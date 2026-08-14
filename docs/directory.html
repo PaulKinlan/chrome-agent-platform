@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent directory — sites as agents</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  .row { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; }
+  .origin { font-weight: 700; min-width: 140px; }
+  .tools { flex: 1; color: var(--muted); font-size: 13px; }
+  .src { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .src.declared { color: var(--accent2); border-color: var(--accent2); }
+  .src.inferred { color: var(--accent); border-color: var(--accent); }
+  .src.linked { color: #d2a8ff; border-color: #d2a8ff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Agent directory</h1>
+  <div class="sub">Every origin the agent has visited becomes a sub-agent. Tools are declared (WebMCP), linked (agent.md/skills), or inferred (window.* functions).</div>
+
+  <div class="row">
+    <span class="origin">github.com</span>
+    <span class="tools">list-repos · read-file · search-code · create-issue · review-pr · run-workflow</span>
+    <span class="src declared">declared · WebMCP</span>
+  </div>
+  <div class="row">
+    <span class="origin">aifoc.us</span>
+    <span class="tools">list-posts · read-post · search · rss-subscribe</span>
+    <span class="src linked">linked · agent.md</span>
+  </div>
+  <div class="row">
+    <span class="origin">figma.com</span>
+    <span class="tools">get-frame · get-comments · export-asset · set-variable · …</span>
+    <span class="src declared">declared · WebMCP</span>
+  </div>
+  <div class="row">
+    <span class="origin">news.ycombinator.com</span>
+    <span class="tools">load-front-page · open-thread · vote · search</span>
+    <span class="src inferred">inferred · window.*</span>
+  </div>
+  <div class="row">
+    <span class="origin">notion.so</span>
+    <span class="tools">search · read-page · create-block · append-block</span>
+    <span class="src declared">declared · WebMCP</span>
+  </div>
+  <div class="row">
+    <span class="origin">+ any site</span>
+    <span class="tools">auto-discover functions on window.* · sourcemaps · Prompt-API for minified</span>
+    <span class="src">discover</span>
+  </div>
+</div>
+<div class="mock-note">mock · directory.html</div>
+</body>
+</html>

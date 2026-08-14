@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat — agent conversation</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; height: 100vh; }
+  .chat { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .chat .head { padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .chat .body { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #001; }
+  .msg.agent { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .shots { display: flex; gap: 8px; overflow-x: auto; padding: 8px 16px; border-top: 1px solid var(--border); }
+  .shot { flex: 0 0 auto; width: 96px; height: 64px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
+  .composer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .composer input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 10px; font: inherit; }
+  .side { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .side .head { padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px; }
+  .side .page { flex: 1; background: var(--bg); margin: 12px; border-radius: 8px; border: 1px solid var(--border); padding: 14px; }
+  .side .page .url { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="chat">
+    <div class="head">Summarise this week's HN front page</div>
+    <div class="body">
+      <div class="msg user">Summarise this week's Hacker News front page for me.</div>
+      <div class="msg agent">Opening Hacker News in the side panel and reading the front page…</div>
+      <div class="msg agent">Done. Three themes this week: (1) local-first databases are having a moment, (2) the agent-browser debate, (3) a new world-model release. Here are the links…</div>
+      <div class="msg agent">I also found <b>@github</b> has a related repo — want me to pull its README too?</div>
+    </div>
+    <div class="shots">
+      <div class="shot">HN 🖼️</div>
+      <div class="shot">thread 🖼️</div>
+      <div class="shot">github 🖼️</div>
+      <div class="shot">+ 3 MHTML</div>
+    </div>
+    <div class="composer">
+      <input placeholder="Reply, or @mention a site agent…">
+      <button class="btn">Send</button>
+    </div>
+  </div>
+  <div class="side">
+    <div class="head">Side panel — driven page</div>
+    <div class="page">
+      <div class="url">news.ycombinator.com</div>
+      <div class="tag">controlled by agent · WebMCP tools: 4</div>
+      <p style="color:var(--muted)">The agent is orchestrating this page. The double-iframe morph surface lets it meld 2–3 sites here.</p>
+    </div>
+  </div>
+</div>
+<div class="mock-note">mock · chat.html</div>
+</body>
+</html>
