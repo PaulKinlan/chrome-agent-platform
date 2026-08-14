@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock index — Chrome Agent Platform</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .wrap { max-width: 640px; margin: 60px auto; padding: 0 20px; }
+  h1 { margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 24px; }
+  .link { display: block; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
+  .link b { display: block; }
+  .link span { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Chrome Agent Platform — mock UI</h1>
+  <div class="sub">Static mockups for review. Serve this directory and open each.</div>
+  <a class="link" href="ntp-hub.html"><b>ntp-hub.html</b><span>the agent hub new-tab page — composer, active tasks, site agents</span></a>
+  <a class="link" href="chat.html"><b>chat.html</b><span>the chat surface + side panel + screenshot/MHTML history</span></a>
+  <a class="link" href="directory.html"><b>directory.html</b><span>the agent directory — sites as agents, declared/linked/inferred tools</span></a>
+  <a class="link" href="memory.html"><b>memory.html</b><span>the OPFS memory explorer — master + per-agent</span></a>
+  <p class="sub" style="margin-top:20px;">Run: <code>python3 -m http.server 8000</code> in <code>mock/</code></p>
+</div>
+<div class="mock-note">mock · index.html</div>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory explorer</title>
+<link rel="stylesheet" href="mock.css">
+<style>
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  .master { background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 14px 16px; margin-bottom: 20px; }
+  .master h2 { margin: 0 0 8px; font-size: 14px; color: var(--accent); }
+  .agents { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mem { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .mem .origin { font-weight: 700; margin-bottom: 6px; }
+  .mem .kv { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; border-top: 1px solid var(--border); padding: 4px 0; }
+  .mem .kv b { color: var(--text); font-weight: 500; }
+  .actions { margin-top: 8px; display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Memory explorer</h1>
+  <div class="sub">OPFS-backed memory: one store for the master agent, one per site sub-agent. Inspect, export, or clear.</div>
+
+  <div class="master">
+    <h2>Master memory (extension agent)</h2>
+    <div class="kv"><span>preferences</span><b>compact answers · dark mode</b></div>
+    <div class="kv"><span>known agents</span><b>14 sites</b></div>
+    <div class="kv"><span>active goals</span><b>3</b></div>
+    <div class="kv"><span>scheduled alarms</span><b>2</b></div>
+  </div>
+
+  <div class="agents">
+    <div class="mem">
+      <div class="origin">github.com</div>
+      <div class="kv"><span>journal entries</span><b>12</b></div>
+      <div class="kv"><span>skills</span><b>review-pr, list-repos</b></div>
+      <div class="kv"><span>knowledge</span><b>owner: PaulKinlan</b></div>
+      <div class="actions"><button class="btn ghost">inspect</button><button class="btn ghost">clear</button></div>
+    </div>
+    <div class="mem">
+      <div class="origin">aifoc.us</div>
+      <div class="kv"><span>journal entries</span><b>4</b></div>
+      <div class="kv"><span>skills</span><b>list-posts, read-post</b></div>
+      <div class="kv"><span>knowledge</span><b>drafts: 2</b></div>
+      <div class="actions"><button class="btn ghost">inspect</button><button class="btn ghost">clear</button></div>
+    </div>
+  </div>
+</div>
+<div class="mock-note">mock · memory.html</div>
+</body>
+</html>
