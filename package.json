@@ -1,0 +1,19 @@
+{
+  "name": "chrome-agent-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.41",
+    "ai": "^4.3.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

@@ -1,21 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Chrome Agent Platform",
-  "version": "0.1.0",
-  "description": "Chrome as the agent platform: an agent hub that orchestrates the web via WebMCP, with sites-as-sub-agents, OPFS memory, alarms, and co-do WASM tools.",
+  "version": "0.2.0",
+  "description": "Chrome as the agent platform: a multi-agent hub that orchestrates the web via WebMCP, with sites-as-sub-agents, origin-keyed OPFS memory, alarms, and usage accounting.",
   "permissions": [
     "alarms",
     "storage",
     "sidePanel",
     "tabs",
-    "notifications"
+    "scripting",
+    "notifications",
+    "pageCapture"
   ],
   "host_permissions": ["<all_urls>"],
   "chrome_url_overrides": {
     "newtab": "ntp/ntp.html"
   },
   "background": {
-    "service_worker": "background/service-worker.js",
+    "service_worker": "dist/background/service-worker.js",
     "type": "module"
   },
   "side_panel": {
@@ -24,5 +26,12 @@
   "action": {
     "default_title": "Open Agent Hub"
   },
-  "options_page": "memory/explorer.html"
+  "options_page": "memory/explorer.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }

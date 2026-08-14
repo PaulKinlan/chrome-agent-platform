@@ -1,0 +1,32 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --accent2: #7ee787;
+  --danger: #ff7b72;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+  position: fixed; bottom: 8px; right: 12px; font-size: 11px; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.btn {
+  background: var(--accent); color: #001; border: 0; border-radius: 6px;
+  padding: 7px 14px; font-weight: 600; cursor: pointer;
+}
+.btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 13px;
+}
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); }
+.tag { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }

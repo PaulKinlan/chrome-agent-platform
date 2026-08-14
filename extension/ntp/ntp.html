@@ -1,2 +1,76 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Agent Hub</title></head>
-<body>Agent Hub (scaffold) — see mock/ntp-hub.html for the reviewed design.</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub — new tab</title>
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .wrap { max-width: 960px; margin: 0 auto; padding: 28px; }
+  .top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  .logo { font-size: 20px; font-weight: 700; }
+  .logo span { color: var(--accent); }
+  .composer { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+  .composer textarea { width: 100%; background: transparent; border: 0; color: var(--text); font: inherit; resize: vertical; min-height: 60px; outline: none; }
+  .composer .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .composer .row .spacer { flex: 1; }
+  .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 15px; }
+  .agents { display: flex; flex-wrap: wrap; gap: 8px; }
+  .agent { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  .agent .name { font-weight: 600; }
+  .agent .tools { color: var(--muted); font-size: 12px; }
+  .task { border-top: 1px solid var(--border); padding: 10px 0; }
+  .task .t { font-weight: 600; }
+  .task .meta { color: var(--muted); font-size: 12px; }
+  .settings { margin-bottom: 16px; font-size: 13px; color: var(--muted); }
+  .settings input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="logo">Chrome <span>Agent</span> Platform</div>
+    <div class="chip"><span class="dot"></span> <span id="status">agent ready</span></div>
+  </div>
+
+  <div class="settings" id="settings">
+    <strong>Provider:</strong>
+    <select id="model-select">
+      <option value="deepseek">DeepSeek (deepseek-v4-pro)</option>
+      <option value="glm">GLM-5.3 (deferred via intercom)</option>
+    </select>
+    <input id="api-key" type="password" placeholder="API key (stored locally)">
+    <button class="btn ghost" id="save-provider">Save</button>
+    <button class="btn ghost" id="open-memory">Memory</button>
+    <button class="btn ghost" id="open-directory">Directory</button>
+  </div>
+
+  <div class="composer">
+    <div class="tag">Start a task</div>
+    <textarea id="task-input" placeholder="Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …"></textarea>
+    <div class="row">
+      <button class="btn" id="run-task">Run task</button>
+      <button class="btn ghost" title="image">📷</button>
+      <button class="btn ghost" title="audio">🎙️</button>
+      <button class="btn ghost" title="video">🎥</button>
+      <div class="spacer"></div>
+      <span class="tag">text · image · audio · video</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Active conversation</h2>
+      <div id="tasks"><p style="color:var(--muted)">No tasks yet — start one above.</p></div>
+    </div>
+    <div class="panel">
+      <h2>Site agents</h2>
+      <div class="agents" id="site-agents"><span style="color:var(--muted)">discovering…</span></div>
+      <p style="color:var(--muted); font-size:12px; margin-top:12px;">Sites with WebMCP tools are callable agents. Sites without them get an inferred tool profile.</p>
+    </div>
+  </div>
+</div>
+<script type="module" src="ntp.js"></script>
+</body>
+</html>

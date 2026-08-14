@@ -1,2 +1,31 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Agent side panel</title></head>
-<body>Side panel (scaffold) — the agent drives pages here.</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Side panel — driven page</title>
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  body { display: flex; flex-direction: column; height: 100vh; margin: 0; }
+  .head { padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: center; }
+  .head input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 6px 10px; font: inherit; }
+  .status { padding: 6px 14px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border); }
+  .page { flex: 1; margin: 12px; border: 1px solid var(--border); border-radius: 8px; }
+  iframe { width: 100%; height: 100%; border: 0; border-radius: 8px; background: #fff; }
+  .morphbar { padding: 8px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <span>Side panel</span>
+    <input id="url" placeholder="https://…" value="https://example.com">
+    <button class="btn" id="go">Go</button>
+  </div>
+  <div class="status" id="status">Ready. The agent drives this page via WebMCP / injected JS.</div>
+  <div class="page"><iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe></div>
+  <div class="morphbar">
+    <button class="btn ghost" id="morph" title="morph 2-3 sites">Meld 2–3 sites (morph)</button>
+    <span class="tag" style="margin-left:auto;">double-iframe morph · stub</span>
+  </div>
+<script type="module" src="sidepanel.js"></script>
+</body>
+</html>
