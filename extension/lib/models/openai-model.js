@@ -13,5 +13,5 @@ export function createOpenAICompatibleModel(config) {
     throw new Error("OpenAI-compatible provider requires baseURL, apiKey, and model");
   }
   const openai = createOpenAICompatible({ baseURL, apiKey, name: "configured" });
-  return openai.chat(model);
+  return openai(model);
 }

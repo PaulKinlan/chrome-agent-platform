@@ -263,10 +263,14 @@
           placeholder="Base URL (e.g. https://api.openai.com/v1)"
           style="display:none">
         <input id="model-name" type="text"
-          placeholder="Model id (e.g. gpt-4o-mini)" style="display:none">
+          placeholder="Model id (e.g. gpt-4o-mini)">
         <input id="api-key" type="password"
-          placeholder="API key (stored locally)" style="display:none">
+          placeholder="API key (stored locally)">
         <button class="btn ghost" id="save-provider">Save</button>
+        <label class="grant-toggle" id="grant-row">
+          <input type="checkbox" id="browser-control-grant">
+          <span>Allow the agent to control the browser (open/navigate/close tabs)</span>
+        </label>
         <button class="btn ghost" id="open-memory">Memory</button>
         <button class="btn ghost" id="open-directory">Directory</button>
       </div>

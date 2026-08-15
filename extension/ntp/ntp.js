@@ -164,6 +164,17 @@ function syncProviderInputs() {
 }
 modelSelect.addEventListener("change", syncProviderInputs);
 
+// Browser-control grant: a user-facing toggle that scopes destructive browser tools.
+async function refreshGrantUI() {
+  const r = await chrome.runtime.sendMessage({ type: "browser-control.get" }).catch(() => ({ granted: false }));
+  const el = document.getElementById("browser-control-grant");
+  if (el) el.checked = Boolean(r?.granted);
+}
+document.getElementById("browser-control-grant")?.addEventListener("change", async (e) => {
+  await chrome.runtime.sendMessage({ type: "browser-control.set", granted: e.target.checked }).catch(() => {});
+});
+refreshGrantUI();
+
 document.getElementById("save-provider").addEventListener("click", async () => {
   const provider = modelSelect.value;
   const config = { provider };

@@ -12,6 +12,7 @@ import { browserToolset, recordBrowserEvent, setBrowserControlGrant, isBrowserCo
 import { RECIPES, getRecipe } from "../lib/recipes.js";
 import { tool } from "ai";
 import { z } from "zod";
+import { schemaToZod as buildSchema, sanitizeToolName as safeToolName, authorizeToolReport } from "../lib/pure.js";
 
 // ---- alarm scheduler (persists the full task payload) ----
 const TASK_KEY = "cap:scheduledTasks";
@@ -36,6 +37,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!task) {
     console.error("scheduled task payload missing", alarm.name);
     return;
+  }
+  // One-shot (non-periodic) tasks are removed once fired; periodic tasks stay.
+  if (!task.periodInMinutes) {
+    const remaining = { ...(store[TASK_KEY] ?? {}) };
+    delete remaining[alarm.name];
+    await chrome.storage.local.set({ [TASK_KEY]: remaining });
+    chrome.alarms.clear(alarm.name).catch(() => {});
   }
   runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] })
     .catch((e) => console.error("scheduled task failed", alarm.name, e));
@@ -76,11 +84,6 @@ async function ensureOrchestrator() {
   return orchestrator;
 }
 
-/** Sanitize a tool name to a valid AI-SDK tool id (no URL punctuation). */
-function sanitizeToolName(origin, name) {
-  const safe = String(name).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `site_${safe}`;
-}
 
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
 async function siteToolset(origin) {
@@ -90,9 +93,9 @@ async function siteToolset(origin) {
     // A valid AI-SDK tool needs an inputSchema. Descriptors carry a JSON-schema;
     // we accept an arbitrary args object (the content-script validates + invokes
     // the real page function, and the invocation is approval-gated + origin-bound).
-    set[sanitizeToolName(origin, t.name)] = tool({
+    set[safeToolName(origin, t.name)] = tool({
       description: `${t.name} on ${origin} — ${t.description ?? ""}`,
-      inputSchema: z.record(z.any()),
+      inputSchema: buildSchema(z, t.inputSchema),
       execute: async (args) => {
         if (!(await isApproved(origin, t.name))) {
           return { error: `tool ${t.name} on ${origin} not approved` };
@@ -119,7 +122,7 @@ async function invokeSiteTool(origin, name, args) {
   }
 }
 
-/** Build a proper string context from multimodal attachments (never an object). */
+/** Build a bounded, honest context string from attachments (never an object). */
 function attachmentContext(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return "";
   const parts = [];
@@ -127,13 +130,17 @@ function attachmentContext(attachments) {
     parts.push(
       `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${a.type ?? "unknown"}, ${a.size ?? "?"} bytes)]`,
     );
-    // Text content is inlined so the model can read it; media bytes are
-    // referenced (the model receives the data URL when multimodal is enabled).
+    // Text attachments are inlined so the model can read them. Media (image/
+    // audio/video) bytes are NOT supplied to the model in this build — they are
+    // honestly labelled as attached-but-unprocessed until a multimodal provider
+    // path is wired. Never claim the bytes reach the model.
     if (a.dataURL && a.type?.startsWith("text/")) {
       try {
         const body = atob(a.dataURL.split(",")[1] ?? "");
         parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
       } catch { /* not decodable */ }
+    } else if (!a.type?.startsWith("text/")) {
+      parts.push("  (media attached — not transcribed/described in this build)");
     }
   }
   return "Attachments:\n" + parts.join("\n");
@@ -148,6 +155,17 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   // agent-do's run(task, context, history) -> result text; context is a STRING.
   const result = await orch.run(task, context, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
+  if (scheduled) {
+    // Completion lifecycle: surface the result as a notification.
+    try {
+      chrome.notifications.create(`cap:${taskId}`, {
+        type: "basic",
+        iconUrl: "icon128.png",
+        title: "Scheduled task complete",
+        message: String(result ?? "").slice(0, 160),
+      });
+    } catch { /* notifications may be unavailable */ }
+  }
   return { ok: true, result };
 }
 
@@ -162,7 +180,16 @@ const handlers = {
   },
   async "provider.models"() { return { choices: PROVIDER_CHOICES }; },
 
-  async "agent.run"(m) { return await runTask({ id: m.id, task: m.task, attachments: m.attachments }); },
+  async "agent.run"(m) {
+    // Bound the attachment payload: reject a single oversized data URL to avoid
+    // base64 memory blowup through runtime messaging.
+    const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8 MiB
+    const bounded = (m.attachments ?? []).filter((a) => {
+      const bytes = a?.size ?? (a?.dataURL ? Math.ceil((a.dataURL.length - a.dataURL.indexOf(",") - 1) * 0.75) : 0);
+      return bytes <= MAX_ATTACHMENT_BYTES;
+    });
+    return await runTask({ id: m.id, task: m.task, attachments: bounded });
+  },
   async "agent.list"() { return await listOrigins(); },
 
   async "tools.list"({ origin }) { return await listTools(origin); },
@@ -245,21 +272,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Sender authorization: a content script may only upsert/read its OWN origin's
-  // tools; it may never touch memory/admin routes. Derive origin from the tab.
-  const isContentScript = Boolean(sender?.tab?.url && sender?.id === chrome.runtime.id && sender?.documentId === undefined && sender?.frameId === 0 && !sender?.url?.startsWith("chrome-extension://"));
-  if (isContentScript) {
+  // tools; it may never touch memory/admin routes. The pure classifier in
+  // lib/pure.js derives + validates the origin (never trusts a message origin).
+  const auth = authorizeToolReport(sender, message.origin, canonicalOrigin, chrome.runtime.id);
+  if (auth.kind === "content-script") {
+    if (auth.error) {
+      sendResponse({ ok: false, error: auth.error });
+      return true;
+    }
     if (ADMIN_TYPES.has(message.type)) {
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }
     if (message.type === "tools.upsert") {
-      const origin = sender.tab.url ? (() => { try { return new URL(sender.tab.url).origin; } catch { return null; } })() : null;
-      if (!origin) {
-        sendResponse({ ok: false, error: "invalid sender origin" });
-        return true;
-      }
-      message.origin = origin; // derive, never trust the message-supplied origin
+      message.origin = auth.origin; // derive, never trust the message-supplied origin
     }
+  } else if (auth.kind === "unmatched") {
+    sendResponse({ ok: false, error: auth.error });
+    return true;
   }
 
   handler(message).then((result) => sendResponse(result)).catch((e) => {

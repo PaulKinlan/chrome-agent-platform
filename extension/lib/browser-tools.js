@@ -80,16 +80,18 @@ export function browserToolset() {
       execute: async ({ tabId }) => readPage(tabId),
     }),
     capture_screenshot: tool({
-      description: "Capture a PNG screenshot of the visible tab.",
+      description: "Capture a PNG screenshot of the requested tab (or the active tab).",
       inputSchema: z.object({ tabId: z.number().optional() }),
       execute: async ({ tabId }) => {
         try {
           const tab = tabId
             ? await chrome.tabs.get(tabId).catch(() => null)
             : await activeTab();
-          const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-          // captureVisibleTab takes a windowId (number), not a tab selector.
-          const url = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+          if (!tab?.windowId) return { error: "no tab" };
+          // Activate the REQUESTED tab so captureVisibleTab targets it (it captures
+          // the active tab of the window, not an arbitrary tabId).
+          if (tab.id) await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+          const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
           return { screenshot: url };
         } catch (e) {
           return { error: String(e?.message ?? e) };

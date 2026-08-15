@@ -25166,7 +25166,7 @@ function createOpenAICompatibleModel(config3) {
     throw new Error("OpenAI-compatible provider requires baseURL, apiKey, and model");
   }
   const openai = createOpenAICompatible({ baseURL, apiKey, name: "configured" });
-  return openai.chat(model);
+  return openai(model);
 }
 
 // extension/lib/models/prompt-api-model.js
@@ -25369,7 +25369,9 @@ var ROOT = "memory";
 var MASTER = "master";
 function canonicalOrigin(value) {
   try {
-    return new URL(String(value)).origin;
+    const u = new URL(String(value));
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin;
   } catch {
     return null;
   }
@@ -66541,13 +66543,15 @@ function browserToolset() {
       execute: async ({ tabId }) => readPage(tabId)
     }),
     capture_screenshot: tool({
-      description: "Capture a PNG screenshot of the visible tab.",
+      description: "Capture a PNG screenshot of the requested tab (or the active tab).",
       inputSchema: external_exports3.object({ tabId: external_exports3.number().optional() }),
       execute: async ({ tabId }) => {
         try {
           const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
-          const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-          const url3 = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+          if (!tab?.windowId) return { error: "no tab" };
+          if (tab.id) await chrome.tabs.update(tab.id, { active: true }).catch(() => {
+          });
+          const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
           return { screenshot: url3 };
         } catch (e) {
           return { error: String(e?.message ?? e) };
@@ -66627,6 +66631,52 @@ function getRecipe(id) {
   return RECIPES.find((r) => r.id === id);
 }
 
+// extension/lib/pure.js
+init_browser_shim_process();
+function schemaToZod(z4, schema4) {
+  if (!schema4 || typeof schema4 !== "object") return z4.record(z4.any());
+  const t = schema4.type;
+  if (t === "string") return z4.string();
+  if (t === "number") return z4.number();
+  if (t === "integer") return z4.number().int();
+  if (t === "boolean") return z4.boolean();
+  if (t === "array") return z4.array(schemaToZod(z4, schema4.items)).max(100);
+  if (t === "object") {
+    const props = schema4.properties && typeof schema4.properties === "object" ? schema4.properties : {};
+    const required3 = Array.isArray(schema4.required) ? new Set(schema4.required) : /* @__PURE__ */ new Set();
+    const shape = {};
+    for (const [key, sub] of Object.entries(props)) {
+      const subZod = schemaToZod(z4, sub);
+      shape[key] = required3.has(key) ? subZod : subZod.optional();
+    }
+    return z4.object(shape).passthrough();
+  }
+  return z4.record(z4.any());
+}
+function sanitizeToolName(origin, name25) {
+  const safe = String(name25).replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `site_${safe}`;
+}
+function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionId) {
+  const senderUrl = sender?.url ?? "";
+  const senderTabUrl = sender?.tab?.url ?? "";
+  const isContentScript = Boolean(
+    sender?.id === extensionId && senderTabUrl && !senderUrl.startsWith("chrome-extension://") && !senderUrl.startsWith("moz-extension://") && sender?.frameId === 0
+  );
+  if (!isContentScript) {
+    if (!senderUrl.startsWith("chrome-extension://") && senderTabUrl) {
+      return { kind: "unmatched", error: "tool reports must come from the page's top frame" };
+    }
+    return { kind: "extension" };
+  }
+  const senderOrigin = canonicalOrigin2(senderTabUrl);
+  if (!senderOrigin) return { kind: "content-script", error: "invalid sender origin" };
+  if (messageOrigin && canonicalOrigin2(messageOrigin) !== senderOrigin) {
+    return { kind: "content-script", error: "origin mismatch \u2014 tool report rejected" };
+  }
+  return { kind: "content-script", origin: senderOrigin };
+}
+
 // extension/background/service-worker.js
 var TASK_KEY = "cap:scheduledTasks";
 async function registerAlarm(task) {
@@ -66646,6 +66696,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!task) {
     console.error("scheduled task payload missing", alarm.name);
     return;
+  }
+  if (!task.periodInMinutes) {
+    const remaining = { ...store[TASK_KEY] ?? {} };
+    delete remaining[alarm.name];
+    await chrome.storage.local.set({ [TASK_KEY]: remaining });
+    chrome.alarms.clear(alarm.name).catch(() => {
+    });
   }
   runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] }).catch((e) => console.error("scheduled task failed", alarm.name, e));
 });
@@ -66678,17 +66735,13 @@ async function ensureOrchestrator() {
   });
   return orchestrator;
 }
-function sanitizeToolName(origin, name25) {
-  const safe = String(name25).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `site_${safe}`;
-}
 async function siteToolset(origin) {
   const tools = await listTools(origin);
   const set4 = {};
   for (const t of tools) {
     set4[sanitizeToolName(origin, t.name)] = tool({
       description: `${t.name} on ${origin} \u2014 ${t.description ?? ""}`,
-      inputSchema: external_exports3.record(external_exports3.any()),
+      inputSchema: schemaToZod(external_exports3, t.inputSchema),
       execute: async (args) => {
         if (!await isApproved(origin, t.name)) {
           return { error: `tool ${t.name} on ${origin} not approved` };
@@ -66729,6 +66782,8 @@ function attachmentContext(attachments) {
         parts.push("--- text content ---\n" + body.slice(0, 4e3) + "\n---");
       } catch {
       }
+    } else if (!a.type?.startsWith("text/")) {
+      parts.push("  (media attached \u2014 not transcribed/described in this build)");
     }
   }
   return "Attachments:\n" + parts.join("\n");
@@ -66741,6 +66796,17 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const context = attachmentContext(attachments);
   const result = await orch.run(task, context, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
+  if (scheduled) {
+    try {
+      chrome.notifications.create(`cap:${taskId}`, {
+        type: "basic",
+        iconUrl: "icon128.png",
+        title: "Scheduled task complete",
+        message: String(result ?? "").slice(0, 160)
+      });
+    } catch {
+    }
+  }
   return { ok: true, result };
 }
 var handlers = {
@@ -66756,7 +66822,12 @@ var handlers = {
     return { choices: PROVIDER_CHOICES };
   },
   async "agent.run"(m) {
-    return await runTask({ id: m.id, task: m.task, attachments: m.attachments });
+    const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+    const bounded = (m.attachments ?? []).filter((a) => {
+      const bytes = a?.size ?? (a?.dataURL ? Math.ceil((a.dataURL.length - a.dataURL.indexOf(",") - 1) * 0.75) : 0);
+      return bytes <= MAX_ATTACHMENT_BYTES;
+    });
+    return await runTask({ id: m.id, task: m.task, attachments: bounded });
   },
   async "agent.list"() {
     return await listOrigins();
@@ -66870,26 +66941,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, error: `unknown message: ${message?.type}` });
     return true;
   }
-  const isContentScript = Boolean(sender?.tab?.url && sender?.id === chrome.runtime.id && sender?.documentId === void 0 && sender?.frameId === 0 && !sender?.url?.startsWith("chrome-extension://"));
-  if (isContentScript) {
+  const auth2 = authorizeToolReport(sender, message.origin, canonicalOrigin, chrome.runtime.id);
+  if (auth2.kind === "content-script") {
+    if (auth2.error) {
+      sendResponse({ ok: false, error: auth2.error });
+      return true;
+    }
     if (ADMIN_TYPES.has(message.type)) {
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }
     if (message.type === "tools.upsert") {
-      const origin = sender.tab.url ? (() => {
-        try {
-          return new URL(sender.tab.url).origin;
-        } catch {
-          return null;
-        }
-      })() : null;
-      if (!origin) {
-        sendResponse({ ok: false, error: "invalid sender origin" });
-        return true;
-      }
-      message.origin = origin;
+      message.origin = auth2.origin;
     }
+  } else if (auth2.kind === "unmatched") {
+    sendResponse({ ok: false, error: auth2.error });
+    return true;
   }
   handler(message).then((result) => sendResponse(result)).catch((e) => {
     sendResponse({ ok: false, error: String(e?.message ?? e) });

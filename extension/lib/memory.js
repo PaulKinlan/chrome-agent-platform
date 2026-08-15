@@ -16,7 +16,12 @@ const MASTER = "master";
 /** Canonicalize an origin string (https://example.com:443 → https://example.com). */
 export function canonicalOrigin(value) {
   try {
-    return new URL(String(value)).origin;
+    const u = new URL(String(value));
+    // Only http/https origins are supported; anything else (file:, data:,
+    // about:, chrome-extension:) has a shared "null" or non-web origin that
+    // must never be a storage boundary.
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin;
   } catch {
     return null;
   }

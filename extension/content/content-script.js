@@ -33,7 +33,7 @@ window.addEventListener("message", (event) => {
 
   if (data.type === "tools") {
     const tools = Array.isArray(data.tools) ? data.tools : [];
-    const origin = data.origin || location.origin;
+    const origin = location.origin; // never trust a message-supplied origin (cross-origin spoof)
     if (tools.length) {
       chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools }).catch(() => {});
     }
