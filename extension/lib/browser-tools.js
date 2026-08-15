@@ -354,8 +354,10 @@ export async function captureTabScreenshot(tabId) {
           // Re-read + REVALIDATE the target identity IMMEDIATELY before activation
           // (after the grant check's awaits): a navigation between the pre-lock
           // snapshot and this point must not let us activate a newly-unauthorized
-          // tab (the round-20 capture-navigation-race finding).
-          const fresh = await chrome.tabs.get(tabId).catch(() => null);
+          // tab (the round-20 capture-navigation-race finding). `target.id` is the
+          // RESOLVED tab id (from tabs.get OR the active-tab query) — never the
+          // raw `tabId` which is undefined when capturing the active tab.
+          const fresh = await chrome.tabs.get(target.id).catch(() => null);
           if (!fresh?.id) return { error: "no tab" };
           const freshOrigin = fresh.url
             ? (() => {

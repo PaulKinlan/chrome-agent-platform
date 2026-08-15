@@ -67598,7 +67598,7 @@ async function captureTabScreenshot(tabId) {
           error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
         };
       }
-      const fresh = await chrome.tabs.get(tabId).catch(() => null);
+      const fresh = await chrome.tabs.get(target.id).catch(() => null);
       if (!fresh?.id) return { error: "no tab" };
       const freshOrigin = fresh.url ? (() => {
         try {
