@@ -1,10 +1,7 @@
 // options.js — the dedicated settings/configuration page.
 
-import {
-  getProviderConfig,
-  setProviderConfig,
-} from "../lib/provider.js";
-import { getUsage, clearUsage } from "../lib/usage.js";
+import { getProviderConfig, setProviderConfig } from "../lib/provider.js";
+import { clearUsage, getUsage } from "../lib/usage.js";
 import { listOrigins, siteMemory } from "../lib/memory.js";
 import {
   isBrowserControlGranted,
@@ -14,13 +11,62 @@ import { RECIPES } from "../lib/recipes.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 const PROVIDERS = [
-  { id: "demo", name: "Demo (local)", hint: "Deterministic local model — no key, always runs.", baseURL: "", needsKey: false, onDevice: false },
-  { id: "prompt-api", name: "Chrome Prompt API", hint: "Gemini nano on-device — no key, works offline.", baseURL: "", needsKey: false, onDevice: true },
-  { id: "openai", name: "OpenAI", hint: "Your OpenAI key + model.", baseURL: "https://api.openai.com/v1", needsKey: true, onDevice: false },
-  { id: "anthropic", name: "Anthropic", hint: "Your Anthropic key (OpenAI-compatible endpoint).", baseURL: "https://api.anthropic.com/v1", needsKey: true, onDevice: false },
-  { id: "gemini", name: "Google Gemini", hint: "Your Gemini API key (OpenAI-compatible endpoint).", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true, onDevice: false },
-  { id: "deepseek", name: "DeepSeek", hint: "Your DeepSeek key + model.", baseURL: "https://api.deepseek.com/v1", needsKey: true, onDevice: false },
-  { id: "ollama", name: "Ollama (local)", hint: "A local Ollama server.", baseURL: "http://localhost:11434/v1", needsKey: false, onDevice: false },
+  {
+    id: "demo",
+    name: "Demo (local)",
+    hint: "Deterministic local model — no key, always runs.",
+    baseURL: "",
+    needsKey: false,
+    onDevice: false,
+  },
+  {
+    id: "prompt-api",
+    name: "Chrome Prompt API",
+    hint: "Gemini nano on-device — no key, works offline.",
+    baseURL: "",
+    needsKey: false,
+    onDevice: true,
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    hint: "Your OpenAI key + model.",
+    baseURL: "https://api.openai.com/v1",
+    needsKey: true,
+    onDevice: false,
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    hint: "Your Anthropic key (OpenAI-compatible endpoint).",
+    baseURL: "https://api.anthropic.com/v1",
+    needsKey: true,
+    onDevice: false,
+  },
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    hint: "Your Gemini API key (OpenAI-compatible endpoint).",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    needsKey: true,
+    onDevice: false,
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    hint: "Your DeepSeek key + model.",
+    baseURL: "https://api.deepseek.com/v1",
+    needsKey: true,
+    onDevice: false,
+  },
+  {
+    id: "ollama",
+    name: "Ollama (local)",
+    hint: "A local Ollama server.",
+    baseURL: "http://localhost:11434/v1",
+    needsKey: false,
+    onDevice: false,
+  },
 ];
 
 const THEMES = [
@@ -46,14 +92,36 @@ async function renderProviders() {
       <div class="provider-head">
         <span class="provider-name">${p.name}</span>
         <span class="muted">${p.hint}</span>
-        <button class="btn small set-default" type="button" ${cfg.provider === p.id ? "disabled" : ""}>Use</button>
+        <button class="btn small set-default" type="button" ${
+      cfg.provider === p.id ? "disabled" : ""
+    }>Use</button>
       </div>
-      ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
+      ${
+      p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama"
+        ? `
       <div class="fields">
-        ${p.needsKey || p.baseURL ? `<input class="base-url" type="text" placeholder="Base URL" value="${escapeAttr(p.baseURL)}">` : ""}
-        ${p.needsKey ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">` : ""}
-        ${p.needsKey ? `<input class="model" type="text" placeholder="Model id" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}">` : ""}
-      </div>` : ""}
+        ${
+          p.needsKey || p.baseURL
+            ? `<input class="base-url" type="text" placeholder="Base URL" value="${
+              escapeAttr(p.baseURL)
+            }">`
+            : ""
+        }
+        ${
+          p.needsKey
+            ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">`
+            : ""
+        }
+        ${
+          p.needsKey
+            ? `<input class="model" type="text" placeholder="Model id" value="${
+              escapeAttr(cfg.provider === p.id ? cfg.model : "")
+            }">`
+            : ""
+        }
+      </div>`
+        : ""
+    }
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
       const fields = {
@@ -68,9 +136,14 @@ async function renderProviders() {
     list.appendChild(card);
   }
   // populate the active card's current key/model when openai-ish
-  const active = list.querySelector(`.provider-card[data-provider="${cfg.provider}"]`);
+  const active = list.querySelector(
+    `.provider-card[data-provider="${cfg.provider}"]`,
+  );
   if (active) {
-    if (cfg.apiKey) { const k = active.querySelector(".api-key"); if (k) k.placeholder = "API key (set)"; }
+    if (cfg.apiKey) {
+      const k = active.querySelector(".api-key");
+      if (k) k.placeholder = "API key (set)";
+    }
   }
 }
 
@@ -90,7 +163,10 @@ async function renderAgents() {
   const map = ap["cap:agentProviders"] ?? {};
   const list = $("#agent-provider-list");
   list.innerHTML = "";
-  const agents = [{ id: "hub", name: "Hub agent" }, ...RECIPES.map((r) => ({ id: r.id, name: r.name }))];
+  const agents = [
+    { id: "hub", name: "Hub agent" },
+    ...RECIPES.map((r) => ({ id: r.id, name: r.name })),
+  ];
   for (const a of agents) {
     const row = document.createElement("div");
     row.className = "provider-card";
@@ -99,7 +175,11 @@ async function renderAgents() {
         <span class="provider-name">${a.name}</span>
         <select class="agent-provider">
           <option value="">Default</option>
-          ${PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("")}
+          ${
+      PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join(
+        "",
+      )
+    }
         </select>
       </div>`;
     const sel = row.querySelector(".agent-provider");
@@ -143,20 +223,26 @@ async function renderBrowser() {
   const granted = Boolean(grant && grant.expiresAt > Date.now());
   $("#browser-grant").checked = granted;
   $("#grant-origins").hidden = !granted;
-  if (grant?.origins?.length) $("#grant-origin-list").value = grant.origins.join("\n");
+  if (grant?.origins?.length) {
+    $("#grant-origin-list").value = grant.origins.join("\n");
+  }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
       await setBrowserControlGrant({ origins: [] });
       $("#grant-origins").hidden = false;
       saveFlash("Browser control granted (scoped — set origins below).");
     } else {
-      await storage.set({ "cap:browserControlGrant": { expiresAt: 0, origins: [] } });
+      await storage.set({
+        "cap:browserControlGrant": { expiresAt: 0, origins: [] },
+      });
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
   });
   $("#grant-origin-list").addEventListener("change", async (e) => {
-    const origins = e.target.value.split("\n").map((s) => s.trim()).filter(Boolean);
+    const origins = e.target.value.split("\n").map((s) => s.trim()).filter(
+      Boolean,
+    );
     await setBrowserControlGrant({ origins });
     saveFlash("Allowed origins saved.");
   });
@@ -168,16 +254,28 @@ async function renderUsage() {
   const sum = $("#usage-summary");
   sum.innerHTML = `
     <div class="usage-stat"><div class="n">${u.totals.calls}</div><div class="l">calls</div></div>
-    <div class="usage-stat"><div class="n">${u.totals.inputTokens + u.totals.outputTokens}</div><div class="l">tokens</div></div>
-    <div class="usage-stat"><div class="n">$${u.totals.estimatedCost.toFixed(4)}</div><div class="l">est. cost</div></div>`;
+    <div class="usage-stat"><div class="n">${
+    u.totals.inputTokens + u.totals.outputTokens
+  }</div><div class="l">tokens</div></div>
+    <div class="usage-stat"><div class="n">$${
+    u.totals.estimatedCost.toFixed(4)
+  }</div><div class="l">est. cost</div></div>`;
   const detail = $("#usage-detail");
   detail.innerHTML = `<table>
     <thead><tr><th>Provider</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
-    <tbody>${u.byModel.map((m) => `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${m.inputTokens + m.outputTokens}</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`).join("")}</tbody></table>`;
+    <tbody>${
+    u.byModel.map((m) =>
+      `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${
+        m.inputTokens + m.outputTokens
+      }</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`
+    ).join("")
+  }</tbody></table>`;
   $("#usage-detail-toggle").addEventListener("click", () => {
     const d = $("#usage-detail");
     d.hidden = !d.hidden;
-    $("#usage-detail-toggle").textContent = d.hidden ? "Show detail" : "Hide detail";
+    $("#usage-detail-toggle").textContent = d.hidden
+      ? "Show detail"
+      : "Hide detail";
   });
 }
 
@@ -193,7 +291,8 @@ async function renderData() {
   for (const origin of origins) {
     const row = document.createElement("div");
     row.className = "origin-row";
-    row.innerHTML = `<span class="origin">${origin}</span><button class="btn small ghost clear-origin" type="button">Clear</button>`;
+    row.innerHTML =
+      `<span class="origin">${origin}</span><button class="btn small ghost clear-origin" type="button">Clear</button>`;
     row.querySelector(".clear-origin").addEventListener("click", async () => {
       const store = siteMemory(origin);
       await store.clear();
@@ -213,7 +312,9 @@ function saveFlash(msg) {
   const el = $("#save-status");
   el.textContent = msg;
   clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => { el.textContent = "Changes save automatically."; }, 2500);
+  flashTimer = setTimeout(() => {
+    el.textContent = "Changes save automatically.";
+  }, 2500);
 }
 
 $("#open-hub").addEventListener("click", () => {
@@ -221,10 +322,19 @@ $("#open-hub").addEventListener("click", () => {
 });
 
 // nav active state
-const sections = ["providers", "agents", "appearance", "browser", "usage", "data"];
+const sections = [
+  "providers",
+  "agents",
+  "appearance",
+  "browser",
+  "usage",
+  "data",
+];
 document.querySelectorAll(".nav-item").forEach((a) => {
   a.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach((x) => x.removeAttribute("aria-current"));
+    document.querySelectorAll(".nav-item").forEach((x) =>
+      x.removeAttribute("aria-current")
+    );
     a.setAttribute("aria-current", "true");
   });
 });
