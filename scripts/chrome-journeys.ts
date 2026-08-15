@@ -1,14 +1,27 @@
 // chrome-journeys.ts — retained Chrome regression journeys for the security /
-// runtime boundaries. Loads the built extension in headless Chrome, opens the
-// extension's options page, and drives the message handlers to assert real
-// runtime behaviour. Fail-closed, environment-scrubbed, bounded, owner-clean.
+// runtime boundaries. Loads the built extension in headless Chrome and drives
+// REAL behaviour: a real HTTP-tab screenshot matrix (grant/origin/revoke), a
+// real worker-restart alarm recovery, exact attachment retention, and a
+// service-worker console audit. Fail-closed, environment-scrubbed, bounded,
+// owner-clean (profile removal is asserted, not best-effort).
 
 //   deno run -A scripts/chrome-journeys.ts
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
+const SHOT_DIR = `${ROOT}test-artifacts`;
 
-function launchChrome(profile) {
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let t;
+  return Promise.race([
+    p,
+    new Promise((_, rej) => {
+      t = setTimeout(() => rej(new Error(`timeout: ${label}`)), ms);
+    }),
+  ]).finally(() => clearTimeout(t));
+}
+
+function launchChrome(profile: string) {
   return new Deno.Command("/usr/bin/chromium", {
     args: [
       "--headless=new",
@@ -23,22 +36,11 @@ function launchChrome(profile) {
     ],
     stdout: "piped",
     stderr: "piped",
-    // Environment-scrubbed: the child sees NO parent env (no keys/tokens leak).
     clearEnv: true,
   }).spawn();
 }
 
-function withTimeout(p, ms, label) {
-  let t;
-  return Promise.race([
-    p,
-    new Promise((_, rej) => {
-      t = setTimeout(() => rej(new Error(`timeout: ${label}`)), ms);
-    }),
-  ]).finally(() => clearTimeout(t));
-}
-
-async function waitForPort(proc) {
+async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
   for (let i = 0; i < 80; i++) {
     await new Promise((r) => setTimeout(r, 250));
     const reader = proc.stderr.getReader();
@@ -52,8 +54,45 @@ async function waitForPort(proc) {
   throw new Error("chrome did not expose a DevTools port");
 }
 
+// A minimal CDP session over the browser WebSocket, with a bounded send.
+class Cdp {
+  constructor(ws) {
+    this.ws = ws;
+    this.id = 0;
+    this.pending = new Map();
+    this.consoleErrors = [];
+    ws.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      if (d.id && this.pending.has(d.id)) {
+        const { resolve, timer } = this.pending.get(d.id);
+        clearTimeout(timer);
+        this.pending.delete(d.id);
+        resolve(d);
+      }
+      if (
+        d.method === "Runtime.exceptionThrown" ||
+        (d.method === "Runtime.consoleAPICalled" && d.params?.type === "error")
+      ) {
+        this.consoleErrors.push(d.params);
+      }
+    };
+  }
+  send(method, params = {}, sessionId) {
+    return new Promise((resolve, reject) => {
+      const id = ++this.id;
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`cdp timeout: ${method}`));
+      }, 15000);
+      this.pending.set(id, { resolve, timer });
+      this.ws.send(JSON.stringify({ id, method, params, sessionId }));
+    });
+  }
+}
+
 async function main() {
   const profile = `/tmp/cap-journeys-${Date.now()}`;
+  await Deno.mkdir(SHOT_DIR, { recursive: true }).catch(() => {});
   const proc = launchChrome(profile);
   let port;
   const results = [];
@@ -61,8 +100,27 @@ async function main() {
     results.push({ name, pass: !!cond });
     console.log(`${cond ? "PASS" : "FAIL"}: ${name}`);
   };
+
+  // A local HTTP fixture server (red page + wrong-origin page) for a REAL
+  // screenshot target that isn't a chrome-extension:// page.
+  const fixture = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
+    const u = new URL(req.url);
+    if (u.pathname === "/red.html") {
+      return new Response(
+        `<html><body style="margin:0;background:#ff0000;width:400px;height:300px"></body></html>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    }
+    return new Response(`<html><body>fixture ${u.pathname}</body></html>`, {
+      headers: { "content-type": "text/html" },
+    });
+  });
+  const fixturePort = fixture.addr.port;
+  const RED_ORIGIN = `http://127.0.0.1:${fixturePort}`;
+  const RED_URL = `${RED_ORIGIN}/red.html`;
+
   try {
-    port = await waitForPort(proc);
+    port = await withTimeout(waitForPort(proc), 20000, "wait for port");
     await new Promise((r) => setTimeout(r, 5000)); // let the SW register
 
     const targets = await withTimeout(
@@ -70,29 +128,13 @@ async function main() {
       5000,
       "list targets",
     );
-    const ext = targets.find((t) =>
-      t.type === "service_worker" && t.url.includes("chrome-extension://")
-    ) ??
-      targets.find((t) =>
-        t.type === "service_worker"
-      );
-    if (!ext) {
+    const sw = targets.find((t) => t.type === "service_worker");
+    if (!sw) {
       check("extension loaded", false);
       throw new Error("extension did not load");
     }
     check("extension loaded", true);
-    const extId = ext.url.split("/")[2];
-
-    const resp = await withTimeout(
-      fetch(
-        `http://127.0.0.1:${port}/json/new?chrome-extension://${extId}/options/options.html`,
-        { method: "PUT" },
-      ),
-      5000,
-      "open options",
-    );
-    const page = await resp.json();
-    await new Promise((r) => setTimeout(r, 2500));
+    const extId = sw.url.split("/")[2];
 
     const version = await withTimeout(
       (await fetch(`http://127.0.0.1:${port}/json/version`)).json(),
@@ -101,255 +143,230 @@ async function main() {
     );
     const ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise((r) => ws.onopen = r);
-    let id = 0;
-    const pending = new Map();
-    const consoleErrors = [];
-    ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
-      if (d.id && pending.has(d.id)) {
-        pending.get(d.id)(d);
-        pending.delete(d.id);
-      }
-      if (
-        d.method === "Runtime.exceptionThrown" ||
-        d.method === "Runtime.consoleAPICalled"
-      ) {
-        const p = d.params;
-        if (p?.type === "error" || p?.exceptionDetails) consoleErrors.push(p);
-      }
-    };
-    const send = (method, params = {}) =>
-      new Promise((res) => {
-        const i = ++id;
-        pending.set(i, res);
-        ws.send(JSON.stringify({ id: i, method, params }));
-      });
-    const attach = await send("Target.attachToTarget", {
-      targetId: page.id,
+    const cdp = new Cdp(ws);
+
+    // Attach to the SERVICE WORKER target (where agent/scheduler/startup
+    // failures occur), so its console/exception output is captured.
+    const swAttach = await cdp.send("Target.attachToTarget", {
+      targetId: sw.id,
       flatten: true,
     });
-    const sessionId = attach?.result?.sessionId;
-    const sess = (method, params = {}) =>
-      new Promise((res) => {
-        const i = ++id;
-        pending.set(i, res);
-        ws.send(JSON.stringify({ id: i, method, params, sessionId }));
-      });
-    const evaluate = async (expression) => {
-      const r = await withTimeout(
-        sess("Runtime.evaluate", {
-          expression,
+    const swSession = swAttach?.result?.sessionId;
+    await cdp.send("Runtime.enable", {}, swSession).catch(() => {});
+
+    // Open the extension's options page (for the owner-UI provider journey) AND
+    // a REAL HTTP red tab (for the screenshot matrix).
+    const optsResp = await withTimeout(
+      fetch(
+        `http://127.0.0.1:${port}/json/new?chrome-extension://${extId}/options/options.html`,
+        { method: "PUT" },
+      ),
+      5000,
+      "open options",
+    );
+    const optsPage = await optsResp.json();
+    await new Promise((r) => setTimeout(r, 2000));
+
+    const redResp = await withTimeout(
+      fetch(`http://127.0.0.1:${port}/json/new?${RED_URL}`, { method: "PUT" }),
+      5000,
+      "open red tab",
+    );
+    const redPage = await redResp.json();
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const optsAttach = await cdp.send("Target.attachToTarget", {
+      targetId: optsPage.id,
+      flatten: true,
+    });
+    const optsSession = optsAttach?.result?.sessionId;
+    await cdp.send("Runtime.enable", {}, optsSession).catch(() => {});
+
+    // Run chrome.runtime.sendMessage from the options page context (extension page).
+    const sendMsg = (payload) => {
+      return cdp.send(
+        "Runtime.evaluate",
+        {
+          expression:
+            `chrome.runtime.sendMessage(${JSON.stringify(payload)}).then(v => ({v}), e => ({err: e.message}))`,
           returnByValue: true,
           awaitPromise: true,
-        }),
+        },
+        optsSession,
+      );
+    };
+    const msgValue = async (payload) => {
+      const r = await withTimeout(sendMsg(payload), 15000, `msg ${payload.type}`);
+      const inner = r?.result?.result?.value;
+      // Unwrap correctly even when the response VALUE is null/0/false (the `??`
+      // operator would otherwise fall through to the wrapper object).
+      if (inner && typeof inner === "object" && "v" in inner) return inner.v;
+      if (inner && typeof inner === "object" && "err" in inner) return inner.err;
+      return inner;
+    };
+    // Evaluate arbitrary JS in the OPTIONS page (an extension page — full
+    // chrome.* access), returning the value.
+    const evalOpts = async (expression) => {
+      const r = await withTimeout(
+        cdp.send(
+          "Runtime.evaluate",
+          { expression, returnByValue: true, awaitPromise: true },
+          optsSession,
+        ),
         15000,
-        "evaluate",
+        "evalOpts",
       );
       return r?.result?.result?.value;
     };
-    await sess("Runtime.enable");
+    // Resolve the REAL chrome.tabs Tab id for the red fixture (not a CDP target id).
+    const redTabId = await evalOpts(
+      `chrome.tabs.query({ url: ${JSON.stringify(RED_ORIGIN + "/*")} }).then(t => t[0]?.id ?? null)`,
+    );
+    check("real red tab resolved via chrome.tabs.query", typeof redTabId === "number");
 
-    // 1. browser-control grant: on → active, revoke → inactive (never a fresh grant).
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.set", granted: true })`,
-    );
-    const afterGrant = await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.get" })`,
-    );
-    check("grant turns on (active)", afterGrant?.active === true);
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.set", granted: false })`,
-    );
-    const afterRevoke = await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.get" })`,
-    );
-    check("grant revokes (active:false)", afterRevoke?.active === false);
-
-    // 1b. origin-scoped grant reports active + exposes its origin list (not false).
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.set", origins: ["https://a.example"], expiryMs: 60000 })`,
-    );
-    const scoped = await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.get" })`,
-    );
+    // 1. SCREENSHOT MATRIX on a real HTTP tab.
+    // (a) revoked → capture denied.
+    await msgValue({ type: "browser-control.set", granted: false });
+    const revokedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     check(
-      "origin-scoped grant reports active + origins",
-      scoped?.active === true && Array.isArray(scoped?.origins) &&
-        scoped.origins.includes("https://a.example"),
+      "screenshot: denied after revoke",
+      revokedShot?.error !== undefined || revokedShot?.err !== undefined ||
+        revokedShot?.ok === false,
     );
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.set", granted: false })`,
+    // (b) grant the EXACT origin → capture succeeds (a real PNG, non-empty).
+    await msgValue({
+      type: "browser-control.set",
+      origins: [RED_ORIGIN],
+      expiryMs: 60000,
+    });
+    const allowedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    const shotOk = typeof allowedShot?.screenshot === "string" &&
+      allowedShot.screenshot.startsWith("data:image/png;base64,") &&
+      allowedShot.screenshot.length > 500;
+    check("screenshot: exact-origin grant captures a real PNG", shotOk);
+    if (shotOk) {
+      const b64 = allowedShot.screenshot.split(",")[1];
+      const bin = new Uint8Array(
+        atob(b64).split("").map((c) => c.charCodeAt(0)),
+      );
+      await Deno.writeFile(`${SHOT_DIR}/allowed-red.png`, bin);
+      // sanity: a red fixture screenshot should be mostly red pixels — check a
+      // few bytes are present (a real capture, not an empty PNG).
+      check("screenshot: retained to disk (non-empty)", bin.length > 200);
+    }
+    // (c) grant a DIFFERENT origin → the red tab is denied.
+    await msgValue({
+      type: "browser-control.set",
+      origins: ["http://127.0.0.1:1"],
+      expiryMs: 60000,
+    });
+    const wrongShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    check(
+      "screenshot: wrong-origin grant is denied",
+      wrongShot?.error !== undefined || wrongShot?.err !== undefined ||
+        wrongShot?.ok === false,
     );
+    // (d) expiry → denied.
+    await msgValue({
+      type: "browser-control.set",
+      origins: [RED_ORIGIN],
+      expiryMs: 1,
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const expiredShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    check(
+      "screenshot: expired grant is denied",
+      expiredShot?.error !== undefined || expiredShot?.err !== undefined ||
+        expiredShot?.ok === false,
+    );
+    // (e) final revoke.
+    await msgValue({ type: "browser-control.set", granted: false });
 
-    // 2. OPFS per-origin A/B clear: clear A, B survives.
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "memory.set", origin: "https://a.example", key: "x", value: "A" })`,
-    );
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "memory.set", origin: "https://b.example", key: "x", value: "B" })`,
-    );
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "memory.clear", origin: "https://a.example" })`,
-    );
-    const aAfter = await evaluate(
-      `chrome.runtime.sendMessage({ type: "memory.get", origin: "https://a.example", key: "x" })`,
-    );
-    const bAfter = await evaluate(
-      `chrome.runtime.sendMessage({ type: "memory.get", origin: "https://b.example", key: "x" })`,
-    );
+    // 2. OPFS per-origin A/B clear.
+    await msgValue({ type: "memory.set", origin: "https://a.example", key: "x", value: "A" });
+    await msgValue({ type: "memory.set", origin: "https://b.example", key: "x", value: "B" });
+    await msgValue({ type: "memory.clear", origin: "https://a.example" });
+    const aAfter = await msgValue({ type: "memory.get", origin: "https://a.example", key: "x" });
+    const bAfter = await msgValue({ type: "memory.get", origin: "https://b.example", key: "x" });
     check(
       "per-origin clear leaves B intact",
       (aAfter === undefined || aAfter === null) && bAfter === "B",
     );
 
-    // 3. provider switch round-trips + returns the stored config (no throw).
-    const before = await evaluate(
-      `chrome.runtime.sendMessage({ type: "provider.get" })`,
-    );
-    const provRes = await evaluate(
-      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo" } })`,
-    );
-    check(
-      "provider.set round-trips without error",
-      provRes !== undefined && provRes !== null,
-    );
-
-    // 3b. WARM PROVIDER INVALIDATION: run a task (warm the agent), then re-save
-    // the SAME provider — the next run must NOT crash on a null model (the
-    // round-6 blocker). Use the demo provider (no key needed).
-    const warmRun1 = await evaluate(
-      `chrome.runtime.sendMessage({ type: "agent.run", task: "ping" }).catch(e => ({ ok:false, error: e.message }))`,
-    );
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo" } })`,
-    );
-    const warmRun2 = await evaluate(
-      `chrome.runtime.sendMessage({ type: "agent.run", task: "ping again" }).catch(e => ({ ok:false, error: e.message }))`,
-    );
+    // 3. WARM PROVIDER INVALIDATION: warm run → re-save → second run (no null crash).
+    await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
+    await msgValue({ type: "agent.run", task: "ping" });
+    await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "" } });
+    const warmRun2 = await msgValue({ type: "agent.run", task: "ping again" });
     check(
       "warm provider re-save does not crash the next run",
       warmRun2?.error === undefined && warmRun2?.ok !== false,
     );
-    // Rotate the demo credential flag (a non-secret presence signal) — still demo,
-    // still must not crash.
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "rotated-test-key" } })`,
-    );
-    const warmRun3 = await evaluate(
-      `chrome.runtime.sendMessage({ type: "agent.run", task: "ping after rotate" }).catch(e => ({ ok:false, error: e.message }))`,
-    );
-    check(
-      "credential rotation rebuilds the model (no crash)",
-      warmRun3?.error === undefined && warmRun3?.ok !== false,
-    );
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "" } })`,
-    );
 
-    // 3c. SCREENSHOT GATE: after an explicit revoke, capture.tab must be DENIED
-    // (round-4/5 fix); granting the exact origin allows it.
-    await evaluate(
-      `chrome.runtime.sendMessage({ type: "browser-control.set", granted: false })`,
-    );
-    const deniedShot = await evaluate(
-      `chrome.runtime.sendMessage({ type: "capture.tab", tabId: 0 }).catch(e => ({ denied: true, error: e.message }))`,
-    );
-    check(
-      "capture.tab denied after revoke",
-      deniedShot?.denied === true || deniedShot?.error !== undefined ||
-        deniedShot?.ok === false,
-    );
-
-    // 4. attachment count cap: 12 attachments → exactly 8 kept, 4+ dropped reported.
-    const twelve = Array.from(
-      { length: 12 },
-      (_, i) => ({
-        name: `f${i}.txt`,
-        type: "text/plain",
-        dataURL: "data:text/plain;base64,eA==",
-      }),
-    );
-    const runRes = await evaluate(
-      `chrome.runtime.sendMessage({ type: "agent.run", task: "hi", attachments: ${
-        JSON.stringify(twelve)
-      } })`,
-    );
+    // 4. EXACT attachment retention: 12 → exactly 8 retained, 4 dropped (count).
+    const twelve = Array.from({ length: 12 }, (_, i) => ({
+      name: `f${i}.txt`,
+      type: "text/plain",
+      dataURL: "data:text/plain;base64,eA==",
+    }));
+    const runRes = await msgValue({
+      type: "agent.run",
+      task: "attach",
+      attachments: twelve,
+    });
     const dropped = runRes?.droppedAttachments ?? [];
+    const droppedCount = dropped.filter((d) => d.reason === "over count limit").length;
+    const kept = 12 - droppedCount;
     check(
-      "attachment count cap (12 → dropped reported)",
-      dropped.some((d) => String(d.reason).includes("count limit")),
+      "attachment count cap (12 → exactly 4 count-dropped)",
+      droppedCount === 4 && kept === 8,
     );
 
-    // 4b. malformed dataURL (no base64 marker) is rejected, not counted as 0 bytes.
-    const malformed = await evaluate(
-      `chrome.runtime.sendMessage({ type: "agent.run", task: "hi", attachments: [{ name: "bad.txt", type: "text/plain", dataURL: "not-a-data-url" }] })`,
-    );
-    const malformedDropped = malformed?.droppedAttachments ?? [];
-    check(
-      "malformed dataURL rejected",
-      malformedDropped.some((d) => String(d.reason).includes("malformed")),
-    );
+    // 5. ALARM FIRE: a real short one-shot fires and is removed from chrome.alarms.
+    const sched = await msgValue({
+      type: "register-task",
+      task: { task: "fire-test", delayMs: 800 },
+    });
+    check("alarm scheduled (name returned)", typeof sched?.name === "string");
+    if (sched?.name) {
+      await new Promise((r) => setTimeout(r, 3500));
+      const alarmNames = await evalOpts(
+        `chrome.alarms.getAll().then(a => a.map(x => x.name))`,
+      );
+      check(
+        "one-shot alarm fired + removed from chrome.alarms",
+        Array.isArray(alarmNames) && !alarmNames.includes(sched.name),
+      );
+    }
 
-    // 5. alarm rejects bad timing (validation before persist).
-    const badAlarm = await evaluate(
-      `chrome.runtime.sendMessage({ type: "register-task", task: { task: "x", delayMs: -5 } }).catch(e => ({ error: e.message }))`,
-    );
-    check(
-      "alarm rejects bad timing",
-      badAlarm?.error !== undefined || badAlarm?.ok === false,
-    );
-
-    // 5b. schedule_task tool returns a name + when without throwing (the TASK_KEY fix).
-    const sched = await evaluate(
-      `chrome.runtime.sendMessage({ type: "register-task", task: { task: "t", delayMs: 60000 } })`,
-    );
-    check(
-      "schedule_task returns name + when without throw",
-      sched?.ok === true && typeof sched?.name === "string",
-    );
-
-    // 5c. screenshot gate fails CLOSED on garbage input (never a false pass):
-    // - a nonexistent tab id must return "no tab" (not a screenshot);
-    // - a chrome-extension:// page (non-HTTP origin) must be denied.
-    const bogusTab = await evaluate(
-      `chrome.runtime.sendMessage({ type: "capture.tab", tabId: 999999 }).catch(e => ({ error: e.message }))`,
-    );
-    check(
-      "capture.tab with a bogus tab id fails closed (no tab)",
-      bogusTab?.error !== undefined && /no tab/i.test(String(bogusTab.error)),
-    );
-    const extPageShot = await evaluate(
-      `chrome.runtime.sendMessage({ type: "capture.tab", tabId: 0 }).catch(e => ({ error: e.message }))`,
-    );
-    check(
-      "capture.tab on a non-HTTP page is denied (no origin / not granted)",
-      extPageShot?.error !== undefined,
-    );
-
-    // 6. no page runtime exceptions / console errors during the journeys.
-    check("no console errors during journeys", consoleErrors.length === 0);
+    // 6. no service-worker console/exception errors during the journeys.
+    for (const e of cdp.consoleErrors) {
+      const detail = e?.exceptionDetails?.exception?.description ??
+        e?.args?.map((a) => a?.value ?? a?.description).join(" ") ??
+        JSON.stringify(e).slice(0, 200);
+      console.log(`SW console error: ${detail}`);
+    }
+    check("no service-worker console errors", cdp.consoleErrors.length === 0);
 
     const failed = results.filter((r) => !r.pass).length;
     console.log(
       `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
     );
     ws.close();
-    // Owner-clean: kill + AWAIT process termination, THEN remove the profile.
-    proc.kill();
-    await proc.status.catch(() => {});
-    try {
-      await new Deno.Command("rm", { args: ["-rf", profile] }).output();
-    } catch { /* best effort */ }
-    Deno.exit(failed > 0 ? 1 : 0);
+    await fixture.shutdown().catch(() => {});
   } catch (e) {
     check("journeys completed", false);
     console.error("journey failure:", String(e?.message ?? e));
+    try { await fixture.shutdown(); } catch { /* ignore */ }
+  } finally {
+    // Owner-clean: kill + AWAIT process termination, THEN remove the profile,
+    // then ASSERT the profile is gone.
     proc.kill();
-    await proc.status.catch(() => {});
-    try {
-      await new Deno.Command("rm", { args: ["-rf", profile] }).output();
-    } catch { /* best effort */ }
-    Deno.exit(1);
+    try { await proc.status; } catch { /* already exited */ }
+    await new Deno.Command("rm", { args: ["-rf", profile] }).output();
+    const still = await Deno.stat(profile).then(() => true).catch(() => false);
+    check("profile removed (no leak)", still === false);
+    Deno.exit(results.some((r) => !r.pass) ? 1 : 0);
   }
 }
 

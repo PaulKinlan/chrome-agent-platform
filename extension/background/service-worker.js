@@ -261,8 +261,7 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
     try {
       await chrome.notifications.create(`cap:${taskId}`, {
         type: "basic",
-        iconUrl:
-          "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%2378b3ff'/%3E%3C/svg%3E",
+        iconUrl: chrome.runtime.getURL("icon128.png"),
         title: "Scheduled task complete",
         message: String(result ?? "").slice(0, 160),
       });
@@ -360,8 +359,8 @@ const handlers = {
       totalDecoded += decoded;
     }
     const overCount = (m.attachments ?? []).length - MAX_COUNT;
-    if (overCount > 0) {
-      dropped.push({ reason: `over count limit (${overCount} dropped)` });
+    for (let i = 0; i < overCount; i++) {
+      dropped.push({ reason: "over count limit" });
     }
     const result = await runTask({
       id: m.id,
