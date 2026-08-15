@@ -287,50 +287,63 @@ const handlers = {
     // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust
     // a client-claimed size), enforce per-item AND aggregate limits + a count cap,
     // and report (not silently drop) anything over budget.
-    const MAX_ITEM_BYTES = 8 * 1024 * 1024; // 8 MiB per attachment
-    const MAX_TOTAL_BYTES = 16 * 1024 * 1024; // 16 MiB aggregate
+    const MAX_ITEM_BYTES = 8 * 1024 * 1024; // 8 MiB per attachment (encoded)
+    const MAX_TOTAL_BYTES = 16 * 1024 * 1024; // 16 MiB aggregate (encoded)
+    const MAX_ITEM_DECODED = 6 * 1024 * 1024; // 6 MiB per attachment (decoded)
+    const MAX_TOTAL_DECODED = 12 * 1024 * 1024; // 12 MiB aggregate (decoded)
     const MAX_COUNT = 8;
-    // Validate the dataURL SHAPE + measure the ENTIRE encoded string (never
-    // just the payload after the comma — a malformed/huge-prefix dataURL must
-    // not slip through at "0 bytes"). Accept only data:<mime>;base64,<payload>.
+    // Validate the dataURL SHAPE + measure BOTH the encoded transport size (the
+    // WHOLE dataURL string, which travels through runtime messaging) AND the
+    // decoded payload size (from validated base64 length/padding). Accept only
+    // data:<mime>;base64,<payload>. The declared a.type must match the parsed
+    // MIME — an image must not be relabelled text/plain.
     const measured = (a) => {
-      if (!a?.dataURL) return { bytes: 0, valid: true };
-      // A bounded type/subtype MIME + base64 payload. The "/" between type and
-      // subtype is REQUIRED (every normal MIME is type/subtype), and the base64
-      // payload must be well-formed (valid alphabet + padding).
+      if (!a?.dataURL) return { bytes: 0, decoded: 0, valid: true };
       const m =
         /^data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*)(?:;\s*[a-z0-9-]+=(?:"[^"]*"|[^;,\s]*))*;base64,([A-Za-z0-9+/]*={0,2})\s*$/
           .exec(
             String(a.dataURL),
           );
-      if (!m) return { bytes: 0, valid: false }; // malformed → rejected
+      if (!m) return { bytes: 0, decoded: 0, valid: false }; // malformed → rejected
+      const mime = m[1].toLowerCase();
       const payload = m[2];
-      if (payload.length % 4 !== 0) return { bytes: 0, valid: false };
-      // Count the WHOLE dataURL string (it all travels through runtime messaging).
-      return { bytes: Math.ceil(String(a.dataURL).length * 0.75), valid: true };
+      if (payload.length % 4 !== 0) return { bytes: 0, decoded: 0, valid: false };
+      // Bind the declared type to the parsed MIME (no image labelled text/plain).
+      const declaredType = String(a?.type ?? "").toLowerCase();
+      if (declaredType && declaredType !== mime) {
+        return { bytes: 0, decoded: 0, valid: false };
+      }
+      // Encoded size = the complete dataURL string (ASCII, so length ≈ bytes).
+      const encoded = String(a.dataURL).length;
+      // Decoded size = (base64_len / 4) * 3 minus padding characters.
+      const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+      const decoded = (payload.length / 4) * 3 - padding;
+      return { bytes: encoded, decoded, valid: true };
     };
     let total = 0;
+    let totalDecoded = 0;
     const bounded = [];
     const dropped = [];
     // Enforce MAX_COUNT exactly (not MAX_COUNT * 4).
     for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
-      const { bytes, valid } = measured(a);
+      const { bytes, decoded, valid } = measured(a);
       const name = String(a?.name ?? "unnamed").slice(0, 200);
       const type = String(a?.type ?? "unknown").slice(0, 100);
       if (!valid) {
-        dropped.push({ name, reason: "malformed dataURL" });
+        dropped.push({ name, reason: "malformed dataURL or type/mime mismatch" });
         continue;
       }
-      if (bytes > MAX_ITEM_BYTES) {
+      if (bytes > MAX_ITEM_BYTES || decoded > MAX_ITEM_DECODED) {
         dropped.push({ name, reason: "over per-item limit" });
         continue;
       }
-      if (total + bytes > MAX_TOTAL_BYTES) {
+      if (total + bytes > MAX_TOTAL_BYTES || totalDecoded + decoded > MAX_TOTAL_DECODED) {
         dropped.push({ name, reason: "over aggregate limit" });
         continue;
       }
       bounded.push({ ...a, name, type });
       total += bytes;
+      totalDecoded += decoded;
     }
     const overCount = (m.attachments ?? []).length - MAX_COUNT;
     if (overCount > 0) {

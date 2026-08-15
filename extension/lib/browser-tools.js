@@ -6,6 +6,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
+import { canonicalOrigin } from "./memory.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
@@ -59,7 +60,7 @@ export async function setOriginBrowserControlGrant(
     ...new Set(
       (origins ?? []).map((o) => {
         try {
-          return new URL(String(o)).origin;
+          return canonicalOrigin(String(o));
         } catch {
           return null;
         }
@@ -106,7 +107,7 @@ export async function captureTabScreenshot(tabId) {
   const origin = tab.url
     ? (() => {
       try {
-        return new URL(tab.url).origin;
+        return canonicalOrigin(tab.url);
       } catch {
         return undefined;
       }
@@ -173,7 +174,7 @@ export function browserToolset() {
         // only authorizes its own origins; a global grant authorizes all).
         let destOrigin;
         try {
-          destOrigin = new URL(url).origin;
+          destOrigin = canonicalOrigin(url);
         } catch {
           return { error: "invalid url" };
         }
@@ -199,7 +200,7 @@ export function browserToolset() {
         // approved origin must not be navigated to an unapproved one.
         let destOrigin;
         try {
-          destOrigin = new URL(url).origin;
+          destOrigin = canonicalOrigin(url);
         } catch {
           return { error: "invalid url" };
         }
@@ -246,7 +247,7 @@ export function browserToolset() {
         const origin = tab?.url
           ? (() => {
             try {
-              return new URL(tab.url).origin;
+              return canonicalOrigin(tab.url);
             } catch {
               return undefined;
             }

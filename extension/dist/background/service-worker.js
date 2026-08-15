@@ -66763,7 +66763,7 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
     ...new Set(
       (origins ?? []).map((o) => {
         try {
-          return new URL(String(o)).origin;
+          return canonicalOrigin(String(o));
         } catch {
           return null;
         }
@@ -66795,7 +66795,7 @@ async function captureTabScreenshot(tabId) {
   if (!tab?.id) return { error: "no tab" };
   const origin = tab.url ? (() => {
     try {
-      return new URL(tab.url).origin;
+      return canonicalOrigin(tab.url);
     } catch {
       return void 0;
     }
@@ -66848,7 +66848,7 @@ function browserToolset() {
       execute: async ({ url: url3 }) => {
         let destOrigin;
         try {
-          destOrigin = new URL(url3).origin;
+          destOrigin = canonicalOrigin(url3);
         } catch {
           return { error: "invalid url" };
         }
@@ -66870,7 +66870,7 @@ function browserToolset() {
       execute: async ({ tabId, url: url3 }) => {
         let destOrigin;
         try {
-          destOrigin = new URL(url3).origin;
+          destOrigin = canonicalOrigin(url3);
         } catch {
           return { error: "invalid url" };
         }
@@ -66912,7 +66912,7 @@ function browserToolset() {
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         const origin = tab?.url ? (() => {
           try {
-            return new URL(tab.url).origin;
+            return canonicalOrigin(tab.url);
           } catch {
             return void 0;
           }
@@ -67032,26 +67032,6 @@ var SUPPORTED_KEYWORDS = /* @__PURE__ */ new Set([
   "anyOf"
   // union (exactly-one oneOf is NOT supported)
 ]);
-function typeZod(z4, type) {
-  switch (type) {
-    case "string":
-      return z4.string();
-    case "number":
-      return z4.number();
-    case "integer":
-      return z4.number().int();
-    case "boolean":
-      return z4.boolean();
-    case "array":
-      return z4.array(z4.unknown());
-    case "object":
-      return z4.object({}).passthrough();
-    case "null":
-      return z4.null();
-    default:
-      return z4.never();
-  }
-}
 function valueMatchesType(value, type) {
   switch (type) {
     case "string":
@@ -67072,123 +67052,149 @@ function valueMatchesType(value, type) {
       return false;
   }
 }
-function schemaToZod(z4, schema4, depth = 0) {
-  if (depth > SCHEMA_BOUNDS.maxDepth) return z4.never();
-  if (!schema4 || typeof schema4 !== "object" || Array.isArray(schema4)) {
-    return z4.never();
-  }
+function validateSchemaAST(schema4, depth) {
+  if (depth > SCHEMA_BOUNDS.maxDepth) return false;
+  if (!schema4 || typeof schema4 !== "object" || Array.isArray(schema4)) return false;
   for (const key of Object.keys(schema4)) {
-    if (!SUPPORTED_KEYWORDS.has(key)) return z4.never();
+    if (!SUPPORTED_KEYWORDS.has(key)) return false;
   }
-  if (schema4.oneOf !== void 0) return z4.never();
-  if (schema4.pattern !== void 0) return z4.never();
-  if (schema4.additionalProperties !== void 0 && typeof schema4.additionalProperties !== "boolean") {
-    return z4.never();
+  if (schema4.oneOf !== void 0 || schema4.pattern !== void 0) return false;
+  if (schema4.additionalProperties !== void 0 && typeof schema4.additionalProperties !== "boolean") return false;
+  if (schema4.required !== void 0) {
+    if (!Array.isArray(schema4.required) || schema4.required.some((k) => typeof k !== "string")) return false;
+  }
+  if (schema4.enum !== void 0) {
+    if (!Array.isArray(schema4.enum)) return false;
+    if (schema4.enum.length === 0 || schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return false;
+  }
+  if (schema4.anyOf !== void 0) {
+    if (!Array.isArray(schema4.anyOf)) return false;
+    if (schema4.anyOf.length === 0 || schema4.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return false;
+  }
+  if (schema4.items !== void 0) {
+    if (schema4.items === null || typeof schema4.items !== "object" || Array.isArray(schema4.items)) return false;
+  }
+  if (schema4.properties !== void 0) {
+    if (schema4.properties === null || typeof schema4.properties !== "object" || Array.isArray(schema4.properties)) return false;
+    const keys = Object.keys(schema4.properties);
+    if (keys.length > SCHEMA_BOUNDS.maxProperties) return false;
+  }
+  for (const k of ["minimum", "maximum"]) {
+    if (schema4[k] !== void 0 && (typeof schema4[k] !== "number" || !Number.isFinite(schema4[k]))) return false;
+  }
+  for (const k of ["minLength", "maxLength", "minItems", "maxItems"]) {
+    if (schema4[k] !== void 0 && (typeof schema4[k] !== "number" || !Number.isInteger(schema4[k]) || schema4[k] < 0)) return false;
   }
   const t = schema4.type;
-  if (schema4.required !== void 0) {
-    if (!Array.isArray(schema4.required) || schema4.required.some((k) => typeof k !== "string")) return z4.never();
+  if (t !== void 0 && !["string", "number", "integer", "boolean", "array", "object", "null"].includes(t)) return false;
+  const nonString = (s) => schema4[s] !== void 0;
+  if (t === "string") {
+    if (nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "number" || t === "integer") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "boolean") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "null") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "array") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "object") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems")) return false;
   }
-  if (schema4.enum !== void 0 && !Array.isArray(schema4.enum)) {
-    return z4.never();
+  if (t !== void 0 && schema4.const !== void 0 && !valueMatchesType(schema4.const, t)) {
+    return false;
   }
-  if (schema4.anyOf !== void 0 && !Array.isArray(schema4.anyOf)) {
-    return z4.never();
-  }
-  if (schema4.items !== void 0 && typeof schema4.items !== "object") {
-    return z4.never();
-  }
-  if (schema4.properties !== void 0 && (typeof schema4.properties !== "object" || Array.isArray(schema4.properties))) return z4.never();
-  for (const k of [
-    "minimum",
-    "maximum",
-    "minItems",
-    "maxItems",
-    "minLength",
-    "maxLength"
-  ]) {
-    if (schema4[k] !== void 0 && typeof schema4[k] !== "number") {
-      return z4.never();
+  if (schema4.items !== void 0 && !validateSchemaAST(schema4.items, depth + 1)) return false;
+  if (schema4.properties !== void 0) {
+    for (const key of Object.keys(schema4.properties)) {
+      if (!validateSchemaAST(schema4.properties[key], depth + 1)) return false;
     }
   }
+  if (schema4.anyOf !== void 0) {
+    for (const branch of schema4.anyOf) {
+      if (!validateSchemaAST(branch, depth + 1)) return false;
+    }
+  }
+  return true;
+}
+function valueSatisfiesBounds(value, schema4) {
+  const t = schema4.type;
+  if (t !== void 0 && !valueMatchesType(value, t)) return false;
+  if (t === "string") {
+    if (typeof value !== "string") return false;
+    if (schema4.minLength !== void 0 && value.length < schema4.minLength) return false;
+    if (schema4.maxLength !== void 0 && value.length > schema4.maxLength) return false;
+    return true;
+  }
+  if (t === "number") {
+    if (typeof value !== "number") return false;
+    if (schema4.minimum !== void 0 && value < schema4.minimum) return false;
+    if (schema4.maximum !== void 0 && value > schema4.maximum) return false;
+    return true;
+  }
+  if (t === "integer") {
+    if (!Number.isInteger(value)) return false;
+    if (schema4.minimum !== void 0 && value < Math.ceil(schema4.minimum)) return false;
+    if (schema4.maximum !== void 0 && value > Math.floor(schema4.maximum)) return false;
+    return true;
+  }
+  return true;
+}
+function schemaToZod(z4, schema4, depth = 0) {
+  if (!validateSchemaAST(schema4, depth)) return z4.never();
   if (schema4.const !== void 0) {
-    if (t !== void 0 && !valueMatchesType(schema4.const, t)) return z4.never();
+    if (!valueSatisfiesBounds(schema4.const, schema4)) return z4.never();
     return z4.literal(schema4.const);
   }
-  if (Array.isArray(schema4.enum)) {
-    if (schema4.enum.length === 0) return z4.never();
-    if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
-    if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
-    const valid = t !== void 0 ? schema4.enum.filter((v) => valueMatchesType(v, t)) : schema4.enum;
+  if (schema4.enum !== void 0) {
+    const valid = schema4.enum.filter((v) => valueSatisfiesBounds(v, schema4));
     if (valid.length === 0) return z4.never();
-    return z4.union(
-      valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v))
-    );
+    return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
   }
-  if (Array.isArray(schema4.anyOf)) {
-    if (schema4.anyOf.length === 0 || schema4.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
+  const base = buildBaseZod(z4, schema4);
+  if (schema4.anyOf !== void 0) {
     const branches = schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1));
-    const typeGuard = t !== void 0 ? typeZod(z4, t) : null;
-    return typeGuard ? z4.intersection(z4.union(branches), typeGuard) : z4.union(branches);
+    return z4.intersection(base, z4.union(branches));
   }
+  return base;
+}
+function buildBaseZod(z4, schema4) {
+  const t = schema4.type;
   if (t === "string") {
-    if (schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     let s = z4.string();
-    if (typeof schema4.minLength === "number" && schema4.minLength >= 0) {
-      s = s.min(schema4.minLength);
-    }
-    const pageMax = typeof schema4.maxLength === "number" && schema4.maxLength >= 0 ? schema4.maxLength : SCHEMA_BOUNDS.maxStringLength;
+    if (schema4.minLength !== void 0) s = s.min(schema4.minLength);
+    const pageMax = schema4.maxLength !== void 0 ? schema4.maxLength : SCHEMA_BOUNDS.maxStringLength;
     s = s.max(Math.min(pageMax, SCHEMA_BOUNDS.maxStringLength));
     return s;
   }
   if (t === "number") {
-    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     let s = z4.number();
-    if (typeof schema4.minimum === "number") s = s.min(schema4.minimum);
-    if (typeof schema4.maximum === "number") s = s.max(schema4.maximum);
+    if (schema4.minimum !== void 0) s = s.min(schema4.minimum);
+    if (schema4.maximum !== void 0) s = s.max(schema4.maximum);
     return s;
   }
   if (t === "integer") {
-    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     let s = z4.number().int();
-    if (typeof schema4.minimum === "number") {
-      s = s.min(Math.ceil(schema4.minimum));
-    }
-    if (typeof schema4.maximum === "number") {
-      s = s.max(Math.floor(schema4.maximum));
-    }
+    if (schema4.minimum !== void 0) s = s.min(Math.ceil(schema4.minimum));
+    if (schema4.maximum !== void 0) s = s.max(Math.floor(schema4.maximum));
     return s;
   }
-  if (t === "boolean") {
-    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
-    return z4.boolean();
-  }
-  if (t === "null") {
-    return z4.null();
-  }
+  if (t === "boolean") return z4.boolean();
+  if (t === "null") return z4.null();
   if (t === "array") {
-    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
-    const inner = schemaToZod(z4, schema4.items, depth + 1);
+    const inner = schemaToZod(z4, schema4.items, 1);
     let arr = z4.array(inner);
-    if (typeof schema4.minItems === "number" && schema4.minItems >= 0) {
-      arr = arr.min(schema4.minItems);
-    }
-    const pageMax = typeof schema4.maxItems === "number" && schema4.maxItems >= 0 ? schema4.maxItems : SCHEMA_BOUNDS.maxArrayItems;
+    if (schema4.minItems !== void 0) arr = arr.min(schema4.minItems);
+    const pageMax = schema4.maxItems !== void 0 ? schema4.maxItems : SCHEMA_BOUNDS.maxArrayItems;
     arr = arr.max(Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
     return arr;
   }
   if (t === "object") {
-    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0) return z4.never();
-    const props = schema4.properties && typeof schema4.properties === "object" ? schema4.properties : {};
-    const propKeys = Object.keys(props);
-    if (propKeys.length > SCHEMA_BOUNDS.maxProperties) return z4.never();
-    const required3 = Array.isArray(schema4.required) ? new Set(schema4.required) : /* @__PURE__ */ new Set();
-    for (const key of required3) {
-      if (!Object.prototype.hasOwnProperty.call(props, key)) return z4.never();
-    }
+    const props = schema4.properties || {};
+    const required3 = new Set(Array.isArray(schema4.required) ? schema4.required : []);
     const shape = {};
     for (const [key, sub] of Object.entries(props)) {
-      const subZod = schemaToZod(z4, sub, depth + 1);
+      const subZod = schemaToZod(z4, sub, 1);
       shape[key] = required3.has(key) ? subZod : subZod.optional();
     }
     const obj = z4.object(shape);
@@ -67428,38 +67434,50 @@ var handlers = {
   async "agent.run"(m) {
     const MAX_ITEM_BYTES = 8 * 1024 * 1024;
     const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+    const MAX_ITEM_DECODED = 6 * 1024 * 1024;
+    const MAX_TOTAL_DECODED = 12 * 1024 * 1024;
     const MAX_COUNT = 8;
     const measured = (a) => {
-      if (!a?.dataURL) return { bytes: 0, valid: true };
+      if (!a?.dataURL) return { bytes: 0, decoded: 0, valid: true };
       const m2 = /^data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*)(?:;\s*[a-z0-9-]+=(?:"[^"]*"|[^;,\s]*))*;base64,([A-Za-z0-9+/]*={0,2})\s*$/.exec(
         String(a.dataURL)
       );
-      if (!m2) return { bytes: 0, valid: false };
+      if (!m2) return { bytes: 0, decoded: 0, valid: false };
+      const mime = m2[1].toLowerCase();
       const payload = m2[2];
-      if (payload.length % 4 !== 0) return { bytes: 0, valid: false };
-      return { bytes: Math.ceil(String(a.dataURL).length * 0.75), valid: true };
+      if (payload.length % 4 !== 0) return { bytes: 0, decoded: 0, valid: false };
+      const declaredType = String(a?.type ?? "").toLowerCase();
+      if (declaredType && declaredType !== mime) {
+        return { bytes: 0, decoded: 0, valid: false };
+      }
+      const encoded = String(a.dataURL).length;
+      const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+      const decoded = payload.length / 4 * 3 - padding;
+      return { bytes: encoded, decoded, valid: true };
     };
     let total = 0;
+    let totalDecoded = 0;
     const bounded = [];
     const dropped = [];
     for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
-      const { bytes, valid } = measured(a);
+      const { bytes, decoded, valid } = measured(a);
       const name25 = String(a?.name ?? "unnamed").slice(0, 200);
       const type = String(a?.type ?? "unknown").slice(0, 100);
       if (!valid) {
-        dropped.push({ name: name25, reason: "malformed dataURL" });
+        dropped.push({ name: name25, reason: "malformed dataURL or type/mime mismatch" });
         continue;
       }
-      if (bytes > MAX_ITEM_BYTES) {
+      if (bytes > MAX_ITEM_BYTES || decoded > MAX_ITEM_DECODED) {
         dropped.push({ name: name25, reason: "over per-item limit" });
         continue;
       }
-      if (total + bytes > MAX_TOTAL_BYTES) {
+      if (total + bytes > MAX_TOTAL_BYTES || totalDecoded + decoded > MAX_TOTAL_DECODED) {
         dropped.push({ name: name25, reason: "over aggregate limit" });
         continue;
       }
       bounded.push({ ...a, name: name25, type });
       total += bytes;
+      totalDecoded += decoded;
     }
     const overCount = (m.attachments ?? []).length - MAX_COUNT;
     if (overCount > 0) {

@@ -206,7 +206,7 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
     ...new Set(
       (origins ?? []).map((o) => {
         try {
-          return new URL(String(o)).origin;
+          return canonicalOrigin(String(o));
         } catch {
           return null;
         }
