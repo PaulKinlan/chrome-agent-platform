@@ -25391,9 +25391,9 @@ async function setProviderConfig(partial3) {
   await chrome.storage.local.set({ providerConfig: next });
   return next;
 }
-async function getModel(providerId) {
+async function getModel() {
   const cfg = await getProviderConfig();
-  const id = providerId ?? cfg.provider;
+  const id = cfg.provider;
   if (OPENAI_COMPATIBLE_IDS.has(id)) {
     const baseURL = cfg.baseURL || (PROVIDER_CHOICES.find((p) => p.id === id)?.baseURL ?? "");
     const apiKey = cfg.apiKey ?? "";
@@ -67302,7 +67302,7 @@ async function ensureModel(_agentId) {
   const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
   if (MODEL_CACHE.key !== cacheKey || !MODEL_CACHE.model) {
     MODEL_CACHE.key = cacheKey;
-    MODEL_CACHE.model = await getModel(cfg.provider);
+    MODEL_CACHE.model = await getModel();
   }
   return MODEL_CACHE.model;
 }

@@ -79,7 +79,7 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
 - OPFS (`navigator.storage.getDirectory()`) — private, per-origin, no quota
   prompts, sync + async access.
 
-### 2.6 Alarm scheduler (agent-do / chaos)
+### 2.6 Alarm scheduler
 - The agent registers future tasks: `chrome.alarms` + a background service worker.
 - On alarm fire: resume the agent context, run the task, respond to browser actions
   (notifications, side-panel updates).

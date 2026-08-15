@@ -15,7 +15,7 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 ## Status (2026-08-15)
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
 - [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)
-- [x] Provider options — a DEDICATED settings pane (options page): Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt-API/demo, multi-agent + per-agent provider, theme picker (4 themes), scoped browser-control grant, usage log, per-origin memory (Paul 2026-08-15: the inline dropdown was not a config pane)
+- [x] Provider options — a DEDICATED settings pane (options page): Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt-API/demo, multi-agent (1-vs-N) hub, theme picker (4 themes), scoped browser-control grant, usage log, per-origin memory (Paul 2026-08-15: the inline dropdown was not a config pane)
 - [x] Usage logging (per-call token/cost records, 7-day rolling window, aggregation)
 - [x] Browser control + event listening (tabs, alarms, capture)
 - [x] Recipes (4 pre-baked utility agents) + management tools (create/delete/list agents)
@@ -29,7 +29,7 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 - [ ] Per-agent provider config (TBD)
 
 ## In flight (2026-08-15)
-- **Dedicated configuration pane** — a proper settings/options page (options_page) like a dedicated options page: providers (Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt API, each with endpoint+key+model, per-agent assignment), agents (1-vs-N), appearance (theme picker), browser-control grant (scoped), usage view, per-origin data. The hub's inline dropdown links to it. Plus the UI polish (clean, modern, sectioned options style). STEERED.
+- **Dedicated configuration pane** — a proper settings/options page (options_page) like a dedicated options page: providers (Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt API, each with endpoint+key+model), agents (1-vs-N), appearance (theme picker), browser-control grant (scoped), usage view, per-origin data. The hub's inline dropdown links to it. Plus the UI polish (clean, modern, sectioned options style). STEERED.
 
 ## Open questions for Paul
 - The provider default for a real model: Prompt API (on-device) vs a configured endpoint. Which?

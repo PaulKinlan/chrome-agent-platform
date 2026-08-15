@@ -124,7 +124,7 @@ async function ensureModel(_agentId) {
   // Rebuild whenever the key changed OR the cached model is null.
   if (MODEL_CACHE.key !== cacheKey || !MODEL_CACHE.model) {
     MODEL_CACHE.key = cacheKey;
-    MODEL_CACHE.model = await getModel(cfg.provider);
+    MODEL_CACHE.model = await getModel();
   }
   return MODEL_CACHE.model;
 }

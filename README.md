@@ -51,14 +51,14 @@ extension/
 
 ## Models
 
-`lib/provider.js` is the pluggable model layer (`@ai-sdk/openai` `createOpenAI`
-over any OpenAI-compatible endpoint). Default: DeepSeek (`deepseek-chat` =
-deepseek-v4-pro). Set the API key in the hub settings. A **deferred-tasks seam**
-(`deferToGlm`) routes tasks to a glm-5.3 endpoint via a configurable webhook
-(intercom) — unconfigured, callers fall back to the local model.
+`lib/provider.js` is the pluggable model layer. The default is the local **Demo**
+(deterministic, no key); the settings pane (options page) configures a real
+provider — OpenAI-compatible endpoints (OpenAI, Anthropic, Gemini, DeepSeek,
+Ollama) or the Chrome Prompt API (on-device Gemini nano). Every agent uses the
+one global provider; there is no per-agent provider resolution yet.
 
 Usage is accounted per task/model (tokens + cost) in `lib/usage.js`, rendered in
-the memory explorer — the chaos-relay accounting pattern.
+the memory explorer — a 7-day rolling window, aggregated by agent/provider/time.
 
 ## Status
 

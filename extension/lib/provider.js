@@ -96,11 +96,13 @@ export async function setProviderConfig(partial) {
   return next;
 }
 
-/** Resolve the actual LanguageModel. `providerId` overrides the stored default
- * (per-agent provider resolution). Returns { model, modelId, providerName }. */
-export async function getModel(providerId) {
+/** Resolve the LanguageModel for the stored global provider. There is NO
+ * per-agent provider resolution — every agent uses the one global provider
+ * config, so a per-agent override can never mix one provider's endpoint with
+ * another's credential. Returns { model, modelId, providerName }. */
+export async function getModel() {
   const cfg = await getProviderConfig();
-  const id = providerId ?? cfg.provider;
+  const id = cfg.provider;
 
   if (OPENAI_COMPATIBLE_IDS.has(id)) {
     const baseURL = cfg.baseURL ||
