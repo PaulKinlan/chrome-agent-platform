@@ -192,28 +192,41 @@ export async function tryAcquireInflight(name) {
 /** Whether `token` still owns the in-flight lock for `name`. This is the
  * execution fence: a run checks it at every durable/destructive boundary so a
  * stale owner (whose lock was re-acquired) aborts before committing side
- * effects (journal writes, notifications, task deletion). */
+ * effects (journal writes, notifications, task deletion).
+ *
+ * The PERSISTED lock is the authority for ownership — not the in-memory map
+ * alone. A same-boot run whose durable lock was lost (a storage failure or an
+ * external deletion) no longer durably owns it, so the fence must abort rather
+ * than commit side effects as a silently-degraded owner (the round-16 blocker). */
 export async function ownsInflight(name, token) {
-  // Same-boot: the in-memory map is authoritative (no storage round-trip, no
-  // storage race). A live run's owner still owns; a stale token does not.
+  // A same-boot run registered under a DIFFERENT token is a stale owner.
   const active = activeRuns.get(name);
-  if (active) return active.token === token;
-  // No live run: fall back to the persisted lock (cross-boot / released).
+  if (active && active.token !== token) return false;
+  // Consult the persisted lock in EVERY case (live in-memory OR released): the
+  // durable lock must still exist AND match the token. The in-memory map only
+  // rules out a stale token faster; it never substitutes for durable ownership.
   const store = await kvGet(INFLIGHT_KEY);
   const existing = store[INFLIGHT_KEY]?.[name];
   return Boolean(validLock(existing) && existing.token === token);
 }
 
-/** Renew a live owner's heartbeat so a slow-but-alive run never looks stale. */
+/** Renew a live owner's heartbeat so a slow-but-alive run never looks stale.
+ * FAILS CLOSED: a missing, malformed, or differently-owned persisted lock must
+ * REJECT (never silently succeed) — otherwise the owner would keep committing
+ * side effects without durable heartbeat proof (the round-16 blocker: a missing/
+ * mismatched persisted heartbeat silently succeeded). */
 export async function heartbeatInflight(name, token) {
   await withLock(async () => {
     const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     const existing = inflight[name];
-    if (validLock(existing) && existing.token === token) {
-      inflight[name] = { ...existing, heartbeatAt: Date.now() };
-      await kvSet({ [INFLIGHT_KEY]: inflight });
+    if (!validLock(existing) || existing.token !== token) {
+      throw new Error(
+        `durable heartbeat lock for "${name}" is missing or owned by another token — aborting run`,
+      );
     }
+    inflight[name] = { ...existing, heartbeatAt: Date.now() };
+    await kvSet({ [INFLIGHT_KEY]: inflight });
   });
 }
 

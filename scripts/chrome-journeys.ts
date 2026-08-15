@@ -480,6 +480,7 @@ async function main() {
   const fixturePort = fixture.addr.port;
   const RED_ORIGIN = `http://127.0.0.1:${fixturePort}`;
   const RED_URL = `${RED_ORIGIN}/red.html`;
+  let fixtureShutdownFailed = false;
 
   try {
     port = await withTimeout(waitForPort(proc), 20000, "wait for port");
@@ -1297,13 +1298,18 @@ async function main() {
     cdp.intentionalClose = true;
     ws.close();
     await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch((e) => {
+      // A hung/failed fixture shutdown is a real resource leak — FAIL the gate
+      // (the round-16 finding: fixture shutdown failure was logged but non-fatal).
+      fixtureShutdownFailed = true;
       console.error("fixture.shutdown failed:", String(e?.message ?? e));
     });
   } catch (e) {
     console.error("journey failure:", String(e?.message ?? e));
     try {
       await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
-        () => {},
+        () => {
+          fixtureShutdownFailed = true;
+        },
       );
     } catch { /* ignore */ }
     try {
@@ -1423,6 +1429,15 @@ async function main() {
           : "").split("\n").filter((l) =>
             l && !l.slice(3).startsWith("test-artifacts/")
           );
+        // A dirty SOURCE tree (beyond the test-artifacts/ this run writes) makes
+        // the retained evidence unattestable — FAIL the retained run rather than
+        // record dirtiness and continue (the round-16 finding: dirty source state
+        // was recorded, not fatal).
+        if (dirty.length > 0) {
+          throw new Error(
+            `source tree is dirty (${dirty.length} file(s)) — commit or stash before retaining evidence`,
+          );
+        }
         const manifest = {
           testedSourceCommit,
           evidenceCommitNote:
@@ -1453,7 +1468,10 @@ async function main() {
     }
 
     Deno.exit(
-      failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ? 1 : 0,
+      failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ||
+          fixtureShutdownFailed
+        ? 1
+        : 0,
     );
   }
 }

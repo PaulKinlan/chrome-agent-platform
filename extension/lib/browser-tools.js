@@ -102,6 +102,26 @@ export async function setOriginBrowserControlGrant(
   return grant;
 }
 
+/** A DENY-ALL scoped grant: the record exists (so the Settings UI can show the
+ * toggle as on and reveal the origin field) but authorizes NOTHING until the
+ * owner scopes it to explicit origins. This removes the round-16 global-grant
+ * footgun — the old default created a 15-minute WHOLE-BROWSER authority before
+ * any origin/task scope existed (contrary to Constitution §1's per-origin
+ * requirement). A global grant must never be created implicitly. */
+export async function setDenyAllBrowserControlGrant(
+  expiryMs = DEFAULT_GRANT_MS,
+) {
+  const grant = {
+    id: newGrantId(),
+    scope: "origins",
+    origins: [],
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
+    grantedAt: Date.now(),
+  };
+  await kvSet({ [GRANT_KEY]: grant });
+  return grant;
+}
+
 export async function revokeBrowserControlGrant() {
   // A removal that FAILS on a live backend now REJECTS (kvRemove fails closed),
   // so we never report {revoked:true} against a backend error. Re-read and
@@ -221,6 +241,11 @@ function validateGrantFor(grant, origin) {
  * browser-control toggle / Screenshots capability). Fail closed when absent.
  */
 export async function captureTabScreenshot(tabId) {
+  // Screenshot capture is a side-effecting boundary (it captures + may return
+  // privileged page pixels) — fence it (the round-16 fence coverage finding).
+  if (runAborted()) {
+    return { error: "run aborted — screenshot not captured" };
+  }
   if (!(await hasActiveTabPermission()) && !(await hasTabsPermission())) {
     return {
       error:
@@ -538,6 +563,12 @@ export function browserToolset() {
         periodInMinutes: z.number().optional(),
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
+        // schedule_task is a durable side-effecting boundary (persists a payload
+        // + creates a Chrome alarm) — fence it (the round-16 fence coverage
+        // finding: schedule_task persisted without a run-abort check).
+        if (runAborted()) {
+          return { error: "run aborted — task not scheduled" };
+        }
         // The ONE atomic scheduling path (shared with the register-task route).
         const { name, when } = await scheduleTask({
           task,

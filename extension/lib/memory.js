@@ -143,7 +143,24 @@ async function globalUsage() {
 /** The shared write path: bounds + reserved-key protection + aggregate quotas.
  * `trusted` bypasses the reserved-key protection (internal authority writes)
  * but NOT the byte/key quotas. */
+// A global write mutex serializes the check-then-write of the aggregate quotas
+// (per-store + global byte/key budgets). Without it, two concurrent writes each
+// observe the available quota and jointly exceed it (the round-16 quota race).
+let writeMutex = Promise.resolve();
+function withWriteLock(fn) {
+  const run = writeMutex.then(fn, fn);
+  writeMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** UTF-8 byte length of a string (quota accounting must use BYTES, not UTF-16
+ * code-unit `.length`, which under-counts non-ASCII data — the round-16 finding). */
+function utf8Bytes(str) {
+  return new TextEncoder().encode(str).byteLength;
+}
+
 async function setValue(path, key, value, { isMaster, trusted = false }) {
+  return withWriteLock(async () => {
   const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
   if (!trusted && reserved.has(String(key))) {
     throw new Error(`key "${key}" is reserved on this store`);
@@ -154,31 +171,40 @@ async function setValue(path, key, value, { isMaster, trusted = false }) {
   } catch {
     throw new Error(`value for "${key}" is not JSON-serializable`);
   }
-  if (serialized.length > MAX_VALUE_BYTES) {
+  const newBytes = utf8Bytes(serialized);
+  if (newBytes > MAX_VALUE_BYTES) {
     throw new Error(
       `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
     );
   }
   const dir = await openDir(path);
   const usage = await storeUsage(dir);
-  const oldRaw = await readJson(dir, `${key}.json`);
-  const isNew = oldRaw === null;
-  const oldBytes = isNew ? 0 : JSON.stringify(oldRaw).length;
+  // Read the OLD value's ACTUAL file bytes (not a re-stringify) so the delta is
+  // measured in the same unit (UTF-8 file bytes) as storeUsage/globalUsage.
+  let oldBytes = 0;
+  let isNew = true;
+  try {
+    const fh = await dir.getFileHandle(`${key}.json`);
+    oldBytes = (await fh.getFile()).size;
+    isNew = false;
+  } catch { /* absent → new key */ }
   // Aggregate quotas: a store may not grow past MAX_KEYS_PER_ORIGIN keys or
   // MAX_BYTES_PER_ORIGIN bytes (and the global tree past MAX_BYTES_GLOBAL).
-  // Existing values can always be REPLACED (shrinking/rewriting is allowed);
-  // growth beyond a quota fails closed.
+  // The delta is positive for BOTH new keys AND replacements that grow — a
+  // replacement that enlarges an existing value must also be budgeted (the
+  // round-16 finding: the global limit was only checked for new keys).
   if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
     throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
   }
-  const delta = serialized.length - oldBytes;
+  const delta = newBytes - oldBytes;
   if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
     throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
   }
-  if (isNew && (await globalUsage()) + serialized.length > MAX_BYTES_GLOBAL) {
+  if ((await globalUsage()) + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
     throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
   }
   await writeJson(dir, `${key}.json`, value);
+  });
 }
 
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */

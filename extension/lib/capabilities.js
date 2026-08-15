@@ -104,6 +104,27 @@ export async function requestCapability(id) {
 }
 
 /**
+ * Revoke a capability's permissions. MUST be called from a user gesture (the
+ * Settings Disable button). Returns { revoked, error } and CONFIRMS absence via
+ * chrome.permissions.contains (a `remove` resolving false means "already absent",
+ * which is the goal — not a failure). The UI must surface a failed revoke, never
+ * claim success against a still-granted permission (the round-16 finding).
+ */
+export async function revokeCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  try {
+    const removed = await chrome.permissions.remove({
+      permissions: cap.permissions,
+    });
+    const stillGranted = await hasCapability(id);
+    return { ok: true, revoked: !stillGranted, capability: id, removed };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e), capability: id };
+  }
+}
+
+/**
  * Request an exact origin's host permission (for enrollment). MUST be called
  * from a user gesture. Returns the honest grant result.
  */

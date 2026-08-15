@@ -128,6 +128,21 @@ export async function enrollmentGeneration(origin) {
   return map[canonical]?.gen ?? 0;
 }
 
+/** An ATOMIC snapshot of an origin's enrollment (enrolled + generation) read
+ * under the global enrollment lock — so a delete (which tombstones + bumps the
+ * generation under the SAME lock) can never interleave with the read (the
+ * round-16 generation-commit race: `isEnrolled` + `enrollmentGeneration` were
+ * read as two separate unlocked kv reads, so a delete could slip between them). */
+export async function enrollmentSnapshot(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { enrolled: false, gen: 0 };
+  return withEnrollmentLock(async () => {
+    const map = await enrolledMap();
+    const e = map[canonical];
+    return { enrolled: Boolean(e && e.enrolled === true), gen: e?.gen ?? 0 };
+  });
+}
+
 export async function enrollOrigin(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) throw new Error(`invalid origin: ${origin}`);
@@ -164,6 +179,20 @@ export async function disenrollOrigin(origin) {
       gen: (map[canonical]?.gen ?? 0) + 1,
     };
     await kvSet({ [ENROLL_KEY]: map });
+    // Bound tombstone retention: enrolled:false entries only exist to fence a
+    // still-running bridge's generation. Keep at most MAX_TOMBSTONES (oldest
+    // first) so a churn of enroll/delete cycles cannot grow the registry without
+    // bound (the round-16 quota finding: tombstones accumulated indefinitely).
+    const MAX_TOMBSTONES = 200;
+    const tombstones = Object.entries(map)
+      .filter(([, v]) => v?.enrolled !== true)
+      .sort((a, b) => (a[1]?.at ?? 0) - (b[1]?.at ?? 0));
+    if (tombstones.length > MAX_TOMBSTONES) {
+      for (const [o] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
+        delete map[o];
+      }
+      await kvSet({ [ENROLL_KEY]: map });
+    }
     return Object.keys(map).filter((o) => map[o]?.enrolled === true);
   });
 }

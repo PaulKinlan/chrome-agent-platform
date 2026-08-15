@@ -176,3 +176,61 @@ Deno.test("markScheduledDone is fenced: a stale owner cannot delete a later owne
   const store2 = await chrome.storage.local.get("cap:scheduledTasks");
   assert(store2["cap:scheduledTasks"][name] === undefined, "owner B removed the task");
 });
+
+Deno.test("heartbeatInflight REJECTS a missing persisted lock (round-16 blocker)", async () => {
+  const a = await tryAcquireInflight("lease-f");
+  assertEquals(a.acquired, true);
+
+  // Delete the durable lock (simulates a storage failure or external deletion)
+  // while the owner is STILL live in memory.
+  const s = await chrome.storage.local.get("cap:scheduledInflight");
+  delete s["cap:scheduledInflight"]["lease-f"];
+  await chrome.storage.local.set({ "cap:scheduledInflight": s["cap:scheduledInflight"] });
+
+  // The heartbeat must REJECT (never silently succeed) — the owner cannot prove
+  // durable ownership, so the run must abort rather than commit side effects.
+  let threw = false;
+  try {
+    await heartbeatInflight("lease-f", a.token);
+  } catch {
+    threw = true;
+  }
+  assert(threw, "heartbeat on a missing durable lock must reject");
+  await releaseInflight("lease-f", a.token);
+});
+
+Deno.test("heartbeatInflight REJECTS a mismatched-token persisted lock (round-16 blocker)", async () => {
+  const a = await tryAcquireInflight("lease-g");
+  assertEquals(a.acquired, true);
+
+  // A different token now owns the persisted lock (re-acquisition by another
+  // worker) while this owner is still in memory.
+  const s = await chrome.storage.local.get("cap:scheduledInflight");
+  s["cap:scheduledInflight"]["lease-g"].token = "some-other-token";
+  await chrome.storage.local.set({ "cap:scheduledInflight": s["cap:scheduledInflight"] });
+
+  let threw = false;
+  try {
+    await heartbeatInflight("lease-g", a.token);
+  } catch {
+    threw = true;
+  }
+  assert(threw, "heartbeat on a mismatched durable lock must reject");
+  await releaseInflight("lease-g", a.token);
+});
+
+Deno.test("ownsInflight is false when the durable lock is lost (round-16 blocker)", async () => {
+  const a = await tryAcquireInflight("lease-h");
+  assertEquals(a.acquired, true);
+  assert(await ownsInflight("lease-h", a.token), "owner owns while the durable lock exists");
+
+  // Delete the durable lock — the in-memory run still exists, but durable
+  // ownership is lost. ownsInflight must now return false (the execution fence
+  // must abort, not commit side effects as a silently-degraded owner).
+  const s = await chrome.storage.local.get("cap:scheduledInflight");
+  delete s["cap:scheduledInflight"]["lease-h"];
+  await chrome.storage.local.set({ "cap:scheduledInflight": s["cap:scheduledInflight"] });
+  assert(!(await ownsInflight("lease-h", a.token)), "durable ownership loss must fail the fence");
+
+  await releaseInflight("lease-h", a.token);
+});

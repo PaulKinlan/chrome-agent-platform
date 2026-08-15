@@ -12,7 +12,9 @@ import {
   kvRemove,
   storageAvailable,
   StorageBackendError,
+  migrateSessionToStorage,
   __resetSessionForTest,
+  __resetMigrationForTest,
 } from "../extension/lib/kv.js";
 
 const store = new Map();
@@ -84,9 +86,44 @@ Deno.test("kvGet REJECTS on a backend read failure (no stale session value)", as
 
 Deno.test("kvSet persists to the backend when it is present and healthy", async () => {
   __resetSessionForTest();
+  __resetMigrationForTest();
   store.clear();
   makeChrome({ present: true, fail: false });
   await kvSet({ "cap:x": { a: 1 } });
   // The value landed in the PERSISTENT store (not a session Map).
   assertEquals(store.get("cap:x"), { a: 1 });
+});
+
+Deno.test("migrateSessionToStorage moves session fallback into the backend on grant (round-16)", async () => {
+  __resetSessionForTest();
+  __resetMigrationForTest();
+  store.clear();
+  // Backend ABSENT → kvSet uses the session fallback.
+  makeChrome({ present: false });
+  await kvSet({ providerConfig: { provider: "openai" } });
+  assertEquals((await kvGet("providerConfig"))["providerConfig"].provider, "openai");
+
+  // Storage permission granted → backend appears. Migrate the session fallback.
+  makeChrome({ present: true, fail: false });
+  await migrateSessionToStorage();
+  // The session value survived into the persistent backend (NOT reset to defaults).
+  assertEquals(store.get("providerConfig").provider, "openai");
+  // The session fallback is cleared after migration (no stale realm-local copy).
+  const s = await kvGet("providerConfig");
+  assertEquals(s["providerConfig"].provider, "openai");
+});
+
+Deno.test("migrateSessionToStorage preserves the session Map on a backend failure", async () => {
+  __resetSessionForTest();
+  __resetMigrationForTest();
+  store.clear();
+  makeChrome({ present: false });
+  await kvSet({ "cap:theme": "midnight" });
+
+  // Backend appears but FAILS → migration must REJECT, leaving the session intact.
+  makeChrome({ present: true, fail: true });
+  await assertRejects(() => migrateSessionToStorage(), StorageBackendError);
+  // The session value is preserved for a retry (never silently dropped).
+  makeChrome({ present: false });
+  assertEquals((await kvGet("cap:theme"))["cap:theme"], "midnight");
 });

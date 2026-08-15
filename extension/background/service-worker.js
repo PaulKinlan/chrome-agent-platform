@@ -15,14 +15,14 @@ import {
   masterMemory,
   siteMemory,
 } from "../lib/memory.js";
-import { kvGet, kvSet } from "../lib/kv.js";
+import { kvGet, kvSet, kvRemove, migrateSessionToStorage } from "../lib/kv.js";
 import { hasCapability, capabilityStatus, requestCapability } from "../lib/capabilities.js";
 import { createAgent, createOrchestrator } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   approveTool,
   disenrollOrigin,
-  enrollmentGeneration,
+  enrollmentSnapshot,
   enrollOrigin,
   isApproved,
   isEnrolled,
@@ -37,7 +37,7 @@ import {
   isBrowserControlGranted,
   recordBrowserEvent,
   revokeBrowserControlGrant,
-  setGlobalBrowserControlGrant,
+  setDenyAllBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES } from "../lib/recipes.js";
@@ -60,7 +60,7 @@ import {
 } from "../lib/enrollment.js";
 import { tool } from "ai";
 import { z } from "zod";
-import { setRunFence, clearRunFence } from "../lib/run-fence.js";
+import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import {
   authorizeToolReport,
   PAGE_ALLOWED_ROUTES,
@@ -183,6 +183,16 @@ function registerAlarmListener() {
 registerAlarmListener();
 chrome.permissions?.onAdded?.addListener((perms) => {
   if (perms?.permissions?.includes("alarms")) registerAlarmListener();
+  // When the optional `storage` permission is granted later, migrate the SW's
+  // session fallback into the persistent backend so the configured provider /
+  // theme / grants are not orphaned (the round-16 migration finding: a genuine
+  // probe showed the provider resetting to demo on storage grant). A failed
+  // migration is logged, never silently dropped.
+  if (perms?.permissions?.includes("storage")) {
+    migrateSessionToStorage().catch((e) =>
+      console.error("migrateSessionToStorage:", e?.message ?? e)
+    );
+  }
 });
 
 // ---- lazy agent bootstrap (invalidated on provider change) ----
@@ -267,11 +277,14 @@ async function ensureOrchestrator() {
       delegateGuard: async (origin) => {
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
-        // lifecycle gate — the round-15 finding).
-        if (!(await isEnrolled(origin))) {
+        // lifecycle gate — the round-15 finding). Use the ATOMIC snapshot (enrolled
+        // + generation read under the enrollment lock) so a delete can never
+        // interleave with the read (the round-16 generation race).
+        const snap = await enrollmentSnapshot(origin);
+        if (!snap.enrolled) {
           return { ok: false, error: `origin ${origin} is not enrolled` };
         }
-        return { ok: true };
+        return { ok: true, gen: snap.gen };
       },
     });
     // Commit only if the generation is still current (an invalidation during
@@ -328,10 +341,13 @@ async function siteToolset(origin) {
 async function invokeSiteTool(origin, name, args) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
-  if (!(await isEnrolled(canonical))) {
+  // Atomic snapshot (enrolled + generation read under the enrollment lock) — a
+  // delete cannot interleave with the read (the round-16 generation race).
+  const snap = await enrollmentSnapshot(canonical);
+  if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
   }
-  const gen = await enrollmentGeneration(canonical);
+  const gen = snap.gen;
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -341,17 +357,22 @@ async function invokeSiteTool(origin, name, args) {
     }
   });
   if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  // The site invocation is a SIDE-EFFECTING boundary (it drives a page function
+  // on the origin) — it must be fenced like every other tool (the round-16 fence
+  // coverage finding: site invocation called tabs.sendMessage without a run check).
+  if (runAborted()) {
+    return { error: "run aborted — site invocation not sent" };
+  }
   try {
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
       name,
       args,
     });
-    // Revalidate live enrollment + the SAME generation AFTER the page call.
-    if (
-      !(await isEnrolled(canonical)) ||
-      (await enrollmentGeneration(canonical)) !== gen
-    ) {
+    // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
+    // call (a single locked snapshot, not two unlocked reads).
+    const after = await enrollmentSnapshot(canonical);
+    if (!after.enrolled || after.gen !== gen) {
       return {
         error: `origin ${canonical} was disenrolled during the call — result discarded`,
       };
@@ -401,9 +422,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // side-effecting tool (via the shared run-fence module): if ownership or
     // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
     // block open/navigate/close/delegate from committing stale side effects.
+    let abortNow = null;
     if (fence?.signal) {
       setRunFence(fence);
-      const abortNow = () => {
+      abortNow = () => {
         try {
           orch.abort?.();
         } catch { /* already aborted */ }
@@ -449,6 +471,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       return { ok: true, result };
     } finally {
       clearRunFence();
+      // Remove the abort listener BEFORE the run mutex is released (in the
+      // `finally`, which still runs under withRunLock). The scheduled run's
+      // `handleAlarm` calls releaseInflight AFTER runTask returns — releasing
+      // the mutex — and releaseInflight aborts the per-run controller. Without
+      // removing this listener, that post-run abort would fire `orch.abort()`
+      // on the SHARED orchestrator and kill a queued next run (the round-16
+      // cross-run abort blocker).
+      if (abortNow && fence?.signal) {
+        try {
+          fence.signal.removeEventListener("abort", abortNow);
+        } catch { /* already removed */ }
+        abortNow = null;
+      }
     }
   });
 }
@@ -734,7 +769,11 @@ const handlers = {
     if (Array.isArray(m?.origins) && m.origins.length > 0) {
       grant = await setOriginBrowserControlGrant(m.origins, m?.expiryMs);
     } else {
-      grant = await setGlobalBrowserControlGrant(m?.expiryMs);
+      // No origins → a DENY-ALL scoped grant, NOT a global grant. The record
+      // exists so the UI shows "granted" + reveals the origin field, but it
+      // authorizes NOTHING until the owner scopes it (the round-16 finding: the
+      // default created a 15-min whole-browser authority before any scope existed).
+      grant = await setDenyAllBrowserControlGrant(m?.expiryMs);
     }
     return { grant };
   },
@@ -837,31 +876,49 @@ const handlers = {
     // revalidated BEFORE committing the journal write.
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    if (!(await isEnrolled(canonical))) {
+    const snap = await enrollmentSnapshot(canonical);
+    if (!snap.enrolled) {
       return { ok: false, error: `origin ${canonical} is not enrolled` };
     }
-    const gen = await enrollmentGeneration(canonical);
+    const gen = snap.gen;
     await ensureOrchestrator();
     const a = orchestrator?.workers?.get(canonical);
     if (!a) return { ok: false, error: `no agent for ${origin}` };
-    const result = await a.run(task, "", []);
-    if (
-      !(await isEnrolled(canonical)) ||
-      (await enrollmentGeneration(canonical)) !== gen
-    ) {
-      return {
-        ok: false,
-        error:
-          `origin ${canonical} was disenrolled during delegation — result discarded`,
-      };
+    // The worker run is a SIDE-EFFECTING boundary: it must be fenced (an aborted
+    // run must not start a delegated worker) AND serialized with the master via
+    // withRunLock (the cached orchestrator's shared abort controller must never be
+    // clobbered by an explicit delegation racing a master run — the round-16 fence
+    // coverage finding).
+    if (runAborted()) {
+      return { ok: false, error: "run aborted — delegation not started" };
     }
-    await journalAppend(siteMemory(canonical), {
-      type: "delegated-result",
-      id: `delegate:${canonical}:${Date.now()}`,
-      task,
-      result,
+    const result = await withRunLock(async () => {
+      if (runAborted()) {
+        throw new Error("run aborted — delegation not started");
+      }
+      return await a.run(task, "", []);
     });
-    return { ok: true, origin: canonical, result };
+    // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
+    // (which tombstones + clears OPFS under the same lock) can never race the
+    // journalAppend and resurrect the tombstoned directory (the round-16
+    // generation-commit race).
+    return await withOriginLock(canonical, async () => {
+      const after = await enrollmentSnapshot(canonical);
+      if (!after.enrolled || after.gen !== gen) {
+        return {
+          ok: false,
+          error:
+            `origin ${canonical} was disenrolled during delegation — result discarded`,
+        };
+      }
+      await journalAppend(siteMemory(canonical), {
+        type: "delegated-result",
+        id: `delegate:${canonical}:${Date.now()}`,
+        task,
+        result,
+      });
+      return { ok: true, origin: canonical, result };
+    });
   },
   async "agent.listAll"() {
     const origins = await listOrigins();
@@ -961,6 +1018,38 @@ chrome.runtime.onInstalled.addListener(async () => {
     });
   }
   console.log("Chrome Agent Platform installed");
+});
+
+// The OWNER-invoked screenshot path (the headed-browser success case). Clicking
+// the extension action grants `activeTab` TRANSIENTLY for the tab the owner is
+// viewing — this is the ONLY gesture that authorizes captureVisibleTab of a
+// specific tab (activeTab is tied to the invoked tab, NOT an arbitrary tab the
+// agent activates later; headless cannot reproduce this because there is no
+// action invocation, so the Chrome suite asserts the fail-closed denial and
+// documents this headed-only path). The captured screenshot is journaled to the
+// hub's memory so the owner can retrieve it.
+chrome.action?.onClicked?.addListener(async (tab) => {
+  if (runAborted()) return;
+  try {
+    const shot = await captureTabScreenshot(tab?.id);
+    if (shot?.screenshot) {
+      const mem = masterMemory();
+      const shots = (await mem.get("screenshots")) ?? [];
+      shots.push({
+        at: Date.now(),
+        url: shot.url,
+        dataURL: shot.screenshot,
+      });
+      await mem.setTrusted("screenshots", shots.slice(-20));
+      await journalAppend(mem, {
+        type: "screenshot",
+        id: `shot:${Date.now()}`,
+        url: shot.url,
+      });
+    }
+  } catch (e) {
+    console.error("action screenshot failed", e?.message ?? e);
+  }
 });
 
 // Recover stale in-flight locks on every worker boot so a crashed task doesn't

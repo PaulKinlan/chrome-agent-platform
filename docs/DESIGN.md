@@ -115,9 +115,20 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
   navigation or revoke→regrant during capture discards the bytes (fail closed).
   `activeTab` is transient and tied to the tab active at the granting gesture,
   so **capture success is a headed-browser path**: the user invokes the
-  extension on the page they are viewing and the agent captures that page. In a
-  headless browser there is no grantable permission that authorizes an arbitrary
-  tab, so capture fails closed (asserted as such in the Chrome suite).
+  extension on the page they are viewing and the agent captures that page. The
+  concrete headed invocation is `chrome.action.onClicked` — clicking the toolbar
+  action grants `activeTab` for the clicked tab and captures it (journaled to the
+  hub's memory under `screenshots`). In a headless browser there is no action
+  invocation and no grantable permission that authorizes an arbitrary tab, so
+  capture fails closed (asserted as such in the Chrome suite; the headed success
+  path is the action handler, exercised in a headed browser).
+
+- **Enrollment requests `scripting` + host together:** the Settings Enroll
+  gesture calls `chrome.permissions.request({ permissions: ["scripting"],
+  origins: ["<origin>/*"] })` in ONE prompt, so a successful host grant also
+  grants the `scripting` permission needed to register + drive the discovery
+  content scripts. Requesting host alone (the prior behavior) could never
+  register scripts after a successful host grant.
 
 - **Permissions (all optional):** the manifest declares an EMPTY `permissions`
   array. `alarms`, `storage`, `sidePanel`, `tabs`, `scripting`, and `notifications`

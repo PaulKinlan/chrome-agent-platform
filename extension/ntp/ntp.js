@@ -185,10 +185,16 @@ async function refreshGrantUI() {
 document.getElementById("browser-control-grant")?.addEventListener(
   "change",
   async (e) => {
-    await chrome.runtime.sendMessage({
+    const res = await chrome.runtime.sendMessage({
       type: "browser-control.set",
       granted: e.target.checked,
-    }).catch(() => {});
+    }).catch((err) => ({ grant: { revoked: false, error: String(err?.message ?? err) } }));
+    // Reflect the AUTHORITATIVE result back (a failed revoke must not leave the
+    // toggle flipped — the round-16 finding: NTP ignored the route's response).
+    if (e.target.checked === false && res?.grant?.revoked !== true) {
+      e.target.checked = true; // revoke failed → keep the grant visible
+    }
+    await refreshGrantUI();
   },
 );
 refreshGrantUI();

@@ -25388,7 +25388,7 @@ async function kvSet(obj) {
     throw new StorageBackendError("set", e);
   }
 }
-async function kvRemove2(keys) {
+async function kvRemove(keys) {
   const list = Array.isArray(keys) ? keys : [keys];
   if (!storageAvailable()) {
     warnOnce();
@@ -25399,6 +25399,24 @@ async function kvRemove2(keys) {
     await chrome.storage.local.remove(list);
   } catch (e) {
     throw new StorageBackendError("remove", e);
+  }
+}
+var migrated = false;
+async function migrateSessionToStorage() {
+  if (migrated) return;
+  if (!storageAvailable()) return;
+  const entries = {};
+  for (const [k, v] of session) entries[k] = clone2(v);
+  if (Object.keys(entries).length === 0) {
+    migrated = true;
+    return;
+  }
+  try {
+    await chrome.storage.local.set(entries);
+    session.clear();
+    migrated = true;
+  } catch (e) {
+    throw new StorageBackendError("set", e);
   }
 }
 
@@ -25603,38 +25621,57 @@ async function globalUsage() {
   }
   return bytes;
 }
+var writeMutex = Promise.resolve();
+function withWriteLock(fn) {
+  const run = writeMutex.then(fn, fn);
+  writeMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
+function utf8Bytes(str) {
+  return new TextEncoder().encode(str).byteLength;
+}
 async function setValue(path, key, value, { isMaster, trusted = false }) {
-  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
-  if (!trusted && reserved.has(String(key))) {
-    throw new Error(`key "${key}" is reserved on this store`);
-  }
-  let serialized;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    throw new Error(`value for "${key}" is not JSON-serializable`);
-  }
-  if (serialized.length > MAX_VALUE_BYTES) {
-    throw new Error(
-      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
-    );
-  }
-  const dir = await openDir(path);
-  const usage = await storeUsage(dir);
-  const oldRaw = await readJson(dir, `${key}.json`);
-  const isNew = oldRaw === null;
-  const oldBytes = isNew ? 0 : JSON.stringify(oldRaw).length;
-  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
-    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
-  }
-  const delta = serialized.length - oldBytes;
-  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
-    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
-  }
-  if (isNew && await globalUsage() + serialized.length > MAX_BYTES_GLOBAL) {
-    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
-  }
-  await writeJson(dir, `${key}.json`, value);
+  return withWriteLock(async () => {
+    const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
+    if (!trusted && reserved.has(String(key))) {
+      throw new Error(`key "${key}" is reserved on this store`);
+    }
+    let serialized;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      throw new Error(`value for "${key}" is not JSON-serializable`);
+    }
+    const newBytes = utf8Bytes(serialized);
+    if (newBytes > MAX_VALUE_BYTES) {
+      throw new Error(
+        `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
+      );
+    }
+    const dir = await openDir(path);
+    const usage = await storeUsage(dir);
+    let oldBytes = 0;
+    let isNew = true;
+    try {
+      const fh = await dir.getFileHandle(`${key}.json`);
+      oldBytes = (await fh.getFile()).size;
+      isNew = false;
+    } catch {
+    }
+    if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
+      throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
+    }
+    const delta = newBytes - oldBytes;
+    if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
+      throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
+    }
+    if (await globalUsage() + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
+      throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+    }
+    await writeJson(dir, `${key}.json`, value);
+  });
 }
 function memoryStore(origin) {
   const isMaster = origin === MASTER;
@@ -66585,7 +66622,7 @@ async function getUsage() {
   };
 }
 async function clearUsage() {
-  await kvRemove2(STORAGE_KEY);
+  await kvRemove(STORAGE_KEY);
 }
 
 // extension/lib/skills.js
@@ -66646,6 +66683,9 @@ function memoryToolset(memory) {
       description: "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
       inputSchema: external_exports3.object({ key: external_exports3.string().min(1).max(128), value: external_exports3.any() }),
       execute: async ({ key, value }) => {
+        if (runAborted()) {
+          return { error: "run aborted \u2014 memory not written" };
+        }
         try {
           await memory.set(key, value);
           return { ok: true, key };
@@ -66753,6 +66793,9 @@ function createOrchestrator2({
               error: g?.error ?? `agent ${agentId} is not enrolled`
             };
           }
+        }
+        if (runAborted()) {
+          return { error: "run aborted \u2014 delegation not started" };
         }
         return { agentId, result: await a.run(task) };
       }
@@ -66883,11 +66926,14 @@ async function isEnrolled(origin) {
   const map4 = await enrolledMap();
   return Boolean(map4[canonical] && map4[canonical].enrolled === true);
 }
-async function enrollmentGeneration(origin) {
+async function enrollmentSnapshot(origin) {
   const canonical = canonicalOrigin(origin);
-  if (!canonical) return 0;
-  const map4 = await enrolledMap();
-  return map4[canonical]?.gen ?? 0;
+  if (!canonical) return { enrolled: false, gen: 0 };
+  return withEnrollmentLock(async () => {
+    const map4 = await enrolledMap();
+    const e = map4[canonical];
+    return { enrolled: Boolean(e && e.enrolled === true), gen: e?.gen ?? 0 };
+  });
 }
 async function enrollOrigin(origin) {
   const canonical = canonicalOrigin(origin);
@@ -66916,6 +66962,14 @@ async function disenrollOrigin(origin) {
       gen: (map4[canonical]?.gen ?? 0) + 1
     };
     await kvSet({ [ENROLL_KEY2]: map4 });
+    const MAX_TOMBSTONES = 200;
+    const tombstones = Object.entries(map4).filter(([, v]) => v?.enrolled !== true).sort((a, b) => (a[1]?.at ?? 0) - (b[1]?.at ?? 0));
+    if (tombstones.length > MAX_TOMBSTONES) {
+      for (const [o] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
+        delete map4[o];
+      }
+      await kvSet({ [ENROLL_KEY2]: map4 });
+    }
     return Object.keys(map4).filter((o) => map4[o]?.enrolled === true);
   });
 }
@@ -67053,7 +67107,7 @@ async function tryAcquireInflight(name25) {
 }
 async function ownsInflight(name25, token) {
   const active = activeRuns.get(name25);
-  if (active) return active.token === token;
+  if (active && active.token !== token) return false;
   const store = await kvGet(INFLIGHT_KEY);
   const existing = store[INFLIGHT_KEY]?.[name25];
   return Boolean(validLock(existing) && existing.token === token);
@@ -67063,10 +67117,13 @@ async function heartbeatInflight(name25, token) {
     const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     const existing = inflight[name25];
-    if (validLock(existing) && existing.token === token) {
-      inflight[name25] = { ...existing, heartbeatAt: Date.now() };
-      await kvSet({ [INFLIGHT_KEY]: inflight });
+    if (!validLock(existing) || existing.token !== token) {
+      throw new Error(
+        `durable heartbeat lock for "${name25}" is missing or owned by another token \u2014 aborting run`
+      );
     }
+    inflight[name25] = { ...existing, heartbeatAt: Date.now() };
+    await kvSet({ [INFLIGHT_KEY]: inflight });
   });
 }
 async function releaseInflight(name25, token) {
@@ -67187,16 +67244,6 @@ function clampExpiryMs(expiryMs) {
   if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_GRANT_MS;
   return Math.min(ms, 60 * 60 * 1e3);
 }
-async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
-  const grant = {
-    id: newGrantId(),
-    scope: "global",
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now()
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
-}
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
   const canonical = [
     ...new Set(
@@ -67222,8 +67269,19 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
   await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
+async function setDenyAllBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
+  const grant = {
+    id: newGrantId(),
+    scope: "origins",
+    origins: [],
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
+    grantedAt: Date.now()
+  };
+  await kvSet({ [GRANT_KEY]: grant });
+  return grant;
+}
 async function revokeBrowserControlGrant() {
-  await kvRemove2(GRANT_KEY);
+  await kvRemove(GRANT_KEY);
   const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
   const gone = remaining === void 0 || remaining === null;
   if (!gone) {
@@ -67283,6 +67341,9 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 async function captureTabScreenshot(tabId) {
+  if (runAborted()) {
+    return { error: "run aborted \u2014 screenshot not captured" };
+  }
   if (!await hasActiveTabPermission() && !await hasTabsPermission()) {
     return {
       error: "activeTab permission not granted \u2014 enable Screenshots in Settings to allow captures"
@@ -67536,6 +67597,9 @@ function browserToolset() {
         periodInMinutes: external_exports3.number().optional()
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
+        if (runAborted()) {
+          return { error: "run aborted \u2014 task not scheduled" };
+        }
         const { name: name25, when } = await scheduleTask({
           task,
           at,
@@ -68127,6 +68191,11 @@ function registerAlarmListener() {
 registerAlarmListener();
 chrome.permissions?.onAdded?.addListener((perms) => {
   if (perms?.permissions?.includes("alarms")) registerAlarmListener();
+  if (perms?.permissions?.includes("storage")) {
+    migrateSessionToStorage().catch(
+      (e) => console.error("migrateSessionToStorage:", e?.message ?? e)
+    );
+  }
 });
 var orchestrator = null;
 var orchestratorGen = -1;
@@ -68178,10 +68247,11 @@ async function ensureOrchestrator() {
       multiAgent,
       extraTools: browserToolset(),
       delegateGuard: async (origin) => {
-        if (!await isEnrolled(origin)) {
+        const snap = await enrollmentSnapshot(origin);
+        if (!snap.enrolled) {
           return { ok: false, error: `origin ${origin} is not enrolled` };
         }
-        return { ok: true };
+        return { ok: true, gen: snap.gen };
       }
     });
     if (generation === gen) {
@@ -68218,10 +68288,11 @@ async function siteToolset(origin) {
 async function invokeSiteTool(origin, name25, args) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
-  if (!await isEnrolled(canonical)) {
+  const snap = await enrollmentSnapshot(canonical);
+  if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
   }
-  const gen = await enrollmentGeneration(canonical);
+  const gen = snap.gen;
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -68231,13 +68302,17 @@ async function invokeSiteTool(origin, name25, args) {
     }
   });
   if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  if (runAborted()) {
+    return { error: "run aborted \u2014 site invocation not sent" };
+  }
   try {
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
       name: name25,
       args
     });
-    if (!await isEnrolled(canonical) || await enrollmentGeneration(canonical) !== gen) {
+    const after = await enrollmentSnapshot(canonical);
+    if (!after.enrolled || after.gen !== gen) {
       return {
         error: `origin ${canonical} was disenrolled during the call \u2014 result discarded`
       };
@@ -68273,9 +68348,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
     const orch = await ensureOrchestrator();
     const taskId = id ?? String(Date.now());
     const mem = masterMemory();
+    let abortNow = null;
     if (fence2?.signal) {
       setRunFence(fence2);
-      const abortNow = () => {
+      abortNow = () => {
         try {
           orch.abort?.();
         } catch {
@@ -68315,6 +68391,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
       return { ok: true, result };
     } finally {
       clearRunFence();
+      if (abortNow && fence2?.signal) {
+        try {
+          fence2.signal.removeEventListener("abort", abortNow);
+        } catch {
+        }
+        abortNow = null;
+      }
     }
   });
 }
@@ -68544,7 +68627,7 @@ var handlers = {
     if (Array.isArray(m?.origins) && m.origins.length > 0) {
       grant = await setOriginBrowserControlGrant(m.origins, m?.expiryMs);
     } else {
-      grant = await setGlobalBrowserControlGrant(m?.expiryMs);
+      grant = await setDenyAllBrowserControlGrant(m?.expiryMs);
     }
     return { grant };
   },
@@ -68609,27 +68692,39 @@ var handlers = {
   async "agent.delegate"({ origin, task }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    if (!await isEnrolled(canonical)) {
+    const snap = await enrollmentSnapshot(canonical);
+    if (!snap.enrolled) {
       return { ok: false, error: `origin ${canonical} is not enrolled` };
     }
-    const gen = await enrollmentGeneration(canonical);
+    const gen = snap.gen;
     await ensureOrchestrator();
     const a = orchestrator?.workers?.get(canonical);
     if (!a) return { ok: false, error: `no agent for ${origin}` };
-    const result = await a.run(task, "", []);
-    if (!await isEnrolled(canonical) || await enrollmentGeneration(canonical) !== gen) {
-      return {
-        ok: false,
-        error: `origin ${canonical} was disenrolled during delegation \u2014 result discarded`
-      };
+    if (runAborted()) {
+      return { ok: false, error: "run aborted \u2014 delegation not started" };
     }
-    await journalAppend(siteMemory(canonical), {
-      type: "delegated-result",
-      id: `delegate:${canonical}:${Date.now()}`,
-      task,
-      result
+    const result = await withRunLock(async () => {
+      if (runAborted()) {
+        throw new Error("run aborted \u2014 delegation not started");
+      }
+      return await a.run(task, "", []);
     });
-    return { ok: true, origin: canonical, result };
+    return await withOriginLock(canonical, async () => {
+      const after = await enrollmentSnapshot(canonical);
+      if (!after.enrolled || after.gen !== gen) {
+        return {
+          ok: false,
+          error: `origin ${canonical} was disenrolled during delegation \u2014 result discarded`
+        };
+      }
+      await journalAppend(siteMemory(canonical), {
+        type: "delegated-result",
+        id: `delegate:${canonical}:${Date.now()}`,
+        task,
+        result
+      });
+      return { ok: true, origin: canonical, result };
+    });
   },
   async "agent.listAll"() {
     const origins = await listOrigins();
@@ -68707,6 +68802,29 @@ chrome.runtime.onInstalled.addListener(async () => {
     });
   }
   console.log("Chrome Agent Platform installed");
+});
+chrome.action?.onClicked?.addListener(async (tab) => {
+  if (runAborted()) return;
+  try {
+    const shot = await captureTabScreenshot(tab?.id);
+    if (shot?.screenshot) {
+      const mem = masterMemory();
+      const shots = await mem.get("screenshots") ?? [];
+      shots.push({
+        at: Date.now(),
+        url: shot.url,
+        dataURL: shot.screenshot
+      });
+      await mem.setTrusted("screenshots", shots.slice(-20));
+      await journalAppend(mem, {
+        type: "screenshot",
+        id: `shot:${Date.now()}`,
+        url: shot.url
+      });
+    }
+  } catch (e) {
+    console.error("action screenshot failed", e?.message ?? e);
+  }
 });
 chrome.runtime.onStartup?.addListener(() => {
   recoverOnBoot().catch(

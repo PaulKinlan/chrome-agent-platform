@@ -30,6 +30,11 @@ function memoryToolset(memory) {
         "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
       inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
       execute: async ({ key, value }) => {
+        // memory_set is a durable side-effecting boundary — fence it (the round-16
+        // fence coverage finding: memory_set wrote without a run-abort check).
+        if (runAborted()) {
+          return { error: "run aborted — memory not written" };
+        }
         try {
           await memory.set(key, value);
           return { ok: true, key };
@@ -159,6 +164,13 @@ export function createOrchestrator({
                 error: g?.error ?? `agent ${agentId} is not enrolled`,
               };
             }
+          }
+          // Re-check the fence AFTER the guard await: an abort during the
+          // delegateGuard await must still prevent the worker from starting
+          // (the round-16 blocker: delegate_task could abort during the guard
+          // then still start the worker).
+          if (runAborted()) {
+            return { error: "run aborted — delegation not started" };
           }
           return { agentId, result: await a.run(task) };
         },

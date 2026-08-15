@@ -126,3 +126,37 @@ export function __resetSessionForTest() {
   session.clear();
   warned = false;
 }
+
+let migrated = false;
+/** Migrate the SW's session fallback into chrome.storage.local when the optional
+ * `storage` permission is granted LATER. Until then, kv* used the realm-local
+ * session Map; once storage becomes available, kv* switches straight to the
+ * persistent backend, which would otherwise ORPHAN the session data (a genuine
+ * probe showed the configured provider resetting to demo on grant — the round-16
+ * migration finding). Migrate transactionally + idempotently: copy every session
+ * entry into the persistent store, then clear the session fallback. A failure
+ * leaves the session Map intact (never silently lose the configured state). */
+export async function migrateSessionToStorage() {
+  if (migrated) return;
+  if (!storageAvailable()) return;
+  const entries = {};
+  for (const [k, v] of session) entries[k] = clone(v);
+  if (Object.keys(entries).length === 0) {
+    migrated = true;
+    return;
+  }
+  // Write session values to the persistent store. A write failure REJECTS (the
+  // session Map is preserved for a retry, never silently dropped).
+  try {
+    await chrome.storage.local.set(entries);
+    session.clear();
+    migrated = true;
+  } catch (e) {
+    throw new StorageBackendError("set", e);
+  }
+}
+
+/** Test hook: reset the migration flag (unit tests). */
+export function __resetMigrationForTest() {
+  migrated = false;
+}

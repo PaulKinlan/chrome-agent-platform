@@ -1,316 +1,3 @@
-// extension/lib/kv.js
-var session = /* @__PURE__ */ new Map();
-var warned = false;
-function storageAvailable() {
-  try {
-    return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
-  } catch {
-    return false;
-  }
-}
-function clone(v) {
-  return v === void 0 ? void 0 : JSON.parse(JSON.stringify(v));
-}
-function warnOnce() {
-  if (!warned) {
-    warned = true;
-    console.warn(
-      "storage permission not granted \u2014 changes are session-only until enabled in Settings"
-    );
-  }
-}
-var StorageBackendError = class extends Error {
-  constructor(op, cause) {
-    super(
-      `chrome.storage.local.${op} failed: ${String(cause?.message ?? cause)}`
-    );
-    this.name = "StorageBackendError";
-    this.op = op;
-    this.cause = cause;
-  }
-};
-async function kvGet(keys) {
-  if (!storageAvailable()) {
-    warnOnce();
-    const out = {};
-    if (keys == null) {
-      for (const [k, v] of session) out[k] = clone(v);
-      return out;
-    }
-    for (const k of Array.isArray(keys) ? keys : [keys]) {
-      if (k != null && session.has(k)) out[k] = clone(session.get(k));
-    }
-    return out;
-  }
-  try {
-    return await chrome.storage.local.get(keys);
-  } catch (e) {
-    throw new StorageBackendError("get", e);
-  }
-}
-
-// extension/lib/provider.js
-var DEFAULTS = {
-  // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
-  provider: "demo",
-  baseURL: "",
-  apiKey: "",
-  model: ""
-};
-async function getProviderConfig() {
-  const stored = await kvGet("providerConfig");
-  return { ...DEFAULTS, ...stored.providerConfig ?? {} };
-}
-
-// extension/lib/usage.js
-var STORAGE_KEY = "cairn:usage";
-var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
-async function getUsage() {
-  const store = await kvGet(STORAGE_KEY);
-  const rows = (store[STORAGE_KEY] ?? []).filter(
-    (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
-  );
-  const byModel = {};
-  const byAgent = {};
-  const totals = {
-    calls: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    estimatedCost: 0
-  };
-  for (const r of rows) {
-    const mk = `${r.provider}/${r.model}`;
-    byModel[mk] ??= {
-      provider: r.provider,
-      model: r.model,
-      calls: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      estimatedCost: 0
-    };
-    byModel[mk].calls++;
-    byModel[mk].inputTokens += r.inputTokens;
-    byModel[mk].outputTokens += r.outputTokens;
-    byModel[mk].estimatedCost += r.estimatedCost;
-    byAgent[r.agentId] ??= {
-      agentId: r.agentId,
-      calls: 0,
-      inputTokens: 0,
-      outputTokens: 0
-    };
-    byAgent[r.agentId].calls++;
-    byAgent[r.agentId].inputTokens += r.inputTokens;
-    byAgent[r.agentId].outputTokens += r.outputTokens;
-    totals.calls++;
-    totals.inputTokens += r.inputTokens;
-    totals.outputTokens += r.outputTokens;
-    totals.estimatedCost += r.estimatedCost;
-  }
-  return {
-    totals,
-    byModel: Object.values(byModel),
-    byAgent: Object.values(byAgent),
-    rows
-  };
-}
-
-// extension/lib/memory.js
-var ROOT = "memory";
-var MASTER = "master";
-var ENROLL_KEY = "cap:enrollment";
-var MAX_VALUE_BYTES = 256 * 1024;
-var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled"]);
-var SITE_RESERVED_KEYS = /* @__PURE__ */ new Set([
-  "approvals",
-  "toolDirectory",
-  "journal",
-  "enrolled"
-]);
-var MAX_KEYS_PER_ORIGIN = 500;
-var MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024;
-var MAX_BYTES_GLOBAL = 64 * 1024 * 1024;
-function canonicalOrigin(value) {
-  try {
-    const u = new URL(String(value));
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return u.origin;
-  } catch {
-    return null;
-  }
-}
-function encodeOrigin(origin) {
-  return encodeURIComponent(origin);
-}
-async function openDir(segments) {
-  let dir = await rootDir();
-  for (const seg of segments) {
-    dir = await dir.getDirectoryHandle(seg, { create: true });
-  }
-  return dir;
-}
-async function rootDir() {
-  return await navigator.storage.getDirectory();
-}
-async function readJson(dir, name) {
-  try {
-    const fh = await dir.getFileHandle(name);
-    const f = await fh.getFile();
-    return JSON.parse(await f.text());
-  } catch {
-    return null;
-  }
-}
-async function writeJson(dir, name, value) {
-  const fh = await dir.getFileHandle(name, { create: true });
-  const w = await fh.createWritable();
-  await w.write(JSON.stringify(value));
-  await w.close();
-}
-async function storeUsage(dir) {
-  let keys = 0;
-  let bytes = 0;
-  for await (const [name, handle] of dir.entries()) {
-    if (!name.endsWith(".json")) continue;
-    keys++;
-    try {
-      const f = await handle.getFile();
-      bytes += f.size;
-    } catch {
-    }
-  }
-  return { keys, bytes };
-}
-async function globalUsage() {
-  let bytes = 0;
-  const root = await rootDir();
-  try {
-    const memDir = await root.getDirectoryHandle(ROOT);
-    async function walk(dir) {
-      for await (const [name, handle] of dir.entries()) {
-        if (handle.kind === "file" && name.endsWith(".json")) {
-          try {
-            bytes += (await handle.getFile()).size;
-          } catch {
-          }
-        } else if (handle.kind === "directory") {
-          await walk(handle);
-        }
-      }
-    }
-    await walk(memDir);
-  } catch {
-  }
-  return bytes;
-}
-async function setValue(path, key, value, { isMaster, trusted = false }) {
-  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
-  if (!trusted && reserved.has(String(key))) {
-    throw new Error(`key "${key}" is reserved on this store`);
-  }
-  let serialized;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    throw new Error(`value for "${key}" is not JSON-serializable`);
-  }
-  if (serialized.length > MAX_VALUE_BYTES) {
-    throw new Error(
-      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
-    );
-  }
-  const dir = await openDir(path);
-  const usage = await storeUsage(dir);
-  const oldRaw = await readJson(dir, `${key}.json`);
-  const isNew = oldRaw === null;
-  const oldBytes = isNew ? 0 : JSON.stringify(oldRaw).length;
-  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
-    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
-  }
-  const delta = serialized.length - oldBytes;
-  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
-    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
-  }
-  if (isNew && await globalUsage() + serialized.length > MAX_BYTES_GLOBAL) {
-    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
-  }
-  await writeJson(dir, `${key}.json`, value);
-}
-function memoryStore(origin) {
-  const isMaster = origin === MASTER;
-  const path = isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(origin)];
-  return {
-    isMaster,
-    origin,
-    async get(key) {
-      const dir = await openDir(path);
-      return await readJson(dir, `${key}.json`);
-    },
-    async set(key, value) {
-      return await setValue(path, key, value, { isMaster });
-    },
-    /** Internal trusted write (approveTool/upsertTools/journalAppend/
-     * enrollOrigin): same bounds + quotas, but reserved authority keys are
-     * writable ONLY here — never via the model's `memory_set`/`set`. */
-    async setTrusted(key, value) {
-      return await setValue(path, key, value, { isMaster, trusted: true });
-    },
-    async keys() {
-      const dir = await openDir(path);
-      const out = [];
-      for await (const [name] of dir.entries()) {
-        if (name.endsWith(".json")) out.push(name.slice(0, -5));
-      }
-      return out.sort();
-    },
-    async delete(key) {
-      const dir = await openDir(path);
-      try {
-        await dir.removeEntry(`${key}.json`);
-      } catch {
-      }
-    },
-    async clear() {
-      if (isMaster) {
-        const parent = await openDir([ROOT]);
-        try {
-          await parent.removeEntry(MASTER, { recursive: true });
-        } catch {
-        }
-        return;
-      }
-      const origins = await openDir([ROOT, "origins"]);
-      try {
-        await origins.removeEntry(encodeOrigin(origin), { recursive: true });
-      } catch {
-      }
-    }
-  };
-}
-function siteMemory(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) {
-    const invalid = memoryStore(`invalid:${origin}`);
-    return {
-      ...invalid,
-      async get() {
-        return null;
-      },
-      async set() {
-        throw new Error(`invalid origin: ${origin}`);
-      },
-      async setTrusted() {
-        throw new Error(`invalid origin: ${origin}`);
-      }
-    };
-  }
-  return memoryStore(canonical);
-}
-async function listOrigins() {
-  const s = await kvGet(ENROLL_KEY);
-  const map = s[ENROLL_KEY] ?? {};
-  return Object.keys(map).filter((o) => map[o]?.enrolled === true).sort();
-}
-
 // extension/lib/capabilities.js
 var CAPABILITIES = [
   {
@@ -387,6 +74,19 @@ async function requestCapability(id) {
       permissions: cap.permissions
     });
     return { ok: true, granted: Boolean(granted), capability: id };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e), capability: id };
+  }
+}
+async function revokeCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  try {
+    const removed = await chrome.permissions.remove({
+      permissions: cap.permissions
+    });
+    const stillGranted = await hasCapability(id);
+    return { ok: true, revoked: !stillGranted, capability: id, removed };
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e), capability: id };
   }
@@ -475,7 +175,7 @@ var storage = {
   }
 };
 async function renderProviders(restoreFocus = false) {
-  const cfg = await getProviderConfig();
+  const cfg = await chrome.runtime.sendMessage({ type: "provider.get" });
   const list = $("#provider-list");
   list.innerHTML = "";
   for (const p of PROVIDERS) {
@@ -565,7 +265,10 @@ async function renderEnroll() {
     const matches = [`${origin}/*`];
     let granted;
     try {
-      granted = await chrome.permissions.request({ origins: matches });
+      granted = await chrome.permissions.request({
+        permissions: ["scripting"],
+        origins: matches
+      });
     } catch (e) {
       saveFlash("Permission request failed: " + String(e?.message ?? e));
       return;
@@ -656,12 +359,20 @@ async function renderBrowser() {
       );
       renderPermissions();
     } else {
-      await chrome.runtime.sendMessage({
+      const res = await chrome.runtime.sendMessage({
         type: "browser-control.set",
         granted: false
-      });
-      $("#grant-origins").hidden = true;
-      saveFlash("Browser control revoked.");
+      }).catch((e2) => ({ grant: { revoked: false, error: String(e2?.message ?? e2) } }));
+      const revoked = res?.grant?.revoked === true;
+      if (revoked) {
+        $("#grant-origins").hidden = true;
+        saveFlash("Browser control revoked.");
+      } else {
+        saveFlash(
+          "Browser control revoke failed: " + (res?.grant?.error ?? "still granted") + "."
+        );
+      }
+      renderPermissions();
     }
   });
   $("#grant-origin-list").addEventListener("change", async (e) => {
@@ -722,12 +433,30 @@ async function renderPermissions() {
         renderPermissions();
       });
       row.appendChild(btn);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn small ghost revoke-perm";
+      btn.dataset.capability = cap.id;
+      btn.textContent = "Disable";
+      btn.setAttribute("aria-label", `Disable ${cap.label}`);
+      btn.addEventListener("click", async () => {
+        const res = await revokeCapability(cap.id);
+        if (res?.revoked) saveFlash(`Disabled ${cap.label}.`);
+        else {
+          saveFlash(
+            `Disable ${cap.label} failed: ${res?.error ?? "still granted"}.`
+          );
+        }
+        renderPermissions();
+      });
+      row.appendChild(btn);
     }
     list.appendChild(row);
   }
 }
 async function renderUsage() {
-  const u = await getUsage();
+  const u = await chrome.runtime.sendMessage({ type: "usage.get" });
   const sum = $("#usage-summary");
   sum.innerHTML = `
     <div class="usage-stat"><div class="n">${u.totals.calls}</div><div class="l">calls</div></div>
@@ -769,7 +498,7 @@ async function renderUsage() {
   });
 }
 async function renderData() {
-  const origins = await listOrigins();
+  const origins = await chrome.runtime.sendMessage({ type: "agent.list" });
   const list = $("#origin-list");
   list.replaceChildren();
   if (!origins.length) {
@@ -791,7 +520,7 @@ async function renderData() {
     clear.className = "btn small ghost clear-origin";
     clear.textContent = "Clear";
     clear.addEventListener("click", async () => {
-      await siteMemory(origin).clear();
+      await chrome.runtime.sendMessage({ type: "memory.clear", origin });
       saveFlash(`Cleared memory for ${origin}.`);
       renderData();
     });

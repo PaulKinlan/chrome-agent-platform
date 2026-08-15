@@ -1,13 +1,11 @@
 // options.js — the dedicated settings/configuration page.
 
-import { getProviderConfig, setProviderConfig } from "../lib/provider.js";
-import { clearUsage, getUsage } from "../lib/usage.js";
-import { listOrigins, siteMemory } from "../lib/memory.js";
 import { RECIPES } from "../lib/recipes.js";
 import {
   CAPABILITIES,
   capabilityStatus,
   requestCapability,
+  revokeCapability,
 } from "../lib/capabilities.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
@@ -103,7 +101,11 @@ const storage = {
 
 // ── Providers ──
 async function renderProviders(restoreFocus = false) {
-  const cfg = await getProviderConfig();
+  // Route the provider read through the SERVICE WORKER (single authority) — never
+  // call lib/provider.js's kv* directly in this page realm (the round-16 split-
+  // authority finding: with storage absent the page's session Map contradicts the
+  // SW's).
+  const cfg = await chrome.runtime.sendMessage({ type: "provider.get" });
   const list = $("#provider-list");
   list.innerHTML = "";
   for (const p of PROVIDERS) {
@@ -230,12 +232,18 @@ async function renderEnroll() {
       return;
     }
     const matches = [`${origin}/*`];
-    // The OWNER gesture: request the exact origin's host permission from the
-    // Settings page (a real user gesture). Only after it is granted do we ask
-    // the SW to register the discovery scripts. Never request from the SW.
+    // The OWNER gesture: request the exact origin's host permission AND the
+    // `scripting` permission TOGETHER (one gesture, one prompt) so enrollment
+    // can register + drive the discovery scripts. The reviewer's round-16 finding:
+    // enrollment requested host only, not scripting plus host, so the discovery
+    // scripts could never register even after a successful host grant. Never
+    // request from the SW (no gesture).
     let granted;
     try {
-      granted = await chrome.permissions.request({ origins: matches });
+      granted = await chrome.permissions.request({
+        permissions: ["scripting"],
+        origins: matches,
+      });
     } catch (e) {
       saveFlash("Permission request failed: " + String(e?.message ?? e));
       return;
@@ -351,12 +359,25 @@ async function renderBrowser() {
       );
       renderPermissions();
     } else {
-      await chrome.runtime.sendMessage({
+      const res = await chrome.runtime.sendMessage({
         type: "browser-control.set",
         granted: false,
-      });
-      $("#grant-origins").hidden = true;
-      saveFlash("Browser control revoked.");
+      }).catch((e) => ({ grant: { revoked: false, error: String(e?.message ?? e) } }));
+      // Surface a FAILED revoke honestly (the round-16 finding: the UI claimed
+      // "revoked" regardless of the worker's response). Only hide the origins
+      // panel + claim success when the grant is CONFIRMED removed.
+      const revoked = res?.grant?.revoked === true;
+      if (revoked) {
+        $("#grant-origins").hidden = true;
+        saveFlash("Browser control revoked.");
+      } else {
+        saveFlash(
+          "Browser control revoke failed: " +
+            (res?.grant?.error ?? "still granted") +
+            ".",
+        );
+      }
+      renderPermissions();
     }
   });
   $("#grant-origin-list").addEventListener("change", async (e) => {
@@ -425,6 +446,27 @@ async function renderPermissions() {
         renderPermissions();
       });
       row.appendChild(btn);
+    } else {
+      // A GRANTED capability must be revocable (the round-16 finding: the panel
+      // only rendered Enable, no Disable/Revoke action). Disable removes the
+      // permission from a real user gesture + CONFIRMS absence, surfacing failure.
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn small ghost revoke-perm";
+      btn.dataset.capability = cap.id;
+      btn.textContent = "Disable";
+      btn.setAttribute("aria-label", `Disable ${cap.label}`);
+      btn.addEventListener("click", async () => {
+        const res = await revokeCapability(cap.id);
+        if (res?.revoked) saveFlash(`Disabled ${cap.label}.`);
+        else {
+          saveFlash(
+            `Disable ${cap.label} failed: ${res?.error ?? "still granted"}.`,
+          );
+        }
+        renderPermissions();
+      });
+      row.appendChild(btn);
     }
     list.appendChild(row);
   }
@@ -432,7 +474,9 @@ async function renderPermissions() {
 
 // ── Usage ──
 async function renderUsage() {
-  const u = await getUsage();
+  // Usage is shared state — read it through the SW (single authority), not the
+  // page-local usage.js kv* (the round-16 split-authority finding).
+  const u = await chrome.runtime.sendMessage({ type: "usage.get" });
   const sum = $("#usage-summary");
   sum.innerHTML = `
     <div class="usage-stat"><div class="n">${u.totals.calls}</div><div class="l">calls</div></div>
@@ -484,7 +528,10 @@ async function renderUsage() {
 
 // ── Data / memory ──
 async function renderData() {
-  const origins = await listOrigins();
+  // Enrolled origins are AUTHORITATIVE shared state — read them through the SW
+  // (agent.list), not the page-local memory.js listOrigins (the round-16 split-
+  // authority finding).
+  const origins = await chrome.runtime.sendMessage({ type: "agent.list" });
   const list = $("#origin-list");
   list.replaceChildren();
   if (!origins.length) {
@@ -508,7 +555,7 @@ async function renderData() {
     clear.className = "btn small ghost clear-origin";
     clear.textContent = "Clear";
     clear.addEventListener("click", async () => {
-      await siteMemory(origin).clear();
+      await chrome.runtime.sendMessage({ type: "memory.clear", origin });
       saveFlash(`Cleared memory for ${origin}.`);
       renderData();
     });
