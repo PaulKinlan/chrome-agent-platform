@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
+  "description": "Chrome as the agent platform \u2014 agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
     "build": "node build.mjs",
-    "watch": "node build.mjs --watch"
+    "watch": "node build.mjs --watch",
+    "test": "deno test --allow-read tests/"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",

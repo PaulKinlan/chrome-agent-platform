@@ -66478,13 +66478,25 @@ async function pendingApprovals(origin) {
 // extension/lib/browser-tools.js
 init_browser_shim_process();
 var GRANT_KEY = "cap:browserControlGrant";
-async function isBrowserControlGranted() {
+var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
+async function isBrowserControlGranted(origin) {
   const s = await chrome.storage.local.get(GRANT_KEY);
-  return Boolean(s[GRANT_KEY]);
+  const grant = s[GRANT_KEY];
+  if (!grant || typeof grant !== "object") return false;
+  if (typeof grant.expiresAt !== "number" || grant.expiresAt <= Date.now()) return false;
+  if (origin && Array.isArray(grant.origins) && grant.origins.length > 0) {
+    return grant.origins.includes(origin);
+  }
+  return true;
 }
-async function setBrowserControlGrant(granted) {
-  await chrome.storage.local.set({ [GRANT_KEY]: Boolean(granted) });
-  return Boolean(granted);
+async function setBrowserControlGrant({ origins = [], expiryMs = DEFAULT_GRANT_MS } = {}) {
+  const grant = {
+    expiresAt: Date.now() + expiryMs,
+    origins: origins.slice(0, 50),
+    grantedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  return grant;
 }
 async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -66526,13 +66538,18 @@ function browserToolset() {
       }
     }),
     navigate_tab: tool({
-      description: "Navigate an existing tab to a URL. Requires browser-control permission.",
+      description: "Navigate an existing tab to a URL. Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ tabId: external_exports3.number().optional(), url: external_exports3.string().url() }),
       execute: async ({ tabId, url: url3 }) => {
-        const g = await guard();
-        if (g) return g;
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
+        const tab = await chrome.tabs.get(id).catch(() => null);
+        const origin = tab?.url ? new URL(tab.url).origin : void 0;
+        if (origin && !await isBrowserControlGranted(origin)) {
+          return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
+        }
+        const g = await guard();
+        if (g) return g;
         await chrome.tabs.update(id, { url: url3 });
         return { ok: true, tabId: id, url: url3 };
       }
@@ -66549,8 +66566,9 @@ function browserToolset() {
         try {
           const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
           if (!tab?.windowId) return { error: "no tab" };
-          if (tab.id) await chrome.tabs.update(tab.id, { active: true }).catch(() => {
-          });
+          if (tab.id) await chrome.tabs.update(tab.id, { active: true });
+          const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+          if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
           const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
           return { screenshot: url3 };
         } catch (e) {
@@ -66567,9 +66585,14 @@ function browserToolset() {
       }
     }),
     close_tab: tool({
-      description: "Close a tab by id. Requires browser-control permission.",
+      description: "Close a tab by id. Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ tabId: external_exports3.number() }),
       execute: async ({ tabId }) => {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        const origin = tab?.url ? new URL(tab.url).origin : void 0;
+        if (origin && !await isBrowserControlGranted(origin)) {
+          return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
+        }
         const g = await guard();
         if (g) return g;
         await chrome.tabs.remove(tabId);
@@ -66583,6 +66606,31 @@ function browserToolset() {
         const events = await chrome.storage.local.get("cap:events");
         const list = events["cap:events"] ?? [];
         return { events: list.slice(0, limit ?? 20) };
+      }
+    }),
+    schedule_task: tool({
+      description: "Schedule a future task to run the agent at an absolute time (epoch ms) or after a delay (ms). The task runs even if the browser is idle.",
+      inputSchema: external_exports3.object({
+        task: external_exports3.string().min(1).max(4e3),
+        at: external_exports3.number().optional(),
+        delayMs: external_exports3.number().optional(),
+        periodInMinutes: external_exports3.number().optional()
+      }),
+      execute: async ({ task, at, delayMs, periodInMinutes }) => {
+        const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        let when;
+        if (typeof at === "number" && at > Date.now()) when = at;
+        else if (typeof delayMs === "number" && delayMs > 0) when = Date.now() + delayMs;
+        else return { error: "provide a future `at` (absolute ms) or a positive `delayMs`" };
+        const KEY = "cap:scheduledTasks";
+        const store = await chrome.storage.local.get(KEY);
+        const tasks = store[KEY] ?? {};
+        tasks[name25] = { name: name25, task, periodInMinutes, at: when };
+        await chrome.storage.local.set({ [KEY]: tasks });
+        const info = { when };
+        if (periodInMinutes) info.periodInMinutes = periodInMinutes;
+        await chrome.alarms.create(name25, info);
+        return { ok: true, name: name25, when };
       }
     })
   };
@@ -66633,29 +66681,87 @@ function getRecipe(id) {
 
 // extension/lib/pure.js
 init_browser_shim_process();
-function schemaToZod(z4, schema4) {
-  if (!schema4 || typeof schema4 !== "object") return z4.record(z4.any());
+var SCHEMA_BOUNDS = {
+  maxDepth: 4,
+  maxProperties: 50,
+  maxArrayItems: 100,
+  maxStringLength: 1e4,
+  maxUnionBranches: 5
+};
+function schemaToZod(z4, schema4, depth = 0) {
+  if (depth > SCHEMA_BOUNDS.maxDepth) return z4.never();
+  if (!schema4 || typeof schema4 !== "object") return z4.never();
+  if (schema4.const !== void 0) return z4.literal(schema4.const);
+  if (Array.isArray(schema4.enum) && schema4.enum.length > 0) {
+    if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
+    return z4.union(schema4.enum.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
+  }
+  if (Array.isArray(schema4.oneOf) || Array.isArray(schema4.anyOf)) {
+    const branches = schema4.oneOf ?? schema4.anyOf ?? [];
+    if (branches.length === 0 || branches.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
+    return z4.union(branches.map((b) => schemaToZod(z4, b, depth + 1)));
+  }
   const t = schema4.type;
-  if (t === "string") return z4.string();
-  if (t === "number") return z4.number();
-  if (t === "integer") return z4.number().int();
+  if (t === "string") {
+    let s = z4.string();
+    if (typeof schema4.minLength === "number" && schema4.minLength >= 0) s = s.min(schema4.minLength);
+    if (typeof schema4.maxLength === "number" && schema4.maxLength >= 0) s = s.max(Math.min(schema4.maxLength, SCHEMA_BOUNDS.maxStringLength));
+    if (typeof schema4.pattern === "string") {
+      try {
+        s = s.regex(new RegExp(schema4.pattern));
+      } catch {
+        return z4.never();
+      }
+    }
+    return s;
+  }
+  if (t === "number") {
+    let s = z4.number();
+    if (typeof schema4.minimum === "number") s = s.min(schema4.minimum);
+    if (typeof schema4.maximum === "number") s = s.max(schema4.maximum);
+    return s;
+  }
+  if (t === "integer") {
+    let s = z4.number().int();
+    if (typeof schema4.minimum === "number") s = s.min(Math.ceil(schema4.minimum));
+    if (typeof schema4.maximum === "number") s = s.max(Math.floor(schema4.maximum));
+    return s;
+  }
   if (t === "boolean") return z4.boolean();
-  if (t === "array") return z4.array(schemaToZod(z4, schema4.items)).max(100);
+  if (t === "array") {
+    const inner = schemaToZod(z4, schema4.items, depth + 1);
+    let arr = z4.array(inner);
+    if (typeof schema4.minItems === "number" && schema4.minItems >= 0) arr = arr.min(schema4.minItems);
+    if (typeof schema4.maxItems === "number" && schema4.maxItems >= 0) arr = arr.max(Math.min(schema4.maxItems, SCHEMA_BOUNDS.maxArrayItems));
+    return arr;
+  }
   if (t === "object") {
     const props = schema4.properties && typeof schema4.properties === "object" ? schema4.properties : {};
+    const propKeys = Object.keys(props);
+    if (propKeys.length > SCHEMA_BOUNDS.maxProperties) return z4.never();
     const required3 = Array.isArray(schema4.required) ? new Set(schema4.required) : /* @__PURE__ */ new Set();
     const shape = {};
     for (const [key, sub] of Object.entries(props)) {
-      const subZod = schemaToZod(z4, sub);
+      const subZod = schemaToZod(z4, sub, depth + 1);
       shape[key] = required3.has(key) ? subZod : subZod.optional();
     }
-    return z4.object(shape).passthrough();
+    const obj = z4.object(shape);
+    return schema4.additionalProperties === false ? obj.strict() : obj.passthrough();
   }
-  return z4.record(z4.any());
+  return z4.never();
 }
 function sanitizeToolName(origin, name25) {
-  const safe = String(name25).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `site_${safe}`;
+  const safe = String(name25).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  const h = fnv1a(`${origin}\0${name25}`).toString(16).padStart(8, "0");
+  return `site_${h}_${safe}`.slice(0, 64);
+}
+function fnv1a(input) {
+  let hash2 = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash2 ^= input.charCodeAt(i);
+    hash2 = Math.imul(hash2, 16777619) >>> 0;
+  }
+  return hash2 >>> 0;
 }
 function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionId) {
   const senderUrl = sender?.url ?? "";
@@ -66676,6 +66782,7 @@ function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionI
   }
   return { kind: "content-script", origin: senderOrigin };
 }
+var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set(["tools.list", "tools.upsert", "tools.approve", "tools.pending"]);
 
 // extension/background/service-worker.js
 var TASK_KEY = "cap:scheduledTasks";
@@ -66685,7 +66792,15 @@ async function registerAlarm(task) {
   const tasks = store[TASK_KEY] ?? {};
   tasks[name25] = { ...task, name: name25 };
   await chrome.storage.local.set({ [TASK_KEY]: tasks });
-  const info = { when: Date.now() + (task.when ?? 0) };
+  let when;
+  if (typeof task.at === "number" && task.at > Date.now()) {
+    when = task.at;
+  } else if (typeof task.delayMs === "number" && task.delayMs > 0) {
+    when = Date.now() + task.delayMs;
+  } else {
+    throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
+  }
+  const info = { when };
   if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
   chrome.alarms.create(name25, info);
   return name25;
@@ -66798,13 +66913,14 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   await journalAppend(mem, { type: "result", id: taskId, result });
   if (scheduled) {
     try {
-      chrome.notifications.create(`cap:${taskId}`, {
+      await chrome.notifications.create(`cap:${taskId}`, {
         type: "basic",
-        iconUrl: "icon128.png",
+        iconUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%2378b3ff'/%3E%3C/svg%3E",
         title: "Scheduled task complete",
         message: String(result ?? "").slice(0, 160)
       });
-    } catch {
+    } catch (e) {
+      console.error("notification failed", e);
     }
   }
   return { ok: true, result };
@@ -66822,11 +66938,24 @@ var handlers = {
     return { choices: PROVIDER_CHOICES };
   },
   async "agent.run"(m) {
-    const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-    const bounded = (m.attachments ?? []).filter((a) => {
-      const bytes = a?.size ?? (a?.dataURL ? Math.ceil((a.dataURL.length - a.dataURL.indexOf(",") - 1) * 0.75) : 0);
-      return bytes <= MAX_ATTACHMENT_BYTES;
-    });
+    const MAX_ITEM_BYTES = 8 * 1024 * 1024;
+    const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+    const MAX_COUNT = 8;
+    const measured = (a) => {
+      if (!a?.dataURL) return 0;
+      const comma = a.dataURL.indexOf(",");
+      if (comma < 0) return 0;
+      return Math.ceil((a.dataURL.length - comma - 1) * 0.75);
+    };
+    let total = 0;
+    const bounded = [];
+    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT * 4)) {
+      const bytes = measured(a);
+      if (bytes > MAX_ITEM_BYTES) continue;
+      if (total + bytes > MAX_TOTAL_BYTES) continue;
+      bounded.push(a);
+      total += bytes;
+    }
     return await runTask({ id: m.id, task: m.task, attachments: bounded });
   },
   async "agent.list"() {
@@ -66899,11 +67028,11 @@ var handlers = {
     return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
   },
   async "browser-control.get"() {
-    return { granted: await isBrowserControlGranted() };
+    return { granted: await isBrowserControlGranted(), expiresInMs: (await chrome.storage.local.get("cap:browserControlGrant"))["cap:browserControlGrant"]?.expiresAt - Date.now() };
   },
-  async "browser-control.set"({ granted }) {
-    await setBrowserControlGrant(granted);
-    return { granted };
+  async "browser-control.set"(m) {
+    const grant = await setBrowserControlGrant({ origins: m?.origins, expiryMs: m?.expiryMs });
+    return { grant };
   },
   // Management tools — the agent can manage its own site-agents.
   async "agent.create"({ origin, name: name25 }) {
@@ -66926,15 +67055,17 @@ var handlers = {
   async "capture.tab"({ tabId }) {
     try {
       const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
-      const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-      const url3 = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+      if (!tab?.id) return { error: "no such tab" };
+      await chrome.tabs.update(tab.id, { active: true });
+      const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+      if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
+      const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
       return { screenshot: url3 };
     } catch (e) {
-      return { error: e.message };
+      return { error: String(e?.message ?? e) };
     }
   }
 };
-var ADMIN_TYPES = /* @__PURE__ */ new Set(["memory.set", "memory.clear", "agent.delete", "agent.create", "provider.set", "usage.clear", "browser-control.set"]);
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = handlers[message?.type];
   if (!handler) {
@@ -66947,7 +67078,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: auth2.error });
       return true;
     }
-    if (ADMIN_TYPES.has(message.type)) {
+    if (!PAGE_ALLOWED_ROUTES.has(message.type)) {
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }

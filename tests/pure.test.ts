@@ -1,30 +1,19 @@
 // Unit tests for the security-critical pure helpers (no chrome.*, no AI SDK).
-// These cover the exact cases the independent review flagged: canonicalOrigin
-// scheme restriction, schema enforcement, tool-name sanitization, and the
-// sender-origin authorization (the cross-origin directory-poisoning exploit).
+// Uses REAL zod (not a permissive fake) so the schema-converter + authorization
+// tests actually prove fail-closed behaviour: enum violations, extra-property
+// rejection, collision-resistant tool ids, and the cross-origin spoof rejection.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { z } from "npm:zod@3";
 
 import { canonicalOrigin } from "../extension/lib/memory.js";
 import {
   schemaToZod,
   sanitizeToolName,
   authorizeToolReport,
+  PAGE_ALLOWED_ROUTES,
+  fnv1a,
 } from "../extension/lib/pure.js";
-
-// A tiny zod stand-in with the surface schemaToZod uses, plus a real safeParse.
-function makeZ() {
-  const mk = (parse: (v: unknown) => unknown) => Object.assign({ safeParse: (v: unknown) => ({ success: true, data: parse(v) }) }, { optional: function () { return this; }, passthrough: function () { return this; } });
-  return {
-    string: () => mk((v: unknown) => String(v)),
-    number: () => { const s = mk((v: unknown) => Number(v)); return Object.assign(s, { int: () => mk((x: unknown) => Math.trunc(Number(x))) }); },
-    boolean: () => mk((v: unknown) => Boolean(v)),
-    array: (inner: unknown) => mk((v: unknown) => [inner]),
-    object: (shape: unknown) => { const s = mk((v: unknown) => ({ shape })); return Object.assign(s, { passthrough: () => s }); },
-    record: () => mk((v: unknown) => v),
-    any: () => mk((v: unknown) => v),
-  };
-}
 
 Deno.test("canonicalOrigin accepts http/https and rejects everything else", () => {
   assertEquals(canonicalOrigin("https://example.com/"), "https://example.com");
@@ -33,83 +22,136 @@ Deno.test("canonicalOrigin accepts http/https and rejects everything else", () =
   assertEquals(canonicalOrigin("data:text/html,hi"), null);
   assertEquals(canonicalOrigin("chrome-extension://abc/ntp.html"), null);
   assertEquals(canonicalOrigin("not a url"), null);
-});
-
-Deno.test("canonicalOrigin: a fake 'null' origin is rejected", () => {
-  // A non-special scheme URL produces origin "null" — must be rejected.
   assertEquals(canonicalOrigin("javascript:alert(1)"), null);
 });
 
-Deno.test("schemaToZod builds an object schema with required/optional", () => {
-  const z = makeZ();
+// ---- schema conversion: FAIL CLOSED ----
+
+Deno.test("schemaToZod rejects a wrong primitive type", () => {
+  const s = schemaToZod(z, { type: "string" });
+  assertEquals(s.safeParse(42).success, false);
+  assertEquals(s.safeParse("ok").success, true);
+});
+
+Deno.test("schemaToZod honors enum (an enum violation is rejected)", () => {
+  const s = schemaToZod(z, { type: "string", enum: ["a", "b"] });
+  assertEquals(s.safeParse("a").success, true);
+  assertEquals(s.safeParse("z").success, false);
+});
+
+Deno.test("schemaToZod honors additionalProperties:false (extra property rejected)", () => {
+  const s = schemaToZod(z, {
+    type: "object",
+    properties: { name: { type: "string" } },
+    additionalProperties: false,
+  });
+  assertEquals(s.safeParse({ name: "x" }).success, true);
+  // an extra field must be rejected — the exact finding from the review
+  assertEquals(s.safeParse({ name: "x", admin: true }).success, false);
+});
+
+Deno.test("schemaToZod honors min/max length + pattern", () => {
+  const s = schemaToZod(z, { type: "string", minLength: 2, maxLength: 4 });
+  assertEquals(s.safeParse("ab").success, true);
+  assertEquals(s.safeParse("a").success, false);
+  assertEquals(s.safeParse("abcde").success, false);
+
+  const p = schemaToZod(z, { type: "string", pattern: "^[a-z]+$" });
+  assertEquals(p.safeParse("abc").success, true);
+  assertEquals(p.safeParse("ABC1").success, false);
+});
+
+Deno.test("schemaToZod honors number/integer minimum/maximum", () => {
+  const n = schemaToZod(z, { type: "number", minimum: 0, maximum: 10 });
+  assertEquals(n.safeParse(5).success, true);
+  assertEquals(n.safeParse(-1).success, false);
+  assertEquals(n.safeParse(11).success, false);
+
+  const i = schemaToZod(z, { type: "integer" });
+  assertEquals(i.safeParse(5).success, true);
+  assertEquals(i.safeParse(5.5).success, false);
+});
+
+Deno.test("schemaToZod honors required properties", () => {
   const s = schemaToZod(z, {
     type: "object",
     properties: { name: { type: "string" }, count: { type: "integer" } },
     required: ["name"],
   });
-  assert(s, "schema returned");
-  assert(typeof s.safeParse === "function", "schema is parseable");
+  assertEquals(s.safeParse({ name: "x" }).success, true);
+  assertEquals(s.safeParse({ count: 1 }).success, false); // name required
 });
 
-Deno.test("schemaToZod falls back to a record for unknown shapes", () => {
-  const z = makeZ();
-  assert(schemaToZod(z, null), "null schema -> record");
-  assert(schemaToZod(z, { type: "weird" }), "unknown type -> record");
+Deno.test("schemaToZod fails closed on unsupported/malformed schemas", () => {
+  // null schema -> z.never() (rejects everything), NOT a permissive record
+  assertEquals(schemaToZod(z, null).safeParse({ anything: 1 }).success, false);
+  assertEquals(schemaToZod(z, { type: "weird" }).safeParse("x").success, false);
+  assertEquals(schemaToZod(z, undefined).safeParse({}).success, false);
 });
 
-Deno.test("sanitizeToolName strips URL punctuation to a valid tool id", () => {
-  assertEquals(sanitizeToolName("https://example.com", "get user"), "site_get_user");
-  assertEquals(sanitizeToolName("https://example.com", "a/b:c?d"), "site_a_b_c_d");
+Deno.test("schemaToZod bounds: too-deep schema fails closed", () => {
+  let deep = { type: "object", properties: {} };
+  for (let i = 0; i < 10; i++) deep = { type: "object", properties: { n: deep } };
+  const s = schemaToZod(z, deep);
+  assertEquals(s.safeParse({ n: { n: { n: { n: { n: {} } } } } }).success, false);
 });
+
+// ---- tool name: collision-resistant ----
+
+Deno.test("sanitizeToolName is collision-resistant (a/b vs a:b differ)", () => {
+  const a = sanitizeToolName("https://example.com", "a/b");
+  const b = sanitizeToolName("https://example.com", "a:b");
+  assert(a !== b, `collision: ${a} == ${b}`);
+});
+
+Deno.test("sanitizeToolName is bounded + includes an origin+name hash", () => {
+  const id = sanitizeToolName("https://example.com", "some tool name");
+  assert(id.length <= 64, `too long: ${id.length}`);
+  assert(id.startsWith("site_"), "should start with site_");
+  assert(id.includes("_"), "should contain a hash + sanitized name");
+});
+
+Deno.test("fnv1a is deterministic", () => {
+  assertEquals(fnv1a("abc"), fnv1a("abc"));
+  assert(fnv1a("abc") !== fnv1a("abd"));
+});
+
+// ---- sender authorization ----
 
 Deno.test("authorizeToolReport: a content script reports its OWN origin (accepted)", () => {
-  const sender = {
-    id: "ext-id",
-    url: "https://example.com/page",
-    tab: { url: "https://example.com/page" },
-    frameId: 0,
-  };
+  const sender = { id: "ext-id", url: "https://example.com/page", tab: { url: "https://example.com/page" }, frameId: 0 };
   const r = authorizeToolReport(sender, "https://example.com", canonicalOrigin, "ext-id");
   assertEquals(r.kind, "content-script");
   assertEquals(r.origin, "https://example.com");
 });
 
 Deno.test("authorizeToolReport: a message claiming a DIFFERENT origin is rejected", () => {
-  const sender = {
-    id: "ext-id",
-    url: "https://example.com/page",
-    tab: { url: "https://example.com/page" },
-    frameId: 0,
-  };
+  const sender = { id: "ext-id", url: "https://example.com/page", tab: { url: "https://example.com/page" }, frameId: 0 };
   const r = authorizeToolReport(sender, "https://victim.example", canonicalOrigin, "ext-id");
   assertEquals(r.kind, "content-script");
   assertEquals(r.error, "origin mismatch — tool report rejected");
 });
 
 Deno.test("authorizeToolReport: a non-top-frame page sender cannot report tools", () => {
-  const sender = {
-    id: "ext-id",
-    url: "https://example.com/iframe",
-    tab: { url: "https://example.com/" },
-    frameId: 1,
-  };
-  const r = authorizeToolReport(sender, undefined, canonicalOrigin, "ext-id");
-  assertEquals(r.kind, "unmatched");
+  const sender = { id: "ext-id", url: "https://example.com/iframe", tab: { url: "https://example.com/" }, frameId: 1 };
+  assertEquals(authorizeToolReport(sender, undefined, canonicalOrigin, "ext-id").kind, "unmatched");
 });
 
 Deno.test("authorizeToolReport: an extension page is not a content script", () => {
   const sender = { id: "ext-id", url: "chrome-extension://ext-id/ntp/ntp.html" };
-  const r = authorizeToolReport(sender, undefined, canonicalOrigin, "ext-id");
-  assertEquals(r.kind, "extension");
+  assertEquals(authorizeToolReport(sender, undefined, canonicalOrigin, "ext-id").kind, "extension");
 });
 
 Deno.test("authorizeToolReport: a fake extension id is not authorized", () => {
-  const sender = {
-    id: "attacker-id",
-    url: "https://example.com/",
-    tab: { url: "https://example.com/" },
-    frameId: 0,
-  };
-  const r = authorizeToolReport(sender, undefined, canonicalOrigin, "ext-id");
-  assertEquals(r.kind, "unmatched"); // not a content script of OUR extension
+  const sender = { id: "attacker-id", url: "https://example.com/", tab: { url: "https://example.com/" }, frameId: 0 };
+  assertEquals(authorizeToolReport(sender, undefined, canonicalOrigin, "ext-id").kind, "unmatched");
+});
+
+Deno.test("PAGE_ALLOWED_ROUTES is an allowlist (admin routes are NOT in it)", () => {
+  assert(PAGE_ALLOWED_ROUTES.has("tools.upsert"));
+  assert(PAGE_ALLOWED_ROUTES.has("tools.list"));
+  assert(!PAGE_ALLOWED_ROUTES.has("memory.set"));
+  assert(!PAGE_ALLOWED_ROUTES.has("provider.set"));
+  assert(!PAGE_ALLOWED_ROUTES.has("agent.run"));
+  assert(!PAGE_ALLOWED_ROUTES.has("browser-control.set"));
 });

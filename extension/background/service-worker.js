@@ -12,7 +12,7 @@ import { browserToolset, recordBrowserEvent, setBrowserControlGrant, isBrowserCo
 import { RECIPES, getRecipe } from "../lib/recipes.js";
 import { tool } from "ai";
 import { z } from "zod";
-import { schemaToZod as buildSchema, sanitizeToolName as safeToolName, authorizeToolReport } from "../lib/pure.js";
+import { schemaToZod as buildSchema, sanitizeToolName as safeToolName, authorizeToolReport, PAGE_ALLOWED_ROUTES } from "../lib/pure.js";
 
 // ---- alarm scheduler (persists the full task payload) ----
 const TASK_KEY = "cap:scheduledTasks";
@@ -25,7 +25,18 @@ async function registerAlarm(task) {
   tasks[name] = { ...task, name };
   await chrome.storage.local.set({ [TASK_KEY]: tasks });
 
-  const info = { when: Date.now() + (task.when ?? 0) };
+  // Timing: task.at is an ABSOLUTE epoch-ms; task.delayMs is a RELATIVE delay.
+  // (Chrome's alarm `when` is absolute — never add a relative value to Date.now()
+  // blindly, and never treat an absolute timestamp as a delay.)
+  let when;
+  if (typeof task.at === "number" && task.at > Date.now()) {
+    when = task.at;
+  } else if (typeof task.delayMs === "number" && task.delayMs > 0) {
+    when = Date.now() + task.delayMs;
+  } else {
+    throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
+  }
+  const info = { when };
   if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
   chrome.alarms.create(name, info);
   return name;
@@ -90,9 +101,10 @@ async function siteToolset(origin) {
   const tools = await listTools(origin);
   const set = {};
   for (const t of tools) {
-    // A valid AI-SDK tool needs an inputSchema. Descriptors carry a JSON-schema;
-    // we accept an arbitrary args object (the content-script validates + invokes
-    // the real page function, and the invocation is approval-gated + origin-bound).
+    // A valid AI-SDK tool needs an inputSchema. The JSON-schema descriptor is
+    // converted by schemaToZod (fail-closed: unsupported → z.never()), and the
+    // invocation is approval-gated + origin-bound. The content script does NOT
+    // validate arguments — this boundary enforces the schema.
     set[safeToolName(origin, t.name)] = tool({
       description: `${t.name} on ${origin} — ${t.description ?? ""}`,
       inputSchema: buildSchema(z, t.inputSchema),
@@ -156,15 +168,16 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const result = await orch.run(task, context, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
   if (scheduled) {
-    // Completion lifecycle: surface the result as a notification.
+    // Completion lifecycle: surface the result as a notification. Await + handle
+    // failure; the icon is an inline data-URI (no external icon file to go missing).
     try {
-      chrome.notifications.create(`cap:${taskId}`, {
+      await chrome.notifications.create(`cap:${taskId}`, {
         type: "basic",
-        iconUrl: "icon128.png",
+        iconUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%2378b3ff'/%3E%3C/svg%3E",
         title: "Scheduled task complete",
         message: String(result ?? "").slice(0, 160),
       });
-    } catch { /* notifications may be unavailable */ }
+    } catch (e) { console.error("notification failed", e); }
   }
   return { ok: true, result };
 }
@@ -181,13 +194,27 @@ const handlers = {
   async "provider.models"() { return { choices: PROVIDER_CHOICES }; },
 
   async "agent.run"(m) {
-    // Bound the attachment payload: reject a single oversized data URL to avoid
-    // base64 memory blowup through runtime messaging.
-    const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8 MiB
-    const bounded = (m.attachments ?? []).filter((a) => {
-      const bytes = a?.size ?? (a?.dataURL ? Math.ceil((a.dataURL.length - a.dataURL.indexOf(",") - 1) * 0.75) : 0);
-      return bytes <= MAX_ATTACHMENT_BYTES;
-    });
+    // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust
+    // a client-claimed size), enforce per-item AND aggregate limits + a count cap,
+    // and drop (not silently truncate) anything over budget.
+    const MAX_ITEM_BYTES = 8 * 1024 * 1024; // 8 MiB per attachment
+    const MAX_TOTAL_BYTES = 16 * 1024 * 1024; // 16 MiB aggregate
+    const MAX_COUNT = 8;
+    const measured = (a) => {
+      if (!a?.dataURL) return 0;
+      const comma = a.dataURL.indexOf(",");
+      if (comma < 0) return 0;
+      return Math.ceil((a.dataURL.length - comma - 1) * 0.75);
+    };
+    let total = 0;
+    const bounded = [];
+    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT * 4)) {
+      const bytes = measured(a);
+      if (bytes > MAX_ITEM_BYTES) continue;
+      if (total + bytes > MAX_TOTAL_BYTES) continue;
+      bounded.push(a);
+      total += bytes;
+    }
     return await runTask({ id: m.id, task: m.task, attachments: bounded });
   },
   async "agent.list"() { return await listOrigins(); },
@@ -229,8 +256,8 @@ const handlers = {
     return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
   },
 
-  async "browser-control.get"() { return { granted: await isBrowserControlGranted() }; },
-  async "browser-control.set"({ granted }) { await setBrowserControlGrant(granted); return { granted }; },
+  async "browser-control.get"() { return { granted: await isBrowserControlGranted(), expiresInMs: (await chrome.storage.local.get("cap:browserControlGrant"))["cap:browserControlGrant"]?.expiresAt - Date.now() ?? 0 }; },
+  async "browser-control.set"(m) { const grant = await setBrowserControlGrant({ origins: m?.origins, expiryMs: m?.expiryMs }); return { grant }; },
 
   // Management tools — the agent can manage its own site-agents.
   async "agent.create"({ origin, name }) {
@@ -254,15 +281,21 @@ const handlers = {
   async "capture.tab"({ tabId }) {
     try {
       const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
-      const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-      const url = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+      if (!tab?.id) return { error: "no such tab" };
+      // Activate the REQUESTED tab, then VERIFY it became active before capture
+      // (captureVisibleTab always captures the active tab — never another tab).
+      await chrome.tabs.update(tab.id, { active: true });
+      const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+      if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
+      const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
       return { screenshot: url };
-    } catch (e) { return { error: e.message }; }
+    } catch (e) { return { error: String(e?.message ?? e) }; }
   },
 };
 
-// Routers that a page's content script must never be able to call.
-const ADMIN_TYPES = new Set(["memory.set", "memory.clear", "agent.delete", "agent.create", "provider.set", "usage.clear", "browser-control.set"]);
+// A page's content script may ONLY route tool-report operations. Everything else
+// (memory, agents, provider, usage, browser-control, run-task, etc.) is extension-only.
+// This is an allowlist — unknown/new routes default to denied for page senders.
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = handlers[message?.type];
@@ -280,7 +313,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: auth.error });
       return true;
     }
-    if (ADMIN_TYPES.has(message.type)) {
+    if (!PAGE_ALLOWED_ROUTES.has(message.type)) {
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }

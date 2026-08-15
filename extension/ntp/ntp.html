@@ -170,6 +170,7 @@
       min-width: 160px;
       padding: 4px;
     }
+    .attach-note { font-size: 11px; color: var(--muted, #888); margin: 6px 0 2px; max-width: 220px; }
     .attach-menu button {
       display: block;
       width: 100%;
@@ -294,6 +295,9 @@
             <button type="button"
               data-kind="capture-camera">Capture camera</button>
             <button type="button" data-kind="other">Add other file</button>
+            <p class="attach-note">Text files are read by the agent. Audio/video/image
+              are attached but not yet read by the model (multimodal is coming) —
+              they are stored with the message, not transcribed.</p>
           </div>
         </div>
       </div>
