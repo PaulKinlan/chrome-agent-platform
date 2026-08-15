@@ -5,10 +5,10 @@
 // privacy issue: MAIN-world discovery enumerating every page's globals). A site
 // becomes a sub-agent only after the user enrolls its origin: we register the
 // discovery scripts for it with chrome.scripting.registerContentScripts
-// (dynamic, per-origin, never a static <all_urls> content script). The
-// <all_urls> HOST permission is retained for the gated capture/read/invoke
-// primitives (captureVisibleTab requires <all_urls> or activeTab), NOT for
-// blanket injection.
+// (dynamic, per-origin, never a static <all_urls> content script). The host
+// permission is OPTIONAL and per-origin (no permanent <all_urls> authority):
+// the owner grants the exact origin from the Settings page (a real gesture),
+// then this module registers only that origin's scripts.
 
 import { canonicalOrigin } from "./memory.js";
 
