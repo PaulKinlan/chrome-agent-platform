@@ -11,9 +11,40 @@
 // then this module registers only that origin's scripts.
 
 import { canonicalOrigin } from "./memory.js";
+import { kvGet, kvSet } from "./kv.js";
 
 const MAIN_WORLD_JS = "content/main-world.js";
 const BRIDGE_JS = "content/content-script.js";
+
+// A cleanup-pending registry, stored INDEPENDENTLY of active enrollment so a
+// tombstoned origin (hidden from listOrigins) still retains a retryable cleanup
+// obligation until its dynamic scripts, host permission, and OPFS are each
+// CONFIRMED removed (the round-17 non-retryable finding: listOrigins hides the
+// tombstone, so Settings dropped the only Disenroll control with no Retry).
+const CLEANUP_KEY = "cap:pendingCleanup";
+
+export async function markCleanupPending(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  const s = await kvGet(CLEANUP_KEY);
+  const map = { ...(s[CLEANUP_KEY] ?? {}) };
+  map[canonical] = Date.now();
+  await kvSet({ [CLEANUP_KEY]: map });
+}
+
+export async function clearCleanupPending(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  const s = await kvGet(CLEANUP_KEY);
+  const map = { ...(s[CLEANUP_KEY] ?? {}) };
+  delete map[canonical];
+  await kvSet({ [CLEANUP_KEY]: map });
+}
+
+export async function listPendingCleanup() {
+  const s = await kvGet(CLEANUP_KEY);
+  return Object.keys(s[CLEANUP_KEY] ?? {}).sort();
+}
 
 /** Deterministic, injective script id per (origin, role). */
 function scriptId(origin, role) {

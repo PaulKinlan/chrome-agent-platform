@@ -66,7 +66,10 @@ import {
 } from "../lib/scheduler.js";
 
 import {
+  clearCleanupPending,
   ensureOriginScriptsRegistered,
+  listPendingCleanup,
+  markCleanupPending,
   removeOriginHostPermission,
   unregisterOriginScripts,
   withOriginLock,
@@ -915,30 +918,85 @@ const handlers = {
       // Tombstone-first means a slow unregister can never leave a still-authorized
       // origin (the round-15 finding that delete was not preemptive).
       await disenrollOrigin(canonical);
-      const unreg = await unregisterOriginScripts(canonical);
-      await siteMemory(canonical).clear();
-      invalidateAgent();
-      // Authoritative revocation is claimed ONLY when BOTH the scripts AND the
-      // host permission are confirmed removed. A partial revocation is surfaced
-      // as incomplete (ok:false + the specific flags), never reported as success.
-      if (!unreg.ok) {
-        return {
+      // allSettled: attempt scripts/host-permission + OPFS cleanup INDEPENDENTLY,
+      // never short-circuit on the first failure (the round-17 non-retryable
+      // finding: a sequential rollback skipped later host cleanup on an earlier
+      // failure).
+      const [unregRes, clearRes] = await Promise.allSettled([
+        unregisterOriginScripts(canonical),
+        siteMemory(canonical).clear(),
+      ]);
+      const unreg = unregRes.status === "fulfilled"
+        ? unregRes.value
+        : {
           ok: false,
+          scriptsRemoved: false,
+          permissionRemoved: false,
+          error: String(unregRes.reason?.message ?? unregRes.reason),
+        };
+      const cleared = clearRes.status === "fulfilled";
+      invalidateAgent();
+      const scriptsRemoved = unreg.scriptsRemoved === true;
+      const permissionRemoved = unreg.permissionRemoved === true;
+      if (scriptsRemoved && permissionRemoved && cleared) {
+        await clearCleanupPending(canonical);
+        return {
+          ok: true,
           origin: canonical,
-          error:
-            unreg.error ??
-            "content-script unregister or host-permission removal failed",
-          scriptsRemoved: unreg.scriptsRemoved,
-          permissionRemoved: unreg.permissionRemoved,
+          scriptsRemoved: true,
+          permissionRemoved: true,
         };
       }
+      // Record a RETRYABLE cleanup obligation (independent of enrollment, so it
+      // survives the tombstone that hides the origin from listOrigins).
+      await markCleanupPending(canonical);
       return {
-        ok: true,
+        ok: false,
         origin: canonical,
-        scriptsRemoved: true,
-        permissionRemoved: true,
+        retryable: true,
+        error:
+          unreg.error ??
+          "OPFS clear failed",
+        scriptsRemoved,
+        permissionRemoved,
+        cleared,
       };
     });
+  },
+  async "agent.retry-cleanup"({ origin }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    const [unregRes, clearRes] = await Promise.allSettled([
+      unregisterOriginScripts(canonical),
+      siteMemory(canonical).clear(),
+    ]);
+    const unreg = unregRes.status === "fulfilled"
+      ? unregRes.value
+      : {
+        ok: false,
+        scriptsRemoved: false,
+        permissionRemoved: false,
+        error: String(unregRes.reason?.message ?? unregRes.reason),
+      };
+    const cleared = clearRes.status === "fulfilled";
+    const scriptsRemoved = unreg.scriptsRemoved === true;
+    const permissionRemoved = unreg.permissionRemoved === true;
+    if (scriptsRemoved && permissionRemoved && cleared) {
+      await clearCleanupPending(canonical);
+      return { ok: true, origin: canonical };
+    }
+    await markCleanupPending(canonical);
+    return {
+      ok: false,
+      retryable: true,
+      error: unreg.error ?? "OPFS clear failed",
+      scriptsRemoved,
+      permissionRemoved,
+      cleared,
+    };
+  },
+  async "agent.pending-cleanup"() {
+    return { origins: await listPendingCleanup() };
   },
   async "agent.delegate"({ origin, task }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an

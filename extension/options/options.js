@@ -592,6 +592,39 @@ async function renderData() {
 
     list.appendChild(row);
   }
+
+  // Pending-cleanup origins: a delete that failed partway (e.g. a script or host
+  // permission removal that could not be CONFIRMED) records a retryable cleanup
+  // obligation independent of enrollment, so it is surfaced here with a Retry
+  // control rather than silently dropped when the tombstone hides the origin
+  // (the round-17 non-retryable finding).
+  const pending = await chrome.runtime.sendMessage({ type: "agent.pending-cleanup" });
+  for (const origin of (pending?.origins ?? [])) {
+    const row = document.createElement("div");
+    row.className = "origin-row pending";
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = origin;
+    row.appendChild(label);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn small retry-cleanup";
+    retry.textContent = "Retry cleanup";
+    retry.setAttribute("aria-label", `Retry cleanup for ${origin}`);
+    retry.addEventListener("click", async () => {
+      const res = await chrome.runtime
+        .sendMessage({ type: "agent.retry-cleanup", origin })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok) {
+        saveFlash(`Cleanup complete for ${origin}.`);
+      } else {
+        saveFlash(`Cleanup still incomplete: ${res?.error ?? "unknown"}.`);
+      }
+      renderData();
+    });
+    row.appendChild(retry);
+    list.appendChild(row);
+  }
 }
 
 // ── helpers ──

@@ -67777,6 +67777,27 @@ function getRecipe(id) {
 init_browser_shim_process();
 var MAIN_WORLD_JS = "content/main-world.js";
 var BRIDGE_JS = "content/content-script.js";
+var CLEANUP_KEY = "cap:pendingCleanup";
+async function markCleanupPending(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  const s = await kvGet(CLEANUP_KEY);
+  const map4 = { ...s[CLEANUP_KEY] ?? {} };
+  map4[canonical] = Date.now();
+  await kvSet({ [CLEANUP_KEY]: map4 });
+}
+async function clearCleanupPending(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  const s = await kvGet(CLEANUP_KEY);
+  const map4 = { ...s[CLEANUP_KEY] ?? {} };
+  delete map4[canonical];
+  await kvSet({ [CLEANUP_KEY]: map4 });
+}
+async function listPendingCleanup() {
+  const s = await kvGet(CLEANUP_KEY);
+  return Object.keys(s[CLEANUP_KEY] ?? {}).sort();
+}
 function scriptId(origin, role) {
   return `cap-${encodeURIComponent(origin)}-${role}`;
 }
@@ -68834,25 +68855,73 @@ var handlers = {
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
       await disenrollOrigin(canonical);
-      const unreg = await unregisterOriginScripts(canonical);
-      await siteMemory(canonical).clear();
+      const [unregRes, clearRes] = await Promise.allSettled([
+        unregisterOriginScripts(canonical),
+        siteMemory(canonical).clear()
+      ]);
+      const unreg = unregRes.status === "fulfilled" ? unregRes.value : {
+        ok: false,
+        scriptsRemoved: false,
+        permissionRemoved: false,
+        error: String(unregRes.reason?.message ?? unregRes.reason)
+      };
+      const cleared = clearRes.status === "fulfilled";
       invalidateAgent();
-      if (!unreg.ok) {
+      const scriptsRemoved = unreg.scriptsRemoved === true;
+      const permissionRemoved = unreg.permissionRemoved === true;
+      if (scriptsRemoved && permissionRemoved && cleared) {
+        await clearCleanupPending(canonical);
         return {
-          ok: false,
+          ok: true,
           origin: canonical,
-          error: unreg.error ?? "content-script unregister or host-permission removal failed",
-          scriptsRemoved: unreg.scriptsRemoved,
-          permissionRemoved: unreg.permissionRemoved
+          scriptsRemoved: true,
+          permissionRemoved: true
         };
       }
+      await markCleanupPending(canonical);
       return {
-        ok: true,
+        ok: false,
         origin: canonical,
-        scriptsRemoved: true,
-        permissionRemoved: true
+        retryable: true,
+        error: unreg.error ?? "OPFS clear failed",
+        scriptsRemoved,
+        permissionRemoved,
+        cleared
       };
     });
+  },
+  async "agent.retry-cleanup"({ origin }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    const [unregRes, clearRes] = await Promise.allSettled([
+      unregisterOriginScripts(canonical),
+      siteMemory(canonical).clear()
+    ]);
+    const unreg = unregRes.status === "fulfilled" ? unregRes.value : {
+      ok: false,
+      scriptsRemoved: false,
+      permissionRemoved: false,
+      error: String(unregRes.reason?.message ?? unregRes.reason)
+    };
+    const cleared = clearRes.status === "fulfilled";
+    const scriptsRemoved = unreg.scriptsRemoved === true;
+    const permissionRemoved = unreg.permissionRemoved === true;
+    if (scriptsRemoved && permissionRemoved && cleared) {
+      await clearCleanupPending(canonical);
+      return { ok: true, origin: canonical };
+    }
+    await markCleanupPending(canonical);
+    return {
+      ok: false,
+      retryable: true,
+      error: unreg.error ?? "OPFS clear failed",
+      scriptsRemoved,
+      permissionRemoved,
+      cleared
+    };
+  },
+  async "agent.pending-cleanup"() {
+    return { origins: await listPendingCleanup() };
   },
   async "agent.delegate"({ origin, task }) {
     const canonical = canonicalOrigin(origin);
