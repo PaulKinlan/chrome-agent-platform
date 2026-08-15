@@ -1,1 +1,0 @@
-The extension is built, loads cleanly, and everything is committed. Let me produce the acceptance report.
