@@ -6,6 +6,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   INFLIGHT_LEASE_MS,
+  __resetBootForTest,
   clearStaleInflight,
   heartbeatInflight,
   markScheduledDone,
@@ -61,35 +62,42 @@ Deno.test("inflight lock blocks a second acquisition while the owner is alive", 
   await releaseInflight("lease-a", c.token);
 });
 
-Deno.test("stale lock re-acquires with a NEW token and stale release is a no-op", async () => {
+Deno.test("a live same-boot owner is NEVER re-acquired from heartbeat age (round-13 blocker)", async () => {
   const a = await tryAcquireInflight("lease-b");
   assertEquals(a.acquired, true);
 
-  // Simulate the owner dying: heartbeat goes silent beyond the lease.
+  // Age the persisted heartbeat far past the lease — the owner "looks" dead.
   const s1 = await chrome.storage.local.get("cap:scheduledInflight");
   s1["cap:scheduledInflight"]["lease-b"].heartbeatAt =
-    Date.now() - INFLIGHT_LEASE_MS * 2;
+    Date.now() - INFLIGHT_LEASE_MS * 10;
   await chrome.storage.local.set({ "cap:scheduledInflight": s1["cap:scheduledInflight"] });
 
-  // B re-acquires (owner demonstrably dead) with a DIFFERENT token.
+  // The owner is STILL LIVE in this worker's memory → re-acquisition is BLOCKED.
+  // (The old code re-acquired here, letting a second run overlap a live one.)
   const b = await tryAcquireInflight("lease-b");
-  assertEquals(b.acquired, true);
+  assertEquals(b.acquired, false, "a live same-boot owner must block re-acquisition");
+  assert(await ownsInflight("lease-b", a.token), "owner A still owns the lock");
+
+  await releaseInflight("lease-b", a.token);
+});
+
+Deno.test("a previous worker instance's lock is re-acquired after a simulated restart", async () => {
+  const a = await tryAcquireInflight("lease-b2");
+  assertEquals(a.acquired, true);
+
+  // Simulate the worker being killed: a fresh SW instance has no in-memory run
+  // and a new boot instant, but the dead owner's persisted lock remains.
+  __resetBootForTest();
+
+  const b = await tryAcquireInflight("lease-b2");
+  assertEquals(b.acquired, true, "a previous worker's lock is re-acquired");
   assert(b.token !== a.token, "re-acquisition must fence with a fresh token");
 
   // The stale owner A's late release must NOT delete B's lock (compare-and-release).
-  await releaseInflight("lease-b", a.token);
-  const s2 = await chrome.storage.local.get("cap:scheduledInflight");
-  assertEquals(s2["cap:scheduledInflight"]["lease-b"].token, b.token);
+  await releaseInflight("lease-b2", a.token);
+  assert(await ownsInflight("lease-b2", b.token), "B still owns after A's stale release");
 
-  // C cannot acquire concurrently with B.
-  const c = await tryAcquireInflight("lease-b");
-  assertEquals(c.acquired, false);
-
-  // B's own release clears.
-  await releaseInflight("lease-b", b.token);
-  const d = await tryAcquireInflight("lease-b");
-  assertEquals(d.acquired, true);
-  await releaseInflight("lease-b", d.token);
+  await releaseInflight("lease-b2", b.token);
 });
 
 Deno.test("heartbeat keeps a slow-but-alive owner from being evicted", async () => {
@@ -126,16 +134,13 @@ Deno.test("clearStaleInflight clears malformed locks but preserves live post-boo
   await releaseInflight("lease-d", a.token);
 });
 
-Deno.test("ownsInflight is true for the owner and false after re-acquisition", async () => {
+Deno.test("ownsInflight is true for the owner and false after a restart re-acquisition", async () => {
   const a = await tryAcquireInflight("lease-e");
   assertEquals(a.acquired, true);
   assert(await ownsInflight("lease-e", a.token), "owner must own the lock");
 
-  // A stale owner's lock is re-acquired by B (owner went silent past the lease).
-  const s1 = await chrome.storage.local.get("cap:scheduledInflight");
-  s1["cap:scheduledInflight"]["lease-e"].heartbeatAt =
-    Date.now() - INFLIGHT_LEASE_MS * 2;
-  await chrome.storage.local.set({ "cap:scheduledInflight": s1["cap:scheduledInflight"] });
+  // Simulate a worker restart: the dead owner A's lock is re-acquired by B.
+  __resetBootForTest();
   const b = await tryAcquireInflight("lease-e");
   assertEquals(b.acquired, true);
   assert(!(await ownsInflight("lease-e", a.token)), "stale owner A no longer owns");
@@ -149,10 +154,8 @@ Deno.test("markScheduledDone is fenced: a stale owner cannot delete a later owne
   const a = await tryAcquireInflight(name);
   assertEquals(a.acquired, true);
 
-  // A ages out; B re-acquires (stale owner demonstrably dead).
-  const s1 = await chrome.storage.local.get("cap:scheduledInflight");
-  s1["cap:scheduledInflight"][name].heartbeatAt = Date.now() - INFLIGHT_LEASE_MS * 2;
-  await chrome.storage.local.set({ "cap:scheduledInflight": s1["cap:scheduledInflight"] });
+  // Simulate a worker restart: owner A's worker died; B re-acquires.
+  __resetBootForTest();
   const b = await tryAcquireInflight(name);
   assertEquals(b.acquired, true);
 

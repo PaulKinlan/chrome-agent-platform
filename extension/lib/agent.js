@@ -155,6 +155,9 @@ export function createOrchestrator({
       // those capabilities. Multi-agent mode adds the delegate tools on top.
       return await master.run(task, context, history);
     },
+    abort() {
+      master.abort();
+    },
     addWorker(config) {
       const a = createAgent({
         model,

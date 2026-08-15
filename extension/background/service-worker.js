@@ -93,15 +93,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const hb = setInterval(() => {
     heartbeatInflight(alarm.name, token).catch(() => {
       heartbeatFailed = true;
+      lock.signal?.abort();
     });
   }, INFLIGHT_HEARTBEAT_MS);
   // The EXECUTION fence: checked at every durable/destructive boundary inside
   // runTask + before markScheduledDone. Ownership loss (re-acquisition by a
   // later firing) or a heartbeat-renewal failure aborts the run BEFORE it
-  // commits journal/notification/task-deletion side effects.
+  // commits journal/notification/task-deletion side effects. The abort signal
+  // is threaded into runTask so the RUNNING agent/tools also stop.
   const fence = {
+    signal: lock.signal,
     async assertOwned() {
-      if (heartbeatFailed) {
+      if (heartbeatFailed || lock.signal?.aborted) {
         throw new Error("heartbeat renewal failed — aborting run");
       }
       if (!(await ownsInflight(alarm.name, token))) {
@@ -325,6 +328,18 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
+  // Thread the fence's abort signal into the RUNNING agent: if ownership or
+  // heartbeat renewal fails mid-run, abort the in-flight model/tool loop so it
+  // cannot commit stale side effects (the round-13 execution fence).
+  if (fence?.signal) {
+    const abortNow = () => {
+      try {
+        orch.abort?.();
+      } catch { /* already aborted */ }
+    };
+    fence.signal.addEventListener("abort", abortNow);
+    if (fence.signal.aborted) abortNow();
+  }
   // Every durable/destructive boundary is FENCED when a scheduled run owns an
   // in-flight lock: a stale owner aborts before committing the task journal,
   // the result journal, or the completion notification.

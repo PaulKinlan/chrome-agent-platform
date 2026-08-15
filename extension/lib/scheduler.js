@@ -5,17 +5,32 @@
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
 
-// A bounded in-flight lease. A hung task (e.g. a provider call that never
-// settles) must not block its alarm FOREVER — after this window a lock whose
-// owner has STOPPED HEARTBEATING is considered stale and a later firing can
-// re-acquire it. Timeout ALONE never permits re-acquisition: a live owner
-// heartbeats well inside the lease, so a live-but-slow run stays "fresh" and
-// blocks the next firing (never overlaps side-effecting agents).
+// A same-boot run is tracked IN MEMORY (the active-runs map below), never
+// inferred from a persisted timestamp. The single-threaded MV3 service worker
+// means a run still registered in this module's state is, by definition, live —
+// so a later firing can never re-acquire it from heartbeat age alone. The
+// persisted heartbeat exists ONLY as a storage-failure canary: if a heartbeat
+// renewal write starts failing, the run aborts rather than commit side effects
+// as a silently-degraded owner. INFLIGHT_LEASE_MS is retained for test aging
+// (pushing a heartbeat far past any plausible window) + documents the
+// historical bound; re-acquisition is governed by the active-runs map, not by
+// timestamp arithmetic.
 export const INFLIGHT_LEASE_MS = 5 * 60 * 1000;
 
-// How often a live in-flight task renews its lock's heartbeat. Well inside the
-// lease so a healthy owner can never be mistaken for a dead one.
+// How often a live in-flight task renews its lock's heartbeat. A failed renewal
+// (storage error) marks the run for abort at the next fence check.
 export const INFLIGHT_HEARTBEAT_MS = 30 * 1000;
+
+// In-memory map of LIVE runs in THIS worker boot: name -> { token, controller }.
+// This is the authoritative same-boot fence — a run present here is alive and
+// can NEVER be overlapped by a later alarm firing. The persisted lock fences
+// ACROSS worker boots (a killed SW instance's lock is re-acquirable because the
+// dead instance's run is gone; this map is empty on a fresh boot).
+const activeRuns = new Map();
+
+// This worker lifetime's boot instant (module-eval time). A persisted lock whose
+// `at` predates this instant was acquired by a previous, now-dead worker instance.
+let BOOT_AT = Date.now();
 
 let lockSeq = 0;
 function newToken() {
@@ -116,33 +131,40 @@ export async function markScheduledDone(name, token) {
 }
 
 /** In-flight lock so overlapping alarms / slow runs can't double-fire.
- * Returns { acquired: true, token } on success or { acquired: false, reason }.
- * Ownership is FENCED by a unique token; a stale lock is re-acquired ONLY when
- * the prior owner has demonstrably stopped heartbeating for the FULL lease
- * (i.e. it is dead) — timeout alone never lets two agents overlap. */
+ * Returns { acquired: true, token, signal } on success or
+ * { acquired: false, reason }. A live same-boot run (present in `activeRuns`)
+ * is NEVER re-acquired — not even from heartbeat age. Only a persisted lock
+ * whose owner is NOT live in this boot (a killed worker instance, or a run that
+ * already released with a failed persist) is re-acquired with a FRESH token, so
+ * a late release from a dead owner can never match. */
 export async function tryAcquireInflight(name) {
   return withLock(async () => {
+    // Authoritative same-boot fence: a run registered in this worker's memory
+    // is alive, period. Heartbeat age can NEVER evict it (the round-13 blocker).
+    if (activeRuns.has(name)) {
+      return { acquired: false, reason: "running in this worker" };
+    }
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
-    const now = Date.now();
     const existing = inflight[name];
-    if (existing !== undefined) {
-      if (!validLock(existing)) {
-        // A malformed lock can never be released by compare-and-release → block
-        // (fail closed). Boot recovery clears it, never a later firing.
-        return { acquired: false, reason: "malformed lock" };
-      }
-      // A fresh heartbeat means the owner is alive → block (NEVER overlap).
-      if (now - existing.heartbeatAt <= INFLIGHT_LEASE_MS) {
-        return { acquired: false, reason: "in flight" };
-      }
-      // Stale: the owner went silent for the full lease → it is dead. Replace
-      // with OUR token so a late release from the (dead) owner can never match.
+    if (existing !== undefined && !validLock(existing)) {
+      // A malformed lock can never be released by compare-and-release → block
+      // (fail closed). Boot recovery clears it, never a later firing.
+      return { acquired: false, reason: "malformed lock" };
     }
+    // Any VALID persisted lock here belongs to a dead or already-released owner
+    // (a live same-boot owner is caught by the activeRuns check above), so
+    // re-acquiring with OUR token is safe — it never overlaps a running agent.
     const token = newToken();
-    inflight[name] = { token, at: now, heartbeatAt: now };
-    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
-    return { acquired: true, token };
+    const controller = new AbortController();
+    inflight[name] = { token, at: Date.now(), heartbeatAt: Date.now() };
+    try {
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    } catch {
+      return { acquired: false, reason: "persist failed" };
+    }
+    activeRuns.set(name, { token, controller });
+    return { acquired: true, token, signal: controller.signal };
   });
 }
 
@@ -151,6 +173,11 @@ export async function tryAcquireInflight(name) {
  * stale owner (whose lock was re-acquired) aborts before committing side
  * effects (journal writes, notifications, task deletion). */
 export async function ownsInflight(name, token) {
+  // Same-boot: the in-memory map is authoritative (no storage round-trip, no
+  // storage race). A live run's owner still owns; a stale token does not.
+  const active = activeRuns.get(name);
+  if (active) return active.token === token;
+  // No live run: fall back to the persisted lock (cross-boot / released).
   const store = await chrome.storage.local.get(INFLIGHT_KEY);
   const existing = store[INFLIGHT_KEY]?.[name];
   return Boolean(validLock(existing) && existing.token === token);
@@ -181,10 +208,25 @@ export async function releaseInflight(name, token) {
       delete inflight[name];
       await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
     }
+    // Same-boot: abort + drop the in-memory run regardless of the persisted
+    // compare-and-release result (the run is ending either way).
+    const active = activeRuns.get(name);
+    if (active && active.token === token) {
+      try {
+        active.controller.abort();
+      } catch { /* already aborted */ }
+      activeRuns.delete(name);
+    }
   });
 }
 
-const BOOT_AT = Date.now(); // this worker lifetime's boot instant
+/** Test hook (Deno unit tests): simulate a worker restart by clearing the
+ * in-memory run map + advancing the boot instant, leaving the persisted lock
+ * in place (as a killed worker would). */
+export function __resetBootForTest() {
+  activeRuns.clear();
+  BOOT_AT = Date.now();
+}
 
 /**
  * Recover in-flight locks on worker boot — but ONLY entries acquired before
