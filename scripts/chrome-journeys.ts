@@ -353,6 +353,9 @@ const EXPECTED = [
   "permissions: enabled sidePanel (granted)",
   "permissions: tabs denied in headless (fail closed)",
   "permissions: notifications denied in headless (fail closed)",
+  "permissions: storage Disable returns revoked (capability.revoke route)",
+  "permissions: provider survives storage Disable (session snapshot)",
+  "permissions: storage re-enabled + provider survived (migration)",
   "Settings: OpenAI provider card rendered",
   "Settings: Clear key button present for the keyed provider",
   "Settings: clicked Clear key via a real click",
@@ -729,6 +732,38 @@ async function main() {
         model: "model-one",
       },
     });
+
+    // Storage Disable→re-enable round-trip (the round-17 blocker): Disabling the
+    // optional `storage` permission must (a) route through the SW capability.revoke
+    // route (snapshot persistent→session + permissions.remove), (b) keep the
+    // configured provider readable from the session fallback (no data loss), and
+    // (c) re-enable must migrate the session changes back (never restore stale
+    // values). This exercises the new SW-side permission removal end-to-end.
+    const storageDisableClicked = await clickSel(
+      cdp, optsSession, `.revoke-perm[data-capability="storage"]`,
+    );
+    await sleep(800);
+    const storageDisabledStatus = await msgValue({ type: "capabilities.status" });
+    const providerDuringDisable = await msgValue({ type: "provider.get" });
+    check(
+      "permissions: storage Disable returns revoked (capability.revoke route)",
+      storageDisableClicked && storageDisabledStatus?.storage === false,
+    );
+    check(
+      "permissions: provider survives storage Disable (session snapshot)",
+      providerDuringDisable?.provider === "openai",
+    );
+    const storageEnableClicked = await clickSel(
+      cdp, optsSession, `.grant-perm[data-capability="storage"]`,
+    );
+    await sleep(800);
+    const storageReenabledStatus = await msgValue({ type: "capabilities.status" });
+    const providerAfterReenable = await msgValue({ type: "provider.get" });
+    check(
+      "permissions: storage re-enabled + provider survived (migration)",
+      storageEnableClicked && storageReenabledStatus?.storage === true &&
+        providerAfterReenable?.provider === "openai",
+    );
 
     // Re-open the Settings page so renderProviders picks up the openai config
     // set above (the first page rendered while the provider was still demo, so
