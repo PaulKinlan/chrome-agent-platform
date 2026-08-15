@@ -410,7 +410,8 @@ const EXPECTED = [
   "extension loaded",
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
-  "manifest: debugger is optional (not permanent)",
+  "manifest: permissions list is empty (all optional)",
+  "manifest: debugger absent everywhere",
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
   "initial SW boot observed via pre-attached restart",
@@ -420,6 +421,12 @@ const EXPECTED = [
   "NTP: clicked Run task via a real click",
   "NTP: retained a driven-UI screenshot",
   "NTP: the typed task reached the agent journal",
+  "Settings: Permissions panel present",
+  "permissions: all six capabilities start ungranted",
+  "permissions: enabled storage (granted)",
+  "permissions: enabled alarms (granted)",
+  "permissions: enabled tabs (granted)",
+  "permissions: enabled scripting (granted)",
   "Settings: OpenAI provider card rendered",
   "Settings: Clear key button present for the keyed provider",
   "Settings: clicked Clear key via a real click",
@@ -437,7 +444,7 @@ const EXPECTED = [
   "warm run 2 (after re-save) returns a concrete demo result",
   "real red tab resolved via chrome.tabs.query",
   "screenshot: denied after revoke (secondary probe)",
-  "screenshot: capture fails closed without the debugger permission",
+  "screenshot: capture succeeds via captureVisibleTab (red page)",
   "screenshot: wrong-origin grant is denied (secondary probe)",
   "screenshot: expired grant is denied (secondary probe)",
   "Settings: browser-grant checkbox present",
@@ -445,7 +452,7 @@ const EXPECTED = [
   "screenshot: granted browser control via a real checkbox click",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
-  "screenshot: UI-granted capture fails closed (debugger absent)",
+  "screenshot: UI-granted capture succeeds (captureVisibleTab)",
   "screenshot: revoked via a real checkbox click",
   "screenshot: revoked → capture denied",
   "per-origin clear leaves B intact",
@@ -618,16 +625,22 @@ async function main() {
     cdp.swSessions.add(swSession);
     check("SW Runtime.enable succeeded", true);
 
-    // Manifest attestation: the debugger capability (screenshot pixel capture)
-    // must be OPTIONAL — never a permanent all-sites permission (round-13 blocker).
+    // Manifest attestation: ALL permissions must be OPTIONAL (Paul's hard
+    // requirement) — the base permissions array is empty; the six API
+    // permissions are optional; debugger is absent everywhere (it cannot be
+    // optional and carries Chrome's all-sites warning).
     const manifestText = await Deno.readTextFile(`${EXT}/manifest.json`);
     const manifest = JSON.parse(manifestText);
     check(
-      "manifest: debugger is optional (not permanent)",
-      Array.isArray(manifest.permissions) &&
-        !manifest.permissions.includes("debugger") &&
+      "manifest: permissions list is empty (all optional)",
+      Array.isArray(manifest.permissions) && manifest.permissions.length === 0 &&
         Array.isArray(manifest.optional_permissions) &&
-        manifest.optional_permissions.includes("debugger"),
+        ["alarms", "storage", "sidePanel", "tabs", "scripting", "notifications"]
+          .every((p) => manifest.optional_permissions.includes(p)),
+    );
+    check(
+      "manifest: debugger absent everywhere",
+      !JSON.stringify(manifest).includes("debugger"),
     );
 
     // Open the NTP (for the genuine input journey + message probes).
@@ -717,8 +730,47 @@ async function main() {
     check("NTP: the typed task reached the agent journal", Boolean(ntpTask));
 
     // ─────────────────────────────────────────────────────────────
-    // JOURNEY 2 — provider Update / Clear key via GENUINE UI input.
+    // JOURNEY 2 — capability onboarding + provider Update/Clear key.
     // ─────────────────────────────────────────────────────────────
+    const optsPage = await openPage(
+      port, `chrome-extension://${extId}/options/options.html`,
+    );
+    await sleep(2000);
+    const optsSession = await attachRuntime(cdp, optsPage.id);
+    cdp.pageSessions.add(optsSession);
+    const evalOpts = (expression) => evalIn(cdp, optsSession, expression);
+
+    // ─────────────────────────────────────────────────────────────
+    // OPTIONAL-PERMISSION CAPABILITY GRANT — every permission is optional
+    // (Paul's hard requirement). Drive the Settings → Permissions panel with
+    // GENUINE clicks: storage + alarms + tabs + scripting all auto-grant in
+    // headless (no-warning permissions). notifications + sidePanel are left
+    // UNREQUESTED so the suite proves the extension runs without them.
+    // ─────────────────────────────────────────────────────────────
+    check(
+      "Settings: Permissions panel present",
+      (await boxOf(cdp, optsSession, "#permission-list")) !== null,
+    );
+    const capState0 = await evalOpts(
+      `[...document.querySelectorAll('.perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
+    );
+    check(
+      "permissions: all six capabilities start ungranted",
+      Array.isArray(capState0) && capState0.length === 6 &&
+        capState0.every((c) => c.granted === false),
+    );
+    for (const cap of ["storage", "alarms", "tabs", "scripting"]) {
+      const clicked = await clickSel(
+        cdp, optsSession, `.grant-perm[data-capability="${cap}"]`,
+      );
+      await sleep(800); // let the permission request + re-render settle
+      const status = await msgValue({ type: "capabilities.status" });
+      check(
+        `permissions: enabled ${cap} (granted)`,
+        clicked && status?.[cap] === true,
+      );
+    }
+
     await msgValue({
       type: "provider.set",
       config: {
@@ -728,13 +780,6 @@ async function main() {
         model: "model-one",
       },
     });
-    const optsPage = await openPage(
-      port, `chrome-extension://${extId}/options/options.html`,
-    );
-    await sleep(2000);
-    const optsSession = await attachRuntime(cdp, optsPage.id);
-    cdp.pageSessions.add(optsSession);
-    const evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
@@ -851,19 +896,32 @@ async function main() {
       "screenshot: denied after revoke (secondary probe)",
       revokedShot?.error !== undefined || revokedShot?.ok === false,
     );
-    // (b) grant the EXACT origin → capture should reach the debugger gate. The
-    // debugger permission is OPTIONAL + headless cannot grant it, so capture
-    // must FAIL CLOSED with a clear error (never throw, never silently succeed).
+    // (b) grant the EXACT origin (message probe) → capture should SUCCEED via
+    // captureVisibleTab now that the `tabs` capability is granted. Verify the
+    // data URL decodes to a predominantly-red PNG (functional, not just "ok").
     await msgValue({
       type: "browser-control.set",
       origins: [RED_ORIGIN],
       expiryMs: 60000,
     });
     const allowedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    let allowedRed = false;
+    if (
+      allowedShot?.screenshot &&
+      String(allowedShot.screenshot).startsWith("data:image/")
+    ) {
+      const b64 = String(allowedShot.screenshot).split(",")[1] ?? "";
+      try {
+        const bytes = new Uint8Array(
+          atob(b64).split("").map((c) => c.charCodeAt(0)),
+        );
+        const decoded = await decodePngSamples(bytes);
+        allowedRed = mostlyRed(decoded.samples);
+      } catch { /* not decodable */ }
+    }
     check(
-      "screenshot: capture fails closed without the debugger permission",
-      allowedShot?.error !== undefined &&
-        String(allowedShot.error).includes("debugger permission"),
+      "screenshot: capture succeeds via captureVisibleTab (red page)",
+      allowedRed === true,
     );
     // (c) wrong-origin (secondary probe).
     await msgValue({
@@ -922,10 +980,26 @@ async function main() {
         scopedGrant.origins.includes(RED_ORIGIN),
     );
     const uiGrantShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    // Verify the capture actually SUCCEEDED via captureVisibleTab: the data URL
+    // decodes to a predominantly-red PNG (the red fixture), not just "no error"
+    // (the functional-verification mandate: a passing status is not proof).
+    let uiShotRed = false;
+    if (
+      uiGrantShot?.screenshot &&
+      String(uiGrantShot.screenshot).startsWith("data:image/")
+    ) {
+      const b64 = String(uiGrantShot.screenshot).split(",")[1] ?? "";
+      try {
+        const bytes = new Uint8Array(
+          atob(b64).split("").map((c) => c.charCodeAt(0)),
+        );
+        const decoded = await decodePngSamples(bytes);
+        uiShotRed = mostlyRed(decoded.samples);
+      } catch { /* not decodable → stays false */ }
+    }
     check(
-      "screenshot: UI-granted capture fails closed (debugger absent)",
-      uiGrantShot?.error !== undefined &&
-        String(uiGrantShot.error).includes("debugger permission"),
+      "screenshot: UI-granted capture succeeds (captureVisibleTab)",
+      uiGrantShot?.screenshot !== undefined && uiShotRed === true,
     );
     // Revoke via a genuine checkbox click (uncheck).
     check(
