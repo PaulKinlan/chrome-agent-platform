@@ -66709,10 +66709,8 @@ var bootRecovered = false;
 async function recoverOnBoot() {
   if (bootRecovered) return;
   bootRecovered = true;
-  await withLock(async () => {
-    await clearStaleInflight();
-    await reconcileScheduledTasks();
-  });
+  await clearStaleInflight();
+  await reconcileScheduledTasks();
 }
 async function reconcileScheduledTasks() {
   const store = await chrome.storage.local.get(TASK_KEY);

@@ -308,6 +308,24 @@ async function main() {
       sched?.ok === true && typeof sched?.name === "string",
     );
 
+    // 5c. screenshot gate fails CLOSED on garbage input (never a false pass):
+    // - a nonexistent tab id must return "no tab" (not a screenshot);
+    // - a chrome-extension:// page (non-HTTP origin) must be denied.
+    const bogusTab = await evaluate(
+      `chrome.runtime.sendMessage({ type: "capture.tab", tabId: 999999 }).catch(e => ({ error: e.message }))`,
+    );
+    check(
+      "capture.tab with a bogus tab id fails closed (no tab)",
+      bogusTab?.error !== undefined && /no tab/i.test(String(bogusTab.error)),
+    );
+    const extPageShot = await evaluate(
+      `chrome.runtime.sendMessage({ type: "capture.tab", tabId: 0 }).catch(e => ({ error: e.message }))`,
+    );
+    check(
+      "capture.tab on a non-HTTP page is denied (no origin / not granted)",
+      extPageShot?.error !== undefined,
+    );
+
     // 6. no page runtime exceptions / console errors during the journeys.
     check("no console errors during journeys", consoleErrors.length === 0);
 

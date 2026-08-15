@@ -118,10 +118,10 @@ let bootRecovered = false;
 export async function recoverOnBoot() {
   if (bootRecovered) return;
   bootRecovered = true;
-  await withLock(async () => {
-    await clearStaleInflight();
-    await reconcileScheduledTasks();
-  });
+  // NOTE: clearStaleInflight + reconcileScheduledTasks each take the lock
+  // themselves; do NOT wrap them in another withLock (nested lock = deadlock).
+  await clearStaleInflight();
+  await reconcileScheduledTasks();
 }
 
 /**
