@@ -1,15 +1,11 @@
 {
-  "testedSourceCommit": "b16c7ba4ff5374e4528ac2ffbe72d51e683dc1c0",
+  "testedSourceCommit": "c9a01fcbeda2109d43c0d23d558a6bb7d81f050b",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
-  "worktreeClean": false,
-  "worktreeDirtyFiles": [
-    " M scripts/chrome-journeys.ts",
-    " M test-artifacts/ntp-driven.png",
-    " M test-artifacts/options-driven.png"
-  ],
-  "runId": "cap-1786822712331",
+  "worktreeClean": true,
+  "worktreeDirtyFiles": [],
+  "runId": "cap-1786822776025",
   "retain": true,
-  "ts": "2026-08-15T19:39:04.513Z",
+  "ts": "2026-08-15T19:40:08.186Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
   "passed": 84,
   "failed": 0,
@@ -354,13 +350,13 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "f246ea8b3b84d10be4aa3f748e38ef73854e00431de1446722df92e87279c411",
-      "bytes": 83349
+      "sha256": "cac6fb455bfc411e5c3eb83c157baa6892714f417e94690316eadcc6db3f02a3",
+      "bytes": 83361
     },
     {
       "name": "options-driven.png",
-      "sha256": "1da6cea5afabad135dfb318987c93fdb93207f27626bd886b64818feab880d44",
-      "bytes": 180866
+      "sha256": "c2f8a651b1780fd7fe3775821c3934d2bfd1f5b5b330bc7a81b397dc82ea0da4",
+      "bytes": 180842
     }
   ]
 }
