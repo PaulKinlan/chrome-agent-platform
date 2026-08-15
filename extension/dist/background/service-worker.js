@@ -66705,12 +66705,17 @@ async function clearStaleInflight() {
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
   });
 }
-var bootRecovered = false;
-async function recoverOnBoot() {
-  if (bootRecovered) return;
-  bootRecovered = true;
-  await clearStaleInflight();
-  await reconcileScheduledTasks();
+var bootRecoveryPromise = null;
+function recoverOnBoot() {
+  if (bootRecoveryPromise) return bootRecoveryPromise;
+  bootRecoveryPromise = (async () => {
+    await clearStaleInflight();
+    return await reconcileScheduledTasks();
+  })().catch((err) => {
+    bootRecoveryPromise = null;
+    throw err;
+  });
+  return bootRecoveryPromise;
 }
 async function reconcileScheduledTasks() {
   const store = await chrome.storage.local.get(TASK_KEY);
@@ -66719,6 +66724,7 @@ async function reconcileScheduledTasks() {
   if (names.length === 0) return [];
   const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
   const resumed = [];
+  const failed = [];
   const now2 = Date.now();
   for (const name25 of names) {
     const task = tasks[name25];
@@ -66730,12 +66736,18 @@ async function reconcileScheduledTasks() {
         await chrome.alarms.create(name25, info);
         resumed.push(name25);
       } catch (err) {
+        failed.push(name25);
         console.error(
           `reconcile: failed to recreate alarm "${name25}":`,
           err?.message ?? err
         );
       }
     }
+  }
+  if (failed.length > 0) {
+    throw new Error(
+      `reconcile: failed to recreate ${failed.length} alarm(s): ${failed.join(", ")}`
+    );
   }
   return resumed;
 }
@@ -66825,6 +66837,16 @@ async function captureTabScreenshot(tabId) {
     });
     if (active?.[0]?.id !== tab.id) {
       return { error: "could not activate the requested tab" };
+    }
+    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : void 0;
+    if (!currentOrigin || currentOrigin !== origin) {
+      return { error: "tab navigated to a different origin \u2014 capture denied" };
+    }
+    if (!await isBrowserControlGranted(currentOrigin)) {
+      return {
+        error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
+      };
     }
     const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png"
@@ -67063,6 +67085,23 @@ function valueMatchesType(value, type) {
       return false;
   }
 }
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    return true;
+  }
+  if (typeof a === "object") {
+    const ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (const k of ka) if (!deepEqual(a[k], b[k])) return false;
+    return true;
+  }
+  return false;
+}
 function validateSchemaAST(schema4, depth) {
   if (depth > SCHEMA_BOUNDS.maxDepth) return false;
   if (!schema4 || typeof schema4 !== "object" || Array.isArray(schema4)) return false;
@@ -67073,6 +67112,11 @@ function validateSchemaAST(schema4, depth) {
   if (schema4.additionalProperties !== void 0 && typeof schema4.additionalProperties !== "boolean") return false;
   if (schema4.required !== void 0) {
     if (!Array.isArray(schema4.required) || schema4.required.some((k) => typeof k !== "string")) return false;
+    if (schema4.properties === void 0 || schema4.properties === null) return false;
+    const propKeys = Object.keys(schema4.properties);
+    for (const k of schema4.required) {
+      if (!propKeys.includes(k)) return false;
+    }
   }
   if (schema4.enum !== void 0) {
     if (!Array.isArray(schema4.enum)) return false;
@@ -67115,6 +67159,9 @@ function validateSchemaAST(schema4, depth) {
   if (t !== void 0 && schema4.const !== void 0 && !valueMatchesType(schema4.const, t)) {
     return false;
   }
+  if (schema4.const !== void 0 && schema4.enum !== void 0) {
+    if (!schema4.enum.some((v) => deepEqual(v, schema4.const))) return false;
+  }
   if (schema4.items !== void 0 && !validateSchemaAST(schema4.items, depth + 1)) return false;
   if (schema4.properties !== void 0) {
     for (const key of Object.keys(schema4.properties)) {
@@ -67128,41 +67175,58 @@ function validateSchemaAST(schema4, depth) {
   }
   return true;
 }
-function valueSatisfiesBounds(value, schema4) {
+function valueSatisfiesSchema(schema4, value, depth) {
+  if (depth > SCHEMA_BOUNDS.maxDepth) return false;
   const t = schema4.type;
   if (t !== void 0 && !valueMatchesType(value, t)) return false;
-  if (t === "string") {
-    if (typeof value !== "string") return false;
+  if (typeof value === "string") {
     if (schema4.minLength !== void 0 && value.length < schema4.minLength) return false;
     if (schema4.maxLength !== void 0 && value.length > schema4.maxLength) return false;
-    return true;
   }
-  if (t === "number") {
-    if (typeof value !== "number") return false;
+  if (typeof value === "number") {
+    if (t === "integer" && !Number.isInteger(value)) return false;
     if (schema4.minimum !== void 0 && value < schema4.minimum) return false;
     if (schema4.maximum !== void 0 && value > schema4.maximum) return false;
-    return true;
   }
-  if (t === "integer") {
-    if (!Number.isInteger(value)) return false;
-    if (schema4.minimum !== void 0 && value < Math.ceil(schema4.minimum)) return false;
-    if (schema4.maximum !== void 0 && value > Math.floor(schema4.maximum)) return false;
-    return true;
+  if (Array.isArray(value)) {
+    if (schema4.minItems !== void 0 && value.length < schema4.minItems) return false;
+    if (schema4.maxItems !== void 0 && value.length > schema4.maxItems) return false;
+    if (schema4.items !== void 0) {
+      for (const item of value) {
+        if (!valueSatisfiesSchema(schema4.items, item, depth + 1)) return false;
+      }
+    }
   }
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const required3 = Array.isArray(schema4.required) ? schema4.required : [];
+    for (const k of required3) if (!(k in value)) return false;
+    if (schema4.properties) {
+      for (const [k, sub] of Object.entries(schema4.properties)) {
+        if (k in value && !valueSatisfiesSchema(sub, value[k], depth + 1)) return false;
+      }
+    }
+    if (schema4.additionalProperties === false) {
+      const known = new Set(Object.keys(schema4.properties || {}));
+      for (const k of Object.keys(value)) if (!known.has(k)) return false;
+    }
+  }
+  if (schema4.const !== void 0 && !deepEqual(value, schema4.const)) return false;
+  if (schema4.enum !== void 0 && !schema4.enum.some((e) => deepEqual(value, e))) return false;
+  if (schema4.anyOf !== void 0 && !schema4.anyOf.some((b) => valueSatisfiesSchema(b, value, depth + 1))) return false;
   return true;
 }
 function schemaToZod(z4, schema4, depth = 0) {
   if (!validateSchemaAST(schema4, depth)) return z4.never();
   if (schema4.const !== void 0) {
-    if (!valueSatisfiesBounds(schema4.const, schema4)) return z4.never();
+    if (!valueSatisfiesSchema(schema4, schema4.const, depth)) return z4.never();
     return z4.literal(schema4.const);
   }
   if (schema4.enum !== void 0) {
-    const valid = schema4.enum.filter((v) => valueSatisfiesBounds(v, schema4));
+    const valid = schema4.enum.filter((v) => valueSatisfiesSchema(schema4, v, depth));
     if (valid.length === 0) return z4.never();
     return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
   }
-  const base = buildBaseZod(z4, schema4);
+  const base = schema4.type === void 0 && schema4.anyOf !== void 0 ? z4.unknown() : buildBaseZod(z4, schema4);
   if (schema4.anyOf !== void 0) {
     const branches = schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1));
     return z4.intersection(base, z4.union(branches));
@@ -67328,10 +67392,13 @@ async function ensureOrchestrator() {
     skills: await getSkills(origin),
     tools: await siteToolset(origin)
   })));
+  const prefs = await chrome.storage.local.get("cap:multiAgent") ?? {};
+  const multiAgent = prefs["cap:multiAgent"] !== false;
   orchestrator = await createOrchestrator2({
     model,
     masterMemory: mem,
     workers,
+    multiAgent,
     extraTools: browserToolset()
   });
   return orchestrator;
@@ -67439,6 +67506,10 @@ var handlers = {
     invalidateAgent();
     return next;
   },
+  async "invalidate-agent"() {
+    invalidateAgent();
+    return { invalidated: true };
+  },
   async "provider.models"() {
     return { choices: PROVIDER_CHOICES };
   },
@@ -67458,7 +67529,8 @@ var handlers = {
       const payload = m2[2];
       if (payload.length % 4 !== 0) return { bytes: 0, decoded: 0, valid: false };
       const declaredType = String(a?.type ?? "").toLowerCase();
-      if (declaredType && declaredType !== mime) {
+      const declaredBase = declaredType.split(";")[0].trim();
+      if (declaredBase && declaredBase !== mime) {
         return { bytes: 0, decoded: 0, valid: false };
       }
       const encoded = String(a.dataURL).length;

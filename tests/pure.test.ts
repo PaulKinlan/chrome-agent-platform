@@ -306,6 +306,56 @@ for (const [label, schema, value] of malformedCases) {
   });
 }
 
+// ---- round-8 regressions: const/enum/anyOf must COMPOSE with every sibling ----
+Deno.test("schemaToZod: unknown required keys are malformed (fail closed)", () => {
+  // {required:["x"]} with no properties, and with properties lacking x, are malformed.
+  const noProps = schemaToZod(z, { type: "object", required: ["x"] });
+  assertEquals(noProps.safeParse({}).success, false);
+  const absent = schemaToZod(z, { type: "object", properties: {}, required: ["x"] });
+  assertEquals(absent.safeParse({}).success, false);
+  // and the well-formed form still works:
+  const ok = schemaToZod(z, { type: "object", properties: { x: { type: "string" } }, required: ["x"] });
+  assertEquals(ok.safeParse({ x: "a" }).success, true);
+  assertEquals(ok.safeParse({}).success, false);
+});
+
+Deno.test("schemaToZod: const + enum that conflict is unsatisfiable", () => {
+  // const "x" but enum ["y"] — no value can satisfy both.
+  const s = schemaToZod(z, { type: "string", const: "x", enum: ["y"] });
+  assertEquals(s.safeParse("x").success, false);
+  assertEquals(s.safeParse("y").success, false);
+});
+
+Deno.test("schemaToZod: const + anyOf compose (const must satisfy an anyOf branch)", () => {
+  const s = schemaToZod(z, { type: "string", const: "x", anyOf: [{ const: "y" }] });
+  assertEquals(s.safeParse("x").success, false); // "x" is not the anyOf branch value
+  const ok = schemaToZod(z, { type: "string", const: "x", anyOf: [{ const: "x" }] });
+  assertEquals(ok.safeParse("x").success, true);
+});
+
+Deno.test("schemaToZod: bounds apply to const/enum even without a declared type", () => {
+  const s = schemaToZod(z, { const: "x", minLength: 2 });
+  assertEquals(s.safeParse("x").success, false); // "x" length 1 < 2
+  const n = schemaToZod(z, { const: 0, minimum: 5 });
+  assertEquals(n.safeParse(0).success, false);
+  const e = schemaToZod(z, { enum: ["x"], minLength: 2 });
+  assertEquals(e.safeParse("x").success, false);
+});
+
+Deno.test("schemaToZod: array/object const siblings are enforced", () => {
+  const a = schemaToZod(z, { type: "array", minItems: 2, const: [] });
+  assertEquals(a.safeParse([]).success, false); // minItems 2 violated
+  const o = schemaToZod(z, { type: "object", required: ["x"], const: {} });
+  assertEquals(o.safeParse({}).success, false); // required x violated
+});
+
+Deno.test("schemaToZod: untyped anyOf accepts matching values (does not reject all)", () => {
+  const s = schemaToZod(z, { anyOf: [{ type: "string" }, { type: "number" }] });
+  assertEquals(s.safeParse("ok").success, true);
+  assertEquals(s.safeParse(42).success, true);
+  assertEquals(s.safeParse(true).success, false);
+});
+
 Deno.test("schemaToZod composes const with satisfying bounds (valid const still works)", () => {
   const s = schemaToZod(z, { type: "string", minLength: 1, const: "ok" });
   assertEquals(s.safeParse("ok").success, true);

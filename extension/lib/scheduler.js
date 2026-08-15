@@ -113,15 +113,22 @@ export async function clearStaleInflight() {
 }
 
 // One serialized, idempotent boot recovery: clear pre-boot locks + reconcile
-// missing alarms. Multiple call sites (module eval + onStartup) are safe.
-let bootRecovered = false;
-export async function recoverOnBoot() {
-  if (bootRecovered) return;
-  bootRecovered = true;
+// missing alarms. Multiple call sites (module eval + onStartup) are safe. A
+// transient failure resets the promise so a later call RETRIES — it never
+// permanently poisons recovery for the worker lifetime.
+let bootRecoveryPromise = null;
+export function recoverOnBoot() {
+  if (bootRecoveryPromise) return bootRecoveryPromise;
   // NOTE: clearStaleInflight + reconcileScheduledTasks each take the lock
   // themselves; do NOT wrap them in another withLock (nested lock = deadlock).
-  await clearStaleInflight();
-  await reconcileScheduledTasks();
+  bootRecoveryPromise = (async () => {
+    await clearStaleInflight();
+    return await reconcileScheduledTasks();
+  })().catch((err) => {
+    bootRecoveryPromise = null; // reset so a later call retries
+    throw err;
+  });
+  return bootRecoveryPromise;
 }
 
 /**
@@ -138,6 +145,7 @@ export async function reconcileScheduledTasks() {
 
   const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
   const resumed = [];
+  const failed = [];
   const now = Date.now();
   for (const name of names) {
     const task = tasks[name];
@@ -155,12 +163,18 @@ export async function reconcileScheduledTasks() {
         await chrome.alarms.create(name, info);
         resumed.push(name);
       } catch (err) {
+        failed.push(name);
         console.error(
           `reconcile: failed to recreate alarm "${name}":`,
           err?.message ?? err,
         );
       }
     }
+  }
+  if (failed.length > 0) {
+    throw new Error(
+      `reconcile: failed to recreate ${failed.length} alarm(s): ${failed.join(", ")}`,
+    );
   }
   return resumed;
 }

@@ -56,6 +56,25 @@ function valueMatchesType(value, type) {
   }
 }
 
+/** Deep structural equality for const/enum literal comparison. */
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    return true;
+  }
+  if (typeof a === "object") {
+    const ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (const k of ka) if (!deepEqual(a[k], b[k])) return false;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Validate the COMPLETE schema AST first — every keyword value shape, every
  * per-type keyword rule, every nested subschema — and only then compile.
@@ -85,6 +104,13 @@ function validateSchemaAST(schema, depth) {
       !Array.isArray(schema.required) ||
       schema.required.some((k) => typeof k !== "string")
     ) return false;
+    // Every required name must be DECLARED in properties (a required key with
+    // no properties, or a required key absent from properties, is malformed).
+    if (schema.properties === undefined || schema.properties === null) return false;
+    const propKeys = Object.keys(schema.properties);
+    for (const k of schema.required) {
+      if (!propKeys.includes(k)) return false;
+    }
   }
   if (schema.enum !== undefined) {
     if (!Array.isArray(schema.enum)) return false;
@@ -135,6 +161,10 @@ function validateSchemaAST(schema, depth) {
   if (t !== undefined && schema.const !== undefined && !valueMatchesType(schema.const, t)) {
     return false;
   }
+  // const AND enum together are only satisfiable if const is IN enum.
+  if (schema.const !== undefined && schema.enum !== undefined) {
+    if (!schema.enum.some((v) => deepEqual(v, schema.const))) return false;
+  }
   // enum values that mismatch the declared type are EXCLUDED at compile time
   // (JSON Schema: a value that doesn't match the type simply never matches).
 
@@ -155,32 +185,59 @@ function validateSchemaAST(schema, depth) {
 }
 
 /**
- * Does a literal value satisfy this schema's type + string/number bounds?
- * (Used to compose const/enum with their sibling constraints — a value that
- * violates a bound makes the whole schema unsatisfiable.)
+ * Does a LITERAL value satisfy this schema — type, every scalar/array/object
+ * bound, const/enum membership, and every anyOf branch? Used to compose
+ * const/enum with their siblings: a const or enum candidate that violates ANY
+ * sibling makes that candidate invalid (and, if none survive, the schema is
+ * unsatisfiable). Applies bounds even when `type` is not declared (bounds are
+ * inferred from the value's runtime kind).
  */
-function valueSatisfiesBounds(value, schema) {
+function valueSatisfiesSchema(schema, value, depth) {
+  if (depth > SCHEMA_BOUNDS.maxDepth) return false;
   const t = schema.type;
   if (t !== undefined && !valueMatchesType(value, t)) return false;
-  if (t === "string") {
-    if (typeof value !== "string") return false;
+
+  // string bounds (apply to string values regardless of a declared type).
+  if (typeof value === "string") {
     if (schema.minLength !== undefined && value.length < schema.minLength) return false;
     if (schema.maxLength !== undefined && value.length > schema.maxLength) return false;
-    return true;
   }
-  if (t === "number") {
-    if (typeof value !== "number") return false;
+  // number/integer bounds (apply to number values).
+  if (typeof value === "number") {
+    if (t === "integer" && !Number.isInteger(value)) return false;
     if (schema.minimum !== undefined && value < schema.minimum) return false;
     if (schema.maximum !== undefined && value > schema.maximum) return false;
-    return true;
   }
-  if (t === "integer") {
-    if (!Number.isInteger(value)) return false;
-    if (schema.minimum !== undefined && value < Math.ceil(schema.minimum)) return false;
-    if (schema.maximum !== undefined && value > Math.floor(schema.maximum)) return false;
-    return true;
+  // array bounds + item validation.
+  if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) return false;
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) return false;
+    if (schema.items !== undefined) {
+      for (const item of value) {
+        if (!valueSatisfiesSchema(schema.items, item, depth + 1)) return false;
+      }
+    }
   }
-  return true; // no bounds apply for other types
+  // object bounds + property validation.
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const k of required) if (!(k in value)) return false;
+    if (schema.properties) {
+      for (const [k, sub] of Object.entries(schema.properties)) {
+        if (k in value && !valueSatisfiesSchema(sub, value[k], depth + 1)) return false;
+      }
+    }
+    if (schema.additionalProperties === false) {
+      const known = new Set(Object.keys(schema.properties || {}));
+      for (const k of Object.keys(value)) if (!known.has(k)) return false;
+    }
+  }
+
+  // const / enum membership (compose with each other + siblings).
+  if (schema.const !== undefined && !deepEqual(value, schema.const)) return false;
+  if (schema.enum !== undefined && !schema.enum.some((e) => deepEqual(value, e))) return false;
+  if (schema.anyOf !== undefined && !schema.anyOf.some((b) => valueSatisfiesSchema(b, value, depth + 1))) return false;
+  return true;
 }
 
 /**
@@ -194,23 +251,30 @@ export function schemaToZod(z, schema, depth = 0) {
   // closed for the WHOLE schema (not just a branch that could become optional).
   if (!validateSchemaAST(schema, depth)) return z.never();
 
-  // ---- const / enum / anyOf compose their siblings (type + bounds) ----
+  // ---- const / enum compose their FULL sibling set (type + bounds + anyOf
+  // + each other). A literal candidate must satisfy EVERY present constraint;
+  // if none survive, the schema is unsatisfiable and fails closed. ----
   if (schema.const !== undefined) {
-    // The value must satisfy type + every sibling bound, else no value works.
-    if (!valueSatisfiesBounds(schema.const, schema)) return z.never();
+    if (!valueSatisfiesSchema(schema, schema.const, depth)) return z.never();
     return z.literal(schema.const);
   }
   if (schema.enum !== undefined) {
-    const valid = schema.enum.filter((v) => valueSatisfiesBounds(v, schema));
+    const valid = schema.enum.filter((v) => valueSatisfiesSchema(schema, v, depth));
     if (valid.length === 0) return z.never();
     return z.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z.literal(v)));
   }
 
   // Build the type + bounds guard (the base schema WITHOUT anyOf).
-  const base = buildBaseZod(z, schema);
+  // An UNTYPED schema carrying anyOf must be permissive (z.unknown), not the
+  // fail-closed z.never() that buildBaseZod returns for an untyped schema —
+  // otherwise the intersection rejects every value.
+  const base = (schema.type === undefined && schema.anyOf !== undefined)
+    ? z.unknown()
+    : buildBaseZod(z, schema);
   if (schema.anyOf !== undefined) {
     const branches = schema.anyOf.map((b) => schemaToZod(z, b, depth + 1));
     // Compose the declared type/bounds with anyOf — JSON Schema requires BOTH.
+    // An UNTYPED schema with anyOf must NOT reject everything: base is z.unknown().
     return z.intersection(base, z.union(branches));
   }
   return base;
@@ -259,9 +323,10 @@ function buildBaseZod(z, schema) {
     const obj = z.object(shape);
     return schema.additionalProperties === false ? obj.strict() : obj.passthrough();
   }
-  // no type declared: accept anything (only valid when combined with const/enum/anyOf,
-  // which are handled before buildBaseZod is called; reaching here with no type
-  // and no const/enum/anyOf means an unconstrained schema — reject fail-closed).
+  // No type declared: when reached here the schema has neither const/enum (those
+  // are handled above) nor anyOf (also above), so an untyped, unconstrained
+  // schema is a fail-closed z.never(). (An untyped schema WITH anyOf is handled
+  // in schemaToZod, where base must be permissive — see below.)
   return z.never();
 }
 

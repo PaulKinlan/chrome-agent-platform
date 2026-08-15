@@ -319,22 +319,28 @@ async function renderProviders() {
       </div>
       ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
       <div class="fields">
-        ${p.needsKey || p.needsModel || p.baseURL || p.needsModel ? `<input class="base-url" type="text" placeholder="Base URL" value="${escapeAttr(p.baseURL)}">` : ""}
+        ${p.needsKey || p.needsModel || p.baseURL || p.needsModel ? `<input class="base-url" type="text" placeholder="Base URL" value="${// The ACTIVE card shows the STORED endpoint (not the preset) so an
+    // Update never silently resets a custom base URL.
+    escapeAttr(cfg.provider === p.id ? cfg.baseURL || p.baseURL : p.baseURL)}">` : ""}
         ${p.needsKey || p.needsModel ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">` : ""}
         ${p.needsKey || p.needsModel ? `<input class="model" type="text" placeholder="Model id" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}">` : ""}
       </div>` : ""}
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
+      const isActive = cfg.provider === p.id;
+      const keyInput = card.querySelector(".api-key");
+      const enteredKey = keyInput?.value ?? "";
+      const apiKey = enteredKey ? enteredKey : isActive && cfg.apiKey ? cfg.apiKey : "";
       const fields = {
-        baseURL: card.querySelector(".base-url")?.value ?? p.baseURL,
-        apiKey: card.querySelector(".api-key")?.value ?? "",
-        model: card.querySelector(".model")?.value ?? ""
+        baseURL: card.querySelector(".base-url")?.value ?? (isActive ? cfg.baseURL || p.baseURL : p.baseURL),
+        apiKey,
+        model: card.querySelector(".model")?.value ?? (isActive ? cfg.model || "" : "")
       };
       await chrome.runtime.sendMessage({
         type: "provider.set",
         config: { provider: p.id, ...fields }
       });
-      await saveFlash(cfg.provider === p.id ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
+      await saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
       renderProviders();
     });
     list.appendChild(card);
@@ -345,8 +351,21 @@ async function renderProviders() {
   if (active) {
     if (cfg.apiKey) {
       const k = active.querySelector(".api-key");
-      if (k) k.placeholder = "API key (set)";
+      if (k) k.placeholder = "API key (set \u2014 leave blank to keep)";
     }
+    const clear = document.createElement("button");
+    clear.className = "btn ghost small clear-key";
+    clear.type = "button";
+    clear.textContent = "Clear key";
+    clear.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({
+        type: "provider.set",
+        config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model }
+      });
+      saveFlash("API key cleared.");
+      renderProviders();
+    });
+    active.querySelector(".provider-head")?.appendChild(clear);
   }
 }
 async function renderAgents() {
@@ -355,6 +374,10 @@ async function renderAgents() {
   $("#multi-agent").addEventListener("change", async (e) => {
     await storage.set({ "cap:multiAgent": e.target.checked });
     $("#per-agent-provider").hidden = !e.target.checked;
+    try {
+      await chrome.runtime.sendMessage({ type: "invalidate-agent" });
+    } catch {
+    }
     saveFlash("Agent mode saved.");
   });
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;

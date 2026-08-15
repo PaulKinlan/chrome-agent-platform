@@ -132,6 +132,20 @@ export async function captureTabScreenshot(tabId) {
     if (active?.[0]?.id !== tab.id) {
       return { error: "could not activate the requested tab" };
     }
+    // TOCTOU guard: re-read the tab's CURRENT url after activation. It must be
+    // the SAME authorized origin — a tab that navigated from an allowed origin
+    // to a denied one between authorization and capture must NOT be captured.
+    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : undefined;
+    if (!currentOrigin || currentOrigin !== origin) {
+      return { error: "tab navigated to a different origin — capture denied" };
+    }
+    if (!(await isBrowserControlGranted(currentOrigin))) {
+      return {
+        error:
+          "browser control not granted for this tab's origin — ask the user to approve it in Settings",
+      };
+    }
     const url = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
     });

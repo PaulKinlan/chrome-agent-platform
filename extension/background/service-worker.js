@@ -140,10 +140,16 @@ async function ensureOrchestrator() {
     skills: await getSkills(origin),
     tools: await siteToolset(origin),
   })));
+  // multiAgent toggles fan-out (hub + per-site sub-agents) vs a solo hub agent.
+  // Read it at orchestration time; the options page changes it via
+  // provider.set-style invalidation so a saved change rebuilds the orchestrator.
+  const prefs = (await chrome.storage.local.get("cap:multiAgent")) ?? {};
+  const multiAgent = prefs["cap:multiAgent"] !== false;
   orchestrator = await createOrchestrator({
     model,
     masterMemory: mem,
     workers,
+    multiAgent,
     extraTools: browserToolset(),
   });
   return orchestrator;
@@ -278,6 +284,12 @@ const handlers = {
     invalidateAgent();
     return next;
   },
+  async "invalidate-agent"() {
+    // The options page calls this after toggling agent mode (multi-agent) so the
+    // running orchestrator is rebuilt with the new setting.
+    invalidateAgent();
+    return { invalidated: true };
+  },
   async "provider.models"() {
     return { choices: PROVIDER_CHOICES };
   },
@@ -308,8 +320,11 @@ const handlers = {
       const payload = m[2];
       if (payload.length % 4 !== 0) return { bytes: 0, decoded: 0, valid: false };
       // Bind the declared type to the parsed MIME (no image labelled text/plain).
+      // Compare the ESSENCE (base type/subtype) — a declared `audio/webm;codecs=opus`
+      // must match the parsed `audio/webm`, not be rejected for its parameters.
       const declaredType = String(a?.type ?? "").toLowerCase();
-      if (declaredType && declaredType !== mime) {
+      const declaredBase = declaredType.split(";")[0].trim();
+      if (declaredBase && declaredBase !== mime) {
         return { bytes: 0, decoded: 0, valid: false };
       }
       // Encoded size = the complete dataURL string (ASCII, so length ≈ bytes).

@@ -110,7 +110,9 @@ async function renderProviders() {
         ${
           p.needsKey || p.needsModel || p.baseURL || p.needsModel
             ? `<input class="base-url" type="text" placeholder="Base URL" value="${
-              escapeAttr(p.baseURL)
+              // The ACTIVE card shows the STORED endpoint (not the preset) so an
+              // Update never silently resets a custom base URL.
+              escapeAttr(cfg.provider === p.id ? (cfg.baseURL || p.baseURL) : p.baseURL)
             }">`
             : ""
         }
@@ -131,10 +133,19 @@ async function renderProviders() {
     }
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
+      // Preserve the EXISTING stored key when the field is left blank (an Update
+      // must not wipe a configured credential). An explicit clear control is the
+      // only way to remove a key.
+      const isActive = cfg.provider === p.id;
+      const keyInput = card.querySelector(".api-key");
+      const enteredKey = keyInput?.value ?? "";
+      const apiKey = enteredKey
+        ? enteredKey
+        : (isActive && cfg.apiKey ? cfg.apiKey : "");
       const fields = {
-        baseURL: card.querySelector(".base-url")?.value ?? p.baseURL,
-        apiKey: card.querySelector(".api-key")?.value ?? "",
-        model: card.querySelector(".model")?.value ?? "",
+        baseURL: card.querySelector(".base-url")?.value ?? (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
+        apiKey,
+        model: card.querySelector(".model")?.value ?? (isActive ? (cfg.model || "") : ""),
       };
       // Route through the worker's provider.set so the running agent's cached
       // model/orchestrator is invalidated immediately (no stale provider).
@@ -142,20 +153,33 @@ async function renderProviders() {
         type: "provider.set",
         config: { provider: p.id, ...fields },
       });
-      await saveFlash(cfg.provider === p.id ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
+      await saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
       renderProviders();
     });
     list.appendChild(card);
   }
-  // populate the active card's current key/model when openai-ish
+  // populate the active card's current key/model + an explicit clear-key control
   const active = list.querySelector(
     `.provider-card[data-provider="${cfg.provider}"]`,
   );
   if (active) {
     if (cfg.apiKey) {
       const k = active.querySelector(".api-key");
-      if (k) k.placeholder = "API key (set)";
+      if (k) k.placeholder = "API key (set — leave blank to keep)";
     }
+    const clear = document.createElement("button");
+    clear.className = "btn ghost small clear-key";
+    clear.type = "button";
+    clear.textContent = "Clear key";
+    clear.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({
+        type: "provider.set",
+        config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model },
+      });
+      saveFlash("API key cleared.");
+      renderProviders();
+    });
+    active.querySelector(".provider-head")?.appendChild(clear);
   }
 }
 
@@ -166,6 +190,13 @@ async function renderAgents() {
   $("#multi-agent").addEventListener("change", async (e) => {
     await storage.set({ "cap:multiAgent": e.target.checked });
     $("#per-agent-provider").hidden = !e.target.checked;
+    // Rebuild the running orchestrator so the fan-out / solo switch takes effect
+    // immediately (the worker reads cap:multiAgent at orchestration time).
+    try {
+      await chrome.runtime.sendMessage({ type: "invalidate-agent" });
+    } catch {
+      /* worker may not be running yet — the setting still persists */
+    }
     saveFlash("Agent mode saved.");
   });
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;
