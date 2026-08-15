@@ -21,6 +21,13 @@
   .usage h2 { margin: 0 0 8px; font-size: 14px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td, th { text-align: left; padding: 6px 8px; border-top: 1px solid var(--border); }
+  .shots { margin-top: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .shots h2 { margin: 0 0 8px; font-size: 14px; }
+  .shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .shot { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot .shot-meta { font-size: 11px; color: var(--muted); padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shot a { display: block; font-size: 11px; padding: 4px 8px; }
 </style>
 </head>
 <body>
@@ -30,6 +37,10 @@
 
   <div class="master" id="master"></div>
   <div class="agents" id="agents"></div>
+  <div class="shots">
+    <h2>Screenshots (captured tabs)</h2>
+    <div class="shot-grid" id="shots"></div>
+  </div>
   <div class="usage">
     <h2>Usage (agent accounting)</h2>
     <div id="usage-summary" style="color:var(--muted); margin-bottom:8px;"></div>

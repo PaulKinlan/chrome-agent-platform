@@ -316,8 +316,10 @@ export async function journalAppend(store, entry) {
   }
   journal.push({ ts: Date.now(), ...bounded });
   let entries = journal.slice(-500); // cap count
+  // The byte budget must use UTF-8 BYTES, not UTF-16 `.length` (which under-
+  // counts non-ASCII result text — the round-18 medium finding).
   while (
-    entries.length > 1 && JSON.stringify(entries).length > MAX_JOURNAL_BYTES
+    entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_JOURNAL_BYTES
   ) {
     entries = entries.slice(1); // cap bytes
   }
@@ -336,7 +338,12 @@ export async function journalAppend(store, entry) {
 const MAX_SCREENSHOTS = 5;
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // 4 MiB per screenshot
 
-/** Persist a screenshot as a dedicated OPFS file + bounded metadata index. */
+/** Persist a screenshot as a dedicated OPFS file + bounded metadata index.
+ * ATOMIC: the blob write + index update + oldest-eviction run under the global
+ * write mutex, and a failed index update compensates by deleting the just-
+ * written blob — so two concurrent captures can never read the same index, lose
+ * one metadata entry, and orphan an unbounded file (the round-18 screenshot
+ * race). */
 export async function saveScreenshot(mem, { url, dataURL }) {
   if (!dataURL || !String(dataURL).startsWith("data:image/")) {
     throw new Error("screenshot must be a data:image/* dataURL");
@@ -345,22 +352,44 @@ export async function saveScreenshot(mem, { url, dataURL }) {
   if (bytes > MAX_SCREENSHOT_BYTES) {
     throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
   }
-  const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const dir = await openDir([ROOT, MASTER, "screenshots"]);
-  await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });
+  return withWriteLock(async () => {
+    const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const dir = await openDir([ROOT, MASTER, "screenshots"]);
+    try {
+      // Write the blob first, then the index, under ONE lock acquisition.
+      await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });
 
-  // Metadata index (small): id/at/url only, never the dataURL inline.
-  const index = (await mem.get("screenshots")) ?? [];
-  index.push({ id, at: Date.now(), url });
-  const next = index.slice(-MAX_SCREENSHOTS);
-  const kept = new Set(next.map((s) => s.id));
-  for (const s of index) {
-    if (!kept.has(s.id)) {
+      // Metadata index (small): id/at/url only, never the dataURL inline.
+      const index = (await mem.get("screenshots")) ?? [];
+      index.push({ id, at: Date.now(), url });
+      const next = index.slice(-MAX_SCREENSHOTS);
+      const kept = new Set(next.map((s) => s.id));
+      for (const s of index) {
+        if (!kept.has(s.id)) {
+          try {
+            await dir.removeEntry(`${s.id}.json`);
+          } catch { /* absent */ }
+        }
+      }
+      await mem.setTrusted("screenshots", next);
+      return { id, url };
+    } catch (e) {
+      // Compensate: a failed index update must not leave an orphaned blob.
       try {
-        await dir.removeEntry(`${s.id}.json`);
+        await dir.removeEntry(`${id}.json`);
       } catch { /* absent */ }
+      throw e;
     }
-  }
-  await mem.setTrusted("screenshots", next);
-  return { id, url };
+  });
+}
+
+/** Read a stored screenshot blob by id (the dataURL + url). */
+export async function loadScreenshot(id) {
+  const dir = await openDir([ROOT, MASTER, "screenshots"]);
+  return await readJson(dir, `${id}.json`);
+}
+
+/** List the screenshot metadata index (id/at/url only — never the dataURL). */
+export async function listScreenshots() {
+  return (await masterMemory().get("screenshots")) ?? [];
 }

@@ -29,6 +29,26 @@
 const session = new Map();
 let warned = false;
 
+// ---- storage-mode state machine (round-18 blocker 3) ----
+// Snapshot→remove→re-enable-migrate must be ATOMIC with respect to every
+// concurrent KV read/write/remove. The reproduced race: a concurrent
+// `kvSet(x=v2)` landed AFTER the disable snapshot copied `x=v1` but BEFORE the
+// permission removal committed; the session then held stale `v1` and re-enable
+// migration overwrote the newer `v2`. One storage-mode mutex serializes the
+// snapshot, the permission removal, the onAdded migration, and EVERY KV
+// operation, so a write is either (a) fully before the snapshot (the snapshot
+// sees it), or (b) fully after the removal (it is a session write the
+// re-enable migration merges).
+let storageModeMutex = Promise.resolve();
+/** Run `fn` while holding the storage-mode lock. All KV operations + the
+ * storage permission transition run under this lock, so they are atomic w.r.t.
+ * each other. */
+export function withStorageModeLock(fn) {
+  const run = storageModeMutex.then(fn, fn);
+  storageModeMutex = run.then(() => {}, () => {});
+  return run;
+}
+
 /** Is the persistent chrome.storage.local backend currently available?
  * Availability is checked at CALL time (never cached at module load) so a
  * freshly-granted permission is picked up without a worker reload. This is now
@@ -82,60 +102,66 @@ export class StorageBackendError extends Error {
 
 /** Mirror chrome.storage.local.get(key|array|null). */
 export async function kvGet(keys) {
-  await waitForMigration();
-  if (!(await storageAvailable())) {
-    warnOnce();
-    const out = {};
-    if (keys == null) {
-      for (const [k, v] of session) out[k] = clone(v);
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    if (!(await storageAvailable())) {
+      warnOnce();
+      const out = {};
+      if (keys == null) {
+        for (const [k, v] of session) out[k] = clone(v);
+        return out;
+      }
+      for (const k of (Array.isArray(keys) ? keys : [keys])) {
+        if (k != null && session.has(k)) out[k] = clone(session.get(k));
+      }
       return out;
     }
-    for (const k of (Array.isArray(keys) ? keys : [keys])) {
-      if (k != null && session.has(k)) out[k] = clone(session.get(k));
+    // Backend available: a read failure is a REAL failure — never return a
+    // stale session value that contradicts the persistent backend.
+    try {
+      return await chrome.storage.local.get(keys);
+    } catch (e) {
+      throw new StorageBackendError("get", e);
     }
-    return out;
-  }
-  // Backend available: a read failure is a REAL failure — never return a
-  // stale session value that contradicts the persistent backend.
-  try {
-    return await chrome.storage.local.get(keys);
-  } catch (e) {
-    throw new StorageBackendError("get", e);
-  }
+  });
 }
 
 /** Mirror chrome.storage.local.set(obj). Fails closed on backend failure. */
 export async function kvSet(obj) {
-  await waitForMigration();
-  if (!(await storageAvailable())) {
-    warnOnce();
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === undefined) session.delete(k);
-      else session.set(k, clone(v));
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    if (!(await storageAvailable())) {
+      warnOnce();
+      for (const [k, v] of Object.entries(obj)) {
+        if (v === undefined) session.delete(k);
+        else session.set(k, clone(v));
+      }
+      return;
     }
-    return;
-  }
-  try {
-    await chrome.storage.local.set(obj);
-  } catch (e) {
-    throw new StorageBackendError("set", e);
-  }
+    try {
+      await chrome.storage.local.set(obj);
+    } catch (e) {
+      throw new StorageBackendError("set", e);
+    }
+  });
 }
 
 /** Mirror chrome.storage.local.remove(key|array). Fails closed on failure. */
 export async function kvRemove(keys) {
-  await waitForMigration();
-  const list = Array.isArray(keys) ? keys : [keys];
-  if (!(await storageAvailable())) {
-    warnOnce();
-    for (const k of list) session.delete(k);
-    return;
-  }
-  try {
-    await chrome.storage.local.remove(list);
-  } catch (e) {
-    throw new StorageBackendError("remove", e);
-  }
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    const list = Array.isArray(keys) ? keys : [keys];
+    if (!(await storageAvailable())) {
+      warnOnce();
+      for (const k of list) session.delete(k);
+      return;
+    }
+    try {
+      await chrome.storage.local.remove(list);
+    } catch (e) {
+      throw new StorageBackendError("remove", e);
+    }
+  });
 }
 
 /** Test hook: reset the in-memory fallback (unit tests). */
@@ -158,8 +184,18 @@ async function waitForMigration() {
 /** Snapshot the persistent backend into the in-memory session Map. Called BEFORE
  * the optional `storage` permission is removed so the session-only period starts
  * with the current data (a Disable must not make settings appear empty, and a
- * re-enable must merge session changes back rather than resurrect stale values). */
+ * re-enable must merge session changes back rather than resurrect stale values).
+ * Runs under the storage-mode lock; the SW's storage-Disable path holds the SAME
+ * lock across snapshot + permission removal so no concurrent write can slip
+ * between them (the round-18 storage-transition race). */
 export async function snapshotPersistentToSession() {
+  return withStorageModeLock(snapshotPersistentToSessionLocked);
+}
+
+/** The LOCKED snapshot body (no re-acquisition). Exported so the SW can hold
+ * the storage-mode lock across snapshot + permission removal + reset in one
+ * atomic transition — see `capability.revoke("storage")`. */
+export async function snapshotPersistentToSessionLocked() {
   if (!(await storageAvailable())) return;
   try {
     const all = await chrome.storage.local.get(null);
@@ -187,12 +223,14 @@ export function resetStorageTransition() {
  * probe showed the configured provider resetting to demo on grant — the round-16
  * migration finding). Migrate transactionally + idempotently: copy every session
  * entry into the persistent store, then clear the session fallback. A failure
- * leaves the session Map intact (never silently lose the configured state). */
+ * leaves the session Map intact (never silently lose the configured state).
+ * Runs under the storage-mode lock so a re-enable migration is atomic w.r.t.
+ * concurrent KV writes (the round-18 storage-transition race). */
 export async function migrateSessionToStorage() {
   if (migrated) return;
   if (!(await storageAvailable())) return;
   if (!migrationInFlight) {
-    migrationInFlight = (async () => {
+    migrationInFlight = withStorageModeLock(async () => {
       const entries = {};
       for (const [k, v] of session) entries[k] = clone(v);
       if (Object.keys(entries).length === 0) {
@@ -208,7 +246,7 @@ export async function migrateSessionToStorage() {
       } catch (e) {
         throw new StorageBackendError("set", e);
       }
-    })().finally(() => {
+    }).finally(() => {
       migrationInFlight = null;
     });
   }

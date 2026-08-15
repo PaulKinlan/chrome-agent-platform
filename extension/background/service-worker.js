@@ -12,6 +12,8 @@ import {
   canonicalOrigin,
   journalAppend,
   listOrigins,
+  listScreenshots,
+  loadScreenshot,
   masterMemory,
   saveScreenshot,
   siteMemory,
@@ -23,6 +25,8 @@ import {
   migrateSessionToStorage,
   resetStorageTransition,
   snapshotPersistentToSession,
+  snapshotPersistentToSessionLocked,
+  withStorageModeLock,
 } from "../lib/kv.js";
 import {
   hasCapability,
@@ -70,7 +74,6 @@ import {
   ensureOriginScriptsRegistered,
   listPendingCleanup,
   markCleanupPending,
-  removeOriginHostPermission,
   unregisterOriginScripts,
   withOriginLock,
 } from "../lib/enrollment.js";
@@ -271,6 +274,20 @@ async function ensureModel(_agentId) {
       return model;
     }
     // Stale build — loop and rebuild under the new generation.
+  }
+}
+
+/** Abort an in-flight worker run for an origin (preemptive revocation: a
+ * delete/tombstone must abort a worker that is mid-run, not merely discard its
+ * result afterward — the round-18 finding that orchestrator abort only targeted
+ * the master agent). agent-do's per-worker agent exposes its own abort. */
+function abortWorker(origin) {
+  const canonical = canonicalOrigin(origin);
+  const a = orchestrator?.workers?.get(canonical);
+  if (a) {
+    try {
+      a.abort?.();
+    } catch { /* no active run */ }
   }
 }
 
@@ -544,27 +561,44 @@ const handlers = {
   //     host permission (Disable must not leave origin authority behind).
   async "capability.revoke"({ id }) {
     if (id === "storage") {
-      try {
-        await snapshotPersistentToSession();
-      } catch (e) {
-        return { ok: false, error: String(e?.message ?? e) };
-      }
+      // The snapshot + permission removal + reset must be ONE atomic transition
+      // under the storage-mode lock, so a concurrent KV write cannot slip between
+      // the snapshot and the removal (the round-18 storage-transition race).
+      return await withStorageModeLock(async () => {
+        try {
+          await snapshotPersistentToSessionLocked();
+        } catch (e) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
+        const res = await revokeCapability(id);
+        resetStorageTransition();
+        return res;
+      });
     }
     if (id === "scripting") {
+      // Disabling scripting must REVOKE the enrolled origins' authority, not
+      // just unregister the scripts (the round-18 high: Disable left origins
+      // enrolled + existing bridges authoritative). Tombstone every enrolled
+      // origin FIRST (a running bridge is rejected from this instant), then
+      // unregister scripts + remove host permissions; failed dependent cleanup
+      // is recorded as retryable pending-cleanup rather than silently dropped.
       const origins = await listOrigins();
-      const results = await Promise.all(
-        origins.map((o) => unregisterOriginScripts(o)),
-      );
-      const failed = results.filter((r) => !r.ok);
-      if (failed.length > 0) {
-        return {
-          ok: false,
-          error:
-            `could not revoke ${failed.length} origin(s): ${
-              failed.map((f) => f.error ?? f.origin).join("; ")
-            }`,
-        };
+      const failures = [];
+      for (const o of origins) {
+        abortWorker(o);
+        await disenrollOrigin(o);
+        const res = await unregisterOriginScripts(o);
+        if (!res.ok) {
+          await markCleanupPending(o);
+          failures.push(res.error ?? o);
+        }
       }
+      invalidateAgent();
+      const res = await revokeCapability(id);
+      if (failures.length > 0) {
+        res.cleanupPending = failures.length;
+      }
+      return res;
     }
     const res = await revokeCapability(id);
     if (id === "storage") {
@@ -784,6 +818,23 @@ const handlers = {
     return await listOrigins();
   },
 
+  // Screenshot READER (round-18 blocker 6): the stored screenshot blobs were
+  // previously only writable via saveScreenshot with no application route to
+  // retrieve them. These routes let the memory explorer render the saved
+  // screenshots (the index lists id/at/url; `screenshots.get` returns the
+  // dataURL for an actual <img>).
+  async "screenshots.list"() {
+    return { screenshots: await listScreenshots() };
+  },
+  async "screenshots.get"({ id }) {
+    if (!id || typeof id !== "string") {
+      return { ok: false, error: "screenshots.get needs an id" };
+    }
+    const shot = await loadScreenshot(id);
+    if (!shot) return { ok: false, error: "screenshot not found" };
+    return { ok: true, url: shot.url, dataURL: shot.dataURL, at: shot.at };
+  },
+
   async "usage.get"() {
     return await getUsage();
   },
@@ -890,18 +941,35 @@ const handlers = {
         (e) => ({ ok: false, error: String(e?.message ?? e) }),
       );
       if (registered?.ok !== true) {
-        // TRANSACTIONAL rollback: tombstone the enrollment, clear the OPFS dir,
-        // and REMOVE the just-granted host permission. The rollback result is
-        // captured + surfaced (a failed rollback is never silently claimed as
-        // clean — the round-15 finding).
+        // TRANSACTIONAL rollback: tombstone the enrollment, then attempt scripts
+        // + host-permission + OPFS cleanup INDEPENDENTLY (allSettled) and record
+        // any incomplete step as RETRYABLE pending-cleanup — never a sequential
+        // rollback that silently skips later cleanup on an earlier failure (the
+        // round-18 finding: failed enrollment rollback was sequential/non-pending).
         await disenrollOrigin(canonical);
-        await siteMemory(canonical).clear();
-        const permissionRemoved = await removeOriginHostPermission(canonical);
+        const [unregRes, clearRes] = await Promise.allSettled([
+          unregisterOriginScripts(canonical),
+          siteMemory(canonical).clear(),
+        ]);
+        const scriptsRemoved = unregRes.status === "fulfilled" &&
+          unregRes.value.scriptsRemoved === true;
+        const permissionRemoved = unregRes.status === "fulfilled" &&
+          unregRes.value.permissionRemoved === true;
+        const cleared = clearRes.status === "fulfilled";
+        if (!(scriptsRemoved && permissionRemoved && cleared)) {
+          await markCleanupPending(canonical);
+        } else {
+          await clearCleanupPending(canonical);
+        }
+        invalidateAgent();
         return {
           ok: false,
           origin: canonical,
           error: registered?.error ?? "script registration failed",
+          retryable: true,
+          scriptsRemoved,
           permissionRemoved,
+          cleared,
         };
       }
       invalidateAgent();
@@ -912,11 +980,13 @@ const handlers = {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
-      // Authoritative, PREEMPTIVE revocation: tombstone the enrollment FIRST
-      // (a running content-script bridge is rejected by isEnrolled from this
-      // instant), THEN remove the dynamic scripts + host permission + OPFS dir.
-      // Tombstone-first means a slow unregister can never leave a still-authorized
-      // origin (the round-15 finding that delete was not preemptive).
+      // Authoritative, PREEMPTIVE revocation: abort any in-flight worker run,
+      // then tombstone the enrollment FIRST (a running content-script bridge is
+      // rejected by isEnrolled from this instant), THEN remove the dynamic
+      // scripts + host permission + OPFS dir. Tombstone-first means a slow
+      // unregister can never leave a still-authorized origin (the round-15
+      // finding that delete was not preemptive).
+      abortWorker(canonical);
       await disenrollOrigin(canonical);
       // allSettled: attempt scripts/host-permission + OPFS cleanup INDEPENDENTLY,
       // never short-circuit on the first failure (the round-17 non-retryable
@@ -966,34 +1036,55 @@ const handlers = {
   async "agent.retry-cleanup"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    const [unregRes, clearRes] = await Promise.allSettled([
-      unregisterOriginScripts(canonical),
-      siteMemory(canonical).clear(),
-    ]);
-    const unreg = unregRes.status === "fulfilled"
-      ? unregRes.value
-      : {
+    // Serialize the retry under the SAME per-origin lifecycle lock as create/
+    // delete/enroll, and REVALIDATE that the origin is still TOMBSTONED + still
+    // in the pending registry before removing anything (the round-18 finding:
+    // an unlocked retry could delete a RE-ENROLLED origin's scripts/host/OPFS
+    // because the stale pending record was never cleared).
+    return await withOriginLock(canonical, async () => {
+      const pending = await listPendingCleanup();
+      if (!pending.includes(canonical)) {
+        // Not pending → either already cleaned, or re-enrolled (safe). Never
+        // delete authority for an origin that is no longer tombstoned.
+        return { ok: true, origin: canonical, alreadyClean: true };
+      }
+      const snap = await enrollmentSnapshot(canonical);
+      if (snap.enrolled) {
+        // Re-enrolled since the pending record was written — do NOT remove the
+        // new scripts/host/OPFS. Drop the stale pending record (re-enrollment is
+        // the safe clearing path).
+        await clearCleanupPending(canonical);
+        return { ok: true, origin: canonical, reenrolled: true };
+      }
+      const [unregRes, clearRes] = await Promise.allSettled([
+        unregisterOriginScripts(canonical),
+        siteMemory(canonical).clear(),
+      ]);
+      const unreg = unregRes.status === "fulfilled"
+        ? unregRes.value
+        : {
+          ok: false,
+          scriptsRemoved: false,
+          permissionRemoved: false,
+          error: String(unregRes.reason?.message ?? unregRes.reason),
+        };
+      const cleared = clearRes.status === "fulfilled";
+      const scriptsRemoved = unreg.scriptsRemoved === true;
+      const permissionRemoved = unreg.permissionRemoved === true;
+      if (scriptsRemoved && permissionRemoved && cleared) {
+        await clearCleanupPending(canonical);
+        return { ok: true, origin: canonical };
+      }
+      await markCleanupPending(canonical);
+      return {
         ok: false,
-        scriptsRemoved: false,
-        permissionRemoved: false,
-        error: String(unregRes.reason?.message ?? unregRes.reason),
+        retryable: true,
+        error: unreg.error ?? "OPFS clear failed",
+        scriptsRemoved,
+        permissionRemoved,
+        cleared,
       };
-    const cleared = clearRes.status === "fulfilled";
-    const scriptsRemoved = unreg.scriptsRemoved === true;
-    const permissionRemoved = unreg.permissionRemoved === true;
-    if (scriptsRemoved && permissionRemoved && cleared) {
-      await clearCleanupPending(canonical);
-      return { ok: true, origin: canonical };
-    }
-    await markCleanupPending(canonical);
-    return {
-      ok: false,
-      retryable: true,
-      error: unreg.error ?? "OPFS clear failed",
-      scriptsRemoved,
-      permissionRemoved,
-      cleared,
-    };
+    });
   },
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };

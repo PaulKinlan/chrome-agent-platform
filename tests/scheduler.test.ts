@@ -262,3 +262,55 @@ Deno.test("an abort during the first storage await prevents scheduleTask persist
     clearRunFence();
   }
 });
+
+Deno.test("an abort DURING alarms.create rolls back the alarm + payload (round-18)", async () => {
+  // A controllable alarms.create that resolves only when released, so we can
+  // abort while the await is in flight.
+  const origCreate = chrome.alarms.create;
+  const origClear = chrome.alarms.clear;
+  const created = [];
+  const cleared = [];
+  let releaseCreate;
+  chrome.alarms.create = (_name) => {
+    created.push(_name);
+    return new Promise((resolve) => {
+      releaseCreate = () => resolve(true);
+    });
+  };
+  chrome.alarms.clear = async (name) => {
+    cleared.push(name);
+    return true;
+  };
+  const controller = new AbortController();
+  setRunFence({ signal: controller.signal });
+  try {
+    const p = scheduleTask({ task: "aborted-alarm-task", delayMs: 5000 });
+    // Wait until alarms.create has been CALLED (the payload is already written).
+    for (let i = 0; i < 100 && created.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert(created.length === 1, "alarms.create must have been called");
+    // Abort DURING the pending alarms.create, then let it resolve.
+    controller.abort();
+    releaseCreate?.();
+    let threw = false;
+    try {
+      await p;
+    } catch {
+      threw = true;
+    }
+    assert(threw, "scheduleTask must reject when aborted during alarms.create");
+    // The created alarm must be rolled back (cleared) AND the payload removed.
+    assert(cleared.includes(created[0]), "the created alarm must be rolled back");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    const tasks = store["cap:scheduledTasks"] ?? {};
+    const leaked = Object.values(tasks).some((t) =>
+      t?.task === "aborted-alarm-task"
+    );
+    assert(!leaked, "no aborted payload may be persisted");
+  } finally {
+    clearRunFence();
+    chrome.alarms.create = origCreate;
+    chrome.alarms.clear = origClear;
+  }
+});

@@ -10,7 +10,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
-import { runAborted } from "./run-fence.js";
+import { runAborted, assertRunAlive } from "./run-fence.js";
 
 const DEFAULT_SYSTEM =
   `You are the Chrome Agent Platform hub agent. You help the
@@ -30,17 +30,26 @@ function memoryToolset(memory) {
         "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
       inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
       execute: async ({ key, value }) => {
-        // memory_set is a durable side-effecting boundary — fence it (the round-16
-        // fence coverage finding: memory_set wrote without a run-abort check).
+        // memory_set is a durable side-effecting boundary — fence it BEFORE the
+        // write (the round-16 fence coverage finding) AND AFTER the awaited OPFS
+        // write (the round-18 finding: memory_set checked once before the await
+        // and never rechecked, so an abort during the write still returned ok).
         if (runAborted()) {
           return { error: "run aborted — memory not written" };
         }
         try {
           await memory.set(key, value);
+          assertRunAlive();
           return { ok: true, key };
         } catch (e) {
           // A bounded/reserved-key rejection is surfaced honestly, never thrown
-          // into the agent loop.
+          // into the agent loop. A run-abort after the write is also surfaced as
+          // an error (best-effort compensate by deleting the just-written key).
+          if (runAborted() && typeof memory.delete === "function") {
+            try {
+              await memory.delete(key);
+            } catch { /* best-effort */ }
+          }
           return { error: String(e?.message ?? e) };
         }
       },

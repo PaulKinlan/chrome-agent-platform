@@ -25326,6 +25326,14 @@ function createDemoModel() {
 init_browser_shim_process();
 var session = /* @__PURE__ */ new Map();
 var warned = false;
+var storageModeMutex = Promise.resolve();
+function withStorageModeLock(fn) {
+  const run = storageModeMutex.then(fn, fn);
+  storageModeMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
 async function storageAvailable() {
   try {
     if (typeof chrome === "undefined" || !chrome.storage?.local) return false;
@@ -25362,61 +25370,67 @@ var StorageBackendError = class extends Error {
   }
 };
 async function kvGet(keys) {
-  await waitForMigration();
-  if (!await storageAvailable()) {
-    warnOnce();
-    const out = {};
-    if (keys == null) {
-      for (const [k, v] of session) out[k] = clone2(v);
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    if (!await storageAvailable()) {
+      warnOnce();
+      const out = {};
+      if (keys == null) {
+        for (const [k, v] of session) out[k] = clone2(v);
+        return out;
+      }
+      for (const k of Array.isArray(keys) ? keys : [keys]) {
+        if (k != null && session.has(k)) out[k] = clone2(session.get(k));
+      }
       return out;
     }
-    for (const k of Array.isArray(keys) ? keys : [keys]) {
-      if (k != null && session.has(k)) out[k] = clone2(session.get(k));
+    try {
+      return await chrome.storage.local.get(keys);
+    } catch (e) {
+      throw new StorageBackendError("get", e);
     }
-    return out;
-  }
-  try {
-    return await chrome.storage.local.get(keys);
-  } catch (e) {
-    throw new StorageBackendError("get", e);
-  }
+  });
 }
 async function kvSet(obj) {
-  await waitForMigration();
-  if (!await storageAvailable()) {
-    warnOnce();
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === void 0) session.delete(k);
-      else session.set(k, clone2(v));
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    if (!await storageAvailable()) {
+      warnOnce();
+      for (const [k, v] of Object.entries(obj)) {
+        if (v === void 0) session.delete(k);
+        else session.set(k, clone2(v));
+      }
+      return;
     }
-    return;
-  }
-  try {
-    await chrome.storage.local.set(obj);
-  } catch (e) {
-    throw new StorageBackendError("set", e);
-  }
+    try {
+      await chrome.storage.local.set(obj);
+    } catch (e) {
+      throw new StorageBackendError("set", e);
+    }
+  });
 }
 async function kvRemove(keys) {
-  await waitForMigration();
-  const list = Array.isArray(keys) ? keys : [keys];
-  if (!await storageAvailable()) {
-    warnOnce();
-    for (const k of list) session.delete(k);
-    return;
-  }
-  try {
-    await chrome.storage.local.remove(list);
-  } catch (e) {
-    throw new StorageBackendError("remove", e);
-  }
+  return withStorageModeLock(async () => {
+    await waitForMigration();
+    const list = Array.isArray(keys) ? keys : [keys];
+    if (!await storageAvailable()) {
+      warnOnce();
+      for (const k of list) session.delete(k);
+      return;
+    }
+    try {
+      await chrome.storage.local.remove(list);
+    } catch (e) {
+      throw new StorageBackendError("remove", e);
+    }
+  });
 }
 var migrated = false;
 var migrationInFlight = null;
 async function waitForMigration() {
   if (migrationInFlight) await migrationInFlight;
 }
-async function snapshotPersistentToSession() {
+async function snapshotPersistentToSessionLocked() {
   if (!await storageAvailable()) return;
   try {
     const all = await chrome.storage.local.get(null);
@@ -25432,7 +25446,7 @@ async function migrateSessionToStorage() {
   if (migrated) return;
   if (!await storageAvailable()) return;
   if (!migrationInFlight) {
-    migrationInFlight = (async () => {
+    migrationInFlight = withStorageModeLock(async () => {
       const entries = {};
       for (const [k, v] of session) entries[k] = clone2(v);
       if (Object.keys(entries).length === 0) {
@@ -25446,7 +25460,7 @@ async function migrateSessionToStorage() {
       } catch (e) {
         throw new StorageBackendError("set", e);
       }
-    })().finally(() => {
+    }).finally(() => {
       migrationInFlight = null;
     });
   }
@@ -25794,7 +25808,7 @@ async function journalAppend(store, entry) {
   }
   journal.push({ ts: Date.now(), ...bounded });
   let entries = journal.slice(-500);
-  while (entries.length > 1 && JSON.stringify(entries).length > MAX_JOURNAL_BYTES) {
+  while (entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_JOURNAL_BYTES) {
     entries = entries.slice(1);
   }
   await store.setTrusted("journal", entries);
@@ -25810,23 +25824,40 @@ async function saveScreenshot(mem, { url: url3, dataURL }) {
   if (bytes > MAX_SCREENSHOT_BYTES) {
     throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
   }
-  const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const dir = await openDir([ROOT, MASTER, "screenshots"]);
-  await writeJson(dir, `${id}.json`, { url: url3, dataURL, at: Date.now() });
-  const index = await mem.get("screenshots") ?? [];
-  index.push({ id, at: Date.now(), url: url3 });
-  const next = index.slice(-MAX_SCREENSHOTS);
-  const kept = new Set(next.map((s) => s.id));
-  for (const s of index) {
-    if (!kept.has(s.id)) {
+  return withWriteLock(async () => {
+    const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const dir = await openDir([ROOT, MASTER, "screenshots"]);
+    try {
+      await writeJson(dir, `${id}.json`, { url: url3, dataURL, at: Date.now() });
+      const index = await mem.get("screenshots") ?? [];
+      index.push({ id, at: Date.now(), url: url3 });
+      const next = index.slice(-MAX_SCREENSHOTS);
+      const kept = new Set(next.map((s) => s.id));
+      for (const s of index) {
+        if (!kept.has(s.id)) {
+          try {
+            await dir.removeEntry(`${s.id}.json`);
+          } catch {
+          }
+        }
+      }
+      await mem.setTrusted("screenshots", next);
+      return { id, url: url3 };
+    } catch (e) {
       try {
-        await dir.removeEntry(`${s.id}.json`);
+        await dir.removeEntry(`${id}.json`);
       } catch {
       }
+      throw e;
     }
-  }
-  await mem.setTrusted("screenshots", next);
-  return { id, url: url3 };
+  });
+}
+async function loadScreenshot(id) {
+  const dir = await openDir([ROOT, MASTER, "screenshots"]);
+  return await readJson(dir, `${id}.json`);
+}
+async function listScreenshots() {
+  return await masterMemory().get("screenshots") ?? [];
 }
 
 // extension/lib/capabilities.js
@@ -66740,6 +66771,11 @@ function clearRunFence() {
 function runAborted() {
   return Boolean(fence?.signal?.aborted);
 }
+function assertRunAlive() {
+  if (runAborted()) {
+    throw new Error("run aborted");
+  }
+}
 
 // extension/lib/agent.js
 var DEFAULT_SYSTEM = `You are the Chrome Agent Platform hub agent. You help the
@@ -66762,8 +66798,15 @@ function memoryToolset(memory) {
         }
         try {
           await memory.set(key, value);
+          assertRunAlive();
           return { ok: true, key };
         } catch (e) {
+          if (runAborted() && typeof memory.delete === "function") {
+            try {
+              await memory.delete(key);
+            } catch {
+            }
+          }
           return { error: String(e?.message ?? e) };
         }
       }
@@ -67132,10 +67175,9 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       );
     }
     const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    if (runAborted()) {
-      throw new Error("run aborted \u2014 task not scheduled");
-    }
+    assertRunAlive();
     const store = await kvGet(TASK_KEY);
+    assertRunAlive();
     const tasks = { ...store[TASK_KEY] ?? {} };
     tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
     await kvSet({ [TASK_KEY]: tasks });
@@ -67156,7 +67198,12 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       const info = { when };
       if (periodInMinutes) info.periodInMinutes = periodInMinutes;
       await alarms.create(name25, info);
+      assertRunAlive();
     } catch (e) {
+      try {
+        await alarmsApi()?.clear(name25);
+      } catch {
+      }
       const cur = await kvGet(TASK_KEY);
       const rollback = { ...cur[TASK_KEY] ?? {} };
       delete rollback[name25];
@@ -67355,40 +67402,44 @@ function clampExpiryMs(expiryMs) {
   return Math.min(ms, 60 * 60 * 1e3);
 }
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
-  const canonical = [
-    ...new Set(
-      (origins ?? []).map((o) => {
-        try {
-          return canonicalOrigin(String(o));
-        } catch {
-          return null;
-        }
-      }).filter(Boolean)
-    )
-  ].slice(0, 50);
-  if (canonical.length === 0) {
-    throw new Error("origin grant needs at least one valid origin");
-  }
-  const grant = {
-    id: newGrantId(),
-    scope: "origins",
-    origins: canonical,
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now()
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
+  return await withGrantLock(async () => {
+    const canonical = [
+      ...new Set(
+        (origins ?? []).map((o) => {
+          try {
+            return canonicalOrigin(String(o));
+          } catch {
+            return null;
+          }
+        }).filter(Boolean)
+      )
+    ].slice(0, 50);
+    if (canonical.length === 0) {
+      throw new Error("origin grant needs at least one valid origin");
+    }
+    const grant = {
+      id: newGrantId(),
+      scope: "origins",
+      origins: canonical,
+      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      grantedAt: Date.now()
+    };
+    await kvSet({ [GRANT_KEY]: grant });
+    return grant;
+  });
 }
 async function setDenyAllBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
-  const grant = {
-    id: newGrantId(),
-    scope: "origins",
-    origins: [],
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now()
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
+  return await withGrantLock(async () => {
+    const grant = {
+      id: newGrantId(),
+      scope: "origins",
+      origins: [],
+      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      grantedAt: Date.now()
+    };
+    await kvSet({ [GRANT_KEY]: grant });
+    return grant;
+  });
 }
 async function revokeBrowserControlGrant() {
   return await withGrantLock(async () => {
@@ -67534,6 +67585,9 @@ async function captureTabScreenshot(tabId) {
     if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
       return { error: "capture returned no image data" };
     }
+    if (runAborted()) {
+      return { error: "run aborted \u2014 screenshot discarded" };
+    }
     return {
       screenshot: dataUrl,
       url: nowTab.url
@@ -67590,6 +67644,13 @@ function browserToolset() {
             return { error: "run aborted \u2014 tab not opened" };
           }
           const tab = await chrome.tabs.create({ url: url3 });
+          if (runAborted()) {
+            try {
+              await chrome.tabs.remove(tab.id);
+            } catch {
+            }
+            return { error: "run aborted \u2014 tab opened then closed" };
+          }
           return { ok: true, tabId: tab.id, url: url3 };
         });
       }
@@ -67637,6 +67698,9 @@ function browserToolset() {
             return { error: "run aborted \u2014 tab not navigated" };
           }
           await chrome.tabs.update(id, { url: url3 });
+          if (runAborted()) {
+            return { error: "run aborted \u2014 tab navigated then aborted" };
+          }
           return { ok: true, tabId: id, url: url3 };
         });
       }
@@ -67693,6 +67757,9 @@ function browserToolset() {
             return { error: "run aborted \u2014 tab not closed" };
           }
           await chrome.tabs.remove(tabId);
+          if (runAborted()) {
+            return { error: "run aborted \u2014 tab closed then aborted" };
+          }
           return { ok: true, tabId };
         });
       }
@@ -67778,25 +67845,39 @@ init_browser_shim_process();
 var MAIN_WORLD_JS = "content/main-world.js";
 var BRIDGE_JS = "content/content-script.js";
 var CLEANUP_KEY = "cap:pendingCleanup";
+var cleanupMutex = Promise.resolve();
+function withCleanupLock(fn) {
+  const run = cleanupMutex.then(fn, fn);
+  cleanupMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
 async function markCleanupPending(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return;
-  const s = await kvGet(CLEANUP_KEY);
-  const map4 = { ...s[CLEANUP_KEY] ?? {} };
-  map4[canonical] = Date.now();
-  await kvSet({ [CLEANUP_KEY]: map4 });
+  return withCleanupLock(async () => {
+    const s = await kvGet(CLEANUP_KEY);
+    const map4 = { ...s[CLEANUP_KEY] ?? {} };
+    map4[canonical] = Date.now();
+    await kvSet({ [CLEANUP_KEY]: map4 });
+  });
 }
 async function clearCleanupPending(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return;
-  const s = await kvGet(CLEANUP_KEY);
-  const map4 = { ...s[CLEANUP_KEY] ?? {} };
-  delete map4[canonical];
-  await kvSet({ [CLEANUP_KEY]: map4 });
+  return withCleanupLock(async () => {
+    const s = await kvGet(CLEANUP_KEY);
+    const map4 = { ...s[CLEANUP_KEY] ?? {} };
+    delete map4[canonical];
+    await kvSet({ [CLEANUP_KEY]: map4 });
+  });
 }
 async function listPendingCleanup() {
-  const s = await kvGet(CLEANUP_KEY);
-  return Object.keys(s[CLEANUP_KEY] ?? {}).sort();
+  return withCleanupLock(async () => {
+    const s = await kvGet(CLEANUP_KEY);
+    return Object.keys(s[CLEANUP_KEY] ?? {}).sort();
+  });
 }
 function scriptId(origin, role) {
   return `cap-${encodeURIComponent(origin)}-${role}`;
@@ -67891,16 +67972,6 @@ async function unregisterOriginScripts(origin) {
     permissionRemoved,
     error: error90
   };
-}
-async function removeOriginHostPermission(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return false;
-  try {
-    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
-    return !await chrome.permissions.contains({ origins: [`${canonical}/*`] });
-  } catch {
-    return false;
-  }
 }
 
 // extension/lib/pure.js
@@ -68369,6 +68440,16 @@ async function ensureModel(_agentId) {
     }
   }
 }
+function abortWorker(origin) {
+  const canonical = canonicalOrigin(origin);
+  const a = orchestrator?.workers?.get(canonical);
+  if (a) {
+    try {
+      a.abort?.();
+    } catch {
+    }
+  }
+}
 async function ensureOrchestrator() {
   while (true) {
     const gen = generation;
@@ -68566,24 +68647,35 @@ var handlers = {
   //     host permission (Disable must not leave origin authority behind).
   async "capability.revoke"({ id }) {
     if (id === "storage") {
-      try {
-        await snapshotPersistentToSession();
-      } catch (e) {
-        return { ok: false, error: String(e?.message ?? e) };
-      }
+      return await withStorageModeLock(async () => {
+        try {
+          await snapshotPersistentToSessionLocked();
+        } catch (e) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
+        const res2 = await revokeCapability(id);
+        resetStorageTransition();
+        return res2;
+      });
     }
     if (id === "scripting") {
       const origins = await listOrigins();
-      const results = await Promise.all(
-        origins.map((o) => unregisterOriginScripts(o))
-      );
-      const failed = results.filter((r) => !r.ok);
-      if (failed.length > 0) {
-        return {
-          ok: false,
-          error: `could not revoke ${failed.length} origin(s): ${failed.map((f) => f.error ?? f.origin).join("; ")}`
-        };
+      const failures = [];
+      for (const o of origins) {
+        abortWorker(o);
+        await disenrollOrigin(o);
+        const res3 = await unregisterOriginScripts(o);
+        if (!res3.ok) {
+          await markCleanupPending(o);
+          failures.push(res3.error ?? o);
+        }
       }
+      invalidateAgent();
+      const res2 = await revokeCapability(id);
+      if (failures.length > 0) {
+        res2.cleanupPending = failures.length;
+      }
+      return res2;
     }
     const res = await revokeCapability(id);
     if (id === "storage") {
@@ -68761,6 +68853,22 @@ var handlers = {
   async "memory.origins"() {
     return await listOrigins();
   },
+  // Screenshot READER (round-18 blocker 6): the stored screenshot blobs were
+  // previously only writable via saveScreenshot with no application route to
+  // retrieve them. These routes let the memory explorer render the saved
+  // screenshots (the index lists id/at/url; `screenshots.get` returns the
+  // dataURL for an actual <img>).
+  async "screenshots.list"() {
+    return { screenshots: await listScreenshots() };
+  },
+  async "screenshots.get"({ id }) {
+    if (!id || typeof id !== "string") {
+      return { ok: false, error: "screenshots.get needs an id" };
+    }
+    const shot = await loadScreenshot(id);
+    if (!shot) return { ok: false, error: "screenshot not found" };
+    return { ok: true, url: shot.url, dataURL: shot.dataURL, at: shot.at };
+  },
   async "usage.get"() {
     return await getUsage();
   },
@@ -68837,13 +68945,27 @@ var handlers = {
       );
       if (registered?.ok !== true) {
         await disenrollOrigin(canonical);
-        await siteMemory(canonical).clear();
-        const permissionRemoved = await removeOriginHostPermission(canonical);
+        const [unregRes, clearRes] = await Promise.allSettled([
+          unregisterOriginScripts(canonical),
+          siteMemory(canonical).clear()
+        ]);
+        const scriptsRemoved = unregRes.status === "fulfilled" && unregRes.value.scriptsRemoved === true;
+        const permissionRemoved = unregRes.status === "fulfilled" && unregRes.value.permissionRemoved === true;
+        const cleared = clearRes.status === "fulfilled";
+        if (!(scriptsRemoved && permissionRemoved && cleared)) {
+          await markCleanupPending(canonical);
+        } else {
+          await clearCleanupPending(canonical);
+        }
+        invalidateAgent();
         return {
           ok: false,
           origin: canonical,
           error: registered?.error ?? "script registration failed",
-          permissionRemoved
+          retryable: true,
+          scriptsRemoved,
+          permissionRemoved,
+          cleared
         };
       }
       invalidateAgent();
@@ -68854,6 +68976,7 @@ var handlers = {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
+      abortWorker(canonical);
       await disenrollOrigin(canonical);
       const [unregRes, clearRes] = await Promise.allSettled([
         unregisterOriginScripts(canonical),
@@ -68893,32 +69016,43 @@ var handlers = {
   async "agent.retry-cleanup"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    const [unregRes, clearRes] = await Promise.allSettled([
-      unregisterOriginScripts(canonical),
-      siteMemory(canonical).clear()
-    ]);
-    const unreg = unregRes.status === "fulfilled" ? unregRes.value : {
-      ok: false,
-      scriptsRemoved: false,
-      permissionRemoved: false,
-      error: String(unregRes.reason?.message ?? unregRes.reason)
-    };
-    const cleared = clearRes.status === "fulfilled";
-    const scriptsRemoved = unreg.scriptsRemoved === true;
-    const permissionRemoved = unreg.permissionRemoved === true;
-    if (scriptsRemoved && permissionRemoved && cleared) {
-      await clearCleanupPending(canonical);
-      return { ok: true, origin: canonical };
-    }
-    await markCleanupPending(canonical);
-    return {
-      ok: false,
-      retryable: true,
-      error: unreg.error ?? "OPFS clear failed",
-      scriptsRemoved,
-      permissionRemoved,
-      cleared
-    };
+    return await withOriginLock(canonical, async () => {
+      const pending = await listPendingCleanup();
+      if (!pending.includes(canonical)) {
+        return { ok: true, origin: canonical, alreadyClean: true };
+      }
+      const snap = await enrollmentSnapshot(canonical);
+      if (snap.enrolled) {
+        await clearCleanupPending(canonical);
+        return { ok: true, origin: canonical, reenrolled: true };
+      }
+      const [unregRes, clearRes] = await Promise.allSettled([
+        unregisterOriginScripts(canonical),
+        siteMemory(canonical).clear()
+      ]);
+      const unreg = unregRes.status === "fulfilled" ? unregRes.value : {
+        ok: false,
+        scriptsRemoved: false,
+        permissionRemoved: false,
+        error: String(unregRes.reason?.message ?? unregRes.reason)
+      };
+      const cleared = clearRes.status === "fulfilled";
+      const scriptsRemoved = unreg.scriptsRemoved === true;
+      const permissionRemoved = unreg.permissionRemoved === true;
+      if (scriptsRemoved && permissionRemoved && cleared) {
+        await clearCleanupPending(canonical);
+        return { ok: true, origin: canonical };
+      }
+      await markCleanupPending(canonical);
+      return {
+        ok: false,
+        retryable: true,
+        error: unreg.error ?? "OPFS clear failed",
+        scriptsRemoved,
+        permissionRemoved,
+        cleared
+      };
+    });
   },
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };

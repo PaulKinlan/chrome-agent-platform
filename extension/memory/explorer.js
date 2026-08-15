@@ -4,6 +4,7 @@ import { send } from "../lib/messages.js";
 
 const masterEl = document.getElementById("master");
 const agentsEl = document.getElementById("agents");
+const shotsEl = document.getElementById("shots");
 const usageSummary = document.getElementById("usage-summary");
 const usageBody = document.querySelector("#usage-table tbody");
 
@@ -73,6 +74,44 @@ async function renderUsage() {
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
+async function renderShots() {
+  const res = await send("screenshots.list");
+  const shots = Array.isArray(res?.screenshots) ? res.screenshots : [];
+  shotsEl.replaceChildren();
+  if (!shots.length) {
+    shotsEl.append(Object.assign(document.createElement("p"), {
+      textContent: "No screenshots captured yet.",
+      style: "color:var(--muted)",
+    }));
+    return;
+  }
+  for (const s of shots) {
+    const box = document.createElement("div");
+    box.className = "shot";
+    // Fetch the actual dataURL (the index carries id/url only) and render it as
+    // a real <img> — the round-18 finding: stored screenshots had no reader/UI.
+    const got = await send("screenshots.get", { id: s.id });
+    const img = document.createElement("img");
+    img.alt = `Screenshot of ${s.url ?? "a tab"}`;
+    img.src = got?.dataURL ?? "";
+    box.append(img);
+    const meta = document.createElement("div");
+    meta.className = "shot-meta";
+    meta.textContent = new Date(s.at).toLocaleString();
+    box.append(meta);
+    if (s.url) {
+      const link = document.createElement("a");
+      link.href = s.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "open source page";
+      box.append(link);
+    }
+    shotsEl.append(box);
+  }
+}
+
 renderMaster();
 renderAgents();
+renderShots();
 renderUsage();

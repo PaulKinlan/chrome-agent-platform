@@ -14,7 +14,9 @@ import {
   StorageBackendError,
   migrateSessionToStorage,
   snapshotPersistentToSession,
+  snapshotPersistentToSessionLocked,
   resetStorageTransition,
+  withStorageModeLock,
   __resetSessionForTest,
   __resetMigrationForTest,
 } from "../extension/lib/kv.js";
@@ -222,4 +224,32 @@ Deno.test("resetStorageTransition allows re-migration after a Disable→Enable c
   makeChrome({ present: true });
   await migrateSessionToStorage();
   assertEquals(store.get("providerConfig").provider, "anthropic");
+});
+
+Deno.test("withStorageModeLock serializes a concurrent kvSet behind a held transition (round-18)", async () => {
+  __resetSessionForTest();
+  __resetMigrationForTest();
+  store.clear();
+  makeChromeWithPermissions({ storageGranted: true });
+  store.set("cap:x", "v1");
+
+  let snapshotDone = false;
+  let writeRan = false;
+  // Hold the storage-mode lock across snapshot (the disable transition).
+  const transition = withStorageModeLock(async () => {
+    await snapshotPersistentToSessionLocked();
+    snapshotDone = true;
+    // Give any (incorrectly) unsynchronized write a chance to run.
+    await new Promise((r) => setTimeout(r, 10));
+  });
+  // A concurrent write issued during the held transition must QUEUE behind it,
+  // not interleave with the snapshot (the round-18 storage-transition race).
+  const write = kvSet({ "cap:x": "v2" }).then(() => {
+    writeRan = true;
+  });
+  await transition;
+  assert(snapshotDone, "snapshot completed inside the held transition");
+  assert(!writeRan, "concurrent write must not run until the transition releases");
+  await write;
+  assert(writeRan, "concurrent write completes after the transition");
 });

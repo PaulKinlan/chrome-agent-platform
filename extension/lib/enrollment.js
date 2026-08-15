@@ -23,27 +23,45 @@ const BRIDGE_JS = "content/content-script.js";
 // tombstone, so Settings dropped the only Disenroll control with no Retry).
 const CLEANUP_KEY = "cap:pendingCleanup";
 
+// A GLOBAL mutex serializes the pending-cleanup registry read-modify-write.
+// `markCleanupPending`/`clearCleanupPending` previously did unlocked
+// kvGet→kvSet, so concurrent failures for DIFFERENT origins could overwrite one
+// another (the round-18 finding: the registry RMW raced). One lock makes the
+// registry authoritative across origins.
+let cleanupMutex = Promise.resolve();
+function withCleanupLock(fn) {
+  const run = cleanupMutex.then(fn, fn);
+  cleanupMutex = run.then(() => {}, () => {});
+  return run;
+}
+
 export async function markCleanupPending(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return;
-  const s = await kvGet(CLEANUP_KEY);
-  const map = { ...(s[CLEANUP_KEY] ?? {}) };
-  map[canonical] = Date.now();
-  await kvSet({ [CLEANUP_KEY]: map });
+  return withCleanupLock(async () => {
+    const s = await kvGet(CLEANUP_KEY);
+    const map = { ...(s[CLEANUP_KEY] ?? {}) };
+    map[canonical] = Date.now();
+    await kvSet({ [CLEANUP_KEY]: map });
+  });
 }
 
 export async function clearCleanupPending(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return;
-  const s = await kvGet(CLEANUP_KEY);
-  const map = { ...(s[CLEANUP_KEY] ?? {}) };
-  delete map[canonical];
-  await kvSet({ [CLEANUP_KEY]: map });
+  return withCleanupLock(async () => {
+    const s = await kvGet(CLEANUP_KEY);
+    const map = { ...(s[CLEANUP_KEY] ?? {}) };
+    delete map[canonical];
+    await kvSet({ [CLEANUP_KEY]: map });
+  });
 }
 
 export async function listPendingCleanup() {
-  const s = await kvGet(CLEANUP_KEY);
-  return Object.keys(s[CLEANUP_KEY] ?? {}).sort();
+  return withCleanupLock(async () => {
+    const s = await kvGet(CLEANUP_KEY);
+    return Object.keys(s[CLEANUP_KEY] ?? {}).sort();
+  });
 }
 
 /** Deterministic, injective script id per (origin, role). */

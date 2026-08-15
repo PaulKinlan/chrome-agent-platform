@@ -493,9 +493,8 @@ async function renderData() {
     p.className = "muted";
     p.textContent = "No enrolled sites yet.";
     list.appendChild(p);
-    return;
   }
-  for (const origin of origins) {
+  for (const origin of origins ?? []) {
     const row = document.createElement("div");
     row.className = "origin-row";
     const label = document.createElement("span");

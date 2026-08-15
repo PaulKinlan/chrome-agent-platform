@@ -3,7 +3,7 @@
 // validation, persistence, and alarm creation stay in a single place.
 
 import { kvGet, kvSet } from "./kv.js";
-import { runAborted } from "./run-fence.js";
+import { runAborted, assertRunAlive } from "./run-fence.js";
 
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
@@ -97,16 +97,26 @@ export async function scheduleTask(
     }
     const name = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    // The abort must be re-checked at the PERSIST boundary, not just once at the
-    // tool's start: an abort arriving while the first kvGet await was in flight
-    // must still prevent the payload from being persisted (the round-17 blocker
-    // reproduced an aborted schedule_task still persisting + creating an alarm).
-    if (runAborted()) {
-      throw new Error("run aborted — task not scheduled");
-    }
+    // The abort must be re-checked at EVERY commit boundary, not just once at
+    // the tool's start: an abort arriving DURING an await must prevent the
+    // durable commit. The boundaries are: (1) before the first read, (2) after
+    // the read + BEFORE the payload write (closes the read-abort crash window
+    // — nothing is persisted, so no rollback is needed), (3) after the write +
+    // before the IRREVERSIBLE alarm creation (roll back the payload), and
+    // (4) after `alarms.create` resolves + before returning success (the
+    // round-18 blocker reproduced an abort during `alarms.create` committing
+    // the alarm + payload and returning ok).
+    assertRunAlive();
 
     // Persist the task (inside the lock so the read-modify-write is atomic).
     const store = await kvGet(TASK_KEY);
+
+    // Re-check the fence AFTER the read await but BEFORE the write: an abort
+    // during the kvGet await must reject with NO payload persisted (the
+    // round-17 crash-window finding: the old code wrote first, then rolled
+    // back, leaving a window where a partial write could survive).
+    assertRunAlive();
+
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     tasks[name] = { name, task, at: when, periodInMinutes, attachments };
     await kvSet({ [TASK_KEY]: tasks });
@@ -135,7 +145,15 @@ export async function scheduleTask(
       const info = { when };
       if (periodInMinutes) info.periodInMinutes = periodInMinutes;
       await alarms.create(name, info);
+      // Re-check the fence AFTER `alarms.create` resolves: an abort during the
+      // await must roll back BOTH the now-created alarm AND the persisted
+      // payload, and REJECT (never return ok) — the round-18 blocker.
+      assertRunAlive();
     } catch (e) {
+      // Roll back the alarm (if it was created) AND the payload together.
+      try {
+        await alarmsApi()?.clear(name);
+      } catch { /* alarm may not exist yet */ }
       const cur = await kvGet(TASK_KEY);
       const rollback = { ...(cur[TASK_KEY] ?? {}) };
       delete rollback[name];

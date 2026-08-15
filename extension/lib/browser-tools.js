@@ -8,7 +8,7 @@ import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
-import { runAborted } from "./run-fence.js";
+import { runAborted, assertRunAlive } from "./run-fence.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
@@ -85,43 +85,52 @@ function clampExpiryMs(expiryMs) {
 export async function setGlobalBrowserControlGrant(
   expiryMs = DEFAULT_GRANT_MS,
 ) {
-  const grant = {
-    id: newGrantId(),
-    scope: "global",
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now(),
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
+  // Grant MUTATION must hold the SAME authority mutex as the checked browser
+  // mutations (open/navigate/close) AND revoke: a re-scope/regrant written
+  // outside the mutex can interleave with an in-flight `tabs.create` under the
+  // old scope (the round-18 blocker reproduced a re-scope A→B while A's
+  // tabs.create was still awaited committing A).
+  return await withGrantLock(async () => {
+    const grant = {
+      id: newGrantId(),
+      scope: "global",
+      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      grantedAt: Date.now(),
+    };
+    await kvSet({ [GRANT_KEY]: grant });
+    return grant;
+  });
 }
 
 export async function setOriginBrowserControlGrant(
   origins,
   expiryMs = DEFAULT_GRANT_MS,
 ) {
-  const canonical = [
-    ...new Set(
-      (origins ?? []).map((o) => {
-        try {
-          return canonicalOrigin(String(o));
-        } catch {
-          return null;
-        }
-      }).filter(Boolean),
-    ),
-  ].slice(0, 50);
-  if (canonical.length === 0) {
-    throw new Error("origin grant needs at least one valid origin");
-  }
-  const grant = {
-    id: newGrantId(),
-    scope: "origins",
-    origins: canonical,
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now(),
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
+  return await withGrantLock(async () => {
+    const canonical = [
+      ...new Set(
+        (origins ?? []).map((o) => {
+          try {
+            return canonicalOrigin(String(o));
+          } catch {
+            return null;
+          }
+        }).filter(Boolean),
+      ),
+    ].slice(0, 50);
+    if (canonical.length === 0) {
+      throw new Error("origin grant needs at least one valid origin");
+    }
+    const grant = {
+      id: newGrantId(),
+      scope: "origins",
+      origins: canonical,
+      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      grantedAt: Date.now(),
+    };
+    await kvSet({ [GRANT_KEY]: grant });
+    return grant;
+  });
 }
 
 /** A DENY-ALL scoped grant: the record exists (so the Settings UI can show the
@@ -133,15 +142,17 @@ export async function setOriginBrowserControlGrant(
 export async function setDenyAllBrowserControlGrant(
   expiryMs = DEFAULT_GRANT_MS,
 ) {
-  const grant = {
-    id: newGrantId(),
-    scope: "origins",
-    origins: [],
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now(),
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
+  return await withGrantLock(async () => {
+    const grant = {
+      id: newGrantId(),
+      scope: "origins",
+      origins: [],
+      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      grantedAt: Date.now(),
+    };
+    await kvSet({ [GRANT_KEY]: grant });
+    return grant;
+  });
 }
 
 export async function revokeBrowserControlGrant() {
@@ -385,6 +396,13 @@ export async function captureTabScreenshot(tabId) {
     if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
       return { error: "capture returned no image data" };
     }
+    // Final fence check at the post-capture COMMIT boundary: an abort during the
+    // captureVisibleTab await must discard the bytes rather than return them
+    // (the round-18 fence coverage finding — screenshot checked abort only
+    // before capture, never at the post-capture commit).
+    if (runAborted()) {
+      return { error: "run aborted — screenshot discarded" };
+    }
     return {
       screenshot: dataUrl,
       url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
@@ -455,6 +473,16 @@ export function browserToolset() {
             return { error: "run aborted — tab not opened" };
           }
           const tab = await chrome.tabs.create({ url });
+          // Re-check the fence AFTER the await, before returning success: an
+          // abort during tabs.create must NOT report a committed open. Compensate
+          // (close the just-opened tab) + return aborted (the round-18 fence
+          // coverage finding).
+          if (runAborted()) {
+            try {
+              await chrome.tabs.remove(tab.id);
+            } catch { /* best-effort compensation */ }
+            return { error: "run aborted — tab opened then closed" };
+          }
           return { ok: true, tabId: tab.id, url };
         });
       },
@@ -515,6 +543,12 @@ export function browserToolset() {
             return { error: "run aborted — tab not navigated" };
           }
           await chrome.tabs.update(id, { url });
+          // Re-check the fence AFTER the await: an abort during tabs.update must
+          // not report success (the navigation side effect may be irreversible,
+          // so we return aborted rather than claim ok — the round-18 finding).
+          if (runAborted()) {
+            return { error: "run aborted — tab navigated then aborted" };
+          }
           return { ok: true, tabId: id, url };
         });
       },
@@ -581,6 +615,11 @@ export function browserToolset() {
             return { error: "run aborted — tab not closed" };
           }
           await chrome.tabs.remove(tabId);
+          // Re-check the fence AFTER the await: an abort during tabs.remove must
+          // not report success (the round-18 finding).
+          if (runAborted()) {
+            return { error: "run aborted — tab closed then aborted" };
+          }
           return { ok: true, tabId };
         });
       },

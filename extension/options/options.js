@@ -545,9 +545,11 @@ async function renderData() {
     p.className = "muted";
     p.textContent = "No enrolled sites yet.";
     list.appendChild(p);
-    return;
+    // NOTE: no early return — pending-cleanup origins must STILL render below
+    // (the round-18 finding: deleting the FINAL origin hid the Retry UI because
+    // renderData returned before the pending-cleanup request).
   }
-  for (const origin of origins) {
+  for (const origin of (origins ?? [])) {
     const row = document.createElement("div");
     row.className = "origin-row";
     const label = document.createElement("span");

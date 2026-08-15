@@ -28,3 +28,15 @@ export function runAborted() {
 export function runSignal() {
   return fence?.signal ?? null;
 }
+
+/** Re-check the run fence and THROW when the run has been aborted. Tools call
+ * this immediately BEFORE and AFTER every durable/destructive await — an abort
+ * that lands DURING an awaited side effect (alarm create, OPFS write, tab
+ * mutation) must prevent the commit AND the success return (the round-18
+ * blocker: the fence was check-only, so an abort during `alarms.create` still
+ * committed the alarm+payload and returned ok). */
+export function assertRunAlive() {
+  if (runAborted()) {
+    throw new Error("run aborted");
+  }
+}
