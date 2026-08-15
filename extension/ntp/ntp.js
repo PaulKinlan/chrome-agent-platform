@@ -121,12 +121,21 @@ async function refreshTasks() {
   for (const r of rows.slice(-10).reverse()) {
     const div = document.createElement("div");
     div.className = "task";
-    const text = typeof r === "object" && r.task
-      ? r.task
-      : String(r).slice(0, 80);
+    // Journal entries are objects ({type, task?|result?, ...}); never fall
+    // through to String(r) (which produced a raw "[object Object]" row for
+    // result entries that carry no `task` field).
+    const text = (() => {
+      if (typeof r !== "object" || r === null) return String(r).slice(0, 80);
+      if (typeof r.task === "string" && r.task) return r.task;
+      if (typeof r.result === "string") return r.result.slice(0, 80);
+      return "(entry)";
+    })();
+    const kind = r?.type === "result"
+      ? "result"
+      : (r?.scheduled ? "scheduled" : "task");
     div.innerHTML = `<div class="t">${
       escapeHtml(text)
-    }</div><div class="meta">${r.scheduled ? "scheduled" : "done"}</div>`;
+    }</div><div class="meta">${kind}</div>`;
     tasksEl.append(div);
   }
 }
@@ -634,8 +643,9 @@ capAction.addEventListener("click", async () => {
   // editor — the API key / base URL are never read into the hub DOM (which
   // previously could cross-wire one provider's stored secret into another
   // provider's fields). Configuring credentials happens exclusively in the
-  // dedicated Settings page.
-  const cfg = await send("provider.get");
+  // dedicated Settings page. Use the REDACTED summary route so the full config
+  // (baseURL/key/model) never crosses into the NTP.
+  const cfg = await send("provider.summary");
   const nameEl = document.getElementById("provider-name");
   if (nameEl && cfg && cfg.provider) {
     nameEl.textContent = cfg.provider;

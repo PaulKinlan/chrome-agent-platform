@@ -183,12 +183,18 @@ async function listOrigins() {
 
 // extension/lib/scheduler.js
 var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
+var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
 var mutex = Promise.resolve();
 var BOOT_AT = Date.now();
 
 // extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";
 var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
+var grantSeq = 0;
+function newGrantId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
+}
 function clampExpiryMs(expiryMs) {
   const ms = Number(expiryMs);
   if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_GRANT_MS;
@@ -196,6 +202,7 @@ function clampExpiryMs(expiryMs) {
 }
 async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   const grant = {
+    id: newGrantId(),
     scope: "global",
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
@@ -219,6 +226,7 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
     throw new Error("origin grant needs at least one valid origin");
   }
   const grant = {
+    id: newGrantId(),
     scope: "origins",
     origins: canonical,
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
@@ -316,7 +324,7 @@ async function renderProviders() {
       <div class="provider-head">
         <span class="provider-name">${p.name}</span>
         <span class="muted">${p.hint}</span>
-        <button class="btn small set-default" type="button">${cfg.provider === p.id ? "Update" : "Use"}</button>
+        <button class="btn small set-default" type="button" aria-label="${cfg.provider === p.id ? `Update ${p.name}` : `Use ${p.name}`}">${cfg.provider === p.id ? "Update" : "Use"}</button>
       </div>
       ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
       <fieldset class="fields">
@@ -359,6 +367,7 @@ async function renderProviders() {
     clear.className = "btn ghost small clear-key";
     clear.type = "button";
     clear.textContent = "Clear key";
+    clear.setAttribute("aria-label", `Clear API key for ${cfg.provider}`);
     clear.addEventListener("click", async () => {
       await chrome.runtime.sendMessage({
         type: "provider.set",
@@ -383,12 +392,7 @@ async function renderAgents() {
     saveFlash("Agent mode saved.");
   });
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;
-  const list = $("#agent-provider-list");
-  list.innerHTML = "";
-  const note = document.createElement("p");
-  note.className = "muted";
-  note.textContent = "Per-agent provider assignment is planned but not enabled yet \u2014 every agent uses the global provider for now.";
-  list.appendChild(note);
+  $("#agent-provider-list").replaceChildren();
 }
 async function renderAppearance() {
   const s = await storage.get("cap:theme");

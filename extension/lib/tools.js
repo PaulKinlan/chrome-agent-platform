@@ -90,12 +90,30 @@ export async function listAllOrigins() {
 
 export async function enrollOrigin(origin) {
   const store = masterMemory();
+  // Create the site's OWN OPFS store directory (so listOrigins() — which
+  // enumerates the per-origin directories — discovers it as a worker). This
+  // fixes the bug where agent.create wrote only the master-memory list and the
+  // worker stayed invisible to listOrigins()/the orchestrator.
+  await siteMemory(origin).set("enrolled", { at: Date.now() });
   const origins = (await store.get("origins")) ?? [];
-  if (!origins.includes(origin)) {
-    origins.push(origin);
+  const canonical = siteMemory(origin).origin;
+  if (!origins.includes(canonical)) {
+    origins.push(canonical);
     await store.set("origins", origins);
   }
   return origins;
+}
+
+/** Remove an origin from the master-memory origins list (mirror of enroll). */
+export async function disenrollOrigin(origin) {
+  const store = masterMemory();
+  const origins = (await store.get("origins")) ?? [];
+  const canonical = siteMemory(origin).origin;
+  const next = origins.filter((o) => o !== canonical);
+  if (next.length !== origins.length) {
+    await store.set("origins", next);
+  }
+  return next;
 }
 
 /**

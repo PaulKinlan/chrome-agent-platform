@@ -170,17 +170,29 @@ input:focus, select:focus, textarea:focus {
   overflow: hidden;
   cursor: pointer;
   background: var(--bg);
+  /* <button> does not inherit body color (it uses buttontext = near-black on
+     dark themes) — set it explicitly so the label is legible in every theme. */
+  color: var(--text);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  font: inherit;
 }
 .theme-card.active {
   border-color: var(--accent);
 }
 .theme-swatch {
+  display: block;
   height: 60px;
+  width: 100%;
+  flex: 0 0 60px;
 }
 .theme-card .theme-label {
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 600;
+  color: var(--text);
 }
 /* Usage */
 .usage-summary {

@@ -11,6 +11,24 @@ import { canonicalOrigin } from "./memory.js";
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
 
+let grantSeq = 0;
+/** A unique, non-predictable grant identity. Revoke→regrant always produces a
+ * DIFFERENT id, so a capture can detect that authorization was absent during
+ * the capture interval (not just that a grant exists before/after). */
+function newGrantId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
+}
+
+/** The current grant's identity id, or null when no grant exists. */
+export async function getBrowserControlGrantIdentity() {
+  const s = await chrome.storage.local.get(GRANT_KEY);
+  const grant = s[GRANT_KEY];
+  return grant && typeof grant === "object" && typeof grant.id === "string"
+    ? grant.id
+    : null;
+}
+
 // A grant is EXPLICITLY scoped, expiring, and revocable. Two scopes:
 //   - "global": the owner granted control over the whole browser (temporary).
 //   - "origins": the owner granted control over a non-empty origin allowlist.
@@ -44,6 +62,7 @@ export async function setGlobalBrowserControlGrant(
   expiryMs = DEFAULT_GRANT_MS,
 ) {
   const grant = {
+    id: newGrantId(),
     scope: "global",
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now(),
@@ -71,6 +90,7 @@ export async function setOriginBrowserControlGrant(
     throw new Error("origin grant needs at least one valid origin");
   }
   const grant = {
+    id: newGrantId(),
     scope: "origins",
     origins: canonical,
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
@@ -144,6 +164,11 @@ export async function captureTabScreenshot(tabId) {
         "browser control not granted for this tab's origin — ask the user to approve it in Settings",
     };
   }
+  // Snapshot the grant IDENTITY (a unique id per grant). A revoke→regrant during
+  // the capture produces a NEW id, so a before/after Boolean check alone cannot
+  // catch it — the identity must remain IDENTICAL across the whole capture.
+  const grantIdBefore = await getBrowserControlGrantIdentity();
+  if (!grantIdBefore) return { error: "browser control grant missing" };
 
   try {
     // Activate the REQUESTED tab, then VERIFY it became active before capture
@@ -195,6 +220,14 @@ export async function captureTabScreenshot(tabId) {
     const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : undefined;
     if (!afterOrigin || afterOrigin !== origin) {
       return { error: "tab navigated during capture — screenshot discarded" };
+    }
+    // The grant must be BOTH still valid AND the SAME grant identity. A revoke
+    // (id → null) or a revoke→regrant (id → a new value) invalidates the bytes.
+    if ((await getBrowserControlGrantIdentity()) !== grantIdBefore) {
+      return {
+        error:
+          "browser control grant changed during capture — screenshot discarded",
+      };
     }
     if (!(await isBrowserControlGranted(afterOrigin))) {
       return {

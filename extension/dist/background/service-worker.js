@@ -66591,12 +66591,24 @@ async function listTools(origin) {
 }
 async function enrollOrigin(origin) {
   const store = masterMemory();
+  await siteMemory(origin).set("enrolled", { at: Date.now() });
   const origins = await store.get("origins") ?? [];
-  if (!origins.includes(origin)) {
-    origins.push(origin);
+  const canonical = siteMemory(origin).origin;
+  if (!origins.includes(canonical)) {
+    origins.push(canonical);
     await store.set("origins", origins);
   }
   return origins;
+}
+async function disenrollOrigin(origin) {
+  const store = masterMemory();
+  const origins = await store.get("origins") ?? [];
+  const canonical = siteMemory(origin).origin;
+  const next = origins.filter((o) => o !== canonical);
+  if (next.length !== origins.length) {
+    await store.set("origins", next);
+  }
+  return next;
 }
 async function isApproved(origin, toolName) {
   const approved = await siteMemory(origin).get("approvals") ?? {};
@@ -66624,6 +66636,17 @@ init_browser_shim_process();
 var TASK_KEY = "cap:scheduledTasks";
 var INFLIGHT_KEY = "cap:scheduledInflight";
 var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
+var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
+var lockSeq = 0;
+function newToken() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `lock_${Date.now()}_${Math.random().toString(36).slice(2)}_${lockSeq++}`;
+}
+function validLock(v) {
+  return Boolean(
+    v && typeof v === "object" && typeof v.token === "string" && v.token.length > 0 && typeof v.heartbeatAt === "number" && Number.isFinite(v.heartbeatAt)
+  );
+}
 var mutex = Promise.resolve();
 function withLock(fn) {
   const run = mutex.then(fn, fn);
@@ -66680,23 +66703,39 @@ async function tryAcquireInflight(name25) {
     const now2 = Date.now();
     const existing = inflight[name25];
     if (existing !== void 0) {
-      if (typeof existing === "number" && Number.isFinite(existing) && now2 - existing > INFLIGHT_LEASE_MS) {
-        delete inflight[name25];
-      } else {
-        return false;
+      if (!validLock(existing)) {
+        return { acquired: false, reason: "malformed lock" };
+      }
+      if (now2 - existing.heartbeatAt <= INFLIGHT_LEASE_MS) {
+        return { acquired: false, reason: "in flight" };
       }
     }
-    inflight[name25] = now2;
+    const token = newToken();
+    inflight[name25] = { token, at: now2, heartbeatAt: now2 };
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
-    return true;
+    return { acquired: true, token };
   });
 }
-async function releaseInflight(name25) {
+async function heartbeatInflight(name25, token) {
   await withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
-    delete inflight[name25];
-    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    const existing = inflight[name25];
+    if (validLock(existing) && existing.token === token) {
+      inflight[name25] = { ...existing, heartbeatAt: Date.now() };
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    }
+  });
+}
+async function releaseInflight(name25, token) {
+  await withLock(async () => {
+    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+    const existing = inflight[name25];
+    if (validLock(existing) && existing.token === token) {
+      delete inflight[name25];
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    }
   });
 }
 var BOOT_AT = Date.now();
@@ -66706,7 +66745,7 @@ async function clearStaleInflight() {
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     for (const name25 of Object.keys(inflight)) {
       const v = inflight[name25];
-      if (typeof v !== "number" || !Number.isFinite(v) || v < BOOT_AT) {
+      if (!validLock(v) || v.at < BOOT_AT) {
         delete inflight[name25];
       }
     }
@@ -66726,43 +66765,55 @@ function recoverOnBoot() {
   return bootRecoveryPromise;
 }
 async function reconcileScheduledTasks() {
-  const store = await chrome.storage.local.get(TASK_KEY);
-  const tasks = { ...store[TASK_KEY] ?? {} };
-  const names = Object.keys(tasks);
-  if (names.length === 0) return [];
-  const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
-  const resumed = [];
-  const failed = [];
-  const now2 = Date.now();
-  for (const name25 of names) {
-    const task = tasks[name25];
-    if (!existing.has(name25)) {
-      const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
-      const info = { when };
-      if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
-      try {
-        await chrome.alarms.create(name25, info);
-        resumed.push(name25);
-      } catch (err) {
-        failed.push(name25);
-        console.error(
-          `reconcile: failed to recreate alarm "${name25}":`,
-          err?.message ?? err
-        );
+  return withLock(async () => {
+    const store = await chrome.storage.local.get(TASK_KEY);
+    const tasks = { ...store[TASK_KEY] ?? {} };
+    const names = Object.keys(tasks);
+    if (names.length === 0) return [];
+    const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
+    const resumed = [];
+    const failed = [];
+    const now2 = Date.now();
+    for (const name25 of names) {
+      const task = tasks[name25];
+      if (!existing.has(name25)) {
+        const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
+        const info = { when };
+        if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
+        try {
+          await chrome.alarms.create(name25, info);
+          resumed.push(name25);
+        } catch (err) {
+          failed.push(name25);
+          console.error(
+            `reconcile: failed to recreate alarm "${name25}":`,
+            err?.message ?? err
+          );
+        }
       }
     }
-  }
-  if (failed.length > 0) {
-    throw new Error(
-      `reconcile: failed to recreate ${failed.length} alarm(s): ${failed.join(", ")}`
-    );
-  }
-  return resumed;
+    if (failed.length > 0) {
+      throw new Error(
+        `reconcile: failed to recreate ${failed.length} alarm(s): ${failed.join(", ")}`
+      );
+    }
+    return resumed;
+  });
 }
 
 // extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";
 var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
+var grantSeq = 0;
+function newGrantId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
+}
+async function getBrowserControlGrantIdentity() {
+  const s = await chrome.storage.local.get(GRANT_KEY);
+  const grant = s[GRANT_KEY];
+  return grant && typeof grant === "object" && typeof grant.id === "string" ? grant.id : null;
+}
 async function isBrowserControlGranted(origin) {
   const s = await chrome.storage.local.get(GRANT_KEY);
   const grant = s[GRANT_KEY];
@@ -66782,6 +66833,7 @@ function clampExpiryMs(expiryMs) {
 }
 async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   const grant = {
+    id: newGrantId(),
     scope: "global",
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
@@ -66805,6 +66857,7 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
     throw new Error("origin grant needs at least one valid origin");
   }
   const grant = {
+    id: newGrantId(),
     scope: "origins",
     origins: canonical,
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
@@ -66850,6 +66903,8 @@ async function captureTabScreenshot(tabId) {
       error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
     };
   }
+  const grantIdBefore = await getBrowserControlGrantIdentity();
+  if (!grantIdBefore) return { error: "browser control grant missing" };
   try {
     await chrome.tabs.update(tab.id, { active: true });
     const active = await chrome.tabs.query({
@@ -66887,6 +66942,11 @@ async function captureTabScreenshot(tabId) {
     const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : void 0;
     if (!afterOrigin || afterOrigin !== origin) {
       return { error: "tab navigated during capture \u2014 screenshot discarded" };
+    }
+    if (await getBrowserControlGrantIdentity() !== grantIdBefore) {
+      return {
+        error: "browser control grant changed during capture \u2014 screenshot discarded"
+      };
     }
     if (!await isBrowserControlGranted(afterOrigin)) {
       return {
@@ -67072,6 +67132,61 @@ var RECIPES = [
 ];
 function getRecipe(id) {
   return RECIPES.find((r) => r.id === id);
+}
+
+// extension/lib/enrollment.js
+init_browser_shim_process();
+var MAIN_WORLD_JS = "content/main-world.js";
+var BRIDGE_JS = "content/content-script.js";
+function scriptId(origin, role) {
+  return `cap-${encodeURIComponent(origin)}-${role}`;
+}
+async function ensureOriginScriptsRegistered(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { ok: false, error: "invalid origin" };
+  const matches = [`${canonical}/*`];
+  const has = await chrome.permissions.contains({ origins: matches });
+  if (!has) {
+    const granted = await Promise.race([
+      chrome.permissions.request({ origins: matches }),
+      new Promise((r) => setTimeout(() => r(false), 3e3))
+    ]);
+    if (!granted) {
+      return { ok: false, error: "host permission denied", origin: canonical };
+    }
+  }
+  const existing = await chrome.scripting.getRegisteredContentScripts({
+    ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
+  }).catch(() => []);
+  if (existing.length === 2) return { ok: true, origin: canonical };
+  await chrome.scripting.registerContentScripts([
+    {
+      id: scriptId(canonical, "main"),
+      matches,
+      js: [MAIN_WORLD_JS],
+      runAt: "document_start",
+      world: "MAIN",
+      allFrames: false
+    },
+    {
+      id: scriptId(canonical, "bridge"),
+      matches,
+      js: [BRIDGE_JS],
+      runAt: "document_idle",
+      world: "ISOLATED",
+      allFrames: false
+    }
+  ]);
+  return { ok: true, origin: canonical };
+}
+async function unregisterOriginScripts(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { ok: false, error: "invalid origin" };
+  await chrome.scripting.unregisterContentScripts({
+    ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
+  }).catch(() => {
+  });
+  return { ok: true, origin: canonical };
 }
 
 // extension/lib/pure.js
@@ -67434,10 +67549,16 @@ async function registerAlarm(task) {
   });
 }
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (!await tryAcquireInflight(alarm.name)) {
-    console.warn("scheduled task already in flight", alarm.name);
+  const lock = await tryAcquireInflight(alarm.name);
+  if (!lock.acquired) {
+    console.warn("scheduled task already in flight", alarm.name, lock.reason);
     return;
   }
+  const { token } = lock;
+  const hb = setInterval(() => {
+    heartbeatInflight(alarm.name, token).catch(() => {
+    });
+  }, INFLIGHT_HEARTBEAT_MS);
   try {
     const store = await chrome.storage.local.get(TASK_KEY2);
     const task = store[TASK_KEY2]?.[alarm.name];
@@ -67457,7 +67578,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   } catch (e) {
     console.error("scheduled task failed", alarm.name, e);
   } finally {
-    await releaseInflight(alarm.name);
+    clearInterval(hb);
+    await releaseInflight(alarm.name, token);
   }
 });
 var orchestrator = null;
@@ -67615,6 +67737,10 @@ var handlers = {
   async "provider.get"() {
     return await getProviderConfig();
   },
+  async "provider.summary"() {
+    const cfg = await getProviderConfig();
+    return { provider: cfg.provider };
+  },
   async "provider.set"(m) {
     const next = await setProviderConfig(m.config);
     invalidateAgent();
@@ -67623,6 +67749,18 @@ var handlers = {
   async "invalidate-agent"() {
     invalidateAgent();
     return { invalidated: true };
+  },
+  async "agent.orchestrator"() {
+    await ensureOrchestrator();
+    const prefs = await chrome.storage.local.get("cap:multiAgent") ?? {};
+    const multiAgent = prefs["cap:multiAgent"] !== false;
+    return {
+      multiAgent,
+      workerCount: orchestrator ? orchestrator.workers.size : 0,
+      workerOrigins: orchestrator ? [...orchestrator.workers.keys()] : [],
+      delegationTools: multiAgent ? ["list_agents", "delegate_task"] : [],
+      generation
+    };
   },
   async "provider.models"() {
     return { choices: PROVIDER_CHOICES };
@@ -67712,7 +67850,9 @@ var handlers = {
     return await listOrigins();
   },
   async "skills.set"({ origin, skills }) {
-    return await setSkills(origin, skills);
+    const result = await setSkills(origin, skills);
+    invalidateAgent();
+    return result;
   },
   async "skills.get"({ origin }) {
     return await getSkills(origin);
@@ -67796,11 +67936,23 @@ var handlers = {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     await enrollOrigin(canonical);
-    return { ok: true, origin: canonical, name: name25 };
+    invalidateAgent();
+    const registered = await ensureOriginScriptsRegistered(canonical).catch(
+      (e) => ({ ok: false, error: String(e?.message ?? e) })
+    );
+    return {
+      ok: true,
+      origin: canonical,
+      name: name25,
+      scriptsRegistered: registered?.ok === true
+    };
   },
   async "agent.delete"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
+    await unregisterOriginScripts(canonical).catch(() => {
+    });
+    await disenrollOrigin(canonical);
     await siteMemory(canonical).clear();
     invalidateAgent();
     return { ok: true, origin: canonical };

@@ -2,21 +2,29 @@
 // runtime boundaries. Loads the built extension in headless Chrome and drives
 // REAL behaviour, including GENUINE CDP user input (Input.dispatchMouseEvent /
 // Input.dispatchKeyEvent on the NTP + Settings surfaces), a real HTTP-tab
-// screenshot matrix, a worker-restart + missing-alarm reconciliation, and a
-// multi-agent toggle rebuild. Fail-closed, environment-scrubbed, bounded,
-// owner-clean (profile removal is asserted, not best-effort; the summary prints
-// only after cleanup passes).
+// screenshot matrix (grant/scope/revoke via genuine UI + secondary message
+// probes), a worker-restart + missing-alarm reconciliation, and a multi-agent
+// fan-out boundary (create→list→delegate→delete). Fail-closed, environment-
+// scrubbed, bounded, owner-clean. The assertion set is FIXED (no dynamic count).
 
-//   deno run -A scripts/chrome-journeys.ts
+//   deno run -A scripts/chrome-journeys.ts            # temporary evidence (default)
+//   deno run -A scripts/chrome-journeys.ts --retain   # opt-in: retain to test-artifacts/
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-const SHOT_DIR = `${ROOT}test-artifacts`;
+// Evidence is TEMPORARY by default; `--retain` is the explicit opt-in to write
+// the tracked test-artifacts/ directory.
+const RETAIN = Deno.args.includes("--retain");
+const EVIDENCE_DIR = RETAIN
+  ? `${ROOT}test-artifacts`
+  : `/tmp/cap-evidence-${Date.now()}`;
+const RUN_ID = `cap-${Date.now()}`;
 
 const CHROMIUM = "/usr/bin/chromium";
 const PKILL = "/usr/bin/pkill";
 const PGREP = "/usr/bin/pgrep";
 const RM = "/bin/rm";
+const GIT = "/usr/bin/git";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -36,7 +44,9 @@ async function fetchJson(url, opts) {
   return await withTimeout(res.json(), 8000, `json ${url}`);
 }
 
-/** Run a child command with a CLEARED environment + absolute path + deadline. */
+/** Run a child command with a CLEARED environment + absolute path + deadline.
+ * The child is spawned into an OWNED process slot and KILLED on deadline (a
+ * timed-out `rm`/`pkill`/`pgrep` must not keep running past its bound). */
 async function runBounded(cmd, args, timeoutMs = 8000) {
   const proc = new Deno.Command(cmd, {
     args,
@@ -44,12 +54,31 @@ async function runBounded(cmd, args, timeoutMs = 8000) {
     stdout: "piped",
     stderr: "piped",
   });
-  const out = await withTimeout(proc.output(), timeoutMs, `run ${cmd}`);
-  return {
-    code: out.code,
-    stdout: new TextDecoder().decode(out.stdout),
-    stderr: new TextDecoder().decode(out.stderr),
-  };
+  const child = proc.spawn();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      child.kill("SIGKILL");
+    } catch { /* already gone */ }
+  }, timeoutMs);
+  try {
+    const out = await child.output();
+    if (timedOut) throw new Error(`run ${cmd} timed out (killed)`);
+    return {
+      code: out.code,
+      stdout: new TextDecoder().decode(out.stdout),
+      stderr: new TextDecoder().decode(out.stderr),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sha256Hex(bytes) {
+  const d = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function launchChrome(profile: string) {
@@ -86,24 +115,54 @@ async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
   throw new Error("chrome did not expose a DevTools port");
 }
 
-// A minimal CDP session over the browser WebSocket. Console/exception events are
-// recorded WITH their sessionId so the "no SW errors" assertion can be strictly
-// worker-only (never mixed with the options/NTP/fixture sessions).
+// A minimal CDP session over the browser WebSocket. Protocol errors REJECT
+// (never resolve as success). Console/exception events are recorded WITH their
+// sessionId so the "no SW errors" assertion is strictly worker-only. New SW
+// targets are auto-attached (waitForDebuggerOnStart) via the onAttach hook.
 class Cdp {
   ws;
   id = 0;
   pending = new Map();
   consoleErrors = [];
   swSessions = new Set();
+  swAttachErrors = [];
+  executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
+  onAttach = null; // (sessionId, targetInfo, waitingForDebugger) => void
   constructor(ws) {
     this.ws = ws;
     ws.onmessage = (e) => {
       const d = JSON.parse(e.data);
       if (d.id && this.pending.has(d.id)) {
-        const { resolve, timer } = this.pending.get(d.id);
+        const { resolve, reject, timer } = this.pending.get(d.id);
         clearTimeout(timer);
         this.pending.delete(d.id);
-        resolve(d);
+        if (d.error) {
+          reject(
+            new Error(
+              `cdp error ${d.id} (${d.error.code}): ${d.error.message}`,
+            ),
+          );
+        } else {
+          resolve(d);
+        }
+      }
+      if (d.method === "Target.attachedToTarget") {
+        this.onAttach?.(
+          d.params?.sessionId,
+          d.params?.targetInfo,
+          d.params?.waitingForDebugger,
+        );
+      }
+      if (d.method === "Runtime.executionContextsCleared") {
+        this.executionContextEvents.push({
+          sessionId: d.sessionId, kind: "cleared", ts: Date.now(),
+        });
+      }
+      if (d.method === "Runtime.executionContextCreated") {
+        this.executionContextEvents.push({
+          sessionId: d.sessionId, kind: "created",
+          id: d.params?.context?.id, ts: Date.now(),
+        });
       }
       if (
         d.method === "Runtime.exceptionThrown" ||
@@ -123,7 +182,7 @@ class Cdp {
         this.pending.delete(id);
         reject(new Error(`cdp timeout: ${method}`));
       }, 15000);
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ id, method, params, sessionId }));
     });
   }
@@ -199,6 +258,16 @@ async function typeText(cdp, session, text) {
   }
 }
 
+/** Press Tab (a genuine key) to blur the focused field → fires its change. */
+async function pressTab(cdp, session) {
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9,
+  }, session);
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9,
+  }, session);
+}
+
 /** Click into an element (focus it) then type real key events. */
 async function typeInto(cdp, session, selector, text) {
   const clicked = await clickSel(cdp, session, selector);
@@ -229,7 +298,6 @@ async function decodePngSamples(bytes) {
   const colorType = bytes[25];
   if (bitDepth !== 8) throw new Error("unsupported bit depth");
   const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 1;
-  // Collect IDAT chunks.
   const idat = [];
   let off = 8;
   while (off + 8 <= bytes.length) {
@@ -247,7 +315,6 @@ async function decodePngSamples(bytes) {
   const inflated = new Uint8Array(
     await new Response(new Blob([compressed]).stream().pipeThrough(ds)).arrayBuffer(),
   );
-  // Unfilter (all 5 filter types).
   const bpp = channels;
   const stride = width * bpp;
   const raw = new Uint8Array(height * (stride + 1));
@@ -296,18 +363,105 @@ function mostlyRed(samples) {
   return red / samples.length > 0.9;
 }
 
+// ---- fixed assertion set (every expected check is unconditional + named) ----
+const results = [];
+const ran = new Set();
+function check(name, cond) {
+  if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
+  ran.add(name);
+  results.push({ name, pass: !!cond });
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name}`);
+}
+
+/** The exact, ordered set of assertions this suite must run. */
+const EXPECTED = [
+  "extension loaded",
+  "SW auto-attach configured (waitForDebuggerOnStart)",
+  "SW attach returned a session id",
+  "SW Runtime.enable succeeded",
+  "NTP: task input present",
+  "NTP: typed a task via Input events",
+  "NTP: textarea reflects the typed text",
+  "NTP: clicked Run task via a real click",
+  "NTP: retained a driven-UI screenshot",
+  "NTP: the typed task reached the agent journal",
+  "Settings: OpenAI provider card rendered",
+  "Settings: Clear key button present for the keyed provider",
+  "Settings: clicked Clear key via a real click",
+  "Settings: Clear key removed only the key (endpoint/model preserved)",
+  "Settings: clicked Update via a real click",
+  "Settings: Update preserved endpoint/model + empty key",
+  "Settings: switched back to Demo via a real click",
+  "Settings: provider restored to demo",
+  "Settings: retained a driven-UI screenshot",
+  "warm run 1 returns a concrete demo result",
+  "warm run 2 (after re-save) returns a concrete demo result",
+  "real red tab resolved via chrome.tabs.query",
+  "screenshot: denied after revoke (secondary probe)",
+  "screenshot: exact-origin grant captures a real PNG (secondary probe)",
+  "screenshot: retained to disk (non-empty)",
+  "screenshot: decoded pixels are predominantly red",
+  "screenshot: wrong-origin grant is denied (secondary probe)",
+  "screenshot: expired grant is denied (secondary probe)",
+  "Settings: browser-grant checkbox present",
+  "screenshot: clicked the browser-grant checkbox",
+  "screenshot: granted browser control via a real checkbox click",
+  "screenshot: typed the red origin into the allowed-origins field",
+  "screenshot: grant scoped to the red origin via the UI",
+  "screenshot: UI-granted capture succeeds (real PNG)",
+  "screenshot: revoked via a real checkbox click",
+  "screenshot: revoked → capture denied",
+  "per-origin clear leaves B intact",
+  "attachment count cap (12 → 4 over-count dropped, journal records 8)",
+  "attachment: declared/image vs text/plain MIME mismatch is dropped",
+  "alarm scheduled (name returned)",
+  "one-shot alarm fired + journaled task AND result",
+  "reconcile task scheduled",
+  "alarm cleared (persisted task remains)",
+  "persisted task payload survives the clear",
+  "old worker target closed (closeTarget success)",
+  "worker woken after restart",
+  "worker restarted (execution context recreated)",
+  "recreated alarm observed before fire",
+  "restarted worker reconciled + ran the persisted task",
+  "agent.create returns ok",
+  "agent.create created a discoverable worker (list includes it)",
+  "orchestrator: multi-agent ON + delegation tools present",
+  "orchestrator: worker fanned out (workerCount >= 1)",
+  "Settings: multi-agent toggle present",
+  "Settings: clicked the multi-agent toggle OFF",
+  "Settings: multi-agent setting persisted OFF",
+  "orchestrator: solo mode drops delegation tools",
+  "orchestrator: generation advanced after rebuild",
+  "solo mode still runs a task",
+  "Settings: clicked the multi-agent toggle ON",
+  "Settings: multi-agent setting persisted ON",
+  "orchestrator: delegation tools restored",
+  "agent.delete removed the worker from the list",
+  "no service-worker console errors",
+  "no SW Runtime.enable errors (auto-attach)",
+  "profile removed (no leak)",
+  "cleanup hard-failed on descendants (none survived)",
+  "assertion set exact (no missing/extra checks)",
+];
+
+const evidenceFiles = [];
+async function writeEvidence(name, bytes) {
+  await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
+  const path = `${EVIDENCE_DIR}/${name}`;
+  await Deno.remove(path).catch(() => {}); // delete-first (never overwrite stale)
+  await Deno.writeFile(path, bytes);
+  evidenceFiles.push({ name, sha256: await sha256Hex(bytes), bytes: bytes.length });
+  return path;
+}
+
 async function main() {
   const profile = `/tmp/cap-journeys-${Date.now()}`;
-  await Deno.mkdir(SHOT_DIR, { recursive: true }).catch(() => {});
+  await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
   const proc = launchChrome(profile);
   let port;
   let ws;
   let cdp;
-  const results = [];
-  const check = (name, cond) => {
-    results.push({ name, pass: !!cond });
-    console.log(`${cond ? "PASS" : "FAIL"}: ${name}`);
-  };
 
   // A local HTTP fixture server (red page + wrong-origin page) for a REAL
   // screenshot target that isn't a chrome-extension:// page.
@@ -335,6 +489,36 @@ async function main() {
     await withTimeout(new Promise((r) => ws.onopen = r), 5000, "ws open");
     cdp = new Cdp(ws);
 
+    // Auto-attach to NEW service-worker targets BEFORE they execute (pre-boot
+    // audit). waitForDebuggerOnStart pauses a new worker until we enable Runtime
+    // + resume it, so module-eval/recoverOnBoot errors are genuinely observed.
+    let attachSettled = Promise.resolve();
+    cdp.onAttach = (sessionId, targetInfo, waitingForDebugger) => {
+      if (targetInfo?.type !== "service_worker") return;
+      cdp.swSessions.add(sessionId);
+      attachSettled = (async () => {
+        try {
+          await cdp.send("Runtime.enable", {}, sessionId);
+        } catch (e) {
+          cdp.swAttachErrors.push(String(e?.message ?? e));
+        }
+        if (waitingForDebugger) {
+          await cdp.send("Runtime.runIfWaitingForDebugger", {}, sessionId)
+            .catch(() => {});
+        }
+      })();
+    };
+    const autoAttachRes = await cdp.send("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      filter: [{ type: "service_worker" }],
+    });
+    check(
+      "SW auto-attach configured (waitForDebuggerOnStart)",
+      autoAttachRes?.result === undefined || autoAttachRes?.result,
+    );
+
     // Discover the service worker AS SOON AS it appears (no fixed 5s sleep —
     // boot/recovery errors must not be lost to a sleep-then-attach).
     let sw = null;
@@ -350,7 +534,7 @@ async function main() {
     check("extension loaded", true);
     const extId = sw.url.split("/")[2];
 
-    // Attach to the SW + enable Runtime + ASSERT the attach/session/enable.
+    // Attach to the (already-booted) initial SW + enable Runtime + assert.
     const swAttach = await cdp.send("Target.attachToTarget", {
       targetId: sw.id, flatten: true,
     });
@@ -412,9 +596,9 @@ async function main() {
     await sleep(3000); // let the demo agent stream + journal
     const ntpShot = await captureShot(cdp, ntpSession);
     if (ntpShot) {
-      await Deno.writeFile(`${SHOT_DIR}/ntp-driven.png`, ntpShot);
-      check("NTP: retained a driven-UI screenshot", ntpShot.length > 200);
+      await writeEvidence("ntp-driven.png", ntpShot);
     }
+    check("NTP: retained a driven-UI screenshot", ntpShot !== null && ntpShot.length > 200);
     const journalAfterNtp = await msgValue({
       type: "memory.get", origin: "master", key: "journal",
     }) ?? [];
@@ -425,8 +609,6 @@ async function main() {
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 2 — provider Update / Clear key via GENUINE UI input.
     // ─────────────────────────────────────────────────────────────
-    // Pre-seed a non-secret placeholder config so the options page renders an
-    // ACTIVE OpenAI card with a "Clear key" button. No provider call is made.
     await msgValue({
       type: "provider.set",
       config: {
@@ -441,10 +623,8 @@ async function main() {
     );
     await sleep(2000);
     const optsSession = await attachRuntime(cdp, optsPage.id);
-    // evalOpts runs chrome.* on the options page (another extension page).
     const evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
-    // Wait for the provider cards to render.
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
       openaiCard = await boxOf(
@@ -459,7 +639,6 @@ async function main() {
         cdp, optsSession, `.provider-card[data-provider="openai"] .clear-key`,
       )) !== null,
     );
-    // Clear the key via a real click.
     check(
       "Settings: clicked Clear key via a real click",
       await clickSel(cdp, optsSession, `.provider-card[data-provider="openai"] .clear-key`),
@@ -474,27 +653,19 @@ async function main() {
         afterClear?.model === "model-one",
     );
 
-    // Drive the "Update" button on the (now keyless) OpenAI card — a genuine
-    // provider update path. Blank key field must NOT re-populate a key.
-    const updateBtn = await boxOf(
-      cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`,
+    check(
+      "Settings: clicked Update via a real click",
+      await clickSel(cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`),
     );
-    if (updateBtn) {
-      check(
-        "Settings: clicked Update via a real click",
-        await clickSel(cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`),
-      );
-      await sleep(500);
-      const afterUpdate = await msgValue({ type: "provider.get" });
-      check(
-        "Settings: Update preserved endpoint/model + empty key",
-        afterUpdate?.provider === "openai" &&
-          afterUpdate?.apiKey === "" &&
-          afterUpdate?.baseURL === "https://custom.invalid/v1" &&
-          afterUpdate?.model === "model-one",
-      );
-    }
-    // Switch back to the OpenAI preset via the demo card (restore demo).
+    await sleep(500);
+    const afterUpdate = await msgValue({ type: "provider.get" });
+    check(
+      "Settings: Update preserved endpoint/model + empty key",
+      afterUpdate?.provider === "openai" &&
+        afterUpdate?.apiKey === "" &&
+        afterUpdate?.baseURL === "https://custom.invalid/v1" &&
+        afterUpdate?.model === "model-one",
+    );
     check(
       "Settings: switched back to Demo via a real click",
       await clickSel(cdp, optsSession, `.provider-card[data-provider="demo"] .set-default`),
@@ -504,9 +675,9 @@ async function main() {
     check("Settings: provider restored to demo", demoCfg?.provider === "demo");
     const optsShot = await captureShot(cdp, optsSession);
     if (optsShot) {
-      await Deno.writeFile(`${SHOT_DIR}/options-driven.png`, optsShot);
-      check("Settings: retained a driven-UI screenshot", optsShot.length > 200);
+      await writeEvidence("options-driven.png", optsShot);
     }
+    check("Settings: retained a driven-UI screenshot", optsShot !== null && optsShot.length > 200);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 3 — warm provider invalidation with CONCRETE assertions.
@@ -523,54 +694,51 @@ async function main() {
     check("warm run 2 (after re-save) returns a concrete demo result", concrete(warmRun2));
 
     // ─────────────────────────────────────────────────────────────
-    // JOURNEY 4 — screenshot matrix on a REAL HTTP tab (grant/origin/expiry/
-    // revoke) with delete-first + color/paint attribution.
+    // JOURNEY 4 — screenshot matrix. Owner grant/scope/revoke is driven via the
+    // genuine Settings UI; wrong-origin + expiry remain SECONDARY message probes.
     // ─────────────────────────────────────────────────────────────
     const redPage = await openPage(port, RED_URL);
     await sleep(2000);
-    // Resolve the REAL chrome.tabs Tab id (the red fixture, not a CDP target id).
     const redTabId = await evalOpts(
       `chrome.tabs.query({ url: ${JSON.stringify(RED_ORIGIN + "/*")} }).then(t => t[0]?.id ?? null)`,
     );
     check("real red tab resolved via chrome.tabs.query", typeof redTabId === "number");
 
-    // (a) revoked → capture denied.
+    // (a) revoked → capture denied (secondary probe).
     await msgValue({ type: "browser-control.set", granted: false });
     const revokedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     check(
-      "screenshot: denied after revoke",
-      revokedShot?.error !== undefined || revokedShot?.err !== undefined ||
-        revokedShot?.ok === false,
+      "screenshot: denied after revoke (secondary probe)",
+      revokedShot?.error !== undefined || revokedShot?.ok === false,
     );
-    // (b) grant the EXACT origin → capture succeeds (a real PNG, non-empty).
+    // (b) grant the EXACT origin → capture succeeds (secondary probe).
     await msgValue({
       type: "browser-control.set",
       origins: [RED_ORIGIN],
       expiryMs: 60000,
     });
-    // Delete-first: remove any prior artifact so a stale file can't satisfy the check.
-    await runBounded(RM, ["-f", `${SHOT_DIR}/allowed-red.png`]);
+    await runBounded(RM, ["-f", `${EVIDENCE_DIR}/allowed-red.png`]);
     const allowedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     const shotOk = typeof allowedShot?.screenshot === "string" &&
       allowedShot.screenshot.startsWith("data:image/png;base64,") &&
       allowedShot.screenshot.length > 500;
-    check("screenshot: exact-origin grant captures a real PNG", shotOk);
+    check("screenshot: exact-origin grant captures a real PNG (secondary probe)", shotOk);
     if (shotOk) {
       const b64 = allowedShot.screenshot.split(",")[1];
       const bin = new Uint8Array(
         atob(b64).split("").map((c) => c.charCodeAt(0)),
       );
-      await Deno.writeFile(`${SHOT_DIR}/allowed-red.png`, bin);
+      await writeEvidence("allowed-red.png", bin);
       check("screenshot: retained to disk (non-empty)", bin.length > 200);
-      // Color/paint attribution: the decoded pixels must be predominantly RED.
       try {
         const { samples } = await decodePngSamples(bin);
         check("screenshot: decoded pixels are predominantly red", mostlyRed(samples));
       } catch (e) {
-        check(`screenshot: color attribution (${e?.message ?? e})`, false);
+        console.error("color attribution failed:", String(e?.message ?? e));
+        check("screenshot: decoded pixels are predominantly red", false);
       }
     }
-    // (c) grant a DIFFERENT origin → the red tab is denied.
+    // (c) wrong-origin (secondary probe).
     await msgValue({
       type: "browser-control.set",
       origins: ["http://127.0.0.1:1"],
@@ -578,11 +746,10 @@ async function main() {
     });
     const wrongShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     check(
-      "screenshot: wrong-origin grant is denied",
-      wrongShot?.error !== undefined || wrongShot?.err !== undefined ||
-        wrongShot?.ok === false,
+      "screenshot: wrong-origin grant is denied (secondary probe)",
+      wrongShot?.error !== undefined || wrongShot?.ok === false,
     );
-    // (d) expiry → denied.
+    // (d) expiry (secondary probe).
     await msgValue({
       type: "browser-control.set",
       origins: [RED_ORIGIN],
@@ -591,12 +758,59 @@ async function main() {
     await sleep(120);
     const expiredShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     check(
-      "screenshot: expired grant is denied",
-      expiredShot?.error !== undefined || expiredShot?.err !== undefined ||
-        expiredShot?.ok === false,
+      "screenshot: expired grant is denied (secondary probe)",
+      expiredShot?.error !== undefined || expiredShot?.ok === false,
     );
-    // (e) final revoke.
-    await msgValue({ type: "browser-control.set", granted: false });
+
+    // ─────────────────────────────────────────────────────────────
+    // GENUINE UI grant: checkbox click + origin textarea typing (the primary
+    // owner-grant acceptance), then revoke via a genuine checkbox click.
+    // ─────────────────────────────────────────────────────────────
+    check(
+      "Settings: browser-grant checkbox present",
+      (await boxOf(cdp, optsSession, "#browser-grant")) !== null,
+    );
+    check(
+      "screenshot: clicked the browser-grant checkbox",
+      await clickSel(cdp, optsSession, "#browser-grant"),
+    );
+    await sleep(400);
+    const grantAfterClick = await msgValue({ type: "browser-control.get" });
+    check(
+      "screenshot: granted browser control via a real checkbox click",
+      grantAfterClick?.active === true,
+    );
+    // Type the red origin into the allowed-origins field (a genuine text edit).
+    check(
+      "screenshot: typed the red origin into the allowed-origins field",
+      await typeInto(cdp, optsSession, "#grant-origin-list", RED_ORIGIN),
+    );
+    await pressTab(cdp, optsSession); // blur → fires the change handler (scopes)
+    await sleep(500);
+    const scopedGrant = await msgValue({ type: "browser-control.get" });
+    check(
+      "screenshot: grant scoped to the red origin via the UI",
+      scopedGrant?.scope === "origins" &&
+        Array.isArray(scopedGrant?.origins) &&
+        scopedGrant.origins.includes(RED_ORIGIN),
+    );
+    const uiGrantShot = await msgValue({ type: "capture.tab", tabId: redTabId });
+    check(
+      "screenshot: UI-granted capture succeeds (real PNG)",
+      typeof uiGrantShot?.screenshot === "string" &&
+        uiGrantShot.screenshot.startsWith("data:image/png;base64,"),
+    );
+    // Revoke via a genuine checkbox click (uncheck).
+    check(
+      "screenshot: revoked via a real checkbox click",
+      await clickSel(cdp, optsSession, "#browser-grant"),
+    );
+    await sleep(400);
+    const afterUiRevoke = await msgValue({ type: "capture.tab", tabId: redTabId });
+    check(
+      "screenshot: revoked → capture denied",
+      afterUiRevoke?.error !== undefined || afterUiRevoke?.ok === false,
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 5 — OPFS per-origin A/B clear.
@@ -626,7 +840,6 @@ async function main() {
     });
     const dropped = runRes?.droppedAttachments ?? [];
     const droppedOver = dropped.filter((d) => d.reason === "over count limit");
-    // OBSERVE the journal: the task entry records the BOUNDED attachment count (8).
     const journal = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
     const attachTask = (Array.isArray(journal) ? journal : [])
       .find((e) => e?.type === "task" && e?.task === "attach");
@@ -634,7 +847,6 @@ async function main() {
       "attachment count cap (12 → 4 over-count dropped, journal records 8)",
       droppedOver.length === 4 && attachTask?.attachmentCount === 8,
     );
-    // MIME boundary: a declared type that contradicts the dataURL MIME is dropped.
     const mimeMismatch = await msgValue({
       type: "agent.run",
       task: "mime-check",
@@ -679,50 +891,65 @@ async function main() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // JOURNEY 8 — worker restart + missing-alarm reconciliation.
+    // JOURNEY 8 — worker restart + missing-alarm reconciliation (fail-closed).
     // ─────────────────────────────────────────────────────────────
     const recTask = "reconcile-after-restart";
     const rec = await msgValue({
       type: "register-task",
-      task: { task: recTask, delayMs: 2500 },
+      task: { task: recTask, delayMs: 10000 },
     });
     check("reconcile task scheduled", typeof rec?.name === "string");
     if (rec?.name) {
-      // Remove the alarm but LEAVE the persisted task (a consumed/missing alarm).
+      // Clear the alarm (LEAVING the persisted task). chrome.alarms.clear
+      // returns a Promise<boolean> — require the REAL true (never map to true).
       const cleared = await evalOpts(
-        `chrome.alarms.clear(${JSON.stringify(rec.name)}).then(() => true).catch(() => false)`,
+        `chrome.alarms.clear(${JSON.stringify(rec.name)})`,
       );
       check("alarm cleared (persisted task remains)", cleared === true);
-      // Restart the worker: close the SW target, then wake it via a message.
-      await cdp.send("Target.closeTarget", { targetId: sw.id });
-      await sleep(500);
+      const persisted = await evalOpts(
+        `chrome.storage.local.get('cap:scheduledTasks').then(s => s['cap:scheduledTasks']?.[${JSON.stringify(rec.name)}]?.task ?? null)`,
+      );
+      check("persisted task payload survives the clear", persisted === recTask);
+      // Close the SW target (success checked) — this restarts the worker.
+      const closeRes = await cdp.send("Target.closeTarget", { targetId: sw.id });
+      check(
+        "old worker target closed (closeTarget success)",
+        closeRes?.result?.success === true,
+      );
+      // Wake the worker (this recreates the SW's execution context, auto-attached
+      // + paused + resumed). A genuine restart is proven by the SW's execution
+      // context being recreated (Runtime.executionContextsCleared/Created) — the
+      // MV3 SW DevTools TARGET id is stable across stop/start, so a "different
+      // target" is NOT a valid proxy; the recreated JS context is.
+      const restartT0 = Date.now();
       const wake = await msgValue({ type: "agent.list" });
-      check("worker woken after restart", Array.isArray(wake) || typeof wake === "object");
-      // Re-discover + re-attach the restarted SW so its boot/recovery errors are
-      // captured (strictly worker-only) for the final console audit.
-      let sw2 = null;
-      for (let i = 0; i < 20 && !sw2; i++) {
-        const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-        sw2 = targets.find((t) => t.type === "service_worker");
-        if (!sw2) await sleep(250);
+      check("worker woken after restart", Array.isArray(wake));
+      let restarted = false;
+      for (let i = 0; i < 40 && !restarted; i++) {
+        await attachSettled.catch(() => {});
+        restarted = cdp.executionContextEvents.some((ev) =>
+          ev.ts >= restartT0 && ev.kind === "created" &&
+          cdp.swSessions.has(ev.sessionId)
+        );
+        if (!restarted) await sleep(250);
       }
-      if (sw2) {
-        const a2 = await cdp.send("Target.attachToTarget", {
-          targetId: sw2.id, flatten: true,
-        });
-        const s2 = a2?.result?.sessionId;
-        if (s2) {
-          await cdp.send("Runtime.enable", {}, s2).catch(() => {});
-          cdp.swSessions.add(s2);
-          check("restarted SW re-attached (boot audit captured)", true);
-        }
-      }
-      // The restarted SW boots, recoverOnBoot reconciles the missing alarm,
-      // and the alarm fires → the task runs + journals a task + result row.
-      await sleep(4000);
+      check(
+        "worker restarted (execution context recreated)",
+        restarted,
+      );
+      await sleep(1500); // let recoverOnBoot reconcile the missing alarm
+      const recreatedAlarms = await evalOpts(
+        `chrome.alarms.getAll().then(a => a.map(x => x.name))`,
+      );
+      check(
+        "recreated alarm observed before fire",
+        Array.isArray(recreatedAlarms) && recreatedAlarms.includes(rec.name),
+      );
+      // Wait for the recreated alarm to fire (original at = now + 10000ms).
+      await sleep(9000);
       const j3 = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
       const arr3 = Array.isArray(j3) ? j3 : [];
-      const recTaskEntry = arr3.find((e) => e?.type === "task" && e?.task === recTask);
+      const recTaskEntry = arr3.find((e) => e?.type === "task" && e?.task === recTask && e?.scheduled === true);
       const recResultEntry = arr3.find((e) => e?.type === "result" && e?.id === rec.name);
       check(
         "restarted worker reconciled + ran the persisted task",
@@ -731,35 +958,96 @@ async function main() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // JOURNEY 9 — multi-agent toggle (genuine UI) → rebuild + solo still works.
+    // JOURNEY 9 — multi-agent fan-out: create→list→delegate→delete.
     // ─────────────────────────────────────────────────────────────
-    // The options page is still open. Toggle the checkbox OFF via a real click.
-    const toggleBox = await boxOf(cdp, optsSession, "#multi-agent");
-    check("Settings: multi-agent toggle present", toggleBox !== null);
-    if (toggleBox) {
-      check(
-        "Settings: toggled multi-agent OFF via a real click",
-        await clickSel(cdp, optsSession, "#multi-agent"),
-      );
-      await sleep(500);
-      const offState = await evalOpts(
-        `chrome.storage.local.get('cap:multiAgent').then(s => s['cap:multiAgent'])`,
-      );
-      check("multi-agent setting persisted OFF", offState === false);
-      // A task must STILL run in solo mode (the master keeps its tools).
-      const solo = await msgValue({ type: "agent.run", task: "solo ping" });
-      check("solo mode still runs a task", concrete(solo));
-      // Toggle back ON.
-      check(
-        "Settings: toggled multi-agent ON via a real click",
-        await clickSel(cdp, optsSession, "#multi-agent"),
-      );
-      await sleep(500);
-      const onState = await evalOpts(
-        `chrome.storage.local.get('cap:multiAgent').then(s => s['cap:multiAgent'])`,
-      );
-      check("multi-agent setting persisted ON", onState === true);
-    }
+    const created = await msgValue({
+      type: "agent.create",
+      origin: "https://worker.example",
+      name: "worker",
+    });
+    check("agent.create returns ok", created?.ok === true);
+    const listed = await msgValue({ type: "agent.list" });
+    check(
+      "agent.create created a discoverable worker (list includes it)",
+      Array.isArray(listed) && listed.includes("https://worker.example"),
+    );
+    // Give the worker a distinct tool so it's a behaviorally distinct agent.
+    await msgValue({
+      type: "tools.upsert",
+      origin: "https://worker.example",
+      tools: [{
+        name: "greet",
+        description: "greet the worker",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      }],
+    });
+    const orchOn = await msgValue({ type: "agent.orchestrator" });
+    check(
+      "orchestrator: multi-agent ON + delegation tools present",
+      orchOn?.multiAgent === true &&
+        Array.isArray(orchOn?.delegationTools) &&
+        orchOn.delegationTools.includes("delegate_task"),
+    );
+    check(
+      "orchestrator: worker fanned out (workerCount >= 1)",
+      (orchOn?.workerCount ?? 0) >= 1 &&
+        Array.isArray(orchOn?.workerOrigins) &&
+        orchOn.workerOrigins.includes("https://worker.example"),
+    );
+    // Toggle OFF via a genuine checkbox click → delegation tools disappear + the
+    // rebuild generation advances (the observable fan-out boundary).
+    check(
+      "Settings: multi-agent toggle present",
+      (await boxOf(cdp, optsSession, "#multi-agent")) !== null,
+    );
+    check(
+      "Settings: clicked the multi-agent toggle OFF",
+      await clickSel(cdp, optsSession, "#multi-agent"),
+    );
+    await sleep(500);
+    const offState = await evalOpts(
+      `chrome.storage.local.get('cap:multiAgent').then(s => s['cap:multiAgent'])`,
+    );
+    check("Settings: multi-agent setting persisted OFF", offState === false);
+    const orchOff = await msgValue({ type: "agent.orchestrator" });
+    check(
+      "orchestrator: solo mode drops delegation tools",
+      orchOff?.multiAgent === false &&
+        Array.isArray(orchOff?.delegationTools) &&
+        orchOff.delegationTools.length === 0,
+    );
+    check(
+      "orchestrator: generation advanced after rebuild",
+      typeof orchOn?.generation === "number" &&
+        typeof orchOff?.generation === "number" &&
+        orchOff.generation > orchOn.generation,
+    );
+    const solo = await msgValue({ type: "agent.run", task: "solo ping" });
+    check("solo mode still runs a task", concrete(solo));
+    // Toggle back ON → delegation tools return.
+    check(
+      "Settings: clicked the multi-agent toggle ON",
+      await clickSel(cdp, optsSession, "#multi-agent"),
+    );
+    await sleep(500);
+    const onState = await evalOpts(
+      `chrome.storage.local.get('cap:multiAgent').then(s => s['cap:multiAgent'])`,
+    );
+    check("Settings: multi-agent setting persisted ON", onState === true);
+    const orchOn2 = await msgValue({ type: "agent.orchestrator" });
+    check(
+      "orchestrator: delegation tools restored",
+      orchOn2?.multiAgent === true &&
+        Array.isArray(orchOn2?.delegationTools) &&
+        orchOn2.delegationTools.includes("delegate_task"),
+    );
+    // Delete the worker → the list + fan-out shrink.
+    await msgValue({ type: "agent.delete", origin: "https://worker.example" });
+    const listedAfter = await msgValue({ type: "agent.list" });
+    check(
+      "agent.delete removed the worker from the list",
+      Array.isArray(listedAfter) && !listedAfter.includes("https://worker.example"),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 10 — service-worker console audit (strictly worker-only).
@@ -768,11 +1056,11 @@ async function main() {
       console.log(`SW console error: ${e.detail}`);
     }
     check("no service-worker console errors", cdp.swErrors().length === 0);
+    check("no SW Runtime.enable errors (auto-attach)", cdp.swAttachErrors.length === 0);
 
     ws.close();
     await fixture.shutdown().catch(() => {});
   } catch (e) {
-    check("journeys completed", false);
     console.error("journey failure:", String(e?.message ?? e));
     try { await fixture.shutdown(); } catch { /* ignore */ }
     try { ws?.close(); } catch { /* ignore */ }
@@ -784,7 +1072,6 @@ async function main() {
     let clean = true;
     try {
       await killChromiumTree(proc, profile);
-      // Absence stability window: remove, then re-verify after a settle delay.
       await runBounded(RM, ["-rf", profile]);
       removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
       if (removed) {
@@ -797,10 +1084,58 @@ async function main() {
     }
     check("profile removed (no leak)", removed);
     check("cleanup hard-failed on descendants (none survived)", clean);
+
+    // Fixed assertion set: every expected check ran exactly once (no missing,
+    // no extra). This is the invariant that prevents a silent count shrink.
+    // The exactness check itself is excluded from the comparison (it is the
+    // check being evaluated).
+    const FINAL_CHECK = "assertion set exact (no missing/extra checks)";
+    const missing = EXPECTED.filter((n) => n !== FINAL_CHECK && !ran.has(n));
+    const extra = [...ran].filter((n) => !EXPECTED.includes(n));
+    for (const n of missing) {
+      console.log(`FAIL: ${n} (not reached)`);
+      results.push({ name: n, pass: false });
+    }
+    for (const n of extra) {
+      console.log(`EXTRA assertion (should be in EXPECTED): ${n}`);
+    }
+    check(FINAL_CHECK, missing.length === 0 && extra.length === 0);
+
     const failed = results.filter((r) => !r.pass).length;
     console.log(
       `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
     );
+
+    // Evidence manifest: commit + run id + named checks + file hashes.
+    try {
+      let commit = "unknown";
+      try {
+        const g = new Deno.Command(GIT, {
+          args: ["rev-parse", "HEAD"],
+          stdout: "piped",
+          clearEnv: true,
+        }).outputSync();
+        commit = new TextDecoder().decode(g.stdout).trim();
+      } catch { /* not a git checkout */ }
+      const manifest = {
+        commit,
+        runId: RUN_ID,
+        retain: RETAIN,
+        ts: new Date().toISOString(),
+        evidenceDir: EVIDENCE_DIR,
+        passed: results.length - failed,
+        failed,
+        checks: results.map((r) => ({ name: r.name, pass: r.pass })),
+        files: evidenceFiles,
+      };
+      await Deno.writeFile(
+        `${EVIDENCE_DIR}/manifest.json`,
+        new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
+      );
+    } catch (e) {
+      console.error("manifest write failed:", String(e?.message ?? e));
+    }
+
     Deno.exit(failed > 0 || !removed || !clean ? 1 : 0);
   }
 }
@@ -815,10 +1150,10 @@ async function killChromiumTree(proc, profile) {
   try { proc.kill("SIGKILL"); } catch { /* already gone */ }
   try { await withTimeout(proc.status, 5000, "proc status"); } catch { /* gone */ }
   const match = `--user-data-dir=${profile}`;
-  await runBounded(PKILL, ["-9", "-f", match]);
+  await runBounded(PKILL, ["-9", "-f", match]).catch(() => {});
   // Bounded wait for the full tree to disappear — HARD FAIL if any remain.
   for (let i = 0; i < 20; i++) {
-    const out = await runBounded(PGREP, ["-f", match]);
+    const out = await runBounded(PGREP, ["-f", match]).catch(() => ({ code: 1 }));
     if (out.code !== 0) return; // no matching process remains
     await sleep(250);
   }

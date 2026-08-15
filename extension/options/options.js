@@ -99,7 +99,9 @@ async function renderProviders() {
       <div class="provider-head">
         <span class="provider-name">${p.name}</span>
         <span class="muted">${p.hint}</span>
-        <button class="btn small set-default" type="button">${
+        <button class="btn small set-default" type="button" aria-label="${
+      cfg.provider === p.id ? `Update ${p.name}` : `Use ${p.name}`
+    }">${
       cfg.provider === p.id ? "Update" : "Use"
     }</button>
       </div>
@@ -172,6 +174,7 @@ async function renderProviders() {
     clear.className = "btn ghost small clear-key";
     clear.type = "button";
     clear.textContent = "Clear key";
+    clear.setAttribute("aria-label", `Clear API key for ${cfg.provider}`);
     clear.addEventListener("click", async () => {
       await chrome.runtime.sendMessage({
         type: "provider.set",
@@ -205,14 +208,9 @@ async function renderAgents() {
   // Per-agent provider assignment is TODO: it needs COMPLETE provider-specific
   // configs keyed by provider/agent (never one global {baseURL,apiKey,model}
   // that could mix one provider's credential with another's endpoint). Until
-  // then, a single safe global provider is used for every agent.
-  const list = $("#agent-provider-list");
-  list.innerHTML = "";
-  const note = document.createElement("p");
-  note.className = "muted";
-  note.textContent =
-    "Per-agent provider assignment is planned but not enabled yet — every agent uses the global provider for now.";
-  list.appendChild(note);
+  // then, a single safe global provider is used for every agent. The explanatory
+  // note lives in options.html (do NOT append a duplicate here).
+  $("#agent-provider-list").replaceChildren();
 }
 
 // ── Appearance ──

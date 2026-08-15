@@ -9,8 +9,7 @@
     "sidePanel",
     "tabs",
     "scripting",
-    "notifications",
-    "pageCapture"
+    "notifications"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -29,27 +28,6 @@
     "default_title": "Open Agent Hub"
   },
   "options_page": "options/options.html",
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content/main-world.js"
-      ],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content/content-script.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ],
   "icons": {
     "128": "icon128.png"
   }

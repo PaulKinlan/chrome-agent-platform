@@ -6,9 +6,33 @@ const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
 
 // A bounded in-flight lease. A hung task (e.g. a provider call that never
-// settles) must not block its alarm FOREVER — after this window the lock is
-// considered stale and a later firing can re-acquire it.
-const INFLIGHT_LEASE_MS = 5 * 60 * 1000;
+// settles) must not block its alarm FOREVER — after this window a lock whose
+// owner has STOPPED HEARTBEATING is considered stale and a later firing can
+// re-acquire it. Timeout ALONE never permits re-acquisition: a live owner
+// heartbeats well inside the lease, so a live-but-slow run stays "fresh" and
+// blocks the next firing (never overlaps side-effecting agents).
+export const INFLIGHT_LEASE_MS = 5 * 60 * 1000;
+
+// How often a live in-flight task renews its lock's heartbeat. Well inside the
+// lease so a healthy owner can never be mistaken for a dead one.
+export const INFLIGHT_HEARTBEAT_MS = 30 * 1000;
+
+let lockSeq = 0;
+function newToken() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `lock_${Date.now()}_${Math.random().toString(36).slice(2)}_${lockSeq++}`;
+}
+
+/** A lock value is well-formed only if it carries a unique owner token + a
+ * finite heartbeat timestamp. Anything else is malformed and can never be
+ * released by compare-and-release → it blocks (fail closed) until boot clears it. */
+function validLock(v) {
+  return Boolean(
+    v && typeof v === "object" &&
+      typeof v.token === "string" && v.token.length > 0 &&
+      typeof v.heartbeatAt === "number" && Number.isFinite(v.heartbeatAt),
+  );
+}
 
 // A per-module promise mutex serializes the read-modify-write on the task store
 // and the in-flight map, so concurrent schedules/acquisitions cannot lose an
@@ -76,7 +100,11 @@ export async function markScheduledDone(name) {
   });
 }
 
-/** In-flight lock so overlapping alarms / slow runs can't double-fire. */
+/** In-flight lock so overlapping alarms / slow runs can't double-fire.
+ * Returns { acquired: true, token } on success or { acquired: false, reason }.
+ * Ownership is FENCED by a unique token; a stale lock is re-acquired ONLY when
+ * the prior owner has demonstrably stopped heartbeating for the FULL lease
+ * (i.e. it is dead) — timeout alone never lets two agents overlap. */
 export async function tryAcquireInflight(name) {
   return withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
@@ -84,30 +112,50 @@ export async function tryAcquireInflight(name) {
     const now = Date.now();
     const existing = inflight[name];
     if (existing !== undefined) {
-      // A numeric lock older than the lease is stale → re-acquire. A fresh
-      // numeric lock (still within the lease) OR a malformed non-numeric lock
-      // (which can never be released) blocks acquisition — fail closed.
-      if (
-        typeof existing === "number" && Number.isFinite(existing) &&
-        now - existing > INFLIGHT_LEASE_MS
-      ) {
-        delete inflight[name];
-      } else {
-        return false;
+      if (!validLock(existing)) {
+        // A malformed lock can never be released by compare-and-release → block
+        // (fail closed). Boot recovery clears it, never a later firing.
+        return { acquired: false, reason: "malformed lock" };
       }
+      // A fresh heartbeat means the owner is alive → block (NEVER overlap).
+      if (now - existing.heartbeatAt <= INFLIGHT_LEASE_MS) {
+        return { acquired: false, reason: "in flight" };
+      }
+      // Stale: the owner went silent for the full lease → it is dead. Replace
+      // with OUR token so a late release from the (dead) owner can never match.
     }
-    inflight[name] = now;
+    const token = newToken();
+    inflight[name] = { token, at: now, heartbeatAt: now };
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
-    return true;
+    return { acquired: true, token };
   });
 }
 
-export async function releaseInflight(name) {
+/** Renew a live owner's heartbeat so a slow-but-alive run never looks stale. */
+export async function heartbeatInflight(name, token) {
   await withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
-    delete inflight[name];
-    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    const existing = inflight[name];
+    if (validLock(existing) && existing.token === token) {
+      inflight[name] = { ...existing, heartbeatAt: Date.now() };
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    }
+  });
+}
+
+/** Compare-and-release: delete ONLY when the token matches. A stale owner
+ * finishing late (after a re-acquisition) must NEVER delete the new owner's
+ * lock — that was the exact stale-owner-unlock the reviewer reproduced. */
+export async function releaseInflight(name, token) {
+  await withLock(async () => {
+    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
+    const existing = inflight[name];
+    if (validLock(existing) && existing.token === token) {
+      delete inflight[name];
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    }
   });
 }
 
@@ -115,8 +163,9 @@ const BOOT_AT = Date.now(); // this worker lifetime's boot instant
 
 /**
  * Recover in-flight locks on worker boot — but ONLY entries acquired before
- * this worker's boot. A live lock acquired AFTER boot (by a task that started
- * this lifetime) must never be cleared, or a slow run could be double-fired.
+ * this worker's boot (a lock from a killed SW instance) and malformed entries
+ * that can never be released by compare-and-release. A valid lock acquired
+ * AFTER boot must never be cleared, or a slow run could be double-fired.
  */
 export async function clearStaleInflight() {
   await withLock(async () => {
@@ -124,11 +173,7 @@ export async function clearStaleInflight() {
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     for (const name of Object.keys(inflight)) {
       const v = inflight[name];
-      // Clear entries acquired BEFORE this boot (numeric, older than BOOT_AT)
-      // AND malformed entries (non-numeric / non-finite) that can never be
-      // released by a releaseInflight call. A live lock acquired AFTER boot
-      // (numeric, >= BOOT_AT) must never be cleared (else a slow run double-fires).
-      if (typeof v !== "number" || !Number.isFinite(v) || v < BOOT_AT) {
+      if (!validLock(v) || v.at < BOOT_AT) {
         delete inflight[name];
       }
     }
@@ -162,6 +207,10 @@ export function recoverOnBoot() {
  * alarm is gone. Recreate missing alarms + resume due one-shots.
  */
 export async function reconcileScheduledTasks() {
+  // Serialize the read-modify-write against scheduleTask/markScheduledDone so
+  // a recovery pass can never recreate an alarm whose payload was just deleted
+  // (the round-11 race: snapshot outside the mutex, delete inside it).
+  return withLock(async () => {
   const store = await chrome.storage.local.get(TASK_KEY);
   const tasks = { ...(store[TASK_KEY] ?? {}) };
   const names = Object.keys(tasks);
@@ -201,4 +250,5 @@ export async function reconcileScheduledTasks() {
     );
   }
   return resumed;
+  });
 }

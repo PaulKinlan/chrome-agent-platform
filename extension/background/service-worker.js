@@ -19,6 +19,7 @@ import { createAgent, createOrchestrator } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   approveTool,
+  disenrollOrigin,
   enrollOrigin,
   isApproved,
   listTools,
@@ -37,12 +38,19 @@ import {
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES } from "../lib/recipes.js";
 import {
+  INFLIGHT_HEARTBEAT_MS,
+  heartbeatInflight,
   recoverOnBoot,
   markScheduledDone,
   releaseInflight,
   scheduleTask,
   tryAcquireInflight,
 } from "../lib/scheduler.js";
+
+import {
+  ensureOriginScriptsRegistered,
+  unregisterOriginScripts,
+} from "../lib/enrollment.js";
 import { tool } from "ai";
 import { z } from "zod";
 import {
@@ -68,10 +76,17 @@ async function registerAlarm(task) {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   // In-flight lock: a slow run must not overlap the next alarm (periodic).
-  if (!(await tryAcquireInflight(alarm.name))) {
-    console.warn("scheduled task already in flight", alarm.name);
+  const lock = await tryAcquireInflight(alarm.name);
+  if (!lock.acquired) {
+    console.warn("scheduled task already in flight", alarm.name, lock.reason);
     return;
   }
+  const { token } = lock;
+  // Heartbeat while the task runs so a live-but-slow run never looks stale to a
+  // later firing (timeout alone must never create overlapping agents).
+  const hb = setInterval(() => {
+    heartbeatInflight(alarm.name, token).catch(() => {});
+  }, INFLIGHT_HEARTBEAT_MS);
   // The lock is acquired; EVERYTHING below (including the storage read) must
   // run inside try/finally so a read/validation rejection still releases the
   // in-flight lock (otherwise future firings block forever).
@@ -96,7 +111,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.error("scheduled task failed", alarm.name, e);
     // Keep the one-shot payload so a retry/restart can resume it.
   } finally {
-    await releaseInflight(alarm.name);
+    clearInterval(hb);
+    await releaseInflight(alarm.name, token);
   }
 });
 
@@ -313,6 +329,13 @@ const handlers = {
   async "provider.get"() {
     return await getProviderConfig();
   },
+  async "provider.summary"() {
+    // A REDACTED summary (provider id only) for surfaces that only need to show
+    // which provider is active — the base URL / key / model never cross into a
+    // non-settings DOM. The full config is Settings-only (provider.get).
+    const cfg = await getProviderConfig();
+    return { provider: cfg.provider };
+  },
   async "provider.set"(m) {
     const next = await setProviderConfig(m.config);
     // The running agent must switch immediately — invalidate the cached model + orchestrator.
@@ -324,6 +347,21 @@ const handlers = {
     // running orchestrator is rebuilt with the new setting.
     invalidateAgent();
     return { invalidated: true };
+  },
+  async "agent.orchestrator"() {
+    // Observable fan-out state (for the acceptance journeys): whether the running
+    // orchestrator is multi-agent, how many workers it fans out to, which
+    // delegation tools it exposes, and the build generation (the rebuild boundary).
+    await ensureOrchestrator();
+    const prefs = (await chrome.storage.local.get("cap:multiAgent")) ?? {};
+    const multiAgent = prefs["cap:multiAgent"] !== false;
+    return {
+      multiAgent,
+      workerCount: orchestrator ? orchestrator.workers.size : 0,
+      workerOrigins: orchestrator ? [...orchestrator.workers.keys()] : [],
+      delegationTools: multiAgent ? ["list_agents", "delegate_task"] : [],
+      generation,
+    };
   },
   async "provider.models"() {
     return { choices: PROVIDER_CHOICES };
@@ -433,7 +471,11 @@ const handlers = {
   },
 
   async "skills.set"({ origin, skills }) {
-    return await setSkills(origin, skills);
+    const result = await setSkills(origin, skills);
+    // Skills feed the orchestrator's system prompt at build time — a skills change
+    // must rebuild the running orchestrator, not leave a stale cached prompt.
+    invalidateAgent();
+    return result;
   },
   async "skills.get"({ origin }) {
     return await getSkills(origin);
@@ -532,12 +574,31 @@ const handlers = {
   async "agent.create"({ origin, name }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
+    // Enroll creates the site's OPFS store directory (so listOrigins() discovers
+    // the worker) AND the master-memory origins list — both, never just one.
     await enrollOrigin(canonical);
-    return { ok: true, origin: canonical, name };
+    // Rebuild the orchestrator so the new worker is actually fan-out-able now.
+    invalidateAgent();
+    // Best-effort: register the discovery content scripts for THIS origin via an
+    // optional host permission (never <all_urls>). A denied permission leaves the
+    // origin enrolled in memory (its tools are just not auto-discovered yet).
+    const registered = await ensureOriginScriptsRegistered(canonical).catch(
+      (e) => ({ ok: false, error: String(e?.message ?? e) }),
+    );
+    return {
+      ok: true,
+      origin: canonical,
+      name,
+      scriptsRegistered: registered?.ok === true,
+    };
   },
   async "agent.delete"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
+    // Remove the dynamic content scripts (optional host permission) + the master
+    // list entry + the per-site OPFS store, then rebuild the orchestrator.
+    await unregisterOriginScripts(canonical).catch(() => {});
+    await disenrollOrigin(canonical);
     await siteMemory(canonical).clear();
     invalidateAgent();
     return { ok: true, origin: canonical };
