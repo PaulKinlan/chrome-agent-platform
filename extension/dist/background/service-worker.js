@@ -68677,7 +68677,9 @@ async function invokeSiteTool(origin, name25, args) {
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
       name: name25,
-      args
+      args,
+      gen
+      // enrollment-scoped identity — the content script enforces it (round-20)
     });
     const after = await enrollmentSnapshot(canonical);
     if (!after.enrolled || after.gen !== gen) {

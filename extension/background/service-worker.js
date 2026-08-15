@@ -452,6 +452,7 @@ async function invokeSiteTool(origin, name, args) {
       type: "invoke-tool",
       name,
       args,
+      gen, // enrollment-scoped identity — the content script enforces it (round-20)
     });
     // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
     // call (a single locked snapshot, not two unlocked reads).
