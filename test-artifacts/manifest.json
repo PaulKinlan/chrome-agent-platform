@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "2ec2603231073ce9e3dc7fba424015faa80c06af",
+  "testedSourceCommit": "5dcec208534f59595efcd6659dac7c917bade5e1",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1786829901374",
+  "runId": "cap-1786832992854",
   "retain": true,
-  "ts": "2026-08-15T21:39:01.698Z",
+  "ts": "2026-08-15T22:30:34.803Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 94,
+  "passed": 97,
   "failed": 0,
   "checks": [
     {
@@ -104,6 +104,18 @@
     },
     {
       "name": "permissions: notifications denied in headless (fail closed)",
+      "pass": true
+    },
+    {
+      "name": "permissions: storage Disable returns revoked (capability.revoke route)",
+      "pass": true
+    },
+    {
+      "name": "permissions: provider survives storage Disable (session snapshot)",
+      "pass": true
+    },
+    {
+      "name": "permissions: storage re-enabled + provider survived (migration)",
       "pass": true
     },
     {
@@ -395,8 +407,8 @@
     },
     {
       "name": "options-driven.png",
-      "sha256": "2eff74faddef0600be34a972654caa40118e122f2ec5e9d26bbb593fe071c94b",
-      "bytes": 220276
+      "sha256": "63cfe019d6fed0b941a21f5d1812174cab59038214b521519491423220f82853",
+      "bytes": 224821
     }
   ]
 }
