@@ -422,11 +422,14 @@ const EXPECTED = [
   "NTP: retained a driven-UI screenshot",
   "NTP: the typed task reached the agent journal",
   "Settings: Permissions panel present",
-  "permissions: all six capabilities start ungranted",
+  "permissions: all seven capabilities start ungranted",
   "permissions: enabled storage (granted)",
   "permissions: enabled alarms (granted)",
-  "permissions: enabled tabs (granted)",
+  "permissions: enabled activeTab (granted)",
   "permissions: enabled scripting (granted)",
+  "permissions: enabled sidePanel (granted)",
+  "permissions: tabs denied in headless (fail closed)",
+  "permissions: notifications denied in headless (fail closed)",
   "Settings: OpenAI provider card rendered",
   "Settings: Clear key button present for the keyed provider",
   "Settings: clicked Clear key via a real click",
@@ -442,7 +445,7 @@ const EXPECTED = [
   "Settings: retained a driven-UI screenshot",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
-  "real red tab resolved via chrome.tabs.query",
+  "real red tab resolved via active-tab query",
   "screenshot: denied after revoke (secondary probe)",
   "screenshot: capture succeeds via captureVisibleTab (red page)",
   "screenshot: wrong-origin grant is denied (secondary probe)",
@@ -635,8 +638,15 @@ async function main() {
       "manifest: permissions list is empty (all optional)",
       Array.isArray(manifest.permissions) && manifest.permissions.length === 0 &&
         Array.isArray(manifest.optional_permissions) &&
-        ["alarms", "storage", "sidePanel", "tabs", "scripting", "notifications"]
-          .every((p) => manifest.optional_permissions.includes(p)),
+        [
+          "alarms",
+          "storage",
+          "sidePanel",
+          "tabs",
+          "activeTab",
+          "scripting",
+          "notifications",
+        ].every((p) => manifest.optional_permissions.includes(p)),
     );
     check(
       "manifest: debugger absent everywhere",
@@ -736,16 +746,17 @@ async function main() {
       port, `chrome-extension://${extId}/options/options.html`,
     );
     await sleep(2000);
-    const optsSession = await attachRuntime(cdp, optsPage.id);
+    let optsSession = await attachRuntime(cdp, optsPage.id);
     cdp.pageSessions.add(optsSession);
-    const evalOpts = (expression) => evalIn(cdp, optsSession, expression);
+    let evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
     // ─────────────────────────────────────────────────────────────
     // OPTIONAL-PERMISSION CAPABILITY GRANT — every permission is optional
     // (Paul's hard requirement). Drive the Settings → Permissions panel with
-    // GENUINE clicks: storage + alarms + tabs + scripting all auto-grant in
-    // headless (no-warning permissions). notifications + sidePanel are left
-    // UNREQUESTED so the suite proves the extension runs without them.
+    // GENUINE clicks. SILENT permissions (storage / alarms / activeTab /
+    // scripting / sidePanel — no warning) grant even in headless. WARNING
+    // permissions (tabs / notifications) auto-DENY in headless — a headed
+    // browser shows the prompt; the fail-closed denial is asserted here.
     // ─────────────────────────────────────────────────────────────
     check(
       "Settings: Permissions panel present",
@@ -755,11 +766,11 @@ async function main() {
       `[...document.querySelectorAll('.perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
     );
     check(
-      "permissions: all six capabilities start ungranted",
-      Array.isArray(capState0) && capState0.length === 6 &&
+      "permissions: all seven capabilities start ungranted",
+      Array.isArray(capState0) && capState0.length === 7 &&
         capState0.every((c) => c.granted === false),
     );
-    for (const cap of ["storage", "alarms", "tabs", "scripting"]) {
+    for (const cap of ["storage", "alarms", "activeTab", "scripting", "sidePanel"]) {
       const clicked = await clickSel(
         cdp, optsSession, `.grant-perm[data-capability="${cap}"]`,
       );
@@ -768,6 +779,20 @@ async function main() {
       check(
         `permissions: enabled ${cap} (granted)`,
         clicked && status?.[cap] === true,
+      );
+    }
+    // WARNING permissions (tabs / notifications) deny in headless — assert the
+    // fail-closed grant path (the feature degrades gracefully until a headed
+    // browser grants them).
+    for (const cap of ["tabs", "notifications"]) {
+      const clicked = await clickSel(
+        cdp, optsSession, `.grant-perm[data-capability="${cap}"]`,
+      );
+      await sleep(800);
+      const status = await msgValue({ type: "capabilities.status" });
+      check(
+        `permissions: ${cap} denied in headless (fail closed)`,
+        clicked && status?.[cap] === false,
       );
     }
 
@@ -780,6 +805,18 @@ async function main() {
         model: "model-one",
       },
     });
+
+    // Re-open the Settings page so renderProviders picks up the openai config
+    // set above (the first page rendered while the provider was still demo, so
+    // its Clear-key button was absent — the options page does not live-update on
+    // SW-side config changes).
+    const optsPageReload = await openPage(
+      port, `chrome-extension://${extId}/options/options.html`,
+    );
+    await sleep(2000);
+    optsSession = await attachRuntime(cdp, optsPageReload.id);
+    cdp.pageSessions.add(optsSession);
+    evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
@@ -884,10 +921,20 @@ async function main() {
     // ─────────────────────────────────────────────────────────────
     const redPage = await openPage(port, RED_URL);
     await sleep(2000);
-    const redTabId = await evalOpts(
-      `chrome.tabs.query({ url: ${JSON.stringify(RED_ORIGIN + "/*")} }).then(t => t[0]?.id ?? null)`,
+    // Activate the red tab so it is the ACTIVE tab — captureVisibleTab (under
+    // the silent activeTab permission) captures the active tab, and its url is
+    // then visible to chrome.tabs.query({active:true}).
+    await cdp.send("Target.activateTarget", { targetId: redPage.id });
+    await sleep(500);
+    const redTab = await evalOpts(
+      `chrome.tabs.query({ active: true, currentWindow: true }).then(t => t[0] ?? null)`,
     );
-    check("real red tab resolved via chrome.tabs.query", typeof redTabId === "number");
+    const redTabId = redTab?.id ?? null;
+    check(
+      "real red tab resolved via active-tab query",
+      typeof redTabId === "number" &&
+        (redTab?.url ?? "").includes("red.html"),
+    );
 
     // (a) revoked → capture denied (secondary probe).
     await msgValue({ type: "browser-control.set", granted: false });

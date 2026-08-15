@@ -25678,7 +25678,13 @@ var CAPABILITIES = [
     id: "tabs",
     permissions: ["tabs"],
     label: "Browser control",
-    hint: "Open/navigate/close tabs and capture screenshots. Without it, read-only page access remains."
+    hint: "Open/navigate/close/list tabs. This permission reads the browsing history (Chrome warns) and is granted from a headed browser; screenshots use the separate Screenshots capability instead."
+  },
+  {
+    id: "activeTab",
+    permissions: ["activeTab"],
+    label: "Screenshots",
+    hint: "Capture the active tab via chrome.tabs.captureVisibleTab. Silent (no warning) \u2014 the same permission the reference screenshot tool uses."
   },
   {
     id: "scripting",
@@ -67133,6 +67139,14 @@ async function hasTabsPermission() {
     return false;
   }
 }
+async function hasActiveTabPermission() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["activeTab"] });
+  } catch {
+    return false;
+  }
+}
 async function hasScriptingPermission() {
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) return false;
@@ -67165,37 +67179,39 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 async function captureTabScreenshot(tabId) {
-  if (!await hasTabsPermission()) {
+  if (!await hasActiveTabPermission() && !await hasTabsPermission()) {
     return {
-      error: "tabs permission not granted \u2014 enable Browser control in Settings to allow screenshots"
+      error: "activeTab permission not granted \u2014 enable Screenshots in Settings to allow captures"
     };
   }
-  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
-  if (!tab?.id) return { error: "no tab" };
-  const origin = tab.url ? (() => {
-    try {
-      return canonicalOrigin(tab.url);
-    } catch {
-      return void 0;
+  return await withTabCaptureLock(tabId ?? "active", async () => {
+    if (tabId) {
+      try {
+        await chrome.tabs.update(tabId, { active: true });
+      } catch (e) {
+        return { error: `could not activate tab: ${e?.message ?? e}` };
+      }
     }
-  })() : void 0;
-  if (!origin) return { error: "no origin" };
-  const grantIdBefore = validateGrantFor(
-    (await kvGet(GRANT_KEY))[GRANT_KEY],
-    origin
-  );
-  if (!grantIdBefore) {
-    return {
-      error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
-    };
-  }
-  return await withTabCaptureLock(tab.id, async () => {
-    try {
-      await chrome.tabs.update(tab.id, { active: true });
-    } catch (e) {
-      return { error: `could not activate tab: ${e?.message ?? e}` };
+    const active = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => !tabId || t.id === tabId) ?? null;
+    if (!active?.id) return { error: "no active tab" };
+    const origin = active.url ? (() => {
+      try {
+        return canonicalOrigin(active.url);
+      } catch {
+        return void 0;
+      }
+    })() : void 0;
+    if (!origin) return { error: "no origin" };
+    const grantIdBefore = validateGrantFor(
+      (await kvGet(GRANT_KEY))[GRANT_KEY],
+      origin
+    );
+    if (!grantIdBefore) {
+      return {
+        error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
+      };
     }
-    const cur = await chrome.tabs.get(tab.id).catch(() => null);
+    const cur = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
     const curOrigin = cur?.url ? (() => {
       try {
         return canonicalOrigin(cur.url);
@@ -67215,7 +67231,7 @@ async function captureTabScreenshot(tabId) {
     } catch (e) {
       return { error: `capture failed: ${e?.message ?? e}` };
     }
-    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
     const nowOrigin = nowTab?.url ? (() => {
       try {
         return canonicalOrigin(nowTab.url);

@@ -320,24 +320,23 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
-      // Screenshot capture uses chrome.tabs.captureVisibleTab (the standard
-      // extension API — NOT the Chrome debugger, which cannot be optional and
-      // carries Chrome's all-sites warning). It needs the OPTIONAL `tabs`
-      // capability, requested HERE (a real user gesture). Denial degrades
-      // gracefully: the grant still covers open/navigate/close; only tab
-      // listing + screenshots become unavailable.
-      let tabsGranted = false;
+      // Screenshot capture uses chrome.tabs.captureVisibleTab with the SILENT
+      // `activeTab` permission (NOT `tabs`, which warns and can't be granted in
+      // headless; NOT the Chrome debugger, which can't be optional). Requested
+      // HERE (a real user gesture). Denial degrades gracefully: the grant still
+      // covers open/navigate/close; only screenshots become unavailable.
+      let captureGranted = false;
       try {
-        tabsGranted = await chrome.permissions.request({
-          permissions: ["tabs"],
+        captureGranted = await chrome.permissions.request({
+          permissions: ["activeTab"],
         });
-      } catch { /* unsupported — tabs stays absent */ }
+      } catch { /* unsupported — activeTab stays absent */ }
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
       saveFlash(
-        tabsGranted
+        captureGranted
           ? "Browser control granted (global, 15 min — set origins below to scope it)."
-          : "Browser control granted (tab control unavailable — tabs permission not granted).",
+          : "Browser control granted (screenshots unavailable — activeTab permission not granted).",
       );
       renderPermissions();
     } else {

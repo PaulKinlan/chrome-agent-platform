@@ -112,14 +112,27 @@ async function activeTab() {
   return tabs[0] ?? null;
 }
 
-/** Whether the OPTIONAL `tabs` permission is currently granted. Screenshot
- * capture uses chrome.tabs.captureVisibleTab (the standard extension API — the
- * same one the chaos extension uses, NOT the Chrome debugger), which requires
- * the `tabs` permission (or `activeTab`). Fail closed when it is absent. */
+/** Whether the OPTIONAL `tabs` permission is currently granted (the broader
+ * open/navigate/close/list controls). Screenshot capture uses the SILENT
+ * `activeTab` permission instead (see hasActiveTabPermission) — the same
+ * permission the reference screenshot tool uses, grantable from a user gesture
+ * with no warning. */
 async function hasTabsPermission() {
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) return false;
     return await chrome.permissions.contains({ permissions: ["tabs"] });
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the OPTIONAL `activeTab` permission is granted (screenshot capture).
+ * `activeTab` is SILENT (no warning) so it grants from the Settings gesture even
+ * in headless; it authorizes captureVisibleTab of the active tab. */
+async function hasActiveTabPermission() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["activeTab"] });
   } catch {
     return false;
   }
@@ -172,65 +185,74 @@ function validateGrantFor(grant, origin) {
 }
 
 /**
- * Capture a PNG screenshot of the requested tab, gated by the browser-control
+ * Capture a PNG screenshot of the active tab, gated by the browser-control
  * grant FOR THAT TAB'S ORIGIN. Uses chrome.tabs.captureVisibleTab (the standard
  * extension screenshot API — NOT the Chrome debugger, which cannot be optional
- * and carries Chrome's all-sites warning). To target a SPECIFIC tab by id, the
- * tab is ACTIVATED first (chrome.tabs.update({active:true})), then its window is
- * captured; the active-tab ABA window is closed by re-deriving + re-checking the
- * origin before AND after the capture, under a per-tab mutex.
+ * and carries Chrome's all-sites warning) with the SILENT `activeTab` permission
+ * (the same permission the reference screenshot tool uses).
  *
- * Requires the OPTIONAL `tabs` permission (requested from the Settings
- * browser-control toggle). Fail closed when it is absent.
+ * `activeTab` authorizes the ACTIVE tab, so capture semantics are: if a tabId
+ * is supplied, that tab is ACTIVATED first (chrome.tabs.update needs no
+ * permission for {active:true}); the now-active tab's url is read via
+ * chrome.tabs.query({active:true}) (url is visible under activeTab) and its
+ * origin is grant-checked. The active-tab ABA window is closed by re-deriving +
+ * re-checking the origin AND the grant identity before AND after the capture,
+ * under a per-tab mutex.
+ *
+ * Requires the OPTIONAL `activeTab` permission (requested from the Settings
+ * browser-control toggle / Screenshots capability). Fail closed when absent.
  */
 export async function captureTabScreenshot(tabId) {
-  if (!(await hasTabsPermission())) {
+  if (!(await hasActiveTabPermission()) && !(await hasTabsPermission())) {
     return {
       error:
-        "tabs permission not granted — enable Browser control in Settings to allow screenshots",
+        "activeTab permission not granted — enable Screenshots in Settings to allow captures",
     };
   }
-  // Resolve the tab first so we can derive its origin for the grant check.
-  const tab = tabId
-    ? await chrome.tabs.get(tabId).catch(() => null)
-    : await activeTab();
-  if (!tab?.id) return { error: "no tab" };
 
-  const origin = tab.url
-    ? (() => {
+  return await withTabCaptureLock(tabId ?? "active", async () => {
+    // Activate the requested tab (if any) so it is the active tab — capture
+    // targets the ACTIVE tab under activeTab. Activating needs no permission.
+    if (tabId) {
       try {
-        return canonicalOrigin(tab.url);
-      } catch {
-        return undefined;
+        await chrome.tabs.update(tabId, { active: true });
+      } catch (e) {
+        return { error: `could not activate tab: ${e?.message ?? e}` };
       }
-    })()
-    : undefined;
-  if (!origin) return { error: "no origin" };
-  // Read the grant ONCE and validate id + scope + expiry + origin together (an
-  // atomic snapshot, not separate reads). The returned id is the fence for the
-  // whole capture.
-  const grantIdBefore = validateGrantFor(
-    (await kvGet(GRANT_KEY))[GRANT_KEY],
-    origin,
-  );
-  if (!grantIdBefore) {
-    return {
-      error:
-        "browser control not granted for this tab's origin — ask the user to approve it in Settings",
-    };
-  }
-
-  return await withTabCaptureLock(tab.id, async () => {
-    // Activate the target tab in its window so captureVisibleTab captures IT
-    // (not whatever tab happens to be visible).
-    try {
-      await chrome.tabs.update(tab.id, { active: true });
-    } catch (e) {
-      return { error: `could not activate tab: ${e?.message ?? e}` };
     }
+    // The active tab (its url is visible under activeTab / tabs).
+    const active = (await chrome.tabs.query({ active: true, currentWindow: true }))
+      .find((t) => !tabId || t.id === tabId) ?? null;
+    if (!active?.id) return { error: "no active tab" };
+
+    const origin = active.url
+      ? (() => {
+        try {
+          return canonicalOrigin(active.url);
+        } catch {
+          return undefined;
+        }
+      })()
+      : undefined;
+    if (!origin) return { error: "no origin" };
+    // Read the grant ONCE and validate id + scope + expiry + origin together (an
+    // atomic snapshot, not separate reads). The returned id is the fence for the
+    // whole capture.
+    const grantIdBefore = validateGrantFor(
+      (await kvGet(GRANT_KEY))[GRANT_KEY],
+      origin,
+    );
+    if (!grantIdBefore) {
+      return {
+        error:
+          "browser control not granted for this tab's origin — ask the user to approve it in Settings",
+      };
+    }
+
     // Post-activation the tab could have navigated — re-derive + re-check BEFORE
     // capturing (closes the active-tab ABA: activation itself can race a nav).
-    const cur = await chrome.tabs.get(tab.id).catch(() => null);
+    const cur = (await chrome.tabs.query({ active: true, currentWindow: true }))
+      .find((t) => t.id === active.id) ?? null;
     const curOrigin = cur?.url
       ? (() => {
         try {
@@ -258,7 +280,8 @@ export async function captureTabScreenshot(tabId) {
     // 1. the tab is STILL on the same origin (no navigation during capture);
     // 2. the SAME grant record still authorizes the SAME origin with the SAME
     //    id (closes the revoke→regrant ABA race atomically).
-    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true }))
+      .find((t) => t.id === active.id) ?? null;
     const nowOrigin = nowTab?.url
       ? (() => {
         try {

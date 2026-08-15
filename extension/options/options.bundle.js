@@ -344,7 +344,13 @@ var CAPABILITIES = [
     id: "tabs",
     permissions: ["tabs"],
     label: "Browser control",
-    hint: "Open/navigate/close tabs and capture screenshots. Without it, read-only page access remains."
+    hint: "Open/navigate/close/list tabs. This permission reads the browsing history (Chrome warns) and is granted from a headed browser; screenshots use the separate Screenshots capability instead."
+  },
+  {
+    id: "activeTab",
+    permissions: ["activeTab"],
+    label: "Screenshots",
+    hint: "Capture the active tab via chrome.tabs.captureVisibleTab. Silent (no warning) \u2014 the same permission the reference screenshot tool uses."
   },
   {
     id: "scripting",
@@ -638,17 +644,17 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
-      let tabsGranted = false;
+      let captureGranted = false;
       try {
-        tabsGranted = await chrome.permissions.request({
-          permissions: ["tabs"]
+        captureGranted = await chrome.permissions.request({
+          permissions: ["activeTab"]
         });
       } catch {
       }
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
       saveFlash(
-        tabsGranted ? "Browser control granted (global, 15 min \u2014 set origins below to scope it)." : "Browser control granted (tab control unavailable \u2014 tabs permission not granted)."
+        captureGranted ? "Browser control granted (global, 15 min \u2014 set origins below to scope it)." : "Browser control granted (screenshots unavailable \u2014 activeTab permission not granted)."
       );
       renderPermissions();
     } else {

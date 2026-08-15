@@ -28,7 +28,13 @@ export const CAPABILITIES = [
     id: "tabs",
     permissions: ["tabs"],
     label: "Browser control",
-    hint: "Open/navigate/close tabs and capture screenshots. Without it, read-only page access remains.",
+    hint: "Open/navigate/close/list tabs. This permission reads the browsing history (Chrome warns) and is granted from a headed browser; screenshots use the separate Screenshots capability instead.",
+  },
+  {
+    id: "activeTab",
+    permissions: ["activeTab"],
+    label: "Screenshots",
+    hint: "Capture the active tab via chrome.tabs.captureVisibleTab. Silent (no warning) — the same permission the reference screenshot tool uses.",
   },
   {
     id: "scripting",
