@@ -324,3 +324,43 @@ export async function journalAppend(store, entry) {
   await store.setTrusted("journal", entries);
   return entries;
 }
+
+// Screenshots are LARGE media (a single base64 PNG is ~300 KiB) that cannot fit
+// in the 256 KiB per-value memory bound. They are stored as SEPARATE OPFS files
+// under memory/master/screenshots/*.json (each bounded by MAX_SCREENSHOT_BYTES),
+// with a small metadata index (id/at/url ONLY — never the dataURL inline) kept
+// in the `screenshots` memory key. The index + files are bounded by
+// MAX_SCREENSHOTS; the oldest file is evicted when a new one arrives (the
+// round-17 blocker: the old code pushed up to 20 base64 dataURLs into ONE value,
+// overflowing the 256 KiB bound before a single image could be stored).
+const MAX_SCREENSHOTS = 5;
+const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // 4 MiB per screenshot
+
+/** Persist a screenshot as a dedicated OPFS file + bounded metadata index. */
+export async function saveScreenshot(mem, { url, dataURL }) {
+  if (!dataURL || !String(dataURL).startsWith("data:image/")) {
+    throw new Error("screenshot must be a data:image/* dataURL");
+  }
+  const bytes = utf8Bytes(String(dataURL));
+  if (bytes > MAX_SCREENSHOT_BYTES) {
+    throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
+  }
+  const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const dir = await openDir([ROOT, MASTER, "screenshots"]);
+  await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });
+
+  // Metadata index (small): id/at/url only, never the dataURL inline.
+  const index = (await mem.get("screenshots")) ?? [];
+  index.push({ id, at: Date.now(), url });
+  const next = index.slice(-MAX_SCREENSHOTS);
+  const kept = new Set(next.map((s) => s.id));
+  for (const s of index) {
+    if (!kept.has(s.id)) {
+      try {
+        await dir.removeEntry(`${s.id}.json`);
+      } catch { /* absent */ }
+    }
+  }
+  await mem.setTrusted("screenshots", next);
+  return { id, url };
+}

@@ -13,6 +13,28 @@ import { runAborted } from "./run-fence.js";
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
 
+// A GLOBAL grant mutex serializes the grant CHECK with the destructive Chrome
+// mutation (open/navigate/close/capture) against revoke. The round-17 blocker
+// reproduced a grant being removed immediately after the authorization read, yet
+// `tabs.create` still ran: check-then-act across two separate async steps. Holding
+// the SAME mutex for the check + the mutation AND for revoke makes them atomic
+// w.r.t. each other — either the mutation happens before the revoke (grant was
+// valid at mutation time) or the revoke lands first (the mutation's check sees no
+// grant and denies).
+let grantMutex = Promise.resolve();
+function withGrantLock(fn) {
+  const run = grantMutex.then(fn, fn);
+  grantMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Read the current grant record ONCE under the grant lock. Returns null when
+ * no valid, unexpired grant exists for `origin`. */
+async function readGrantFor(origin) {
+  const grant = (await kvGet(GRANT_KEY))[GRANT_KEY];
+  return validateGrantFor(grant, origin);
+}
+
 let grantSeq = 0;
 /** A unique, non-predictable grant identity. Revoke→regrant always produces a
  * DIFFERENT id, so a capture can detect that authorization was absent during
@@ -123,18 +145,25 @@ export async function setDenyAllBrowserControlGrant(
 }
 
 export async function revokeBrowserControlGrant() {
-  // A removal that FAILS on a live backend now REJECTS (kvRemove fails closed),
-  // so we never report {revoked:true} against a backend error. Re-read and
-  // CONFIRM absence before claiming revocation (a false `remove` resolution for
-  // an already-absent key is a no-op, but a backend that silently kept the
-  // value must surface as revoked:false, never as success).
-  await kvRemove(GRANT_KEY);
-  const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
-  const gone = remaining === undefined || remaining === null;
-  if (!gone) {
-    return { revoked: false, error: "grant still present after removal" };
-  }
-  return { revoked: true };
+  // Serialize revoke against in-flight destructive mutations (open/navigate/
+  // close/capture) via the grant mutex: a mutation that already checked the grant
+  // either completes BEFORE this revoke (correct — it was authorized at mutation
+  // time) or the revoke lands first and the mutation's check denies. A revoke can
+  // no longer interleave with a checked mutation (the round-17 blocker).
+  return await withGrantLock(async () => {
+    // A removal that FAILS on a live backend now REJECTS (kvRemove fails closed),
+    // so we never report {revoked:true} against a backend error. Re-read and
+    // CONFIRM absence before claiming revocation (a false `remove` resolution for
+    // an already-absent key is a no-op, but a backend that silently kept the
+    // value must surface as revoked:false, never as success).
+    await kvRemove(GRANT_KEY);
+    const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
+    const gone = remaining === undefined || remaining === null;
+    if (!gone) {
+      return { revoked: false, error: "grant still present after removal" };
+    }
+    return { revoked: true };
+  });
 }
 
 /** Resolve the active tab in the current window. */
@@ -412,17 +441,22 @@ export function browserToolset() {
         } catch {
           return { error: "invalid url" };
         }
-        if (!(await isBrowserControlGranted(destOrigin))) {
-          return {
-            error:
-              "browser control not granted for this origin — ask the user to approve it in Settings",
-          };
-        }
-        if (runAborted()) {
-          return { error: "run aborted — tab not opened" };
-        }
-        const tab = await chrome.tabs.create({ url });
-        return { ok: true, tabId: tab.id, url };
+        // Check the grant + perform the mutation under the SAME grant lock: a
+        // revoke can no longer interleave with the checked tabs.create (the
+        // round-17 check-then-act blocker).
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(destOrigin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          if (runAborted()) {
+            return { error: "run aborted — tab not opened" };
+          }
+          const tab = await chrome.tabs.create({ url });
+          return { ok: true, tabId: tab.id, url };
+        });
       },
     }),
     navigate_tab: tool({
@@ -447,12 +481,6 @@ export function browserToolset() {
         } catch {
           return { error: "invalid url" };
         }
-        if (!(await isBrowserControlGranted(destOrigin))) {
-          return {
-            error:
-              "browser control not granted for the destination origin — ask the user to approve it in Settings",
-          };
-        }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
         // Source origin must ALSO be authorized (not just the destination): a
@@ -468,17 +496,27 @@ export function browserToolset() {
             }
           })()
           : undefined;
-        if (!(await isBrowserControlGranted(srcOrigin))) {
-          return {
-            error:
-              "browser control not granted for the source tab's origin — ask the user to approve it in Settings",
-          };
-        }
-        if (runAborted()) {
-          return { error: "run aborted — tab not navigated" };
-        }
-        await chrome.tabs.update(id, { url });
-        return { ok: true, tabId: id, url };
+        // Check BOTH origins + perform the mutation under the SAME grant lock
+        // (a revoke can no longer interleave with the checked tabs.update).
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(destOrigin))) {
+            return {
+              error:
+                "browser control not granted for the destination origin — ask the user to approve it in Settings",
+            };
+          }
+          if (!(await isBrowserControlGranted(srcOrigin))) {
+            return {
+              error:
+                "browser control not granted for the source tab's origin — ask the user to approve it in Settings",
+            };
+          }
+          if (runAborted()) {
+            return { error: "run aborted — tab not navigated" };
+          }
+          await chrome.tabs.update(id, { url });
+          return { ok: true, tabId: id, url };
+        });
       },
     }),
     read_page: tool({
@@ -530,17 +568,21 @@ export function browserToolset() {
             }
           })()
           : undefined;
-        if (!(await isBrowserControlGranted(origin))) {
-          return {
-            error:
-              "browser control not granted for this origin — ask the user to approve it in Settings",
-          };
-        }
-        if (runAborted()) {
-          return { error: "run aborted — tab not closed" };
-        }
-        await chrome.tabs.remove(tabId);
-        return { ok: true, tabId };
+        // Check the grant + perform the mutation under the SAME grant lock (a
+        // revoke can no longer interleave with the checked tabs.remove).
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          if (runAborted()) {
+            return { error: "run aborted — tab not closed" };
+          }
+          await chrome.tabs.remove(tabId);
+          return { ok: true, tabId };
+        });
       },
     }),
     recent_browser_events: tool({

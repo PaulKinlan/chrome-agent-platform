@@ -25326,9 +25326,16 @@ function createDemoModel() {
 init_browser_shim_process();
 var session = /* @__PURE__ */ new Map();
 var warned = false;
-function storageAvailable() {
+async function storageAvailable() {
   try {
-    return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return false;
+    if (chrome.permissions?.contains) {
+      try {
+        return await chrome.permissions.contains({ permissions: ["storage"] });
+      } catch {
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -25355,7 +25362,8 @@ var StorageBackendError = class extends Error {
   }
 };
 async function kvGet(keys) {
-  if (!storageAvailable()) {
+  await waitForMigration();
+  if (!await storageAvailable()) {
     warnOnce();
     const out = {};
     if (keys == null) {
@@ -25374,7 +25382,8 @@ async function kvGet(keys) {
   }
 }
 async function kvSet(obj) {
-  if (!storageAvailable()) {
+  await waitForMigration();
+  if (!await storageAvailable()) {
     warnOnce();
     for (const [k, v] of Object.entries(obj)) {
       if (v === void 0) session.delete(k);
@@ -25389,8 +25398,9 @@ async function kvSet(obj) {
   }
 }
 async function kvRemove(keys) {
+  await waitForMigration();
   const list = Array.isArray(keys) ? keys : [keys];
-  if (!storageAvailable()) {
+  if (!await storageAvailable()) {
     warnOnce();
     for (const k of list) session.delete(k);
     return;
@@ -25402,22 +25412,45 @@ async function kvRemove(keys) {
   }
 }
 var migrated = false;
+var migrationInFlight = null;
+async function waitForMigration() {
+  if (migrationInFlight) await migrationInFlight;
+}
+async function snapshotPersistentToSession() {
+  if (!await storageAvailable()) return;
+  try {
+    const all = await chrome.storage.local.get(null);
+    for (const [k, v] of Object.entries(all)) session.set(k, clone2(v));
+  } catch (e) {
+    throw new StorageBackendError("snapshot", e);
+  }
+}
+function resetStorageTransition() {
+  migrated = false;
+}
 async function migrateSessionToStorage() {
   if (migrated) return;
-  if (!storageAvailable()) return;
-  const entries = {};
-  for (const [k, v] of session) entries[k] = clone2(v);
-  if (Object.keys(entries).length === 0) {
-    migrated = true;
-    return;
+  if (!await storageAvailable()) return;
+  if (!migrationInFlight) {
+    migrationInFlight = (async () => {
+      const entries = {};
+      for (const [k, v] of session) entries[k] = clone2(v);
+      if (Object.keys(entries).length === 0) {
+        migrated = true;
+        return;
+      }
+      try {
+        await chrome.storage.local.set(entries);
+        session.clear();
+        migrated = true;
+      } catch (e) {
+        throw new StorageBackendError("set", e);
+      }
+    })().finally(() => {
+      migrationInFlight = null;
+    });
   }
-  try {
-    await chrome.storage.local.set(entries);
-    session.clear();
-    migrated = true;
-  } catch (e) {
-    throw new StorageBackendError("set", e);
-  }
+  await migrationInFlight;
 }
 
 // extension/lib/provider.js
@@ -25767,6 +25800,34 @@ async function journalAppend(store, entry) {
   await store.setTrusted("journal", entries);
   return entries;
 }
+var MAX_SCREENSHOTS = 5;
+var MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+async function saveScreenshot(mem, { url: url3, dataURL }) {
+  if (!dataURL || !String(dataURL).startsWith("data:image/")) {
+    throw new Error("screenshot must be a data:image/* dataURL");
+  }
+  const bytes = utf8Bytes(String(dataURL));
+  if (bytes > MAX_SCREENSHOT_BYTES) {
+    throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
+  }
+  const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const dir = await openDir([ROOT, MASTER, "screenshots"]);
+  await writeJson(dir, `${id}.json`, { url: url3, dataURL, at: Date.now() });
+  const index = await mem.get("screenshots") ?? [];
+  index.push({ id, at: Date.now(), url: url3 });
+  const next = index.slice(-MAX_SCREENSHOTS);
+  const kept = new Set(next.map((s) => s.id));
+  for (const s of index) {
+    if (!kept.has(s.id)) {
+      try {
+        await dir.removeEntry(`${s.id}.json`);
+      } catch {
+      }
+    }
+  }
+  await mem.setTrusted("screenshots", next);
+  return { id, url: url3 };
+}
 
 // extension/lib/capabilities.js
 init_browser_shim_process();
@@ -25836,6 +25897,19 @@ async function capabilityStatus() {
     out[c.id] = await hasCapability(c.id);
   }
   return out;
+}
+async function revokeCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  try {
+    const removed = await chrome.permissions.remove({
+      permissions: cap.permissions
+    });
+    const stillGranted = await hasCapability(id);
+    return { ok: true, revoked: !stillGranted, capability: id, removed };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e), capability: id };
+  }
 }
 
 // extension/lib/agent.js
@@ -66786,6 +66860,7 @@ function createOrchestrator2({
         }
         const a = workerAgents.get(agentId);
         if (!a) return { error: `no agent for ${agentId}` };
+        let gen = 0;
         if (delegateGuard) {
           const g = await delegateGuard(agentId);
           if (!g?.ok) {
@@ -66793,11 +66868,21 @@ function createOrchestrator2({
               error: g?.error ?? `agent ${agentId} is not enrolled`
             };
           }
+          gen = g.gen ?? 0;
         }
         if (runAborted()) {
           return { error: "run aborted \u2014 delegation not started" };
         }
-        return { agentId, result: await a.run(task) };
+        const result = await a.run(task);
+        if (delegateGuard && gen) {
+          const after = await delegateGuard(agentId);
+          if (!after?.ok || (after.gen ?? 0) !== gen) {
+            return {
+              error: `agent ${agentId} was disenrolled during the task`
+            };
+          }
+        }
+        return { agentId, result };
       }
     })
   } : {};
@@ -66838,6 +66923,7 @@ function createOrchestrator2({
 init_browser_shim_process();
 var DIR_KEY = "toolDirectory";
 var ENROLL_KEY2 = "cap:enrollment";
+var GEN_KEY = "cap:enrollmentGen";
 var enrollmentMutex = Promise.resolve();
 function withEnrollmentLock(fn) {
   const run = enrollmentMutex.then(fn, fn);
@@ -66845,6 +66931,12 @@ function withEnrollmentLock(fn) {
   }, () => {
   });
   return run;
+}
+async function nextGeneration() {
+  const s = await kvGet(GEN_KEY);
+  const next = (Number(s[GEN_KEY]) || 0) + 1;
+  await kvSet({ [GEN_KEY]: next });
+  return next;
 }
 async function enrolledMap() {
   const s = await kvGet(ENROLL_KEY2);
@@ -66944,7 +67036,7 @@ async function enrollOrigin(origin) {
     map4[canonical] = {
       enrolled: true,
       at: Date.now(),
-      gen: (map4[canonical]?.gen ?? 0) + 1
+      gen: await nextGeneration()
     };
     await kvSet({ [ENROLL_KEY2]: map4 });
     return Object.keys(map4).filter((o) => map4[o]?.enrolled === true);
@@ -66959,7 +67051,7 @@ async function disenrollOrigin(origin) {
       enrolled: false,
       // tombstone
       at: Date.now(),
-      gen: (map4[canonical]?.gen ?? 0) + 1
+      gen: await nextGeneration()
     };
     await kvSet({ [ENROLL_KEY2]: map4 });
     const MAX_TOMBSTONES = 200;
@@ -67040,10 +67132,20 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       );
     }
     const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (runAborted()) {
+      throw new Error("run aborted \u2014 task not scheduled");
+    }
     const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
     await kvSet({ [TASK_KEY]: tasks });
+    if (runAborted()) {
+      const cur = await kvGet(TASK_KEY);
+      const rollback = { ...cur[TASK_KEY] ?? {} };
+      delete rollback[name25];
+      await kvSet({ [TASK_KEY]: rollback });
+      throw new Error("run aborted \u2014 task not scheduled");
+    }
     try {
       const alarms = alarmsApi();
       if (!alarms) {
@@ -67222,6 +67324,14 @@ async function reconcileScheduledTasks() {
 // extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";
 var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
+var grantMutex = Promise.resolve();
+function withGrantLock(fn) {
+  const run = grantMutex.then(fn, fn);
+  grantMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
 var grantSeq = 0;
 function newGrantId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -67281,13 +67391,15 @@ async function setDenyAllBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   return grant;
 }
 async function revokeBrowserControlGrant() {
-  await kvRemove(GRANT_KEY);
-  const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
-  const gone = remaining === void 0 || remaining === null;
-  if (!gone) {
-    return { revoked: false, error: "grant still present after removal" };
-  }
-  return { revoked: true };
+  return await withGrantLock(async () => {
+    await kvRemove(GRANT_KEY);
+    const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
+    const gone = remaining === void 0 || remaining === null;
+    if (!gone) {
+      return { revoked: false, error: "grant still present after removal" };
+    }
+    return { revoked: true };
+  });
 }
 async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -67468,16 +67580,18 @@ function browserToolset() {
         } catch {
           return { error: "invalid url" };
         }
-        if (!await isBrowserControlGranted(destOrigin)) {
-          return {
-            error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
-          };
-        }
-        if (runAborted()) {
-          return { error: "run aborted \u2014 tab not opened" };
-        }
-        const tab = await chrome.tabs.create({ url: url3 });
-        return { ok: true, tabId: tab.id, url: url3 };
+        return await withGrantLock(async () => {
+          if (!await isBrowserControlGranted(destOrigin)) {
+            return {
+              error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
+            };
+          }
+          if (runAborted()) {
+            return { error: "run aborted \u2014 tab not opened" };
+          }
+          const tab = await chrome.tabs.create({ url: url3 });
+          return { ok: true, tabId: tab.id, url: url3 };
+        });
       }
     }),
     navigate_tab: tool({
@@ -67498,11 +67612,6 @@ function browserToolset() {
         } catch {
           return { error: "invalid url" };
         }
-        if (!await isBrowserControlGranted(destOrigin)) {
-          return {
-            error: "browser control not granted for the destination origin \u2014 ask the user to approve it in Settings"
-          };
-        }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
         const srcTab = await chrome.tabs.get(id).catch(() => null);
@@ -67513,16 +67622,23 @@ function browserToolset() {
             return void 0;
           }
         })() : void 0;
-        if (!await isBrowserControlGranted(srcOrigin)) {
-          return {
-            error: "browser control not granted for the source tab's origin \u2014 ask the user to approve it in Settings"
-          };
-        }
-        if (runAborted()) {
-          return { error: "run aborted \u2014 tab not navigated" };
-        }
-        await chrome.tabs.update(id, { url: url3 });
-        return { ok: true, tabId: id, url: url3 };
+        return await withGrantLock(async () => {
+          if (!await isBrowserControlGranted(destOrigin)) {
+            return {
+              error: "browser control not granted for the destination origin \u2014 ask the user to approve it in Settings"
+            };
+          }
+          if (!await isBrowserControlGranted(srcOrigin)) {
+            return {
+              error: "browser control not granted for the source tab's origin \u2014 ask the user to approve it in Settings"
+            };
+          }
+          if (runAborted()) {
+            return { error: "run aborted \u2014 tab not navigated" };
+          }
+          await chrome.tabs.update(id, { url: url3 });
+          return { ok: true, tabId: id, url: url3 };
+        });
       }
     }),
     read_page: tool({
@@ -67567,16 +67683,18 @@ function browserToolset() {
             return void 0;
           }
         })() : void 0;
-        if (!await isBrowserControlGranted(origin)) {
-          return {
-            error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
-          };
-        }
-        if (runAborted()) {
-          return { error: "run aborted \u2014 tab not closed" };
-        }
-        await chrome.tabs.remove(tabId);
-        return { ok: true, tabId };
+        return await withGrantLock(async () => {
+          if (!await isBrowserControlGranted(origin)) {
+            return {
+              error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
+            };
+          }
+          if (runAborted()) {
+            return { error: "run aborted \u2014 tab not closed" };
+          }
+          await chrome.tabs.remove(tabId);
+          return { ok: true, tabId };
+        });
       }
     }),
     recent_browser_events: tool({
@@ -68197,6 +68315,11 @@ chrome.permissions?.onAdded?.addListener((perms) => {
     );
   }
 });
+chrome.permissions?.onRemoved?.addListener((perms) => {
+  if (perms?.permissions?.includes("storage")) {
+    resetStorageTransition();
+  }
+});
 var orchestrator = null;
 var orchestratorGen = -1;
 var MODEL_CACHE = { model: null, key: null, gen: -1 };
@@ -68305,6 +68428,14 @@ async function invokeSiteTool(origin, name25, args) {
   if (runAborted()) {
     return { error: "run aborted \u2014 site invocation not sent" };
   }
+  {
+    const recheck = await enrollmentSnapshot(canonical);
+    if (!recheck.enrolled || recheck.gen !== gen) {
+      return {
+        error: `origin ${canonical} was disenrolled before the call`
+      };
+    }
+  }
   try {
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
@@ -68404,6 +68535,40 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
 var handlers = {
   async "capabilities.status"() {
     return await capabilityStatus();
+  },
+  // Revoke an optional capability from the SW (single authority for the
+  // dependent cleanup + the permission removal). The Settings Disable button
+  // routes here so storage/scripting get their authoritative side effects:
+  //   - storage: snapshot persistent→session BEFORE removal (no data loss on
+  //     Disable) + reset the migration flag for a clean re-enable.
+  //   - scripting: also unregister every enrolled origin's dynamic scripts +
+  //     host permission (Disable must not leave origin authority behind).
+  async "capability.revoke"({ id }) {
+    if (id === "storage") {
+      try {
+        await snapshotPersistentToSession();
+      } catch (e) {
+        return { ok: false, error: String(e?.message ?? e) };
+      }
+    }
+    if (id === "scripting") {
+      const origins = await listOrigins();
+      const results = await Promise.all(
+        origins.map((o) => unregisterOriginScripts(o))
+      );
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) {
+        return {
+          ok: false,
+          error: `could not revoke ${failed.length} origin(s): ${failed.map((f) => f.error ?? f.origin).join("; ")}`
+        };
+      }
+    }
+    const res = await revokeCapability(id);
+    if (id === "storage") {
+      resetStorageTransition();
+    }
+    return res;
   },
   // Shared key-value access, EXTENSION-ONLY. Page surfaces route their key-value
   // reads/writes through these routes so the service worker is the SINGLE
@@ -68707,6 +68872,12 @@ var handlers = {
       if (runAborted()) {
         throw new Error("run aborted \u2014 delegation not started");
       }
+      const recheck = await enrollmentSnapshot(canonical);
+      if (!recheck.enrolled || recheck.gen !== gen) {
+        throw new Error(
+          `origin ${canonical} was disenrolled before delegation`
+        );
+      }
       return await a.run(task, "", []);
     });
     return await withOriginLock(canonical, async () => {
@@ -68809,13 +68980,10 @@ chrome.action?.onClicked?.addListener(async (tab) => {
     const shot = await captureTabScreenshot(tab?.id);
     if (shot?.screenshot) {
       const mem = masterMemory();
-      const shots = await mem.get("screenshots") ?? [];
-      shots.push({
-        at: Date.now(),
+      await saveScreenshot(mem, {
         url: shot.url,
         dataURL: shot.screenshot
       });
-      await mem.setTrusted("screenshots", shots.slice(-20));
       await journalAppend(mem, {
         type: "screenshot",
         id: `shot:${Date.now()}`,

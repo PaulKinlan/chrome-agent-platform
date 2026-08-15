@@ -31,10 +31,24 @@ let warned = false;
 
 /** Is the persistent chrome.storage.local backend currently available?
  * Availability is checked at CALL time (never cached at module load) so a
- * freshly-granted permission is picked up without a worker reload. */
-export function storageAvailable() {
+ * freshly-granted permission is picked up without a worker reload. This is now
+ * ASYNC: after `chrome.permissions.remove({permissions:["storage"]})` the
+ * `chrome.storage.local` OBJECT remains truthy but its methods reject with
+ * "not available in this context" (the round-17 blocker — the old truthiness
+ * check classified permission absence as a backend failure). The authoritative
+ * signal is `chrome.permissions.contains({permissions:["storage"]})`. */
+export async function storageAvailable() {
   try {
-    return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return false;
+    if (chrome.permissions?.contains) {
+      try {
+        return await chrome.permissions.contains({ permissions: ["storage"] });
+      } catch {
+        // permissions API threw — fall back to the object-truthiness check below
+        // (unit-test mocks provide chrome.storage but no chrome.permissions).
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -68,7 +82,8 @@ export class StorageBackendError extends Error {
 
 /** Mirror chrome.storage.local.get(key|array|null). */
 export async function kvGet(keys) {
-  if (!storageAvailable()) {
+  await waitForMigration();
+  if (!(await storageAvailable())) {
     warnOnce();
     const out = {};
     if (keys == null) {
@@ -91,7 +106,8 @@ export async function kvGet(keys) {
 
 /** Mirror chrome.storage.local.set(obj). Fails closed on backend failure. */
 export async function kvSet(obj) {
-  if (!storageAvailable()) {
+  await waitForMigration();
+  if (!(await storageAvailable())) {
     warnOnce();
     for (const [k, v] of Object.entries(obj)) {
       if (v === undefined) session.delete(k);
@@ -108,8 +124,9 @@ export async function kvSet(obj) {
 
 /** Mirror chrome.storage.local.remove(key|array). Fails closed on failure. */
 export async function kvRemove(keys) {
+  await waitForMigration();
   const list = Array.isArray(keys) ? keys : [keys];
-  if (!storageAvailable()) {
+  if (!(await storageAvailable())) {
     warnOnce();
     for (const k of list) session.delete(k);
     return;
@@ -128,6 +145,41 @@ export function __resetSessionForTest() {
 }
 
 let migrated = false;
+let migrationInFlight = null;
+
+/** Await any in-flight session→storage migration so a concurrent KV operation
+ * cannot race the migration and lose a write (the round-17 "serialize migration
+ * with every KV operation" finding). migrateSessionToStorage itself must NOT
+ * await this (it would deadlock on its own promise). */
+async function waitForMigration() {
+  if (migrationInFlight) await migrationInFlight;
+}
+
+/** Snapshot the persistent backend into the in-memory session Map. Called BEFORE
+ * the optional `storage` permission is removed so the session-only period starts
+ * with the current data (a Disable must not make settings appear empty, and a
+ * re-enable must merge session changes back rather than resurrect stale values). */
+export async function snapshotPersistentToSession() {
+  if (!(await storageAvailable())) return;
+  try {
+    const all = await chrome.storage.local.get(null);
+    for (const [k, v] of Object.entries(all)) session.set(k, clone(v));
+  } catch (e) {
+    // A failed snapshot must not be silent: the owner is about to Disable
+    // storage, and losing the persistent state would be a data-loss bug.
+    throw new StorageBackendError("snapshot", e);
+  }
+}
+
+/** Reset the migration state on every storage-permission TRANSITION (grant or
+ * removal). After a Disable→Enable cycle the session fallback holds changes made
+ * during the disabled period; `migrated` must be cleared so the next grant
+ * re-migrates them (the round-17 blocker: `migrated` never reset → re-enable
+ * restored only the old persistent values). */
+export function resetStorageTransition() {
+  migrated = false;
+}
+
 /** Migrate the SW's session fallback into chrome.storage.local when the optional
  * `storage` permission is granted LATER. Until then, kv* used the realm-local
  * session Map; once storage becomes available, kv* switches straight to the
@@ -138,22 +190,29 @@ let migrated = false;
  * leaves the session Map intact (never silently lose the configured state). */
 export async function migrateSessionToStorage() {
   if (migrated) return;
-  if (!storageAvailable()) return;
-  const entries = {};
-  for (const [k, v] of session) entries[k] = clone(v);
-  if (Object.keys(entries).length === 0) {
-    migrated = true;
-    return;
+  if (!(await storageAvailable())) return;
+  if (!migrationInFlight) {
+    migrationInFlight = (async () => {
+      const entries = {};
+      for (const [k, v] of session) entries[k] = clone(v);
+      if (Object.keys(entries).length === 0) {
+        migrated = true;
+        return;
+      }
+      // Write session values to the persistent store. A write failure REJECTS (the
+      // session Map is preserved for a retry, never silently dropped).
+      try {
+        await chrome.storage.local.set(entries);
+        session.clear();
+        migrated = true;
+      } catch (e) {
+        throw new StorageBackendError("set", e);
+      }
+    })().finally(() => {
+      migrationInFlight = null;
+    });
   }
-  // Write session values to the persistent store. A write failure REJECTS (the
-  // session Map is preserved for a retry, never silently dropped).
-  try {
-    await chrome.storage.local.set(entries);
-    session.clear();
-    migrated = true;
-  } catch (e) {
-    throw new StorageBackendError("set", e);
-  }
+  await migrationInFlight;
 }
 
 /** Test hook: reset the migration flag (unit tests). */

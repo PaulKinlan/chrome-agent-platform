@@ -78,19 +78,6 @@ async function requestCapability(id) {
     return { ok: false, error: String(e?.message ?? e), capability: id };
   }
 }
-async function revokeCapability(id) {
-  const cap = CAPABILITIES.find((c) => c.id === id);
-  if (!cap) return { ok: false, error: `unknown capability ${id}` };
-  try {
-    const removed = await chrome.permissions.remove({
-      permissions: cap.permissions
-    });
-    const stillGranted = await hasCapability(id);
-    return { ok: true, revoked: !stillGranted, capability: id, removed };
-  } catch (e) {
-    return { ok: false, error: String(e?.message ?? e), capability: id };
-  }
-}
 
 // extension/options/options.js
 var PROVIDERS = [
@@ -441,7 +428,7 @@ async function renderPermissions() {
       btn.textContent = "Disable";
       btn.setAttribute("aria-label", `Disable ${cap.label}`);
       btn.addEventListener("click", async () => {
-        const res = await revokeCapability(cap.id);
+        const res = await chrome.runtime.sendMessage({ type: "capability.revoke", id: cap.id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
         if (res?.revoked) saveFlash(`Disabled ${cap.label}.`);
         else {
           saveFlash(

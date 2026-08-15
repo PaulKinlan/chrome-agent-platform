@@ -5,7 +5,6 @@ import {
   CAPABILITIES,
   capabilityStatus,
   requestCapability,
-  revokeCapability,
 } from "../lib/capabilities.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
@@ -457,7 +456,14 @@ async function renderPermissions() {
       btn.textContent = "Disable";
       btn.setAttribute("aria-label", `Disable ${cap.label}`);
       btn.addEventListener("click", async () => {
-        const res = await revokeCapability(cap.id);
+        // Route Disable through the SERVICE WORKER (single authority): storage
+        // needs a pre-removal persistent→session snapshot + migration reset, and
+        // scripting needs its dependent host permissions + dynamic scripts
+        // revoked. A direct page-realm permissions.remove would skip both (the
+        // round-17 capability-Disable finding).
+        const res = await chrome.runtime
+          .sendMessage({ type: "capability.revoke", id: cap.id })
+          .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
         if (res?.revoked) saveFlash(`Disabled ${cap.label}.`);
         else {
           saveFlash(

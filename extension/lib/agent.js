@@ -157,6 +157,7 @@ export function createOrchestrator({
           // Revalidate LIVE enrollment/generation before the worker runs: a
           // worker deleted AFTER the orchestrator was built must not run (the
           // internal delegate path previously bypassed the lifecycle gate).
+          let gen = 0;
           if (delegateGuard) {
             const g = await delegateGuard(agentId);
             if (!g?.ok) {
@@ -164,6 +165,7 @@ export function createOrchestrator({
                 error: g?.error ?? `agent ${agentId} is not enrolled`,
               };
             }
+            gen = g.gen ?? 0;
           }
           // Re-check the fence AFTER the guard await: an abort during the
           // delegateGuard await must still prevent the worker from starting
@@ -172,7 +174,20 @@ export function createOrchestrator({
           if (runAborted()) {
             return { error: "run aborted — delegation not started" };
           }
-          return { agentId, result: await a.run(task) };
+          const result = await a.run(task);
+          // Post-run generation revalidation: a delete DURING the worker run
+          // tombstones + bumps the generation, so the result must be discarded
+          // rather than returned to the model (the round-17 blocker: delegateGuard
+          // returned {gen} but delegate_task ignored it).
+          if (delegateGuard && gen) {
+            const after = await delegateGuard(agentId);
+            if (!after?.ok || (after.gen ?? 0) !== gen) {
+              return {
+                error: `agent ${agentId} was disenrolled during the task`,
+              };
+            }
+          }
+          return { agentId, result };
         },
       }),
     }

@@ -3,6 +3,7 @@
 // validation, persistence, and alarm creation stay in a single place.
 
 import { kvGet, kvSet } from "./kv.js";
+import { runAborted } from "./run-fence.js";
 
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
@@ -96,11 +97,31 @@ export async function scheduleTask(
     }
     const name = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+    // The abort must be re-checked at the PERSIST boundary, not just once at the
+    // tool's start: an abort arriving while the first kvGet await was in flight
+    // must still prevent the payload from being persisted (the round-17 blocker
+    // reproduced an aborted schedule_task still persisting + creating an alarm).
+    if (runAborted()) {
+      throw new Error("run aborted — task not scheduled");
+    }
+
     // Persist the task (inside the lock so the read-modify-write is atomic).
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     tasks[name] = { name, task, at: when, periodInMinutes, attachments };
     await kvSet({ [TASK_KEY]: tasks });
+
+    // Re-check the fence before the IRREVERSIBLE alarm creation (a second abort
+    // window exists between the persist and the alarm create).
+    if (runAborted()) {
+      // Roll back the just-persisted payload so an aborted schedule leaves no
+      // orphaned task behind.
+      const cur = await kvGet(TASK_KEY);
+      const rollback = { ...(cur[TASK_KEY] ?? {}) };
+      delete rollback[name];
+      await kvSet({ [TASK_KEY]: rollback });
+      throw new Error("run aborted — task not scheduled");
+    }
 
     // Create the alarm LAST. On failure, roll back the persisted task so it is
     // never orphaned.

@@ -234,3 +234,31 @@ Deno.test("ownsInflight is false when the durable lock is lost (round-16 blocker
 
   await releaseInflight("lease-h", a.token);
 });
+
+import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
+
+Deno.test("an abort during the first storage await prevents scheduleTask persisting (round-17)", async () => {
+  const controller = new AbortController();
+  setRunFence({ signal: controller.signal });
+  try {
+    // scheduleTask validates + then awaits kvGet(TASK_KEY). Abort synchronously
+    // so the fence flips during that await — the persist-boundary re-check must
+    // reject and leave NO persisted payload (the round-17 blocker reproduced an
+    // aborted schedule_task still persisting + creating an alarm).
+    const p = scheduleTask({ task: "aborted-task", delayMs: 5000 });
+    controller.abort();
+    let threw = false;
+    try {
+      await p;
+    } catch {
+      threw = true;
+    }
+    assert(threw, "an aborted scheduleTask must reject");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    const tasks = store["cap:scheduledTasks"] ?? {};
+    const leaked = Object.values(tasks).some((t) => t?.task === "aborted-task");
+    assert(!leaked, "no aborted payload may be persisted");
+  } finally {
+    clearRunFence();
+  }
+});

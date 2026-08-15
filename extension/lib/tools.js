@@ -6,6 +6,7 @@ import { kvGet, kvSet } from "./kv.js";
 
 const DIR_KEY = "toolDirectory";
 const ENROLL_KEY = "cap:enrollment";
+const GEN_KEY = "cap:enrollmentGen";
 
 // A GLOBAL enrollment-state mutex: enrollOrigin/disenrollOrigin perform a
 // read-modify-write on the SHARED `cap:enrollment` registry. Per-origin locks
@@ -17,6 +18,19 @@ function withEnrollmentLock(fn) {
   const run = enrollmentMutex.then(fn, fn);
   enrollmentMutex = run.then(() => {}, () => {});
   return run;
+}
+
+/** A MONOTONIC, never-reused enrollment generation counter (the round-17 ABA
+ * blocker: deriving `gen` from the current registry entry meant a pruned
+ * tombstone reset the origin to generation 1, letting a stale in-flight
+ * operation holding the old generation pass a future re-enrollment postcheck).
+ * The ceiling lives in its OWN never-pruned key and only ever increments, so a
+ * generation is never reissued even after tombstone pruning or re-enrollment. */
+async function nextGeneration() {
+  const s = await kvGet(GEN_KEY);
+  const next = (Number(s[GEN_KEY]) || 0) + 1;
+  await kvSet({ [GEN_KEY]: next });
+  return next;
 }
 
 /** Read the enrollment registry (the authoritative enrolled:true set). */
@@ -157,7 +171,7 @@ export async function enrollOrigin(origin) {
     map[canonical] = {
       enrolled: true,
       at: Date.now(),
-      gen: (map[canonical]?.gen ?? 0) + 1,
+      gen: await nextGeneration(),
     };
     await kvSet({ [ENROLL_KEY]: map });
     return Object.keys(map).filter((o) => map[o]?.enrolled === true);
@@ -176,7 +190,7 @@ export async function disenrollOrigin(origin) {
     map[canonical] = {
       enrolled: false, // tombstone
       at: Date.now(),
-      gen: (map[canonical]?.gen ?? 0) + 1,
+      gen: await nextGeneration(),
     };
     await kvSet({ [ENROLL_KEY]: map });
     // Bound tombstone retention: enrolled:false entries only exist to fence a

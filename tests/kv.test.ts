@@ -13,6 +13,8 @@ import {
   storageAvailable,
   StorageBackendError,
   migrateSessionToStorage,
+  snapshotPersistentToSession,
+  resetStorageTransition,
   __resetSessionForTest,
   __resetMigrationForTest,
 } from "../extension/lib/kv.js";
@@ -47,10 +49,10 @@ function makeChrome({ present = true, fail = false } = {}) {
   };
 }
 
-Deno.test("kv reports storage unavailable when the backend is absent", () => {
+Deno.test("kv reports storage unavailable when the backend is absent", async () => {
   __resetSessionForTest();
   makeChrome({ present: false });
-  assertEquals(storageAvailable(), false);
+  assertEquals(await storageAvailable(), false);
 });
 
 Deno.test("kvSet falls back to session ONLY when the backend is absent", async () => {
@@ -126,4 +128,98 @@ Deno.test("migrateSessionToStorage preserves the session Map on a backend failur
   // The session value is preserved for a retry (never silently dropped).
   makeChrome({ present: false });
   assertEquals((await kvGet("cap:theme"))["cap:theme"], "midnight");
+});
+
+// ---- round-17 storage-transition tests (async permissions-aware availability) ----
+
+/** A chrome mock where chrome.storage.local is TRUTHY but the permissions API
+ * reports the `storage` permission as NOT granted (the post-Disable state). */
+function makeChromeWithPermissions({ storageGranted = true } = {}) {
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get: async (key) => {
+          if (!storageGranted) throw new Error("'storage.get' is not available in this context");
+          const out = {};
+          const keys = key == null
+            ? [...store.keys()]
+            : (Array.isArray(key) ? key : [key]);
+          for (const k of keys) {
+            if (store.has(k)) out[k] = JSON.parse(JSON.stringify(store.get(k)));
+          }
+          return out;
+        },
+        set: async (obj) => {
+          if (!storageGranted) throw new Error("'storage.set' is not available in this context");
+          for (const [k, v] of Object.entries(obj)) store.set(k, JSON.parse(JSON.stringify(v)));
+        },
+        remove: async (keys) => {
+          if (!storageGranted) throw new Error("'storage.remove' is not available in this context");
+          for (const k of (Array.isArray(keys) ? keys : [keys])) store.delete(k);
+        },
+      },
+    },
+    permissions: {
+      contains: async ({ permissions }) => permissions.includes("storage") ? storageGranted : false,
+    },
+  };
+}
+
+Deno.test("storageAvailable uses permissions.contains as the authority (round-17 blocker)", async () => {
+  __resetSessionForTest();
+  store.clear();
+  // chrome.storage.local is TRUTHY but the permission is absent (post-Disable).
+  makeChromeWithPermissions({ storageGranted: false });
+  assertEquals(await storageAvailable(), false, "truthy-but-unavailable storage must report absent");
+
+  makeChromeWithPermissions({ storageGranted: true });
+  assertEquals(await storageAvailable(), true);
+});
+
+Deno.test("kvSet uses the session fallback when storage is truthy-but-unavailable (round-17)", async () => {
+  __resetSessionForTest();
+  store.clear();
+  makeChromeWithPermissions({ storageGranted: false });
+  // Must NOT throw StorageBackendError — the permission is ABSENT, so this is
+  // session-only mode, not a backend failure.
+  await kvSet({ "cap:x": 42 });
+  assertEquals((await kvGet("cap:x"))["cap:x"], 42);
+});
+
+Deno.test("snapshotPersistentToSession copies the persistent backend into the session Map", async () => {
+  __resetSessionForTest();
+  store.clear();
+  makeChromeWithPermissions({ storageGranted: true });
+  store.set("cap:theme", "midnight");
+  store.set("providerConfig", { provider: "openai" });
+  await snapshotPersistentToSession();
+
+  // Now the backend is gone (Disable) — the session fallback must have the data.
+  makeChrome({ present: false });
+  assertEquals((await kvGet("cap:theme"))["cap:theme"], "midnight");
+  assertEquals((await kvGet("providerConfig"))["providerConfig"].provider, "openai");
+});
+
+Deno.test("resetStorageTransition allows re-migration after a Disable→Enable cycle (round-17)", async () => {
+  __resetSessionForTest();
+  __resetMigrationForTest();
+  store.clear();
+  // First grant: session → storage migration.
+  makeChrome({ present: false });
+  await kvSet({ providerConfig: { provider: "openai" } });
+  makeChrome({ present: true });
+  await migrateSessionToStorage();
+  assertEquals(store.get("providerConfig").provider, "openai");
+
+  // Disable: snapshot the persistent state back into session, reset migration.
+  makeChrome({ present: false });
+  resetStorageTransition();
+  // During the disabled period the owner changes the provider (session-only).
+  await kvSet({ providerConfig: { provider: "anthropic" } });
+
+  // Re-enable: migration must re-run and MERGE the session change over the old
+  // persistent value (not restore the stale "openai").
+  makeChrome({ present: true });
+  await migrateSessionToStorage();
+  assertEquals(store.get("providerConfig").provider, "anthropic");
 });

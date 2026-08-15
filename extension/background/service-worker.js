@@ -13,10 +13,23 @@ import {
   journalAppend,
   listOrigins,
   masterMemory,
+  saveScreenshot,
   siteMemory,
 } from "../lib/memory.js";
-import { kvGet, kvSet, kvRemove, migrateSessionToStorage } from "../lib/kv.js";
-import { hasCapability, capabilityStatus, requestCapability } from "../lib/capabilities.js";
+import {
+  kvGet,
+  kvSet,
+  kvRemove,
+  migrateSessionToStorage,
+  resetStorageTransition,
+  snapshotPersistentToSession,
+} from "../lib/kv.js";
+import {
+  hasCapability,
+  capabilityStatus,
+  requestCapability,
+  revokeCapability,
+} from "../lib/capabilities.js";
 import { createAgent, createOrchestrator } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
@@ -194,6 +207,15 @@ chrome.permissions?.onAdded?.addListener((perms) => {
     );
   }
 });
+chrome.permissions?.onRemoved?.addListener((perms) => {
+  if (perms?.permissions?.includes("storage")) {
+    // On a storage Disable→Enable cycle the session fallback holds changes made
+    // during the disabled period; reset the migration flag so the next grant
+    // re-migrates them (never restore stale persistent values — the round-17
+    // storage-Disable blocker).
+    resetStorageTransition();
+  }
+});
 
 // ---- lazy agent bootstrap (invalidated on provider change) ----
 // A generation counter guards the async bootstrap against stale publication:
@@ -363,6 +385,20 @@ async function invokeSiteTool(origin, name, args) {
   if (runAborted()) {
     return { error: "run aborted — site invocation not sent" };
   }
+  // Re-check the SAME enrollment generation IMMEDIATELY before tabs.sendMessage:
+  // the snapshot above was read before the tab query await, so a delete in that
+  // gap could tombstone the origin and the page function would still run (the
+  // round-17 blocker: deletion did not preempt a site invocation already in
+  // flight). Re-reading under the enrollment lock closes the await gap as tightly
+  // as possible without holding the origin lifecycle lock across the page call.
+  {
+    const recheck = await enrollmentSnapshot(canonical);
+    if (!recheck.enrolled || recheck.gen !== gen) {
+      return {
+        error: `origin ${canonical} was disenrolled before the call`,
+      };
+    }
+  }
   try {
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
@@ -495,6 +531,43 @@ const handlers = {
     // tabs, scripting, notifications, sidePanel). The Settings panel renders
     // enable buttons from this; the Chrome suite asserts the empty base list.
     return await capabilityStatus();
+  },
+  // Revoke an optional capability from the SW (single authority for the
+  // dependent cleanup + the permission removal). The Settings Disable button
+  // routes here so storage/scripting get their authoritative side effects:
+  //   - storage: snapshot persistent→session BEFORE removal (no data loss on
+  //     Disable) + reset the migration flag for a clean re-enable.
+  //   - scripting: also unregister every enrolled origin's dynamic scripts +
+  //     host permission (Disable must not leave origin authority behind).
+  async "capability.revoke"({ id }) {
+    if (id === "storage") {
+      try {
+        await snapshotPersistentToSession();
+      } catch (e) {
+        return { ok: false, error: String(e?.message ?? e) };
+      }
+    }
+    if (id === "scripting") {
+      const origins = await listOrigins();
+      const results = await Promise.all(
+        origins.map((o) => unregisterOriginScripts(o)),
+      );
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) {
+        return {
+          ok: false,
+          error:
+            `could not revoke ${failed.length} origin(s): ${
+              failed.map((f) => f.error ?? f.origin).join("; ")
+            }`,
+        };
+      }
+    }
+    const res = await revokeCapability(id);
+    if (id === "storage") {
+      resetStorageTransition();
+    }
+    return res;
   },
   // Shared key-value access, EXTENSION-ONLY. Page surfaces route their key-value
   // reads/writes through these routes so the service worker is the SINGLE
@@ -896,6 +969,16 @@ const handlers = {
       if (runAborted()) {
         throw new Error("run aborted — delegation not started");
       }
+      // Re-check the SAME generation IMMEDIATELY before a.run: a delete while
+      // this delegation was waiting on the run mutex must not start a stale
+      // worker (the round-17 blocker: delegation could abort during the guard
+      // then still start).
+      const recheck = await enrollmentSnapshot(canonical);
+      if (!recheck.enrolled || recheck.gen !== gen) {
+        throw new Error(
+          `origin ${canonical} was disenrolled before delegation`,
+        );
+      }
       return await a.run(task, "", []);
     });
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
@@ -1034,13 +1117,13 @@ chrome.action?.onClicked?.addListener(async (tab) => {
     const shot = await captureTabScreenshot(tab?.id);
     if (shot?.screenshot) {
       const mem = masterMemory();
-      const shots = (await mem.get("screenshots")) ?? [];
-      shots.push({
-        at: Date.now(),
+      // Store the screenshot as a DEDICATED OPFS file (bounded + evict-oldest),
+      // never as an inline base64 value that overflows the 256 KiB memory bound
+      // (the round-17 blocker: one base64 PNG (~300 KiB) exceeded the cap).
+      await saveScreenshot(mem, {
         url: shot.url,
         dataURL: shot.screenshot,
       });
-      await mem.setTrusted("screenshots", shots.slice(-20));
       await journalAppend(mem, {
         type: "screenshot",
         id: `shot:${Date.now()}`,
