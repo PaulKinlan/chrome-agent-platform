@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "ac23762ca692e8405a8d5d27ea7cc84115f8ab16",
+  "testedSourceCommit": "70b318cb96f6c28895711a13b78a9f96fdb0d528",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1786835650478",
+  "runId": "cap-1786838218942",
   "retain": true,
-  "ts": "2026-08-15T23:14:52.418Z",
+  "ts": "2026-08-15T23:57:40.893Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 97,
+  "passed": 100,
   "failed": 0,
   "checks": [
     {
@@ -360,6 +360,18 @@
     },
     {
       "name": "disenroll: agent removed from list + enrollment tombstoned",
+      "pass": true
+    },
+    {
+      "name": "scripting Disable: two origins enrolled before the revoke",
+      "pass": true
+    },
+    {
+      "name": "scripting Disable: capability revoked",
+      "pass": true
+    },
+    {
+      "name": "scripting Disable: BOTH origins tombstoned (no lost update)",
       "pass": true
     },
     {
