@@ -81,7 +81,7 @@ async function registerAlarm(task) {
   });
 }
 
-chrome.alarms?.onAlarm?.addListener(async (alarm) => {
+async function handleAlarm(alarm) {
   // In-flight lock: a slow run must not overlap the next alarm (periodic).
   const lock = await tryAcquireInflight(alarm.name);
   if (!lock.acquired) {
@@ -148,6 +148,27 @@ chrome.alarms?.onAlarm?.addListener(async (alarm) => {
     clearInterval(hb);
     await releaseInflight(alarm.name, token);
   }
+}
+
+// The `chrome.alarms` namespace is permission-gated: when `alarms` is an
+// OPTIONAL permission (Paul's all-optional requirement) and not yet granted,
+// `chrome.alarms` is `undefined` at module-eval time, so a top-level
+// `chrome.alarms?.onAlarm?.addListener(...)` would silently no-op and the alarm
+// listener would NEVER be registered (the round-14b alarm bug: the alarm fires
+// and is consumed, but nothing handles it, so no task/result is journaled).
+// Register the listener lazily: once when the module evaluates (if `alarms` was
+// already granted, e.g. the extension was reloaded after a grant) and again via
+// chrome.permissions.onAdded when the user grants the capability.
+let alarmListenerRegistered = false;
+function registerAlarmListener() {
+  if (alarmListenerRegistered) return;
+  if (typeof chrome === "undefined" || !chrome.alarms?.onAlarm) return;
+  chrome.alarms.onAlarm.addListener(handleAlarm);
+  alarmListenerRegistered = true;
+}
+registerAlarmListener();
+chrome.permissions?.onAdded?.addListener((perms) => {
+  if (perms?.permissions?.includes("alarms")) registerAlarmListener();
 });
 
 // ---- lazy agent bootstrap (invalidated on provider change) ----

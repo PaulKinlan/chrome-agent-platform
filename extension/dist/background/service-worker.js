@@ -67927,7 +67927,7 @@ async function registerAlarm(task) {
     attachments: task.attachments ?? []
   });
 }
-chrome.alarms?.onAlarm?.addListener(async (alarm) => {
+async function handleAlarm(alarm) {
   const lock = await tryAcquireInflight(alarm.name);
   if (!lock.acquired) {
     console.warn("scheduled task already in flight", alarm.name, lock.reason);
@@ -67976,6 +67976,17 @@ chrome.alarms?.onAlarm?.addListener(async (alarm) => {
     clearInterval(hb);
     await releaseInflight(alarm.name, token);
   }
+}
+var alarmListenerRegistered = false;
+function registerAlarmListener() {
+  if (alarmListenerRegistered) return;
+  if (typeof chrome === "undefined" || !chrome.alarms?.onAlarm) return;
+  chrome.alarms.onAlarm.addListener(handleAlarm);
+  alarmListenerRegistered = true;
+}
+registerAlarmListener();
+chrome.permissions?.onAdded?.addListener((perms) => {
+  if (perms?.permissions?.includes("alarms")) registerAlarmListener();
 });
 var orchestrator = null;
 var orchestratorGen = -1;
