@@ -32,6 +32,7 @@
       padding: 16px;
       margin-bottom: 20px;
     }
+    label.tag { display: block; }
     .composer textarea {
       width: 100%;
       background: transparent;
@@ -268,7 +269,7 @@
       </div>
 
       <div class="composer">
-        <div class="tag">Start a task</div>
+        <label class="tag" for="task-input">Start a task</label>
         <textarea id="task-input"
           placeholder="Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …"></textarea>
         <div class="row">
