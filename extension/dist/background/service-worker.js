@@ -66497,9 +66497,7 @@ function createOrchestrator2({
     master,
     workers: workerAgents,
     async run(task, context, history) {
-      if (multiAgent) return await master.run(task, context, history);
-      const solo = createAgent2({ model, system, memory: masterMemory2, taskId });
-      return await solo.run(task, context, history);
+      return await master.run(task, context, history);
     },
     addWorker(config3) {
       const a = createAgent2({
@@ -66851,6 +66849,18 @@ async function captureTabScreenshot(tabId) {
     const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png"
     });
+    const afterActive = await chrome.tabs.query({
+      active: true,
+      windowId: tab.windowId
+    });
+    if (afterActive?.[0]?.id !== tab.id) {
+      return { error: "active tab changed during capture \u2014 screenshot discarded" };
+    }
+    const afterTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : void 0;
+    if (!afterOrigin || afterOrigin !== origin) {
+      return { error: "tab navigated during capture \u2014 screenshot discarded" };
+    }
     return { screenshot: url3 };
   } catch (e) {
     return { error: String(e?.message ?? e) };
@@ -67039,7 +67049,8 @@ var SCHEMA_BOUNDS = {
   maxProperties: 50,
   maxArrayItems: 100,
   maxStringLength: 1e4,
-  maxUnionBranches: 5
+  maxUnionBranches: 5,
+  maxLiteralDepth: 8
 };
 var SUPPORTED_KEYWORDS = /* @__PURE__ */ new Set([
   "type",
@@ -67085,19 +67096,20 @@ function valueMatchesType(value, type) {
       return false;
   }
 }
-function deepEqual(a, b) {
+function deepEqual(a, b, depth = 0) {
+  if (depth > SCHEMA_BOUNDS.maxLiteralDepth) return false;
   if (a === b) return true;
   if (typeof a !== typeof b) return false;
   if (a === null || b === null) return false;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i], depth + 1)) return false;
     return true;
   }
   if (typeof a === "object") {
     const ka = Object.keys(a), kb = Object.keys(b);
     if (ka.length !== kb.length) return false;
-    for (const k of ka) if (!deepEqual(a[k], b[k])) return false;
+    for (const k of ka) if (!deepEqual(a[k], b[k], depth + 1)) return false;
     return true;
   }
   return false;
@@ -67215,18 +67227,53 @@ function valueSatisfiesSchema(schema4, value, depth) {
   if (schema4.anyOf !== void 0 && !schema4.anyOf.some((b) => valueSatisfiesSchema(b, value, depth + 1))) return false;
   return true;
 }
+var CONFLICT = Symbol("type-conflict");
+function inferTypeFromSiblings(schema4) {
+  let inferred = null;
+  const claim = (t) => {
+    if (inferred !== null && inferred !== t) return CONFLICT;
+    inferred = t;
+    return inferred;
+  };
+  if (schema4.minLength !== void 0 || schema4.maxLength !== void 0) {
+    if (claim("string") === CONFLICT) return CONFLICT;
+  }
+  if (schema4.minimum !== void 0 || schema4.maximum !== void 0) {
+    if (claim("number") === CONFLICT) return CONFLICT;
+  }
+  if (schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0) {
+    if (claim("array") === CONFLICT) return CONFLICT;
+  }
+  if (schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) {
+    if (claim("object") === CONFLICT) return CONFLICT;
+  }
+  return inferred;
+}
+function literalSchema(z4, value) {
+  if (value !== null && typeof value === "object") {
+    return z4.any().refine((x) => deepEqual(x, value), {
+      message: "expected exact structural value"
+    });
+  }
+  return z4.literal(value);
+}
 function schemaToZod(z4, schema4, depth = 0) {
   if (!validateSchemaAST(schema4, depth)) return z4.never();
   if (schema4.const !== void 0) {
     if (!valueSatisfiesSchema(schema4, schema4.const, depth)) return z4.never();
-    return z4.literal(schema4.const);
+    return literalSchema(z4, schema4.const);
   }
   if (schema4.enum !== void 0) {
     const valid = schema4.enum.filter((v) => valueSatisfiesSchema(schema4, v, depth));
     if (valid.length === 0) return z4.never();
-    return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
+    return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => literalSchema(z4, v)));
   }
-  const base = schema4.type === void 0 && schema4.anyOf !== void 0 ? z4.unknown() : buildBaseZod(z4, schema4);
+  const base = schema4.type === void 0 && schema4.anyOf !== void 0 ? (() => {
+    const inferred = inferTypeFromSiblings(schema4);
+    if (inferred === CONFLICT) return z4.never();
+    if (inferred === null) return z4.unknown();
+    return buildBaseZod(z4, { ...schema4, type: inferred });
+  })() : buildBaseZod(z4, schema4);
   if (schema4.anyOf !== void 0) {
     const branches = schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1));
     return z4.intersection(base, z4.union(branches));
@@ -67341,14 +67388,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.warn("scheduled task already in flight", alarm.name);
     return;
   }
-  const store = await chrome.storage.local.get(TASK_KEY2);
-  const task = store[TASK_KEY2]?.[alarm.name];
-  if (!task) {
-    await releaseInflight(alarm.name);
-    console.error("scheduled task payload missing", alarm.name);
-    return;
-  }
   try {
+    const store = await chrome.storage.local.get(TASK_KEY2);
+    const task = store[TASK_KEY2]?.[alarm.name];
+    if (!task) {
+      console.error("scheduled task payload missing", alarm.name);
+      return;
+    }
     await runTask({
       id: alarm.name,
       task: task.task ?? alarm.name,

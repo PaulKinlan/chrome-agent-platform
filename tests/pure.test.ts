@@ -361,6 +361,64 @@ Deno.test("schemaToZod composes const with satisfying bounds (valid const still 
   assertEquals(s.safeParse("ok").success, true);
 });
 
+
+// ---- round-9: untyped anyOf sibling composition + structural const/enum ----
+
+Deno.test("untyped anyOf composes string siblings (minLength applies)", () => {
+  // {minLength:5, anyOf:[{type:string}]} must REJECT "x" (sibling minLength).
+  const s = schemaToZod(z, { minLength: 5, anyOf: [{ type: "string" }] });
+  assertEquals(s.safeParse("x").success, false);
+  assertEquals(s.safeParse("xxxxx").success, true);
+});
+
+Deno.test("untyped anyOf composes object siblings (required applies)", () => {
+  // {properties:{x}, required:[x], anyOf:[{type:object}]} must REJECT {}.
+  const s = schemaToZod(z, {
+    properties: { x: { type: "string" } },
+    required: ["x"],
+    anyOf: [{ type: "object" }],
+  });
+  assertEquals(s.safeParse({}).success, false);
+  assertEquals(s.safeParse({ x: "ok" }).success, true);
+});
+
+Deno.test("untyped anyOf with conflicting siblings fails closed", () => {
+  // minLength (string) + properties (object) is contradictory — reject all.
+  const s = schemaToZod(z, {
+    minLength: 2,
+    properties: { x: { type: "string" } },
+    anyOf: [{ type: "string" }, { type: "object" }],
+  });
+  assertEquals(s.safeParse("abcd").success, false);
+  assertEquals(s.safeParse({ x: "ok" }).success, false);
+});
+
+Deno.test("bare untyped anyOf (no siblings) still accepts union members", () => {
+  const s = schemaToZod(z, { anyOf: [{ type: "string" }, { type: "number" }] });
+  assertEquals(s.safeParse("ok").success, true);
+  assertEquals(s.safeParse(42).success, true);
+  assertEquals(s.safeParse(true).success, false);
+});
+
+Deno.test("structural const accepts an equal object clone", () => {
+  const s = schemaToZod(z, { type: "object", const: { x: 1 } });
+  // A separately-parsed but structurally-equal object must PASS (not identity).
+  assertEquals(s.safeParse({ x: 1 }).success, true);
+  assertEquals(s.safeParse({ x: 2 }).success, false);
+});
+
+Deno.test("structural const accepts an equal array clone", () => {
+  const s = schemaToZod(z, { type: "array", const: [1, 2] });
+  assertEquals(s.safeParse([1, 2]).success, true);
+  assertEquals(s.safeParse([1, 3]).success, false);
+});
+
+Deno.test("structural enum accepts an equal object clone", () => {
+  const s = schemaToZod(z, { type: "object", enum: [{ a: 1 }, { b: 2 }] });
+  assertEquals(s.safeParse({ a: 1 }).success, true);
+  assertEquals(s.safeParse({ c: 3 }).success, false);
+});
+
 Deno.test("Ollama-compatible model allows an optional key (no key required)", async () => {
   const { createOpenAICompatibleModel } = await import(
     "../extension/lib/models/openai-model.js"

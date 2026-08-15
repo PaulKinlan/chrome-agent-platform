@@ -190,7 +190,12 @@ document.getElementById("save-provider").addEventListener("click", async () => {
   const config = { provider };
   if (provider === "openai") {
     config.baseURL = baseUrlInput.value.trim();
-    config.apiKey = apiKeyInput.value.trim();
+    // PRESERVE the stored key when the field is left blank (a blank field must
+    // not silently clear the credential — clearing is an explicit action in the
+    // dedicated Settings page, not an accident of saving from the hub).
+    const existing = (await send("provider.get")) ?? {};
+    const enteredKey = apiKeyInput.value.trim();
+    config.apiKey = enteredKey !== "" ? enteredKey : (existing.apiKey ?? "");
     config.model = document.getElementById("model-name")?.value?.trim() ||
       "gpt-4o-mini";
   }

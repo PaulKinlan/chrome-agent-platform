@@ -316,10 +316,13 @@ async function main() {
     });
     const dropped = runRes?.droppedAttachments ?? [];
     const droppedCount = dropped.filter((d) => d.reason === "over count limit").length;
-    const kept = 12 - droppedCount;
+    // OBSERVE the journal: the task entry records the BOUNDED attachment count
+    // (8) — not an inferred `12 - dropped`.
+    const journal = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
+    const attachTask = journal.find((e) => e.type === "task" && e.task === "attach");
     check(
-      "attachment count cap (12 → exactly 4 count-dropped)",
-      droppedCount === 4 && kept === 8,
+      "attachment count cap (12 → 4 over-count dropped, journal records 8)",
+      droppedCount === 4 && attachTask?.attachmentCount === 8,
     );
 
     // 5. ALARM FIRE: a real short one-shot fires and is removed from chrome.alarms.
@@ -333,9 +336,16 @@ async function main() {
       const alarmNames = await evalOpts(
         `chrome.alarms.getAll().then(a => a.map(x => x.name))`,
       );
+      const removedFromAlarms = Array.isArray(alarmNames) && !alarmNames.includes(sched.name);
+      // OBSERVE the actual execution: the fired alarm must have journaled a
+      // scheduled `task` entry AND a `result` entry (not just disappeared from
+      // chrome.alarms — Chrome consumes one-shots on its own).
+      const j2 = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
+      const firedTask = j2.find((e) => e.type === "task" && e.task === "fire-test" && e.scheduled === true);
+      const firedResult = j2.find((e) => e.type === "result" && e.id === sched.name);
       check(
-        "one-shot alarm fired + removed from chrome.alarms",
-        Array.isArray(alarmNames) && !alarmNames.includes(sched.name),
+        "one-shot alarm fired + journaled task AND result",
+        removedFromAlarms && firedTask && firedResult,
       );
     }
 
@@ -348,10 +358,6 @@ async function main() {
     }
     check("no service-worker console errors", cdp.consoleErrors.length === 0);
 
-    const failed = results.filter((r) => !r.pass).length;
-    console.log(
-      `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
-    );
     ws.close();
     await fixture.shutdown().catch(() => {});
   } catch (e) {
@@ -359,14 +365,46 @@ async function main() {
     console.error("journey failure:", String(e?.message ?? e));
     try { await fixture.shutdown(); } catch { /* ignore */ }
   } finally {
-    // Owner-clean: kill + AWAIT process termination, THEN remove the profile,
-    // then ASSERT the profile is gone.
-    proc.kill();
-    try { await proc.status; } catch { /* already exited */ }
-    await new Deno.Command("rm", { args: ["-rf", profile] }).output();
-    const still = await Deno.stat(profile).then(() => true).catch(() => false);
-    check("profile removed (no leak)", still === false);
-    Deno.exit(results.some((r) => !r.pass) ? 1 : 0);
+    // Owner-clean shutdown. Chromium spawns a PROCESS TREE (browser + renderers
+    // + GPU); killing only the direct child leaves descendants that recreate
+    // profile files after removal. Kill the whole group, wait until every
+    // descendant is gone, remove with a bounded retry, then assert absence.
+    await killChromiumTree(proc, profile);
+    let removed = false;
+    for (let attempt = 0; attempt < 5 && !removed; attempt++) {
+      await new Deno.Command("rm", { args: ["-rf", profile] }).output();
+      removed = !(await Deno.stat(profile).then(() => true).catch(() => false));
+      if (!removed) await new Promise((r) => setTimeout(r, 500));
+    }
+    check("profile removed (no leak)", removed);
+    // The summary is printed ONLY AFTER cleanup, so a leaked profile (or any
+    // failed check) can never be masked by an earlier "N/N passed" line.
+    const failed = results.filter((r) => !r.pass).length;
+    console.log(
+      `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
+    );
+    Deno.exit(failed > 0 || !removed ? 1 : 0);
+  }
+}
+
+/**
+ * Kill the Chromium process tree and wait for all descendants to exit. The
+ * direct child is killed first; any survivors (matched by the user-data-dir)
+ * are killed via pkill, then we poll until they are gone (bounded).
+ */
+async function killChromiumTree(proc, profile) {
+  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+  try { await proc.status; } catch { /* already exited */ }
+  // Kill any descendant that still references this profile dir.
+  const match = `--user-data-dir=${profile}`;
+  await new Deno.Command("pkill", { args: ["-f", match] }).output().catch(() => {});
+  // Bounded wait for the full tree to disappear.
+  for (let i = 0; i < 20; i++) {
+    const out = await new Deno.Command("pgrep", { args: ["-f", match] })
+      .output().catch(() => null);
+    const alive = out?.code === 0;
+    if (!alive) return;
+    await new Promise((r) => setTimeout(r, 250));
   }
 }
 

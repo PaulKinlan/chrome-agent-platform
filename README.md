@@ -33,7 +33,7 @@ extension/
 ## Paul's design decisions (implemented)
 
 1. **Multi-agent hub** — a master/hub agent + per-site worker agents, with
-   `delegate_task` / `list_agents` / `get_agent_status` delegation tools. A
+   `delegate_task` / `list_agents` delegation tools. A
    `multiAgent` config flag (see `createOrchestrator`) switches between 1-agent
    and multi-agent for iteration.
 2. **Consumer next-steps tray** — inferred (the agent derives 2-3 actions per
@@ -43,8 +43,8 @@ extension/
    approved tools.
 4. **Memory segregation** — OPFS keyed per origin (`memory/origins/<origin>`);
    one origin cannot read another's store; a `memory/master` store for the hub.
-5. **co-do** — its tool/sandbox principles are used as inspiration (not a code
-   import); the tool-set + upload seam follow the co-do shape.
+5. **Sandboxed tools** — compiled WASM functions are callable as tools, with a
+   tool-set + upload seam for the owner to add more.
 6. **History** — screenshots (chat strip) + MHTML saves (seam: `chrome.pageCapture`);
    data retained until the user deletes it (chat or memory explorer).
 7. **Naming** — placeholder.
@@ -71,4 +71,4 @@ the memory explorer — a 7-day rolling window, aggregated by agent/provider/tim
 - [ ] Morph (double-iframe meld) — documented seam, not wired
 - [ ] Real model key + end-to-end agent run (needs a configured key)
 - [ ] MHTML capture (chrome.pageCapture) — seam stubbed
-- [ ] glm-5.3 intercom deferral — seam documented, needs the hosted harness
+- [ ] Additional hosted-model deferral — seam documented, needs the hosted harness

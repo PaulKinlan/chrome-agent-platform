@@ -149,6 +149,22 @@ export async function captureTabScreenshot(tabId) {
     const url = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
     });
+    // Post-capture re-check: another tab may have become active (or the target
+    // tab navigated) between the pre-capture check and captureVisibleTab. If
+    // the requested tab is no longer the active one OR its origin changed, the
+    // captured bytes may be a different tab's — discard them (fail closed).
+    const afterActive = await chrome.tabs.query({
+      active: true,
+      windowId: tab.windowId,
+    });
+    if (afterActive?.[0]?.id !== tab.id) {
+      return { error: "active tab changed during capture — screenshot discarded" };
+    }
+    const afterTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : undefined;
+    if (!afterOrigin || afterOrigin !== origin) {
+      return { error: "tab navigated during capture — screenshot discarded" };
+    }
     return { screenshot: url };
   } catch (e) {
     return { error: String(e?.message ?? e) };

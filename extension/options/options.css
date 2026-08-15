@@ -261,3 +261,8 @@ input:focus, select:focus, textarea:focus {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Accessible provider form: visible labels, fieldset grouping. */
+.fields { border: 0; padding: 0; margin: 0.5rem 0 0; display: grid; gap: 0.5rem; }
+.field { display: grid; gap: 0.25rem; }
+.field-label { font-size: 0.8rem; color: var(--muted, #888); }

@@ -150,9 +150,10 @@ export function createOrchestrator({
     master,
     workers: workerAgents,
     async run(task, context, history) {
-      if (multiAgent) return await master.run(task, context, history);
-      const solo = createAgent({ model, system, memory: masterMemory, taskId });
-      return await solo.run(task, context, history);
+      // Solo mode REUSES the master agent (which carries the non-delegation
+      // browser/management tools); it must NOT build a fresh agent that loses
+      // those capabilities. Multi-agent mode adds the delegate tools on top.
+      return await master.run(task, context, history);
     },
     addWorker(config) {
       const a = createAgent({

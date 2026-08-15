@@ -41,7 +41,7 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
 - Multimodal input: text, image, audio (mic), video (camera / file). Transcribed /
   described before planning (Web Speech API now; WebRTC voice-model seam documented).
 - Task start → the agent plans → executes across sites.
-- Renders the chat surface inline (co-do style) plus the agent directory.
+- Renders the chat surface inline plus the agent directory.
 - `at-@` mentions: `@github`, `@aifoc` refer to a site-as-agent and call its tools
   directly.
 
@@ -86,16 +86,16 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
 - Primitives for knowledge workers: "check this site at 9am", "remind me to review",
   "watch this page and tell me when X changes".
 
-### 2.7 Morph (double-iframe) + co-do
+### 2.7 Morph (double-iframe)
 - The agent can generate/meld content by composing 2–3 sites into one view
   (double-iframe surface).
-- co-do WASM tools: the agent can call compiled WASM functions (co-do's tool set)
+- Sandboxed WASM tools: the agent can call compiled WASM functions
   and the user can upload more tools.
 - In the chat: the agent launches URLs, captures screenshots (clickable, re-opens the
   page), and stores MHTML saves of visited pages.
 
 ### 2.8 Chat surface
-- Inline in the NTP (co-do style): the conversation, launched-URL chips, a screenshot
+- Inline in the NTP: the conversation, launched-URL chips, a screenshot
   history strip (click to re-open), MHTML saves, and the double-iframe morph output.
 
 ## 3. Security model

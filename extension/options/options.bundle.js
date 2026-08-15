@@ -318,13 +318,13 @@ async function renderProviders() {
         <button class="btn small set-default" type="button">${cfg.provider === p.id ? "Update" : "Use"}</button>
       </div>
       ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
-      <div class="fields">
-        ${p.needsKey || p.needsModel || p.baseURL || p.needsModel ? `<input class="base-url" type="text" placeholder="Base URL" value="${// The ACTIVE card shows the STORED endpoint (not the preset) so an
+      <fieldset class="fields">
+        ${p.needsKey || p.needsModel || p.baseURL || p.needsModel ? `<label class="field"><span class="field-label">Base URL</span><input class="base-url" type="text" placeholder="https://\u2026" value="${// The ACTIVE card shows the STORED endpoint (not the preset) so an
     // Update never silently resets a custom base URL.
-    escapeAttr(cfg.provider === p.id ? cfg.baseURL || p.baseURL : p.baseURL)}">` : ""}
-        ${p.needsKey || p.needsModel ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">` : ""}
-        ${p.needsKey || p.needsModel ? `<input class="model" type="text" placeholder="Model id" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}">` : ""}
-      </div>` : ""}
+    escapeAttr(cfg.provider === p.id ? cfg.baseURL || p.baseURL : p.baseURL)}"></label>` : ""}
+        ${p.needsKey || p.needsModel ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="\u2026" autocomplete="off"></label>` : ""}
+        ${p.needsKey || p.needsModel ? `<label class="field"><span class="field-label">Model id</span><input class="model" type="text" placeholder="e.g. gpt-4o-mini" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}"></label>` : ""}
+      </fieldset>` : ""}
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
       const isActive = cfg.provider === p.id;
@@ -370,7 +370,7 @@ async function renderProviders() {
 }
 async function renderAgents() {
   const s = await storage.get("cap:multiAgent");
-  $("#multi-agent").checked = Boolean(s["cap:multiAgent"]);
+  $("#multi-agent").checked = s["cap:multiAgent"] !== false;
   $("#multi-agent").addEventListener("change", async (e) => {
     await storage.set({ "cap:multiAgent": e.target.checked });
     $("#per-agent-provider").hidden = !e.target.checked;
@@ -394,11 +394,13 @@ async function renderAppearance() {
   const grid = $("#theme-grid");
   grid.innerHTML = "";
   for (const t of THEMES) {
-    const card = document.createElement("div");
+    const card = document.createElement("button");
+    card.type = "button";
     card.className = "theme-card" + (current === t.id ? " active" : "");
+    card.setAttribute("aria-pressed", String(current === t.id));
     card.innerHTML = `
-      <div class="theme-swatch" style="background: linear-gradient(135deg, ${t.swatch})"></div>
-      <div class="theme-label">${t.label}</div>`;
+      <span class="theme-swatch" style="background: linear-gradient(135deg, ${t.swatch})"></span>
+      <span class="theme-label">${t.label}</span>`;
     card.addEventListener("click", async () => {
       await storage.set({ "cap:theme": t.id });
       document.documentElement.dataset.theme = t.id;

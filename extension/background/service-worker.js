@@ -72,14 +72,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.warn("scheduled task already in flight", alarm.name);
     return;
   }
-  const store = await chrome.storage.local.get(TASK_KEY);
-  const task = store[TASK_KEY]?.[alarm.name];
-  if (!task) {
-    await releaseInflight(alarm.name);
-    console.error("scheduled task payload missing", alarm.name);
-    return;
-  }
+  // The lock is acquired; EVERYTHING below (including the storage read) must
+  // run inside try/finally so a read/validation rejection still releases the
+  // in-flight lock (otherwise future firings block forever).
   try {
+    const store = await chrome.storage.local.get(TASK_KEY);
+    const task = store[TASK_KEY]?.[alarm.name];
+    if (!task) {
+      console.error("scheduled task payload missing", alarm.name);
+      return;
+    }
     // Run FIRST, delete only on success (durable across worker interruption).
     await runTask({
       id: alarm.name,

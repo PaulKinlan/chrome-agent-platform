@@ -8,6 +8,7 @@ export const SCHEMA_BOUNDS = {
   maxArrayItems: 100,
   maxStringLength: 10000,
   maxUnionBranches: 5,
+  maxLiteralDepth: 8,
 };
 
 /**
@@ -57,19 +58,20 @@ function valueMatchesType(value, type) {
 }
 
 /** Deep structural equality for const/enum literal comparison. */
-function deepEqual(a, b) {
+function deepEqual(a, b, depth = 0) {
+  if (depth > SCHEMA_BOUNDS.maxLiteralDepth) return false;
   if (a === b) return true;
   if (typeof a !== typeof b) return false;
   if (a === null || b === null) return false;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i], depth + 1)) return false;
     return true;
   }
   if (typeof a === "object") {
     const ka = Object.keys(a), kb = Object.keys(b);
     if (ka.length !== kb.length) return false;
-    for (const k of ka) if (!deepEqual(a[k], b[k])) return false;
+    for (const k of ka) if (!deepEqual(a[k], b[k], depth + 1)) return false;
     return true;
   }
   return false;
@@ -246,6 +248,51 @@ function valueSatisfiesSchema(schema, value, depth) {
  * malformed schema becomes z.never() (rejects everything), never a permissive
  * fallback. All supported sibling constraints are composed, never dropped.
  */
+
+/**
+ * Infer the type an UNTYPED schema implies from its bound siblings. Used to
+ * compose an untyped `anyOf` with its root siblings (minLength → string,
+ * minimum → number, items → array, properties/required → object). Returns a
+ * string type, or null when nothing implies a type, or a sentinel CONFLICT
+ * when multiple incompatible types are implied (fail closed).
+ */
+const CONFLICT = Symbol("type-conflict");
+function inferTypeFromSiblings(schema) {
+  let inferred = null;
+  const claim = (t) => {
+    if (inferred !== null && inferred !== t) return CONFLICT;
+    inferred = t;
+    return inferred;
+  };
+  if (schema.minLength !== undefined || schema.maxLength !== undefined) {
+    if (claim("string") === CONFLICT) return CONFLICT;
+  }
+  if (schema.minimum !== undefined || schema.maximum !== undefined) {
+    if (claim("number") === CONFLICT) return CONFLICT;
+  }
+  if (schema.items !== undefined || schema.minItems !== undefined || schema.maxItems !== undefined) {
+    if (claim("array") === CONFLICT) return CONFLICT;
+  }
+  if (schema.properties !== undefined || schema.required !== undefined || schema.additionalProperties !== undefined) {
+    if (claim("object") === CONFLICT) return CONFLICT;
+  }
+  return inferred;
+}
+
+/**
+ * Build a zod literal for a const/enum value. Primitives use z.literal; object
+ * and array values use a bounded deepEqual refinement (z.literal compares
+ * non-primitives by IDENTITY, which would reject structurally-equal clones).
+ */
+function literalSchema(z, value) {
+  if (value !== null && typeof value === "object") {
+    return z.any().refine((x) => deepEqual(x, value), {
+      message: "expected exact structural value",
+    });
+  }
+  return z.literal(value);
+}
+
 export function schemaToZod(z, schema, depth = 0) {
   // Phase 1: validate the complete AST. Any malformed/unsupported shape fails
   // closed for the WHOLE schema (not just a branch that could become optional).
@@ -256,20 +303,26 @@ export function schemaToZod(z, schema, depth = 0) {
   // if none survive, the schema is unsatisfiable and fails closed. ----
   if (schema.const !== undefined) {
     if (!valueSatisfiesSchema(schema, schema.const, depth)) return z.never();
-    return z.literal(schema.const);
+    return literalSchema(z, schema.const);
   }
   if (schema.enum !== undefined) {
     const valid = schema.enum.filter((v) => valueSatisfiesSchema(schema, v, depth));
     if (valid.length === 0) return z.never();
-    return z.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z.literal(v)));
+    return z.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => literalSchema(z, v)));
   }
 
   // Build the type + bounds guard (the base schema WITHOUT anyOf).
-  // An UNTYPED schema carrying anyOf must be permissive (z.unknown), not the
-  // fail-closed z.never() that buildBaseZod returns for an untyped schema —
-  // otherwise the intersection rejects every value.
+  // An UNTYPED schema carrying anyOf must still compose its root siblings:
+  // infer the type the siblings imply (minLength → string, properties → object,
+  // ...) and use that typed base; conflicting inferences fail closed; only a
+  // truly unconstrained untyped union falls back to z.unknown().
   const base = (schema.type === undefined && schema.anyOf !== undefined)
-    ? z.unknown()
+    ? (() => {
+        const inferred = inferTypeFromSiblings(schema);
+        if (inferred === CONFLICT) return z.never();
+        if (inferred === null) return z.unknown();
+        return buildBaseZod(z, { ...schema, type: inferred });
+      })()
     : buildBaseZod(z, schema);
   if (schema.anyOf !== undefined) {
     const branches = schema.anyOf.map((b) => schemaToZod(z, b, depth + 1));
