@@ -129,11 +129,25 @@ class Cdp {
   pageSessions = new Set();
   swAttachErrors = [];
   executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
+  fatalEvents = []; // malformed protocol, target crash, unexpected socket close
+  intentionalClose = false;
   onAttach = null; // (sessionId, targetInfo, waitingForDebugger) => void
   constructor(ws) {
     this.ws = ws;
+    ws.onerror = () => this.fatalEvents.push("websocket error");
+    ws.onclose = () => {
+      if (!this.intentionalClose) {
+        this.fatalEvents.push("websocket closed unexpectedly");
+      }
+    };
     ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
+      let d;
+      try {
+        d = JSON.parse(e.data);
+      } catch (err) {
+        this.fatalEvents.push(`malformed CDP message: ${String(err?.message ?? err)}`);
+        return;
+      }
       if (d.id && this.pending.has(d.id)) {
         const { resolve, reject, timer } = this.pending.get(d.id);
         clearTimeout(timer);
@@ -146,6 +160,16 @@ class Cdp {
           );
         } else {
           resolve(d);
+        }
+      }
+      if (d.method === "Inspector.targetCrashed") {
+        // The SW target is INTENTIONALLY closed for the pre-attached restart
+        // (Target.closeTarget), which emits targetCrashed — that is expected,
+        // not fatal. A crash on any OTHER target (a page) is a real failure.
+        if (!this.swSessions.has(d.sessionId)) {
+          this.fatalEvents.push(
+            `Inspector.targetCrashed (session ${d.sessionId})`,
+          );
         }
       }
       if (d.method === "Target.attachedToTarget") {
@@ -386,6 +410,7 @@ const EXPECTED = [
   "extension loaded",
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
+  "manifest: debugger is optional (not permanent)",
   "initial SW closed for a pre-attached restart",
   "SW woken for the pre-attached restart",
   "initial SW boot observed via pre-attached restart",
@@ -403,14 +428,16 @@ const EXPECTED = [
   "Settings: Update preserved endpoint/model + empty key",
   "Settings: switched back to Demo via a real click",
   "Settings: provider restored to demo",
+  "Settings: Enroll input present",
+  "Settings: typed a loopback origin into the Enroll field",
+  "Settings: clicked Enroll via a real click",
+  "enrollment: denied host permission → origin NOT enrolled (fail closed)",
   "Settings: retained a driven-UI screenshot",
   "warm run 1 returns a concrete demo result",
   "warm run 2 (after re-save) returns a concrete demo result",
   "real red tab resolved via chrome.tabs.query",
   "screenshot: denied after revoke (secondary probe)",
-  "screenshot: exact-origin grant captures a real PNG (secondary probe)",
-  "screenshot: retained to disk (non-empty)",
-  "screenshot: decoded pixels are predominantly red",
+  "screenshot: capture fails closed without the debugger permission",
   "screenshot: wrong-origin grant is denied (secondary probe)",
   "screenshot: expired grant is denied (secondary probe)",
   "Settings: browser-grant checkbox present",
@@ -418,7 +445,7 @@ const EXPECTED = [
   "screenshot: granted browser control via a real checkbox click",
   "screenshot: typed the red origin into the allowed-origins field",
   "screenshot: grant scoped to the red origin via the UI",
-  "screenshot: UI-granted capture succeeds (real PNG)",
+  "screenshot: UI-granted capture fails closed (debugger absent)",
   "screenshot: revoked via a real checkbox click",
   "screenshot: revoked → capture denied",
   "per-origin clear leaves B intact",
@@ -449,9 +476,15 @@ const EXPECTED = [
   "Settings: multi-agent setting persisted ON",
   "orchestrator: delegation tools restored",
   "agent.delete removed the worker from the list",
+  "delete-race: upsert on a deleted origin is rejected",
+  "delete-race: listOrigins excludes the deleted origin after racing upsert",
+  "Settings: Disenroll button present for an enrolled agent",
+  "Settings: clicked Disenroll via a real click",
+  "disenroll: agent removed from list + enrollment tombstoned",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
+  "no fatal CDP lifecycle events",
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
   "no leftover temporary evidence dir",
@@ -461,14 +494,31 @@ const EXPECTED = [
 
 const evidenceFiles = [];
 async function writeEvidence(name, bytes) {
-  // Bounded (a hung fs write must not stall the gate indefinitely).
-  await withTimeout((async () => {
+  // Bounded (a hung fs write must not stall the gate indefinitely) + cancellable:
+  // the body checks a cancellation flag so that after the deadline it stops
+  // early rather than continuing to mutate the evidence dir.
+  let cancelled = false;
+  const body = (async () => {
     await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
+    if (cancelled) throw new Error(`cancelled evidence write: ${name}`);
     const path = `${EVIDENCE_DIR}/${name}`;
     await Deno.remove(path).catch(() => {}); // delete-first (never overwrite stale)
+    if (cancelled) throw new Error(`cancelled evidence write: ${name}`);
     await Deno.writeFile(path, bytes);
-    evidenceFiles.push({ name, sha256: await sha256Hex(bytes), bytes: bytes.length });
-  })(), 10000, `writeEvidence ${name}`);
+    if (cancelled) throw new Error(`cancelled evidence write: ${name}`);
+    const entry = {
+      name,
+      sha256: await sha256Hex(bytes),
+      bytes: bytes.length,
+    };
+    evidenceFiles.push(entry);
+  })();
+  try {
+    await withTimeout(body, 10000, `writeEvidence ${name}`);
+  } catch (e) {
+    cancelled = true;
+    throw e;
+  }
   return `${EVIDENCE_DIR}/${name}`;
 }
 
@@ -521,7 +571,11 @@ async function main() {
         }
         if (waitingForDebugger) {
           await cdp.send("Runtime.runIfWaitingForDebugger", {}, sessionId)
-            .catch(() => {});
+            .catch((e) =>
+              cdp.swAttachErrors.push(
+                "runIfWaitingForDebugger: " + String(e?.message ?? e),
+              )
+            );
         }
       })();
     };
@@ -563,6 +617,18 @@ async function main() {
     await cdp.send("Runtime.enable", {}, swSession); // throws on failure
     cdp.swSessions.add(swSession);
     check("SW Runtime.enable succeeded", true);
+
+    // Manifest attestation: the debugger capability (screenshot pixel capture)
+    // must be OPTIONAL — never a permanent all-sites permission (round-13 blocker).
+    const manifestText = await Deno.readTextFile(`${EXT}/manifest.json`);
+    const manifest = JSON.parse(manifestText);
+    check(
+      "manifest: debugger is optional (not permanent)",
+      Array.isArray(manifest.permissions) &&
+        !manifest.permissions.includes("debugger") &&
+        Array.isArray(manifest.optional_permissions) &&
+        manifest.optional_permissions.includes("debugger"),
+    );
 
     // Open the NTP (for the genuine input journey + message probes).
     const ntpPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
@@ -718,6 +784,35 @@ async function main() {
     await sleep(500);
     const demoCfg = await msgValue({ type: "provider.get" });
     check("Settings: provider restored to demo", demoCfg?.provider === "demo");
+
+    // ─────────────────────────────────────────────────────────────
+    // ENROLLMENT — genuine owner gesture: type a loopback origin + click Enroll.
+    // Headless auto-denies the optional host-permission prompt, so the origin
+    // must NOT be enrolled (fail closed). A headed browser would grant it; the
+    // deny path is what is observable here and proves enrollment is NOT claimed
+    // without the permission (the round-13 acceptance).
+    // ─────────────────────────────────────────────────────────────
+    const enrollOrigin = "https://enroll.example";
+    check(
+      "Settings: Enroll input present",
+      (await boxOf(cdp, optsSession, "#enroll-origin")) !== null,
+    );
+    check(
+      "Settings: typed a loopback origin into the Enroll field",
+      await typeInto(cdp, optsSession, "#enroll-origin", enrollOrigin),
+    );
+    check(
+      "Settings: clicked Enroll via a real click",
+      await clickSel(cdp, optsSession, "#enroll-btn"),
+    );
+    await sleep(1500); // let the (denied) permission request settle
+    const enrolledAfterDeny = await msgValue({ type: "agent.list" });
+    check(
+      "enrollment: denied host permission → origin NOT enrolled (fail closed)",
+      Array.isArray(enrolledAfterDeny) &&
+        !enrolledAfterDeny.includes(enrollOrigin),
+    );
+
     const optsShot = await captureShot(cdp, optsSession);
     if (optsShot) {
       await writeEvidence("options-driven.png", optsShot);
@@ -756,33 +851,20 @@ async function main() {
       "screenshot: denied after revoke (secondary probe)",
       revokedShot?.error !== undefined || revokedShot?.ok === false,
     );
-    // (b) grant the EXACT origin → capture succeeds (secondary probe).
+    // (b) grant the EXACT origin → capture should reach the debugger gate. The
+    // debugger permission is OPTIONAL + headless cannot grant it, so capture
+    // must FAIL CLOSED with a clear error (never throw, never silently succeed).
     await msgValue({
       type: "browser-control.set",
       origins: [RED_ORIGIN],
       expiryMs: 60000,
     });
-    await runBounded(RM, ["-f", `${EVIDENCE_DIR}/allowed-red.png`]);
     const allowedShot = await msgValue({ type: "capture.tab", tabId: redTabId });
-    const shotOk = typeof allowedShot?.screenshot === "string" &&
-      allowedShot.screenshot.startsWith("data:image/png;base64,") &&
-      allowedShot.screenshot.length > 500;
-    check("screenshot: exact-origin grant captures a real PNG (secondary probe)", shotOk);
-    if (shotOk) {
-      const b64 = allowedShot.screenshot.split(",")[1];
-      const bin = new Uint8Array(
-        atob(b64).split("").map((c) => c.charCodeAt(0)),
-      );
-      await writeEvidence("allowed-red.png", bin);
-      check("screenshot: retained to disk (non-empty)", bin.length > 200);
-      try {
-        const { samples } = await decodePngSamples(bin);
-        check("screenshot: decoded pixels are predominantly red", mostlyRed(samples));
-      } catch (e) {
-        console.error("color attribution failed:", String(e?.message ?? e));
-        check("screenshot: decoded pixels are predominantly red", false);
-      }
-    }
+    check(
+      "screenshot: capture fails closed without the debugger permission",
+      allowedShot?.error !== undefined &&
+        String(allowedShot.error).includes("debugger permission"),
+    );
     // (c) wrong-origin (secondary probe).
     await msgValue({
       type: "browser-control.set",
@@ -841,9 +923,9 @@ async function main() {
     );
     const uiGrantShot = await msgValue({ type: "capture.tab", tabId: redTabId });
     check(
-      "screenshot: UI-granted capture succeeds (real PNG)",
-      typeof uiGrantShot?.screenshot === "string" &&
-        uiGrantShot.screenshot.startsWith("data:image/png;base64,"),
+      "screenshot: UI-granted capture fails closed (debugger absent)",
+      uiGrantShot?.error !== undefined &&
+        String(uiGrantShot.error).includes("debugger permission"),
     );
     // Revoke via a genuine checkbox click (uncheck).
     check(
@@ -1112,6 +1194,65 @@ async function main() {
       "agent.delete removed the worker from the list",
       Array.isArray(listedAfter) && !listedAfter.includes("https://worker.example"),
     );
+    // ─────────────────────────────────────────────────────────────
+    // DELETE-RACE regression (round-13 blocker): a racing upsert from a
+    // still-running bridge must NOT resurrect the tombstoned worker. The upsert
+    // is rejected (isEnrolled false under the origin lock) and listOrigins —
+    // derived from authoritative enrollment state, not OPFS dir existence —
+    // still excludes it.
+    // ─────────────────────────────────────────────────────────────
+    const raceUpsert = await msgValue({
+      type: "tools.upsert",
+      origin: "https://worker.example",
+      tools: [{
+        name: "zombie",
+        description: "zombie tool",
+        inputSchema: { type: "object", properties: {}, required: [] },
+      }],
+    });
+    check(
+      "delete-race: upsert on a deleted origin is rejected",
+      raceUpsert?.ok === false || raceUpsert?.error !== undefined,
+    );
+    const listedAfterRace = await msgValue({ type: "agent.list" });
+    check(
+      "delete-race: listOrigins excludes the deleted origin after racing upsert",
+      Array.isArray(listedAfterRace) &&
+        !listedAfterRace.includes("https://worker.example"),
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // DISENROLL UI — create a SECOND agent, open a fresh Settings page (so
+    // renderData lists it), and drive the Disenroll button with genuine input.
+    // The authoritative agent.delete route is what the button calls.
+    // ─────────────────────────────────────────────────────────────
+    await msgValue({ type: "agent.create", origin: "https://disenroll.example", name: "disenroll" });
+    const optsPage2 = await openPage(
+      port, `chrome-extension://${extId}/options/options.html`,
+    );
+    await sleep(2000);
+    const optsSession2 = await attachRuntime(cdp, optsPage2.id);
+    cdp.pageSessions.add(optsSession2);
+    let disenrollBtn = null;
+    for (let i = 0; i < 20 && !disenrollBtn; i++) {
+      disenrollBtn = await boxOf(cdp, optsSession2, ".origin-row .disenroll-origin");
+      if (!disenrollBtn) await sleep(250);
+    }
+    check(
+      "Settings: Disenroll button present for an enrolled agent",
+      disenrollBtn !== null,
+    );
+    check(
+      "Settings: clicked Disenroll via a real click",
+      await clickSel(cdp, optsSession2, ".origin-row .disenroll-origin"),
+    );
+    await sleep(600);
+    const afterDisenroll = await msgValue({ type: "agent.list" });
+    check(
+      "disenroll: agent removed from list + enrollment tombstoned",
+      Array.isArray(afterDisenroll) &&
+        !afterDisenroll.includes("https://disenroll.example"),
+    );
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 10 — service-worker console audit (strictly worker-only).
@@ -1125,13 +1266,27 @@ async function main() {
       console.log(`page console error: ${e.detail}`);
     }
     check("no NTP/Settings console errors", cdp.pageErrors().length === 0);
+    for (const f of cdp.fatalEvents) {
+      console.log(`fatal CDP event: ${f}`);
+    }
+    check("no fatal CDP lifecycle events", cdp.fatalEvents.length === 0);
 
+    cdp.intentionalClose = true;
     ws.close();
-    await fixture.shutdown().catch(() => {});
+    await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch((e) => {
+      console.error("fixture.shutdown failed:", String(e?.message ?? e));
+    });
   } catch (e) {
     console.error("journey failure:", String(e?.message ?? e));
-    try { await fixture.shutdown(); } catch { /* ignore */ }
-    try { ws?.close(); } catch { /* ignore */ }
+    try {
+      await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
+        () => {},
+      );
+    } catch { /* ignore */ }
+    try {
+      cdp && (cdp.intentionalClose = true);
+      ws?.close();
+    } catch { /* ignore */ }
   } finally {
     // ─────────────────────────────────────────────────────────────
     // Owner-clean shutdown (fail-closed, bounded, environment-scrubbed).
@@ -1206,24 +1361,51 @@ async function main() {
       `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
     );
 
-    // Evidence manifest (RETAIN only, fatal): commit + run id + named checks +
-    // file hashes. A FAILED manifest write is FATAL — the retained evidence has
-    // no provenance without it. The default (non-retained) run writes no
-    // manifest (its temp evidence is discarded above).
+    // Evidence manifest (RETAIN only, fatal): the SOURCE commit the evidence
+    // attests + the evidence files' hashes + the named checks. A tracked manifest
+    // can never contain the hash of the commit that contains IT (that commit is
+    // created AFTER the run), so we model `testedSourceCommit` (the HEAD at run
+    // time — i.e. the exact source the evidence exercised) explicitly, and record
+    // worktree cleanliness. A failed git lookup or manifest write is FATAL.
     let manifestOk = true;
     if (RETAIN) {
       try {
-        let commit = "unknown";
-        try {
-          const g = new Deno.Command(GIT, {
-            args: ["rev-parse", "HEAD"],
-            stdout: "piped",
-            clearEnv: true,
-          }).outputSync();
-          commit = new TextDecoder().decode(g.stdout).trim();
-        } catch { /* not a git checkout */ }
+        let testedSourceCommit = null;
+        const g = new Deno.Command(GIT, {
+          args: ["rev-parse", "HEAD"],
+          stdout: "piped",
+          stderr: "piped",
+          clearEnv: true,
+        }).outputSync();
+        if (g.code !== 0) {
+          throw new Error(
+            `git rev-parse failed (exit ${g.code}) — cannot attest source`,
+          );
+        }
+        testedSourceCommit = new TextDecoder().decode(g.stdout).trim();
+        if (!/^[0-9a-f]{40}$/.test(testedSourceCommit)) {
+          throw new Error(
+            `git rev-parse returned a non-commit (${testedSourceCommit})`,
+          );
+        }
+        // Worktree cleanliness (excluding test-artifacts/, which this run is
+        // about to write). A dirty tree beyond that is recorded, not fatal.
+        const st = new Deno.Command(GIT, {
+          args: ["status", "--porcelain"],
+          stdout: "piped",
+          clearEnv: true,
+        }).outputSync();
+        const dirty = (st.code === 0
+          ? new TextDecoder().decode(st.stdout)
+          : "").split("\n").filter((l) =>
+            l && !l.slice(3).startsWith("test-artifacts/")
+          );
         const manifest = {
-          commit,
+          testedSourceCommit,
+          evidenceCommitNote:
+            "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
+          worktreeClean: dirty.length === 0,
+          worktreeDirtyFiles: dirty.slice(0, 20),
           runId: RUN_ID,
           retain: RETAIN,
           ts: new Date().toISOString(),
@@ -1233,9 +1415,13 @@ async function main() {
           checks: results.map((r) => ({ name: r.name, pass: r.pass })),
           files: evidenceFiles,
         };
-        await Deno.writeFile(
-          `${EVIDENCE_DIR}/manifest.json`,
-          new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
+        await withTimeout(
+          Deno.writeFile(
+            `${EVIDENCE_DIR}/manifest.json`,
+            new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
+          ),
+          10000,
+          "write retained manifest.json",
         );
       } catch (e) {
         manifestOk = false;

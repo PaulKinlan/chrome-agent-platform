@@ -1,10 +1,17 @@
 {
-  "commit": "40c627c9c02102556cdbfd8e3dbc53748fb197bc",
-  "runId": "cap-1786819820669",
+  "testedSourceCommit": "b16c7ba4ff5374e4528ac2ffbe72d51e683dc1c0",
+  "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
+  "worktreeClean": false,
+  "worktreeDirtyFiles": [
+    " M scripts/chrome-journeys.ts",
+    " M test-artifacts/ntp-driven.png",
+    " M test-artifacts/options-driven.png"
+  ],
+  "runId": "cap-1786822712331",
   "retain": true,
-  "ts": "2026-08-15T18:50:48.783Z",
+  "ts": "2026-08-15T19:39:04.513Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 75,
+  "passed": 84,
   "failed": 0,
   "checks": [
     {
@@ -21,6 +28,10 @@
     },
     {
       "name": "SW Runtime.enable succeeded",
+      "pass": true
+    },
+    {
+      "name": "manifest: debugger is optional (not permanent)",
       "pass": true
     },
     {
@@ -92,6 +103,22 @@
       "pass": true
     },
     {
+      "name": "Settings: Enroll input present",
+      "pass": true
+    },
+    {
+      "name": "Settings: typed a loopback origin into the Enroll field",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked Enroll via a real click",
+      "pass": true
+    },
+    {
+      "name": "enrollment: denied host permission → origin NOT enrolled (fail closed)",
+      "pass": true
+    },
+    {
       "name": "Settings: retained a driven-UI screenshot",
       "pass": true
     },
@@ -112,15 +139,7 @@
       "pass": true
     },
     {
-      "name": "screenshot: exact-origin grant captures a real PNG (secondary probe)",
-      "pass": true
-    },
-    {
-      "name": "screenshot: retained to disk (non-empty)",
-      "pass": true
-    },
-    {
-      "name": "screenshot: decoded pixels are predominantly red",
+      "name": "screenshot: capture fails closed without the debugger permission",
       "pass": true
     },
     {
@@ -152,7 +171,7 @@
       "pass": true
     },
     {
-      "name": "screenshot: UI-granted capture succeeds (real PNG)",
+      "name": "screenshot: UI-granted capture fails closed (debugger absent)",
       "pass": true
     },
     {
@@ -276,6 +295,26 @@
       "pass": true
     },
     {
+      "name": "delete-race: upsert on a deleted origin is rejected",
+      "pass": true
+    },
+    {
+      "name": "delete-race: listOrigins excludes the deleted origin after racing upsert",
+      "pass": true
+    },
+    {
+      "name": "Settings: Disenroll button present for an enrolled agent",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked Disenroll via a real click",
+      "pass": true
+    },
+    {
+      "name": "disenroll: agent removed from list + enrollment tombstoned",
+      "pass": true
+    },
+    {
       "name": "no service-worker console errors",
       "pass": true
     },
@@ -285,6 +324,10 @@
     },
     {
       "name": "no NTP/Settings console errors",
+      "pass": true
+    },
+    {
+      "name": "no fatal CDP lifecycle events",
       "pass": true
     },
     {
@@ -311,18 +354,13 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "044113d64b7c12cf70bb7416ae8f98a47dacd154ca674c1b386208a8845e7dc6",
-      "bytes": 79788
+      "sha256": "f246ea8b3b84d10be4aa3f748e38ef73854e00431de1446722df92e87279c411",
+      "bytes": 83349
     },
     {
       "name": "options-driven.png",
-      "sha256": "c1012cbbea846e4ddf9ceb8e212db0f6a4ca8a81c1ad160bdd557f3fa2f395fd",
-      "bytes": 203820
-    },
-    {
-      "name": "allowed-red.png",
-      "sha256": "e80ebbfda4431e02ca30c833fdca471bb555d36845feaff72a7d787cebb6e06e",
-      "bytes": 14609
+      "sha256": "1da6cea5afabad135dfb318987c93fdb93207f27626bd886b64818feab880d44",
+      "bytes": 180866
     }
   ]
 }
