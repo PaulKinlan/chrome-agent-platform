@@ -1,3 +1,5 @@
+const ICONS = {"mic": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"18\" height=\"18\" aria-hidden=\"true\"><path d=\"M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"23\"/><line x1=\"8\" y1=\"23\" x2=\"16\" y2=\"23\"/></svg>", "attach": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"14\" height=\"14\" aria-hidden=\"true\"><path d=\"M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48\"/></svg>", "camera": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"14\" height=\"14\" aria-hidden=\"true\"><path d=\"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z\"/><circle cx=\"12\" cy=\"13\" r=\"4\"/></svg>", "audio": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"14\" height=\"14\" aria-hidden=\"true\"><path d=\"M9 18V5l12-2v13\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><circle cx=\"18\" cy=\"16\" r=\"3\"/></svg>", "record": "<svg viewBox=\"0 0 24 24\" fill=\"currentColor\" width=\"14\" height=\"14\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"6\"/></svg>"};
+function setActionIcon(el, key, label) { el.innerHTML = (ICONS[key] || "") + " " + label; }
 // ntp/ntp.js — the hub page wiring.
 
 import { send } from "../lib/messages.js";
@@ -146,7 +148,7 @@ attachMenu.addEventListener("click", async (e) => {
     });
     if (!file) return;
     attachments.push({ name: file.name, kind, size: file.size, type: file.type });
-    addAttachTag(`📎 ${file.name}`);
+    addAttachTag(ICONS.attach + " " + file.name);
   } catch (err) {
     setStatus("attach error: " + String(err?.message ?? err), false);
   }
@@ -263,7 +265,7 @@ function capShow(mode) {
   capMode = mode;
   capPanel.hidden = false;
   capTitle.textContent = mode === "audio" ? "Record audio" : "Capture camera";
-  capAction.textContent = mode === "camera" ? "📷 Capture photo" : "● Record";
+  setActionIcon(capAction, mode === "camera" ? "camera" : "record", mode === "camera" ? "Capture photo" : "Record");
   capTimer.textContent = "0:00";
   capNote.textContent = "";
   capVideo.hidden = mode === "audio";
@@ -381,13 +383,13 @@ function stopCapRecording() {
   capRecording = false;
   if (capTimerId) clearInterval(capTimerId);
   capTimerId = null;
-  capAction.textContent = capMode === "camera" ? "📷 Capture photo" : "● Record";
+  setActionIcon(capAction, capMode === "camera" ? "camera" : "record", capMode === "camera" ? "Capture photo" : "Record");
 }
 
 function finishCapture(blob, kind, name) {
   const url = URL.createObjectURL(blob);
   attachments.push({ name, kind, size: blob.size, type: blob.type, blobURL: url, blob });
-  addAttachTag(`${kind === "audio" ? "🎙️" : "🎥"} ${name}`);
+  addAttachTag((kind === "audio" ? ICONS.audio : ICONS.camera) + " " + name);
   setStatus(`attached ${name}`);
   capClosePanel();
 }
