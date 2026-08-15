@@ -8,28 +8,85 @@
   --accent2: #7ee787;
   --danger: #ff7b72;
 }
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 body {
-  margin: 0; background: var(--bg); color: var(--text);
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
   font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-  position: fixed; bottom: 8px; right: 12px; font-size: 11px; color: var(--muted);
-  background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px;
+position: fixed;
+bottom: 8px;
+right: 12px;
+font-size: 11px;
+color: var(--muted);
+background: var(--panel);
+border: 1px solid var(--border);
+border-radius: 6px;
+padding: 3px 8px;
 }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
 .btn {
-  background: var(--accent); color: #001; border: 0; border-radius: 6px;
-  padding: 7px 14px; font-weight: 600; cursor: pointer;
+  background: var(--accent);
+  color: #001;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-weight: 600;
+  cursor: pointer;
 }
-.btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+/* Consistent icon-button scale (mic, +, and any icon action across surfaces). */
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 13px;
 }
-.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); }
-.tag { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent2);
+}
+.tag {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
 
 /* The "thinking" glow — a multicolor animated halo around the composer while
    the agent is responding. Respects prefers-reduced-motion (static glow). */
@@ -46,7 +103,8 @@ a:hover { text-decoration: underline; }
     from 0deg,
     #58a6ff, #7ee787, #ff7b72, #d2a8ff, #f0b72f, #58a6ff
   );
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0
+    0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   z-index: -1;
@@ -54,8 +112,13 @@ a:hover { text-decoration: underline; }
   animation: glow-rotate 3s linear infinite;
 }
 @keyframes glow-rotate {
-  to { filter: blur(1px) hue-rotate(360deg); }
+  to {
+    filter: blur(1px) hue-rotate(360deg);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .glow::before { animation: none; filter: none; }
+  .glow::before {
+    animation: none;
+    filter: none;
+  }
 }

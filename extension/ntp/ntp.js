@@ -1,5 +1,18 @@
-const ICONS = {"mic": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"18\" height=\"18\" aria-hidden=\"true\"><path d=\"M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z\"/><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"23\"/><line x1=\"8\" y1=\"23\" x2=\"16\" y2=\"23\"/></svg>", "attach": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"14\" height=\"14\" aria-hidden=\"true\"><path d=\"M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48\"/></svg>", "camera": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"14\" height=\"14\" aria-hidden=\"true\"><path d=\"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z\"/><circle cx=\"12\" cy=\"13\" r=\"4\"/></svg>", "audio": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" width=\"14\" height=\"14\" aria-hidden=\"true\"><path d=\"M9 18V5l12-2v13\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><circle cx=\"18\" cy=\"16\" r=\"3\"/></svg>", "record": "<svg viewBox=\"0 0 24 24\" fill=\"currentColor\" width=\"14\" height=\"14\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"6\"/></svg>"};
-function setActionIcon(el, key, label) { el.innerHTML = (ICONS[key] || "") + " " + label; }
+const ICONS = {
+  "mic":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>',
+  "attach":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
+  "camera":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+  "audio":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  "record":
+    '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="6"/></svg>',
+};
+function setActionIcon(el, key, label) {
+  el.innerHTML = (ICONS[key] || "") + " " + label;
+}
 // ntp/ntp.js — the hub page wiring.
 
 import { send } from "../lib/messages.js";
@@ -12,7 +25,9 @@ const agentsEl = document.getElementById("site-agents");
 
 function setStatus(text, ready = true) {
   statusEl.textContent = text;
-  statusEl.closest(".chip").querySelector(".dot").style.background = ready ? "var(--accent2)" : "var(--danger)";
+  statusEl.closest(".chip").querySelector(".dot").style.background = ready
+    ? "var(--accent2)"
+    : "var(--danger)";
   // the "thinking" glow — toggle the halo on the composer while the agent runs
   document.querySelector(".composer")?.classList.toggle("glow", !ready);
 }
@@ -22,15 +37,27 @@ async function refreshAgents() {
   const list = Array.isArray(origins) ? origins : [];
   agentsEl.replaceChildren();
   if (!list.length) {
-    agentsEl.append(Object.assign(document.createElement("span"), { textContent: "No sites enrolled yet — browse the web to discover them.", style: "color:var(--muted)" }));
+    agentsEl.append(
+      Object.assign(document.createElement("span"), {
+        textContent: "No sites enrolled yet — browse the web to discover them.",
+        style: "color:var(--muted)",
+      }),
+    );
     return;
   }
   for (const origin of list) {
     const tools = await send("tools.list", { origin });
     const chip = document.createElement("div");
     chip.className = "agent";
-    chip.innerHTML = `<span class="name">@${origin.replace(/^https?:\/\//, "").replace(/\/.*/, "")}</span><span class="tools">${(Array.isArray(tools) ? tools.length : 0)} tools</span>`;
-    chip.onclick = () => { taskInput.value = `@${origin} `; taskInput.focus(); };
+    chip.innerHTML = `<span class="name">@${
+      origin.replace(/^https?:\/\//, "").replace(/\/.*/, "")
+    }</span><span class="tools">${(Array.isArray(tools)
+      ? tools.length
+      : 0)} tools</span>`;
+    chip.onclick = () => {
+      taskInput.value = `@${origin} `;
+      taskInput.focus();
+    };
     agentsEl.append(chip);
   }
 }
@@ -45,12 +72,16 @@ async function refreshRecipes() {
     const chip = document.createElement("button");
     chip.className = "chip";
     chip.style.cursor = "pointer";
-    chip.innerHTML = `<span>${r.icon ?? ""}</span><span>${escapeHtml(r.name)}</span>`;
+    chip.innerHTML = `<span>${r.icon ?? ""}</span><span>${
+      escapeHtml(r.name)
+    }</span>`;
     chip.onclick = async () => {
       setStatus(`running recipe: ${r.name}`, false);
       const out = await send("recipe.run", { id: r.id });
-      if (out.ok) { setStatus("agent ready"); await refreshTasks(); }
-      else setStatus("error: " + (out.error ?? "unknown"), false);
+      if (out.ok) {
+        setStatus("agent ready");
+        await refreshTasks();
+      } else setStatus("error: " + (out.error ?? "unknown"), false);
     };
     recipesEl.append(chip);
   }
@@ -59,23 +90,40 @@ async function refreshRecipes() {
 async function refreshTasks() {
   const mem = await send("memory.list", { origin: "master" });
   // Render the journal as a task list.
-  const journal = await send("memory.get", { origin: "master", key: "journal" });
+  const journal = await send("memory.get", {
+    origin: "master",
+    key: "journal",
+  });
   const rows = Array.isArray(journal) ? journal : [];
   tasksEl.replaceChildren();
   if (!rows.length) {
-    tasksEl.append(Object.assign(document.createElement("p"), { textContent: "No tasks yet — start one above.", style: "color:var(--muted)" }));
+    tasksEl.append(
+      Object.assign(document.createElement("p"), {
+        textContent: "No tasks yet — start one above.",
+        style: "color:var(--muted)",
+      }),
+    );
     return;
   }
   for (const r of rows.slice(-10).reverse()) {
     const div = document.createElement("div");
     div.className = "task";
-    const text = typeof r === "object" && r.task ? r.task : String(r).slice(0, 80);
-    div.innerHTML = `<div class="t">${escapeHtml(text)}</div><div class="meta">${r.scheduled ? "scheduled" : "done"}</div>`;
+    const text = typeof r === "object" && r.task
+      ? r.task
+      : String(r).slice(0, 80);
+    div.innerHTML = `<div class="t">${
+      escapeHtml(text)
+    }</div><div class="meta">${r.scheduled ? "scheduled" : "done"}</div>`;
     tasksEl.append(div);
   }
 }
 
-function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function escapeHtml(s) {
+  return String(s).replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
+  );
+}
 
 refreshRecipes();
 refreshAgents();
@@ -85,7 +133,11 @@ runBtn.addEventListener("click", async () => {
   const task = taskInput.value.trim();
   if (!task) return;
   setStatus("running task…", false);
-  const res = await send("agent.run", { task, id: String(Date.now()), attachments: attachments.splice(0) });
+  const res = await send("agent.run", {
+    task,
+    id: String(Date.now()),
+    attachments: attachments.splice(0),
+  });
   if (res.ok) {
     setStatus("agent ready");
     await refreshTasks();
@@ -110,14 +162,24 @@ document.getElementById("save-provider").addEventListener("click", async () => {
   if (provider === "openai") {
     config.baseURL = baseUrlInput.value.trim();
     config.apiKey = apiKeyInput.value.trim();
-    config.model = document.getElementById("model-name")?.value?.trim() || "gpt-4o-mini";
+    config.model = document.getElementById("model-name")?.value?.trim() ||
+      "gpt-4o-mini";
   }
   await send("provider.set", { config });
   setStatus("provider saved");
 });
 
-document.getElementById("open-memory").addEventListener("click", () => chrome.runtime.openOptionsPage());
-document.getElementById("open-directory").addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("directory/directory.html") }));
+document.getElementById("open-memory").addEventListener(
+  "click",
+  () => chrome.runtime.openOptionsPage(),
+);
+document.getElementById("open-directory").addEventListener(
+  "click",
+  () =>
+    chrome.tabs.create({
+      url: chrome.runtime.getURL("directory/directory.html"),
+    }),
+);
 
 // ---- attach menu: a single "+" opens Add file / audio / video / other ----
 const plusBtn = document.getElementById("plus-btn");
@@ -128,26 +190,43 @@ plusBtn.addEventListener("click", (e) => {
   attachMenu.hidden = !attachMenu.hidden;
 });
 document.addEventListener("click", (e) => {
-  if (!attachMenu.contains(e.target) && e.target !== plusBtn) attachMenu.hidden = true;
+  if (!attachMenu.contains(e.target) && e.target !== plusBtn) {
+    attachMenu.hidden = true;
+  }
 });
 attachMenu.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-kind]");
   if (!btn) return;
   attachMenu.hidden = true;
   const kind = btn.dataset.kind;
-  if (kind === "record-audio") { await startAudioCapture(); return; }
-  if (kind === "capture-camera") { await startCameraCapture(); return; }
+  if (kind === "record-audio") {
+    await startAudioCapture();
+    return;
+  }
+  if (kind === "capture-camera") {
+    await startCameraCapture();
+    return;
+  }
   try {
     const [file] = await new Promise((resolve) => {
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = kind === "audio" ? "audio/*" : kind === "video" ? "video/*" : "";
+      input.accept = kind === "audio"
+        ? "audio/*"
+        : kind === "video"
+        ? "video/*"
+        : "";
       input.onchange = () => resolve(input.files ?? []);
       input.oncancel = () => resolve([]);
       input.click();
     });
     if (!file) return;
-    attachments.push({ name: file.name, kind, size: file.size, type: file.type });
+    attachments.push({
+      name: file.name,
+      kind,
+      size: file.size,
+      type: file.type,
+    });
     addAttachTag(ICONS.attach + " " + file.name);
   } catch (err) {
     setStatus("attach error: " + String(err?.message ?? err), false);
@@ -156,7 +235,6 @@ attachMenu.addEventListener("click", async (e) => {
 
 // ---- microphone: Web Speech Recognition + waveform + real-time text (no dup) ----
 const micBtn = document.getElementById("mic-btn");
-const waveEl = document.getElementById("wave");
 let recognition = null;
 let listening = false;
 function initRecognition() {
@@ -174,7 +252,10 @@ micBtn.addEventListener("click", () => {
 });
 function startListening() {
   if (!recognition) recognition = initRecognition();
-  if (!recognition) { setStatus("speech recognition not available", false); return; }
+  if (!recognition) {
+    setStatus("speech recognition not available", false);
+    return;
+  }
   // the composer text before this listening session — final results append to it
   // once, using the interim span for live preview so nothing is duplicated.
   const baseText = taskInput.value;
@@ -203,12 +284,18 @@ function startListening() {
         interim += res[0].transcript;
       }
     }
-    taskInput.value = (committed + (committed && interim ? " " : "") + interim).trim();
+    taskInput.value = (committed + (committed && interim ? " " : "") + interim)
+      .trim();
     interimSpan = interim;
   };
   recognition.onend = () => {
     // if the engine stops unexpectedly while we still want to listen, restart once
-    if (listening) { try { recognition.start(); } catch { /* ignore */ } return; }
+    if (listening) {
+      try {
+        recognition.start();
+      } catch { /* ignore */ }
+      return;
+    }
     stopListening();
   };
   recognition.onerror = (event) => {
@@ -219,15 +306,19 @@ function startListening() {
   listening = true;
   micBtn.classList.add("listening");
   micBtn.setAttribute("aria-label", "Stop listening");
-  waveEl.hidden = false;
-  try { recognition.start(); } catch { /* already started */ }
+  try {
+    recognition.start();
+  } catch { /* already started */ }
 }
 function stopListening() {
   listening = false;
   micBtn.classList.remove("listening");
   micBtn.setAttribute("aria-label", "Start listening");
-  waveEl.hidden = true;
-  if (recognition) { try { recognition.stop(); } catch { /* ignore */ } }
+  if (recognition) {
+    try {
+      recognition.stop();
+    } catch { /* ignore */ }
+  }
 }
 
 // ---- media capture (record audio + camera) --------------------------------
@@ -265,7 +356,11 @@ function capShow(mode) {
   capMode = mode;
   capPanel.hidden = false;
   capTitle.textContent = mode === "audio" ? "Record audio" : "Capture camera";
-  setActionIcon(capAction, mode === "camera" ? "camera" : "record", mode === "camera" ? "Capture photo" : "Record");
+  setActionIcon(
+    capAction,
+    mode === "camera" ? "camera" : "record",
+    mode === "camera" ? "Capture photo" : "Record",
+  );
   capTimer.textContent = "0:00";
   capNote.textContent = "";
   capVideo.hidden = mode === "audio";
@@ -274,7 +369,10 @@ function capShow(mode) {
 
 function capClosePanel() {
   stopCapRecording();
-  if (capStream) { capStream.getTracks().forEach((t) => t.stop()); capStream = null; }
+  if (capStream) {
+    capStream.getTracks().forEach((t) => t.stop());
+    capStream = null;
+  }
   stopMeter();
   capPanel.hidden = true;
   capVideo.srcObject = null;
@@ -285,7 +383,10 @@ capClose.addEventListener("click", capClosePanel);
 function startMeter(stream) {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) { pulseMeter(); return; }
+    if (!Ctx) {
+      pulseMeter();
+      return;
+    }
     capAudioCtx = capAudioCtx || new Ctx();
     if (capAudioCtx.state === "suspended") capAudioCtx.resume();
     const src = capAudioCtx.createMediaStreamSource(stream);
@@ -301,7 +402,8 @@ function startMeter(stream) {
       for (let i = 0; i < data.length; i += 4) sum += data[i];
       const level = sum / (data.length / 4) / 255; // 0..1
       bars.forEach((b, i) => {
-        const h = 4 + level * 16 * (0.5 + 0.5 * Math.sin(i / 2 + Date.now() / 180));
+        const h = 4 +
+          level * 16 * (0.5 + 0.5 * Math.sin(i / 2 + Date.now() / 180));
         b.style.height = Math.max(4, Math.min(20, h)) + "px";
       });
       capRafId = requestAnimationFrame(draw);
@@ -318,7 +420,8 @@ function pulseMeter() {
   const draw = () => {
     if (!capPanel || capPanel.hidden) return;
     bars.forEach((b, i) => {
-      b.style.height = (5 + 12 * Math.abs(Math.sin(Date.now() / 220 + i))) + "px";
+      b.style.height = (5 + 12 * Math.abs(Math.sin(Date.now() / 220 + i))) +
+        "px";
     });
     capRafId = requestAnimationFrame(draw);
   };
@@ -328,8 +431,13 @@ function pulseMeter() {
 function stopMeter() {
   if (capRafId) cancelAnimationFrame(capRafId);
   capRafId = null;
-  if (capAnalyser) { capAnalyser = null; }
-  if (capAudioCtx) { try { capAudioCtx.close(); } catch { /* ignore */ } capAudioCtx = null; }
+  if (capAnalyser) capAnalyser = null;
+  if (capAudioCtx) {
+    try {
+      capAudioCtx.close();
+    } catch { /* ignore */ }
+    capAudioCtx = null;
+  }
 }
 
 function capElapsed() {
@@ -338,7 +446,10 @@ function capElapsed() {
 }
 
 async function startAudioCapture() {
-  if (!navigator.mediaDevices?.getUserMedia) { setStatus("audio capture not available here", false); return; }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("audio capture not available here", false);
+    return;
+  }
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -352,10 +463,16 @@ async function startAudioCapture() {
 }
 
 async function startCameraCapture() {
-  if (!navigator.mediaDevices?.getUserMedia) { setStatus("camera capture not available here", false); return; }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("camera capture not available here", false);
+    return;
+  }
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
   } catch (err) {
     handleCaptureError("camera", err);
     return;
@@ -368,27 +485,53 @@ async function startCameraCapture() {
 
 function handleCaptureError(kind, err) {
   const name = err?.name || "";
-  if (name === "NotAllowedError" || name === "PermissionDeniedError" || name === "SecurityError") {
-    setStatus(`${kind} permission denied — that's fine, attach a file instead`, false);
+  if (
+    name === "NotAllowedError" || name === "PermissionDeniedError" ||
+    name === "SecurityError"
+  ) {
+    setStatus(
+      `${kind} permission denied — that's fine, attach a file instead`,
+      false,
+    );
   } else if (name === "NotFoundError") {
-    setStatus(`${kind} not found — no ${kind === "audio" ? "microphone" : "camera"} device available`, false);
+    setStatus(
+      `${kind} not found — no ${
+        kind === "audio" ? "microphone" : "camera"
+      } device available`,
+      false,
+    );
   } else {
     setStatus(`${kind} capture error: ${String(err?.message ?? err)}`, false);
   }
 }
 
 function stopCapRecording() {
-  if (capRecorder && capRecorder.state !== "inactive") { try { capRecorder.stop(); } catch { /* ignore */ } }
+  if (capRecorder && capRecorder.state !== "inactive") {
+    try {
+      capRecorder.stop();
+    } catch { /* ignore */ }
+  }
   capRecorder = null;
   capRecording = false;
   if (capTimerId) clearInterval(capTimerId);
   capTimerId = null;
-  setActionIcon(capAction, capMode === "camera" ? "camera" : "record", capMode === "camera" ? "Capture photo" : "Record");
+  setActionIcon(
+    capAction,
+    capMode === "camera" ? "camera" : "record",
+    capMode === "camera" ? "Capture photo" : "Record",
+  );
 }
 
 function finishCapture(blob, kind, name) {
   const url = URL.createObjectURL(blob);
-  attachments.push({ name, kind, size: blob.size, type: blob.type, blobURL: url, blob });
+  attachments.push({
+    name,
+    kind,
+    size: blob.size,
+    type: blob.type,
+    blobURL: url,
+    blob,
+  });
   addAttachTag((kind === "audio" ? ICONS.audio : ICONS.camera) + " " + name);
   setStatus(`attached ${name}`);
   capClosePanel();
@@ -397,15 +540,27 @@ function finishCapture(blob, kind, name) {
 capAction.addEventListener("click", async () => {
   if (capMode === "camera") {
     // camera: capture a photo frame (or stop an in-progress recording)
-    if (capRecording) { stopCapRecording(); return; }
+    if (capRecording) {
+      stopCapRecording();
+      return;
+    }
     try {
       const w = capVideo.videoWidth, h = capVideo.videoHeight;
-      if (!w || !h) { setStatus("camera not ready yet", false); return; }
+      if (!w || !h) {
+        setStatus("camera not ready yet", false);
+        return;
+      }
       const canvas = document.createElement("canvas");
-      canvas.width = w; canvas.height = h;
+      canvas.width = w;
+      canvas.height = h;
       canvas.getContext("2d").drawImage(capVideo, 0, 0, w, h);
-      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.9));
-      if (!blob) { setStatus("capture failed", false); return; }
+      const blob = await new Promise((res) =>
+        canvas.toBlob(res, "image/jpeg", 0.9)
+      );
+      if (!blob) {
+        setStatus("capture failed", false);
+        return;
+      }
       finishCapture(blob, "image", `photo-${Date.now()}.jpg`);
     } catch (err) {
       setStatus("camera capture error: " + String(err?.message ?? err), false);
@@ -416,23 +571,31 @@ capAction.addEventListener("click", async () => {
   // audio: toggle record / stop
   if (!capRecording) {
     if (!capStream) return;
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "audio/webm";
     try {
       capRecorder = new MediaRecorder(capStream, { mimeType: mime });
     } catch {
       capRecorder = new MediaRecorder(capStream);
     }
     capChunks = [];
-    capRecorder.ondataavailable = (e) => { if (e.data.size) capChunks.push(e.data); };
+    capRecorder.ondataavailable = (e) => {
+      if (e.data.size) capChunks.push(e.data);
+    };
     capRecorder.onstop = () => {
-      const mime = capRecorder ? (capRecorder.mimeType || "audio/webm") : "audio/webm";
+      const mime = capRecorder
+        ? (capRecorder.mimeType || "audio/webm")
+        : "audio/webm";
       const blob = new Blob(capChunks, { type: mime });
       finishCapture(blob, "audio", `recording-${Date.now()}.webm`);
     };
     capRecorder.start();
     capRecording = true;
     capStartedAt = Date.now();
-    capTimerId = setInterval(() => { capTimer.textContent = capElapsed(); }, 500);
+    capTimerId = setInterval(() => {
+      capTimer.textContent = capElapsed();
+    }, 500);
     capAction.textContent = "■ Stop";
     capNote.textContent = "recording…";
   } else {
