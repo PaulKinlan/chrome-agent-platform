@@ -6,19 +6,33 @@
 //   - per-site memory (sub-agents)    at memory/origins/<encoded-origin>/*
 //
 // One site origin must never access another's store: every per-site handle is
-// keyed by the sanitized origin string and opened via a lookup that returns a
+// keyed by the canonical origin string and opened via a lookup that returns a
 // distinct subdirectory per origin. Reads/writes go through these helpers so
 // callers never touch another origin's handle.
 
 const ROOT = "memory";
+const MASTER = "master";
 
-async function rootDir() {
-  return await navigator.storage.getDirectory();
+/** Canonicalize an origin string (https://example.com:443 → https://example.com). */
+export function canonicalOrigin(value) {
+  try {
+    return new URL(String(value)).origin;
+  } catch {
+    return null;
+  }
 }
 
+/**
+ * Injective, reversible encoding of a canonical origin for a directory name.
+ * encodeURIComponent is injective (every byte maps to a unique escape sequence)
+ * and reversible; no lossy substitutions.
+ */
 function encodeOrigin(origin) {
-  // URL-safe, stable, reversible-ish key for an origin string.
-  return encodeURIComponent(origin).replace(/%/g, "_");
+  return encodeURIComponent(origin);
+}
+
+function decodeOrigin(encoded) {
+  return decodeURIComponent(encoded);
 }
 
 /** Open (creating if needed) a directory handle for the given path segments. */
@@ -28,6 +42,10 @@ export async function openDir(segments) {
     dir = await dir.getDirectoryHandle(seg, { create: true });
   }
   return dir;
+}
+
+async function rootDir() {
+  return await navigator.storage.getDirectory();
 }
 
 async function readJson(dir, name) {
@@ -47,12 +65,13 @@ async function writeJson(dir, name, value) {
   await w.close();
 }
 
-/** A single origin-scoped store. */
+/** A single origin-scoped store. `origin` is a canonical origin string or "master". */
 export function memoryStore(origin) {
-  const path = origin === "master"
-    ? ["memory", "master"]
-    : ["memory", "origins", encodeOrigin(origin)];
-  const isMaster = origin === "master";
+  const isMaster = origin === MASTER;
+  // Guard: a site origin can never collide with the reserved master sentinel.
+  const path = isMaster
+    ? [ROOT, MASTER]
+    : [ROOT, "origins", encodeOrigin(origin)];
   return {
     isMaster,
     origin,
@@ -77,21 +96,43 @@ export function memoryStore(origin) {
       try { await dir.removeEntry(`${key}.json`); } catch { /* absent */ }
     },
     async clear() {
-      const parent = await openDir(["memory"]);
-      try { await parent.removeEntry(isMaster ? "master" : "origins"); } catch { /* absent */ }
+      if (isMaster) {
+        const parent = await openDir([ROOT]);
+        try { await parent.removeEntry(MASTER, { recursive: true }); } catch { /* absent */ }
+        return;
+      }
+      // Remove ONLY this origin's subdirectory — never the whole origins tree.
+      const origins = await openDir([ROOT, "origins"]);
+      try { await origins.removeEntry(encodeOrigin(origin), { recursive: true }); } catch { /* absent */ }
     },
   };
 }
 
-export const masterMemory = () => memoryStore("master");
-export const siteMemory = (origin) => memoryStore(origin);
+export const masterMemory = () => memoryStore(MASTER);
+
+/** siteMemory accepts a raw origin string; it is canonicalized before use. */
+export function siteMemory(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) {
+    // Return a store that refuses to work on an invalid origin.
+    const invalid = memoryStore(`invalid:${origin}`);
+    return {
+      ...invalid,
+      async get() { return null; },
+      async set() { throw new Error(`invalid origin: ${origin}`); },
+    };
+  }
+  return memoryStore(canonical);
+}
 
 /** Enumerate all enrolled site origins (the sub-agent directory). */
 export async function listOrigins() {
   try {
-    const dir = await openDir(["memory", "origins"]);
+    const dir = await openDir([ROOT, "origins"]);
     const out = [];
-    for await (const [name] of dir.entries()) out.push(decodeURIComponent(name.replace(/_/g, "%")));
+    for await (const [name] of dir.entries()) {
+      out.push(decodeOrigin(name));
+    }
     return out.sort();
   } catch {
     return [];

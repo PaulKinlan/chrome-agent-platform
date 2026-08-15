@@ -1,15 +1,34 @@
 // lib/browser-tools.js — browser-control + event-listening tools the agent
-// can call. The agent can completely control the browser: open/navigate/close
-// tabs, read the page, capture a screenshot, and read browser events that
-// happened (the event log from the service-worker's chrome.tabs listeners).
+// can call. Destructive operations (open/navigate/close) are gated behind an
+// explicit user grant (a chrome.storage flag the hub sets when the user opts
+// in), so a page's untrusted text can never drive arbitrary tab control.
 
 import { tool } from "ai";
 import { z } from "zod";
 
+const GRANT_KEY = "cap:browserControlGrant";
+
+export async function isBrowserControlGranted() {
+  const s = await chrome.storage.local.get(GRANT_KEY);
+  return Boolean(s[GRANT_KEY]);
+}
+
+export async function setBrowserControlGrant(granted) {
+  await chrome.storage.local.set({ [GRANT_KEY]: Boolean(granted) });
+  return Boolean(granted);
+}
+
+/** Resolve the active tab in the current window. */
+async function activeTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] ?? null;
+}
+
 /** Read the visible text of a tab (or the active tab) via scripting. */
 export async function readPage(tabId) {
   try {
-    const target = tabId ? { tabId } : {};
+    const target = tabId ? { tabId } : await activeTab().then((t) => (t?.id ? { tabId: t.id } : null));
+    if (!target) return { error: "no tab" };
     const results = await chrome.scripting.executeScript({
       target,
       func: () => ({
@@ -26,27 +45,33 @@ export async function readPage(tabId) {
 
 /** The browser-control toolset, passed into the agent. */
 export function browserToolset() {
+  const guard = async () => {
+    if (!(await isBrowserControlGranted())) {
+      return { error: "browser control not granted — ask the user to enable it in Settings" };
+    }
+    return null;
+  };
   return {
     open_tab: tool({
-      description: "Open a URL in a new browser tab.",
-      inputSchema: z.object({ url: z.string() }),
+      description: "Open a URL in a new browser tab. Requires browser-control permission.",
+      inputSchema: z.object({ url: z.string().url() }),
       execute: async ({ url }) => {
+        const g = await guard();
+        if (g) return g;
         const tab = await chrome.tabs.create({ url });
         return { ok: true, tabId: tab.id, url };
       },
     }),
     navigate_tab: tool({
-      description: "Navigate an existing tab to a URL.",
-      inputSchema: z.object({ tabId: z.number().optional(), url: z.string() }),
+      description: "Navigate an existing tab to a URL. Requires browser-control permission.",
+      inputSchema: z.object({ tabId: z.number().optional(), url: z.string().url() }),
       execute: async ({ tabId, url }) => {
-        if (tabId) {
-          await chrome.tabs.update(tabId, { url });
-          return { ok: true, tabId, url };
-        }
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tabs[0]?.id) return { error: "no active tab" };
-        await chrome.tabs.update(tabs[0].id, { url });
-        return { ok: true, tabId: tabs[0].id, url };
+        const g = await guard();
+        if (g) return g;
+        const id = tabId ?? (await activeTab())?.id;
+        if (!id) return { error: "no tab" };
+        await chrome.tabs.update(id, { url });
+        return { ok: true, tabId: id, url };
       },
     }),
     read_page: tool({
@@ -59,7 +84,12 @@ export function browserToolset() {
       inputSchema: z.object({ tabId: z.number().optional() }),
       execute: async ({ tabId }) => {
         try {
-          const url = await chrome.tabs.captureVisibleTab(tabId ? { tabId } : undefined, { format: "png" });
+          const tab = tabId
+            ? await chrome.tabs.get(tabId).catch(() => null)
+            : await activeTab();
+          const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+          // captureVisibleTab takes a windowId (number), not a tab selector.
+          const url = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
           return { screenshot: url };
         } catch (e) {
           return { error: String(e?.message ?? e) };
@@ -75,9 +105,11 @@ export function browserToolset() {
       },
     }),
     close_tab: tool({
-      description: "Close a tab by id.",
+      description: "Close a tab by id. Requires browser-control permission.",
       inputSchema: z.object({ tabId: z.number() }),
       execute: async ({ tabId }) => {
+        const g = await guard();
+        if (g) return g;
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };
       },

@@ -11,6 +11,7 @@
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",
     "@ai-sdk/openai": "^4.0.42",
+    "@ai-sdk/openai-compatible": "^3.0.30",
     "agent-do": "^0.7.0",
     "ai": "^7.0.66",
     "zod": "^3.24.0"

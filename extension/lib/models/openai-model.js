@@ -5,13 +5,13 @@
 // a genuine model — it calls the user's endpoint. It is never a fake label and
 // the extension never ships the owner's keys.
 
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 export function createOpenAICompatibleModel(config) {
   const { baseURL, apiKey, model } = config ?? {};
   if (!baseURL || !apiKey || !model) {
     throw new Error("OpenAI-compatible provider requires baseURL, apiKey, and model");
   }
-  const openai = createOpenAI({ baseURL, apiKey });
-  return openai(model);
+  const openai = createOpenAICompatible({ baseURL, apiKey, name: "configured" });
+  return openai.chat(model);
 }

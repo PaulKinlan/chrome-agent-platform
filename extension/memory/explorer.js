@@ -61,11 +61,12 @@ async function renderAgents() {
 
 async function renderUsage() {
   const u = await send("usage.get");
-  usageSummary.textContent = `${u.calls ?? 0} calls · ${u.totalTokensIn ?? 0} tokens in · ${u.totalTokensOut ?? 0} out · $${(u.totalCost ?? 0).toFixed(4)}`;
+  const totals = u.totals ?? {};
+  usageSummary.textContent = `${totals.calls ?? 0} calls · ${totals.inputTokens ?? 0} tokens in · ${totals.outputTokens ?? 0} out · $${(totals.estimatedCost ?? 0).toFixed(4)}`;
   usageBody.replaceChildren();
-  for (const [model, m] of Object.entries(u.byModel ?? {})) {
+  for (const m of Array.isArray(u.byModel) ? u.byModel : []) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${escapeHtml(model)}</td><td>${m.calls}</td><td>${m.tokensIn}</td><td>${m.tokensOut}</td><td>$${m.costUsd.toFixed(4)}</td>`;
+    tr.innerHTML = `<td>${escapeHtml(m.provider + "/" + m.model)}</td><td>${m.calls}</td><td>${m.inputTokens}</td><td>${m.outputTokens}</td><td>$${(m.estimatedCost ?? 0).toFixed(4)}</td>`;
     usageBody.append(tr);
   }
 }

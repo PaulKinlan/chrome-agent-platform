@@ -1,4 +1,4 @@
-// lib/usage.js — usage accounting (the chaos-extension pattern).
+// lib/usage.js — usage accounting (per-LLM-call token/cost ledger).
 //
 // Records per-LLM-call usage (agentId, provider, model, input/output tokens,
 // estimated cost) into chrome.storage.local with a rolling 7-day window, then

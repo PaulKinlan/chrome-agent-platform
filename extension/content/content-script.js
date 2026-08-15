@@ -1,127 +1,83 @@
-// content/content-script.js — WebMCP bridge + tool inference (runs in page context).
+// content/content-script.js — the isolated-world relay between the MAIN-world
+// bridge (content/main-world.js) and the extension background worker.
 //
-// 1. Collects declared WebMCP tools (document.modelContext) + linked agent.md /
-//    skills (future) + inferred window.* functions, and reports them to the
-//    background worker so the hub can build its per-site tool directory.
-// 2. Handles "invoke-tool" messages: calls a page function / WebMCP tool.
+// The isolated world cannot see the page's globals, and the MAIN world cannot
+// use chrome.* APIs — so this file relays across a nonce-authenticated
+// window.postMessage channel:
+//   MAIN world → postMessage("tools") → here → chrome.runtime "tools.upsert"
+//   background → "invoke-tool" → here → postMessage("invoke") → MAIN world → call
+//             → postMessage("result") → here → sendResponse
 
-const origin = location.origin;
+const CHANNEL = "__cairn_bridge";
 
-function isDomOwned(name) {
-  // Heuristic: a DOM-owned global is a known platform object/property.
-  const platform = new Set([
-    "window", "self", "document", "location", "navigator", "history", "screen",
-    "parent", "top", "frames", "opener", "fetch", "crypto", "indexedDB",
-    "localStorage", "sessionStorage", "caches", "console", "alert", "confirm",
-    "prompt", "open", "close", "focus", "blur", "scroll", "scrollTo", "scrollBy",
-    "resizeTo", "resizeBy", "moveTo", "moveBy", "print", "stop", "postMessage",
-    "requestAnimationFrame", "cancelAnimationFrame", "requestIdleCallback",
-    "cancelIdleCallback", "setTimeout", "setInterval", "clearTimeout", "clearInterval",
-    "getComputedStyle", "matchMedia", "getSelection", "atob", "btoa",
-    "queueMicrotask", "structuredClone", "reportError", "addEventListener",
-    "removeEventListener", "dispatchEvent", "customElements", "trustedTypes",
-    "Image", "Option", "WebAssembly", "WebSocket", "Worker", "EventSource",
-    "XMLHttpRequest", "URL", "URLSearchParams", "DOMParser", "Blob", "File",
-    "FileReader", "FormData", "Response", "Request", "Headers", "Promise",
-    "Symbol", "Reflect", "Proxy", "JSON", "Math", "Date", "RegExp", "Error",
-    "TypeError", "RangeError", "SyntaxError", "Map", "Set", "WeakMap", "WeakSet",
-    "Array", "Object", "String", "Number", "Boolean", "BigInt", "Intl",
-  ]);
-  return platform.has(name);
+// A nonce the MAIN-world bridge must echo back, so a page script cannot spoof
+// invoke results.
+const nonce = crypto.randomUUID();
+let initialized = false;
+
+function ensureMainWorld() {
+  if (initialized) return;
+  initialized = true;
+  // Pass the nonce to the MAIN world over the same postMessage channel.
+  window.postMessage({ [CHANNEL]: true, type: "init", nonce }, "*");
 }
 
-function paramNames(fn) {
-  const src = Function.prototype.toString.call(fn);
-  const m = src.match(/^(?:async\s+)?(?:function\s*[^(]*)?\(([^)]*)\)/);
-  if (!m) return [];
-  return m[1].split(",").map((p) => p.trim()).filter((p) => p && !p.includes("=")).map((p) => p.replace(/\/\*.*?\*\//g, "").trim()).filter(Boolean);
-}
+// A pending invoke request, keyed by requestId → sendResponse.
+const pending = new Map();
+let reqSeq = 0;
 
-function inferTools() {
-  const out = [];
-  for (const key of Object.keys(window)) {
-    if (isDomOwned(key)) continue;
-    try {
-      const val = window[key];
-      if (typeof val !== "function") continue;
-      const params = paramNames(val);
-      out.push({
-        name: key,
-        source: "inferred",
-        description: `Inferred global function ${key}`,
-        inputSchema: {
-          type: "object",
-          properties: Object.fromEntries(params.map((p) => [p, { type: "string" }])),
-          required: [],
-        },
-        args: params,
-      });
-    } catch { /* not a callable we can inspect */ }
-  }
-  return out.slice(0, 200); // cap inferred surface
-}
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+  const data = event.data;
+  if (!data || typeof data !== "object" || data[CHANNEL] !== true) return;
 
-function declaredTools() {
-  const mc = document.modelContext;
-  const tools = mc?.tools ?? mc?.getTools?.() ?? null;
-  const out = [];
-  if (tools instanceof Map) {
-    for (const [name, t] of tools) {
-      out.push({
-        name,
-        source: "declared",
-        description: t.description ?? "",
-        inputSchema: t.inputSchema ?? { type: "object", properties: {} },
-      });
+  if (data.type === "tools") {
+    const tools = Array.isArray(data.tools) ? data.tools : [];
+    const origin = data.origin || location.origin;
+    if (tools.length) {
+      chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools }).catch(() => {});
     }
-  } else if (Array.isArray(tools)) {
-    for (const t of tools) out.push({ name: t.name, source: "declared", description: t.description ?? "", inputSchema: t.inputSchema ?? {} });
+  } else if (data.type === "result" && data.nonce === nonce) {
+    const send = pending.get(data.requestId);
+    if (send) {
+      pending.delete(data.requestId);
+      send(data.ok ? { ok: true, result: data.result } : { ok: false, error: data.error });
+    }
   }
-  return out;
-}
-
-// Report tools to the background worker.
-async function reportTools() {
-  const declared = declaredTools();
-  const inferred = declared.length ? [] : inferTools(); // declared wins; infer as fallback
-  const tools = [...declared, ...inferred];
-  if (!tools.length) return;
-  try {
-    await chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools });
-  } catch { /* background not ready */ }
-}
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "invoke-tool") {
-    const { name, args } = message;
-    try {
-      const fn = window[name];
-      if (typeof fn === "function") {
-        const params = paramNames(fn);
-        const ordered = params.map((p) => args?.[p]);
-        const result = fn.apply(window, ordered);
-        Promise.resolve(result).then((r) => sendResponse({ ok: true, result: r })).catch((e) => sendResponse({ ok: false, error: String(e) }));
-        return true;
+    ensureMainWorld();
+    const requestId = String(++reqSeq);
+    pending.set(requestId, sendResponse);
+    window.postMessage({
+      [CHANNEL]: true,
+      type: "invoke",
+      nonce,
+      requestId,
+      name: message.name,
+      args: message.args,
+    }, "*");
+    // Timeout so a hung page function doesn't leak the sendResponse.
+    setTimeout(() => {
+      if (pending.has(requestId)) {
+        pending.delete(requestId);
+        sendResponse({ ok: false, error: "invoke timed out" });
       }
-      // WebMCP path: call the registered tool.
-      const mc = document.modelContext;
-      if (mc?.callTool) {
-        mc.callTool(name, args).then((r) => sendResponse({ ok: true, result: r })).catch((e) => sendResponse({ ok: false, error: String(e) }));
-        return true;
-      }
-      sendResponse({ ok: false, error: `no such function/tool: ${name}` });
-    } catch (e) {
-      sendResponse({ ok: false, error: String(e) });
-    }
+    }, 15000);
     return true;
   }
   if (message?.type === "collect-tools") {
-    reportTools().then(() => sendResponse({ ok: true }));
+    ensureMainWorld();
+    window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*");
+    sendResponse({ ok: true });
     return true;
   }
   return false;
 });
 
-// Collect once on load (after the page settles).
-if (document.readyState === "complete") setTimeout(reportTools, 500);
-else window.addEventListener("load", () => setTimeout(reportTools, 500));
+// Kick off discovery once on load.
+ensureMainWorld();
+if (document.readyState === "complete") window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*");
+else window.addEventListener("load", () => window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*"));

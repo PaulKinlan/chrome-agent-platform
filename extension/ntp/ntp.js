@@ -17,6 +17,14 @@ function setActionIcon(el, key, label) {
 
 import { send } from "../lib/messages.js";
 
+
+const RECIPE_ICON = {
+  broom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M21 3l-9 9-3-3 9-9z"/><path d="M9 12l-6 6a2.5 2.5 0 0 0 3 3l6-6"/><path d="M12 9l3 3"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  books: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+};
+
 const statusEl = document.getElementById("status");
 const taskInput = document.getElementById("task-input");
 const runBtn = document.getElementById("run-task");
@@ -72,7 +80,7 @@ async function refreshRecipes() {
     const chip = document.createElement("button");
     chip.className = "chip";
     chip.style.cursor = "pointer";
-    chip.innerHTML = `<span>${r.icon ?? ""}</span><span>${
+    chip.innerHTML = `<span class="chip-icon">${RECIPE_ICON[r.icon] ?? ""}</span><span>${
       escapeHtml(r.name)
     }</span>`;
     chip.onclick = async () => {
@@ -221,11 +229,23 @@ attachMenu.addEventListener("click", async (e) => {
       input.click();
     });
     if (!file) return;
+    // Read the bytes up front as a data URL (Blob URLs don't survive runtime
+    // messaging — the background worker must receive the actual bytes).
+    let dataURL = "";
+    try {
+      dataURL = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(fr.error);
+        fr.readAsDataURL(file);
+      });
+    } catch { /* non-fatal: attach metadata only */ }
     attachments.push({
       name: file.name,
       kind,
       size: file.size,
       type: file.type,
+      dataURL,
     });
     addAttachTag(ICONS.attach + " " + file.name);
   } catch (err) {
@@ -522,16 +542,17 @@ function stopCapRecording() {
   );
 }
 
-function finishCapture(blob, kind, name) {
-  const url = URL.createObjectURL(blob);
-  attachments.push({
-    name,
-    kind,
-    size: blob.size,
-    type: blob.type,
-    blobURL: url,
-    blob,
-  });
+async function finishCapture(blob, kind, name) {
+  let dataURL = "";
+  try {
+    dataURL = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(fr.error);
+      fr.readAsDataURL(blob);
+    });
+  } catch { /* non-fatal */ }
+  attachments.push({ name, kind, size: blob.size, type: blob.type, dataURL });
   addAttachTag((kind === "audio" ? ICONS.audio : ICONS.camera) + " " + name);
   setStatus(`attached ${name}`);
   capClosePanel();

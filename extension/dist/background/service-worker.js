@@ -3120,7 +3120,7 @@ var require_compile = __commonJS({
         sourceCode = `${gen.scopeRefs(names_1.default.scope)}return ${validateCode}`;
         if (this.opts.code.process)
           sourceCode = this.opts.code.process(sourceCode, sch);
-        const makeValidate = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode);
+        const makeValidate = (function(){ throw new Error('eval disabled (MV3 CSP)'); })(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode);
         const validate = makeValidate(this, this.scope.get());
         this.scope.value(validateName, { ref: validate });
         validate.errors = null;
@@ -8355,7 +8355,7 @@ init_browser_shim_process();
 // extension/lib/models/openai-model.js
 init_browser_shim_process();
 
-// node_modules/@ai-sdk/openai/dist/index.js
+// node_modules/@ai-sdk/openai-compatible/dist/index.js
 init_browser_shim_process();
 
 // node_modules/@ai-sdk/provider-utils/dist/index.js
@@ -20212,15 +20212,6 @@ function getWebSocketConstructor(webSocket) {
   }
   return WebSocketConstructor;
 }
-function toWebSocketUrl(url3) {
-  const wsUrl = new URL(url3);
-  if (wsUrl.protocol === "http:") {
-    wsUrl.protocol = "ws:";
-  } else if (wsUrl.protocol === "https:") {
-    wsUrl.protocol = "wss:";
-  }
-  return wsUrl;
-}
 var textDecoder = new TextDecoder();
 async function readWebSocketMessageText(data) {
   if (typeof data === "string") return data;
@@ -20316,42 +20307,6 @@ function connectToWebSocket({
   };
   return { socket, close };
 }
-function convertAsyncIteratorToReadableStream(iterator) {
-  let cancelled = false;
-  return new ReadableStream({
-    /**
-     * Called when the consumer wants to pull more data from the stream.
-     *
-     * @param {ReadableStreamDefaultController<T>} controller - The controller to enqueue data into the stream.
-     * @returns {Promise<void>}
-     */
-    async pull(controller) {
-      if (cancelled) return;
-      try {
-        const { value, done } = await iterator.next();
-        if (done) {
-          controller.close();
-        } else {
-          controller.enqueue(value);
-        }
-      } catch (error90) {
-        controller.error(error90);
-      }
-    },
-    /**
-     * Called when the consumer cancels the stream.
-     */
-    async cancel(reason) {
-      cancelled = true;
-      if (iterator.return) {
-        try {
-          await iterator.return(reason);
-        } catch (e) {
-        }
-      }
-    }
-  });
-}
 var { btoa: btoa2, atob: atob2 } = globalThis;
 function convertBase64ToUint8Array(base64String) {
   const base64Url = base64String.replace(/-/g, "+").replace(/_/g, "/");
@@ -20367,18 +20322,6 @@ function convertUint8ArrayToBase64(array4) {
 }
 function convertToBase64(value) {
   return value instanceof Uint8Array ? convertUint8ArrayToBase64(value) : value;
-}
-function convertInlineFileDataToUint8Array(data) {
-  if (data.type === "text") {
-    return new TextEncoder().encode(data.text);
-  }
-  if (data.data instanceof Uint8Array) {
-    return data.data;
-  }
-  if (data.data instanceof ArrayBuffer) {
-    return new Uint8Array(data.data);
-  }
-  return convertBase64ToUint8Array(data.data);
 }
 function convertToFormData(input, options = {}) {
   const { useArrayBrackets = true } = options;
@@ -20427,30 +20370,6 @@ function createNullLanguageModelUsage() {
       reasoning: void 0
     },
     raw: void 0
-  };
-}
-function createToolNameMapping({
-  tools = [],
-  providerToolNames
-}) {
-  const customToolNameToProviderToolName = {};
-  const providerToolNameToCustomToolName = {};
-  for (const tool2 of tools) {
-    if (tool2.type === "provider" && tool2.id in providerToolNames) {
-      const providerToolName = providerToolNames[tool2.id];
-      customToolNameToProviderToolName[tool2.name] = providerToolName;
-      providerToolNameToCustomToolName[providerToolName] = tool2.name;
-    }
-  }
-  return {
-    toProviderToolName: (customToolName) => {
-      var _a34;
-      return (_a34 = customToolNameToProviderToolName[customToolName]) != null ? _a34 : customToolName;
-    },
-    toCustomToolName: (providerToolName) => {
-      var _a34;
-      return (_a34 = providerToolNameToCustomToolName[providerToolName]) != null ? _a34 : providerToolName;
-    }
   };
 }
 var DelayedPromise = class {
@@ -21479,9 +21398,6 @@ function isBuffer(value) {
   var _a34, _b33;
   return (_b33 = (_a34 = globalThis.Buffer) == null ? void 0 : _a34.isBuffer(value)) != null ? _b33 : false;
 }
-function isNonNullable(value) {
-  return value != null;
-}
 function isProviderReference(data) {
   return typeof data === "object" && data !== null && !(data instanceof Uint8Array) && !(data instanceof URL) && !(data instanceof ArrayBuffer) && !isBuffer(data) && !("type" in data);
 }
@@ -21521,38 +21437,6 @@ function testRegExpFromStart(pattern, value) {
     pattern.lastIndex = lastIndex;
   }
 }
-function loadApiKey({
-  apiKey,
-  environmentVariableName,
-  apiKeyParameterName = "apiKey",
-  description
-}) {
-  if (typeof apiKey === "string") {
-    return apiKey;
-  }
-  if (apiKey != null) {
-    throw new LoadAPIKeyError({
-      message: `${description} API key must be a string.`
-    });
-  }
-  if (typeof process === "undefined") {
-    throw new LoadAPIKeyError({
-      message: `${description} API key is missing. Pass it using the '${apiKeyParameterName}' parameter. Environment variables are not supported in this environment.`
-    });
-  }
-  apiKey = process.env[environmentVariableName];
-  if (apiKey == null) {
-    throw new LoadAPIKeyError({
-      message: `${description} API key is missing. Pass it using the '${apiKeyParameterName}' parameter or the ${environmentVariableName} environment variable.`
-    });
-  }
-  if (typeof apiKey !== "string") {
-    throw new LoadAPIKeyError({
-      message: `${description} API key must be a string. The value of the ${environmentVariableName} environment variable is not a string.`
-    });
-  }
-  return apiKey;
-}
 function loadOptionalSetting({
   settingValue,
   environmentVariableName
@@ -21571,17 +21455,6 @@ function loadOptionalSetting({
 }
 function isCustomReasoning(reasoning) {
   return reasoning !== void 0 && reasoning !== "provider-default";
-}
-function mediaTypeToExtension(mediaType) {
-  var _a34;
-  const [_type, subtype = ""] = mediaType.toLowerCase().split("/");
-  return (_a34 = {
-    mpeg: "mp3",
-    "x-wav": "wav",
-    opus: "ogg",
-    mp4: "m4a",
-    "x-m4a": "m4a"
-  }[subtype]) != null ? _a34 : subtype;
 }
 var suspectProtoRx = /"(?:_|\\u005[Ff])(?:_|\\u005[Ff])(?:p|\\u0070)(?:r|\\u0072)(?:o|\\u006[Ff])(?:t|\\u0074)(?:o|\\u006[Ff])(?:_|\\u005[Ff])(?:_|\\u005[Ff])"\s*:/;
 var suspectConstructorRx = /"(?:c|\\u0063)(?:o|\\u006[Ff])(?:n|\\u006[Ee])(?:s|\\u0073)(?:t|\\u0074)(?:r|\\u0072)(?:u|\\u0075)(?:c|\\u0063)(?:t|\\u0074)(?:o|\\u006[Ff])(?:r|\\u0072)"\s*:/;
@@ -23106,62 +22979,6 @@ function tool(tool2) {
 function dynamicTool(tool2) {
   return { ...tool2, type: "dynamic" };
 }
-function createProviderDefinedToolFactory({
-  id,
-  inputSchema
-}) {
-  return ({
-    execute,
-    outputSchema: outputSchema2,
-    needsApproval,
-    toModelOutput,
-    onInputStart,
-    onInputDelta,
-    onInputAvailable,
-    ...args
-  }) => tool({
-    type: "provider",
-    isProviderExecuted: false,
-    id,
-    args,
-    inputSchema,
-    outputSchema: outputSchema2,
-    execute,
-    needsApproval,
-    toModelOutput,
-    onInputStart,
-    onInputDelta,
-    onInputAvailable
-  });
-}
-function createProviderDefinedToolFactoryWithOutputSchema({
-  id,
-  inputSchema,
-  outputSchema: outputSchema2
-}) {
-  return ({
-    execute,
-    needsApproval,
-    toModelOutput,
-    onInputStart,
-    onInputDelta,
-    onInputAvailable,
-    ...args
-  }) => tool({
-    type: "provider",
-    isProviderExecuted: false,
-    id,
-    args,
-    inputSchema,
-    outputSchema: outputSchema2,
-    execute,
-    needsApproval,
-    toModelOutput,
-    onInputStart,
-    onInputDelta,
-    onInputAvailable
-  });
-}
 function createProviderExecutedToolFactory({
   id,
   inputSchema,
@@ -23212,19 +23029,6 @@ function resolveFullMediaType({
   }
   throw new UnsupportedFunctionalityError({
     functionality: `file of media type "${part.mediaType}" must specify subtype since it is not passed as inline bytes`
-  });
-}
-function resolveProviderReference({
-  reference,
-  provider
-}) {
-  const id = reference[provider];
-  if (id != null) {
-    return id;
-  }
-  throw new NoSuchProviderReferenceError({
-    provider,
-    reference
   });
 }
 var retryWithExponentialBackoff = ({
@@ -23406,36 +23210,6 @@ var createJsonResponseHandler = (responseSchema) => async ({ response, url: url3
     value: parsedResult.value,
     rawValue: parsedResult.rawValue
   };
-};
-var createBinaryResponseHandler = () => async ({ response, url: url3, requestBodyValues }) => {
-  const responseHeaders = extractResponseHeaders(response);
-  if (!response.body) {
-    throw new APICallError({
-      message: "Response body is empty",
-      url: url3,
-      requestBodyValues,
-      statusCode: response.status,
-      responseHeaders,
-      responseBody: void 0
-    });
-  }
-  try {
-    const buffer = await response.arrayBuffer();
-    return {
-      responseHeaders,
-      value: new Uint8Array(buffer)
-    };
-  } catch (error90) {
-    throw new APICallError({
-      message: "Failed to read response as array buffer",
-      url: url3,
-      requestBodyValues,
-      statusCode: response.status,
-      responseHeaders,
-      responseBody: void 0,
-      cause: error90
-    });
-  }
 };
 function isJSONSerializable(value) {
   if (value === null || value === void 0) return true;
@@ -23691,15 +23465,6 @@ function isWarning(value) {
 function isSegment(value) {
   return isRecord(value) && isString(value.text) && isNumber(value.startSecond) && isNumber(value.endSecond);
 }
-function validateBaseURL(baseURL) {
-  if ((baseURL == null ? void 0 : baseURL.trim()) === "") {
-    throw new InvalidArgumentError({
-      argument: "baseURL",
-      message: "baseURL must be a non-empty string."
-    });
-  }
-  return baseURL;
-}
 function withoutTrailingSlash(url3) {
   return url3 == null ? void 0 : url3.replace(/\/$/, "");
 }
@@ -23726,17 +23491,36 @@ async function* executeTool({
     yield { type: "final", output: await result };
   }
 }
-function toolCaller(tool2, definition) {
-  return Object.defineProperty({ ...tool2 }, "experimental_toolCaller", {
-    value: definition
-  });
-}
 function getToolCaller(tool2) {
   return tool2 == null ? void 0 : tool2.experimental_toolCaller;
 }
 
-// node_modules/@ai-sdk/openai/dist/index.js
-var openaiErrorDataSchema = external_exports.object({
+// node_modules/@ai-sdk/openai-compatible/dist/index.js
+function toCamelCase(str) {
+  return str.replace(/[_-]([a-z])/g, (g) => g[1].toUpperCase());
+}
+function resolveProviderOptionsKey(rawName, providerOptions) {
+  const camelName = toCamelCase(rawName);
+  if (camelName !== rawName && (providerOptions == null ? void 0 : providerOptions[camelName]) != null) {
+    return camelName;
+  }
+  return rawName;
+}
+function warnIfDeprecatedProviderOptionsKey({
+  rawName,
+  providerOptions,
+  warnings
+}) {
+  const camelName = toCamelCase(rawName);
+  if (camelName !== rawName && (providerOptions == null ? void 0 : providerOptions[rawName]) != null) {
+    warnings.push({
+      type: "deprecated",
+      setting: `providerOptions key '${rawName}'`,
+      message: `Use '${camelName}' instead.`
+    });
+  }
+}
+var openaiCompatibleErrorDataSchema = external_exports.object({
   error: external_exports.object({
     message: external_exports.string(),
     // The additional information below is handled loosely to support
@@ -23747,340 +23531,83 @@ var openaiErrorDataSchema = external_exports.object({
     code: external_exports.union([external_exports.string(), external_exports.number()]).nullish()
   })
 });
-var openaiFailedResponseHandler = createJsonErrorResponseHandler({
-  errorSchema: openaiErrorDataSchema,
+var defaultOpenAICompatibleErrorStructure = {
+  errorSchema: openaiCompatibleErrorDataSchema,
   errorToMessage: (data) => data.error.message
-});
-function getOpenAILanguageModelCapabilities(modelId) {
-  var _a27, _b18, _c, _d, _e;
-  const oSeriesVersion = getOSeriesVersion(modelId);
-  const gptVersion = getGptVersion(modelId);
-  const isGptChatModel = (gptVersion == null ? void 0 : gptVersion.minor) == null && ((_b18 = (_a27 = gptVersion == null ? void 0 : gptVersion.variant) == null ? void 0 : _a27.startsWith("chat")) != null ? _b18 : false);
-  const isGptNanoModel = (_d = (_c = gptVersion == null ? void 0 : gptVersion.variant) == null ? void 0 : _c.startsWith("nano")) != null ? _d : false;
-  const supportsFlexProcessing = oSeriesVersion != null && oSeriesVersion >= 3 || gptVersion != null && gptVersion.major >= 5 && !isGptChatModel;
-  const supportsPriorityProcessing = modelId.startsWith("gpt-4") || gptVersion != null && gptVersion.major >= 5 && !isGptNanoModel && !isGptChatModel || oSeriesVersion != null && oSeriesVersion >= 3;
-  const isReasoningModel = oSeriesVersion != null || gptVersion != null && gptVersion.major >= 5 && !isGptChatModel;
-  const supportsNonReasoningParameters = gptVersion != null && (gptVersion.major > 5 || gptVersion.major === 5 && ((_e = gptVersion.minor) != null ? _e : 0) >= 1);
-  const systemMessageMode = isReasoningModel ? "developer" : "system";
-  return {
-    supportsFlexProcessing,
-    supportsPriorityProcessing,
-    isReasoningModel,
-    systemMessageMode,
-    supportsNonReasoningParameters
-  };
-}
-function getOSeriesVersion(modelId) {
-  const match = /^o(\d+)(?:-|$)/.exec(modelId);
-  return match == null ? void 0 : Number(match[1]);
-}
-function getGptVersion(modelId) {
-  const match = /^gpt-(\d+)(?:\.(\d+))?(?:-(.+))?$/.exec(modelId);
-  if (match == null) {
-    return void 0;
-  }
-  return {
-    major: Number(match[1]),
-    minor: match[2] == null ? void 0 : Number(match[2]),
-    variant: match[3]
-  };
-}
-async function throwIfOpenAIStreamErrorBeforeOutput({
-  stream: stream2,
-  getError,
-  isOutputChunk: isOutputChunk3,
-  isAcceptedChunk,
-  acceptedGraceMs = 50,
-  url: url3,
-  requestBodyValues,
-  responseHeaders
-}) {
-  const [streamForEarlyError, streamForConsumer] = stream2.tee();
-  const reader = streamForEarlyError.getReader();
-  let drainAfterError = false;
-  try {
-    let accepted = false;
-    while (true) {
-      let result;
-      if (accepted) {
-        const raced = await raceWithTimeout(reader.read(), acceptedGraceMs);
-        if (raced.timedOut) {
-          return streamForConsumer;
-        }
-        result = raced.value;
-      } else {
-        result = await reader.read();
-      }
-      if (result.done) {
-        return streamForConsumer;
-      }
-      const chunk = result.value;
-      if (!chunk.success) {
-        return streamForConsumer;
-      }
-      const errorFrame = getError(chunk.value);
-      if (errorFrame != null) {
-        drainAfterError = true;
-        drainReader(reader).catch(() => {
-        });
-        drainReader(streamForConsumer.getReader()).catch(() => {
-        });
-        throw createOpenAIStreamError({
-          frame: errorFrame,
-          url: url3,
-          requestBodyValues,
-          responseHeaders
-        });
-      }
-      if (isOutputChunk3(chunk.value)) {
-        return streamForConsumer;
-      }
-      if (!accepted && (isAcceptedChunk == null ? void 0 : isAcceptedChunk(chunk.value)) === true) {
-        accepted = true;
-      }
-    }
-  } finally {
-    if (!drainAfterError) {
-      reader.cancel().catch(() => {
-      });
-      reader.releaseLock();
-    }
-  }
-}
-async function drainReader(reader) {
-  try {
-    while (!(await reader.read()).done) {
-    }
-  } catch (e) {
-  } finally {
-    reader.releaseLock();
-  }
-}
-async function raceWithTimeout(promise3, timeoutMs) {
-  let timer;
-  const wrapped = promise3.then((value) => ({ timedOut: false, value }));
-  try {
-    const raced = await Promise.race([
-      wrapped,
-      new Promise((resolve3) => {
-        timer = setTimeout(() => resolve3({ timedOut: true }), timeoutMs);
-      })
-    ]);
-    if (raced.timedOut) {
-      wrapped.catch(() => {
-      });
-    }
-    return raced;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-function createOpenAIStreamError({
-  frame,
-  url: url3,
-  requestBodyValues,
-  responseHeaders
-}) {
-  var _a27;
-  const streamError = parseStreamError(frame);
-  return new APICallError({
-    message: (_a27 = streamError == null ? void 0 : streamError.message) != null ? _a27 : "OpenAI stream failed before any output was generated",
-    url: url3,
-    requestBodyValues,
-    statusCode: streamError == null ? 500 : getStatusCode(streamError),
-    responseHeaders,
-    responseBody: JSON.stringify(frame),
-    data: frame
-  });
-}
-function parseStreamError(frame) {
-  var _a27;
-  const value = asRecord(frame);
-  if (value == null) {
-    return void 0;
-  }
-  if (value.type === "response.failed") {
-    const response = asRecord(value.response);
-    const responseError = asRecord(response == null ? void 0 : response.error);
-    return typeof (responseError == null ? void 0 : responseError.message) === "string" ? {
-      message: responseError.message,
-      code: getStringOrNumber(responseError.code),
-      type: "response.failed",
-      frame
-    } : void 0;
-  }
-  const error90 = (_a27 = asRecord(value.error)) != null ? _a27 : value;
-  return typeof error90.message === "string" && (asRecord(value.error) != null || typeof error90.type === "string" || "code" in error90 || "param" in error90) ? {
-    message: error90.message,
-    code: getStringOrNumber(error90.code),
-    type: typeof error90.type === "string" ? error90.type : void 0,
-    frame
-  } : void 0;
-}
-function getStatusCode(error90) {
-  if (typeof error90.code === "number" && isHttpErrorStatusCode(error90.code)) {
-    return error90.code;
-  }
-  if (typeof error90.code === "string" && /^\d{3}$/.test(error90.code)) {
-    const numericCode = Number(error90.code);
-    if (isHttpErrorStatusCode(numericCode)) {
-      return numericCode;
-    }
-  }
-  const discriminator = [error90.code, error90.type].filter((value) => typeof value === "string" || typeof value === "number").join(" ").toLowerCase();
-  if (["insufficient_quota", "rate_limit"].some(
-    (term) => discriminator.includes(term)
-  )) {
-    return 429;
-  }
-  if (discriminator.includes("authentication")) return 401;
-  if (discriminator.includes("permission")) return 403;
-  if (discriminator.includes("not_found")) return 404;
-  if (["invalid", "bad_request", "context_length"].some(
-    (term) => discriminator.includes(term)
-  )) {
-    return 400;
-  }
-  if (discriminator.includes("overload")) return 503;
-  if (discriminator.includes("timeout")) return 504;
-  return 500;
-}
-function asRecord(value) {
-  return typeof value === "object" && value != null ? value : void 0;
-}
-function getStringOrNumber(value) {
-  return typeof value === "string" || typeof value === "number" ? value : void 0;
-}
-function isHttpErrorStatusCode(value) {
-  return Number.isInteger(value) && value >= 400 && value <= 599;
-}
-function convertOpenAIChatUsage(usage) {
-  var _a27, _b18, _c, _d, _e, _f, _g, _h;
+};
+function convertOpenAICompatibleChatUsage(usage) {
+  var _a27, _b18, _c, _d, _e, _f;
   if (usage == null) {
     return createNullLanguageModelUsage();
   }
   const promptTokens = (_a27 = usage.prompt_tokens) != null ? _a27 : 0;
   const completionTokens = (_b18 = usage.completion_tokens) != null ? _b18 : 0;
-  const cachedTokens = (_d = (_c = usage.prompt_tokens_details) == null ? void 0 : _c.cached_tokens) != null ? _d : 0;
-  const cacheWriteTokens = (_f = (_e = usage.prompt_tokens_details) == null ? void 0 : _e.cache_write_tokens) != null ? _f : void 0;
-  const reasoningTokens = (_h = (_g = usage.completion_tokens_details) == null ? void 0 : _g.reasoning_tokens) != null ? _h : 0;
+  const cacheReadTokens = (_d = (_c = usage.prompt_tokens_details) == null ? void 0 : _c.cached_tokens) != null ? _d : 0;
+  const reasoningTokens = (_f = (_e = usage.completion_tokens_details) == null ? void 0 : _e.reasoning_tokens) != null ? _f : 0;
   return {
     inputTokens: {
       total: promptTokens,
-      noCache: promptTokens - cachedTokens - (cacheWriteTokens != null ? cacheWriteTokens : 0),
-      cacheRead: cachedTokens,
-      cacheWrite: cacheWriteTokens
+      noCache: promptTokens - cacheReadTokens,
+      cacheRead: cacheReadTokens,
+      cacheWrite: void 0
     },
     outputTokens: {
       total: completionTokens,
-      text: completionTokens - reasoningTokens,
+      text: Math.max(0, completionTokens - reasoningTokens),
       reasoning: reasoningTokens
     },
     raw: usage
   };
 }
-function serializeToolCallArguments(input) {
-  return JSON.stringify(input === void 0 ? {} : input);
-}
-function getPromptCacheBreakpoint(providerOptions) {
-  var _a27;
-  return (_a27 = providerOptions == null ? void 0 : providerOptions.openai) == null ? void 0 : _a27.promptCacheBreakpoint;
-}
-function convertToOpenAIChatMessages({
-  prompt,
-  systemMessageMode = "system"
-}) {
+function getOpenAIMetadata(message) {
   var _a27, _b18;
+  return (_b18 = (_a27 = message == null ? void 0 : message.providerOptions) == null ? void 0 : _a27.openaiCompatible) != null ? _b18 : {};
+}
+function getAudioFormat(mediaType) {
+  switch (mediaType) {
+    case "audio/wav":
+      return "wav";
+    case "audio/mp3":
+    case "audio/mpeg":
+      return "mp3";
+    default:
+      return null;
+  }
+}
+function convertToOpenAICompatibleChatMessages(prompt) {
+  var _a27, _b18, _c;
   const messages = [];
-  const warnings = [];
-  for (const { role, content, providerOptions } of prompt) {
+  for (const { role, content, ...message } of prompt) {
+    const metadata = getOpenAIMetadata({ ...message });
     switch (role) {
       case "system": {
-        switch (systemMessageMode) {
-          case "system": {
-            const promptCacheBreakpoint = getPromptCacheBreakpoint(providerOptions);
-            messages.push({
-              role: "system",
-              content: promptCacheBreakpoint == null ? content : [
-                {
-                  type: "text",
-                  text: content,
-                  prompt_cache_breakpoint: promptCacheBreakpoint
-                }
-              ]
-            });
-            break;
-          }
-          case "developer": {
-            const promptCacheBreakpoint = getPromptCacheBreakpoint(providerOptions);
-            messages.push({
-              role: "developer",
-              content: promptCacheBreakpoint == null ? content : [
-                {
-                  type: "text",
-                  text: content,
-                  prompt_cache_breakpoint: promptCacheBreakpoint
-                }
-              ]
-            });
-            break;
-          }
-          case "remove": {
-            warnings.push({
-              type: "other",
-              message: "system messages are removed for this model"
-            });
-            break;
-          }
-          default: {
-            const _exhaustiveCheck = systemMessageMode;
-            throw new Error(
-              `Unsupported system message mode: ${_exhaustiveCheck}`
-            );
-          }
-        }
+        messages.push({ role: "system", content, ...metadata });
         break;
       }
       case "user": {
-        if (content.length === 1 && content[0].type === "text" && getPromptCacheBreakpoint(content[0].providerOptions) == null) {
-          messages.push({ role: "user", content: content[0].text });
+        if (content.length === 1 && content[0].type === "text") {
+          messages.push({
+            role: "user",
+            content: content[0].text,
+            ...getOpenAIMetadata(content[0])
+          });
           break;
         }
         messages.push({
           role: "user",
-          content: content.map((part, index) => {
-            var _a28, _b24, _c;
+          content: content.map((part) => {
+            var _a28;
+            const partMetadata = getOpenAIMetadata(part);
             switch (part.type) {
               case "text": {
-                const promptCacheBreakpoint = getPromptCacheBreakpoint(
-                  part.providerOptions
-                );
-                return {
-                  type: "text",
-                  text: part.text,
-                  ...promptCacheBreakpoint != null && {
-                    prompt_cache_breakpoint: promptCacheBreakpoint
-                  }
-                };
+                return { type: "text", text: part.text, ...partMetadata };
               }
               case "file": {
-                const promptCacheBreakpoint = getPromptCacheBreakpoint(
-                  part.providerOptions
-                );
                 switch (part.data.type) {
                   case "reference": {
-                    return {
-                      type: "file",
-                      file: {
-                        file_id: resolveProviderReference({
-                          reference: part.data.reference,
-                          provider: "openai"
-                        })
-                      },
-                      ...promptCacheBreakpoint != null && {
-                        prompt_cache_breakpoint: promptCacheBreakpoint
-                      }
-                    };
+                    throw new UnsupportedFunctionalityError({
+                      functionality: "file parts with provider references"
+                    });
                   }
                   case "text": {
                     throw new UnsupportedFunctionalityError({
@@ -24094,114 +23621,109 @@ function convertToOpenAIChatMessages({
                       return {
                         type: "image_url",
                         image_url: {
-                          url: part.data.type === "url" ? part.data.url.toString() : `data:${resolveFullMediaType({ part })};base64,${convertToBase64(part.data.data)}`,
-                          detail: (_b24 = (_a28 = part.providerOptions) == null ? void 0 : _a28.openai) == null ? void 0 : _b24.imageDetail
+                          url: part.data.type === "url" ? part.data.url.toString() : `data:${resolveFullMediaType({ part })};base64,${convertToBase64(part.data.data)}`
                         },
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
+                        ...partMetadata
                       };
-                    } else if (topLevel === "audio") {
+                    }
+                    if (topLevel === "audio") {
                       if (part.data.type === "url") {
                         throw new UnsupportedFunctionalityError({
                           functionality: "audio file parts with URLs"
                         });
                       }
                       const fullMediaType = resolveFullMediaType({ part });
-                      switch (fullMediaType) {
-                        case "audio/wav": {
-                          return {
-                            type: "input_audio",
-                            input_audio: {
-                              data: convertToBase64(part.data.data),
-                              format: "wav"
-                            },
-                            ...promptCacheBreakpoint != null && {
-                              prompt_cache_breakpoint: promptCacheBreakpoint
-                            }
-                          };
-                        }
-                        case "audio/mp3":
-                        case "audio/mpeg": {
-                          return {
-                            type: "input_audio",
-                            input_audio: {
-                              data: convertToBase64(part.data.data),
-                              format: "mp3"
-                            },
-                            ...promptCacheBreakpoint != null && {
-                              prompt_cache_breakpoint: promptCacheBreakpoint
-                            }
-                          };
-                        }
-                        default: {
-                          throw new UnsupportedFunctionalityError({
-                            functionality: `audio content parts with media type ${fullMediaType}`
-                          });
-                        }
+                      const format = getAudioFormat(fullMediaType);
+                      if (format === null) {
+                        throw new UnsupportedFunctionalityError({
+                          functionality: `audio media type ${fullMediaType}`
+                        });
                       }
+                      return {
+                        type: "input_audio",
+                        input_audio: {
+                          data: convertToBase64(part.data.data),
+                          format
+                        },
+                        ...partMetadata
+                      };
                     }
-                    {
+                    if (topLevel === "application") {
+                      if (part.data.type === "url") {
+                        throw new UnsupportedFunctionalityError({
+                          functionality: "PDF file parts with URLs"
+                        });
+                      }
                       const fullMediaType = resolveFullMediaType({ part });
                       if (fullMediaType !== "application/pdf") {
                         throw new UnsupportedFunctionalityError({
                           functionality: `file part media type ${fullMediaType}`
                         });
                       }
-                      if (part.data.type === "url") {
-                        throw new UnsupportedFunctionalityError({
-                          functionality: "PDF file parts with URLs"
-                        });
-                      }
                       return {
                         type: "file",
                         file: {
-                          filename: (_c = part.filename) != null ? _c : `part-${index}.pdf`,
+                          filename: (_a28 = part.filename) != null ? _a28 : "document.pdf",
                           file_data: `data:application/pdf;base64,${convertToBase64(part.data.data)}`
                         },
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
+                        ...partMetadata
                       };
                     }
+                    if (topLevel === "text") {
+                      const textContent = part.data.type === "url" ? part.data.url.toString() : typeof part.data.data === "string" ? new TextDecoder().decode(
+                        convertBase64ToUint8Array(part.data.data)
+                      ) : new TextDecoder().decode(part.data.data);
+                      return {
+                        type: "text",
+                        text: textContent,
+                        ...partMetadata
+                      };
+                    }
+                    throw new UnsupportedFunctionalityError({
+                      functionality: `file part media type ${part.mediaType}`
+                    });
                   }
                 }
               }
             }
-          })
+          }),
+          ...metadata
         });
         break;
       }
       case "assistant": {
         let text2 = "";
-        const textParts = [];
-        let hasPromptCacheBreakpoint = false;
+        let reasoning = "";
         const toolCalls = [];
         for (const part of content) {
+          const partMetadata = getOpenAIMetadata(part);
           switch (part.type) {
             case "text": {
-              const promptCacheBreakpoint = getPromptCacheBreakpoint(
-                part.providerOptions
-              );
               text2 += part.text;
-              textParts.push({
-                type: "text",
-                text: part.text,
-                ...promptCacheBreakpoint != null && {
-                  prompt_cache_breakpoint: promptCacheBreakpoint
-                }
-              });
-              hasPromptCacheBreakpoint || (hasPromptCacheBreakpoint = promptCacheBreakpoint != null);
+              break;
+            }
+            case "reasoning": {
+              reasoning += part.text;
               break;
             }
             case "tool-call": {
+              const thoughtSignature = (_b18 = (_a27 = part.providerOptions) == null ? void 0 : _a27.google) == null ? void 0 : _b18.thoughtSignature;
               toolCalls.push({
                 id: part.toolCallId,
                 type: "function",
                 function: {
                   name: part.toolName,
-                  arguments: serializeToolCallArguments(part.input)
-                }
+                  arguments: JSON.stringify(part.input)
+                },
+                ...partMetadata,
+                // Include extra_content for Google Gemini thought signatures
+                ...thoughtSignature ? {
+                  extra_content: {
+                    google: {
+                      thought_signature: String(thoughtSignature)
+                    }
+                  }
+                } : {}
               });
               break;
             }
@@ -24209,8 +23731,10 @@ function convertToOpenAIChatMessages({
         }
         messages.push({
           role: "assistant",
-          content: hasPromptCacheBreakpoint ? textParts : toolCalls.length > 0 ? text2 || null : text2,
-          tool_calls: toolCalls.length > 0 ? toolCalls : void 0
+          content: toolCalls.length > 0 ? text2 || null : text2,
+          ...reasoning.length > 0 ? { reasoning_content: reasoning } : {},
+          tool_calls: toolCalls.length > 0 ? toolCalls : void 0,
+          ...metadata
         });
         break;
       }
@@ -24220,7 +23744,6 @@ function convertToOpenAIChatMessages({
             continue;
           }
           const output = toolResponse.output;
-          const promptCacheBreakpoint = (_a27 = output.type === "content" ? output.value.map((part) => getPromptCacheBreakpoint(part.providerOptions)).find((breakpoint) => breakpoint != null) : getPromptCacheBreakpoint(output.providerOptions)) != null ? _a27 : getPromptCacheBreakpoint(toolResponse.providerOptions);
           let contentValue;
           switch (output.type) {
             case "text":
@@ -24228,7 +23751,7 @@ function convertToOpenAIChatMessages({
               contentValue = output.value;
               break;
             case "execution-denied":
-              contentValue = (_b18 = output.reason) != null ? _b18 : "Tool call execution denied.";
+              contentValue = (_c = output.reason) != null ? _c : "Tool call execution denied.";
               break;
             case "content":
             case "json":
@@ -24236,16 +23759,12 @@ function convertToOpenAIChatMessages({
               contentValue = JSON.stringify(output.value);
               break;
           }
+          const toolResponseMetadata = getOpenAIMetadata(toolResponse);
           messages.push({
             role: "tool",
             tool_call_id: toolResponse.toolCallId,
-            content: promptCacheBreakpoint == null ? contentValue : [
-              {
-                type: "text",
-                text: contentValue,
-                prompt_cache_breakpoint: promptCacheBreakpoint
-              }
-            ]
+            content: contentValue,
+            ...toolResponseMetadata
           });
         }
         break;
@@ -24256,22 +23775,9 @@ function convertToOpenAIChatMessages({
       }
     }
   }
-  return { messages, warnings };
+  return messages;
 }
-function getResponseMetadata({
-  id,
-  model,
-  created
-}) {
-  return createLanguageModelResponseMetadata({
-    id,
-    model,
-    // Azure content-filter chunks use 0 as a placeholder timestamp. Preserve
-    // the previous OpenAI behavior so those chunks are not treated as metadata.
-    created: created || void 0
-  });
-}
-function mapOpenAIFinishReason(finishReason) {
+function mapOpenAICompatibleFinishReason(finishReason) {
   switch (finishReason) {
     case "stop":
       return "stop";
@@ -24286,274 +23792,30 @@ function mapOpenAIFinishReason(finishReason) {
       return "other";
   }
 }
-var openaiChatResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string().nullish(),
-      created: external_exports.number().nullish(),
-      model: external_exports.string().nullish(),
-      choices: external_exports.array(
-        external_exports.object({
-          message: external_exports.object({
-            role: external_exports.literal("assistant").nullish(),
-            content: external_exports.string().nullish(),
-            tool_calls: external_exports.array(
-              external_exports.object({
-                id: external_exports.string().nullish(),
-                type: external_exports.literal("function"),
-                function: external_exports.object({
-                  name: external_exports.string(),
-                  arguments: external_exports.string()
-                })
-              })
-            ).nullish(),
-            annotations: external_exports.array(
-              external_exports.object({
-                type: external_exports.literal("url_citation"),
-                url_citation: external_exports.object({
-                  start_index: external_exports.number(),
-                  end_index: external_exports.number(),
-                  url: external_exports.string(),
-                  title: external_exports.string()
-                })
-              })
-            ).nullish()
-          }),
-          index: external_exports.number(),
-          logprobs: external_exports.object({
-            content: external_exports.array(
-              external_exports.object({
-                token: external_exports.string(),
-                logprob: external_exports.number(),
-                top_logprobs: external_exports.array(
-                  external_exports.object({
-                    token: external_exports.string(),
-                    logprob: external_exports.number()
-                  })
-                )
-              })
-            ).nullish()
-          }).nullish(),
-          finish_reason: external_exports.string().nullish()
-        })
-      ),
-      usage: external_exports.object({
-        prompt_tokens: external_exports.number().nullish(),
-        completion_tokens: external_exports.number().nullish(),
-        total_tokens: external_exports.number().nullish(),
-        prompt_tokens_details: external_exports.object({
-          cached_tokens: external_exports.number().nullish(),
-          cache_write_tokens: external_exports.number().nullish()
-        }).nullish(),
-        completion_tokens_details: external_exports.object({
-          reasoning_tokens: external_exports.number().nullish(),
-          accepted_prediction_tokens: external_exports.number().nullish(),
-          rejected_prediction_tokens: external_exports.number().nullish()
-        }).nullish()
-      }).nullish()
-    })
-  )
-);
-var openaiChatChunkSchema = lazySchema(
-  () => zodSchema(
-    external_exports.union([
-      external_exports.object({
-        id: external_exports.string().nullish(),
-        created: external_exports.number().nullish(),
-        model: external_exports.string().nullish(),
-        choices: external_exports.array(
-          external_exports.object({
-            delta: external_exports.object({
-              role: external_exports.enum(["assistant"]).nullish(),
-              content: external_exports.string().nullish(),
-              tool_calls: external_exports.array(
-                external_exports.object({
-                  index: external_exports.number(),
-                  id: external_exports.string().nullish(),
-                  type: external_exports.literal("function").nullish(),
-                  function: external_exports.object({
-                    name: external_exports.string().nullish(),
-                    arguments: external_exports.string().nullish()
-                  })
-                })
-              ).nullish(),
-              annotations: external_exports.array(
-                external_exports.object({
-                  type: external_exports.literal("url_citation"),
-                  url_citation: external_exports.object({
-                    start_index: external_exports.number(),
-                    end_index: external_exports.number(),
-                    url: external_exports.string(),
-                    title: external_exports.string()
-                  })
-                })
-              ).nullish()
-            }).nullish(),
-            logprobs: external_exports.object({
-              content: external_exports.array(
-                external_exports.object({
-                  token: external_exports.string(),
-                  logprob: external_exports.number(),
-                  top_logprobs: external_exports.array(
-                    external_exports.object({
-                      token: external_exports.string(),
-                      logprob: external_exports.number()
-                    })
-                  )
-                })
-              ).nullish()
-            }).nullish(),
-            finish_reason: external_exports.string().nullish(),
-            index: external_exports.number()
-          })
-        ),
-        usage: external_exports.object({
-          prompt_tokens: external_exports.number().nullish(),
-          completion_tokens: external_exports.number().nullish(),
-          total_tokens: external_exports.number().nullish(),
-          prompt_tokens_details: external_exports.object({
-            cached_tokens: external_exports.number().nullish(),
-            cache_write_tokens: external_exports.number().nullish()
-          }).nullish(),
-          completion_tokens_details: external_exports.object({
-            reasoning_tokens: external_exports.number().nullish(),
-            accepted_prediction_tokens: external_exports.number().nullish(),
-            rejected_prediction_tokens: external_exports.number().nullish()
-          }).nullish()
-        }).nullish()
-      }),
-      openaiErrorDataSchema
-    ])
-  )
-);
-var openaiLanguageModelChatOptions = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      /**
-       * Modify the likelihood of specified tokens appearing in the completion.
-       *
-       * Accepts a JSON object that maps tokens (specified by their token ID in
-       * the GPT tokenizer) to an associated bias value from -100 to 100.
-       */
-      logitBias: external_exports.record(external_exports.coerce.number(), external_exports.number()).optional(),
-      /**
-       * Return the log probabilities of the tokens.
-       *
-       * Setting to true will return the log probabilities of the tokens that
-       * were generated.
-       *
-       * Setting to a number will return the log probabilities of the top n
-       * tokens that were generated.
-       */
-      logprobs: external_exports.union([external_exports.boolean(), external_exports.number()]).optional(),
-      /**
-       * Whether to enable parallel function calling during tool use. Default to true.
-       */
-      parallelToolCalls: external_exports.boolean().optional(),
-      /**
-       * A unique identifier representing your end-user, which can help OpenAI to
-       * monitor and detect abuse.
-       */
-      user: external_exports.string().optional(),
-      /**
-       * Reasoning effort for reasoning models. Defaults to `medium`.
-       */
-      reasoningEffort: external_exports.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
-      /**
-       * Maximum number of completion tokens to generate. Useful for reasoning models.
-       */
-      maxCompletionTokens: external_exports.number().optional(),
-      /**
-       * Whether to enable persistence in responses API.
-       */
-      store: external_exports.boolean().optional(),
-      /**
-       * Metadata to associate with the request.
-       */
-      metadata: external_exports.record(external_exports.string().max(64), external_exports.string().max(512)).optional(),
-      /**
-       * Parameters for prediction mode.
-       */
-      prediction: external_exports.record(external_exports.string(), external_exports.any()).optional(),
-      /**
-       * Service tier for the request.
-       * - 'auto': Default service tier. The request will be processed with the service tier configured in the
-       *           Project settings. Unless otherwise configured, the Project will use 'default'.
-       * - 'flex': 50% cheaper processing at the cost of increased latency. Only available for o3 and o4-mini models.
-       * - 'priority': Higher-speed processing with predictably low latency at premium cost. Available for Enterprise customers.
-       * - 'fast': OpenAI's newer name for the 'priority' tier. Interchangeable with it.
-       * - 'default': The request will be processed with the standard pricing and performance for the selected model.
-       *
-       * @default 'auto'
-       */
-      serviceTier: external_exports.enum(["auto", "flex", "priority", "fast", "default"]).optional(),
-      /**
-       * Whether to use strict JSON schema validation.
-       *
-       * @default true
-       */
-      strictJsonSchema: external_exports.boolean().optional(),
-      /**
-       * Controls the verbosity of the model's responses.
-       * Lower values will result in more concise responses, while higher values will result in more verbose responses.
-       */
-      textVerbosity: external_exports.enum(["low", "medium", "high"]).optional(),
-      /**
-       * A cache key for prompt caching. Allows manual control over prompt caching behavior.
-       * Useful for improving cache hit rates and working around automatic caching issues.
-       */
-      promptCacheKey: external_exports.string().optional(),
-      /**
-       * Prompt cache behavior for GPT-5.6 and later models.
-       * `mode` controls whether OpenAI also places an implicit breakpoint.
-       * `ttl` sets the minimum cache lifetime and currently only supports 30 minutes.
-       */
-      promptCacheOptions: external_exports.object({
-        mode: external_exports.enum(["implicit", "explicit"]).optional(),
-        ttl: external_exports.literal("30m").optional()
-      }).optional(),
-      /**
-       * The retention policy for the prompt cache.
-       * - 'in_memory': Default. Standard prompt caching behavior.
-       * - '24h': Extended prompt caching that keeps cached prefixes active for up to 24 hours.
-       *          Available for models before GPT-5.6 that support extended caching.
-       *
-       * @deprecated For GPT-5.6 and later models, use `promptCacheOptions.ttl`.
-       *
-       * @default 'in_memory'
-       */
-      promptCacheRetention: external_exports.enum(["in_memory", "24h"]).optional(),
-      /**
-       * A stable identifier used to help detect users of your application
-       * that may be violating OpenAI's usage policies. The IDs should be a
-       * string that uniquely identifies each user. We recommend hashing their
-       * username or email address, in order to avoid sending us any identifying
-       * information.
-       */
-      safetyIdentifier: external_exports.string().optional(),
-      /**
-       * Override the system message mode for this model.
-       * - 'system': Use the 'system' role for system messages (default for most models)
-       * - 'developer': Use the 'developer' role for system messages (used by reasoning models)
-       * - 'remove': Remove system messages entirely
-       *
-       * If not specified, the mode is automatically determined based on the model.
-       */
-      systemMessageMode: external_exports.enum(["system", "developer", "remove"]).optional(),
-      /**
-       * Force treating this model as a reasoning model.
-       *
-       * This is useful for "stealth" reasoning models (e.g. via a custom baseURL)
-       * where the model ID is not recognized by the SDK's allowlist.
-       *
-       * When enabled, the SDK applies reasoning-model parameter compatibility rules
-       * and defaults `systemMessageMode` to `developer` unless overridden.
-       */
-      forceReasoning: external_exports.boolean().optional()
-    })
-  )
-);
-function prepareChatTools({
+var openaiCompatibleLanguageModelChatOptions = external_exports.object({
+  /**
+   * A unique identifier representing your end-user, which can help the provider to
+   * monitor and detect abuse.
+   */
+  user: external_exports.string().optional(),
+  /**
+   * Reasoning effort for reasoning models. Defaults to `medium`.
+   */
+  reasoningEffort: external_exports.string().optional(),
+  /**
+   * Controls the verbosity of the generated text. Defaults to `medium`.
+   */
+  textVerbosity: external_exports.string().optional(),
+  /**
+   * Whether to use strict JSON schema validation.
+   * When true, the model uses constrained decoding to guarantee schema compliance.
+   * Only used when the provider supports structured outputs and a schema is provided.
+   *
+   * @default true
+   */
+  strictJsonSchema: external_exports.boolean().optional()
+});
+function prepareTools({
   tools,
   toolChoice
 }) {
@@ -24562,45 +23824,40 @@ function prepareChatTools({
   if (tools == null) {
     return { tools: void 0, toolChoice: void 0, toolWarnings };
   }
-  const openaiTools2 = [];
+  const openaiCompatTools = [];
   for (const tool2 of tools) {
-    switch (tool2.type) {
-      case "function":
-        openaiTools2.push({
-          type: "function",
-          function: {
-            name: tool2.name,
-            description: tool2.description,
-            parameters: tool2.inputSchema,
-            ...tool2.strict != null ? { strict: tool2.strict } : {}
-          }
-        });
-        break;
-      default:
-        toolWarnings.push({
-          type: "unsupported",
-          feature: `tool type: ${tool2.type}`
-        });
-        break;
+    if (tool2.type === "provider") {
+      toolWarnings.push({
+        type: "unsupported",
+        feature: `provider-defined tool ${tool2.id}`
+      });
+    } else {
+      openaiCompatTools.push({
+        type: "function",
+        function: {
+          name: tool2.name,
+          description: tool2.description,
+          parameters: tool2.inputSchema,
+          ...tool2.strict != null ? { strict: tool2.strict } : {}
+        }
+      });
     }
   }
   if (toolChoice == null) {
-    return { tools: openaiTools2, toolChoice: void 0, toolWarnings };
+    return { tools: openaiCompatTools, toolChoice: void 0, toolWarnings };
   }
   const type = toolChoice.type;
   switch (type) {
     case "auto":
     case "none":
     case "required":
-      return { tools: openaiTools2, toolChoice: type, toolWarnings };
+      return { tools: openaiCompatTools, toolChoice: type, toolWarnings };
     case "tool":
       return {
-        tools: openaiTools2,
+        tools: openaiCompatTools,
         toolChoice: {
           type: "function",
-          function: {
-            name: toolChoice.toolName
-          }
+          function: { name: toolChoice.toolName }
         },
         toolWarnings
       };
@@ -24612,15 +23869,20 @@ function prepareChatTools({
     }
   }
 }
-var OpenAIChatLanguageModel = class _OpenAIChatLanguageModel {
+var OpenAICompatibleChatLanguageModel = class _OpenAICompatibleChatLanguageModel {
   constructor(modelId, config3) {
     this.specificationVersion = "v4";
-    this.supportedUrls = {
-      "image/*": [/^https?:\/\/.*$/]
-    };
+    var _a27, _b18;
     this.modelId = modelId;
     this.config = config3;
+    const errorStructure = (_a27 = config3.errorStructure) != null ? _a27 : defaultOpenAICompatibleErrorStructure;
+    this.chunkSchema = createOpenAICompatibleChatChunkSchema(
+      errorStructure.errorSchema
+    );
+    this.failedResponseHandler = createJsonErrorResponseHandler(errorStructure);
+    this.supportsStructuredOutputs = (_b18 = config3.supportsStructuredOutputs) != null ? _b18 : false;
   }
+  // type inferred via constructor
   static [WORKFLOW_SERIALIZE](model) {
     return serializeModelOptions({
       modelId: model.modelId,
@@ -24628,10 +23890,28 @@ var OpenAIChatLanguageModel = class _OpenAIChatLanguageModel {
     });
   }
   static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAIChatLanguageModel(options.modelId, options.config);
+    return new _OpenAICompatibleChatLanguageModel(
+      options.modelId,
+      options.config
+    );
   }
   get provider() {
     return this.config.provider;
+  }
+  get providerOptionsName() {
+    return this.config.provider.split(".")[0].trim();
+  }
+  get supportedUrls() {
+    var _a27, _b18, _c;
+    return (_c = (_b18 = (_a27 = this.config).supportedUrls) == null ? void 0 : _b18.call(_a27)) != null ? _c : {};
+  }
+  transformRequestBody(args) {
+    var _a27, _b18, _c;
+    return (_c = (_b18 = (_a27 = this.config).transformRequestBody) == null ? void 0 : _b18.call(_a27, args)) != null ? _c : args;
+  }
+  convertUsage(usage) {
+    var _a27, _b18, _c;
+    return (_c = (_b18 = (_a27 = this.config).convertUsage) == null ? void 0 : _b18.call(_a27, usage)) != null ? _c : convertOpenAICompatibleChatUsage(usage);
   }
   async getArgs({
     prompt,
@@ -24641,188 +23921,127 @@ var OpenAIChatLanguageModel = class _OpenAIChatLanguageModel {
     topK,
     frequencyPenalty,
     presencePenalty,
+    reasoning,
+    providerOptions,
     stopSequences,
     responseFormat,
     seed,
-    tools,
     toolChoice,
-    reasoning,
-    providerOptions
+    tools
   }) {
     var _a27, _b18, _c, _d, _e, _f;
     const warnings = [];
-    const openaiOptions = (_a27 = await parseProviderOptions({
-      provider: "openai",
+    const deprecatedOptions = await parseProviderOptions({
+      provider: "openai-compatible",
       providerOptions,
-      schema: openaiLanguageModelChatOptions
-    })) != null ? _a27 : {};
-    const modelCapabilities = getOpenAILanguageModelCapabilities(this.modelId);
-    const resolvedReasoningEffort = (_b18 = openaiOptions.reasoningEffort) != null ? _b18 : isCustomReasoning(reasoning) ? reasoning : void 0;
-    const isReasoningModel = (_c = openaiOptions.forceReasoning) != null ? _c : modelCapabilities.isReasoningModel;
+      schema: openaiCompatibleLanguageModelChatOptions
+    });
+    if (deprecatedOptions != null) {
+      warnings.push({
+        type: "deprecated",
+        setting: "providerOptions key 'openai-compatible'",
+        message: "Use 'openaiCompatible' instead."
+      });
+    }
+    warnIfDeprecatedProviderOptionsKey({
+      rawName: this.providerOptionsName,
+      providerOptions,
+      warnings
+    });
+    const compatibleOptions = Object.assign(
+      deprecatedOptions != null ? deprecatedOptions : {},
+      (_a27 = await parseProviderOptions({
+        provider: "openaiCompatible",
+        providerOptions,
+        schema: openaiCompatibleLanguageModelChatOptions
+      })) != null ? _a27 : {},
+      (_b18 = await parseProviderOptions({
+        provider: this.providerOptionsName,
+        providerOptions,
+        schema: openaiCompatibleLanguageModelChatOptions
+      })) != null ? _b18 : {},
+      (_c = await parseProviderOptions({
+        provider: toCamelCase(this.providerOptionsName),
+        providerOptions,
+        schema: openaiCompatibleLanguageModelChatOptions
+      })) != null ? _c : {}
+    );
+    const strictJsonSchema = (_d = compatibleOptions == null ? void 0 : compatibleOptions.strictJsonSchema) != null ? _d : true;
     if (topK != null) {
       warnings.push({ type: "unsupported", feature: "topK" });
     }
-    const { messages, warnings: messageWarnings } = convertToOpenAIChatMessages(
-      {
-        prompt,
-        systemMessageMode: (_d = openaiOptions.systemMessageMode) != null ? _d : isReasoningModel ? "developer" : modelCapabilities.systemMessageMode
-      }
-    );
-    warnings.push(...messageWarnings);
-    const strictJsonSchema = (_e = openaiOptions.strictJsonSchema) != null ? _e : true;
-    const baseArgs = {
-      // model id:
-      model: this.modelId,
-      // model specific settings:
-      logit_bias: openaiOptions.logitBias,
-      logprobs: openaiOptions.logprobs === true || typeof openaiOptions.logprobs === "number" ? true : void 0,
-      top_logprobs: typeof openaiOptions.logprobs === "number" ? openaiOptions.logprobs : typeof openaiOptions.logprobs === "boolean" ? openaiOptions.logprobs ? 0 : void 0 : void 0,
-      user: openaiOptions.user,
-      parallel_tool_calls: openaiOptions.parallelToolCalls,
-      // standardized settings:
-      max_tokens: maxOutputTokens,
-      temperature,
-      top_p: topP,
-      frequency_penalty: frequencyPenalty,
-      presence_penalty: presencePenalty,
-      response_format: (responseFormat == null ? void 0 : responseFormat.type) === "json" ? responseFormat.schema != null ? {
-        type: "json_schema",
-        json_schema: {
-          schema: responseFormat.schema,
-          strict: strictJsonSchema,
-          name: (_f = responseFormat.name) != null ? _f : "response",
-          description: responseFormat.description
-        }
-      } : { type: "json_object" } : void 0,
-      stop: stopSequences,
-      seed,
-      verbosity: openaiOptions.textVerbosity,
-      // openai specific settings:
-      // TODO AI SDK 6: remove, we auto-map maxOutputTokens now
-      max_completion_tokens: openaiOptions.maxCompletionTokens,
-      store: openaiOptions.store,
-      metadata: openaiOptions.metadata,
-      prediction: openaiOptions.prediction,
-      reasoning_effort: resolvedReasoningEffort,
-      service_tier: openaiOptions.serviceTier,
-      prompt_cache_key: openaiOptions.promptCacheKey,
-      prompt_cache_options: openaiOptions.promptCacheOptions,
-      prompt_cache_retention: openaiOptions.promptCacheRetention,
-      safety_identifier: openaiOptions.safetyIdentifier,
-      // messages:
-      messages
-    };
-    if (isReasoningModel) {
-      if (resolvedReasoningEffort !== "none" || !modelCapabilities.supportsNonReasoningParameters) {
-        if (baseArgs.temperature != null) {
-          baseArgs.temperature = void 0;
-          warnings.push({
-            type: "unsupported",
-            feature: "temperature",
-            details: "temperature is not supported for reasoning models"
-          });
-        }
-        if (baseArgs.top_p != null) {
-          baseArgs.top_p = void 0;
-          warnings.push({
-            type: "unsupported",
-            feature: "topP",
-            details: "topP is not supported for reasoning models"
-          });
-        }
-        if (baseArgs.logprobs != null) {
-          baseArgs.logprobs = void 0;
-          warnings.push({
-            type: "other",
-            message: "logprobs is not supported for reasoning models"
-          });
-        }
-      }
-      if (baseArgs.frequency_penalty != null) {
-        baseArgs.frequency_penalty = void 0;
-        warnings.push({
-          type: "unsupported",
-          feature: "frequencyPenalty",
-          details: "frequencyPenalty is not supported for reasoning models"
-        });
-      }
-      if (baseArgs.presence_penalty != null) {
-        baseArgs.presence_penalty = void 0;
-        warnings.push({
-          type: "unsupported",
-          feature: "presencePenalty",
-          details: "presencePenalty is not supported for reasoning models"
-        });
-      }
-      if (baseArgs.logit_bias != null) {
-        baseArgs.logit_bias = void 0;
-        warnings.push({
-          type: "other",
-          message: "logitBias is not supported for reasoning models"
-        });
-      }
-      if (baseArgs.top_logprobs != null) {
-        baseArgs.top_logprobs = void 0;
-        warnings.push({
-          type: "other",
-          message: "topLogprobs is not supported for reasoning models"
-        });
-      }
-      if (baseArgs.max_tokens != null) {
-        if (baseArgs.max_completion_tokens == null) {
-          baseArgs.max_completion_tokens = baseArgs.max_tokens;
-        }
-        baseArgs.max_tokens = void 0;
-      }
-    } else if (this.modelId.startsWith("gpt-4o-search-preview") || this.modelId.startsWith("gpt-4o-mini-search-preview")) {
-      if (baseArgs.temperature != null) {
-        baseArgs.temperature = void 0;
-        warnings.push({
-          type: "unsupported",
-          feature: "temperature",
-          details: "temperature is not supported for the search preview models and has been removed."
-        });
-      }
-    }
-    if (openaiOptions.serviceTier === "flex" && !modelCapabilities.supportsFlexProcessing) {
+    if ((responseFormat == null ? void 0 : responseFormat.type) === "json" && responseFormat.schema != null && !this.supportsStructuredOutputs) {
       warnings.push({
         type: "unsupported",
-        feature: "serviceTier",
-        details: "flex processing is only available for o3, o4-mini, and gpt-5 models"
+        feature: "responseFormat",
+        details: "JSON response format schema is only supported with structuredOutputs"
       });
-      baseArgs.service_tier = void 0;
-    }
-    if ((openaiOptions.serviceTier === "priority" || openaiOptions.serviceTier === "fast") && !modelCapabilities.supportsPriorityProcessing) {
-      warnings.push({
-        type: "unsupported",
-        feature: "serviceTier",
-        details: "priority processing is only available for supported models (gpt-4, gpt-5, gpt-5-mini, o3, o4-mini) and requires Enterprise access. gpt-5-nano is not supported"
-      });
-      baseArgs.service_tier = void 0;
     }
     const {
-      tools: openaiTools2,
+      tools: openaiTools,
       toolChoice: openaiToolChoice,
       toolWarnings
-    } = prepareChatTools({
+    } = prepareTools({
       tools,
       toolChoice
     });
+    const metadataKey = resolveProviderOptionsKey(
+      this.providerOptionsName,
+      providerOptions
+    );
     return {
+      metadataKey,
       args: {
-        ...baseArgs,
-        tools: openaiTools2,
+        // model id:
+        model: this.modelId,
+        // model specific settings:
+        user: compatibleOptions.user,
+        // standardized settings:
+        max_tokens: maxOutputTokens,
+        temperature,
+        top_p: topP,
+        frequency_penalty: frequencyPenalty,
+        presence_penalty: presencePenalty,
+        response_format: (responseFormat == null ? void 0 : responseFormat.type) === "json" ? this.supportsStructuredOutputs === true && responseFormat.schema != null ? {
+          type: "json_schema",
+          json_schema: {
+            schema: responseFormat.schema,
+            strict: strictJsonSchema,
+            name: (_e = responseFormat.name) != null ? _e : "response",
+            description: responseFormat.description
+          }
+        } : { type: "json_object" } : void 0,
+        stop: stopSequences,
+        seed,
+        ...Object.fromEntries(
+          Object.entries({
+            ...providerOptions == null ? void 0 : providerOptions[this.providerOptionsName],
+            ...providerOptions == null ? void 0 : providerOptions[toCamelCase(this.providerOptionsName)]
+          }).filter(
+            ([key]) => !Object.keys(
+              openaiCompatibleLanguageModelChatOptions.shape
+            ).includes(key)
+          )
+        ),
+        reasoning_effort: (_f = compatibleOptions.reasoningEffort) != null ? _f : isCustomReasoning(reasoning) && reasoning !== "none" ? reasoning : void 0,
+        verbosity: compatibleOptions.textVerbosity,
+        // messages:
+        messages: convertToOpenAICompatibleChatMessages(prompt),
+        // tools:
+        tools: openaiTools,
         tool_choice: openaiToolChoice
       },
       warnings: [...warnings, ...toolWarnings]
     };
   }
   async doGenerate(options) {
-    var _a27, _b18, _c, _d, _e, _f, _g, _h;
-    const { args: body, warnings } = await this.getArgs(options);
+    var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j;
+    const { args, warnings, metadataKey } = await this.getArgs({ ...options });
+    const transformedBody = this.transformRequestBody(args);
+    const body = JSON.stringify(transformedBody);
     const {
       responseHeaders,
-      value: response,
+      value: responseBody,
       rawValue: rawResponse
     } = await postJsonToApi({
       url: this.config.url({
@@ -24830,119 +24049,175 @@ var OpenAIChatLanguageModel = class _OpenAIChatLanguageModel {
         modelId: this.modelId
       }),
       headers: combineHeaders((_b18 = (_a27 = this.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
-      body,
-      failedResponseHandler: openaiFailedResponseHandler,
+      body: transformedBody,
+      failedResponseHandler: this.failedResponseHandler,
       successfulResponseHandler: createJsonResponseHandler(
-        openaiChatResponseSchema
+        OpenAICompatibleChatResponseSchema
       ),
       abortSignal: options.abortSignal,
       fetch: this.config.fetch
     });
-    const choice2 = response.choices[0];
+    const choice2 = responseBody.choices[0];
     const content = [];
     const text2 = choice2.message.content;
     if (text2 != null && text2.length > 0) {
       content.push({ type: "text", text: text2 });
     }
-    for (const toolCall of (_c = choice2.message.tool_calls) != null ? _c : []) {
+    const reasoning = (_c = choice2.message.reasoning_content) != null ? _c : choice2.message.reasoning;
+    if (reasoning != null && reasoning.length > 0) {
       content.push({
-        type: "tool-call",
-        toolCallId: (_d = toolCall.id) != null ? _d : generateId(),
-        toolName: toolCall.function.name,
-        input: toolCall.function.arguments
+        type: "reasoning",
+        text: reasoning
       });
     }
-    for (const annotation of (_e = choice2.message.annotations) != null ? _e : []) {
-      content.push({
-        type: "source",
-        sourceType: "url",
-        id: generateId(),
-        url: annotation.url_citation.url,
-        title: annotation.url_citation.title
-      });
+    if (choice2.message.tool_calls != null) {
+      for (const toolCall of choice2.message.tool_calls) {
+        const thoughtSignature = (_e = (_d = toolCall.extra_content) == null ? void 0 : _d.google) == null ? void 0 : _e.thought_signature;
+        content.push({
+          type: "tool-call",
+          toolCallId: (_f = toolCall.id) != null ? _f : generateId(),
+          toolName: toolCall.function.name,
+          input: toolCall.function.arguments,
+          ...thoughtSignature ? {
+            providerMetadata: {
+              [metadataKey]: { thoughtSignature }
+            }
+          } : {}
+        });
+      }
     }
-    const completionTokenDetails = (_f = response.usage) == null ? void 0 : _f.completion_tokens_details;
-    const providerMetadata = { openai: {} };
+    const providerMetadata = {
+      [metadataKey]: {},
+      ...await ((_h = (_g = this.config.metadataExtractor) == null ? void 0 : _g.extractMetadata) == null ? void 0 : _h.call(_g, {
+        parsedBody: rawResponse
+      }))
+    };
+    const completionTokenDetails = (_i = responseBody.usage) == null ? void 0 : _i.completion_tokens_details;
     if ((completionTokenDetails == null ? void 0 : completionTokenDetails.accepted_prediction_tokens) != null) {
-      providerMetadata.openai.acceptedPredictionTokens = completionTokenDetails == null ? void 0 : completionTokenDetails.accepted_prediction_tokens;
+      providerMetadata[metadataKey].acceptedPredictionTokens = completionTokenDetails == null ? void 0 : completionTokenDetails.accepted_prediction_tokens;
     }
     if ((completionTokenDetails == null ? void 0 : completionTokenDetails.rejected_prediction_tokens) != null) {
-      providerMetadata.openai.rejectedPredictionTokens = completionTokenDetails == null ? void 0 : completionTokenDetails.rejected_prediction_tokens;
-    }
-    if (((_g = choice2.logprobs) == null ? void 0 : _g.content) != null) {
-      providerMetadata.openai.logprobs = choice2.logprobs.content;
+      providerMetadata[metadataKey].rejectedPredictionTokens = completionTokenDetails == null ? void 0 : completionTokenDetails.rejected_prediction_tokens;
     }
     return {
       content,
       finishReason: {
-        unified: mapOpenAIFinishReason(choice2.finish_reason),
-        raw: (_h = choice2.finish_reason) != null ? _h : void 0
+        unified: mapOpenAICompatibleFinishReason(choice2.finish_reason),
+        raw: (_j = choice2.finish_reason) != null ? _j : void 0
       },
-      usage: convertOpenAIChatUsage(response.usage),
+      usage: this.convertUsage(responseBody.usage),
+      providerMetadata,
       request: { body },
       response: {
-        ...getResponseMetadata(response),
+        ...createLanguageModelResponseMetadata(responseBody),
         headers: responseHeaders,
         body: rawResponse
       },
-      warnings,
-      providerMetadata
+      warnings
     };
   }
   async doStream(options) {
-    var _a27, _b18;
-    const { args, warnings } = await this.getArgs(options);
-    const body = {
+    var _a27, _b18, _c;
+    const { args, warnings, metadataKey } = await this.getArgs({
+      ...options
+    });
+    const body = this.transformRequestBody({
       ...args,
       stream: true,
-      stream_options: {
-        include_usage: true
-      }
-    };
-    const url3 = this.config.url({
-      path: "/chat/completions",
-      modelId: this.modelId
+      // only include stream_options when in strict compatibility mode:
+      stream_options: this.config.includeUsage ? { include_usage: true } : void 0
     });
+    const metadataExtractor = (_a27 = this.config.metadataExtractor) == null ? void 0 : _a27.createStreamExtractor();
     const { responseHeaders, value: response } = await postJsonToApi({
-      url: url3,
-      headers: combineHeaders((_b18 = (_a27 = this.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
+      url: this.config.url({
+        path: "/chat/completions",
+        modelId: this.modelId
+      }),
+      headers: combineHeaders((_c = (_b18 = this.config).headers) == null ? void 0 : _c.call(_b18), options.headers),
       body,
-      failedResponseHandler: openaiFailedResponseHandler,
+      failedResponseHandler: this.failedResponseHandler,
       successfulResponseHandler: createEventSourceResponseHandler(
-        openaiChatChunkSchema
+        this.chunkSchema
       ),
       abortSignal: options.abortSignal,
       fetch: this.config.fetch
     });
-    const checkedResponse = await throwIfOpenAIStreamErrorBeforeOutput({
-      stream: response,
-      getError: (chunk) => "error" in chunk ? chunk.error : void 0,
-      isOutputChunk: isOpenAIChatOutputChunk,
-      url: url3,
-      requestBodyValues: body,
-      responseHeaders
-    });
+    const providerOptionsName = metadataKey;
     let toolCallTracker;
+    const pendingToolCalls = /* @__PURE__ */ new Map();
+    const forwardedToolCallIndices = /* @__PURE__ */ new Set();
+    const processToolCallDelta = (toolCallDelta) => {
+      var _a28, _b24, _c2, _d, _e;
+      const index = toolCallDelta.index;
+      if (index == null || forwardedToolCallIndices.has(index)) {
+        toolCallTracker.processDelta(toolCallDelta);
+        return;
+      }
+      let pending = pendingToolCalls.get(index);
+      if (pending == null) {
+        pending = {
+          id: (_a28 = toolCallDelta.id) != null ? _a28 : null,
+          bufferedArguments: "",
+          extraContent: (_b24 = toolCallDelta.extra_content) != null ? _b24 : null
+        };
+        pendingToolCalls.set(index, pending);
+      } else {
+        if (pending.id == null && toolCallDelta.id != null) {
+          pending.id = toolCallDelta.id;
+        }
+        if (pending.extraContent == null && toolCallDelta.extra_content != null) {
+          pending.extraContent = toolCallDelta.extra_content;
+        }
+      }
+      const argumentsDelta = (_c2 = toolCallDelta.function) == null ? void 0 : _c2.arguments;
+      if (argumentsDelta != null) {
+        pending.bufferedArguments += argumentsDelta;
+      }
+      const name25 = (_d = toolCallDelta.function) == null ? void 0 : _d.name;
+      if (name25 != null) {
+        const forwardDelta = {
+          index,
+          id: pending.id,
+          function: {
+            name: name25,
+            arguments: pending.bufferedArguments
+          },
+          extra_content: (_e = pending.extraContent) != null ? _e : void 0
+        };
+        toolCallTracker.processDelta(forwardDelta);
+        pendingToolCalls.delete(index);
+        forwardedToolCallIndices.add(index);
+      }
+    };
     let finishReason = {
       unified: "other",
       raw: void 0
     };
     let usage = void 0;
-    let metadataExtracted = false;
+    let isFirstChunk = true;
+    let isActiveReasoning = false;
     let isActiveText = false;
-    const providerMetadata = { openai: {} };
-    const result = {
-      stream: checkedResponse.pipeThrough(
+    const convertUsage = (usage2) => this.convertUsage(usage2);
+    return {
+      stream: response.pipeThrough(
         new TransformStream({
           start(controller) {
-            toolCallTracker = new StreamingToolCallTracker(controller, {
-              generateId,
-              typeValidation: "if-present"
-            });
+            toolCallTracker = new StreamingToolCallTracker(
+              controller,
+              {
+                generateId,
+                extractMetadata: (delta) => {
+                  var _a28, _b24;
+                  const thoughtSignature = (_b24 = (_a28 = delta.extra_content) == null ? void 0 : _a28.google) == null ? void 0 : _b24.thought_signature;
+                  return thoughtSignature ? { [providerOptionsName]: { thoughtSignature } } : void 0;
+                },
+                buildToolCallProviderMetadata: (metadata) => metadata
+              }
+            );
             controller.enqueue({ type: "stream-start", warnings });
           },
           transform(chunk, controller) {
-            var _a28, _b24, _c, _d, _e;
+            var _a28, _b24;
             if (options.includeRawChunks) {
               controller.enqueue({ type: "raw", rawValue: chunk.rawValue });
             }
@@ -24951,83 +24226,115 @@ var OpenAIChatLanguageModel = class _OpenAIChatLanguageModel {
               controller.enqueue({ type: "error", error: chunk.error });
               return;
             }
-            const value = chunk.value;
-            if ("error" in value) {
+            metadataExtractor == null ? void 0 : metadataExtractor.processChunk(chunk.rawValue);
+            if ("error" in chunk.value) {
               finishReason = { unified: "error", raw: void 0 };
-              controller.enqueue({ type: "error", error: value.error });
+              controller.enqueue({
+                type: "error",
+                error: chunk.value.error
+              });
               return;
             }
-            if (!metadataExtracted) {
-              const metadata = getResponseMetadata(value);
-              if (Object.values(metadata).some(Boolean)) {
-                metadataExtracted = true;
-                controller.enqueue({
-                  type: "response-metadata",
-                  ...getResponseMetadata(value)
-                });
-              }
+            const value = chunk.value;
+            if (isFirstChunk) {
+              isFirstChunk = false;
+              controller.enqueue({
+                type: "response-metadata",
+                ...createLanguageModelResponseMetadata(value)
+              });
             }
             if (value.usage != null) {
               usage = value.usage;
-              if (((_a28 = value.usage.completion_tokens_details) == null ? void 0 : _a28.accepted_prediction_tokens) != null) {
-                providerMetadata.openai.acceptedPredictionTokens = (_b24 = value.usage.completion_tokens_details) == null ? void 0 : _b24.accepted_prediction_tokens;
-              }
-              if (((_c = value.usage.completion_tokens_details) == null ? void 0 : _c.rejected_prediction_tokens) != null) {
-                providerMetadata.openai.rejectedPredictionTokens = (_d = value.usage.completion_tokens_details) == null ? void 0 : _d.rejected_prediction_tokens;
-              }
             }
             const choice2 = value.choices[0];
             if ((choice2 == null ? void 0 : choice2.finish_reason) != null) {
               finishReason = {
-                unified: mapOpenAIFinishReason(choice2.finish_reason),
-                raw: choice2.finish_reason
+                unified: mapOpenAICompatibleFinishReason(choice2.finish_reason),
+                raw: (_a28 = choice2.finish_reason) != null ? _a28 : void 0
               };
-            }
-            if (((_e = choice2 == null ? void 0 : choice2.logprobs) == null ? void 0 : _e.content) != null) {
-              providerMetadata.openai.logprobs = choice2.logprobs.content;
             }
             if ((choice2 == null ? void 0 : choice2.delta) == null) {
               return;
             }
             const delta = choice2.delta;
-            if (delta.content != null) {
+            const reasoningContent = (_b24 = delta.reasoning_content) != null ? _b24 : delta.reasoning;
+            if (reasoningContent) {
+              if (!isActiveReasoning) {
+                controller.enqueue({
+                  type: "reasoning-start",
+                  id: "reasoning-0"
+                });
+                isActiveReasoning = true;
+              }
+              controller.enqueue({
+                type: "reasoning-delta",
+                id: "reasoning-0",
+                delta: reasoningContent
+              });
+            }
+            if (delta.content) {
+              if (isActiveReasoning) {
+                controller.enqueue({
+                  type: "reasoning-end",
+                  id: "reasoning-0"
+                });
+                isActiveReasoning = false;
+              }
               if (!isActiveText) {
-                controller.enqueue({ type: "text-start", id: "0" });
+                controller.enqueue({ type: "text-start", id: "txt-0" });
                 isActiveText = true;
               }
               controller.enqueue({
                 type: "text-delta",
-                id: "0",
+                id: "txt-0",
                 delta: delta.content
               });
             }
             if (delta.tool_calls != null) {
-              for (const toolCallDelta of delta.tool_calls) {
-                toolCallTracker.processDelta(toolCallDelta);
-              }
-            }
-            if (delta.annotations != null) {
-              for (const annotation of delta.annotations) {
+              if (isActiveReasoning) {
                 controller.enqueue({
-                  type: "source",
-                  sourceType: "url",
-                  id: generateId(),
-                  url: annotation.url_citation.url,
-                  title: annotation.url_citation.title
+                  type: "reasoning-end",
+                  id: "reasoning-0"
                 });
+                isActiveReasoning = false;
+              }
+              for (const toolCallDelta of delta.tool_calls) {
+                processToolCallDelta(toolCallDelta);
               }
             }
           },
           flush(controller) {
-            if (isActiveText) {
-              controller.enqueue({ type: "text-end", id: "0" });
+            var _a28, _b24, _c2, _d;
+            if (isActiveReasoning) {
+              controller.enqueue({ type: "reasoning-end", id: "reasoning-0" });
             }
+            if (isActiveText) {
+              controller.enqueue({ type: "text-end", id: "txt-0" });
+            }
+            for (const [index, pending] of pendingToolCalls) {
+              toolCallTracker.processDelta({
+                index,
+                id: pending.id,
+                function: { arguments: pending.bufferedArguments }
+              });
+            }
+            pendingToolCalls.clear();
             toolCallTracker.flush();
+            const providerMetadata = {
+              [providerOptionsName]: {},
+              ...metadataExtractor == null ? void 0 : metadataExtractor.buildMetadata()
+            };
+            if (((_a28 = usage == null ? void 0 : usage.completion_tokens_details) == null ? void 0 : _a28.accepted_prediction_tokens) != null) {
+              providerMetadata[providerOptionsName].acceptedPredictionTokens = (_b24 = usage == null ? void 0 : usage.completion_tokens_details) == null ? void 0 : _b24.accepted_prediction_tokens;
+            }
+            if (((_c2 = usage == null ? void 0 : usage.completion_tokens_details) == null ? void 0 : _c2.rejected_prediction_tokens) != null) {
+              providerMetadata[providerOptionsName].rejectedPredictionTokens = (_d = usage == null ? void 0 : usage.completion_tokens_details) == null ? void 0 : _d.rejected_prediction_tokens;
+            }
             controller.enqueue({
               type: "finish",
               finishReason,
-              usage: convertOpenAIChatUsage(usage),
-              ...providerMetadata != null ? { providerMetadata } : {}
+              usage: convertUsage(usage),
+              providerMetadata
             });
           }
         })
@@ -25035,20 +24342,92 @@ var OpenAIChatLanguageModel = class _OpenAIChatLanguageModel {
       request: { body },
       response: { headers: responseHeaders }
     };
-    return result;
   }
 };
-function isOpenAIChatOutputChunk(chunk) {
-  if ("error" in chunk) {
-    return false;
-  }
-  return chunk.choices.some((choice2) => {
-    const delta = choice2.delta;
-    return (delta == null ? void 0 : delta.content) != null && delta.content.length > 0 || (delta == null ? void 0 : delta.tool_calls) != null && delta.tool_calls.length > 0 || (delta == null ? void 0 : delta.annotations) != null && delta.annotations.length > 0;
-  });
-}
-function convertOpenAICompletionUsage(usage) {
-  var _a27, _b18, _c, _d;
+var openaiCompatibleTokenUsageSchema = external_exports.looseObject({
+  prompt_tokens: external_exports.number().nullish(),
+  completion_tokens: external_exports.number().nullish(),
+  total_tokens: external_exports.number().nullish(),
+  prompt_tokens_details: external_exports.object({
+    cached_tokens: external_exports.number().nullish()
+  }).nullish(),
+  completion_tokens_details: external_exports.object({
+    reasoning_tokens: external_exports.number().nullish(),
+    accepted_prediction_tokens: external_exports.number().nullish(),
+    rejected_prediction_tokens: external_exports.number().nullish()
+  }).nullish()
+}).nullish();
+var OpenAICompatibleChatResponseSchema = external_exports.looseObject({
+  id: external_exports.string().nullish(),
+  created: external_exports.number().nullish(),
+  model: external_exports.string().nullish(),
+  choices: external_exports.array(
+    external_exports.object({
+      message: external_exports.object({
+        role: external_exports.literal("assistant").nullish(),
+        content: external_exports.string().nullish(),
+        reasoning_content: external_exports.string().nullish(),
+        reasoning: external_exports.string().nullish(),
+        tool_calls: external_exports.array(
+          external_exports.object({
+            id: external_exports.string().nullish(),
+            function: external_exports.object({
+              name: external_exports.string(),
+              arguments: external_exports.string()
+            }),
+            // Support for Google Gemini thought signatures via OpenAI compatibility
+            extra_content: external_exports.object({
+              google: external_exports.object({
+                thought_signature: external_exports.string().nullish()
+              }).nullish()
+            }).nullish()
+          })
+        ).nullish()
+      }),
+      finish_reason: external_exports.string().nullish()
+    })
+  ),
+  usage: openaiCompatibleTokenUsageSchema
+});
+var chunkBaseSchema = external_exports.looseObject({
+  id: external_exports.string().nullish(),
+  created: external_exports.number().nullish(),
+  model: external_exports.string().nullish(),
+  choices: external_exports.array(
+    external_exports.object({
+      delta: external_exports.object({
+        role: external_exports.enum(["assistant", ""]).nullish(),
+        content: external_exports.string().nullish(),
+        // Most openai-compatible models set `reasoning_content`, but some
+        // providers serving `gpt-oss` set `reasoning`. See #7866
+        reasoning_content: external_exports.string().nullish(),
+        reasoning: external_exports.string().nullish(),
+        tool_calls: external_exports.array(
+          external_exports.object({
+            index: external_exports.number().nullish(),
+            //google does not send index
+            id: external_exports.string().nullish(),
+            function: external_exports.object({
+              name: external_exports.string().nullish(),
+              arguments: external_exports.string().nullish()
+            }),
+            // Support for Google Gemini thought signatures via OpenAI compatibility
+            extra_content: external_exports.object({
+              google: external_exports.object({
+                thought_signature: external_exports.string().nullish()
+              }).nullish()
+            }).nullish()
+          })
+        ).nullish()
+      }).nullish(),
+      finish_reason: external_exports.string().nullish()
+    })
+  ),
+  usage: openaiCompatibleTokenUsageSchema
+});
+var createOpenAICompatibleChatChunkSchema = (errorSchema) => external_exports.union([chunkBaseSchema, errorSchema]);
+function convertOpenAICompatibleCompletionUsage(usage) {
+  var _a27, _b18;
   if (usage == null) {
     return createNullLanguageModelUsage();
   }
@@ -25056,20 +24435,20 @@ function convertOpenAICompletionUsage(usage) {
   const completionTokens = (_b18 = usage.completion_tokens) != null ? _b18 : 0;
   return {
     inputTokens: {
-      total: (_c = usage.prompt_tokens) != null ? _c : void 0,
+      total: promptTokens,
       noCache: promptTokens,
       cacheRead: void 0,
       cacheWrite: void 0
     },
     outputTokens: {
-      total: (_d = usage.completion_tokens) != null ? _d : void 0,
+      total: completionTokens,
       text: completionTokens,
       reasoning: void 0
     },
     raw: usage
   };
 }
-function convertToOpenAICompletionPrompt({
+function convertToOpenAICompatibleCompletionPrompt({
   prompt,
   user = "user",
   assistant = "assistant"
@@ -25141,7 +24520,7 @@ ${assistantMessage}
 ${user}:`]
   };
 }
-function mapOpenAIFinishReason2(finishReason) {
+function mapOpenAICompatibleFinishReason2(finishReason) {
   switch (finishReason) {
     case "stop":
       return "stop";
@@ -25156,116 +24535,41 @@ function mapOpenAIFinishReason2(finishReason) {
       return "other";
   }
 }
-var openaiCompletionResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string().nullish(),
-      created: external_exports.number().nullish(),
-      model: external_exports.string().nullish(),
-      choices: external_exports.array(
-        external_exports.object({
-          text: external_exports.string(),
-          finish_reason: external_exports.string(),
-          logprobs: external_exports.object({
-            tokens: external_exports.array(external_exports.string()),
-            token_logprobs: external_exports.array(external_exports.number()),
-            top_logprobs: external_exports.array(external_exports.record(external_exports.string(), external_exports.number())).nullish()
-          }).nullish()
-        })
-      ),
-      usage: external_exports.object({
-        prompt_tokens: external_exports.number(),
-        completion_tokens: external_exports.number(),
-        total_tokens: external_exports.number()
-      }).nullish()
-    })
-  )
-);
-var openaiCompletionChunkSchema = lazySchema(
-  () => zodSchema(
-    external_exports.union([
-      external_exports.object({
-        id: external_exports.string().nullish(),
-        created: external_exports.number().nullish(),
-        model: external_exports.string().nullish(),
-        choices: external_exports.array(
-          external_exports.object({
-            text: external_exports.string(),
-            finish_reason: external_exports.string().nullish(),
-            index: external_exports.number(),
-            logprobs: external_exports.object({
-              tokens: external_exports.array(external_exports.string()),
-              token_logprobs: external_exports.array(external_exports.number()),
-              top_logprobs: external_exports.array(external_exports.record(external_exports.string(), external_exports.number())).nullish()
-            }).nullish()
-          })
-        ),
-        usage: external_exports.object({
-          prompt_tokens: external_exports.number(),
-          completion_tokens: external_exports.number(),
-          total_tokens: external_exports.number()
-        }).nullish()
-      }),
-      openaiErrorDataSchema
-    ])
-  )
-);
-var openaiLanguageModelCompletionOptions = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      /**
-       * Echo back the prompt in addition to the completion.
-       */
-      echo: external_exports.boolean().optional(),
-      /**
-       * Modify the likelihood of specified tokens appearing in the completion.
-       *
-       * Accepts a JSON object that maps tokens (specified by their token ID in
-       * the GPT tokenizer) to an associated bias value from -100 to 100. You
-       * can use this tokenizer tool to convert text to token IDs. Mathematically,
-       * the bias is added to the logits generated by the model prior to sampling.
-       * The exact effect will vary per model, but values between -1 and 1 should
-       * decrease or increase likelihood of selection; values like -100 or 100
-       * should result in a ban or exclusive selection of the relevant token.
-       *
-       * As an example, you can pass {"50256": -100} to prevent the <|endoftext|>
-       * token from being generated.
-       */
-      logitBias: external_exports.record(external_exports.string(), external_exports.number()).optional(),
-      /**
-       * The suffix that comes after a completion of inserted text.
-       */
-      suffix: external_exports.string().optional(),
-      /**
-       * A unique identifier representing your end-user, which can help OpenAI to
-       * monitor and detect abuse. Learn more.
-       */
-      user: external_exports.string().optional(),
-      /**
-       * Return the log probabilities of the tokens. Including logprobs will increase
-       * the response size and can slow down response times. However, it can
-       * be useful to better understand how the model is behaving.
-       * Setting to true will return the log probabilities of the tokens that
-       * were generated.
-       * Setting to a number will return the log probabilities of the top n
-       * tokens that were generated.
-       */
-      logprobs: external_exports.union([external_exports.boolean(), external_exports.number()]).optional()
-    })
-  )
-);
-var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
+var openaiCompatibleLanguageModelCompletionOptions = external_exports.object({
+  /**
+   * Echo back the prompt in addition to the completion.
+   */
+  echo: external_exports.boolean().optional(),
+  /**
+   * Modify the likelihood of specified tokens appearing in the completion.
+   *
+   * Accepts a JSON object that maps tokens (specified by their token ID in
+   * the GPT tokenizer) to an associated bias value from -100 to 100.
+   */
+  logitBias: external_exports.record(external_exports.string(), external_exports.number()).optional(),
+  /**
+   * The suffix that comes after a completion of inserted text.
+   */
+  suffix: external_exports.string().optional(),
+  /**
+   * A unique identifier representing your end-user, which can help providers to
+   * monitor and detect abuse.
+   */
+  user: external_exports.string().optional()
+});
+var OpenAICompatibleCompletionLanguageModel = class _OpenAICompatibleCompletionLanguageModel {
   constructor(modelId, config3) {
     this.specificationVersion = "v4";
-    this.supportedUrls = {
-      // No URLs are supported for completion models.
-    };
+    var _a27;
     this.modelId = modelId;
     this.config = config3;
+    const errorStructure = (_a27 = config3.errorStructure) != null ? _a27 : defaultOpenAICompatibleErrorStructure;
+    this.chunkSchema = createOpenAICompatibleCompletionChunkSchema(
+      errorStructure.errorSchema
+    );
+    this.failedResponseHandler = createJsonErrorResponseHandler(errorStructure);
   }
-  get providerOptionsName() {
-    return this.config.provider.split(".")[0].trim();
-  }
+  // type inferred via constructor
   static [WORKFLOW_SERIALIZE](model) {
     return serializeModelOptions({
       modelId: model.modelId,
@@ -25273,10 +24577,20 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
     });
   }
   static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAICompletionLanguageModel(options.modelId, options.config);
+    return new _OpenAICompatibleCompletionLanguageModel(
+      options.modelId,
+      options.config
+    );
   }
   get provider() {
     return this.config.provider;
+  }
+  get providerOptionsName() {
+    return this.config.provider.split(".")[0].trim();
+  }
+  get supportedUrls() {
+    var _a27, _b18, _c;
+    return (_c = (_b18 = (_a27 = this.config).supportedUrls) == null ? void 0 : _b18.call(_a27)) != null ? _c : {};
   }
   async getArgs({
     prompt,
@@ -25288,24 +24602,30 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
     presencePenalty,
     stopSequences: userStopSequences,
     responseFormat,
-    tools,
-    toolChoice,
     seed,
-    providerOptions
+    providerOptions,
+    tools,
+    toolChoice
   }) {
+    var _a27, _b18;
     const warnings = [];
-    const openaiOptions = {
-      ...await parseProviderOptions({
-        provider: "openai",
-        providerOptions,
-        schema: openaiLanguageModelCompletionOptions
-      }),
-      ...await parseProviderOptions({
+    warnIfDeprecatedProviderOptionsKey({
+      rawName: this.providerOptionsName,
+      providerOptions,
+      warnings
+    });
+    const completionOptions = Object.assign(
+      (_a27 = await parseProviderOptions({
         provider: this.providerOptionsName,
         providerOptions,
-        schema: openaiLanguageModelCompletionOptions
-      })
-    };
+        schema: openaiCompatibleLanguageModelCompletionOptions
+      })) != null ? _a27 : {},
+      (_b18 = await parseProviderOptions({
+        provider: toCamelCase(this.providerOptionsName),
+        providerOptions,
+        schema: openaiCompatibleLanguageModelCompletionOptions
+      })) != null ? _b18 : {}
+    );
     if (topK != null) {
       warnings.push({ type: "unsupported", feature: "topK" });
     }
@@ -25322,18 +24642,17 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
         details: "JSON response format is not supported."
       });
     }
-    const { prompt: completionPrompt, stopSequences } = convertToOpenAICompletionPrompt({ prompt });
+    const { prompt: completionPrompt, stopSequences } = convertToOpenAICompatibleCompletionPrompt({ prompt });
     const stop = [...stopSequences != null ? stopSequences : [], ...userStopSequences != null ? userStopSequences : []];
     return {
       args: {
         // model id:
         model: this.modelId,
         // model specific settings:
-        echo: openaiOptions.echo,
-        logit_bias: openaiOptions.logitBias,
-        logprobs: (openaiOptions == null ? void 0 : openaiOptions.logprobs) === true ? 0 : (openaiOptions == null ? void 0 : openaiOptions.logprobs) === false ? void 0 : openaiOptions == null ? void 0 : openaiOptions.logprobs,
-        suffix: openaiOptions.suffix,
-        user: openaiOptions.user,
+        echo: completionOptions.echo,
+        logit_bias: completionOptions.logitBias,
+        suffix: completionOptions.suffix,
+        user: completionOptions.user,
         // standardized settings:
         max_tokens: maxOutputTokens,
         temperature,
@@ -25341,6 +24660,8 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
         frequency_penalty: frequencyPenalty,
         presence_penalty: presencePenalty,
         seed,
+        ...providerOptions == null ? void 0 : providerOptions[this.providerOptionsName],
+        ...providerOptions == null ? void 0 : providerOptions[toCamelCase(this.providerOptionsName)],
         // prompt:
         prompt: completionPrompt,
         // stop sequences:
@@ -25350,7 +24671,7 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
     };
   }
   async doGenerate(options) {
-    var _a27, _b18, _c;
+    var _a27, _b18;
     const { args, warnings } = await this.getArgs(options);
     const {
       responseHeaders,
@@ -25363,24 +24684,24 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
       }),
       headers: combineHeaders((_b18 = (_a27 = this.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
       body: args,
-      failedResponseHandler: openaiFailedResponseHandler,
+      failedResponseHandler: this.failedResponseHandler,
       successfulResponseHandler: createJsonResponseHandler(
-        openaiCompletionResponseSchema
+        openaiCompatibleCompletionResponseSchema
       ),
       abortSignal: options.abortSignal,
       fetch: this.config.fetch
     });
     const choice2 = response.choices[0];
-    const providerMetadata = { openai: {} };
-    if (choice2.logprobs != null) {
-      providerMetadata.openai.logprobs = choice2.logprobs;
+    const content = [];
+    if (choice2.text != null && choice2.text.length > 0) {
+      content.push({ type: "text", text: choice2.text });
     }
     return {
-      content: [{ type: "text", text: choice2.text }],
-      usage: convertOpenAICompletionUsage(response.usage),
+      content,
+      usage: convertOpenAICompatibleCompletionUsage(response.usage),
       finishReason: {
-        unified: mapOpenAIFinishReason2(choice2.finish_reason),
-        raw: (_c = choice2.finish_reason) != null ? _c : void 0
+        unified: mapOpenAICompatibleFinishReason2(choice2.finish_reason),
+        raw: choice2.finish_reason
       },
       request: { body: args },
       response: {
@@ -25388,7 +24709,6 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
         headers: responseHeaders,
         body: rawResponse
       },
-      providerMetadata,
       warnings
     };
   }
@@ -25398,47 +24718,37 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
     const body = {
       ...args,
       stream: true,
-      stream_options: {
-        include_usage: true
-      }
+      // only include stream_options when in strict compatibility mode:
+      stream_options: this.config.includeUsage ? { include_usage: true } : void 0
     };
-    const url3 = this.config.url({
-      path: "/completions",
-      modelId: this.modelId
-    });
     const { responseHeaders, value: response } = await postJsonToApi({
-      url: url3,
+      url: this.config.url({
+        path: "/completions",
+        modelId: this.modelId
+      }),
       headers: combineHeaders((_b18 = (_a27 = this.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
       body,
-      failedResponseHandler: openaiFailedResponseHandler,
+      failedResponseHandler: this.failedResponseHandler,
       successfulResponseHandler: createEventSourceResponseHandler(
-        openaiCompletionChunkSchema
+        this.chunkSchema
       ),
       abortSignal: options.abortSignal,
       fetch: this.config.fetch
-    });
-    const checkedResponse = await throwIfOpenAIStreamErrorBeforeOutput({
-      stream: response,
-      getError: (chunk) => "error" in chunk ? chunk.error : void 0,
-      isOutputChunk: isOpenAICompletionOutputChunk,
-      url: url3,
-      requestBodyValues: body,
-      responseHeaders
     });
     let finishReason = {
       unified: "other",
       raw: void 0
     };
-    const providerMetadata = { openai: {} };
     let usage = void 0;
     let isFirstChunk = true;
-    const result = {
-      stream: checkedResponse.pipeThrough(
+    return {
+      stream: response.pipeThrough(
         new TransformStream({
           start(controller) {
             controller.enqueue({ type: "stream-start", warnings });
           },
           transform(chunk, controller) {
+            var _a28;
             if (options.includeRawChunks) {
               controller.enqueue({ type: "raw", rawValue: chunk.rawValue });
             }
@@ -25459,7 +24769,10 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
                 type: "response-metadata",
                 ...createLanguageModelResponseMetadata(value)
               });
-              controller.enqueue({ type: "text-start", id: "0" });
+              controller.enqueue({
+                type: "text-start",
+                id: "0"
+              });
             }
             if (value.usage != null) {
               usage = value.usage;
@@ -25467,14 +24780,11 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
             const choice2 = value.choices[0];
             if ((choice2 == null ? void 0 : choice2.finish_reason) != null) {
               finishReason = {
-                unified: mapOpenAIFinishReason2(choice2.finish_reason),
-                raw: choice2.finish_reason
+                unified: mapOpenAICompatibleFinishReason2(choice2.finish_reason),
+                raw: (_a28 = choice2.finish_reason) != null ? _a28 : void 0
               };
             }
-            if ((choice2 == null ? void 0 : choice2.logprobs) != null) {
-              providerMetadata.openai.logprobs = choice2.logprobs;
-            }
-            if ((choice2 == null ? void 0 : choice2.text) != null && choice2.text.length > 0) {
+            if ((choice2 == null ? void 0 : choice2.text) != null) {
               controller.enqueue({
                 type: "text-delta",
                 id: "0",
@@ -25489,8 +24799,7 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
             controller.enqueue({
               type: "finish",
               finishReason,
-              providerMetadata,
-              usage: convertOpenAICompletionUsage(usage)
+              usage: convertOpenAICompatibleCompletionUsage(usage)
             });
           }
         })
@@ -25498,43 +24807,69 @@ var OpenAICompletionLanguageModel = class _OpenAICompletionLanguageModel {
       request: { body },
       response: { headers: responseHeaders }
     };
-    return result;
   }
 };
-function isOpenAICompletionOutputChunk(chunk) {
-  return !("error" in chunk) && chunk.choices.some((choice2) => choice2.text.length > 0);
-}
-var openaiEmbeddingModelOptions = lazySchema(
-  () => zodSchema(
+var usageSchema = external_exports.object({
+  prompt_tokens: external_exports.number(),
+  completion_tokens: external_exports.number(),
+  total_tokens: external_exports.number()
+});
+var openaiCompatibleCompletionResponseSchema = external_exports.object({
+  id: external_exports.string().nullish(),
+  created: external_exports.number().nullish(),
+  model: external_exports.string().nullish(),
+  choices: external_exports.array(
     external_exports.object({
-      /**
-       * The number of dimensions the resulting output embeddings should have.
-       * Only supported in text-embedding-3 and later models.
-       */
-      dimensions: external_exports.number().optional(),
-      /**
-       * A unique identifier representing your end-user, which can help OpenAI to
-       * monitor and detect abuse. Learn more.
-       */
-      user: external_exports.string().optional()
+      text: external_exports.string(),
+      finish_reason: external_exports.string()
     })
-  )
-);
-var openaiTextEmbeddingResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      data: external_exports.array(external_exports.object({ embedding: external_exports.array(external_exports.number()) })),
-      usage: external_exports.object({ prompt_tokens: external_exports.number() }).nullish()
-    })
-  )
-);
-var OpenAIEmbeddingModel = class _OpenAIEmbeddingModel {
+  ),
+  usage: usageSchema.nullish()
+});
+var createOpenAICompatibleCompletionChunkSchema = (errorSchema) => external_exports.union([
+  external_exports.object({
+    id: external_exports.string().nullish(),
+    created: external_exports.number().nullish(),
+    model: external_exports.string().nullish(),
+    choices: external_exports.array(
+      external_exports.object({
+        text: external_exports.string(),
+        finish_reason: external_exports.string().nullish(),
+        index: external_exports.number()
+      })
+    ),
+    usage: usageSchema.nullish()
+  }),
+  errorSchema
+]);
+var openaiCompatibleEmbeddingModelOptions = external_exports.object({
+  /**
+   * The number of dimensions the resulting output embeddings should have.
+   * Only supported in text-embedding-3 and later models.
+   */
+  dimensions: external_exports.number().optional(),
+  /**
+   * A unique identifier representing your end-user, which can help providers to
+   * monitor and detect abuse.
+   */
+  user: external_exports.string().optional()
+});
+var OpenAICompatibleEmbeddingModel = class _OpenAICompatibleEmbeddingModel {
   constructor(modelId, config3) {
     this.specificationVersion = "v4";
-    this.maxEmbeddingsPerCall = 2048;
-    this.supportsParallelCalls = true;
     this.modelId = modelId;
     this.config = config3;
+  }
+  get provider() {
+    return this.config.provider;
+  }
+  get maxEmbeddingsPerCall() {
+    var _a27;
+    return (_a27 = this.config.maxEmbeddingsPerCall) != null ? _a27 : 2048;
+  }
+  get supportsParallelCalls() {
+    var _a27;
+    return (_a27 = this.config.supportsParallelCalls) != null ? _a27 : true;
   }
   static [WORKFLOW_SERIALIZE](model) {
     return serializeModelOptions({
@@ -25543,10 +24878,10 @@ var OpenAIEmbeddingModel = class _OpenAIEmbeddingModel {
     });
   }
   static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAIEmbeddingModel(options.modelId, options.config);
+    return new _OpenAICompatibleEmbeddingModel(options.modelId, options.config);
   }
-  get provider() {
-    return this.config.provider;
+  get providerOptionsName() {
+    return this.config.provider.split(".")[0].trim();
   }
   async doEmbed({
     values,
@@ -25554,7 +24889,38 @@ var OpenAIEmbeddingModel = class _OpenAIEmbeddingModel {
     abortSignal,
     providerOptions
   }) {
-    var _a27, _b18, _c;
+    var _a27, _b18, _c, _d, _e;
+    const warnings = [];
+    const deprecatedOptions = await parseProviderOptions({
+      provider: "openai-compatible",
+      providerOptions,
+      schema: openaiCompatibleEmbeddingModelOptions
+    });
+    if (deprecatedOptions != null) {
+      warnings.push({
+        type: "deprecated",
+        setting: "providerOptions key 'openai-compatible'",
+        message: "Use 'openaiCompatible' instead."
+      });
+    }
+    warnIfDeprecatedProviderOptionsKey({
+      rawName: this.providerOptionsName,
+      providerOptions,
+      warnings
+    });
+    const compatibleOptions = Object.assign(
+      deprecatedOptions != null ? deprecatedOptions : {},
+      (_a27 = await parseProviderOptions({
+        provider: "openaiCompatible",
+        providerOptions,
+        schema: openaiCompatibleEmbeddingModelOptions
+      })) != null ? _a27 : {},
+      (_b18 = await parseProviderOptions({
+        provider: this.providerOptionsName,
+        providerOptions,
+        schema: openaiCompatibleEmbeddingModelOptions
+      })) != null ? _b18 : {}
+    );
     if (values.length > this.maxEmbeddingsPerCall) {
       throw new TooManyEmbeddingValuesForCallError({
         provider: this.provider,
@@ -25563,11 +24929,6 @@ var OpenAIEmbeddingModel = class _OpenAIEmbeddingModel {
         values
       });
     }
-    const openaiOptions = (_a27 = await parseProviderOptions({
-      provider: "openai",
-      providerOptions,
-      schema: openaiEmbeddingModelOptions
-    })) != null ? _a27 : {};
     const {
       responseHeaders,
       value: response,
@@ -25577,15 +24938,17 @@ var OpenAIEmbeddingModel = class _OpenAIEmbeddingModel {
         path: "/embeddings",
         modelId: this.modelId
       }),
-      headers: combineHeaders((_c = (_b18 = this.config).headers) == null ? void 0 : _c.call(_b18), headers),
+      headers: combineHeaders((_d = (_c = this.config).headers) == null ? void 0 : _d.call(_c), headers),
       body: {
         model: this.modelId,
         input: values,
         encoding_format: "float",
-        dimensions: openaiOptions.dimensions,
-        user: openaiOptions.user
+        dimensions: compatibleOptions.dimensions,
+        user: compatibleOptions.user
       },
-      failedResponseHandler: openaiFailedResponseHandler,
+      failedResponseHandler: createJsonErrorResponseHandler(
+        (_e = this.config.errorStructure) != null ? _e : defaultOpenAICompatibleErrorStructure
+      ),
       successfulResponseHandler: createJsonResponseHandler(
         openaiTextEmbeddingResponseSchema
       ),
@@ -25593,215 +24956,34 @@ var OpenAIEmbeddingModel = class _OpenAIEmbeddingModel {
       fetch: this.config.fetch
     });
     return {
-      warnings: [],
+      warnings,
       embeddings: response.data.map((item) => item.embedding),
       usage: response.usage ? { tokens: response.usage.prompt_tokens } : void 0,
+      providerMetadata: response.providerMetadata,
       response: { headers: responseHeaders, body: rawValue }
     };
   }
 };
-var openaiFilesResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string(),
-      object: external_exports.string().nullish(),
-      bytes: external_exports.number().nullish(),
-      created_at: external_exports.number().nullish(),
-      filename: external_exports.string().nullish(),
-      purpose: external_exports.string().nullish(),
-      status: external_exports.string().nullish(),
-      expires_at: external_exports.number().nullish()
-    })
-  )
-);
-var openaiFilesOptionsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      /*
-       * Required by the OpenAI API, but optional here because
-       * the SDK defaults to "assistants" — by far the most common
-       * purpose when uploading files in this context.
-       */
-      purpose: external_exports.string().optional(),
-      expiresAfter: external_exports.number().optional()
-    })
-  )
-);
-var OpenAIFiles = class {
-  constructor(config3) {
-    this.config = config3;
-    this.specificationVersion = "v4";
-  }
-  get provider() {
-    return this.config.provider;
-  }
-  async uploadFile({
-    data,
-    mediaType,
-    filename,
-    providerOptions
-  }) {
-    var _a27, _b18, _c;
-    const openaiOptions = await parseProviderOptions({
-      provider: "openai",
-      providerOptions,
-      schema: openaiFilesOptionsSchema
-    });
-    const fileBytes = convertInlineFileDataToUint8Array(data);
-    const blob = new Blob([fileBytes], {
-      type: mediaType
-    });
-    const formData = new FormData();
-    if (filename != null) {
-      formData.append("file", blob, filename);
-    } else {
-      formData.append("file", blob);
-    }
-    formData.append("purpose", (_a27 = openaiOptions == null ? void 0 : openaiOptions.purpose) != null ? _a27 : "assistants");
-    if ((openaiOptions == null ? void 0 : openaiOptions.expiresAfter) != null) {
-      formData.append("expires_after[anchor]", "created_at");
-      formData.append(
-        "expires_after[seconds]",
-        String(openaiOptions.expiresAfter)
-      );
-    }
-    const { value: response } = await postFormDataToApi({
-      url: `${this.config.baseURL}/files`,
-      headers: combineHeaders(this.config.headers()),
-      formData,
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiFilesResponseSchema
-      ),
-      fetch: this.config.fetch
-    });
-    return {
-      warnings: [],
-      providerReference: { openai: response.id },
-      ...((_b18 = response.filename) != null ? _b18 : filename) ? { filename: (_c = response.filename) != null ? _c : filename } : {},
-      ...mediaType != null ? { mediaType } : {},
-      providerMetadata: {
-        openai: {
-          ...response.filename != null ? { filename: response.filename } : {},
-          ...response.purpose != null ? { purpose: response.purpose } : {},
-          ...response.bytes != null ? { bytes: response.bytes } : {},
-          ...response.created_at != null ? { createdAt: response.created_at } : {},
-          ...response.status != null ? { status: response.status } : {},
-          ...response.expires_at != null ? { expiresAt: response.expires_at } : {}
-        }
-      }
-    };
-  }
-};
-var openaiImageResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      created: external_exports.number().nullish(),
-      data: external_exports.array(
-        external_exports.object({
-          b64_json: external_exports.string(),
-          revised_prompt: external_exports.string().nullish()
-        })
-      ),
-      background: external_exports.string().nullish(),
-      output_format: external_exports.string().nullish(),
-      size: external_exports.string().nullish(),
-      quality: external_exports.string().nullish(),
-      usage: external_exports.object({
-        input_tokens: external_exports.number().nullish(),
-        output_tokens: external_exports.number().nullish(),
-        total_tokens: external_exports.number().nullish(),
-        input_tokens_details: external_exports.object({
-          image_tokens: external_exports.number().nullish(),
-          text_tokens: external_exports.number().nullish()
-        }).nullish()
-      }).nullish()
-    })
-  )
-);
-var modelMaxImagesPerCall = {
-  "dall-e-3": 1,
-  "dall-e-2": 10,
-  "gpt-image-1": 10,
-  "gpt-image-1-mini": 10,
-  "gpt-image-1.5": 10,
-  "gpt-image-2": 10,
-  "chatgpt-image-latest": 10
-};
-var defaultResponseFormatPrefixes = ["chatgpt-image-", "gpt-image-"];
-function hasDefaultResponseFormat(modelId) {
-  return defaultResponseFormatPrefixes.some(
-    (prefix) => modelId.startsWith(prefix)
-  );
-}
-function getMaxImagesPerCall(modelId) {
-  var _a27;
-  return (_a27 = modelMaxImagesPerCall[modelId]) != null ? _a27 : modelId.startsWith("gpt-image-") ? 10 : 1;
-}
-var baseImageModelOptionsObject = external_exports.object({
-  /**
-   * Quality of the generated image(s).
-   *
-   * Valid values: `standard`, `hd`, `low`, `medium`, `high`, `auto`.
-   */
-  quality: external_exports.enum(["standard", "hd", "low", "medium", "high", "auto"]).optional(),
-  /**
-   * Background behavior for the generated image(s).
-   *
-   * If `transparent`, the output format must support transparency
-   * (i.e. `png` or `webp`).
-   */
-  background: external_exports.enum(["transparent", "opaque", "auto"]).optional(),
-  /**
-   * Format in which the generated image(s) are returned.
-   */
-  outputFormat: external_exports.enum(["png", "jpeg", "webp"]).optional(),
-  /**
-   * Compression level (0-100) for the generated image(s). Applies to the
-   * `jpeg` and `webp` output formats.
-   */
-  outputCompression: external_exports.number().int().min(0).max(100).optional(),
-  /**
-   * A unique identifier representing your end-user, which can help OpenAI
-   * to monitor and detect abuse.
-   */
-  user: external_exports.string().optional()
+var openaiTextEmbeddingResponseSchema = external_exports.object({
+  data: external_exports.array(external_exports.object({ embedding: external_exports.array(external_exports.number()) })),
+  usage: external_exports.object({ prompt_tokens: external_exports.number() }).nullish(),
+  providerMetadata: external_exports.record(external_exports.string(), external_exports.record(external_exports.string(), external_exports.any())).optional()
 });
-var openaiImageModelOptions = lazySchema(
-  () => zodSchema(baseImageModelOptionsObject)
-);
-var openaiImageModelGenerationOptions = lazySchema(
-  () => zodSchema(
-    baseImageModelOptionsObject.extend({
-      /**
-       * Style of the generated image. `vivid` produces hyper-real and
-       * dramatic images; `natural` produces more subdued, less hyper-real
-       * looking images.
-       */
-      style: external_exports.enum(["vivid", "natural"]).optional(),
-      /**
-       * Content moderation level for the generated image(s). `low` applies
-       * less restrictive filtering.
-       */
-      moderation: external_exports.enum(["auto", "low"]).optional()
-    })
-  )
-);
-var openaiImageModelEditOptions = lazySchema(
-  () => zodSchema(
-    baseImageModelOptionsObject.extend({
-      /**
-       * Fidelity of the output image(s) to the input image(s).
-       */
-      inputFidelity: external_exports.enum(["high", "low"]).optional()
-    })
-  )
-);
-var OpenAIImageModel = class _OpenAIImageModel {
+var OpenAICompatibleImageModel = class _OpenAICompatibleImageModel {
   constructor(modelId, config3) {
     this.modelId = modelId;
     this.config = config3;
     this.specificationVersion = "v4";
+    this.maxImagesPerCall = 10;
+  }
+  get provider() {
+    return this.config.provider;
+  }
+  /**
+   * The provider options key used to extract provider-specific options.
+   */
+  get providerOptionsKey() {
+    return this.config.provider.split(".")[0].trim();
   }
   static [WORKFLOW_SERIALIZE](model) {
     return serializeModelOptions({
@@ -25810,27 +24992,32 @@ var OpenAIImageModel = class _OpenAIImageModel {
     });
   }
   static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAIImageModel(options.modelId, options.config);
+    return new _OpenAICompatibleImageModel(options.modelId, options.config);
   }
-  get maxImagesPerCall() {
-    return getMaxImagesPerCall(this.modelId);
-  }
-  get provider() {
-    return this.config.provider;
+  getArgs(providerOptions, warnings) {
+    warnIfDeprecatedProviderOptionsKey({
+      rawName: this.providerOptionsKey,
+      providerOptions,
+      warnings
+    });
+    return {
+      ...providerOptions[this.providerOptionsKey],
+      ...providerOptions[toCamelCase(this.providerOptionsKey)]
+    };
   }
   async doGenerate({
     prompt,
-    files,
-    mask,
     n,
     size,
     aspectRatio,
     seed,
     providerOptions,
     headers,
-    abortSignal
+    abortSignal,
+    files,
+    mask
   }) {
-    var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+    var _a27, _b18, _c, _d, _e, _f, _g, _h, _i;
     const warnings = [];
     if (aspectRatio != null) {
       warnings.push({
@@ -25843,48 +25030,28 @@ var OpenAIImageModel = class _OpenAIImageModel {
       warnings.push({ type: "unsupported", feature: "seed" });
     }
     const currentDate = (_c = (_b18 = (_a27 = this.config._internal) == null ? void 0 : _a27.currentDate) == null ? void 0 : _b18.call(_a27)) != null ? _c : /* @__PURE__ */ new Date();
-    if (files != null) {
-      const openaiOptions2 = (_d = await parseProviderOptions({
-        provider: "openai",
-        providerOptions,
-        schema: openaiImageModelEditOptions
-      })) != null ? _d : {};
+    const args = this.getArgs(providerOptions, warnings);
+    if (files != null && files.length > 0) {
       const { value: response2, responseHeaders: responseHeaders2 } = await postFormDataToApi({
         url: this.config.url({
           path: "/images/edits",
           modelId: this.modelId
         }),
-        headers: combineHeaders((_f = (_e = this.config).headers) == null ? void 0 : _f.call(_e), headers),
+        headers: combineHeaders((_e = (_d = this.config).headers) == null ? void 0 : _e.call(_d), headers),
         formData: convertToFormData({
           model: this.modelId,
           prompt,
-          image: await Promise.all(
-            files.map(
-              (file3) => file3.type === "file" ? new Blob(
-                [
-                  file3.data instanceof Uint8Array ? new Blob([file3.data], {
-                    type: file3.mediaType
-                  }) : new Blob([convertBase64ToUint8Array(file3.data)], {
-                    type: file3.mediaType
-                  })
-                ],
-                { type: file3.mediaType }
-              ) : downloadBlob(file3.url)
-            )
-          ),
+          image: await Promise.all(files.map((file3) => fileToBlob(file3))),
           mask: mask != null ? await fileToBlob(mask) : void 0,
           n,
           size,
-          quality: openaiOptions2.quality,
-          background: openaiOptions2.background,
-          output_format: openaiOptions2.outputFormat,
-          output_compression: openaiOptions2.outputCompression,
-          input_fidelity: openaiOptions2.inputFidelity,
-          user: openaiOptions2.user
+          ...args
         }),
-        failedResponseHandler: openaiFailedResponseHandler,
+        failedResponseHandler: createJsonErrorResponseHandler(
+          (_f = this.config.errorStructure) != null ? _f : defaultOpenAICompatibleErrorStructure
+        ),
         successfulResponseHandler: createJsonResponseHandler(
-          openaiImageResponseSchema
+          openaiCompatibleImageResponseSchema
         ),
         abortSignal,
         fetch: this.config.fetch
@@ -25892,66 +25059,31 @@ var OpenAIImageModel = class _OpenAIImageModel {
       return {
         images: response2.data.map((item) => item.b64_json),
         warnings,
-        usage: response2.usage != null ? {
-          inputTokens: (_g = response2.usage.input_tokens) != null ? _g : void 0,
-          outputTokens: (_h = response2.usage.output_tokens) != null ? _h : void 0,
-          totalTokens: (_i = response2.usage.total_tokens) != null ? _i : void 0
-        } : void 0,
         response: {
           timestamp: currentDate,
           modelId: this.modelId,
           headers: responseHeaders2
-        },
-        providerMetadata: {
-          openai: {
-            images: response2.data.map((item, index) => {
-              var _a28, _b24, _c2, _d2, _e2, _f2;
-              return {
-                ...item.revised_prompt ? { revisedPrompt: item.revised_prompt } : {},
-                created: (_a28 = response2.created) != null ? _a28 : void 0,
-                size: (_b24 = response2.size) != null ? _b24 : void 0,
-                quality: (_c2 = response2.quality) != null ? _c2 : void 0,
-                background: (_d2 = response2.background) != null ? _d2 : void 0,
-                outputFormat: (_e2 = response2.output_format) != null ? _e2 : void 0,
-                ...distributeTokenDetails(
-                  (_f2 = response2.usage) == null ? void 0 : _f2.input_tokens_details,
-                  index,
-                  response2.data.length
-                )
-              };
-            })
-          }
         }
       };
     }
-    const openaiOptions = (_j = await parseProviderOptions({
-      provider: "openai",
-      providerOptions,
-      schema: openaiImageModelGenerationOptions
-    })) != null ? _j : {};
     const { value: response, responseHeaders } = await postJsonToApi({
       url: this.config.url({
         path: "/images/generations",
         modelId: this.modelId
       }),
-      headers: combineHeaders((_l = (_k = this.config).headers) == null ? void 0 : _l.call(_k), headers),
+      headers: combineHeaders((_h = (_g = this.config).headers) == null ? void 0 : _h.call(_g), headers),
       body: {
         model: this.modelId,
         prompt,
         n,
         size,
-        quality: openaiOptions.quality,
-        style: openaiOptions.style,
-        background: openaiOptions.background,
-        moderation: openaiOptions.moderation,
-        output_format: openaiOptions.outputFormat,
-        output_compression: openaiOptions.outputCompression,
-        user: openaiOptions.user,
-        ...!hasDefaultResponseFormat(this.modelId) ? { response_format: "b64_json" } : {}
+        ...args
       },
-      failedResponseHandler: openaiFailedResponseHandler,
+      failedResponseHandler: createJsonErrorResponseHandler(
+        (_i = this.config.errorStructure) != null ? _i : defaultOpenAICompatibleErrorStructure
+      ),
       successfulResponseHandler: createJsonResponseHandler(
-        openaiImageResponseSchema
+        openaiCompatibleImageResponseSchema
       ),
       abortSignal,
       fetch: this.config.fetch
@@ -25959,7479 +25091,73 @@ var OpenAIImageModel = class _OpenAIImageModel {
     return {
       images: response.data.map((item) => item.b64_json),
       warnings,
-      usage: response.usage != null ? {
-        inputTokens: (_m = response.usage.input_tokens) != null ? _m : void 0,
-        outputTokens: (_n = response.usage.output_tokens) != null ? _n : void 0,
-        totalTokens: (_o = response.usage.total_tokens) != null ? _o : void 0
-      } : void 0,
       response: {
         timestamp: currentDate,
         modelId: this.modelId,
         headers: responseHeaders
-      },
-      providerMetadata: {
-        openai: {
-          images: response.data.map((item, index) => {
-            var _a28, _b24, _c2, _d2, _e2, _f2;
-            return {
-              ...item.revised_prompt ? { revisedPrompt: item.revised_prompt } : {},
-              created: (_a28 = response.created) != null ? _a28 : void 0,
-              size: (_b24 = response.size) != null ? _b24 : void 0,
-              quality: (_c2 = response.quality) != null ? _c2 : void 0,
-              background: (_d2 = response.background) != null ? _d2 : void 0,
-              outputFormat: (_e2 = response.output_format) != null ? _e2 : void 0,
-              ...distributeTokenDetails(
-                (_f2 = response.usage) == null ? void 0 : _f2.input_tokens_details,
-                index,
-                response.data.length
-              )
-            };
-          })
-        }
       }
     };
   }
 };
-function distributeTokenDetails(details, index, total) {
-  if (details == null) {
-    return {};
-  }
-  const result = {};
-  if (details.image_tokens != null) {
-    const base = Math.floor(details.image_tokens / total);
-    const remainder = details.image_tokens - base * (total - 1);
-    result.imageTokens = index === total - 1 ? remainder : base;
-  }
-  if (details.text_tokens != null) {
-    const base = Math.floor(details.text_tokens / total);
-    const remainder = details.text_tokens - base * (total - 1);
-    result.textTokens = index === total - 1 ? remainder : base;
-  }
-  return result;
-}
+var openaiCompatibleImageResponseSchema = external_exports.object({
+  data: external_exports.array(external_exports.object({ b64_json: external_exports.string() }))
+});
 async function fileToBlob(file3) {
-  if (!file3) return void 0;
   if (file3.type === "url") {
     return downloadBlob(file3.url);
   }
   const data = file3.data instanceof Uint8Array ? file3.data : convertBase64ToUint8Array(file3.data);
   return new Blob([data], { type: file3.mediaType });
 }
-var applyPatchInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      callId: external_exports.string(),
-      operation: external_exports.discriminatedUnion("type", [
-        external_exports.object({
-          type: external_exports.literal("create_file"),
-          path: external_exports.string(),
-          diff: external_exports.string()
-        }),
-        external_exports.object({
-          type: external_exports.literal("delete_file"),
-          path: external_exports.string()
-        }),
-        external_exports.object({
-          type: external_exports.literal("update_file"),
-          path: external_exports.string(),
-          diff: external_exports.string()
-        })
-      ])
-    })
-  )
-);
-var applyPatchOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      status: external_exports.enum(["completed", "failed"]),
-      output: external_exports.string().optional()
-    })
-  )
-);
-var applyPatchArgsSchema = lazySchema(() => zodSchema(external_exports.object({})));
-var applyPatchToolFactory = createProviderDefinedToolFactoryWithOutputSchema({
-  id: "openai.apply_patch",
-  inputSchema: applyPatchInputSchema,
-  outputSchema: applyPatchOutputSchema
-});
-var applyPatch = applyPatchToolFactory;
-var codeInterpreterInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      code: external_exports.string().nullish(),
-      containerId: external_exports.string()
-    })
-  )
-);
-var codeInterpreterOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      outputs: external_exports.array(
-        external_exports.discriminatedUnion("type", [
-          external_exports.object({ type: external_exports.literal("logs"), logs: external_exports.string() }),
-          external_exports.object({ type: external_exports.literal("image"), url: external_exports.string() })
-        ])
-      ).nullish()
-    })
-  )
-);
-var codeInterpreterArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      container: external_exports.union([
-        external_exports.string(),
-        external_exports.object({
-          fileIds: external_exports.array(external_exports.string()).optional()
-        })
-      ]).optional()
-    })
-  )
-);
-var codeInterpreterToolFactory = createProviderExecutedToolFactory({
-  id: "openai.code_interpreter",
-  inputSchema: codeInterpreterInputSchema,
-  outputSchema: codeInterpreterOutputSchema
-});
-var codeInterpreter = (args = {}) => {
-  return codeInterpreterToolFactory(args);
-};
-var safetyCheckSchema = external_exports.object({
-  id: external_exports.string(),
-  code: external_exports.string().optional(),
-  message: external_exports.string().optional()
-});
-var computerActionSchema = external_exports.discriminatedUnion("type", [
-  external_exports.object({
-    type: external_exports.literal("click"),
-    button: external_exports.enum(["left", "right", "wheel", "back", "forward"]),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).optional()
-  }),
-  external_exports.object({
-    type: external_exports.literal("double_click"),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).optional()
-  }),
-  external_exports.object({
-    type: external_exports.literal("drag"),
-    path: external_exports.array(external_exports.object({ x: external_exports.number(), y: external_exports.number() })),
-    keys: external_exports.array(external_exports.string()).optional()
-  }),
-  external_exports.object({
-    type: external_exports.literal("keypress"),
-    keys: external_exports.array(external_exports.string())
-  }),
-  external_exports.object({
-    type: external_exports.literal("move"),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).optional()
-  }),
-  external_exports.object({
-    type: external_exports.literal("screenshot")
-  }),
-  external_exports.object({
-    type: external_exports.literal("scroll"),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    scrollX: external_exports.number(),
-    scrollY: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).optional()
-  }),
-  external_exports.object({
-    type: external_exports.literal("type"),
-    text: external_exports.string()
-  }),
-  external_exports.object({
-    type: external_exports.literal("wait")
-  })
-]);
-var computerInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      actions: external_exports.array(computerActionSchema),
-      pendingSafetyChecks: external_exports.array(safetyCheckSchema),
-      status: external_exports.enum(["in_progress", "completed", "incomplete"])
-    })
-  )
-);
-var computerOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      output: external_exports.union([
-        external_exports.object({
-          type: external_exports.literal("computer_screenshot"),
-          imageUrl: external_exports.string(),
-          fileId: external_exports.string().optional(),
-          detail: external_exports.enum(["auto", "low", "high", "original"]).optional()
-        }),
-        external_exports.object({
-          type: external_exports.literal("computer_screenshot"),
-          fileId: external_exports.string(),
-          imageUrl: external_exports.string().optional(),
-          detail: external_exports.enum(["auto", "low", "high", "original"]).optional()
-        })
-      ]),
-      acknowledgedSafetyChecks: external_exports.array(safetyCheckSchema).optional()
-    })
-  )
-);
-var computerToolFactory = createProviderDefinedToolFactoryWithOutputSchema({
-  id: "openai.computer",
-  inputSchema: computerInputSchema,
-  outputSchema: computerOutputSchema
-});
-var computer = (options = {}) => computerToolFactory(options);
-var customArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      description: external_exports.string().optional(),
-      format: external_exports.union([
-        external_exports.object({
-          type: external_exports.literal("grammar"),
-          syntax: external_exports.enum(["regex", "lark"]),
-          definition: external_exports.string()
-        }),
-        external_exports.object({
-          type: external_exports.literal("text")
-        })
-      ]).optional()
-    })
-  )
-);
-var customInputSchema = lazySchema(() => zodSchema(external_exports.string()));
-var customToolFactory = createProviderDefinedToolFactory({
-  id: "openai.custom",
-  inputSchema: customInputSchema
-});
-var customTool = (args) => customToolFactory(args);
-var comparisonFilterSchema = external_exports.object({
-  key: external_exports.string(),
-  type: external_exports.enum(["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"]),
-  value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.array(external_exports.string())])
-});
-var compoundFilterSchema = external_exports.object({
-  type: external_exports.enum(["and", "or"]),
-  filters: external_exports.array(
-    external_exports.union([comparisonFilterSchema, external_exports.lazy(() => compoundFilterSchema)])
-  )
-});
-var fileSearchArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      vectorStoreIds: external_exports.array(external_exports.string()),
-      maxNumResults: external_exports.number().optional(),
-      ranking: external_exports.object({
-        ranker: external_exports.string().optional(),
-        scoreThreshold: external_exports.number().optional()
-      }).optional(),
-      filters: external_exports.union([comparisonFilterSchema, compoundFilterSchema]).optional()
-    })
-  )
-);
-var fileSearchOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      queries: external_exports.array(external_exports.string()),
-      results: external_exports.array(
-        external_exports.object({
-          attributes: external_exports.record(external_exports.string(), external_exports.unknown()),
-          fileId: external_exports.string(),
-          filename: external_exports.string(),
-          score: external_exports.number(),
-          text: external_exports.string()
-        })
-      ).nullable()
-    })
-  )
-);
-var fileSearch = createProviderExecutedToolFactory({
-  id: "openai.file_search",
-  inputSchema: external_exports.object({}),
-  outputSchema: fileSearchOutputSchema
-});
-var imageGenerationArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      background: external_exports.enum(["auto", "opaque", "transparent"]).optional(),
-      inputFidelity: external_exports.enum(["low", "high"]).optional(),
-      inputImageMask: external_exports.object({
-        fileId: external_exports.string().optional(),
-        imageUrl: external_exports.string().optional()
-      }).optional(),
-      model: external_exports.string().optional(),
-      moderation: external_exports.enum(["auto"]).optional(),
-      outputCompression: external_exports.number().int().min(0).max(100).optional(),
-      outputFormat: external_exports.enum(["png", "jpeg", "webp"]).optional(),
-      partialImages: external_exports.number().int().min(0).max(3).optional(),
-      quality: external_exports.enum(["auto", "low", "medium", "high"]).optional(),
-      size: external_exports.enum(["1024x1024", "1024x1536", "1536x1024", "auto"]).optional()
-    }).strict()
-  )
-);
-var imageGenerationInputSchema = lazySchema(() => zodSchema(external_exports.object({})));
-var imageGenerationOutputSchema = lazySchema(
-  () => zodSchema(external_exports.object({ result: external_exports.string() }))
-);
-var imageGenerationToolFactory = createProviderExecutedToolFactory({
-  id: "openai.image_generation",
-  inputSchema: imageGenerationInputSchema,
-  outputSchema: imageGenerationOutputSchema
-});
-var imageGeneration = (args = {}) => {
-  return imageGenerationToolFactory(args);
-};
-var localShellInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      action: external_exports.object({
-        type: external_exports.literal("exec"),
-        command: external_exports.array(external_exports.string()),
-        timeoutMs: external_exports.number().optional(),
-        user: external_exports.string().optional(),
-        workingDirectory: external_exports.string().optional(),
-        env: external_exports.record(external_exports.string(), external_exports.string()).optional()
-      })
-    })
-  )
-);
-var localShellOutputSchema = lazySchema(
-  () => zodSchema(external_exports.object({ output: external_exports.string() }))
-);
-var localShell = createProviderDefinedToolFactoryWithOutputSchema({
-  id: "openai.local_shell",
-  inputSchema: localShellInputSchema,
-  outputSchema: localShellOutputSchema
-});
-var shellInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      action: external_exports.object({
-        commands: external_exports.array(external_exports.string()),
-        timeoutMs: external_exports.number().optional(),
-        maxOutputLength: external_exports.number().optional()
-      })
-    })
-  )
-);
-var shellOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      output: external_exports.array(
-        external_exports.object({
-          stdout: external_exports.string(),
-          stderr: external_exports.string(),
-          outcome: external_exports.discriminatedUnion("type", [
-            external_exports.object({ type: external_exports.literal("timeout") }),
-            external_exports.object({ type: external_exports.literal("exit"), exitCode: external_exports.number() })
-          ])
-        })
-      )
-    })
-  )
-);
-var shellSkillsSchema = external_exports.array(
-  external_exports.discriminatedUnion("type", [
-    external_exports.object({
-      type: external_exports.literal("skillReference"),
-      providerReference: external_exports.record(external_exports.string(), external_exports.string()),
-      version: external_exports.string().optional()
-    }),
-    external_exports.object({
-      type: external_exports.literal("inline"),
-      name: external_exports.string(),
-      description: external_exports.string(),
-      source: external_exports.object({
-        type: external_exports.literal("base64"),
-        mediaType: external_exports.literal("application/zip"),
-        data: external_exports.string()
-      })
-    })
-  ])
-).optional();
-var shellArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      environment: external_exports.union([
-        external_exports.object({
-          type: external_exports.literal("containerAuto"),
-          fileIds: external_exports.array(external_exports.string()).optional(),
-          memoryLimit: external_exports.enum(["1g", "4g", "16g", "64g"]).optional(),
-          networkPolicy: external_exports.discriminatedUnion("type", [
-            external_exports.object({ type: external_exports.literal("disabled") }),
-            external_exports.object({
-              type: external_exports.literal("allowlist"),
-              allowedDomains: external_exports.array(external_exports.string()),
-              domainSecrets: external_exports.array(
-                external_exports.object({
-                  domain: external_exports.string(),
-                  name: external_exports.string(),
-                  value: external_exports.string()
-                })
-              ).optional()
-            })
-          ]).optional(),
-          skills: shellSkillsSchema
-        }),
-        external_exports.object({
-          type: external_exports.literal("containerReference"),
-          containerId: external_exports.string()
-        }),
-        external_exports.object({
-          type: external_exports.literal("local").optional(),
-          skills: external_exports.array(
-            external_exports.object({
-              name: external_exports.string(),
-              description: external_exports.string(),
-              path: external_exports.string()
-            })
-          ).optional()
-        })
-      ]).optional()
-    })
-  )
-);
-var shell = createProviderDefinedToolFactoryWithOutputSchema({
-  id: "openai.shell",
-  inputSchema: shellInputSchema,
-  outputSchema: shellOutputSchema
-});
-var toolSearchArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      execution: external_exports.enum(["server", "client"]).optional(),
-      description: external_exports.string().optional(),
-      parameters: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
-    })
-  )
-);
-var toolSearchInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      arguments: external_exports.unknown().optional(),
-      call_id: external_exports.string().nullish()
-    })
-  )
-);
-var toolSearchOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      tools: external_exports.array(external_exports.record(external_exports.string(), external_exports.unknown()))
-    })
-  )
-);
-var toolSearchToolFactory = createProviderDefinedToolFactoryWithOutputSchema({
-  id: "openai.tool_search",
-  inputSchema: toolSearchInputSchema,
-  outputSchema: toolSearchOutputSchema
-});
-var toolSearch = (args = {}) => toolSearchToolFactory(args);
-var webSearchArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      externalWebAccess: external_exports.boolean().optional(),
-      filters: external_exports.object({
-        allowedDomains: external_exports.array(external_exports.string()).optional(),
-        blockedDomains: external_exports.array(external_exports.string()).optional()
-      }).optional(),
-      searchContextSize: external_exports.enum(["low", "medium", "high"]).optional(),
-      userLocation: external_exports.object({
-        type: external_exports.literal("approximate"),
-        country: external_exports.string().optional(),
-        city: external_exports.string().optional(),
-        region: external_exports.string().optional(),
-        timezone: external_exports.string().optional()
-      }).optional()
-    })
-  )
-);
-var webSearchInputSchema = lazySchema(() => zodSchema(external_exports.object({})));
-var webSearchOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      action: external_exports.discriminatedUnion("type", [
-        external_exports.object({
-          type: external_exports.literal("search"),
-          query: external_exports.string().optional(),
-          queries: external_exports.array(external_exports.string()).optional()
-        }),
-        external_exports.object({
-          type: external_exports.literal("openPage"),
-          url: external_exports.string().nullish()
-        }),
-        external_exports.object({
-          type: external_exports.literal("findInPage"),
-          url: external_exports.string().nullish(),
-          pattern: external_exports.string().nullish()
-        })
-      ]).optional(),
-      sources: external_exports.array(
-        external_exports.discriminatedUnion("type", [
-          external_exports.object({ type: external_exports.literal("url"), url: external_exports.string() }),
-          external_exports.object({ type: external_exports.literal("api"), name: external_exports.string() })
-        ])
-      ).optional()
-    })
-  )
-);
-var webSearchToolFactory = createProviderExecutedToolFactory({
-  id: "openai.web_search",
-  inputSchema: webSearchInputSchema,
-  outputSchema: webSearchOutputSchema
-});
-var webSearch = (args = {}) => webSearchToolFactory(args);
-var webSearchPreviewArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      searchContextSize: external_exports.enum(["low", "medium", "high"]).optional(),
-      userLocation: external_exports.object({
-        type: external_exports.literal("approximate"),
-        country: external_exports.string().optional(),
-        city: external_exports.string().optional(),
-        region: external_exports.string().optional(),
-        timezone: external_exports.string().optional()
-      }).optional()
-    })
-  )
-);
-var webSearchPreviewInputSchema = lazySchema(
-  () => zodSchema(external_exports.object({}))
-);
-var webSearchPreviewOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      action: external_exports.discriminatedUnion("type", [
-        external_exports.object({
-          type: external_exports.literal("search"),
-          query: external_exports.string().optional()
-        }),
-        external_exports.object({
-          type: external_exports.literal("openPage"),
-          url: external_exports.string().nullish()
-        }),
-        external_exports.object({
-          type: external_exports.literal("findInPage"),
-          url: external_exports.string().nullish(),
-          pattern: external_exports.string().nullish()
-        })
-      ]).optional()
-    })
-  )
-);
-var webSearchPreview = createProviderExecutedToolFactory({
-  id: "openai.web_search_preview",
-  inputSchema: webSearchPreviewInputSchema,
-  outputSchema: webSearchPreviewOutputSchema
-});
-var jsonValueSchema = external_exports.lazy(
-  () => external_exports.union([
-    external_exports.string(),
-    external_exports.number(),
-    external_exports.boolean(),
-    external_exports.null(),
-    external_exports.array(jsonValueSchema),
-    external_exports.record(external_exports.string(), jsonValueSchema)
-  ])
-);
-var mcpArgsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      serverLabel: external_exports.string(),
-      allowedTools: external_exports.union([
-        external_exports.array(external_exports.string()),
-        external_exports.object({
-          readOnly: external_exports.boolean().optional(),
-          toolNames: external_exports.array(external_exports.string()).optional()
-        })
-      ]).optional(),
-      authorization: external_exports.string().optional(),
-      connectorId: external_exports.string().optional(),
-      headers: external_exports.record(external_exports.string(), external_exports.string()).optional(),
-      requireApproval: external_exports.union([
-        external_exports.enum(["always", "never"]),
-        external_exports.object({
-          never: external_exports.object({
-            toolNames: external_exports.array(external_exports.string()).optional()
-          }).optional()
-        })
-      ]).optional(),
-      serverDescription: external_exports.string().optional(),
-      serverUrl: external_exports.string().optional()
-    }).refine(
-      (v) => v.serverUrl != null || v.connectorId != null,
-      "One of serverUrl or connectorId must be provided."
-    )
-  )
-);
-var mcpInputSchema = lazySchema(() => zodSchema(external_exports.object({})));
-var mcpOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      type: external_exports.literal("call"),
-      serverLabel: external_exports.string(),
-      name: external_exports.string(),
-      arguments: external_exports.string(),
-      output: external_exports.string().nullish(),
-      error: external_exports.union([external_exports.string(), jsonValueSchema]).optional()
-    })
-  )
-);
-var mcpToolFactory = createProviderExecutedToolFactory({
-  id: "openai.mcp",
-  inputSchema: mcpInputSchema,
-  outputSchema: mcpOutputSchema
-});
-var mcp = (args) => mcpToolFactory(args);
-var programmaticToolCallingInputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      code: external_exports.string(),
-      fingerprint: external_exports.string()
-    })
-  )
-);
-var programmaticToolCallingOutputSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      result: external_exports.string(),
-      status: external_exports.enum(["completed", "incomplete"])
-    })
-  )
-);
-var programmaticToolCallingFactory = createProviderExecutedToolFactory({
-  id: "openai.programmatic_tool_calling",
-  inputSchema: programmaticToolCallingInputSchema,
-  outputSchema: programmaticToolCallingOutputSchema,
-  supportsDeferredResults: true
-});
-var programmaticToolCalling = () => toolCaller(programmaticToolCallingFactory({}), {
-  type: "provider",
-  prepareProviderOptions: (providerOptions) => {
-    var _a27;
-    const openaiOptions = providerOptions == null ? void 0 : providerOptions.openai;
-    return {
-      ...providerOptions,
-      openai: {
-        ...openaiOptions,
-        allowedCallers: [
-          .../* @__PURE__ */ new Set([
-            ...(_a27 = openaiOptions == null ? void 0 : openaiOptions.allowedCallers) != null ? _a27 : [],
-            "programmatic"
-          ])
-        ]
+var VERSION2 = true ? "3.0.30" : "0.0.0-test";
+function createOpenAICompatible(options) {
+  const baseURL = withoutTrailingSlash(options.baseURL);
+  const providerName = options.name;
+  const headers = {
+    ...options.apiKey && { Authorization: `Bearer ${options.apiKey}` },
+    ...options.headers
+  };
+  const getHeaders = () => withUserAgentSuffix(headers, `ai-sdk/openai-compatible/${VERSION2}`);
+  const getCommonModelConfig = (modelType) => ({
+    provider: `${providerName}.${modelType}`,
+    url: ({ path }) => {
+      const url3 = new URL(`${baseURL}${path}`);
+      if (options.queryParams) {
+        url3.search = new URLSearchParams(options.queryParams).toString();
       }
-    };
-  }
-});
-var openaiTools = {
-  /**
-   * The apply_patch tool lets GPT-5.1 create, update, and delete files in your
-   * codebase using structured diffs. Instead of just suggesting edits, the model
-   * emits patch operations that your application applies and then reports back on,
-   * enabling iterative, multi-step code editing workflows.
-   *
-   */
-  applyPatch,
-  /**
-   * Custom tools let callers constrain model output to a grammar (regex or
-   * Lark syntax). The model returns a `custom_tool_call` output item whose
-   * `input` field is a string matching the specified grammar.
-   *
-   * @param description - An optional description of the tool.
-   * @param format - The output format constraint (grammar type, syntax, and definition).
-   */
-  customTool,
-  /**
-   * The Code Interpreter tool allows models to write and run Python code in a
-   * sandboxed environment to solve complex problems in domains like data analysis,
-   * coding, and math.
-   *
-   * @param container - The container to use for the code interpreter.
-   */
-  codeInterpreter,
-  /**
-   * The computer tool allows models to operate a browser or desktop through
-   * batched UI actions. Your application executes the actions and returns an
-   * updated screenshot.
-   *
-   * WARNING: Run computer use in an isolated environment, treat on-screen
-   * content as untrusted, and require confirmation for consequential actions.
-   */
-  computer,
-  /**
-   * File search is a tool available in the Responses API. It enables models to
-   * retrieve information in a knowledge base of previously uploaded files through
-   * semantic and keyword search.
-   *
-   * @param vectorStoreIds - The vector store IDs to use for the file search.
-   * @param maxNumResults - The maximum number of results to return.
-   * @param ranking - The ranking options to use for the file search.
-   * @param filters - The filters to use for the file search.
-   */
-  fileSearch,
-  /**
-   * The image generation tool allows you to generate images using a text prompt,
-   * and optionally image inputs. It leverages the GPT Image model,
-   * and automatically optimizes text inputs for improved performance.
-   *
-   * @param background - Background type for the generated image. One of 'auto', 'opaque', or 'transparent'.
-   * @param inputFidelity - Input fidelity for the generated image. One of 'low' or 'high'.
-   * @param inputImageMask - Optional mask for inpainting. Contains fileId and/or imageUrl.
-   * @param model - The image generation model to use. Default: gpt-image-1.
-   * @param moderation - Moderation level for the generated image. Default: 'auto'.
-   * @param outputCompression - Compression level for the output image (0-100).
-   * @param outputFormat - The output format of the generated image. One of 'png', 'jpeg', or 'webp'.
-   * @param partialImages - Number of partial images to generate in streaming mode (0-3).
-   * @param quality - The quality of the generated image. One of 'auto', 'low', 'medium', or 'high'.
-   * @param size - The size of the generated image. One of 'auto', '1024x1024', '1024x1536', or '1536x1024'.
-   */
-  imageGeneration,
-  /**
-   * Local shell is a tool that allows agents to run shell commands locally
-   * on a machine you or the user provides.
-   *
-   * Supported models: `gpt-5-codex`
-   */
-  localShell,
-  /**
-   * The shell tool allows the model to interact with your local computer through
-   * a controlled command-line interface. The model proposes shell commands; your
-   * integration executes them and returns the outputs.
-   *
-   * Available through the Responses API for use with GPT-5.1.
-   *
-   * WARNING: Running arbitrary shell commands can be dangerous. Always sandbox
-   * execution or add strict allow-/deny-lists before forwarding a command to
-   * the system shell.
-   */
-  shell,
-  /**
-   * Web search allows models to access up-to-date information from the internet
-   * and provide answers with sourced citations.
-   *
-   * @param searchContextSize - The search context size to use for the web search.
-   * @param userLocation - The user location to use for the web search.
-   */
-  webSearchPreview,
-  /**
-   * Web search allows models to access up-to-date information from the internet
-   * and provide answers with sourced citations.
-   *
-   * @param filters - The filters to use for the web search.
-   * @param searchContextSize - The search context size to use for the web search.
-   * @param userLocation - The user location to use for the web search.
-   */
-  webSearch,
-  /**
-   * MCP (Model Context Protocol) allows models to call tools exposed by
-   * remote MCP servers or service connectors.
-   *
-   * @param serverLabel - Label to identify the MCP server.
-   * @param allowedTools - Allowed tool names or filter object.
-   * @param authorization - OAuth access token for the MCP server/connector.
-   * @param connectorId - Identifier for a service connector.
-   * @param headers - Optional headers to include in MCP requests.
-   * // param requireApproval - Approval policy ('always'|'never'|filter object). (Removed - always 'never')
-   * @param serverDescription - Optional description of the server.
-   * @param serverUrl - URL for the MCP server.
-   */
-  mcp,
-  /**
-   * Programmatic Tool Calling lets OpenAI Responses models write and execute
-   * JavaScript that orchestrates eligible tools.
-   */
-  programmaticToolCalling,
-  /**
-   * Tool search allows the model to dynamically search for and load deferred
-   * tools into the model's context as needed. This helps reduce overall token
-   * usage, cost, and latency by only loading tools when the model needs them.
-   *
-   * To use tool search, mark functions or namespaces with `defer_loading: true`
-   * in the tools array. The model will use tool search to load these tools
-   * when it determines they are needed.
-   */
-  toolSearch
-};
-function convertOpenAIResponsesUsage(usage) {
-  var _a27, _b18, _c, _d, _e, _f;
-  if (usage == null) {
-    return createNullLanguageModelUsage();
-  }
-  const inputTokens = usage.input_tokens;
-  const outputTokens = usage.output_tokens;
-  const cachedTokens = (_b18 = (_a27 = usage.input_tokens_details) == null ? void 0 : _a27.cached_tokens) != null ? _b18 : 0;
-  const cacheWriteTokens = (_d = (_c = usage.input_tokens_details) == null ? void 0 : _c.cache_write_tokens) != null ? _d : void 0;
-  const reasoningTokens = (_f = (_e = usage.output_tokens_details) == null ? void 0 : _e.reasoning_tokens) != null ? _f : 0;
-  return {
-    inputTokens: {
-      total: inputTokens,
-      noCache: inputTokens - cachedTokens - (cacheWriteTokens != null ? cacheWriteTokens : 0),
-      cacheRead: cachedTokens,
-      cacheWrite: cacheWriteTokens
+      return url3.toString();
     },
-    outputTokens: {
-      total: outputTokens,
-      text: outputTokens - reasoningTokens,
-      reasoning: reasoningTokens
-    },
-    raw: usage
-  };
-}
-function mapOpenAIResponseFinishReason({
-  finishReason,
-  hasFunctionCall
-}) {
-  switch (finishReason) {
-    case void 0:
-    case null:
-      return hasFunctionCall ? "tool-calls" : "stop";
-    case "max_output_tokens":
-      return "length";
-    case "content_filter":
-      return "content-filter";
-    default:
-      return hasFunctionCall ? "tool-calls" : "other";
-  }
-}
-var jsonValueSchema2 = external_exports.lazy(
-  () => external_exports.union([
-    external_exports.string(),
-    external_exports.number(),
-    external_exports.boolean(),
-    external_exports.null(),
-    external_exports.array(jsonValueSchema2),
-    external_exports.record(external_exports.string(), jsonValueSchema2.optional())
-  ])
-);
-var openaiResponsesComputerSafetyCheckSchema = external_exports.object({
-  id: external_exports.string(),
-  code: external_exports.string().nullish(),
-  message: external_exports.string().nullish()
-});
-var openaiResponsesComputerActionSchema = external_exports.discriminatedUnion("type", [
-  external_exports.object({
-    type: external_exports.literal("click"),
-    button: external_exports.enum(["left", "right", "wheel", "back", "forward"]),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).nullish()
-  }),
-  external_exports.object({
-    type: external_exports.literal("double_click"),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).nullish()
-  }),
-  external_exports.object({
-    type: external_exports.literal("drag"),
-    path: external_exports.array(external_exports.object({ x: external_exports.number(), y: external_exports.number() })),
-    keys: external_exports.array(external_exports.string()).nullish()
-  }),
-  external_exports.object({
-    type: external_exports.literal("keypress"),
-    keys: external_exports.array(external_exports.string())
-  }),
-  external_exports.object({
-    type: external_exports.literal("move"),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).nullish()
-  }),
-  external_exports.object({
-    type: external_exports.literal("screenshot")
-  }),
-  external_exports.object({
-    type: external_exports.literal("scroll"),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    scroll_x: external_exports.number(),
-    scroll_y: external_exports.number(),
-    keys: external_exports.array(external_exports.string()).nullish()
-  }),
-  external_exports.object({
-    type: external_exports.literal("type"),
-    text: external_exports.string()
-  }),
-  external_exports.object({
-    type: external_exports.literal("wait")
-  })
-]);
-var openaiResponsesComputerCallSchema = external_exports.object({
-  type: external_exports.literal("computer_call"),
-  id: external_exports.string(),
-  call_id: external_exports.string().nullish(),
-  status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-  action: openaiResponsesComputerActionSchema.nullish(),
-  actions: external_exports.array(openaiResponsesComputerActionSchema).nullish(),
-  pending_safety_checks: external_exports.array(openaiResponsesComputerSafetyCheckSchema).nullish()
-});
-var openaiResponsesToolCallerSchema = external_exports.discriminatedUnion("type", [
-  external_exports.object({ type: external_exports.literal("direct") }),
-  external_exports.object({
-    type: external_exports.literal("program"),
-    caller_id: external_exports.string()
-  })
-]);
-var openaiResponsesProgramSchema = external_exports.object({
-  type: external_exports.literal("program"),
-  id: external_exports.string(),
-  call_id: external_exports.string(),
-  code: external_exports.string(),
-  fingerprint: external_exports.string()
-});
-var openaiResponsesProgramOutputSchema = external_exports.object({
-  type: external_exports.literal("program_output"),
-  id: external_exports.string(),
-  call_id: external_exports.string(),
-  result: external_exports.string(),
-  status: external_exports.enum(["completed", "incomplete"])
-});
-var openaiResponsesNestedErrorChunkSchema = external_exports.object({
-  type: external_exports.literal("error"),
-  sequence_number: external_exports.number(),
-  error: external_exports.object({
-    type: external_exports.string(),
-    code: external_exports.string(),
-    message: external_exports.string(),
-    param: external_exports.string().nullish()
-  })
-});
-var openaiResponsesErrorChunkSchema = external_exports.object({
-  type: external_exports.literal("error"),
-  sequence_number: external_exports.number(),
-  code: external_exports.string().nullish(),
-  message: external_exports.string(),
-  param: external_exports.string().nullish()
-});
-var openaiResponsesChunkSchema = lazySchema(
-  () => zodSchema(
-    external_exports.union([
-      external_exports.object({
-        type: external_exports.literal("response.output_text.delta"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number().nullish(),
-        delta: external_exports.string(),
-        logprobs: external_exports.array(
-          external_exports.object({
-            token: external_exports.string(),
-            logprob: external_exports.number(),
-            top_logprobs: external_exports.array(
-              external_exports.object({
-                token: external_exports.string(),
-                logprob: external_exports.number()
-              })
-            )
-          })
-        ).nullish()
-      }),
-      external_exports.object({
-        type: external_exports.enum(["response.completed", "response.incomplete"]),
-        response: external_exports.object({
-          incomplete_details: external_exports.object({ reason: external_exports.string() }).nullish(),
-          usage: external_exports.object({
-            input_tokens: external_exports.number(),
-            input_tokens_details: external_exports.object({
-              cached_tokens: external_exports.number().nullish(),
-              cache_write_tokens: external_exports.number().nullish(),
-              orchestration_input_tokens: external_exports.number().nullish(),
-              orchestration_input_cached_tokens: external_exports.number().nullish()
-            }).nullish(),
-            output_tokens: external_exports.number(),
-            output_tokens_details: external_exports.object({
-              reasoning_tokens: external_exports.number().nullish(),
-              orchestration_output_tokens: external_exports.number().nullish()
-            }).nullish()
-          }),
-          reasoning: external_exports.object({
-            context: external_exports.string().nullish()
-          }).nullish(),
-          service_tier: external_exports.string().nullish()
-        })
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.failed"),
-        sequence_number: external_exports.number(),
-        response: external_exports.object({
-          error: external_exports.object({
-            code: external_exports.string().nullish(),
-            message: external_exports.string()
-          }).nullish(),
-          incomplete_details: external_exports.object({ reason: external_exports.string() }).nullish(),
-          usage: external_exports.object({
-            input_tokens: external_exports.number(),
-            input_tokens_details: external_exports.object({
-              cached_tokens: external_exports.number().nullish(),
-              cache_write_tokens: external_exports.number().nullish(),
-              orchestration_input_tokens: external_exports.number().nullish(),
-              orchestration_input_cached_tokens: external_exports.number().nullish()
-            }).nullish(),
-            output_tokens: external_exports.number(),
-            output_tokens_details: external_exports.object({
-              reasoning_tokens: external_exports.number().nullish(),
-              orchestration_output_tokens: external_exports.number().nullish()
-            }).nullish()
-          }).nullish(),
-          reasoning: external_exports.object({
-            context: external_exports.string().nullish()
-          }).nullish(),
-          service_tier: external_exports.string().nullish()
-        })
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.created"),
-        response: external_exports.object({
-          id: external_exports.string(),
-          created_at: external_exports.number(),
-          model: external_exports.string(),
-          service_tier: external_exports.string().nullish()
-        })
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.in_progress"),
-        response: external_exports.object({
-          id: external_exports.string(),
-          created_at: external_exports.number(),
-          model: external_exports.string(),
-          service_tier: external_exports.string().nullish()
-        })
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.output_item.added"),
-        output_index: external_exports.number(),
-        item: external_exports.discriminatedUnion("type", [
-          external_exports.object({
-            type: external_exports.literal("message"),
-            id: external_exports.string(),
-            phase: external_exports.enum(["commentary", "final_answer"]).nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("reasoning"),
-            id: external_exports.string(),
-            encrypted_content: external_exports.string().nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("function_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            name: external_exports.string(),
-            arguments: external_exports.string(),
-            namespace: external_exports.string().nullish(),
-            caller: openaiResponsesToolCallerSchema.nullish()
-          }),
-          openaiResponsesProgramSchema,
-          openaiResponsesProgramOutputSchema,
-          external_exports.object({
-            type: external_exports.literal("web_search_call"),
-            id: external_exports.string(),
-            status: external_exports.string()
-          }),
-          openaiResponsesComputerCallSchema,
-          external_exports.object({
-            type: external_exports.literal("file_search_call"),
-            id: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("image_generation_call"),
-            id: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("code_interpreter_call"),
-            id: external_exports.string(),
-            container_id: external_exports.string(),
-            code: external_exports.string().nullable(),
-            outputs: external_exports.array(
-              external_exports.discriminatedUnion("type", [
-                external_exports.object({ type: external_exports.literal("logs"), logs: external_exports.string() }),
-                external_exports.object({ type: external_exports.literal("image"), url: external_exports.string() })
-              ])
-            ).nullable(),
-            status: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_call"),
-            id: external_exports.string(),
-            status: external_exports.string(),
-            approval_request_id: external_exports.string().nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_list_tools"),
-            id: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_approval_request"),
-            id: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("apply_patch_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed"]),
-            operation: external_exports.discriminatedUnion("type", [
-              external_exports.object({
-                type: external_exports.literal("create_file"),
-                path: external_exports.string(),
-                diff: external_exports.string()
-              }),
-              external_exports.object({
-                type: external_exports.literal("delete_file"),
-                path: external_exports.string()
-              }),
-              external_exports.object({
-                type: external_exports.literal("update_file"),
-                path: external_exports.string(),
-                diff: external_exports.string()
-              })
-            ])
-          }),
-          external_exports.object({
-            type: external_exports.literal("custom_tool_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            name: external_exports.string(),
-            input: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("shell_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            action: external_exports.object({
-              commands: external_exports.array(external_exports.string())
-            })
-          }),
-          external_exports.object({
-            type: external_exports.literal("compaction"),
-            id: external_exports.string(),
-            encrypted_content: external_exports.string().nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("shell_call_output"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            output: external_exports.array(
-              external_exports.object({
-                stdout: external_exports.string(),
-                stderr: external_exports.string(),
-                outcome: external_exports.discriminatedUnion("type", [
-                  external_exports.object({ type: external_exports.literal("timeout") }),
-                  external_exports.object({
-                    type: external_exports.literal("exit"),
-                    exit_code: external_exports.number()
-                  })
-                ])
-              })
-            )
-          }),
-          external_exports.object({
-            type: external_exports.literal("tool_search_call"),
-            id: external_exports.string(),
-            execution: external_exports.enum(["server", "client"]),
-            call_id: external_exports.string().nullable(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            arguments: external_exports.unknown()
-          }),
-          external_exports.object({
-            type: external_exports.literal("tool_search_output"),
-            id: external_exports.string(),
-            execution: external_exports.enum(["server", "client"]),
-            call_id: external_exports.string().nullable(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            tools: external_exports.array(external_exports.record(external_exports.string(), jsonValueSchema2.optional()))
-          })
-        ])
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.output_item.done"),
-        output_index: external_exports.number(),
-        item: external_exports.discriminatedUnion("type", [
-          external_exports.object({
-            type: external_exports.literal("message"),
-            id: external_exports.string(),
-            phase: external_exports.enum(["commentary", "final_answer"]).nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("reasoning"),
-            id: external_exports.string(),
-            encrypted_content: external_exports.string().nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("function_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            name: external_exports.string(),
-            arguments: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            namespace: external_exports.string().nullish(),
-            caller: openaiResponsesToolCallerSchema.nullish()
-          }),
-          openaiResponsesProgramSchema,
-          openaiResponsesProgramOutputSchema,
-          external_exports.object({
-            type: external_exports.literal("custom_tool_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            name: external_exports.string(),
-            input: external_exports.string(),
-            status: external_exports.literal("completed")
-          }),
-          external_exports.object({
-            type: external_exports.literal("code_interpreter_call"),
-            id: external_exports.string(),
-            code: external_exports.string().nullable(),
-            container_id: external_exports.string(),
-            outputs: external_exports.array(
-              external_exports.discriminatedUnion("type", [
-                external_exports.object({ type: external_exports.literal("logs"), logs: external_exports.string() }),
-                external_exports.object({ type: external_exports.literal("image"), url: external_exports.string() })
-              ])
-            ).nullable()
-          }),
-          external_exports.object({
-            type: external_exports.literal("image_generation_call"),
-            id: external_exports.string(),
-            result: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("web_search_call"),
-            id: external_exports.string(),
-            status: external_exports.string(),
-            action: external_exports.discriminatedUnion("type", [
-              external_exports.object({
-                type: external_exports.literal("search"),
-                query: external_exports.string().nullish(),
-                queries: external_exports.array(external_exports.string()).nullish(),
-                sources: external_exports.array(
-                  external_exports.discriminatedUnion("type", [
-                    external_exports.object({ type: external_exports.literal("url"), url: external_exports.string() }),
-                    external_exports.object({ type: external_exports.literal("api"), name: external_exports.string() })
-                  ])
-                ).nullish()
-              }),
-              external_exports.object({
-                type: external_exports.literal("open_page"),
-                url: external_exports.string().nullish()
-              }),
-              external_exports.object({
-                type: external_exports.literal("find_in_page"),
-                url: external_exports.string().nullish(),
-                pattern: external_exports.string().nullish()
-              })
-            ]).nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("file_search_call"),
-            id: external_exports.string(),
-            queries: external_exports.array(external_exports.string()),
-            results: external_exports.array(
-              external_exports.object({
-                attributes: external_exports.record(
-                  external_exports.string(),
-                  external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()])
-                ),
-                file_id: external_exports.string(),
-                filename: external_exports.string(),
-                score: external_exports.number(),
-                text: external_exports.string()
-              })
-            ).nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("local_shell_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            action: external_exports.object({
-              type: external_exports.literal("exec"),
-              command: external_exports.array(external_exports.string()),
-              timeout_ms: external_exports.number().optional(),
-              user: external_exports.string().optional(),
-              working_directory: external_exports.string().optional(),
-              env: external_exports.record(external_exports.string(), external_exports.string()).optional()
-            })
-          }),
-          openaiResponsesComputerCallSchema,
-          external_exports.object({
-            type: external_exports.literal("mcp_call"),
-            id: external_exports.string(),
-            status: external_exports.string(),
-            arguments: external_exports.string(),
-            name: external_exports.string(),
-            server_label: external_exports.string(),
-            output: external_exports.string().nullish(),
-            error: external_exports.union([
-              external_exports.string(),
-              external_exports.object({
-                type: external_exports.string().optional(),
-                code: external_exports.union([external_exports.number(), external_exports.string()]).optional(),
-                message: external_exports.string().optional()
-              }).loose()
-            ]).nullish(),
-            approval_request_id: external_exports.string().nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_list_tools"),
-            id: external_exports.string(),
-            server_label: external_exports.string(),
-            tools: external_exports.array(
-              external_exports.object({
-                name: external_exports.string(),
-                description: external_exports.string().optional(),
-                input_schema: external_exports.any(),
-                annotations: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
-              })
-            ),
-            error: external_exports.union([
-              external_exports.string(),
-              external_exports.object({
-                type: external_exports.string().optional(),
-                code: external_exports.union([external_exports.number(), external_exports.string()]).optional(),
-                message: external_exports.string().optional()
-              }).loose()
-            ]).optional()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_approval_request"),
-            id: external_exports.string(),
-            server_label: external_exports.string(),
-            name: external_exports.string(),
-            arguments: external_exports.string(),
-            approval_request_id: external_exports.string().optional()
-          }),
-          external_exports.object({
-            type: external_exports.literal("apply_patch_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed"]),
-            operation: external_exports.discriminatedUnion("type", [
-              external_exports.object({
-                type: external_exports.literal("create_file"),
-                path: external_exports.string(),
-                diff: external_exports.string()
-              }),
-              external_exports.object({
-                type: external_exports.literal("delete_file"),
-                path: external_exports.string()
-              }),
-              external_exports.object({
-                type: external_exports.literal("update_file"),
-                path: external_exports.string(),
-                diff: external_exports.string()
-              })
-            ])
-          }),
-          external_exports.object({
-            type: external_exports.literal("shell_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            action: external_exports.object({
-              commands: external_exports.array(external_exports.string())
-            })
-          }),
-          external_exports.object({
-            type: external_exports.literal("compaction"),
-            id: external_exports.string(),
-            encrypted_content: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("shell_call_output"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            output: external_exports.array(
-              external_exports.object({
-                stdout: external_exports.string(),
-                stderr: external_exports.string(),
-                outcome: external_exports.discriminatedUnion("type", [
-                  external_exports.object({ type: external_exports.literal("timeout") }),
-                  external_exports.object({
-                    type: external_exports.literal("exit"),
-                    exit_code: external_exports.number()
-                  })
-                ])
-              })
-            )
-          }),
-          external_exports.object({
-            type: external_exports.literal("tool_search_call"),
-            id: external_exports.string(),
-            execution: external_exports.enum(["server", "client"]),
-            call_id: external_exports.string().nullable(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            arguments: external_exports.unknown()
-          }),
-          external_exports.object({
-            type: external_exports.literal("tool_search_output"),
-            id: external_exports.string(),
-            execution: external_exports.enum(["server", "client"]),
-            call_id: external_exports.string().nullable(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            tools: external_exports.array(external_exports.record(external_exports.string(), jsonValueSchema2.optional()))
-          })
-        ])
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.function_call_arguments.delta"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        delta: external_exports.string()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.custom_tool_call_input.delta"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        delta: external_exports.string()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.image_generation_call.partial_image"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        partial_image_b64: external_exports.string()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.code_interpreter_call_code.delta"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        delta: external_exports.string()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.code_interpreter_call_code.done"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        code: external_exports.string()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.output_text.annotation.added"),
-        annotation: external_exports.discriminatedUnion("type", [
-          external_exports.object({
-            type: external_exports.literal("url_citation"),
-            start_index: external_exports.number(),
-            end_index: external_exports.number(),
-            url: external_exports.string(),
-            title: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("file_citation"),
-            file_id: external_exports.string(),
-            filename: external_exports.string(),
-            index: external_exports.number()
-          }),
-          external_exports.object({
-            type: external_exports.literal("container_file_citation"),
-            container_id: external_exports.string(),
-            file_id: external_exports.string(),
-            filename: external_exports.string(),
-            start_index: external_exports.number(),
-            end_index: external_exports.number()
-          }),
-          external_exports.object({
-            type: external_exports.literal("file_path"),
-            file_id: external_exports.string(),
-            index: external_exports.number()
-          })
-        ])
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.reasoning_summary_part.added"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number().nullish(),
-        summary_index: external_exports.number()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.reasoning_summary_text.delta"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number().nullish(),
-        summary_index: external_exports.number(),
-        delta: external_exports.string()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.reasoning_summary_part.done"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number().nullish(),
-        summary_index: external_exports.number()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.apply_patch_call_operation_diff.delta"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        delta: external_exports.string(),
-        obfuscation: external_exports.string().nullish()
-      }),
-      external_exports.object({
-        type: external_exports.literal("response.apply_patch_call_operation_diff.done"),
-        item_id: external_exports.string(),
-        output_index: external_exports.number(),
-        diff: external_exports.string()
-      }),
-      openaiResponsesNestedErrorChunkSchema,
-      openaiResponsesErrorChunkSchema,
-      external_exports.object({ type: external_exports.string() }).loose().transform((value) => ({
-        type: "unknown_chunk",
-        message: value.type
-      }))
-      // fallback for unknown chunks
-    ])
-  )
-);
-var openaiResponsesResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string().optional(),
-      created_at: external_exports.number().optional(),
-      error: external_exports.object({
-        message: external_exports.string(),
-        type: external_exports.string(),
-        param: external_exports.string().nullish(),
-        code: external_exports.string()
-      }).nullish(),
-      model: external_exports.string().optional(),
-      output: external_exports.array(
-        external_exports.discriminatedUnion("type", [
-          external_exports.object({
-            type: external_exports.literal("message"),
-            role: external_exports.literal("assistant"),
-            id: external_exports.string(),
-            phase: external_exports.enum(["commentary", "final_answer"]).nullish(),
-            content: external_exports.array(
-              external_exports.object({
-                type: external_exports.literal("output_text"),
-                text: external_exports.string(),
-                logprobs: external_exports.array(
-                  external_exports.object({
-                    token: external_exports.string(),
-                    logprob: external_exports.number(),
-                    top_logprobs: external_exports.array(
-                      external_exports.object({
-                        token: external_exports.string(),
-                        logprob: external_exports.number()
-                      })
-                    )
-                  })
-                ).nullish(),
-                annotations: external_exports.array(
-                  external_exports.discriminatedUnion("type", [
-                    external_exports.object({
-                      type: external_exports.literal("url_citation"),
-                      start_index: external_exports.number(),
-                      end_index: external_exports.number(),
-                      url: external_exports.string(),
-                      title: external_exports.string()
-                    }),
-                    external_exports.object({
-                      type: external_exports.literal("file_citation"),
-                      file_id: external_exports.string(),
-                      filename: external_exports.string(),
-                      index: external_exports.number()
-                    }),
-                    external_exports.object({
-                      type: external_exports.literal("container_file_citation"),
-                      container_id: external_exports.string(),
-                      file_id: external_exports.string(),
-                      filename: external_exports.string(),
-                      start_index: external_exports.number(),
-                      end_index: external_exports.number()
-                    }),
-                    external_exports.object({
-                      type: external_exports.literal("file_path"),
-                      file_id: external_exports.string(),
-                      index: external_exports.number()
-                    })
-                  ])
-                )
-              })
-            )
-          }),
-          external_exports.object({
-            type: external_exports.literal("web_search_call"),
-            id: external_exports.string(),
-            status: external_exports.string(),
-            action: external_exports.discriminatedUnion("type", [
-              external_exports.object({
-                type: external_exports.literal("search"),
-                query: external_exports.string().nullish(),
-                queries: external_exports.array(external_exports.string()).nullish(),
-                sources: external_exports.array(
-                  external_exports.discriminatedUnion("type", [
-                    external_exports.object({ type: external_exports.literal("url"), url: external_exports.string() }),
-                    external_exports.object({
-                      type: external_exports.literal("api"),
-                      name: external_exports.string()
-                    })
-                  ])
-                ).nullish()
-              }),
-              external_exports.object({
-                type: external_exports.literal("open_page"),
-                url: external_exports.string().nullish()
-              }),
-              external_exports.object({
-                type: external_exports.literal("find_in_page"),
-                url: external_exports.string().nullish(),
-                pattern: external_exports.string().nullish()
-              })
-            ]).nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("file_search_call"),
-            id: external_exports.string(),
-            queries: external_exports.array(external_exports.string()),
-            results: external_exports.array(
-              external_exports.object({
-                attributes: external_exports.record(
-                  external_exports.string(),
-                  external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()])
-                ),
-                file_id: external_exports.string(),
-                filename: external_exports.string(),
-                score: external_exports.number(),
-                text: external_exports.string()
-              })
-            ).nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("code_interpreter_call"),
-            id: external_exports.string(),
-            code: external_exports.string().nullable(),
-            container_id: external_exports.string(),
-            outputs: external_exports.array(
-              external_exports.discriminatedUnion("type", [
-                external_exports.object({ type: external_exports.literal("logs"), logs: external_exports.string() }),
-                external_exports.object({ type: external_exports.literal("image"), url: external_exports.string() })
-              ])
-            ).nullable()
-          }),
-          external_exports.object({
-            type: external_exports.literal("image_generation_call"),
-            id: external_exports.string(),
-            result: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("local_shell_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            action: external_exports.object({
-              type: external_exports.literal("exec"),
-              command: external_exports.array(external_exports.string()),
-              timeout_ms: external_exports.number().optional(),
-              user: external_exports.string().optional(),
-              working_directory: external_exports.string().optional(),
-              env: external_exports.record(external_exports.string(), external_exports.string()).optional()
-            })
-          }),
-          external_exports.object({
-            type: external_exports.literal("function_call"),
-            call_id: external_exports.string(),
-            name: external_exports.string(),
-            arguments: external_exports.string(),
-            id: external_exports.string(),
-            namespace: external_exports.string().nullish(),
-            caller: openaiResponsesToolCallerSchema.nullish()
-          }),
-          openaiResponsesProgramSchema,
-          openaiResponsesProgramOutputSchema,
-          external_exports.object({
-            type: external_exports.literal("custom_tool_call"),
-            call_id: external_exports.string(),
-            name: external_exports.string(),
-            input: external_exports.string(),
-            id: external_exports.string()
-          }),
-          openaiResponsesComputerCallSchema,
-          external_exports.object({
-            type: external_exports.literal("reasoning"),
-            id: external_exports.string(),
-            encrypted_content: external_exports.string().nullish(),
-            summary: external_exports.array(
-              external_exports.object({
-                type: external_exports.literal("summary_text"),
-                text: external_exports.string()
-              })
-            )
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_call"),
-            id: external_exports.string(),
-            status: external_exports.string(),
-            arguments: external_exports.string(),
-            name: external_exports.string(),
-            server_label: external_exports.string(),
-            output: external_exports.string().nullish(),
-            error: external_exports.union([
-              external_exports.string(),
-              external_exports.object({
-                type: external_exports.string().optional(),
-                code: external_exports.union([external_exports.number(), external_exports.string()]).optional(),
-                message: external_exports.string().optional()
-              }).loose()
-            ]).nullish(),
-            approval_request_id: external_exports.string().nullish()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_list_tools"),
-            id: external_exports.string(),
-            server_label: external_exports.string(),
-            tools: external_exports.array(
-              external_exports.object({
-                name: external_exports.string(),
-                description: external_exports.string().optional(),
-                input_schema: external_exports.any(),
-                annotations: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
-              })
-            ),
-            error: external_exports.union([
-              external_exports.string(),
-              external_exports.object({
-                type: external_exports.string().optional(),
-                code: external_exports.union([external_exports.number(), external_exports.string()]).optional(),
-                message: external_exports.string().optional()
-              }).loose()
-            ]).optional()
-          }),
-          external_exports.object({
-            type: external_exports.literal("mcp_approval_request"),
-            id: external_exports.string(),
-            server_label: external_exports.string(),
-            name: external_exports.string(),
-            arguments: external_exports.string(),
-            approval_request_id: external_exports.string().optional()
-          }),
-          external_exports.object({
-            type: external_exports.literal("apply_patch_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed"]),
-            operation: external_exports.discriminatedUnion("type", [
-              external_exports.object({
-                type: external_exports.literal("create_file"),
-                path: external_exports.string(),
-                diff: external_exports.string()
-              }),
-              external_exports.object({
-                type: external_exports.literal("delete_file"),
-                path: external_exports.string()
-              }),
-              external_exports.object({
-                type: external_exports.literal("update_file"),
-                path: external_exports.string(),
-                diff: external_exports.string()
-              })
-            ])
-          }),
-          external_exports.object({
-            type: external_exports.literal("shell_call"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            action: external_exports.object({
-              commands: external_exports.array(external_exports.string())
-            })
-          }),
-          external_exports.object({
-            type: external_exports.literal("compaction"),
-            id: external_exports.string(),
-            encrypted_content: external_exports.string()
-          }),
-          external_exports.object({
-            type: external_exports.literal("shell_call_output"),
-            id: external_exports.string(),
-            call_id: external_exports.string(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            output: external_exports.array(
-              external_exports.object({
-                stdout: external_exports.string(),
-                stderr: external_exports.string(),
-                outcome: external_exports.discriminatedUnion("type", [
-                  external_exports.object({ type: external_exports.literal("timeout") }),
-                  external_exports.object({
-                    type: external_exports.literal("exit"),
-                    exit_code: external_exports.number()
-                  })
-                ])
-              })
-            )
-          }),
-          external_exports.object({
-            type: external_exports.literal("tool_search_call"),
-            id: external_exports.string(),
-            execution: external_exports.enum(["server", "client"]),
-            call_id: external_exports.string().nullable(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            arguments: external_exports.unknown()
-          }),
-          external_exports.object({
-            type: external_exports.literal("tool_search_output"),
-            id: external_exports.string(),
-            execution: external_exports.enum(["server", "client"]),
-            call_id: external_exports.string().nullable(),
-            status: external_exports.enum(["in_progress", "completed", "incomplete"]),
-            tools: external_exports.array(external_exports.record(external_exports.string(), jsonValueSchema2.optional()))
-          })
-        ])
-      ).optional(),
-      service_tier: external_exports.string().nullish(),
-      reasoning: external_exports.object({
-        context: external_exports.string().nullish()
-      }).nullish(),
-      incomplete_details: external_exports.object({ reason: external_exports.string() }).nullish(),
-      usage: external_exports.object({
-        input_tokens: external_exports.number(),
-        input_tokens_details: external_exports.object({
-          cached_tokens: external_exports.number().nullish(),
-          cache_write_tokens: external_exports.number().nullish(),
-          orchestration_input_tokens: external_exports.number().nullish(),
-          orchestration_input_cached_tokens: external_exports.number().nullish()
-        }).nullish(),
-        output_tokens: external_exports.number(),
-        output_tokens_details: external_exports.object({
-          reasoning_tokens: external_exports.number().nullish(),
-          orchestration_output_tokens: external_exports.number().nullish()
-        }).nullish()
-      }).optional()
-    })
-  )
-);
-function serializeToolCallArguments2(input) {
-  return JSON.stringify(input === void 0 ? {} : input);
-}
-function mapToolCaller(caller) {
-  return caller == null ? void 0 : caller.type === "program" ? { type: "program", caller_id: caller.callerId } : caller;
-}
-function getPromptCacheBreakpoint2(providerOptions, providerOptionsName) {
-  var _a27;
-  return (_a27 = providerOptions == null ? void 0 : providerOptions[providerOptionsName]) == null ? void 0 : _a27.promptCacheBreakpoint;
-}
-function isFileId(data, prefixes) {
-  if (!prefixes) return false;
-  return prefixes.some((prefix) => data.startsWith(prefix));
-}
-async function convertToOpenAIResponsesInput({
-  prompt,
-  toolNameMapping,
-  systemMessageMode,
-  providerOptionsName,
-  fileIdPrefixes,
-  passThroughUnsupportedFiles = false,
-  store,
-  hasConversation = false,
-  hasPreviousResponseId = false,
-  hasLocalShellTool = false,
-  hasShellTool = false,
-  hasApplyPatchTool = false,
-  hasComputerTool = false,
-  customProviderToolNames,
-  outputSchemaToolNames
-}) {
-  var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L;
-  let input = [];
-  const warnings = [];
-  const processedApprovalIds = /* @__PURE__ */ new Set();
-  for (const { role, content, providerOptions } of prompt) {
-    switch (role) {
-      case "system": {
-        switch (systemMessageMode) {
-          case "system": {
-            const promptCacheBreakpoint = getPromptCacheBreakpoint2(
-              providerOptions,
-              providerOptionsName
-            );
-            input.push({
-              role: "system",
-              content: promptCacheBreakpoint == null ? content : [
-                {
-                  type: "input_text",
-                  text: content,
-                  prompt_cache_breakpoint: promptCacheBreakpoint
-                }
-              ]
-            });
-            break;
-          }
-          case "developer": {
-            const promptCacheBreakpoint = getPromptCacheBreakpoint2(
-              providerOptions,
-              providerOptionsName
-            );
-            input.push({
-              role: "developer",
-              content: promptCacheBreakpoint == null ? content : [
-                {
-                  type: "input_text",
-                  text: content,
-                  prompt_cache_breakpoint: promptCacheBreakpoint
-                }
-              ]
-            });
-            break;
-          }
-          case "remove": {
-            warnings.push({
-              type: "other",
-              message: "system messages are removed for this model"
-            });
-            break;
-          }
-          default: {
-            const _exhaustiveCheck = systemMessageMode;
-            throw new Error(
-              `Unsupported system message mode: ${_exhaustiveCheck}`
-            );
-          }
-        }
-        break;
-      }
-      case "user": {
-        input.push({
-          role: "user",
-          content: content.map((part, index) => {
-            var _a28, _b24, _c2, _d2, _e2;
-            switch (part.type) {
-              case "text": {
-                const promptCacheBreakpoint = getPromptCacheBreakpoint2(
-                  part.providerOptions,
-                  providerOptionsName
-                );
-                return {
-                  type: "input_text",
-                  text: part.text,
-                  ...promptCacheBreakpoint != null && {
-                    prompt_cache_breakpoint: promptCacheBreakpoint
-                  }
-                };
-              }
-              case "file": {
-                const promptCacheBreakpoint = getPromptCacheBreakpoint2(
-                  part.providerOptions,
-                  providerOptionsName
-                );
-                switch (part.data.type) {
-                  case "reference": {
-                    const fileId = resolveProviderReference({
-                      reference: part.data.reference,
-                      provider: providerOptionsName
-                    });
-                    if (getTopLevelMediaType(part.mediaType) === "image") {
-                      return {
-                        type: "input_image",
-                        file_id: fileId,
-                        detail: (_b24 = (_a28 = part.providerOptions) == null ? void 0 : _a28[providerOptionsName]) == null ? void 0 : _b24.imageDetail,
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
-                      };
-                    }
-                    return {
-                      type: "input_file",
-                      file_id: fileId,
-                      ...promptCacheBreakpoint != null && {
-                        prompt_cache_breakpoint: promptCacheBreakpoint
-                      }
-                    };
-                  }
-                  case "text": {
-                    throw new UnsupportedFunctionalityError({
-                      functionality: "text file parts"
-                    });
-                  }
-                  case "url":
-                  case "data": {
-                    const topLevel = getTopLevelMediaType(part.mediaType);
-                    if (topLevel === "image") {
-                      return {
-                        type: "input_image",
-                        ...part.data.type === "url" ? { image_url: part.data.url.toString() } : typeof part.data.data === "string" && isFileId(part.data.data, fileIdPrefixes) ? { file_id: part.data.data } : {
-                          image_url: `data:${resolveFullMediaType({ part })};base64,${convertToBase64(part.data.data)}`
-                        },
-                        detail: (_d2 = (_c2 = part.providerOptions) == null ? void 0 : _c2[providerOptionsName]) == null ? void 0 : _d2.imageDetail,
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
-                      };
-                    } else {
-                      if (part.data.type === "url") {
-                        return {
-                          type: "input_file",
-                          file_url: part.data.url.toString(),
-                          ...promptCacheBreakpoint != null && {
-                            prompt_cache_breakpoint: promptCacheBreakpoint
-                          }
-                        };
-                      }
-                      const fullMediaType = resolveFullMediaType({ part });
-                      if (fullMediaType !== "application/pdf" && !passThroughUnsupportedFiles) {
-                        throw new UnsupportedFunctionalityError({
-                          functionality: `file part media type ${fullMediaType}`
-                        });
-                      }
-                      return {
-                        type: "input_file",
-                        ...typeof part.data.data === "string" && isFileId(part.data.data, fileIdPrefixes) ? { file_id: part.data.data } : {
-                          filename: (_e2 = part.filename) != null ? _e2 : fullMediaType === "application/pdf" ? `part-${index}.pdf` : `part-${index}`,
-                          file_data: `data:${fullMediaType};base64,${convertToBase64(part.data.data)}`
-                        },
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
-                      };
-                    }
-                  }
-                }
-              }
-            }
-          })
-        });
-        break;
-      }
-      case "assistant": {
-        const reasoningMessages = {};
-        for (const part of content) {
-          switch (part.type) {
-            case "text": {
-              const providerOptions2 = (_a27 = part.providerOptions) == null ? void 0 : _a27[providerOptionsName];
-              const id = providerOptions2 == null ? void 0 : providerOptions2.itemId;
-              const phase = providerOptions2 == null ? void 0 : providerOptions2.phase;
-              if (hasConversation && id != null) {
-                break;
-              }
-              if (store && id != null) {
-                input.push({ type: "item_reference", id });
-                break;
-              }
-              input.push({
-                role: "assistant",
-                content: [{ type: "output_text", text: part.text }],
-                id,
-                ...phase != null && { phase }
-              });
-              break;
-            }
-            case "tool-call": {
-              const id = (_f = (_c = (_b18 = part.providerOptions) == null ? void 0 : _b18[providerOptionsName]) == null ? void 0 : _c.itemId) != null ? _f : (_e = (_d = part.providerMetadata) == null ? void 0 : _d[providerOptionsName]) == null ? void 0 : _e.itemId;
-              const namespace = (_k = (_h = (_g = part.providerOptions) == null ? void 0 : _g[providerOptionsName]) == null ? void 0 : _h.namespace) != null ? _k : (_j = (_i = part.providerMetadata) == null ? void 0 : _i[providerOptionsName]) == null ? void 0 : _j.namespace;
-              const caller = (_m = (_l = part.providerOptions) == null ? void 0 : _l[providerOptionsName]) == null ? void 0 : _m.caller;
-              if (hasConversation && id != null) {
-                break;
-              }
-              const resolvedToolName = toolNameMapping.toProviderToolName(
-                part.toolName
-              );
-              if (resolvedToolName === "tool_search") {
-                if (store && id != null) {
-                  input.push({ type: "item_reference", id });
-                  break;
-                }
-                const parsedInput = typeof part.input === "string" ? await parseJSON({
-                  text: part.input,
-                  schema: toolSearchInputSchema
-                }) : await validateTypes({
-                  value: part.input,
-                  schema: toolSearchInputSchema
-                });
-                const execution = parsedInput.call_id != null ? "client" : "server";
-                input.push({
-                  type: "tool_search_call",
-                  id: id != null ? id : part.toolCallId,
-                  execution,
-                  call_id: (_n = parsedInput.call_id) != null ? _n : null,
-                  status: "completed",
-                  arguments: parsedInput.arguments
-                });
-                break;
-              }
-              if (resolvedToolName === "programmatic_tool_calling") {
-                if (store && id != null) {
-                  input.push({ type: "item_reference", id });
-                  break;
-                }
-                const parsedInput = await validateTypes({
-                  value: part.input,
-                  schema: programmaticToolCallingInputSchema
-                });
-                input.push({
-                  type: "program",
-                  id: id != null ? id : part.toolCallId,
-                  call_id: part.toolCallId,
-                  code: parsedInput.code,
-                  fingerprint: parsedInput.fingerprint
-                });
-                break;
-              }
-              if (part.providerExecuted) {
-                if (store && id != null) {
-                  input.push({ type: "item_reference", id });
-                }
-                if (store || !hasShellTool || resolvedToolName !== "shell") {
-                  break;
-                }
-              }
-              const isProviderDefinedToolCall = hasLocalShellTool && resolvedToolName === "local_shell" || hasShellTool && resolvedToolName === "shell" || hasApplyPatchTool && resolvedToolName === "apply_patch" || hasComputerTool && resolvedToolName === "computer" || ((_o = customProviderToolNames == null ? void 0 : customProviderToolNames.has(resolvedToolName)) != null ? _o : false);
-              if (hasPreviousResponseId && store && id != null && isProviderDefinedToolCall) {
-                break;
-              }
-              if (store && id != null && isProviderDefinedToolCall) {
-                input.push({ type: "item_reference", id });
-                break;
-              }
-              if (hasLocalShellTool && resolvedToolName === "local_shell") {
-                const parsedInput = await validateTypes({
-                  value: part.input,
-                  schema: localShellInputSchema
-                });
-                input.push({
-                  type: "local_shell_call",
-                  call_id: part.toolCallId,
-                  id,
-                  action: {
-                    type: "exec",
-                    command: parsedInput.action.command,
-                    timeout_ms: parsedInput.action.timeoutMs,
-                    user: parsedInput.action.user,
-                    working_directory: parsedInput.action.workingDirectory,
-                    env: parsedInput.action.env
-                  }
-                });
-                break;
-              }
-              if (hasShellTool && resolvedToolName === "shell") {
-                const parsedInput = await validateTypes({
-                  value: part.input,
-                  schema: shellInputSchema
-                });
-                input.push({
-                  type: "shell_call",
-                  call_id: part.toolCallId,
-                  id,
-                  status: "completed",
-                  action: {
-                    commands: parsedInput.action.commands,
-                    timeout_ms: parsedInput.action.timeoutMs,
-                    max_output_length: parsedInput.action.maxOutputLength
-                  }
-                });
-                break;
-              }
-              if (hasApplyPatchTool && resolvedToolName === "apply_patch") {
-                const parsedInput = await validateTypes({
-                  value: part.input,
-                  schema: applyPatchInputSchema
-                });
-                input.push({
-                  type: "apply_patch_call",
-                  call_id: parsedInput.callId,
-                  id,
-                  status: "completed",
-                  operation: parsedInput.operation
-                });
-                break;
-              }
-              if (hasComputerTool && resolvedToolName === "computer") {
-                const parsedInput = await validateTypes({
-                  value: part.input,
-                  schema: computerInputSchema
-                });
-                input.push({
-                  type: "computer_call",
-                  call_id: part.toolCallId,
-                  id,
-                  status: parsedInput.status,
-                  actions: parsedInput.actions.map((action) => {
-                    switch (action.type) {
-                      case "click":
-                      case "double_click":
-                      case "move":
-                        return {
-                          ...action,
-                          keys: action.keys
-                        };
-                      case "drag":
-                        return {
-                          ...action,
-                          keys: action.keys
-                        };
-                      case "scroll":
-                        return {
-                          type: "scroll",
-                          x: action.x,
-                          y: action.y,
-                          scroll_x: action.scrollX,
-                          scroll_y: action.scrollY,
-                          keys: action.keys
-                        };
-                      default:
-                        return action;
-                    }
-                  }),
-                  pending_safety_checks: parsedInput.pendingSafetyChecks.map(
-                    (safetyCheck) => ({
-                      id: safetyCheck.id,
-                      code: safetyCheck.code,
-                      message: safetyCheck.message
-                    })
-                  )
-                });
-                break;
-              }
-              if (customProviderToolNames == null ? void 0 : customProviderToolNames.has(resolvedToolName)) {
-                input.push({
-                  type: "custom_tool_call",
-                  call_id: part.toolCallId,
-                  name: resolvedToolName,
-                  input: typeof part.input === "string" ? part.input : JSON.stringify(part.input),
-                  id
-                });
-                break;
-              }
-              input.push({
-                type: "function_call",
-                call_id: part.toolCallId,
-                name: resolvedToolName,
-                arguments: serializeToolCallArguments2(part.input),
-                ...namespace != null && { namespace },
-                ...caller != null && {
-                  caller: mapToolCaller(caller)
-                }
-              });
-              break;
-            }
-            // assistant tool result parts are from provider-executed tools:
-            case "tool-result": {
-              if (part.output.type === "execution-denied" || part.output.type === "json" && typeof part.output.value === "object" && part.output.value != null && "type" in part.output.value && part.output.value.type === "execution-denied") {
-                break;
-              }
-              if (hasConversation) {
-                break;
-              }
-              const resolvedResultToolName = toolNameMapping.toProviderToolName(
-                part.toolName
-              );
-              if (resolvedResultToolName === "tool_search") {
-                const itemId = (_u = (_t = (_q = (_p = part.providerOptions) == null ? void 0 : _p[providerOptionsName]) == null ? void 0 : _q.itemId) != null ? _t : (_s = (_r = part.providerMetadata) == null ? void 0 : _r[providerOptionsName]) == null ? void 0 : _s.itemId) != null ? _u : part.toolCallId;
-                if (store) {
-                  input.push({ type: "item_reference", id: itemId });
-                } else if (part.output.type === "json") {
-                  const parsedOutput = await validateTypes({
-                    value: part.output.value,
-                    schema: toolSearchOutputSchema
-                  });
-                  input.push({
-                    type: "tool_search_output",
-                    id: itemId,
-                    execution: "server",
-                    call_id: null,
-                    status: "completed",
-                    tools: parsedOutput.tools
-                  });
-                }
-                break;
-              }
-              if (resolvedResultToolName === "programmatic_tool_calling") {
-                const itemId = (_A = (_z = (_w = (_v = part.providerOptions) == null ? void 0 : _v[providerOptionsName]) == null ? void 0 : _w.itemId) != null ? _z : (_y = (_x = part.providerMetadata) == null ? void 0 : _x[providerOptionsName]) == null ? void 0 : _y.itemId) != null ? _A : part.toolCallId;
-                if (store) {
-                  input.push({ type: "item_reference", id: itemId });
-                } else if (part.output.type === "json") {
-                  const parsedOutput = await validateTypes({
-                    value: part.output.value,
-                    schema: programmaticToolCallingOutputSchema
-                  });
-                  input.push({
-                    type: "program_output",
-                    id: itemId,
-                    call_id: part.toolCallId,
-                    result: parsedOutput.result,
-                    status: parsedOutput.status
-                  });
-                }
-                break;
-              }
-              if (hasShellTool && resolvedResultToolName === "shell") {
-                if (part.output.type === "json") {
-                  const parsedOutput = await validateTypes({
-                    value: part.output.value,
-                    schema: shellOutputSchema
-                  });
-                  input.push({
-                    type: "shell_call_output",
-                    call_id: part.toolCallId,
-                    output: parsedOutput.output.map((item) => ({
-                      stdout: item.stdout,
-                      stderr: item.stderr,
-                      outcome: item.outcome.type === "timeout" ? { type: "timeout" } : {
-                        type: "exit",
-                        exit_code: item.outcome.exitCode
-                      }
-                    }))
-                  });
-                }
-                break;
-              }
-              if (store) {
-                const itemId = (_D = (_C = (_B = part.providerOptions) == null ? void 0 : _B[providerOptionsName]) == null ? void 0 : _C.itemId) != null ? _D : part.toolCallId;
-                input.push({ type: "item_reference", id: itemId });
-              } else {
-                warnings.push({
-                  type: "other",
-                  message: `Results for OpenAI tool ${part.toolName} are not sent to the API when store is false`
-                });
-              }
-              break;
-            }
-            case "reasoning": {
-              const providerOptions2 = await parseProviderOptions({
-                provider: providerOptionsName,
-                providerOptions: part.providerOptions,
-                schema: openaiResponsesReasoningProviderOptionsSchema
-              });
-              const reasoningId = providerOptions2 == null ? void 0 : providerOptions2.itemId;
-              if ((hasConversation || hasPreviousResponseId) && reasoningId != null) {
-                break;
-              }
-              if (reasoningId != null) {
-                const reasoningMessage = reasoningMessages[reasoningId];
-                if (store) {
-                  if (reasoningMessage === void 0) {
-                    input.push({ type: "item_reference", id: reasoningId });
-                    reasoningMessages[reasoningId] = {
-                      type: "reasoning",
-                      id: reasoningId,
-                      summary: []
-                    };
-                  }
-                } else {
-                  const summaryParts = [];
-                  if (part.text.length > 0) {
-                    summaryParts.push({
-                      type: "summary_text",
-                      text: part.text
-                    });
-                  } else if (reasoningMessage !== void 0) {
-                    warnings.push({
-                      type: "other",
-                      message: `Cannot append empty reasoning part to existing reasoning sequence. Skipping reasoning part: ${JSON.stringify(part)}.`
-                    });
-                  }
-                  if (reasoningMessage === void 0) {
-                    reasoningMessages[reasoningId] = {
-                      type: "reasoning",
-                      id: reasoningId,
-                      encrypted_content: providerOptions2 == null ? void 0 : providerOptions2.reasoningEncryptedContent,
-                      summary: summaryParts
-                    };
-                    input.push(reasoningMessages[reasoningId]);
-                  } else {
-                    reasoningMessage.summary.push(...summaryParts);
-                    if ((providerOptions2 == null ? void 0 : providerOptions2.reasoningEncryptedContent) != null) {
-                      reasoningMessage.encrypted_content = providerOptions2.reasoningEncryptedContent;
-                    }
-                  }
-                }
-              } else {
-                const encryptedContent = providerOptions2 == null ? void 0 : providerOptions2.reasoningEncryptedContent;
-                if (encryptedContent != null) {
-                  const summaryParts = [];
-                  if (part.text.length > 0) {
-                    summaryParts.push({
-                      type: "summary_text",
-                      text: part.text
-                    });
-                  }
-                  input.push({
-                    type: "reasoning",
-                    encrypted_content: encryptedContent,
-                    summary: summaryParts
-                  });
-                } else {
-                  warnings.push({
-                    type: "other",
-                    message: `Non-OpenAI reasoning parts are not supported. Skipping reasoning part: ${JSON.stringify(part)}.`
-                  });
-                }
-              }
-              break;
-            }
-            case "custom": {
-              if (part.kind === "openai.compaction") {
-                const providerOptions2 = (_E = part.providerOptions) == null ? void 0 : _E[providerOptionsName];
-                const id = providerOptions2 == null ? void 0 : providerOptions2.itemId;
-                if (hasConversation && id != null) {
-                  break;
-                }
-                if (store && id != null) {
-                  input.push({ type: "item_reference", id });
-                  break;
-                }
-                const encryptedContent = providerOptions2 == null ? void 0 : providerOptions2.encryptedContent;
-                if (id != null) {
-                  input.push({
-                    type: "compaction",
-                    id,
-                    encrypted_content: encryptedContent
-                  });
-                }
-              }
-              break;
-            }
-          }
-        }
-        break;
-      }
-      case "tool": {
-        for (const part of content) {
-          if (part.type === "tool-approval-response") {
-            const approvalResponse = part;
-            if (processedApprovalIds.has(approvalResponse.approvalId)) {
-              continue;
-            }
-            processedApprovalIds.add(approvalResponse.approvalId);
-            if (store && !hasConversation && !hasPreviousResponseId) {
-              input.push({
-                type: "item_reference",
-                id: approvalResponse.approvalId
-              });
-            }
-            input.push({
-              type: "mcp_approval_response",
-              approval_request_id: approvalResponse.approvalId,
-              approve: approvalResponse.approved
-            });
-            continue;
-          }
-          const output = part.output;
-          if (output.type === "execution-denied") {
-            const approvalId = (_G = (_F = output.providerOptions) == null ? void 0 : _F.openai) == null ? void 0 : _G.approvalId;
-            if (approvalId) {
-              continue;
-            }
-          }
-          const resolvedToolName = toolNameMapping.toProviderToolName(
-            part.toolName
-          );
-          if (resolvedToolName === "tool_search" && output.type === "json") {
-            const parsedOutput = await validateTypes({
-              value: output.value,
-              schema: toolSearchOutputSchema
-            });
-            input.push({
-              type: "tool_search_output",
-              execution: "client",
-              call_id: part.toolCallId,
-              status: "completed",
-              tools: parsedOutput.tools
-            });
-            continue;
-          }
-          if (hasLocalShellTool && resolvedToolName === "local_shell" && output.type === "json") {
-            const parsedOutput = await validateTypes({
-              value: output.value,
-              schema: localShellOutputSchema
-            });
-            input.push({
-              type: "local_shell_call_output",
-              call_id: part.toolCallId,
-              output: parsedOutput.output
-            });
-            continue;
-          }
-          if (hasShellTool && resolvedToolName === "shell" && output.type === "json") {
-            const parsedOutput = await validateTypes({
-              value: output.value,
-              schema: shellOutputSchema
-            });
-            input.push({
-              type: "shell_call_output",
-              call_id: part.toolCallId,
-              output: parsedOutput.output.map((item) => ({
-                stdout: item.stdout,
-                stderr: item.stderr,
-                outcome: item.outcome.type === "timeout" ? { type: "timeout" } : {
-                  type: "exit",
-                  exit_code: item.outcome.exitCode
-                }
-              }))
-            });
-            continue;
-          }
-          if (hasApplyPatchTool && part.toolName === "apply_patch" && output.type === "json") {
-            const parsedOutput = await validateTypes({
-              value: output.value,
-              schema: applyPatchOutputSchema
-            });
-            input.push({
-              type: "apply_patch_call_output",
-              call_id: part.toolCallId,
-              status: parsedOutput.status,
-              output: parsedOutput.output
-            });
-            continue;
-          }
-          if (hasComputerTool && resolvedToolName === "computer" && output.type === "json") {
-            const parsedOutput = await validateTypes({
-              value: output.value,
-              schema: computerOutputSchema
-            });
-            input.push({
-              type: "computer_call_output",
-              call_id: part.toolCallId,
-              output: {
-                type: "computer_screenshot",
-                image_url: parsedOutput.output.imageUrl,
-                file_id: parsedOutput.output.fileId,
-                detail: parsedOutput.output.detail
-              },
-              acknowledged_safety_checks: (_H = parsedOutput.acknowledgedSafetyChecks) == null ? void 0 : _H.map((safetyCheck) => ({
-                id: safetyCheck.id,
-                code: safetyCheck.code,
-                message: safetyCheck.message
-              }))
-            });
-            continue;
-          }
-          if (customProviderToolNames == null ? void 0 : customProviderToolNames.has(resolvedToolName)) {
-            let outputValue;
-            switch (output.type) {
-              case "text":
-              case "error-text":
-                outputValue = output.value;
-                break;
-              case "execution-denied":
-                outputValue = (_I = output.reason) != null ? _I : "Tool call execution denied.";
-                break;
-              case "json":
-              case "error-json":
-                outputValue = JSON.stringify(output.value);
-                break;
-              case "content":
-                outputValue = output.value.map((item) => {
-                  var _a28, _b24, _c2;
-                  const promptCacheBreakpoint = getPromptCacheBreakpoint2(
-                    item.providerOptions,
-                    providerOptionsName
-                  );
-                  switch (item.type) {
-                    case "text":
-                      return {
-                        type: "input_text",
-                        text: item.text,
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
-                      };
-                    case "file": {
-                      const topLevel = getTopLevelMediaType(item.mediaType);
-                      const imageDetail = (_b24 = (_a28 = item.providerOptions) == null ? void 0 : _a28[providerOptionsName]) == null ? void 0 : _b24.imageDetail;
-                      if (item.data.type === "data") {
-                        const fullMediaType = resolveFullMediaType({
-                          part: item
-                        });
-                        if (topLevel === "image") {
-                          return {
-                            type: "input_image",
-                            image_url: `data:${fullMediaType};base64,${convertToBase64(item.data.data)}`,
-                            detail: imageDetail,
-                            ...promptCacheBreakpoint != null && {
-                              prompt_cache_breakpoint: promptCacheBreakpoint
-                            }
-                          };
-                        }
-                        return {
-                          type: "input_file",
-                          filename: (_c2 = item.filename) != null ? _c2 : "data",
-                          file_data: `data:${fullMediaType};base64,${convertToBase64(item.data.data)}`,
-                          ...promptCacheBreakpoint != null && {
-                            prompt_cache_breakpoint: promptCacheBreakpoint
-                          }
-                        };
-                      }
-                      if (item.data.type === "url") {
-                        if (topLevel === "image") {
-                          return {
-                            type: "input_image",
-                            image_url: item.data.url.toString(),
-                            detail: imageDetail,
-                            ...promptCacheBreakpoint != null && {
-                              prompt_cache_breakpoint: promptCacheBreakpoint
-                            }
-                          };
-                        }
-                        return {
-                          type: "input_file",
-                          file_url: item.data.url.toString(),
-                          ...promptCacheBreakpoint != null && {
-                            prompt_cache_breakpoint: promptCacheBreakpoint
-                          }
-                        };
-                      }
-                      warnings.push({
-                        type: "other",
-                        message: `unsupported custom tool content part type: ${item.type} with data type: ${item.data.type}`
-                      });
-                      return void 0;
-                    }
-                    default:
-                      warnings.push({
-                        type: "other",
-                        message: `unsupported custom tool content part type: ${item.type}`
-                      });
-                      return void 0;
-                  }
-                }).filter(isNonNullable);
-                break;
-              default:
-                outputValue = "";
-            }
-            input.push({
-              type: "custom_tool_call_output",
-              call_id: part.toolCallId,
-              output: outputValue
-            });
-            continue;
-          }
-          let contentValue;
-          const hasOutputSchema = outputSchemaToolNames == null ? void 0 : outputSchemaToolNames.has(part.toolName);
-          switch (output.type) {
-            case "text":
-            case "error-text":
-              contentValue = hasOutputSchema ? JSON.stringify(output.value) : output.value;
-              break;
-            case "execution-denied": {
-              const reason = (_J = output.reason) != null ? _J : "Tool call execution denied.";
-              contentValue = hasOutputSchema ? JSON.stringify(reason) : reason;
-              break;
-            }
-            case "json":
-            case "error-json":
-              contentValue = JSON.stringify(output.value);
-              break;
-            case "content":
-              contentValue = output.value.map((item) => {
-                var _a28, _b24, _c2;
-                const promptCacheBreakpoint = getPromptCacheBreakpoint2(
-                  item.providerOptions,
-                  providerOptionsName
-                );
-                switch (item.type) {
-                  case "text": {
-                    return {
-                      type: "input_text",
-                      text: item.text,
-                      ...promptCacheBreakpoint != null && {
-                        prompt_cache_breakpoint: promptCacheBreakpoint
-                      }
-                    };
-                  }
-                  case "file": {
-                    const topLevel = getTopLevelMediaType(item.mediaType);
-                    const imageDetail = (_b24 = (_a28 = item.providerOptions) == null ? void 0 : _a28[providerOptionsName]) == null ? void 0 : _b24.imageDetail;
-                    if (item.data.type === "data") {
-                      const fullMediaType = resolveFullMediaType({
-                        part: item
-                      });
-                      if (topLevel === "image") {
-                        return {
-                          type: "input_image",
-                          image_url: `data:${fullMediaType};base64,${convertToBase64(item.data.data)}`,
-                          detail: imageDetail,
-                          ...promptCacheBreakpoint != null && {
-                            prompt_cache_breakpoint: promptCacheBreakpoint
-                          }
-                        };
-                      }
-                      return {
-                        type: "input_file",
-                        filename: (_c2 = item.filename) != null ? _c2 : "data",
-                        file_data: `data:${fullMediaType};base64,${convertToBase64(item.data.data)}`,
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
-                      };
-                    }
-                    if (item.data.type === "url") {
-                      if (topLevel === "image") {
-                        return {
-                          type: "input_image",
-                          image_url: item.data.url.toString(),
-                          detail: imageDetail,
-                          ...promptCacheBreakpoint != null && {
-                            prompt_cache_breakpoint: promptCacheBreakpoint
-                          }
-                        };
-                      }
-                      return {
-                        type: "input_file",
-                        file_url: item.data.url.toString(),
-                        ...promptCacheBreakpoint != null && {
-                          prompt_cache_breakpoint: promptCacheBreakpoint
-                        }
-                      };
-                    }
-                    warnings.push({
-                      type: "other",
-                      message: `unsupported tool content part type: ${item.type} with data type: ${item.data.type}`
-                    });
-                    return void 0;
-                  }
-                  default: {
-                    warnings.push({
-                      type: "other",
-                      message: `unsupported tool content part type: ${item.type}`
-                    });
-                    return void 0;
-                  }
-                }
-              }).filter(isNonNullable);
-              break;
-          }
-          const caller = mapToolCaller(
-            (_L = (_K = part.providerOptions) == null ? void 0 : _K[providerOptionsName]) == null ? void 0 : _L.caller
-          );
-          input.push({
-            type: "function_call_output",
-            call_id: part.toolCallId,
-            output: contentValue,
-            ...caller != null && { caller }
-          });
-        }
-        break;
-      }
-      default: {
-        const _exhaustiveCheck = role;
-        throw new Error(`Unsupported role: ${_exhaustiveCheck}`);
-      }
-    }
-  }
-  if (!store && input.some(
-    (item) => "type" in item && item.type === "reasoning" && item.encrypted_content == null
-  )) {
-    warnings.push({
-      type: "other",
-      message: "Reasoning parts without encrypted content are not supported when store is false. Skipping reasoning parts."
-    });
-    input = input.filter(
-      (item) => !("type" in item) || item.type !== "reasoning" || item.encrypted_content != null
-    );
-  }
-  return { input, warnings };
-}
-var openaiResponsesReasoningProviderOptionsSchema = external_exports.object({
-  itemId: external_exports.string().nullish(),
-  reasoningEncryptedContent: external_exports.string().nullish()
-});
-var TOP_LOGPROBS_MAX = 20;
-var openaiResponsesReasoningModelIds = [
-  "o1",
-  "o1-2024-12-17",
-  "o3",
-  "o3-2025-04-16",
-  "o3-mini",
-  "o3-mini-2025-01-31",
-  "o4-mini",
-  "o4-mini-2025-04-16",
-  "gpt-5",
-  "gpt-5-2025-08-07",
-  "gpt-5-codex",
-  "gpt-5-mini",
-  "gpt-5-mini-2025-08-07",
-  "gpt-5-nano",
-  "gpt-5-nano-2025-08-07",
-  "gpt-5-pro",
-  "gpt-5-pro-2025-10-06",
-  "gpt-5.1",
-  "gpt-5.1-chat-latest",
-  "gpt-5.1-codex-mini",
-  "gpt-5.1-codex",
-  "gpt-5.1-codex-max",
-  "gpt-5.2",
-  "gpt-5.2-chat-latest",
-  "gpt-5.2-pro",
-  "gpt-5.2-codex",
-  "gpt-5.3-chat-latest",
-  "gpt-5.3-codex",
-  "gpt-5.4",
-  "gpt-5.4-2026-03-05",
-  "gpt-5.4-mini",
-  "gpt-5.4-mini-2026-03-17",
-  "gpt-5.4-nano",
-  "gpt-5.4-nano-2026-03-17",
-  "gpt-5.4-pro",
-  "gpt-5.4-pro-2026-03-05",
-  "gpt-5.5",
-  "gpt-5.5-2026-04-23",
-  "gpt-5.6",
-  "gpt-5.6-luna",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra"
-];
-var openaiResponsesModelIds = [
-  "gpt-4.1",
-  "gpt-4.1-2025-04-14",
-  "gpt-4.1-mini",
-  "gpt-4.1-mini-2025-04-14",
-  "gpt-4.1-nano",
-  "gpt-4.1-nano-2025-04-14",
-  "gpt-4o",
-  "gpt-4o-2024-05-13",
-  "gpt-4o-2024-08-06",
-  "gpt-4o-2024-11-20",
-  "gpt-4o-audio-preview",
-  "gpt-4o-audio-preview-2024-12-17",
-  "gpt-4o-search-preview",
-  "gpt-4o-search-preview-2025-03-11",
-  "gpt-4o-mini-search-preview",
-  "gpt-4o-mini-search-preview-2025-03-11",
-  "gpt-4o-mini",
-  "gpt-4o-mini-2024-07-18",
-  "gpt-3.5-turbo-0125",
-  "gpt-3.5-turbo",
-  "gpt-3.5-turbo-1106",
-  "gpt-5-chat-latest",
-  ...openaiResponsesReasoningModelIds
-];
-var openaiLanguageModelResponsesOptionsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      /**
-       * The ID of the OpenAI Conversation to continue.
-       * You must create a conversation first via the OpenAI API.
-       * Cannot be used in conjunction with `previousResponseId`.
-       * Defaults to `undefined`.
-       * @see https://platform.openai.com/docs/api-reference/conversations/create
-       */
-      conversation: external_exports.string().nullish(),
-      /**
-       * The set of extra fields to include in the response (advanced, usually not needed).
-       * Example values: 'reasoning.encrypted_content', 'file_search_call.results', 'web_search_call.results', 'message.output_text.logprobs'.
-       */
-      include: external_exports.array(
-        external_exports.enum([
-          "reasoning.encrypted_content",
-          // handled internally by default, only needed for unknown reasoning models
-          "file_search_call.results",
-          "web_search_call.results",
-          "message.output_text.logprobs"
-        ])
-      ).nullish(),
-      /**
-       * Instructions for the model.
-       * They can be used to change the system or developer message when continuing a conversation using the `previousResponseId` option.
-       * Defaults to `undefined`.
-       */
-      instructions: external_exports.string().nullish(),
-      /**
-       * Return the log probabilities of the tokens. Including logprobs will increase
-       * the response size and can slow down response times. However, it can
-       * be useful to better understand how the model is behaving.
-       *
-       * Setting to true will return the log probabilities of the tokens that
-       * were generated.
-       *
-       * Setting to a number will return the log probabilities of the top n
-       * tokens that were generated.
-       *
-       * @see https://platform.openai.com/docs/api-reference/responses/create
-       * @see https://cookbook.openai.com/examples/using_logprobs
-       */
-      logprobs: external_exports.union([external_exports.boolean(), external_exports.number().min(1).max(TOP_LOGPROBS_MAX)]).optional(),
-      /**
-       * The maximum number of total calls to built-in tools that can be processed in a response.
-       * This maximum number applies across all built-in tool calls, not per individual tool.
-       * Any further attempts to call a tool by the model will be ignored.
-       */
-      maxToolCalls: external_exports.number().nullish(),
-      /**
-       * Additional metadata to store with the generation.
-       */
-      metadata: external_exports.any().nullish(),
-      /**
-       * Whether to use parallel tool calls. Defaults to `true`.
-       */
-      parallelToolCalls: external_exports.boolean().nullish(),
-      /**
-       * The ID of the previous response. You can use it to continue a conversation.
-       * Defaults to `undefined`.
-       */
-      previousResponseId: external_exports.string().nullish(),
-      /**
-       * Sets a cache key to tie this prompt to cached prefixes for better caching performance.
-       */
-      promptCacheKey: external_exports.string().nullish(),
-      /**
-       * Prompt cache behavior for GPT-5.6 and later models.
-       * `mode` controls whether OpenAI also places an implicit breakpoint.
-       * `ttl` sets the minimum cache lifetime and currently only supports 30 minutes.
-       */
-      promptCacheOptions: external_exports.object({
-        mode: external_exports.enum(["implicit", "explicit"]).optional(),
-        ttl: external_exports.literal("30m").optional()
-      }).optional(),
-      /**
-       * The retention policy for the prompt cache.
-       * - 'in_memory': Default. Standard prompt caching behavior.
-       * - '24h': Extended prompt caching that keeps cached prefixes active for up to 24 hours.
-       *          Available for models before GPT-5.6 that support extended caching.
-       *
-       * @deprecated For GPT-5.6 and later models, use `promptCacheOptions.ttl`.
-       *
-       * @default 'in_memory'
-       */
-      promptCacheRetention: external_exports.enum(["in_memory", "24h"]).nullish(),
-      /**
-       * Reasoning effort for reasoning models. Defaults to `medium`. If you use
-       * `providerOptions` to set the `reasoningEffort` option, this model setting will be ignored.
-       * GPT-5.6 supports 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
-       * Supported values vary by model.
-       */
-      reasoningEffort: external_exports.string().nullish(),
-      /**
-       * Controls how much model work GPT-5.6 performs before returning a final answer.
-       * `standard` is the default. `pro` increases quality, latency, and token usage.
-       */
-      reasoningMode: external_exports.enum(["standard", "pro"]).optional(),
-      /**
-       * Controls which available reasoning items GPT-5.6 can use.
-       * `auto` uses the model default, `current_turn` excludes reasoning from earlier
-       * turns, and `all_turns` makes compatible earlier reasoning available.
-       */
-      reasoningContext: external_exports.enum(["auto", "current_turn", "all_turns"]).optional(),
-      /**
-       * Controls reasoning summary output from the model.
-       * Set to "auto" to automatically receive the richest level available,
-       * or "detailed" for comprehensive summaries.
-       */
-      reasoningSummary: external_exports.string().nullish(),
-      /**
-       * The identifier for safety monitoring and tracking.
-       */
-      safetyIdentifier: external_exports.string().nullish(),
-      /**
-       * Service tier for the request.
-       * Set to 'flex' for 50% cheaper processing at the cost of increased latency (available for o3, o4-mini, and gpt-5 models).
-       * Set to 'priority' for faster processing with Enterprise access (available for gpt-4, gpt-5, gpt-5-mini, o3, o4-mini; gpt-5-nano is not supported).
-       * Set to 'fast' for the same tier as 'priority' (OpenAI's newer name for it).
-       *
-       * Defaults to 'auto'.
-       */
-      serviceTier: external_exports.enum(["auto", "flex", "priority", "fast", "default"]).nullish(),
-      /**
-       * Whether to store the generation. Defaults to `true`.
-       */
-      store: external_exports.boolean().nullish(),
-      /**
-       * Whether to pass through non-image file types as generic input files.
-       *
-       * By default, inline file inputs are restricted to images and PDFs.
-       * Enable this when the target OpenAI Responses model supports additional
-       * file media types, such as text/csv.
-       */
-      passThroughUnsupportedFiles: external_exports.boolean().optional(),
-      /**
-       * Whether to use strict JSON schema validation.
-       * Defaults to `true`.
-       */
-      strictJsonSchema: external_exports.boolean().nullish(),
-      /**
-       * Controls the verbosity of the model's responses. Lower values ('low') will result
-       * in more concise responses, while higher values ('high') will result in more verbose responses.
-       * Valid values: 'low', 'medium', 'high'.
-       */
-      textVerbosity: external_exports.enum(["low", "medium", "high"]).nullish(),
-      /**
-       * Controls output truncation. 'auto' (default) performs truncation automatically;
-       * 'disabled' turns truncation off.
-       */
-      truncation: external_exports.enum(["auto", "disabled"]).nullish(),
-      /**
-       * A unique identifier representing your end-user, which can help OpenAI to
-       * monitor and detect abuse.
-       * Defaults to `undefined`.
-       * @see https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids
-       */
-      user: external_exports.string().nullish(),
-      /**
-       * Override the system message mode for this model.
-       * - 'system': Use the 'system' role for system messages (default for most models)
-       * - 'developer': Use the 'developer' role for system messages (used by reasoning models)
-       * - 'remove': Remove system messages entirely
-       *
-       * If not specified, the mode is automatically determined based on the model.
-       */
-      systemMessageMode: external_exports.enum(["system", "developer", "remove"]).optional(),
-      /**
-       * Force treating this model as a reasoning model.
-       *
-       * This is useful for "stealth" reasoning models (e.g. via a custom baseURL)
-       * where the model ID is not recognized by the SDK's allowlist.
-       *
-       * When enabled, the SDK applies reasoning-model parameter compatibility rules
-       * and defaults `systemMessageMode` to `developer` unless overridden.
-       */
-      forceReasoning: external_exports.boolean().optional(),
-      /**
-       * Enable server-side context management (compaction).
-       */
-      contextManagement: external_exports.array(
-        external_exports.object({
-          type: external_exports.literal("compaction"),
-          compactThreshold: external_exports.number()
-        })
-      ).nullish(),
-      /**
-       * Request explicit server-side compaction by appending a
-       * `compaction_trigger` item to the Responses input.
-       */
-      compactionTrigger: external_exports.boolean().optional(),
-      /**
-       * Restrict the callable tools to a subset while keeping the full tools
-       * list intact, so prompt caching is preserved across requests with
-       * different allowlists.
-       *
-       * When set, this overrides the request-level `toolChoice` and emits
-       * `tool_choice: { type: "allowed_tools", mode, tools }` on the wire.
-       *
-       * @see https://developers.openai.com/api/reference/resources/responses/methods/create#(resource)%20responses%20%3E%20(model)%20tool_choice_allowed%20%3E%20(schema)
-       */
-      allowedTools: external_exports.object({
-        toolNames: external_exports.array(external_exports.string()).min(1),
-        mode: external_exports.enum(["auto", "required"]).optional()
-      }).optional()
-    })
-  )
-);
-async function prepareResponsesTools({
-  tools,
-  toolChoice,
-  allowedTools,
-  toolNameMapping,
-  customProviderToolNames,
-  outputSchemaToolNames
-}) {
-  var _a27, _b18, _c;
-  tools = (tools == null ? void 0 : tools.length) ? tools : void 0;
-  const toolWarnings = [];
-  if (tools == null) {
-    return { tools: void 0, toolChoice: void 0, toolWarnings };
-  }
-  const openaiTools2 = [];
-  const namespaceTools = /* @__PURE__ */ new Map();
-  const resolvedCustomProviderToolNames = customProviderToolNames != null ? customProviderToolNames : /* @__PURE__ */ new Set();
-  for (const tool2 of tools) {
-    switch (tool2.type) {
-      case "function": {
-        const openaiOptions = (_a27 = tool2.providerOptions) == null ? void 0 : _a27.openai;
-        if ((openaiOptions == null ? void 0 : openaiOptions.outputSchema) != null) {
-          outputSchemaToolNames == null ? void 0 : outputSchemaToolNames.add(tool2.name);
-        }
-        const openaiFunctionTool = prepareFunctionTool({
-          tool: tool2,
-          options: openaiOptions
-        });
-        const namespace = openaiOptions == null ? void 0 : openaiOptions.namespace;
-        if (namespace == null) {
-          openaiTools2.push(openaiFunctionTool);
-        } else {
-          let namespaceTool = namespaceTools.get(namespace.name);
-          if (namespaceTool == null) {
-            namespaceTool = {
-              type: "namespace",
-              name: namespace.name,
-              description: namespace.description,
-              tools: []
-            };
-            namespaceTools.set(namespace.name, namespaceTool);
-            openaiTools2.push(namespaceTool);
-          } else if (namespaceTool.description !== namespace.description) {
-            throw new UnsupportedFunctionalityError({
-              functionality: `conflicting descriptions for OpenAI tool namespace "${namespace.name}"`
-            });
-          }
-          namespaceTool.tools.push(openaiFunctionTool);
-        }
-        break;
-      }
-      case "provider": {
-        switch (tool2.id) {
-          case "openai.file_search": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: fileSearchArgsSchema
-            });
-            openaiTools2.push({
-              type: "file_search",
-              vector_store_ids: args.vectorStoreIds,
-              max_num_results: args.maxNumResults,
-              ranking_options: args.ranking ? {
-                ranker: args.ranking.ranker,
-                score_threshold: args.ranking.scoreThreshold
-              } : void 0,
-              filters: args.filters
-            });
-            break;
-          }
-          case "openai.local_shell": {
-            openaiTools2.push({
-              type: "local_shell"
-            });
-            break;
-          }
-          case "openai.shell": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: shellArgsSchema
-            });
-            openaiTools2.push({
-              type: "shell",
-              ...args.environment && {
-                environment: mapShellEnvironment(args.environment)
-              }
-            });
-            break;
-          }
-          case "openai.apply_patch": {
-            openaiTools2.push({
-              type: "apply_patch"
-            });
-            break;
-          }
-          case "openai.computer": {
-            openaiTools2.push({
-              type: "computer"
-            });
-            break;
-          }
-          case "openai.web_search_preview": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: webSearchPreviewArgsSchema
-            });
-            openaiTools2.push({
-              type: "web_search_preview",
-              search_context_size: args.searchContextSize,
-              user_location: args.userLocation
-            });
-            break;
-          }
-          case "openai.web_search": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: webSearchArgsSchema
-            });
-            openaiTools2.push({
-              type: "web_search",
-              filters: args.filters != null ? {
-                allowed_domains: args.filters.allowedDomains,
-                blocked_domains: args.filters.blockedDomains
-              } : void 0,
-              external_web_access: args.externalWebAccess,
-              search_context_size: args.searchContextSize,
-              user_location: args.userLocation
-            });
-            break;
-          }
-          case "openai.code_interpreter": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: codeInterpreterArgsSchema
-            });
-            openaiTools2.push({
-              type: "code_interpreter",
-              container: args.container == null ? { type: "auto", file_ids: void 0 } : typeof args.container === "string" ? args.container : { type: "auto", file_ids: args.container.fileIds }
-            });
-            break;
-          }
-          case "openai.image_generation": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: imageGenerationArgsSchema
-            });
-            openaiTools2.push({
-              type: "image_generation",
-              background: args.background,
-              input_fidelity: args.inputFidelity,
-              input_image_mask: args.inputImageMask ? {
-                file_id: args.inputImageMask.fileId,
-                image_url: args.inputImageMask.imageUrl
-              } : void 0,
-              model: args.model,
-              moderation: args.moderation,
-              partial_images: args.partialImages,
-              quality: args.quality,
-              output_compression: args.outputCompression,
-              output_format: args.outputFormat,
-              size: args.size
-            });
-            break;
-          }
-          case "openai.mcp": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: mcpArgsSchema
-            });
-            const mapApprovalFilter = (filter2) => ({
-              tool_names: filter2.toolNames
-            });
-            const requireApproval = args.requireApproval;
-            const requireApprovalParam = requireApproval == null ? void 0 : typeof requireApproval === "string" ? requireApproval : requireApproval.never != null ? { never: mapApprovalFilter(requireApproval.never) } : void 0;
-            openaiTools2.push({
-              type: "mcp",
-              server_label: args.serverLabel,
-              allowed_tools: Array.isArray(args.allowedTools) ? args.allowedTools : args.allowedTools ? {
-                read_only: args.allowedTools.readOnly,
-                tool_names: args.allowedTools.toolNames
-              } : void 0,
-              authorization: args.authorization,
-              connector_id: args.connectorId,
-              headers: args.headers,
-              require_approval: requireApprovalParam != null ? requireApprovalParam : "never",
-              server_description: args.serverDescription,
-              server_url: args.serverUrl
-            });
-            break;
-          }
-          case "openai.custom": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: customArgsSchema
-            });
-            openaiTools2.push({
-              type: "custom",
-              name: tool2.name,
-              description: args.description,
-              format: args.format
-            });
-            resolvedCustomProviderToolNames.add(tool2.name);
-            break;
-          }
-          case "openai.programmatic_tool_calling": {
-            openaiTools2.push({
-              type: "programmatic_tool_calling"
-            });
-            break;
-          }
-          case "openai.tool_search": {
-            const args = await validateTypes({
-              value: tool2.args,
-              schema: toolSearchArgsSchema
-            });
-            openaiTools2.push({
-              type: "tool_search",
-              ...args.execution != null ? { execution: args.execution } : {},
-              ...args.description != null ? { description: args.description } : {},
-              ...args.parameters != null ? { parameters: args.parameters } : {}
-            });
-            break;
-          }
-        }
-        break;
-      }
-      default:
-        toolWarnings.push({
-          type: "unsupported",
-          feature: `function tool ${tool2}`
-        });
-        break;
-    }
-  }
-  if (allowedTools != null) {
-    return {
-      tools: openaiTools2,
-      toolChoice: {
-        type: "allowed_tools",
-        mode: (_b18 = allowedTools.mode) != null ? _b18 : "auto",
-        tools: allowedTools.toolNames.map((name25) => {
-          var _a28;
-          return {
-            type: "function",
-            name: (_a28 = toolNameMapping == null ? void 0 : toolNameMapping.toProviderToolName(name25)) != null ? _a28 : name25
-          };
-        })
-      },
-      toolWarnings
-    };
-  }
-  if (toolChoice == null) {
-    return { tools: openaiTools2, toolChoice: void 0, toolWarnings };
-  }
-  const type = toolChoice.type;
-  switch (type) {
-    case "auto":
-    case "none":
-    case "required":
-      return { tools: openaiTools2, toolChoice: type, toolWarnings };
-    case "tool": {
-      const resolvedToolName = (_c = toolNameMapping == null ? void 0 : toolNameMapping.toProviderToolName(toolChoice.toolName)) != null ? _c : toolChoice.toolName;
-      return {
-        tools: openaiTools2,
-        toolChoice: resolvedToolName === "code_interpreter" || resolvedToolName === "file_search" || resolvedToolName === "image_generation" || resolvedToolName === "web_search_preview" || resolvedToolName === "web_search" || resolvedToolName === "mcp" || resolvedToolName === "apply_patch" || resolvedToolName === "computer" || resolvedToolName === "programmatic_tool_calling" ? { type: resolvedToolName } : resolvedCustomProviderToolNames.has(resolvedToolName) ? { type: "custom", name: resolvedToolName } : { type: "function", name: resolvedToolName },
-        toolWarnings
-      };
-    }
-    default: {
-      const _exhaustiveCheck = type;
-      throw new UnsupportedFunctionalityError({
-        functionality: `tool choice type: ${_exhaustiveCheck}`
-      });
-    }
-  }
-}
-function prepareFunctionTool({
-  tool: tool2,
-  options
-}) {
-  const deferLoading = options == null ? void 0 : options.deferLoading;
-  return {
-    type: "function",
-    name: tool2.name,
-    description: tool2.description,
-    parameters: tool2.inputSchema,
-    ...tool2.strict != null ? { strict: tool2.strict } : {},
-    ...deferLoading != null ? { defer_loading: deferLoading } : {},
-    ...(options == null ? void 0 : options.allowedCallers) != null ? { allowed_callers: options.allowedCallers } : {},
-    ...(options == null ? void 0 : options.outputSchema) != null ? { output_schema: options.outputSchema } : {}
-  };
-}
-function mapShellEnvironment(environment) {
-  if (environment.type === "containerReference") {
-    const env2 = environment;
-    return {
-      type: "container_reference",
-      container_id: env2.containerId
-    };
-  }
-  if (environment.type === "containerAuto") {
-    const env2 = environment;
-    return {
-      type: "container_auto",
-      file_ids: env2.fileIds,
-      memory_limit: env2.memoryLimit,
-      network_policy: env2.networkPolicy == null ? void 0 : env2.networkPolicy.type === "disabled" ? { type: "disabled" } : {
-        type: "allowlist",
-        allowed_domains: env2.networkPolicy.allowedDomains,
-        domain_secrets: env2.networkPolicy.domainSecrets
-      },
-      skills: mapShellSkills(env2.skills)
-    };
-  }
-  const env = environment;
-  return {
-    type: "local",
-    skills: env.skills
-  };
-}
-function mapShellSkills(skills) {
-  return skills == null ? void 0 : skills.map(
-    (skill) => {
-      var _a27, _b18;
-      return skill.type === "skillReference" ? {
-        type: "skill_reference",
-        skill_id: resolveProviderReference({
-          reference: (_a27 = skill.providerReference) != null ? _a27 : {},
-          provider: "openai"
-        }),
-        version: (_b18 = skill.version) != null ? _b18 : "latest"
-      } : {
-        type: "inline",
-        name: skill.name,
-        description: skill.description,
-        source: {
-          type: "base64",
-          media_type: skill.source.mediaType,
-          data: skill.source.data
-        }
-      };
-    }
-  );
-}
-function extractApprovalRequestIdToToolCallIdMapping(prompt) {
-  var _a27, _b18;
-  const mapping = {};
-  for (const message of prompt) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.content) {
-      if (part.type !== "tool-call") continue;
-      const approvalRequestId = (_b18 = (_a27 = part.providerOptions) == null ? void 0 : _a27.openai) == null ? void 0 : _b18.approvalRequestId;
-      if (approvalRequestId != null) {
-        mapping[approvalRequestId] = part.toolCallId;
-      }
-    }
-  }
-  return mapping;
-}
-function mapComputerAction(action) {
-  switch (action.type) {
-    case "click":
-      return {
-        type: "click",
-        button: action.button,
-        x: action.x,
-        y: action.y,
-        ...action.keys != null && { keys: action.keys }
-      };
-    case "double_click":
-      return {
-        type: "double_click",
-        x: action.x,
-        y: action.y,
-        ...action.keys != null && { keys: action.keys }
-      };
-    case "drag":
-      return {
-        type: "drag",
-        path: action.path,
-        ...action.keys != null && { keys: action.keys }
-      };
-    case "keypress":
-      return action;
-    case "move":
-      return {
-        type: "move",
-        x: action.x,
-        y: action.y,
-        ...action.keys != null && { keys: action.keys }
-      };
-    case "screenshot":
-      return action;
-    case "scroll":
-      return {
-        type: "scroll",
-        x: action.x,
-        y: action.y,
-        scrollX: action.scroll_x,
-        scrollY: action.scroll_y,
-        ...action.keys != null && { keys: action.keys }
-      };
-    case "type":
-      return action;
-    case "wait":
-      return action;
-  }
-}
-function mapComputerCallInput({
-  action,
-  actions,
-  pending_safety_checks,
-  status
-}) {
-  var _a27;
-  return {
-    actions: (actions != null ? actions : action != null ? [action] : []).map(
-      mapComputerAction
-    ),
-    pendingSafetyChecks: (_a27 = pending_safety_checks == null ? void 0 : pending_safety_checks.map((safetyCheck) => ({
-      id: safetyCheck.id,
-      ...safetyCheck.code != null && { code: safetyCheck.code },
-      ...safetyCheck.message != null && { message: safetyCheck.message }
-    }))) != null ? _a27 : [],
-    status
-  };
-}
-var OpenAIResponsesLanguageModel = class _OpenAIResponsesLanguageModel {
-  constructor(modelId, config3) {
-    this.specificationVersion = "v4";
-    this.supportedUrls = {
-      "image/*": [/^https?:\/\/.*$/],
-      "application/pdf": [/^https?:\/\/.*$/]
-    };
-    this.modelId = modelId;
-    this.config = config3;
-  }
-  static [WORKFLOW_SERIALIZE](model) {
-    return serializeModelOptions({
-      modelId: model.modelId,
-      config: model.config
-    });
-  }
-  static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAIResponsesLanguageModel(options.modelId, options.config);
-  }
-  get provider() {
-    return this.config.provider;
-  }
-  async getArgs({
-    maxOutputTokens,
-    temperature,
-    stopSequences,
-    topP,
-    topK,
-    presencePenalty,
-    frequencyPenalty,
-    seed,
-    prompt,
-    reasoning,
-    providerOptions,
-    tools,
-    toolChoice,
-    responseFormat
-  }) {
-    var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
-    const warnings = [];
-    const modelCapabilities = getOpenAILanguageModelCapabilities(this.modelId);
-    if (topK != null) {
-      warnings.push({ type: "unsupported", feature: "topK" });
-    }
-    if (seed != null) {
-      warnings.push({ type: "unsupported", feature: "seed" });
-    }
-    if (presencePenalty != null) {
-      warnings.push({ type: "unsupported", feature: "presencePenalty" });
-    }
-    if (frequencyPenalty != null) {
-      warnings.push({ type: "unsupported", feature: "frequencyPenalty" });
-    }
-    if (stopSequences != null) {
-      warnings.push({ type: "unsupported", feature: "stopSequences" });
-    }
-    const providerOptionsName = this.config.provider.includes("azure") ? "azure" : "openai";
-    let openaiOptions = await parseProviderOptions({
-      provider: providerOptionsName,
-      providerOptions,
-      schema: openaiLanguageModelResponsesOptionsSchema
-    });
-    if (openaiOptions == null && providerOptionsName !== "openai") {
-      openaiOptions = await parseProviderOptions({
-        provider: "openai",
-        providerOptions,
-        schema: openaiLanguageModelResponsesOptionsSchema
-      });
-    }
-    const resolvedReasoningEffort = (_a27 = openaiOptions == null ? void 0 : openaiOptions.reasoningEffort) != null ? _a27 : isCustomReasoning(reasoning) ? reasoning : void 0;
-    const resolvedReasoningSummary = (openaiOptions == null ? void 0 : openaiOptions.reasoningSummary) !== void 0 ? openaiOptions.reasoningSummary : resolvedReasoningEffort != null && resolvedReasoningEffort !== "none" ? "detailed" : void 0;
-    const isReasoningModel = (_b18 = openaiOptions == null ? void 0 : openaiOptions.forceReasoning) != null ? _b18 : modelCapabilities.isReasoningModel;
-    if ((openaiOptions == null ? void 0 : openaiOptions.conversation) && (openaiOptions == null ? void 0 : openaiOptions.previousResponseId)) {
-      warnings.push({
-        type: "unsupported",
-        feature: "conversation",
-        details: "conversation and previousResponseId cannot be used together"
-      });
-    }
-    const toolNameMapping = createToolNameMapping({
-      tools,
-      providerToolNames: {
-        "openai.code_interpreter": "code_interpreter",
-        "openai.computer": "computer",
-        "openai.file_search": "file_search",
-        "openai.image_generation": "image_generation",
-        "openai.local_shell": "local_shell",
-        "openai.shell": "shell",
-        "openai.web_search": "web_search",
-        "openai.web_search_preview": "web_search_preview",
-        "openai.mcp": "mcp",
-        "openai.apply_patch": "apply_patch",
-        "openai.tool_search": "tool_search",
-        "openai.programmatic_tool_calling": "programmatic_tool_calling"
-      }
-    });
-    const customProviderToolNames = /* @__PURE__ */ new Set();
-    const outputSchemaToolNames = /* @__PURE__ */ new Set();
-    const {
-      tools: openaiTools2,
-      toolChoice: openaiToolChoice,
-      toolWarnings
-    } = await prepareResponsesTools({
-      tools,
-      toolChoice,
-      allowedTools: (_c = openaiOptions == null ? void 0 : openaiOptions.allowedTools) != null ? _c : void 0,
-      toolNameMapping,
-      customProviderToolNames,
-      outputSchemaToolNames
-    });
-    const { input, warnings: inputWarnings } = await convertToOpenAIResponsesInput({
-      prompt,
-      toolNameMapping,
-      systemMessageMode: (_d = openaiOptions == null ? void 0 : openaiOptions.systemMessageMode) != null ? _d : isReasoningModel ? "developer" : modelCapabilities.systemMessageMode,
-      providerOptionsName,
-      fileIdPrefixes: this.config.fileIdPrefixes,
-      passThroughUnsupportedFiles: (_e = openaiOptions == null ? void 0 : openaiOptions.passThroughUnsupportedFiles) != null ? _e : false,
-      store: (_f = openaiOptions == null ? void 0 : openaiOptions.store) != null ? _f : true,
-      hasConversation: (openaiOptions == null ? void 0 : openaiOptions.conversation) != null,
-      hasPreviousResponseId: (openaiOptions == null ? void 0 : openaiOptions.previousResponseId) != null,
-      hasLocalShellTool: hasOpenAITool("openai.local_shell"),
-      hasShellTool: hasOpenAITool("openai.shell"),
-      hasApplyPatchTool: hasOpenAITool("openai.apply_patch"),
-      hasComputerTool: hasOpenAITool("openai.computer"),
-      customProviderToolNames: customProviderToolNames.size > 0 ? customProviderToolNames : void 0,
-      outputSchemaToolNames: outputSchemaToolNames.size > 0 ? outputSchemaToolNames : void 0
-    });
-    warnings.push(...inputWarnings);
-    if (openaiOptions == null ? void 0 : openaiOptions.compactionTrigger) {
-      input.push({ type: "compaction_trigger" });
-    }
-    const strictJsonSchema = (_g = openaiOptions == null ? void 0 : openaiOptions.strictJsonSchema) != null ? _g : true;
-    let include = openaiOptions == null ? void 0 : openaiOptions.include;
-    function addInclude(key) {
-      if (include == null) {
-        include = [key];
-      } else if (!include.includes(key)) {
-        include = [...include, key];
-      }
-    }
-    function hasOpenAITool(id) {
-      return (tools == null ? void 0 : tools.find((tool2) => tool2.type === "provider" && tool2.id === id)) != null;
-    }
-    const topLogprobs = typeof (openaiOptions == null ? void 0 : openaiOptions.logprobs) === "number" ? openaiOptions == null ? void 0 : openaiOptions.logprobs : (openaiOptions == null ? void 0 : openaiOptions.logprobs) === true ? TOP_LOGPROBS_MAX : void 0;
-    if (topLogprobs) {
-      addInclude("message.output_text.logprobs");
-    }
-    const webSearchToolName = (_h = tools == null ? void 0 : tools.find(
-      (tool2) => tool2.type === "provider" && (tool2.id === "openai.web_search" || tool2.id === "openai.web_search_preview")
-    )) == null ? void 0 : _h.name;
-    if (webSearchToolName) {
-      addInclude("web_search_call.action.sources");
-    }
-    if (hasOpenAITool("openai.code_interpreter")) {
-      addInclude("code_interpreter_call.outputs");
-    }
-    const store = openaiOptions == null ? void 0 : openaiOptions.store;
-    if (store === false && isReasoningModel) {
-      addInclude("reasoning.encrypted_content");
-    }
-    const baseArgs = {
-      model: this.modelId,
-      input,
-      temperature,
-      top_p: topP,
-      max_output_tokens: maxOutputTokens,
-      ...((responseFormat == null ? void 0 : responseFormat.type) === "json" || (openaiOptions == null ? void 0 : openaiOptions.textVerbosity)) && {
-        text: {
-          ...(responseFormat == null ? void 0 : responseFormat.type) === "json" && {
-            format: responseFormat.schema != null ? {
-              type: "json_schema",
-              strict: strictJsonSchema,
-              name: (_i = responseFormat.name) != null ? _i : "response",
-              description: responseFormat.description,
-              schema: responseFormat.schema
-            } : { type: "json_object" }
-          },
-          ...(openaiOptions == null ? void 0 : openaiOptions.textVerbosity) && {
-            verbosity: openaiOptions.textVerbosity
-          }
-        }
-      },
-      // provider options:
-      conversation: openaiOptions == null ? void 0 : openaiOptions.conversation,
-      max_tool_calls: openaiOptions == null ? void 0 : openaiOptions.maxToolCalls,
-      metadata: openaiOptions == null ? void 0 : openaiOptions.metadata,
-      parallel_tool_calls: openaiOptions == null ? void 0 : openaiOptions.parallelToolCalls,
-      previous_response_id: openaiOptions == null ? void 0 : openaiOptions.previousResponseId,
-      store,
-      user: openaiOptions == null ? void 0 : openaiOptions.user,
-      instructions: openaiOptions == null ? void 0 : openaiOptions.instructions,
-      service_tier: openaiOptions == null ? void 0 : openaiOptions.serviceTier,
-      include,
-      prompt_cache_key: openaiOptions == null ? void 0 : openaiOptions.promptCacheKey,
-      prompt_cache_options: openaiOptions == null ? void 0 : openaiOptions.promptCacheOptions,
-      prompt_cache_retention: openaiOptions == null ? void 0 : openaiOptions.promptCacheRetention,
-      safety_identifier: openaiOptions == null ? void 0 : openaiOptions.safetyIdentifier,
-      top_logprobs: topLogprobs,
-      truncation: openaiOptions == null ? void 0 : openaiOptions.truncation,
-      // context management (server-side compaction):
-      ...(openaiOptions == null ? void 0 : openaiOptions.contextManagement) && {
-        context_management: openaiOptions.contextManagement.map((cm) => ({
-          type: cm.type,
-          compact_threshold: cm.compactThreshold
-        }))
-      },
-      // model-specific settings:
-      ...isReasoningModel && (resolvedReasoningEffort != null || resolvedReasoningSummary != null || (openaiOptions == null ? void 0 : openaiOptions.reasoningMode) != null || (openaiOptions == null ? void 0 : openaiOptions.reasoningContext) != null) && {
-        reasoning: {
-          ...resolvedReasoningEffort != null && {
-            effort: resolvedReasoningEffort
-          },
-          ...resolvedReasoningSummary != null && {
-            summary: resolvedReasoningSummary
-          },
-          ...(openaiOptions == null ? void 0 : openaiOptions.reasoningMode) != null && {
-            mode: openaiOptions.reasoningMode
-          },
-          ...(openaiOptions == null ? void 0 : openaiOptions.reasoningContext) != null && {
-            context: openaiOptions.reasoningContext
-          }
-        }
-      }
-    };
-    if (isReasoningModel) {
-      if (!(resolvedReasoningEffort === "none" && modelCapabilities.supportsNonReasoningParameters)) {
-        if (baseArgs.temperature != null) {
-          baseArgs.temperature = void 0;
-          warnings.push({
-            type: "unsupported",
-            feature: "temperature",
-            details: "temperature is not supported for reasoning models"
-          });
-        }
-        if (baseArgs.top_p != null) {
-          baseArgs.top_p = void 0;
-          warnings.push({
-            type: "unsupported",
-            feature: "topP",
-            details: "topP is not supported for reasoning models"
-          });
-        }
-      }
-    } else {
-      if ((openaiOptions == null ? void 0 : openaiOptions.reasoningEffort) != null) {
-        warnings.push({
-          type: "unsupported",
-          feature: "reasoningEffort",
-          details: "reasoningEffort is not supported for non-reasoning models"
-        });
-      }
-      if ((openaiOptions == null ? void 0 : openaiOptions.reasoningSummary) != null) {
-        warnings.push({
-          type: "unsupported",
-          feature: "reasoningSummary",
-          details: "reasoningSummary is not supported for non-reasoning models"
-        });
-      }
-      if ((openaiOptions == null ? void 0 : openaiOptions.reasoningMode) != null) {
-        warnings.push({
-          type: "unsupported",
-          feature: "reasoningMode",
-          details: "reasoningMode is not supported for non-reasoning models"
-        });
-      }
-      if ((openaiOptions == null ? void 0 : openaiOptions.reasoningContext) != null) {
-        warnings.push({
-          type: "unsupported",
-          feature: "reasoningContext",
-          details: "reasoningContext is not supported for non-reasoning models"
-        });
-      }
-    }
-    if ((openaiOptions == null ? void 0 : openaiOptions.serviceTier) === "flex" && !modelCapabilities.supportsFlexProcessing) {
-      warnings.push({
-        type: "unsupported",
-        feature: "serviceTier",
-        details: "flex processing is only available for o3, o4-mini, and gpt-5 models"
-      });
-      delete baseArgs.service_tier;
-    }
-    if (((openaiOptions == null ? void 0 : openaiOptions.serviceTier) === "priority" || (openaiOptions == null ? void 0 : openaiOptions.serviceTier) === "fast") && !modelCapabilities.supportsPriorityProcessing) {
-      warnings.push({
-        type: "unsupported",
-        feature: "serviceTier",
-        details: "priority processing is only available for supported models (gpt-4, gpt-5, gpt-5-mini, o3, o4-mini) and requires Enterprise access. gpt-5-nano is not supported"
-      });
-      delete baseArgs.service_tier;
-    }
-    const shellToolEnvType = (_l = (_k = (_j = tools == null ? void 0 : tools.find(
-      (tool2) => tool2.type === "provider" && tool2.id === "openai.shell"
-    )) == null ? void 0 : _j.args) == null ? void 0 : _k.environment) == null ? void 0 : _l.type;
-    const isShellProviderExecuted = shellToolEnvType === "containerAuto" || shellToolEnvType === "containerReference";
-    return {
-      webSearchToolName,
-      args: {
-        ...baseArgs,
-        tools: openaiTools2,
-        tool_choice: openaiToolChoice
-      },
-      warnings: [...warnings, ...toolWarnings],
-      store,
-      toolNameMapping,
-      providerOptionsName,
-      isShellProviderExecuted
-    };
-  }
-  async doGenerate(options) {
-    var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F;
-    const {
-      args: body,
-      warnings,
-      webSearchToolName,
-      toolNameMapping,
-      providerOptionsName,
-      isShellProviderExecuted
-    } = await this.getArgs(options);
-    const url3 = this.config.url({
-      path: "/responses",
-      modelId: this.modelId
-    });
-    const approvalRequestIdToDummyToolCallIdFromPrompt = extractApprovalRequestIdToToolCallIdMapping(options.prompt);
-    const {
-      responseHeaders,
-      value: response,
-      rawValue: rawResponse
-    } = await postJsonToApi({
-      url: url3,
-      headers: combineHeaders((_b18 = (_a27 = this.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
-      body,
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiResponsesResponseSchema
-      ),
-      abortSignal: options.abortSignal,
-      fetch: this.config.fetch
-    });
-    if (response.error) {
-      throw new APICallError({
-        message: response.error.message,
-        url: url3,
-        requestBodyValues: body,
-        statusCode: 400,
-        responseHeaders,
-        responseBody: rawResponse,
-        isRetryable: false
-      });
-    }
-    if (response.output == null) {
-      const detail = (_c = response.incomplete_details) == null ? void 0 : _c.reason;
-      throw new APICallError({
-        message: detail ? `Responses API returned no output (${detail})` : "Responses API returned no output",
-        url: url3,
-        requestBodyValues: body,
-        statusCode: 500,
-        responseHeaders,
-        responseBody: rawResponse,
-        isRetryable: false
-      });
-    }
-    const content = [];
-    const logprobs = [];
-    let hasFunctionCall = false;
-    const hostedToolSearchCallIds = [];
-    for (const part of response.output) {
-      switch (part.type) {
-        case "reasoning": {
-          if (part.summary.length === 0) {
-            part.summary.push({ type: "summary_text", text: "" });
-          }
-          for (const summary of part.summary) {
-            content.push({
-              type: "reasoning",
-              text: summary.text,
-              providerMetadata: {
-                [providerOptionsName]: {
-                  itemId: part.id,
-                  reasoningEncryptedContent: (_d = part.encrypted_content) != null ? _d : null
-                }
-              }
-            });
-          }
-          break;
-        }
-        case "image_generation_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName("image_generation"),
-            input: "{}",
-            providerExecuted: true
-          });
-          content.push({
-            type: "tool-result",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName("image_generation"),
-            result: {
-              result: part.result
-            }
-          });
-          break;
-        }
-        case "tool_search_call": {
-          const toolCallId = (_e = part.call_id) != null ? _e : part.id;
-          const isHosted = part.execution === "server";
-          if (isHosted) {
-            hostedToolSearchCallIds.push(toolCallId);
-          }
-          content.push({
-            type: "tool-call",
-            toolCallId,
-            toolName: toolNameMapping.toCustomToolName("tool_search"),
-            input: JSON.stringify({
-              arguments: part.arguments,
-              call_id: part.call_id
-            }),
-            ...isHosted ? { providerExecuted: true } : {},
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "tool_search_output": {
-          const toolCallId = (_g = (_f = part.call_id) != null ? _f : hostedToolSearchCallIds.shift()) != null ? _g : part.id;
-          content.push({
-            type: "tool-result",
-            toolCallId,
-            toolName: toolNameMapping.toCustomToolName("tool_search"),
-            result: {
-              tools: part.tools
-            },
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "local_shell_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName: toolNameMapping.toCustomToolName("local_shell"),
-            input: JSON.stringify({
-              action: part.action
-            }),
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "shell_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName: toolNameMapping.toCustomToolName("shell"),
-            input: JSON.stringify({
-              action: {
-                commands: part.action.commands
-              }
-            }),
-            ...isShellProviderExecuted && { providerExecuted: true },
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "shell_call_output": {
-          content.push({
-            type: "tool-result",
-            toolCallId: part.call_id,
-            toolName: toolNameMapping.toCustomToolName("shell"),
-            result: {
-              output: part.output.map((item) => ({
-                stdout: item.stdout,
-                stderr: item.stderr,
-                outcome: item.outcome.type === "exit" ? {
-                  type: "exit",
-                  exitCode: item.outcome.exit_code
-                } : { type: "timeout" }
-              }))
-            }
-          });
-          break;
-        }
-        case "message": {
-          for (const contentPart of part.content) {
-            if (((_i = (_h = options.providerOptions) == null ? void 0 : _h[providerOptionsName]) == null ? void 0 : _i.logprobs) && contentPart.logprobs) {
-              logprobs.push(contentPart.logprobs);
-            }
-            const providerMetadata2 = {
-              itemId: part.id,
-              ...part.phase != null && { phase: part.phase },
-              ...contentPart.annotations.length > 0 && {
-                annotations: contentPart.annotations
-              }
-            };
-            content.push({
-              type: "text",
-              text: contentPart.text,
-              providerMetadata: {
-                [providerOptionsName]: providerMetadata2
-              }
-            });
-            for (const annotation of contentPart.annotations) {
-              if (annotation.type === "url_citation") {
-                content.push({
-                  type: "source",
-                  sourceType: "url",
-                  id: (_l = (_k = (_j = this.config).generateId) == null ? void 0 : _k.call(_j)) != null ? _l : generateId(),
-                  url: annotation.url,
-                  title: annotation.title
-                });
-              } else if (annotation.type === "file_citation") {
-                content.push({
-                  type: "source",
-                  sourceType: "document",
-                  id: (_o = (_n = (_m = this.config).generateId) == null ? void 0 : _n.call(_m)) != null ? _o : generateId(),
-                  mediaType: "text/plain",
-                  title: annotation.filename,
-                  filename: annotation.filename,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: annotation.type,
-                      fileId: annotation.file_id,
-                      index: annotation.index
-                    }
-                  }
-                });
-              } else if (annotation.type === "container_file_citation") {
-                content.push({
-                  type: "source",
-                  sourceType: "document",
-                  id: (_r = (_q = (_p = this.config).generateId) == null ? void 0 : _q.call(_p)) != null ? _r : generateId(),
-                  mediaType: "text/plain",
-                  title: annotation.filename,
-                  filename: annotation.filename,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: annotation.type,
-                      fileId: annotation.file_id,
-                      containerId: annotation.container_id
-                    }
-                  }
-                });
-              } else if (annotation.type === "file_path") {
-                content.push({
-                  type: "source",
-                  sourceType: "document",
-                  id: (_u = (_t = (_s = this.config).generateId) == null ? void 0 : _t.call(_s)) != null ? _u : generateId(),
-                  mediaType: "application/octet-stream",
-                  title: annotation.file_id,
-                  filename: annotation.file_id,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: annotation.type,
-                      fileId: annotation.file_id,
-                      index: annotation.index
-                    }
-                  }
-                });
-              }
-            }
-          }
-          break;
-        }
-        case "function_call": {
-          hasFunctionCall = true;
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName: part.name,
-            input: part.arguments,
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id,
-                ...part.namespace != null && { namespace: part.namespace },
-                ...part.caller != null && {
-                  caller: part.caller.type === "program" ? {
-                    type: "program",
-                    callerId: part.caller.caller_id
-                  } : part.caller
-                }
-              }
-            }
-          });
-          break;
-        }
-        case "program": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName: toolNameMapping.toCustomToolName(
-              "programmatic_tool_calling"
-            ),
-            input: JSON.stringify({
-              code: part.code,
-              fingerprint: part.fingerprint
-            }),
-            providerExecuted: true,
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "program_output": {
-          content.push({
-            type: "tool-result",
-            toolCallId: part.call_id,
-            toolName: toolNameMapping.toCustomToolName(
-              "programmatic_tool_calling"
-            ),
-            result: {
-              result: part.result,
-              status: part.status
-            },
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "custom_tool_call": {
-          hasFunctionCall = true;
-          const toolName = toolNameMapping.toCustomToolName(part.name);
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName,
-            input: JSON.stringify(part.input),
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "web_search_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName(
-              webSearchToolName != null ? webSearchToolName : "web_search"
-            ),
-            input: JSON.stringify({}),
-            providerExecuted: true
-          });
-          content.push({
-            type: "tool-result",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName(
-              webSearchToolName != null ? webSearchToolName : "web_search"
-            ),
-            result: mapWebSearchOutput(part.action)
-          });
-          break;
-        }
-        case "mcp_call": {
-          const toolCallId = part.approval_request_id != null ? (_v = approvalRequestIdToDummyToolCallIdFromPrompt[part.approval_request_id]) != null ? _v : part.id : part.id;
-          const toolName = `mcp.${part.name}`;
-          content.push({
-            type: "tool-call",
-            toolCallId,
-            toolName,
-            input: part.arguments,
-            providerExecuted: true,
-            dynamic: true
-          });
-          content.push({
-            type: "tool-result",
-            toolCallId,
-            toolName,
-            result: {
-              type: "call",
-              serverLabel: part.server_label,
-              name: part.name,
-              arguments: part.arguments,
-              ...part.output != null ? { output: part.output } : {},
-              ...part.error != null ? { error: part.error } : {}
-            },
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "mcp_list_tools": {
-          break;
-        }
-        case "mcp_approval_request": {
-          const approvalRequestId = (_w = part.approval_request_id) != null ? _w : part.id;
-          const dummyToolCallId = (_z = (_y = (_x = this.config).generateId) == null ? void 0 : _y.call(_x)) != null ? _z : generateId();
-          const toolName = `mcp.${part.name}`;
-          content.push({
-            type: "tool-call",
-            toolCallId: dummyToolCallId,
-            toolName,
-            input: part.arguments,
-            providerExecuted: true,
-            dynamic: true
-          });
-          content.push({
-            type: "tool-approval-request",
-            approvalId: approvalRequestId,
-            toolCallId: dummyToolCallId
-          });
-          break;
-        }
-        case "computer_call": {
-          if (part.call_id == null) {
-            content.push({
-              type: "tool-call",
-              toolCallId: part.id,
-              toolName: toolNameMapping.toCustomToolName("computer_use"),
-              input: "",
-              providerExecuted: true
-            });
-            content.push({
-              type: "tool-result",
-              toolCallId: part.id,
-              toolName: toolNameMapping.toCustomToolName("computer_use"),
-              result: {
-                type: "computer_use_tool_result",
-                status: part.status
-              }
-            });
-            break;
-          }
-          hasFunctionCall = true;
-          const toolName = toolNameMapping.toCustomToolName("computer");
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName,
-            input: JSON.stringify(mapComputerCallInput(part)),
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "file_search_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName("file_search"),
-            input: "{}",
-            providerExecuted: true
-          });
-          content.push({
-            type: "tool-result",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName("file_search"),
-            result: {
-              queries: part.queries,
-              results: (_B = (_A = part.results) == null ? void 0 : _A.map((result) => ({
-                attributes: result.attributes,
-                fileId: result.file_id,
-                filename: result.filename,
-                score: result.score,
-                text: result.text
-              }))) != null ? _B : null
-            }
-          });
-          break;
-        }
-        case "code_interpreter_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName("code_interpreter"),
-            input: JSON.stringify({
-              code: part.code,
-              containerId: part.container_id
-            }),
-            providerExecuted: true
-          });
-          content.push({
-            type: "tool-result",
-            toolCallId: part.id,
-            toolName: toolNameMapping.toCustomToolName("code_interpreter"),
-            result: {
-              outputs: part.outputs
-            }
-          });
-          break;
-        }
-        case "apply_patch_call": {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.call_id,
-            toolName: toolNameMapping.toCustomToolName("apply_patch"),
-            input: JSON.stringify({
-              callId: part.call_id,
-              operation: part.operation
-            }),
-            providerMetadata: {
-              [providerOptionsName]: {
-                itemId: part.id
-              }
-            }
-          });
-          break;
-        }
-        case "compaction": {
-          content.push({
-            type: "custom",
-            kind: "openai.compaction",
-            providerMetadata: {
-              [providerOptionsName]: {
-                type: "compaction",
-                itemId: part.id,
-                encryptedContent: part.encrypted_content
-              }
-            }
-          });
-          break;
-        }
-      }
-    }
-    const providerMetadata = {
-      [providerOptionsName]: {
-        responseId: response.id,
-        ...logprobs.length > 0 ? { logprobs } : {},
-        ...typeof response.service_tier === "string" ? { serviceTier: response.service_tier } : {},
-        ...((_C = response.reasoning) == null ? void 0 : _C.context) != null ? { reasoningContext: response.reasoning.context } : {}
-      }
-    };
-    const usage = response.usage;
-    return {
-      content,
-      finishReason: {
-        unified: mapOpenAIResponseFinishReason({
-          finishReason: (_D = response.incomplete_details) == null ? void 0 : _D.reason,
-          hasFunctionCall
-        }),
-        raw: (_F = (_E = response.incomplete_details) == null ? void 0 : _E.reason) != null ? _F : void 0
-      },
-      usage: convertOpenAIResponsesUsage(usage),
-      request: { body },
-      response: {
-        id: response.id,
-        timestamp: new Date(response.created_at * 1e3),
-        modelId: response.model,
-        headers: responseHeaders,
-        body: rawResponse
-      },
-      providerMetadata,
-      warnings
-    };
-  }
-  async doStream(options) {
-    var _a27, _b18;
-    const {
-      args: body,
-      warnings,
-      webSearchToolName,
-      toolNameMapping,
-      store,
-      providerOptionsName,
-      isShellProviderExecuted
-    } = await this.getArgs(options);
-    const url3 = this.config.url({
-      path: "/responses",
-      modelId: this.modelId
-    });
-    const { responseHeaders, value: response } = await postJsonToApi({
-      url: url3,
-      headers: combineHeaders((_b18 = (_a27 = this.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
-      body: {
-        ...body,
-        stream: true
-      },
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createEventSourceResponseHandler(
-        openaiResponsesChunkSchema
-      ),
-      abortSignal: options.abortSignal,
-      fetch: this.config.fetch
-    });
-    const checkedResponse = await throwIfOpenAIStreamErrorBeforeOutput({
-      stream: response,
-      getError: (chunk) => isErrorChunk(chunk) || isResponseFailedChunk(chunk) && chunk.response.error != null ? chunk : void 0,
-      isOutputChunk: isResponseOutputChunk,
-      isAcceptedChunk: isResponseInProgressChunk,
-      url: url3,
-      requestBodyValues: body,
-      responseHeaders
-    });
-    const self = this;
-    const approvalRequestIdToDummyToolCallIdFromPrompt = extractApprovalRequestIdToToolCallIdMapping(options.prompt);
-    const approvalRequestIdToDummyToolCallIdFromStream = /* @__PURE__ */ new Map();
-    let finishReason = {
-      unified: "other",
-      raw: void 0
-    };
-    let usage = void 0;
-    const logprobs = [];
-    let responseId = null;
-    const ongoingToolCalls = {};
-    const ongoingAnnotations = [];
-    let activeMessagePhase;
-    let hasFunctionCall = false;
-    const activeReasoning = {};
-    const activeOutputItemIds = {};
-    const resolveOutputItemId = ({
-      itemId,
-      outputIndex
-    }) => {
-      var _a28;
-      return outputIndex == null ? itemId : (_a28 = activeOutputItemIds[outputIndex]) != null ? _a28 : itemId;
-    };
-    let serviceTier;
-    let reasoningContext;
-    const hostedToolSearchCallIds = [];
-    let encounteredStreamError = false;
-    const result = {
-      stream: checkedResponse.pipeThrough(
-        new TransformStream({
-          start(controller) {
-            controller.enqueue({ type: "stream-start", warnings });
-          },
-          transform(chunk, controller) {
-            var _a28, _b24, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N;
-            if (options.includeRawChunks) {
-              controller.enqueue({ type: "raw", rawValue: chunk.rawValue });
-            }
-            if (!chunk.success) {
-              const error90 = isOpenAIChatCompletionChunk(chunk.rawValue) ? createOpenAIResponsesChatCompletionsMismatchError({
-                value: chunk.rawValue,
-                cause: chunk.error,
-                url: url3,
-                requestBodyValues: body,
-                responseHeaders
-              }) : chunk.error;
-              finishReason = { unified: "error", raw: void 0 };
-              controller.enqueue({ type: "error", error: error90 });
-              return;
-            }
-            const value = chunk.value;
-            if (isResponseOutputItemAddedChunk(value)) {
-              if (value.item.type === "function_call") {
-                ongoingToolCalls[value.output_index] = {
-                  toolName: value.item.name,
-                  toolCallId: value.item.call_id
-                };
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: value.item.call_id,
-                  toolName: value.item.name
-                });
-              } else if (value.item.type === "custom_tool_call") {
-                const toolName = toolNameMapping.toCustomToolName(
-                  value.item.name
-                );
-                ongoingToolCalls[value.output_index] = {
-                  toolName,
-                  toolCallId: value.item.call_id
-                };
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: value.item.call_id,
-                  toolName
-                });
-              } else if (value.item.type === "web_search_call") {
-                ongoingToolCalls[value.output_index] = {
-                  toolName: toolNameMapping.toCustomToolName(
-                    webSearchToolName != null ? webSearchToolName : "web_search"
-                  ),
-                  toolCallId: value.item.id
-                };
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName(
-                    webSearchToolName != null ? webSearchToolName : "web_search"
-                  ),
-                  providerExecuted: true
-                });
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: value.item.id
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName(
-                    webSearchToolName != null ? webSearchToolName : "web_search"
-                  ),
-                  input: JSON.stringify({}),
-                  providerExecuted: true
-                });
-              } else if (value.item.type === "computer_call") {
-                const toolCallId = (_a28 = value.item.call_id) != null ? _a28 : value.item.id;
-                ongoingToolCalls[value.output_index] = {
-                  toolName: toolNameMapping.toCustomToolName("computer"),
-                  toolCallId
-                };
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: toolCallId,
-                  toolName: toolNameMapping.toCustomToolName("computer")
-                });
-              } else if (value.item.type === "code_interpreter_call") {
-                ongoingToolCalls[value.output_index] = {
-                  toolName: toolNameMapping.toCustomToolName("code_interpreter"),
-                  toolCallId: value.item.id,
-                  codeInterpreter: {
-                    containerId: value.item.container_id
-                  }
-                };
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName("code_interpreter"),
-                  providerExecuted: true
-                });
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: value.item.id,
-                  delta: `{"containerId":"${value.item.container_id}","code":"`
-                });
-              } else if (value.item.type === "file_search_call") {
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName("file_search"),
-                  input: "{}",
-                  providerExecuted: true
-                });
-              } else if (value.item.type === "image_generation_call") {
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName("image_generation"),
-                  input: "{}",
-                  providerExecuted: true
-                });
-              } else if (value.item.type === "tool_search_call") {
-                const toolCallId = value.item.id;
-                const toolName = toolNameMapping.toCustomToolName("tool_search");
-                const isHosted = value.item.execution === "server";
-                ongoingToolCalls[value.output_index] = {
-                  toolName,
-                  toolCallId,
-                  toolSearchExecution: (_b24 = value.item.execution) != null ? _b24 : "server"
-                };
-                if (isHosted) {
-                  controller.enqueue({
-                    type: "tool-input-start",
-                    id: toolCallId,
-                    toolName,
-                    providerExecuted: true
-                  });
-                }
-              } else if (value.item.type === "tool_search_output") {
-              } else if (value.item.type === "mcp_call" || value.item.type === "mcp_list_tools" || value.item.type === "mcp_approval_request") {
-              } else if (value.item.type === "apply_patch_call") {
-                const { call_id: callId, operation } = value.item;
-                ongoingToolCalls[value.output_index] = {
-                  toolName: toolNameMapping.toCustomToolName("apply_patch"),
-                  toolCallId: callId,
-                  applyPatch: {
-                    // delete_file doesn't have diff
-                    hasDiff: operation.type === "delete_file",
-                    endEmitted: operation.type === "delete_file"
-                  }
-                };
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: callId,
-                  toolName: toolNameMapping.toCustomToolName("apply_patch")
-                });
-                if (operation.type === "delete_file") {
-                  const inputString = JSON.stringify({
-                    callId,
-                    operation
-                  });
-                  controller.enqueue({
-                    type: "tool-input-delta",
-                    id: callId,
-                    delta: inputString
-                  });
-                  controller.enqueue({
-                    type: "tool-input-end",
-                    id: callId
-                  });
-                } else {
-                  controller.enqueue({
-                    type: "tool-input-delta",
-                    id: callId,
-                    delta: `{"callId":"${escapeJSONDelta(callId)}","operation":{"type":"${escapeJSONDelta(operation.type)}","path":"${escapeJSONDelta(operation.path)}","diff":"`
-                  });
-                }
-              } else if (value.item.type === "shell_call") {
-                ongoingToolCalls[value.output_index] = {
-                  toolName: toolNameMapping.toCustomToolName("shell"),
-                  toolCallId: value.item.call_id
-                };
-              } else if (value.item.type === "shell_call_output") {
-              } else if (value.item.type === "message") {
-                activeOutputItemIds[value.output_index] = value.item.id;
-                ongoingAnnotations.splice(0, ongoingAnnotations.length);
-                activeMessagePhase = (_c = value.item.phase) != null ? _c : void 0;
-                controller.enqueue({
-                  type: "text-start",
-                  id: value.item.id,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id,
-                      ...value.item.phase != null && {
-                        phase: value.item.phase
-                      }
-                    }
-                  }
-                });
-              } else if (isResponseOutputItemAddedChunk(value) && value.item.type === "reasoning") {
-                activeOutputItemIds[value.output_index] = value.item.id;
-                activeReasoning[value.item.id] = {
-                  encryptedContent: value.item.encrypted_content,
-                  summaryParts: { 0: "active" }
-                };
-                controller.enqueue({
-                  type: "reasoning-start",
-                  id: `${value.item.id}:0`,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id,
-                      reasoningEncryptedContent: (_d = value.item.encrypted_content) != null ? _d : null
-                    }
-                  }
-                });
-              }
-            } else if (isResponseOutputItemDoneChunk(value)) {
-              if (value.item.type === "message") {
-                const itemId = resolveOutputItemId({
-                  itemId: value.item.id,
-                  outputIndex: value.output_index
-                });
-                const phase = (_e = value.item.phase) != null ? _e : activeMessagePhase;
-                activeMessagePhase = void 0;
-                controller.enqueue({
-                  type: "text-end",
-                  id: itemId,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId,
-                      ...phase != null && { phase },
-                      ...ongoingAnnotations.length > 0 && {
-                        annotations: ongoingAnnotations
-                      }
-                    }
-                  }
-                });
-                activeOutputItemIds[value.output_index] = void 0;
-              } else if (value.item.type === "function_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                hasFunctionCall = true;
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: value.item.call_id,
-                  ...value.item.namespace != null && {
-                    providerMetadata: {
-                      [providerOptionsName]: {
-                        namespace: value.item.namespace
-                      }
-                    }
-                  }
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.call_id,
-                  toolName: value.item.name,
-                  input: value.item.arguments,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id,
-                      ...value.item.namespace != null && {
-                        namespace: value.item.namespace
-                      },
-                      ...value.item.caller != null && {
-                        caller: value.item.caller.type === "program" ? {
-                          type: "program",
-                          callerId: value.item.caller.caller_id
-                        } : value.item.caller
-                      }
-                    }
-                  }
-                });
-              } else if (value.item.type === "program") {
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.call_id,
-                  toolName: toolNameMapping.toCustomToolName(
-                    "programmatic_tool_calling"
-                  ),
-                  input: JSON.stringify({
-                    code: value.item.code,
-                    fingerprint: value.item.fingerprint
-                  }),
-                  providerExecuted: true,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id
-                    }
-                  }
-                });
-              } else if (value.item.type === "program_output") {
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: value.item.call_id,
-                  toolName: toolNameMapping.toCustomToolName(
-                    "programmatic_tool_calling"
-                  ),
-                  result: {
-                    result: value.item.result,
-                    status: value.item.status
-                  },
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id
-                    }
-                  }
-                });
-              } else if (value.item.type === "custom_tool_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                hasFunctionCall = true;
-                const toolName = toolNameMapping.toCustomToolName(
-                  value.item.name
-                );
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: value.item.call_id
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.call_id,
-                  toolName,
-                  input: JSON.stringify(value.item.input),
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id
-                    }
-                  }
-                });
-              } else if (value.item.type === "web_search_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName(
-                    webSearchToolName != null ? webSearchToolName : "web_search"
-                  ),
-                  result: mapWebSearchOutput(value.item.action)
-                });
-              } else if (value.item.type === "computer_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                if (value.item.call_id == null) {
-                  controller.enqueue({
-                    type: "tool-input-end",
-                    id: value.item.id
-                  });
-                  controller.enqueue({
-                    type: "tool-call",
-                    toolCallId: value.item.id,
-                    toolName: toolNameMapping.toCustomToolName("computer_use"),
-                    input: "",
-                    providerExecuted: true
-                  });
-                  controller.enqueue({
-                    type: "tool-result",
-                    toolCallId: value.item.id,
-                    toolName: toolNameMapping.toCustomToolName("computer_use"),
-                    result: {
-                      type: "computer_use_tool_result",
-                      status: value.item.status
-                    }
-                  });
-                  return;
-                }
-                hasFunctionCall = true;
-                const toolName = toolNameMapping.toCustomToolName("computer");
-                const input = JSON.stringify(mapComputerCallInput(value.item));
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: value.item.call_id,
-                  delta: input
-                });
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: value.item.call_id
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.call_id,
-                  toolName,
-                  input,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id
-                    }
-                  }
-                });
-              } else if (value.item.type === "file_search_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName("file_search"),
-                  result: {
-                    queries: value.item.queries,
-                    results: (_g = (_f = value.item.results) == null ? void 0 : _f.map((result2) => ({
-                      attributes: result2.attributes,
-                      fileId: result2.file_id,
-                      filename: result2.filename,
-                      score: result2.score,
-                      text: result2.text
-                    }))) != null ? _g : null
-                  }
-                });
-              } else if (value.item.type === "code_interpreter_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName("code_interpreter"),
-                  result: {
-                    outputs: value.item.outputs
-                  }
-                });
-              } else if (value.item.type === "image_generation_call") {
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: value.item.id,
-                  toolName: toolNameMapping.toCustomToolName("image_generation"),
-                  result: {
-                    result: value.item.result
-                  }
-                });
-              } else if (value.item.type === "tool_search_call") {
-                const toolCall = ongoingToolCalls[value.output_index];
-                const isHosted = value.item.execution === "server";
-                if (toolCall != null) {
-                  const toolCallId = isHosted ? toolCall.toolCallId : (_h = value.item.call_id) != null ? _h : value.item.id;
-                  if (isHosted) {
-                    hostedToolSearchCallIds.push(toolCallId);
-                  } else {
-                    controller.enqueue({
-                      type: "tool-input-start",
-                      id: toolCallId,
-                      toolName: toolCall.toolName
-                    });
-                  }
-                  controller.enqueue({
-                    type: "tool-input-end",
-                    id: toolCallId
-                  });
-                  controller.enqueue({
-                    type: "tool-call",
-                    toolCallId,
-                    toolName: toolCall.toolName,
-                    input: JSON.stringify({
-                      arguments: value.item.arguments,
-                      call_id: isHosted ? null : toolCallId
-                    }),
-                    ...isHosted ? { providerExecuted: true } : {},
-                    providerMetadata: {
-                      [providerOptionsName]: {
-                        itemId: value.item.id
-                      }
-                    }
-                  });
-                }
-                ongoingToolCalls[value.output_index] = void 0;
-              } else if (value.item.type === "tool_search_output") {
-                const toolCallId = (_j = (_i = value.item.call_id) != null ? _i : hostedToolSearchCallIds.shift()) != null ? _j : value.item.id;
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId,
-                  toolName: toolNameMapping.toCustomToolName("tool_search"),
-                  result: {
-                    tools: value.item.tools
-                  },
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id
-                    }
-                  }
-                });
-              } else if (value.item.type === "mcp_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                const approvalRequestId = (_k = value.item.approval_request_id) != null ? _k : void 0;
-                const aliasedToolCallId = approvalRequestId != null ? (_m = (_l = approvalRequestIdToDummyToolCallIdFromStream.get(
-                  approvalRequestId
-                )) != null ? _l : approvalRequestIdToDummyToolCallIdFromPrompt[approvalRequestId]) != null ? _m : value.item.id : value.item.id;
-                const toolName = `mcp.${value.item.name}`;
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: aliasedToolCallId,
-                  toolName,
-                  input: value.item.arguments,
-                  providerExecuted: true,
-                  dynamic: true
-                });
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: aliasedToolCallId,
-                  toolName,
-                  result: {
-                    type: "call",
-                    serverLabel: value.item.server_label,
-                    name: value.item.name,
-                    arguments: value.item.arguments,
-                    ...value.item.output != null ? { output: value.item.output } : {},
-                    ...value.item.error != null ? { error: value.item.error } : {}
-                  },
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      itemId: value.item.id
-                    }
-                  }
-                });
-              } else if (value.item.type === "mcp_list_tools") {
-                ongoingToolCalls[value.output_index] = void 0;
-              } else if (value.item.type === "apply_patch_call") {
-                const toolCall = ongoingToolCalls[value.output_index];
-                if ((toolCall == null ? void 0 : toolCall.applyPatch) && !toolCall.applyPatch.endEmitted && value.item.operation.type !== "delete_file") {
-                  if (!toolCall.applyPatch.hasDiff) {
-                    controller.enqueue({
-                      type: "tool-input-delta",
-                      id: toolCall.toolCallId,
-                      delta: escapeJSONDelta(value.item.operation.diff)
-                    });
-                  }
-                  controller.enqueue({
-                    type: "tool-input-delta",
-                    id: toolCall.toolCallId,
-                    delta: '"}}'
-                  });
-                  controller.enqueue({
-                    type: "tool-input-end",
-                    id: toolCall.toolCallId
-                  });
-                  toolCall.applyPatch.endEmitted = true;
-                }
-                if (toolCall && value.item.status === "completed") {
-                  controller.enqueue({
-                    type: "tool-call",
-                    toolCallId: toolCall.toolCallId,
-                    toolName: toolNameMapping.toCustomToolName("apply_patch"),
-                    input: JSON.stringify({
-                      callId: value.item.call_id,
-                      operation: value.item.operation
-                    }),
-                    providerMetadata: {
-                      [providerOptionsName]: {
-                        itemId: value.item.id
-                      }
-                    }
-                  });
-                }
-                ongoingToolCalls[value.output_index] = void 0;
-              } else if (value.item.type === "mcp_approval_request") {
-                ongoingToolCalls[value.output_index] = void 0;
-                const dummyToolCallId = (_p = (_o = (_n = self.config).generateId) == null ? void 0 : _o.call(_n)) != null ? _p : generateId();
-                const approvalRequestId = (_q = value.item.approval_request_id) != null ? _q : value.item.id;
-                approvalRequestIdToDummyToolCallIdFromStream.set(
-                  approvalRequestId,
-                  dummyToolCallId
-                );
-                const toolName = `mcp.${value.item.name}`;
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: dummyToolCallId,
-                  toolName,
-                  input: value.item.arguments,
-                  providerExecuted: true,
-                  dynamic: true
-                });
-                controller.enqueue({
-                  type: "tool-approval-request",
-                  approvalId: approvalRequestId,
-                  toolCallId: dummyToolCallId
-                });
-              } else if (value.item.type === "local_shell_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.call_id,
-                  toolName: toolNameMapping.toCustomToolName("local_shell"),
-                  input: JSON.stringify({
-                    action: {
-                      type: "exec",
-                      command: value.item.action.command,
-                      timeoutMs: value.item.action.timeout_ms,
-                      user: value.item.action.user,
-                      workingDirectory: value.item.action.working_directory,
-                      env: value.item.action.env
-                    }
-                  }),
-                  providerMetadata: {
-                    [providerOptionsName]: { itemId: value.item.id }
-                  }
-                });
-              } else if (value.item.type === "shell_call") {
-                ongoingToolCalls[value.output_index] = void 0;
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: value.item.call_id,
-                  toolName: toolNameMapping.toCustomToolName("shell"),
-                  input: JSON.stringify({
-                    action: {
-                      commands: value.item.action.commands
-                    }
-                  }),
-                  ...isShellProviderExecuted && {
-                    providerExecuted: true
-                  },
-                  providerMetadata: {
-                    [providerOptionsName]: { itemId: value.item.id }
-                  }
-                });
-              } else if (value.item.type === "shell_call_output") {
-                controller.enqueue({
-                  type: "tool-result",
-                  toolCallId: value.item.call_id,
-                  toolName: toolNameMapping.toCustomToolName("shell"),
-                  result: {
-                    output: value.item.output.map(
-                      (item) => ({
-                        stdout: item.stdout,
-                        stderr: item.stderr,
-                        outcome: item.outcome.type === "exit" ? {
-                          type: "exit",
-                          exitCode: item.outcome.exit_code
-                        } : { type: "timeout" }
-                      })
-                    )
-                  }
-                });
-              } else if (value.item.type === "reasoning") {
-                const itemId = resolveOutputItemId({
-                  itemId: value.item.id,
-                  outputIndex: value.output_index
-                });
-                const activeReasoningPart = activeReasoning[itemId];
-                if (activeReasoningPart != null) {
-                  const summaryPartIndices = Object.entries(
-                    activeReasoningPart.summaryParts
-                  ).filter(
-                    ([_, status]) => status === "active" || status === "can-conclude"
-                  ).map(([summaryIndex]) => summaryIndex);
-                  for (const summaryIndex of summaryPartIndices) {
-                    controller.enqueue({
-                      type: "reasoning-end",
-                      id: `${itemId}:${summaryIndex}`,
-                      providerMetadata: {
-                        [providerOptionsName]: {
-                          itemId,
-                          reasoningEncryptedContent: (_r = value.item.encrypted_content) != null ? _r : null
-                        }
-                      }
-                    });
-                  }
-                  delete activeReasoning[itemId];
-                }
-                activeOutputItemIds[value.output_index] = void 0;
-              } else if (value.item.type === "compaction") {
-                controller.enqueue({
-                  type: "custom",
-                  kind: "openai.compaction",
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: "compaction",
-                      itemId: value.item.id,
-                      encryptedContent: value.item.encrypted_content
-                    }
-                  }
-                });
-              }
-            } else if (isResponseFunctionCallArgumentsDeltaChunk(value)) {
-              const toolCall = ongoingToolCalls[value.output_index];
-              if (toolCall != null) {
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCall.toolCallId,
-                  delta: value.delta
-                });
-              }
-            } else if (isResponseCustomToolCallInputDeltaChunk(value)) {
-              const toolCall = ongoingToolCalls[value.output_index];
-              if (toolCall != null) {
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCall.toolCallId,
-                  delta: value.delta
-                });
-              }
-            } else if (isResponseApplyPatchCallOperationDiffDeltaChunk(value)) {
-              const toolCall = ongoingToolCalls[value.output_index];
-              if (toolCall == null ? void 0 : toolCall.applyPatch) {
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCall.toolCallId,
-                  delta: escapeJSONDelta(value.delta)
-                });
-                toolCall.applyPatch.hasDiff = true;
-              }
-            } else if (isResponseApplyPatchCallOperationDiffDoneChunk(value)) {
-              const toolCall = ongoingToolCalls[value.output_index];
-              if ((toolCall == null ? void 0 : toolCall.applyPatch) && !toolCall.applyPatch.endEmitted) {
-                if (!toolCall.applyPatch.hasDiff) {
-                  controller.enqueue({
-                    type: "tool-input-delta",
-                    id: toolCall.toolCallId,
-                    delta: escapeJSONDelta(value.diff)
-                  });
-                  toolCall.applyPatch.hasDiff = true;
-                }
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCall.toolCallId,
-                  delta: '"}}'
-                });
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: toolCall.toolCallId
-                });
-                toolCall.applyPatch.endEmitted = true;
-              }
-            } else if (isResponseImageGenerationCallPartialImageChunk(value)) {
-              controller.enqueue({
-                type: "tool-result",
-                toolCallId: value.item_id,
-                toolName: toolNameMapping.toCustomToolName("image_generation"),
-                result: {
-                  result: value.partial_image_b64
-                },
-                preliminary: true
-              });
-            } else if (isResponseCodeInterpreterCallCodeDeltaChunk(value)) {
-              const toolCall = ongoingToolCalls[value.output_index];
-              if (toolCall != null) {
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCall.toolCallId,
-                  delta: escapeJSONDelta(value.delta)
-                });
-              }
-            } else if (isResponseCodeInterpreterCallCodeDoneChunk(value)) {
-              const toolCall = ongoingToolCalls[value.output_index];
-              if (toolCall != null) {
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCall.toolCallId,
-                  delta: '"}'
-                });
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: toolCall.toolCallId
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId: toolCall.toolCallId,
-                  toolName: toolNameMapping.toCustomToolName("code_interpreter"),
-                  input: JSON.stringify({
-                    code: value.code,
-                    containerId: toolCall.codeInterpreter.containerId
-                  }),
-                  providerExecuted: true
-                });
-              }
-            } else if (isResponseCreatedChunk(value)) {
-              responseId = value.response.id;
-              controller.enqueue({
-                type: "response-metadata",
-                id: value.response.id,
-                timestamp: new Date(value.response.created_at * 1e3),
-                modelId: value.response.model
-              });
-            } else if (isTextDeltaChunk(value)) {
-              const itemId = resolveOutputItemId({
-                itemId: value.item_id,
-                outputIndex: value.output_index
-              });
-              controller.enqueue({
-                type: "text-delta",
-                id: itemId,
-                delta: value.delta
-              });
-              if (((_t = (_s = options.providerOptions) == null ? void 0 : _s[providerOptionsName]) == null ? void 0 : _t.logprobs) && value.logprobs) {
-                logprobs.push(value.logprobs);
-              }
-            } else if (value.type === "response.reasoning_summary_part.added") {
-              const itemId = resolveOutputItemId({
-                itemId: value.item_id,
-                outputIndex: value.output_index
-              });
-              if (value.summary_index > 0) {
-                const activeReasoningPart = activeReasoning[itemId];
-                if (activeReasoningPart != null) {
-                  activeReasoningPart.summaryParts[value.summary_index] = "active";
-                  for (const summaryIndex of Object.keys(
-                    activeReasoningPart.summaryParts
-                  )) {
-                    if (activeReasoningPart.summaryParts[summaryIndex] === "can-conclude") {
-                      controller.enqueue({
-                        type: "reasoning-end",
-                        id: `${itemId}:${summaryIndex}`,
-                        providerMetadata: {
-                          [providerOptionsName]: {
-                            itemId
-                          }
-                        }
-                      });
-                      activeReasoningPart.summaryParts[summaryIndex] = "concluded";
-                    }
-                  }
-                  controller.enqueue({
-                    type: "reasoning-start",
-                    id: `${itemId}:${value.summary_index}`,
-                    providerMetadata: {
-                      [providerOptionsName]: {
-                        itemId,
-                        reasoningEncryptedContent: (_u = activeReasoningPart.encryptedContent) != null ? _u : null
-                      }
-                    }
-                  });
-                }
-              }
-            } else if (value.type === "response.reasoning_summary_text.delta") {
-              const itemId = resolveOutputItemId({
-                itemId: value.item_id,
-                outputIndex: value.output_index
-              });
-              controller.enqueue({
-                type: "reasoning-delta",
-                id: `${itemId}:${value.summary_index}`,
-                delta: value.delta,
-                providerMetadata: {
-                  [providerOptionsName]: {
-                    itemId
-                  }
-                }
-              });
-            } else if (value.type === "response.reasoning_summary_part.done") {
-              const itemId = resolveOutputItemId({
-                itemId: value.item_id,
-                outputIndex: value.output_index
-              });
-              const activeReasoningPart = activeReasoning[itemId];
-              if (activeReasoningPart != null) {
-                if (store) {
-                  controller.enqueue({
-                    type: "reasoning-end",
-                    id: `${itemId}:${value.summary_index}`,
-                    providerMetadata: {
-                      [providerOptionsName]: {
-                        itemId
-                      }
-                    }
-                  });
-                  activeReasoningPart.summaryParts[value.summary_index] = "concluded";
-                } else {
-                  activeReasoningPart.summaryParts[value.summary_index] = "can-conclude";
-                }
-              }
-            } else if (isResponseFinishedChunk(value)) {
-              finishReason = {
-                unified: mapOpenAIResponseFinishReason({
-                  finishReason: (_v = value.response.incomplete_details) == null ? void 0 : _v.reason,
-                  hasFunctionCall
-                }),
-                raw: (_x = (_w = value.response.incomplete_details) == null ? void 0 : _w.reason) != null ? _x : void 0
-              };
-              usage = value.response.usage;
-              if (typeof value.response.service_tier === "string") {
-                serviceTier = value.response.service_tier;
-              }
-              if (((_y = value.response.reasoning) == null ? void 0 : _y.context) != null) {
-                reasoningContext = value.response.reasoning.context;
-              }
-            } else if (isResponseFailedChunk(value)) {
-              const incompleteReason = (_z = value.response.incomplete_details) == null ? void 0 : _z.reason;
-              finishReason = {
-                unified: incompleteReason ? mapOpenAIResponseFinishReason({
-                  finishReason: incompleteReason,
-                  hasFunctionCall
-                }) : "error",
-                raw: incompleteReason != null ? incompleteReason : "error"
-              };
-              usage = (_A = value.response.usage) != null ? _A : void 0;
-              if (((_B = value.response.reasoning) == null ? void 0 : _B.context) != null) {
-                reasoningContext = value.response.reasoning.context;
-              }
-              if (!encounteredStreamError && value.response.error != null) {
-                encounteredStreamError = true;
-                controller.enqueue({
-                  type: "error",
-                  error: {
-                    type: "response.failed",
-                    sequence_number: value.sequence_number,
-                    response: {
-                      error: value.response.error,
-                      incomplete_details: value.response.incomplete_details,
-                      service_tier: value.response.service_tier
-                    }
-                  }
-                });
-              }
-            } else if (isResponseAnnotationAddedChunk(value)) {
-              ongoingAnnotations.push(value.annotation);
-              if (value.annotation.type === "url_citation") {
-                controller.enqueue({
-                  type: "source",
-                  sourceType: "url",
-                  id: (_E = (_D = (_C = self.config).generateId) == null ? void 0 : _D.call(_C)) != null ? _E : generateId(),
-                  url: value.annotation.url,
-                  title: value.annotation.title
-                });
-              } else if (value.annotation.type === "file_citation") {
-                controller.enqueue({
-                  type: "source",
-                  sourceType: "document",
-                  id: (_H = (_G = (_F = self.config).generateId) == null ? void 0 : _G.call(_F)) != null ? _H : generateId(),
-                  mediaType: "text/plain",
-                  title: value.annotation.filename,
-                  filename: value.annotation.filename,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: value.annotation.type,
-                      fileId: value.annotation.file_id,
-                      index: value.annotation.index
-                    }
-                  }
-                });
-              } else if (value.annotation.type === "container_file_citation") {
-                controller.enqueue({
-                  type: "source",
-                  sourceType: "document",
-                  id: (_K = (_J = (_I = self.config).generateId) == null ? void 0 : _J.call(_I)) != null ? _K : generateId(),
-                  mediaType: "text/plain",
-                  title: value.annotation.filename,
-                  filename: value.annotation.filename,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: value.annotation.type,
-                      fileId: value.annotation.file_id,
-                      containerId: value.annotation.container_id
-                    }
-                  }
-                });
-              } else if (value.annotation.type === "file_path") {
-                controller.enqueue({
-                  type: "source",
-                  sourceType: "document",
-                  id: (_N = (_M = (_L = self.config).generateId) == null ? void 0 : _M.call(_L)) != null ? _N : generateId(),
-                  mediaType: "application/octet-stream",
-                  title: value.annotation.file_id,
-                  filename: value.annotation.file_id,
-                  providerMetadata: {
-                    [providerOptionsName]: {
-                      type: value.annotation.type,
-                      fileId: value.annotation.file_id,
-                      index: value.annotation.index
-                    }
-                  }
-                });
-              }
-            } else if (isErrorChunk(value)) {
-              encounteredStreamError = true;
-              finishReason = { unified: "error", raw: "error" };
-              controller.enqueue({ type: "error", error: value });
-            }
-          },
-          flush(controller) {
-            const providerMetadata = {
-              [providerOptionsName]: {
-                responseId,
-                ...logprobs.length > 0 ? { logprobs } : {},
-                ...serviceTier !== void 0 ? { serviceTier } : {},
-                ...reasoningContext !== void 0 ? { reasoningContext } : {}
-              }
-            };
-            controller.enqueue({
-              type: "finish",
-              finishReason,
-              usage: convertOpenAIResponsesUsage(usage),
-              providerMetadata
-            });
-          }
-        })
-      ),
-      request: { body },
-      response: { headers: responseHeaders }
-    };
-    return result;
-  }
-};
-function isTextDeltaChunk(chunk) {
-  return chunk.type === "response.output_text.delta";
-}
-function isOpenAIChatCompletionChunk(value) {
-  const chunk = asRecord2(value);
-  return chunk != null && Array.isArray(chunk.choices) && typeof chunk.type !== "string";
-}
-function createOpenAIResponsesChatCompletionsMismatchError({
-  value,
-  cause,
-  url: url3,
-  requestBodyValues,
-  responseHeaders
-}) {
-  return new APICallError({
-    message: "Received a Chat Completions stream while using the OpenAI Responses API. The default OpenAI provider model uses the Responses API. If your custom baseURL targets a Chat Completions-compatible endpoint, use openai.chat('model-id') or createOpenAI(...).chat('model-id') instead. You can also use @ai-sdk/openai-compatible for OpenAI-compatible providers.",
-    url: url3,
-    requestBodyValues,
-    responseHeaders,
-    responseBody: JSON.stringify(value),
-    cause,
-    data: value,
-    isRetryable: false
-  });
-}
-function asRecord2(value) {
-  return typeof value === "object" && value != null ? value : void 0;
-}
-function isResponseOutputItemDoneChunk(chunk) {
-  return chunk.type === "response.output_item.done";
-}
-function isResponseFinishedChunk(chunk) {
-  return chunk.type === "response.completed" || chunk.type === "response.incomplete";
-}
-function isResponseFailedChunk(chunk) {
-  return chunk.type === "response.failed";
-}
-function isResponseCreatedChunk(chunk) {
-  return chunk.type === "response.created";
-}
-function isResponseFunctionCallArgumentsDeltaChunk(chunk) {
-  return chunk.type === "response.function_call_arguments.delta";
-}
-function isResponseCustomToolCallInputDeltaChunk(chunk) {
-  return chunk.type === "response.custom_tool_call_input.delta";
-}
-function isResponseImageGenerationCallPartialImageChunk(chunk) {
-  return chunk.type === "response.image_generation_call.partial_image";
-}
-function isResponseCodeInterpreterCallCodeDeltaChunk(chunk) {
-  return chunk.type === "response.code_interpreter_call_code.delta";
-}
-function isResponseCodeInterpreterCallCodeDoneChunk(chunk) {
-  return chunk.type === "response.code_interpreter_call_code.done";
-}
-function isResponseApplyPatchCallOperationDiffDeltaChunk(chunk) {
-  return chunk.type === "response.apply_patch_call_operation_diff.delta";
-}
-function isResponseApplyPatchCallOperationDiffDoneChunk(chunk) {
-  return chunk.type === "response.apply_patch_call_operation_diff.done";
-}
-function isResponseOutputItemAddedChunk(chunk) {
-  return chunk.type === "response.output_item.added";
-}
-function isResponseAnnotationAddedChunk(chunk) {
-  return chunk.type === "response.output_text.annotation.added";
-}
-function isErrorChunk(chunk) {
-  return chunk.type === "error";
-}
-function isResponseInProgressChunk(chunk) {
-  return chunk.type === "response.in_progress";
-}
-function isResponseOutputChunk(chunk) {
-  return !(chunk.type === "response.created" || chunk.type === "response.in_progress" || chunk.type === "response.failed" || chunk.type === "error" || chunk.type === "unknown_chunk");
-}
-function mapWebSearchOutput(action) {
-  var _a27;
-  if (action == null) {
-    return {};
-  }
-  switch (action.type) {
-    case "search":
-      return {
-        action: {
-          type: "search",
-          query: (_a27 = action.query) != null ? _a27 : void 0,
-          ...action.queries != null && { queries: action.queries }
-        },
-        // include sources when provided by the Responses API (behind include flag)
-        ...action.sources != null && { sources: action.sources }
-      };
-    case "open_page":
-      return { action: { type: "openPage", url: action.url } };
-    case "find_in_page":
-      return {
-        action: {
-          type: "findInPage",
-          url: action.url,
-          pattern: action.pattern
-        }
-      };
-  }
-}
-function escapeJSONDelta(delta) {
-  return JSON.stringify(delta).slice(1, -1);
-}
-var openaiBatchEndpoint = "/v1/responses";
-var openaiBatchInputFileExpiresAfterSeconds = 48 * 60 * 60;
-var openaiBatchResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string(),
-      status: external_exports.string(),
-      output_file_id: external_exports.string().nullish(),
-      error_file_id: external_exports.string().nullish(),
-      created_at: external_exports.number().nullish(),
-      expires_at: external_exports.number().nullish(),
-      request_counts: external_exports.object({
-        total: external_exports.number().nullish(),
-        completed: external_exports.number().nullish(),
-        failed: external_exports.number().nullish()
-      }).nullish(),
-      errors: external_exports.object({
-        data: external_exports.array(
-          external_exports.object({
-            code: external_exports.string().nullish(),
-            message: external_exports.string().nullish()
-          })
-        ).nullish()
-      }).nullish()
-    })
-  )
-);
-var openaiBatchResultLineSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      custom_id: external_exports.string(),
-      response: external_exports.object({
-        status_code: external_exports.number(),
-        request_id: external_exports.string().nullish(),
-        body: external_exports.unknown()
-      }).nullish(),
-      error: external_exports.object({
-        code: external_exports.string(),
-        message: external_exports.string()
-      }).nullish()
-    })
-  )
-);
-var OpenAIResponsesBatch = class {
-  constructor(options) {
-    this.options = options;
-  }
-  async startBatch(options) {
-    var _a27, _b18, _c, _d;
-    const fileParts = [];
-    const warnings = [];
-    for (const request of options.requests) {
-      const preparedRequest = await this.options.prepareRequest(request);
-      fileParts.push(
-        JSON.stringify({
-          custom_id: request.id,
-          method: "POST",
-          url: openaiBatchEndpoint,
-          body: preparedRequest.body
-        }),
-        "\n"
-      );
-      for (const warning of preparedRequest.warnings) {
-        warnings.push({ requestId: request.id, warning });
-      }
-    }
-    const filename = "batch.jsonl";
-    const file3 = new Blob(fileParts, {
-      type: "application/jsonl"
-    });
-    fileParts.length = 0;
-    const formData = new FormData();
-    formData.append("file", file3, filename);
-    formData.append("purpose", "batch");
-    formData.append("expires_after[anchor]", "created_at");
-    formData.append(
-      "expires_after[seconds]",
-      String(openaiBatchInputFileExpiresAfterSeconds)
-    );
-    const { value: uploadedFile } = await postToApi({
-      url: this.getUrl("/files"),
-      headers: combineHeaders((_b18 = (_a27 = this.options.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
-      body: {
-        content: formData,
-        values: {
-          purpose: "batch",
-          "expires_after[anchor]": "created_at",
-          "expires_after[seconds]": String(
-            openaiBatchInputFileExpiresAfterSeconds
-          ),
-          file: {
-            name: filename,
-            type: file3.type,
-            size: file3.size
-          }
-        }
-      },
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiFilesResponseSchema
-      ),
-      abortSignal: options.abortSignal,
-      fetch: this.options.config.fetch
-    });
-    const { value: batch } = await postJsonToApi({
-      url: this.getUrl("/batches"),
-      headers: combineHeaders((_d = (_c = this.options.config).headers) == null ? void 0 : _d.call(_c), options.headers),
-      body: {
-        input_file_id: uploadedFile.id,
-        endpoint: openaiBatchEndpoint,
-        completion_window: "24h"
-      },
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiBatchResponseSchema
-      ),
-      abortSignal: options.abortSignal,
-      fetch: this.options.config.fetch
-    });
-    return {
-      batchId: batch.id,
-      ...convertOpenAIBatchStatus(batch),
-      warnings
-    };
-  }
-  async getBatchStatus(options) {
-    const batch = await this.retrieveBatch(options);
-    return convertOpenAIBatchStatus(batch);
-  }
-  async getBatchResults(options) {
-    const batch = await this.retrieveBatch(options);
-    if (convertOpenAIBatchStatus(batch).status === "pending") {
-      throw new InvalidArgumentError({
-        argument: "batchId",
-        message: `OpenAI batch "${options.batchId}" is not complete.`
-      });
-    }
-    const fileIds = [batch.output_file_id, batch.error_file_id].filter(
-      (fileId) => fileId != null
-    );
-    const iterator = this.iterateBatchResults({ fileIds, options });
-    return convertAsyncIteratorToReadableStream(iterator);
-  }
-  async retrieveBatch(options) {
-    var _a27, _b18;
-    const { value: batch } = await getFromApi({
-      url: this.getUrl(`/batches/${encodeURIComponent(options.batchId)}`),
-      headers: combineHeaders((_b18 = (_a27 = this.options.config).headers) == null ? void 0 : _b18.call(_a27), options.headers),
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiBatchResponseSchema
-      ),
-      abortSignal: options.abortSignal,
-      fetch: this.options.config.fetch,
-      validateUrl: false
-    });
-    return batch;
-  }
-  async *iterateBatchResults({
-    fileIds,
-    options
-  }) {
-    var _a27, _b18;
-    for (const fileId of fileIds) {
-      const { value: stream2 } = await getFromApi({
-        url: this.getUrl(`/files/${encodeURIComponent(fileId)}/content`),
-        headers: combineHeaders(
-          (_b18 = (_a27 = this.options.config).headers) == null ? void 0 : _b18.call(_a27),
-          options.headers
-        ),
-        failedResponseHandler: openaiFailedResponseHandler,
-        successfulResponseHandler: rawStreamResponseHandler,
-        abortSignal: options.abortSignal,
-        fetch: this.options.config.fetch,
-        validateUrl: false
-      });
-      for await (const line of parseJsonLines(stream2)) {
-        yield await this.convertResultLine(line);
-      }
-    }
-  }
-  async convertResultLine(line) {
-    if (line.error != null) {
-      const error90 = {
-        message: line.error.message,
-        code: line.error.code
-      };
-      if (line.error.code === "batch_cancelled") {
-        return { id: line.custom_id, status: "cancelled", error: error90 };
-      }
-      if (line.error.code === "batch_expired") {
-        return { id: line.custom_id, status: "expired", error: error90 };
-      }
-      return { id: line.custom_id, status: "failed", error: error90 };
-    }
-    if (line.response == null) {
-      return {
-        id: line.custom_id,
-        status: "failed",
-        error: {
-          message: "OpenAI returned a batch result without a response or error.",
-          code: "invalid_batch_result"
-        }
-      };
-    }
-    if (line.response.status_code < 200 || line.response.status_code >= 300) {
-      return {
-        id: line.custom_id,
-        status: "failed",
-        error: await convertOpenAIErrorResponse({
-          body: line.response.body,
-          statusCode: line.response.status_code
-        })
-      };
-    }
-    const conversion = await convertOpenAIResponsesBatchResponse(
-      line.response.body
-    );
-    if (!conversion.success) {
-      return {
-        id: line.custom_id,
-        status: "failed",
-        error: conversion.error
-      };
-    }
-    return {
-      id: line.custom_id,
-      status: "succeeded",
-      result: conversion.result
-    };
-  }
-  getUrl(path) {
-    return this.options.config.url({
-      modelId: this.options.modelId,
-      path
-    });
-  }
-};
-var OpenAIResponsesBatchLanguageModel = class _OpenAIResponsesBatchLanguageModel extends OpenAIResponsesLanguageModel {
-  static [WORKFLOW_SERIALIZE](model) {
-    return OpenAIResponsesLanguageModel[WORKFLOW_SERIALIZE](model);
-  }
-  static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAIResponsesBatchLanguageModel(
-      options.modelId,
-      options.config
-    );
-  }
-  constructor(modelId, config3) {
-    super(modelId, config3);
-    this.batch = new OpenAIResponsesBatch({
-      modelId,
-      config: config3,
-      prepareRequest: async (request) => {
-        const { args: body, warnings } = await this.getArgs(request.options);
-        return { body, warnings };
-      }
-    });
-  }
-  experimental_doStartBatch(options) {
-    return this.batch.startBatch(options);
-  }
-  experimental_doGetBatchStatus(options) {
-    return this.batch.getBatchStatus(options);
-  }
-  experimental_doGetBatchResults(options) {
-    return this.batch.getBatchResults(options);
-  }
-};
-function convertOpenAIBatchStatus(batch) {
-  var _a27, _b18, _c;
-  const status = mapOpenAIBatchStatus(batch.status);
-  const firstError = (_b18 = (_a27 = batch.errors) == null ? void 0 : _a27.data) == null ? void 0 : _b18[0];
-  const requestCounts = convertOpenAIRequestCounts(batch.request_counts);
-  const createdAt = convertUnixTimestamp(batch.created_at);
-  const expiresAt = convertUnixTimestamp(batch.expires_at);
-  return {
-    status,
-    rawStatus: batch.status,
-    ...requestCounts != null ? { requestCounts } : {},
-    ...firstError != null ? {
-      error: {
-        message: (_c = firstError.message) != null ? _c : "OpenAI batch failed.",
-        ...firstError.code != null ? { code: firstError.code } : {}
-      }
-    } : {},
-    ...createdAt != null ? { createdAt } : {},
-    ...expiresAt != null ? { expiresAt } : {}
-  };
-}
-function mapOpenAIBatchStatus(rawStatus) {
-  switch (rawStatus) {
-    case "completed":
-      return "completed";
-    case "failed":
-    case "expired":
-    case "cancelled":
-      return "failed";
-    case "validating":
-    case "in_progress":
-    case "finalizing":
-    case "cancelling":
-    default:
-      return "pending";
-  }
-}
-function convertOpenAIRequestCounts(counts) {
-  const total = counts == null ? void 0 : counts.total;
-  const completed = counts == null ? void 0 : counts.completed;
-  const failed = counts == null ? void 0 : counts.failed;
-  if (total == null || completed == null || failed == null || total < 0 || completed < 0 || failed < 0 || completed + failed > total) {
-    return void 0;
-  }
-  return {
-    total,
-    pending: total - completed - failed,
-    completed,
-    failed
-  };
-}
-function convertUnixTimestamp(value) {
-  if (value == null || !Number.isFinite(value)) {
-    return void 0;
-  }
-  const date9 = new Date(value * 1e3);
-  return Number.isNaN(date9.getTime()) ? void 0 : date9.toISOString();
-}
-async function convertOpenAIErrorResponse({
-  body,
-  statusCode
-}) {
-  var _a27;
-  const result = await safeValidateTypes({
-    value: body,
-    schema: openaiErrorDataSchema
-  });
-  if (!result.success) {
-    return {
-      message: `OpenAI batch request failed with status code ${statusCode}.`,
-      statusCode
-    };
-  }
-  return {
-    message: result.value.error.message,
-    type: (_a27 = result.value.error.type) != null ? _a27 : void 0,
-    code: result.value.error.code != null ? String(result.value.error.code) : void 0,
-    statusCode
-  };
-}
-async function convertOpenAIResponsesBatchResponse(body) {
-  var _a27, _b18, _c, _d, _e;
-  const response = await validateTypes({
-    value: body,
-    schema: openaiResponsesResponseSchema
-  });
-  if (response.error != null) {
-    return {
-      success: false,
-      error: {
-        message: response.error.message,
-        type: response.error.type,
-        code: response.error.code
-      }
-    };
-  }
-  if (response.output == null) {
-    const detail = (_a27 = response.incomplete_details) == null ? void 0 : _a27.reason;
-    return {
-      success: false,
-      error: {
-        message: detail != null ? `OpenAI Responses returned no output (${detail}).` : "OpenAI Responses returned no output.",
-        code: "invalid_response"
-      }
-    };
-  }
-  const content = [];
-  const logprobs = [];
-  for (const part of response.output) {
-    if (part.type === "message") {
-      for (const contentPart of part.content) {
-        content.push({ type: "text", text: contentPart.text });
-        if (contentPart.logprobs != null) {
-          logprobs.push(contentPart.logprobs);
-        }
-      }
-    } else if (part.type === "function_call" || part.type === "custom_tool_call") {
-      return {
-        success: false,
-        error: {
-          message: "OpenAI returned a tool call, but tool calls are not supported in AI SDK text batches.",
-          code: "unsupported_tool_call"
-        }
-      };
-    }
-  }
-  const providerMetadata = {
-    openai: {
-      responseId: response.id,
-      ...logprobs.length > 0 ? { logprobs } : {},
-      ...typeof response.service_tier === "string" ? { serviceTier: response.service_tier } : {},
-      ...((_b18 = response.reasoning) == null ? void 0 : _b18.context) != null ? { reasoningContext: response.reasoning.context } : {}
-    }
-  };
-  return {
-    success: true,
-    result: {
-      content,
-      finishReason: {
-        unified: mapOpenAIResponseFinishReason({
-          finishReason: (_c = response.incomplete_details) == null ? void 0 : _c.reason,
-          hasFunctionCall: false
-        }),
-        raw: (_e = (_d = response.incomplete_details) == null ? void 0 : _d.reason) != null ? _e : void 0
-      },
-      usage: convertOpenAIResponsesUsage(response.usage),
-      response: {
-        id: response.id,
-        timestamp: response.created_at != null ? new Date(response.created_at * 1e3) : void 0,
-        modelId: response.model
-      },
-      providerMetadata,
-      warnings: []
-    }
-  };
-}
-var rawStreamResponseHandler = async ({ response }) => {
-  if (response.body == null) {
-    throw new EmptyResponseBodyError();
-  }
-  return { value: response.body };
-};
-async function* parseJsonLines(stream2) {
-  const reader = stream2.getReader();
-  const decoder2 = new TextDecoder();
-  let buffer = "";
-  let finished = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        finished = true;
-        buffer += decoder2.decode();
-        break;
-      }
-      buffer += decoder2.decode(value, { stream: true });
-      let lineEnd = buffer.indexOf("\n");
-      while (lineEnd !== -1) {
-        const line = buffer.slice(0, lineEnd).replace(/\r$/, "");
-        buffer = buffer.slice(lineEnd + 1);
-        if (line.trim().length > 0) {
-          yield await parseJSON({
-            text: line,
-            schema: openaiBatchResultLineSchema
-          });
-        }
-        lineEnd = buffer.indexOf("\n");
-      }
-    }
-    const finalLine = buffer.replace(/\r$/, "");
-    if (finalLine.trim().length > 0) {
-      yield await parseJSON({
-        text: finalLine,
-        schema: openaiBatchResultLineSchema
-      });
-    }
-  } finally {
-    if (!finished) {
-      await reader.cancel().catch(() => {
-      });
-    }
-    reader.releaseLock();
-  }
-}
-function parseOpenAIRealtimeServerEvent(raw) {
-  var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
-  const event = raw;
-  const type = event.type;
-  switch (type) {
-    // ── Session lifecycle ──────────────────────────────────────────
-    case "session.created":
-      return {
-        type: "session-created",
-        sessionId: (_a27 = event.session) == null ? void 0 : _a27.id,
-        raw
-      };
-    case "session.updated":
-      return { type: "session-updated", raw };
-    // ── Input audio buffer ─────────────────────────────────────────
-    case "input_audio_buffer.speech_started":
-      return {
-        type: "speech-started",
-        itemId: event.item_id,
-        raw
-      };
-    case "input_audio_buffer.speech_stopped":
-      return {
-        type: "speech-stopped",
-        itemId: event.item_id,
-        raw
-      };
-    case "input_audio_buffer.committed":
-      return {
-        type: "audio-committed",
-        itemId: event.item_id,
-        previousItemId: event.previous_item_id,
-        raw
-      };
-    // ── Conversation items ─────────────────────────────────────────
-    case "conversation.item.added":
-      return {
-        type: "conversation-item-added",
-        itemId: (_c = (_b18 = event.item) == null ? void 0 : _b18.id) != null ? _c : event.item_id,
-        item: event.item,
-        raw
-      };
-    case "conversation.item.input_audio_transcription.completed":
-      return {
-        type: "input-transcription-completed",
-        itemId: event.item_id,
-        transcript: (_d = event.transcript) != null ? _d : "",
-        raw
-      };
-    // ── Response lifecycle ──────────────────────────────────────────
-    case "response.created":
-      return {
-        type: "response-created",
-        responseId: (_f = (_e = event.response) == null ? void 0 : _e.id) != null ? _f : event.response_id,
-        raw
-      };
-    case "response.done":
-      return {
-        type: "response-done",
-        responseId: (_h = (_g = event.response) == null ? void 0 : _g.id) != null ? _h : event.response_id,
-        status: (_j = (_i = event.response) == null ? void 0 : _i.status) != null ? _j : "completed",
-        raw
-      };
-    // ── Output item lifecycle ───────────────────────────────────────
-    case "response.output_item.added":
-      return {
-        type: "output-item-added",
-        responseId: event.response_id,
-        itemId: (_l = (_k = event.item) == null ? void 0 : _k.id) != null ? _l : event.item_id,
-        raw
-      };
-    case "response.output_item.done":
-      return {
-        type: "output-item-done",
-        responseId: event.response_id,
-        itemId: (_n = (_m = event.item) == null ? void 0 : _m.id) != null ? _n : event.item_id,
-        raw
-      };
-    case "response.content_part.added":
-      return {
-        type: "content-part-added",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        raw
-      };
-    case "response.content_part.done":
-      return {
-        type: "content-part-done",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        raw
-      };
-    // ── Audio output ────────────────────────────────────────────────
-    case "response.output_audio.delta":
-      return {
-        type: "audio-delta",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        delta: event.delta,
-        raw
-      };
-    case "response.output_audio.done":
-      return {
-        type: "audio-done",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        raw
-      };
-    // ── Audio transcript output ─────────────────────────────────────
-    case "response.output_audio_transcript.delta":
-      return {
-        type: "audio-transcript-delta",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        delta: event.delta,
-        raw
-      };
-    case "response.output_audio_transcript.done":
-      return {
-        type: "audio-transcript-done",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        transcript: event.transcript,
-        raw
-      };
-    // ── Text output ─────────────────────────────────────────────────
-    case "response.output_text.delta":
-      return {
-        type: "text-delta",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        delta: event.delta,
-        raw
-      };
-    case "response.output_text.done":
-      return {
-        type: "text-done",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        text: event.text,
-        raw
-      };
-    // ── Function calling ────────────────────────────────────────────
-    case "response.function_call_arguments.delta":
-      return {
-        type: "function-call-arguments-delta",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        callId: event.call_id,
-        delta: event.delta,
-        raw
-      };
-    case "response.function_call_arguments.done":
-      return {
-        type: "function-call-arguments-done",
-        responseId: event.response_id,
-        itemId: event.item_id,
-        callId: event.call_id,
-        name: event.name,
-        arguments: event.arguments,
-        raw
-      };
-    // ── Error ───────────────────────────────────────────────────────
-    case "error":
-      return {
-        type: "error",
-        message: (_q = (_p = (_o = event.error) == null ? void 0 : _o.message) != null ? _p : event.message) != null ? _q : "Unknown error",
-        code: (_s = (_r = event.error) == null ? void 0 : _r.code) != null ? _s : event.code,
-        raw
-      };
-    // ── Pass-through ────────────────────────────────────────────────
-    default:
-      return { type: "custom", rawType: type, raw };
-  }
-}
-function serializeOpenAIRealtimeClientEvent(event, modelId) {
-  switch (event.type) {
-    case "session-update":
-      return {
-        type: "session.update",
-        session: buildOpenAISessionConfig(event.config, modelId)
-      };
-    case "input-audio-append":
-      return {
-        type: "input_audio_buffer.append",
-        audio: event.audio
-      };
-    case "input-audio-commit":
-      return { type: "input_audio_buffer.commit" };
-    case "input-audio-clear":
-      return { type: "input_audio_buffer.clear" };
-    case "conversation-item-create": {
-      const item = event.item;
-      switch (item.type) {
-        case "text-message":
-          return {
-            type: "conversation.item.create",
-            item: {
-              type: "message",
-              role: item.role,
-              content: [{ type: "input_text", text: item.text }]
-            }
-          };
-        case "audio-message":
-          return {
-            type: "conversation.item.create",
-            item: {
-              type: "message",
-              role: item.role,
-              content: [{ type: "input_audio", audio: item.audio }]
-            }
-          };
-        case "function-call-output":
-          return {
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: item.callId,
-              output: item.output
-            }
-          };
-      }
-      break;
-    }
-    case "conversation-item-truncate":
-      return {
-        type: "conversation.item.truncate",
-        item_id: event.itemId,
-        content_index: event.contentIndex,
-        audio_end_ms: event.audioEndMs
-      };
-    case "response-create":
-      return {
-        type: "response.create",
-        ...event.options != null ? {
-          response: {
-            ...event.options.modalities != null ? { output_modalities: event.options.modalities } : {},
-            ...event.options.instructions != null ? { instructions: event.options.instructions } : {},
-            ...event.options.metadata != null ? { metadata: event.options.metadata } : {}
-          }
-        } : {}
-      };
-    case "response-cancel":
-      return { type: "response.cancel" };
-  }
-}
-function buildOpenAISessionConfig(config3, modelId) {
-  var _a27;
-  const session = {
-    type: "realtime",
-    model: modelId
-  };
-  if (config3.instructions != null) {
-    session.instructions = config3.instructions;
-  }
-  if (config3.outputModalities != null) {
-    session.output_modalities = config3.outputModalities;
-  }
-  const audio = {};
-  if (config3.inputAudioFormat != null || config3.inputAudioTranscription != null || config3.turnDetection != null) {
-    const input = {};
-    if (config3.inputAudioFormat != null) {
-      input.format = {
-        type: config3.inputAudioFormat.type,
-        ...config3.inputAudioFormat.rate != null ? { rate: config3.inputAudioFormat.rate } : {}
-      };
-    }
-    if (config3.turnDetection != null) {
-      if (config3.turnDetection.type === "disabled") {
-        input.turn_detection = null;
-      } else {
-        const td = {
-          type: config3.turnDetection.type === "server-vad" ? "server_vad" : "semantic_vad"
-        };
-        if (config3.turnDetection.threshold != null) {
-          td.threshold = config3.turnDetection.threshold;
-        }
-        if (config3.turnDetection.silenceDurationMs != null) {
-          td.silence_duration_ms = config3.turnDetection.silenceDurationMs;
-        }
-        if (config3.turnDetection.prefixPaddingMs != null) {
-          td.prefix_padding_ms = config3.turnDetection.prefixPaddingMs;
-        }
-        input.turn_detection = td;
-      }
-    }
-    if (config3.inputAudioTranscription != null) {
-      input.transcription = {
-        model: (_a27 = config3.inputAudioTranscription.model) != null ? _a27 : "gpt-realtime-whisper",
-        ...config3.inputAudioTranscription.language != null ? { language: config3.inputAudioTranscription.language } : {},
-        ...config3.inputAudioTranscription.prompt != null ? { prompt: config3.inputAudioTranscription.prompt } : {}
-      };
-    }
-    audio.input = input;
-  }
-  if (config3.outputAudioFormat != null || config3.voice != null) {
-    const output = {};
-    if (config3.outputAudioFormat != null) {
-      output.format = {
-        type: config3.outputAudioFormat.type,
-        ...config3.outputAudioFormat.rate != null ? { rate: config3.outputAudioFormat.rate } : {}
-      };
-    }
-    if (config3.voice != null) {
-      output.voice = config3.voice;
-    }
-    audio.output = output;
-  }
-  if (Object.keys(audio).length > 0) {
-    session.audio = audio;
-  }
-  if (config3.tools != null && config3.tools.length > 0) {
-    session.tools = config3.tools.map((tool2) => ({
-      type: tool2.type,
-      name: tool2.name,
-      description: tool2.description,
-      parameters: tool2.parameters
-    }));
-    session.tool_choice = "auto";
-  }
-  if (config3.providerOptions != null) {
-    Object.assign(session, config3.providerOptions);
-  }
-  return session;
-}
-var OpenAIRealtimeModel = class {
-  constructor(modelId, config3) {
-    this.specificationVersion = "v4";
-    this.modelId = modelId;
-    this.provider = config3.provider;
-    this.config = config3;
-  }
-  async doCreateClientSecret(options) {
-    var _a27;
-    const fetchFn = (_a27 = this.config.fetch) != null ? _a27 : fetch;
-    const url3 = `${this.config.baseURL}/realtime/client_secrets`;
-    const session = options.sessionConfig != null ? buildOpenAISessionConfig(options.sessionConfig, this.modelId) : { type: "realtime", model: this.modelId };
-    const response = await fetchFn(url3, {
-      method: "POST",
-      headers: {
-        ...this.config.headers(),
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        session,
-        ...options.expiresAfterSeconds != null ? {
-          // `anchor` is required by the client secrets endpoint; without it
-          // the request fails with "Missing required parameter:
-          // 'expires_after.anchor'".
-          expires_after: {
-            anchor: "created_at",
-            seconds: options.expiresAfterSeconds
-          }
-        } : {}
-      })
-    });
-    if (!response.ok) {
-      const text2 = await response.text();
-      throw new Error(
-        `OpenAI realtime client secret request failed: ${response.status} ${text2}`
-      );
-    }
-    const data = await response.json();
-    return {
-      token: data.value,
-      url: `wss://${new URL(this.config.baseURL).host}/v1/realtime?model=${encodeURIComponent(this.modelId)}`,
-      expiresAt: data.expires_at
-    };
-  }
-  getWebSocketConfig(options) {
-    return {
-      url: options.url,
-      protocols: ["realtime", `openai-insecure-api-key.${options.token}`]
-    };
-  }
-  parseServerEvent(raw) {
-    return parseOpenAIRealtimeServerEvent(raw);
-  }
-  serializeClientEvent(event) {
-    return serializeOpenAIRealtimeClientEvent(event, this.modelId);
-  }
-  buildSessionConfig(config3) {
-    return buildOpenAISessionConfig(config3, this.modelId);
-  }
-};
-var openaiSpeechModelOptionsSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      instructions: external_exports.string().nullish(),
-      speed: external_exports.number().min(0.25).max(4).default(1).nullish()
-    })
-  )
-);
-var OpenAISpeechModel = class _OpenAISpeechModel {
-  constructor(modelId, config3) {
-    this.modelId = modelId;
-    this.config = config3;
-    this.specificationVersion = "v4";
-  }
-  static [WORKFLOW_SERIALIZE](model) {
-    return serializeModelOptions({
-      modelId: model.modelId,
-      config: model.config
-    });
-  }
-  static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAISpeechModel(options.modelId, options.config);
-  }
-  get provider() {
-    return this.config.provider;
-  }
-  async getArgs({
-    text: text2,
-    voice = "alloy",
-    outputFormat = "mp3",
-    speed,
-    instructions,
-    language,
-    providerOptions
-  }) {
-    const warnings = [];
-    const openAIOptions = await parseProviderOptions({
-      provider: "openai",
-      providerOptions,
-      schema: openaiSpeechModelOptionsSchema
-    });
-    const requestBody = {
-      model: this.modelId,
-      input: text2,
-      voice,
-      response_format: "mp3",
-      speed,
-      instructions
-    };
-    if (outputFormat) {
-      if (["mp3", "opus", "aac", "flac", "wav", "pcm"].includes(outputFormat)) {
-        requestBody.response_format = outputFormat;
-      } else {
-        warnings.push({
-          type: "unsupported",
-          feature: "outputFormat",
-          details: `Unsupported output format: ${outputFormat}. Using mp3 instead.`
-        });
-      }
-    }
-    if (openAIOptions) {
-      const speechModelOptions = {};
-      for (const key in speechModelOptions) {
-        const value = speechModelOptions[key];
-        if (value !== void 0) {
-          requestBody[key] = value;
-        }
-      }
-    }
-    if (language) {
-      warnings.push({
-        type: "unsupported",
-        feature: "language",
-        details: `OpenAI speech models do not support language selection. Language parameter "${language}" was ignored.`
-      });
-    }
-    return {
-      requestBody,
-      warnings
-    };
-  }
-  async doGenerate(options) {
-    var _a27, _b18, _c, _d, _e;
-    const currentDate = (_c = (_b18 = (_a27 = this.config._internal) == null ? void 0 : _a27.currentDate) == null ? void 0 : _b18.call(_a27)) != null ? _c : /* @__PURE__ */ new Date();
-    const { requestBody, warnings } = await this.getArgs(options);
-    const {
-      value: audio,
-      responseHeaders,
-      rawValue: rawResponse
-    } = await postJsonToApi({
-      url: this.config.url({
-        path: "/audio/speech",
-        modelId: this.modelId
-      }),
-      headers: combineHeaders((_e = (_d = this.config).headers) == null ? void 0 : _e.call(_d), options.headers),
-      body: requestBody,
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createBinaryResponseHandler(),
-      abortSignal: options.abortSignal,
-      fetch: this.config.fetch
-    });
-    return {
-      audio,
-      warnings,
-      request: {
-        body: JSON.stringify(requestBody)
-      },
-      response: {
-        timestamp: currentDate,
-        modelId: this.modelId,
-        headers: responseHeaders,
-        body: rawResponse
-      }
-    };
-  }
-};
-var openaiTranscriptionResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      text: external_exports.string(),
-      language: external_exports.string().nullish(),
-      duration: external_exports.number().nullish(),
-      words: external_exports.array(
-        external_exports.object({
-          word: external_exports.string(),
-          start: external_exports.number(),
-          end: external_exports.number()
-        })
-      ).nullish(),
-      segments: external_exports.array(
-        external_exports.object({
-          id: external_exports.number(),
-          seek: external_exports.number(),
-          start: external_exports.number(),
-          end: external_exports.number(),
-          text: external_exports.string(),
-          tokens: external_exports.array(external_exports.number()),
-          temperature: external_exports.number(),
-          avg_logprob: external_exports.number(),
-          compression_ratio: external_exports.number(),
-          no_speech_prob: external_exports.number()
-        })
-      ).nullish()
-    })
-  )
-);
-var openAITranscriptionModelOptions = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      /**
-       * Additional information to include in the transcription response.
-       */
-      include: external_exports.array(external_exports.string()).optional(),
-      /**
-       * The language of the input audio in ISO-639-1 format.
-       */
-      language: external_exports.string().optional(),
-      /**
-       * An optional text to guide the model's style or continue a previous audio segment.
-       */
-      prompt: external_exports.string().optional(),
-      /**
-       * The sampling temperature, between 0 and 1.
-       * @default 0
-       */
-      temperature: external_exports.number().min(0).max(1).default(0).optional(),
-      /**
-       * The timestamp granularities to populate for this transcription.
-       * @default ['segment']
-       */
-      timestampGranularities: external_exports.array(external_exports.enum(["word", "segment"])).default(["segment"]).optional(),
-      /**
-       * Options for streaming transcription models such as `gpt-realtime-whisper`.
-       */
-      streaming: external_exports.object({
-        /**
-         * Latency/accuracy tradeoff for realtime transcription.
-         */
-        delay: external_exports.enum(["minimal", "low", "medium", "high", "xhigh"]).optional(),
-        /**
-         * Additional fields to include in realtime transcription events.
-         */
-        include: external_exports.array(external_exports.string()).optional()
-      }).optional()
-    })
-  )
-);
-function isRealtimeTranscriptionModelId(modelId) {
-  return modelId === "gpt-realtime-whisper" || modelId.startsWith("gpt-realtime-whisper-");
-}
-var languageMap = {
-  afrikaans: "af",
-  arabic: "ar",
-  armenian: "hy",
-  azerbaijani: "az",
-  belarusian: "be",
-  bosnian: "bs",
-  bulgarian: "bg",
-  catalan: "ca",
-  chinese: "zh",
-  croatian: "hr",
-  czech: "cs",
-  danish: "da",
-  dutch: "nl",
-  english: "en",
-  estonian: "et",
-  finnish: "fi",
-  french: "fr",
-  galician: "gl",
-  german: "de",
-  greek: "el",
-  hebrew: "he",
-  hindi: "hi",
-  hungarian: "hu",
-  icelandic: "is",
-  indonesian: "id",
-  italian: "it",
-  japanese: "ja",
-  kannada: "kn",
-  kazakh: "kk",
-  korean: "ko",
-  latvian: "lv",
-  lithuanian: "lt",
-  macedonian: "mk",
-  malay: "ms",
-  marathi: "mr",
-  maori: "mi",
-  nepali: "ne",
-  norwegian: "no",
-  persian: "fa",
-  polish: "pl",
-  portuguese: "pt",
-  romanian: "ro",
-  russian: "ru",
-  serbian: "sr",
-  slovak: "sk",
-  slovenian: "sl",
-  spanish: "es",
-  swahili: "sw",
-  swedish: "sv",
-  tagalog: "tl",
-  tamil: "ta",
-  thai: "th",
-  turkish: "tr",
-  ukrainian: "uk",
-  urdu: "ur",
-  vietnamese: "vi",
-  welsh: "cy"
-};
-var OpenAITranscriptionModel = class _OpenAITranscriptionModel {
-  constructor(modelId, config3) {
-    this.modelId = modelId;
-    this.config = config3;
-    this.specificationVersion = "v4";
-  }
-  static [WORKFLOW_SERIALIZE](model) {
-    return serializeModelOptions({
-      modelId: model.modelId,
-      config: model.config
-    });
-  }
-  static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAITranscriptionModel(options.modelId, options.config);
-  }
-  get provider() {
-    return this.config.provider;
-  }
-  async getArgs({
-    audio,
-    mediaType,
-    providerOptions
-  }) {
-    const warnings = [];
-    const openAIOptions = await parseProviderOptions({
-      provider: "openai",
-      providerOptions,
-      schema: openAITranscriptionModelOptions
-    });
-    const formData = new FormData();
-    const blob = audio instanceof Uint8Array ? new Blob([audio]) : new Blob([convertBase64ToUint8Array(audio)]);
-    formData.append("model", this.modelId);
-    const fileExtension = mediaTypeToExtension(mediaType);
-    formData.append(
-      "file",
-      new File([blob], "audio", { type: mediaType }),
-      `audio.${fileExtension}`
-    );
-    if (this.modelId === "whisper-1") {
-      formData.append("response_format", "verbose_json");
-    }
-    if (openAIOptions) {
-      const isGpt4oTranscribeModel = [
-        "gpt-4o-transcribe",
-        "gpt-4o-mini-transcribe"
-      ].includes(this.modelId);
-      const transcriptionModelOptions = {
-        include: openAIOptions.include,
-        language: openAIOptions.language,
-        prompt: openAIOptions.prompt,
-        // https://platform.openai.com/docs/api-reference/audio/createTranscription#audio_createtranscription-response_format
-        // prefer verbose_json to get segments for models that support it
-        ...this.modelId !== "whisper-1" && {
-          response_format: isGpt4oTranscribeModel ? "json" : "verbose_json"
-        },
-        temperature: openAIOptions.temperature,
-        timestamp_granularities: openAIOptions.timestampGranularities
-      };
-      for (const [key, value] of Object.entries(transcriptionModelOptions)) {
-        if (value != null) {
-          if (Array.isArray(value)) {
-            for (const item of value) {
-              formData.append(`${key}[]`, String(item));
-            }
-          } else {
-            formData.append(key, String(value));
-          }
-        }
-      }
-    }
-    return {
-      formData,
-      warnings
-    };
-  }
-  async doGenerate(options) {
-    var _a27, _b18, _c, _d, _e, _f, _g, _h, _i, _j;
-    if (isRealtimeTranscriptionModelId(this.modelId)) {
-      throw new UnsupportedFunctionalityError({
-        functionality: `non-streaming transcription with ${this.modelId}`
-      });
-    }
-    const currentDate = (_c = (_b18 = (_a27 = this.config._internal) == null ? void 0 : _a27.currentDate) == null ? void 0 : _b18.call(_a27)) != null ? _c : /* @__PURE__ */ new Date();
-    const { formData, warnings } = await this.getArgs(options);
-    const {
-      value: response,
-      responseHeaders,
-      rawValue: rawResponse
-    } = await postFormDataToApi({
-      url: this.config.url({
-        path: "/audio/transcriptions",
-        modelId: this.modelId
-      }),
-      headers: combineHeaders((_e = (_d = this.config).headers) == null ? void 0 : _e.call(_d), options.headers),
-      formData,
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiTranscriptionResponseSchema
-      ),
-      abortSignal: options.abortSignal,
-      fetch: this.config.fetch
-    });
-    const language = response.language != null && response.language in languageMap ? languageMap[response.language] : void 0;
-    return {
-      text: response.text,
-      segments: (_i = (_h = (_f = response.segments) == null ? void 0 : _f.map((segment) => ({
-        text: segment.text,
-        startSecond: segment.start,
-        endSecond: segment.end
-      }))) != null ? _h : (_g = response.words) == null ? void 0 : _g.map((word) => ({
-        text: word.word,
-        startSecond: word.start,
-        endSecond: word.end
-      }))) != null ? _i : [],
-      language,
-      durationInSeconds: (_j = response.duration) != null ? _j : void 0,
-      warnings,
-      response: {
-        timestamp: currentDate,
-        modelId: this.modelId,
-        headers: responseHeaders,
-        body: rawResponse
-      }
-    };
-  }
-  async doStream(options) {
-    var _a27, _b18, _c, _d, _e, _f, _g;
-    if (!isRealtimeTranscriptionModelId(this.modelId)) {
-      throw new UnsupportedFunctionalityError({
-        functionality: `streaming transcription with ${this.modelId}`
-      });
-    }
-    const currentDate = (_c = (_b18 = (_a27 = this.config._internal) == null ? void 0 : _a27.currentDate) == null ? void 0 : _b18.call(_a27)) != null ? _c : /* @__PURE__ */ new Date();
-    const openAIOptions = await parseProviderOptions({
-      provider: "openai",
-      providerOptions: options.providerOptions,
-      schema: openAITranscriptionModelOptions
-    });
-    const warnings = [];
-    const rawOpenAIOptions = (_e = (_d = options.providerOptions) == null ? void 0 : _d.openai) != null ? _e : {};
-    for (const option of [
-      "include",
-      "prompt",
-      "temperature",
-      "timestampGranularities"
-    ]) {
-      if (rawOpenAIOptions[option] != null) {
-        warnings.push({
-          type: "unsupported",
-          feature: `providerOptions.openai.${option}`,
-          details: `OpenAI streaming transcription does not support ${option}.`
-        });
-      }
-    }
-    const headers = combineHeaders((_g = (_f = this.config).headers) == null ? void 0 : _g.call(_f), options.headers);
-    const sessionUpdate = buildOpenAIRealtimeTranscriptionSession({
-      modelId: this.modelId,
-      inputAudioFormat: options.inputAudioFormat,
-      providerOptions: openAIOptions
-    });
-    return {
-      request: { body: sessionUpdate },
-      response: {
-        timestamp: currentDate,
-        modelId: this.modelId
-      },
-      stream: createOpenAIRealtimeTranscriptionStream({
-        webSocket: this.config.webSocket,
-        url: toWebSocketUrl(
-          this.config.url({
-            path: "/realtime?intent=transcription",
-            modelId: this.modelId
-          })
-        ),
-        headers,
-        sessionUpdate,
-        language: openAIOptions == null ? void 0 : openAIOptions.language,
-        warnings,
-        audio: options.audio,
-        abortSignal: options.abortSignal,
-        includeRawChunks: options.includeRawChunks
-      })
-    };
-  }
-};
-function createOpenAIRealtimeTranscriptionStream({
-  webSocket,
-  url: url3,
-  headers,
-  sessionUpdate,
-  language,
-  warnings,
-  audio,
-  abortSignal,
-  includeRawChunks
-}) {
-  let finished = false;
-  let cleanup = () => {
-  };
-  return new ReadableStream({
-    start: (controller) => {
-      const realtimeConnection = getOpenAIRealtimeConnection(headers);
-      let audioReader;
-      let connection;
-      cleanup = (closeCode) => {
-        if (audioReader != null) {
-          void audioReader.cancel().catch(() => {
-          });
-        } else {
-          void audio.cancel().catch(() => {
-          });
-        }
-        connection == null ? void 0 : connection.close(closeCode);
-      };
-      const finishWithError = (error90) => {
-        if (finished) return;
-        finished = true;
-        cleanup();
-        controller.error(error90);
-      };
-      const finish = (text2, id) => {
-        if (finished) return;
-        finished = true;
-        if (id != null) {
-          controller.enqueue({ type: "transcript-final", id, text: text2 });
-        }
-        controller.enqueue({
-          type: "finish",
-          text: text2,
-          segments: [],
-          language
-        });
-        controller.close();
-        cleanup(1e3);
-      };
-      const sendAudio = async (socket) => {
-        audioReader = audio.getReader();
-        try {
-          while (true) {
-            const { done, value } = await audioReader.read();
-            if (done || finished) break;
-            socket.send(
-              JSON.stringify({
-                type: "input_audio_buffer.append",
-                audio: convertToBase64(value)
-              })
-            );
-            await waitForWebSocketBufferDrain(socket);
-          }
-        } finally {
-          audioReader.releaseLock();
-          audioReader = void 0;
-        }
-        if (!finished) {
-          socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-        }
-      };
-      connection = connectToWebSocket({
-        url: url3,
-        protocols: realtimeConnection.protocols,
-        headers: realtimeConnection.headers,
-        webSocket,
-        abortSignal,
-        onAbort: finishWithError,
-        onProcessingError: finishWithError,
-        onOpen: (socket) => {
-          controller.enqueue({ type: "stream-start", warnings });
-          socket.send(JSON.stringify(sessionUpdate));
-          void sendAudio(socket).catch(finishWithError);
-        },
-        onMessageText: async (text2) => {
-          var _a27, _b18, _c, _d;
-          const parsed = await safeParseJSON({ text: text2 });
-          if (!parsed.success) return;
-          const raw = parsed.value;
-          if (includeRawChunks) {
-            controller.enqueue({ type: "raw", rawValue: raw });
-          }
-          switch (raw.type) {
-            case "conversation.item.input_audio_transcription.delta": {
-              controller.enqueue({
-                type: "transcript-delta",
-                id: raw.item_id,
-                delta: (_a27 = raw.delta) != null ? _a27 : ""
-              });
-              break;
-            }
-            case "conversation.item.input_audio_transcription.completed": {
-              finish((_b18 = raw.transcript) != null ? _b18 : "", raw.item_id);
-              break;
-            }
-            case "error": {
-              finishWithError(
-                new Error((_d = (_c = raw.error) == null ? void 0 : _c.message) != null ? _d : "OpenAI realtime error")
-              );
-              break;
-            }
-          }
-        },
-        onSocketError: () => {
-          finishWithError(new Error("OpenAI realtime transcription error"));
-        },
-        onClose: () => {
-          if (finished) return;
-          finished = true;
-          cleanup();
-          controller.close();
-        }
-      });
-    },
-    cancel: () => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-    }
-  });
-}
-function buildOpenAIRealtimeTranscriptionSession({
-  modelId,
-  inputAudioFormat,
-  providerOptions
-}) {
-  var _a27, _b18;
-  return {
-    type: "session.update",
-    session: {
-      type: "transcription",
-      audio: {
-        input: {
-          format: {
-            type: inputAudioFormat.type,
-            ...inputAudioFormat.rate != null ? { rate: inputAudioFormat.rate } : {}
-          },
-          transcription: {
-            model: modelId,
-            ...(providerOptions == null ? void 0 : providerOptions.language) != null ? { language: providerOptions.language } : {},
-            ...((_a27 = providerOptions == null ? void 0 : providerOptions.streaming) == null ? void 0 : _a27.delay) != null ? { delay: providerOptions.streaming.delay } : {}
-          },
-          turn_detection: null
-        }
-      },
-      ...((_b18 = providerOptions == null ? void 0 : providerOptions.streaming) == null ? void 0 : _b18.include) != null ? { include: providerOptions.streaming.include } : {}
-    }
-  };
-}
-function getOpenAIRealtimeConnection(headers) {
-  var _a27;
-  let authorization;
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === "authorization" && value != null) {
-      authorization = value;
-    }
-  }
-  const token = (_a27 = authorization == null ? void 0 : authorization.match(/^bearer\s+(.+)$/i)) == null ? void 0 : _a27[1];
-  if (token == null) {
-    return { protocols: ["realtime"], headers };
-  }
-  return {
-    protocols: ["realtime", `openai-insecure-api-key.${token}`],
-    headers: Object.fromEntries(
-      Object.entries(headers).filter(
-        ([key]) => key.toLowerCase() !== "authorization"
-      )
-    )
-  };
-}
-var openAISpeechTranslationModelOptions = lazySchema(
-  () => zodSchema(external_exports.object({}))
-);
-var OpenAISpeechTranslationModel = class _OpenAISpeechTranslationModel {
-  constructor(modelId, config3) {
-    this.modelId = modelId;
-    this.config = config3;
-    this.specificationVersion = "v4";
-  }
-  static [WORKFLOW_SERIALIZE](model) {
-    return serializeModelOptions({
-      modelId: model.modelId,
-      config: model.config
-    });
-  }
-  static [WORKFLOW_DESERIALIZE](options) {
-    return new _OpenAISpeechTranslationModel(options.modelId, options.config);
-  }
-  get provider() {
-    return this.config.provider;
-  }
-  async doStream(options) {
-    var _a27, _b18, _c, _d, _e;
-    if (options.targetLanguage == null) {
-      throw new InvalidArgumentError({
-        argument: "targetLanguage",
-        message: `targetLanguage is required for translation model '${this.modelId}'.`
-      });
-    }
-    const currentDate = (_c = (_b18 = (_a27 = this.config._internal) == null ? void 0 : _a27.currentDate) == null ? void 0 : _b18.call(_a27)) != null ? _c : /* @__PURE__ */ new Date();
-    await parseProviderOptions({
-      provider: "openai",
-      providerOptions: options.providerOptions,
-      schema: openAISpeechTranslationModelOptions
-    });
-    const warnings = [];
-    validateOpenAISpeechTranslationInputAudioFormat(options.inputAudioFormat);
-    if (options.sourceLanguage != null) {
-      warnings.push({
-        type: "unsupported",
-        feature: "sourceLanguage",
-        details: "The OpenAI Realtime translation API auto-detects the source language and does not accept a source language."
-      });
-    }
-    if (options.outputAudioFormat != null) {
-      warnings.push({
-        type: "unsupported",
-        feature: "outputAudioFormat",
-        details: "The OpenAI Realtime translation API always outputs 24kHz 16-bit PCM audio and does not accept an output audio format."
-      });
-    }
-    const headers = combineHeaders((_e = (_d = this.config).headers) == null ? void 0 : _e.call(_d), options.headers);
-    const sessionUpdate = buildOpenAIRealtimeSpeechTranslationSession({
-      targetLanguage: options.targetLanguage
-    });
-    return {
-      request: { body: sessionUpdate },
-      response: {
-        timestamp: currentDate,
-        modelId: this.modelId
-      },
-      stream: createOpenAIRealtimeSpeechTranslationStream({
-        webSocket: this.config.webSocket,
-        url: toWebSocketUrl(
-          this.config.url({
-            path: `/realtime/translations?model=${encodeURIComponent(this.modelId)}`,
-            modelId: this.modelId
-          })
-        ),
-        headers,
-        sessionUpdate,
-        warnings,
-        audio: options.audio,
-        abortSignal: options.abortSignal,
-        includeRawChunks: options.includeRawChunks
-      })
-    };
-  }
-};
-function createOpenAIRealtimeSpeechTranslationStream({
-  webSocket,
-  url: url3,
-  headers,
-  sessionUpdate,
-  warnings,
-  audio,
-  abortSignal,
-  includeRawChunks
-}) {
-  let finished = false;
-  let cleanup = () => {
-  };
-  return new ReadableStream({
-    start: (controller) => {
-      const realtimeConnection = getOpenAIRealtimeConnection2(headers);
-      let audioReader;
-      let connection;
-      let sourceText = "";
-      let translationText = "";
-      cleanup = (closeCode) => {
-        if (audioReader != null) {
-          void audioReader.cancel().catch(() => {
-          });
-        } else {
-          void audio.cancel().catch(() => {
-          });
-        }
-        connection == null ? void 0 : connection.close(closeCode);
-      };
-      const finishWithError = (error90) => {
-        if (finished) return;
-        finished = true;
-        cleanup();
-        controller.error(error90);
-      };
-      const finish = () => {
-        if (finished) return;
-        finished = true;
-        if (sourceText !== "") {
-          controller.enqueue({
-            type: "source-transcript-final",
-            text: sourceText
-          });
-        }
-        if (translationText !== "") {
-          controller.enqueue({
-            type: "output-text-final",
-            text: translationText
-          });
-        }
-        controller.enqueue({
-          type: "finish",
-          sourceText,
-          outputText: translationText,
-          usage: void 0
-        });
-        controller.close();
-        cleanup(1e3);
-      };
-      const sendAudio = async (socket) => {
-        audioReader = audio.getReader();
-        try {
-          while (true) {
-            const { done, value } = await audioReader.read();
-            if (done || finished) break;
-            socket.send(
-              JSON.stringify({
-                type: "session.input_audio_buffer.append",
-                audio: convertToBase64(value)
-              })
-            );
-            await waitForWebSocketBufferDrain(socket);
-          }
-        } finally {
-          audioReader.releaseLock();
-          audioReader = void 0;
-        }
-        if (!finished) {
-          socket.send(JSON.stringify({ type: "session.close" }));
-        }
-      };
-      connection = connectToWebSocket({
-        url: url3,
-        protocols: realtimeConnection.protocols,
-        headers: realtimeConnection.headers,
-        webSocket,
-        abortSignal,
-        onAbort: finishWithError,
-        onProcessingError: finishWithError,
-        onOpen: (socket) => {
-          controller.enqueue({ type: "stream-start", warnings });
-          socket.send(JSON.stringify(sessionUpdate));
-          void sendAudio(socket).catch(finishWithError);
-        },
-        onMessageText: async (text2) => {
-          var _a27, _b18, _c, _d, _e, _f;
-          if (finished) return;
-          const parsed = await safeParseJSON({ text: text2 });
-          if (!parsed.success) return;
-          const raw = parsed.value;
-          if (includeRawChunks) {
-            controller.enqueue({ type: "raw", rawValue: raw });
-          }
-          switch (raw.type) {
-            case "session.output_audio.delta": {
-              if (raw.delta) {
-                controller.enqueue({
-                  type: "audio",
-                  audio: raw.delta
-                });
-              }
-              break;
-            }
-            case "session.output_transcript.delta": {
-              translationText += (_a27 = raw.delta) != null ? _a27 : "";
-              controller.enqueue({
-                type: "output-text-delta",
-                delta: (_b18 = raw.delta) != null ? _b18 : ""
-              });
-              break;
-            }
-            case "session.input_transcript.delta": {
-              sourceText += (_c = raw.delta) != null ? _c : "";
-              controller.enqueue({
-                type: "source-transcript-delta",
-                delta: (_d = raw.delta) != null ? _d : ""
-              });
-              break;
-            }
-            case "session.closed": {
-              finish();
-              break;
-            }
-            case "error": {
-              controller.enqueue({
-                type: "error",
-                error: new Error((_f = (_e = raw.error) == null ? void 0 : _e.message) != null ? _f : "OpenAI realtime error")
-              });
-              break;
-            }
-          }
-        },
-        onSocketError: () => {
-          finishWithError(new Error("OpenAI realtime translation error"));
-        },
-        onClose: ({ code, reason }) => {
-          if (finished) return;
-          finishWithError(
-            new Error(
-              `OpenAI realtime translation WebSocket closed unexpectedly before finishing (code ${code != null ? code : "unknown"}${reason ? `, reason: ${reason}` : ""}).`
-            )
-          );
-        }
-      });
-    },
-    cancel: () => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-    }
-  });
-}
-function buildOpenAIRealtimeSpeechTranslationSession({
-  targetLanguage
-}) {
-  return {
-    type: "session.update",
-    session: {
-      audio: {
-        input: {
-          transcription: {
-            model: "gpt-realtime-whisper"
-          },
-          noise_reduction: null
-        },
-        output: {
-          language: targetLanguage
-        }
-      }
-    }
-  };
-}
-function validateOpenAISpeechTranslationInputAudioFormat(inputAudioFormat) {
-  if (inputAudioFormat.type !== "audio/pcm" || inputAudioFormat.rate != null && inputAudioFormat.rate !== 24e3) {
-    throw new InvalidArgumentError({
-      argument: "inputAudioFormat",
-      message: "The OpenAI Realtime translation API only supports 24kHz 16-bit PCM input audio."
-    });
-  }
-}
-function getOpenAIRealtimeConnection2(headers) {
-  var _a27;
-  let authorization;
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === "authorization" && value != null) {
-      authorization = value;
-    }
-  }
-  const token = (_a27 = authorization == null ? void 0 : authorization.match(/^bearer\s+(.+)$/i)) == null ? void 0 : _a27[1];
-  if (token == null) {
-    return { protocols: ["realtime"], headers };
-  }
-  return {
-    protocols: ["realtime", `openai-insecure-api-key.${token}`],
-    headers: Object.fromEntries(
-      Object.entries(headers).filter(
-        ([key]) => key.toLowerCase() !== "authorization"
-      )
-    )
-  };
-}
-var openaiSkillResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string(),
-      name: external_exports.string().nullish(),
-      description: external_exports.string().nullish(),
-      default_version: external_exports.string().nullish(),
-      latest_version: external_exports.string().nullish(),
-      created_at: external_exports.number(),
-      updated_at: external_exports.number().nullish()
-    })
-  )
-);
-var openaiSkillVersionResponseSchema = lazySchema(
-  () => zodSchema(
-    external_exports.object({
-      id: external_exports.string(),
-      version: external_exports.string().nullish(),
-      name: external_exports.string().nullish(),
-      description: external_exports.string().nullish()
-    })
-  )
-);
-var OpenAISkills = class {
-  constructor(config3) {
-    this.config = config3;
-    this.specificationVersion = "v4";
-  }
-  get provider() {
-    return this.config.provider;
-  }
-  async uploadSkill(params) {
-    const warnings = [];
-    if (params.displayTitle != null) {
-      warnings.push({
-        type: "unsupported",
-        feature: "displayTitle"
-      });
-    }
-    const formData = new FormData();
-    for (const file3 of params.files) {
-      const content = convertInlineFileDataToUint8Array(file3.data);
-      formData.append("files[]", new Blob([content]), file3.path);
-    }
-    const { value: response } = await postFormDataToApi({
-      url: this.config.url({ path: "/skills" }),
-      headers: combineHeaders(this.config.headers()),
-      formData,
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createJsonResponseHandler(
-        openaiSkillResponseSchema
-      ),
-      fetch: this.config.fetch
-    });
-    return {
-      providerReference: { openai: response.id },
-      ...response.name != null ? { name: response.name } : {},
-      ...response.description != null ? { description: response.description } : {},
-      ...response.latest_version != null ? { latestVersion: response.latest_version } : {},
-      providerMetadata: {
-        openai: {
-          ...response.default_version != null ? { defaultVersion: response.default_version } : {},
-          ...response.created_at != null ? { createdAt: response.created_at } : {},
-          ...response.updated_at != null ? { updatedAt: response.updated_at } : {}
-        }
-      },
-      warnings
-    };
-  }
-};
-var VERSION2 = true ? "4.0.42" : "0.0.0-test";
-function createOpenAI(options = {}) {
-  var _a27, _b18;
-  const baseURL = (_a27 = withoutTrailingSlash(
-    validateBaseURL(
-      loadOptionalSetting({
-        settingValue: options.baseURL,
-        environmentVariableName: "OPENAI_BASE_URL"
-      })
-    )
-  )) != null ? _a27 : "https://api.openai.com/v1";
-  const providerName = (_b18 = options.name) != null ? _b18 : "openai";
-  const getHeaders = () => withUserAgentSuffix(
-    {
-      Authorization: `Bearer ${loadApiKey({
-        apiKey: options.apiKey,
-        environmentVariableName: "OPENAI_API_KEY",
-        description: "OpenAI"
-      })}`,
-      "OpenAI-Organization": options.organization,
-      "OpenAI-Project": options.project,
-      ...options.headers
-    },
-    `ai-sdk/openai/${VERSION2}`
-  );
-  const createChatModel = (modelId) => new OpenAIChatLanguageModel(modelId, {
-    provider: `${providerName}.chat`,
-    url: ({ path }) => `${baseURL}${path}`,
     headers: getHeaders,
     fetch: options.fetch
   });
-  const createCompletionModel = (modelId) => new OpenAICompletionLanguageModel(modelId, {
-    provider: `${providerName}.completion`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch
+  const createLanguageModel = (modelId) => createChatModel(modelId);
+  const createChatModel = (modelId) => new OpenAICompatibleChatLanguageModel(modelId, {
+    ...getCommonModelConfig("chat"),
+    includeUsage: options.includeUsage,
+    supportsStructuredOutputs: options.supportsStructuredOutputs,
+    supportedUrls: options.supportedUrls,
+    transformRequestBody: options.transformRequestBody,
+    metadataExtractor: options.metadataExtractor,
+    convertUsage: options.convertUsage
   });
-  const createEmbeddingModel = (modelId) => new OpenAIEmbeddingModel(modelId, {
-    provider: `${providerName}.embedding`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch
+  const createCompletionModel = (modelId) => new OpenAICompatibleCompletionLanguageModel(modelId, {
+    ...getCommonModelConfig("completion"),
+    includeUsage: options.includeUsage
   });
-  const createImageModel = (modelId) => new OpenAIImageModel(modelId, {
-    provider: `${providerName}.image`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch
+  const createEmbeddingModel = (modelId) => new OpenAICompatibleEmbeddingModel(modelId, {
+    ...getCommonModelConfig("embedding")
   });
-  const createTranscriptionModel = (modelId) => new OpenAITranscriptionModel(modelId, {
-    provider: `${providerName}.transcription`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch,
-    webSocket: options.webSocket
-  });
-  const createSpeechTranslationModel = (modelId) => new OpenAISpeechTranslationModel(modelId, {
-    provider: `${providerName}.speech-translation`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch,
-    webSocket: options.webSocket
-  });
-  const createSpeechModel = (modelId) => new OpenAISpeechModel(modelId, {
-    provider: `${providerName}.speech`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch
-  });
-  const createFiles = () => new OpenAIFiles({
-    provider: `${providerName}.files`,
-    baseURL,
-    headers: getHeaders,
-    fetch: options.fetch
-  });
-  const createSkills = () => new OpenAISkills({
-    provider: `${providerName}.skills`,
-    url: ({ path }) => `${baseURL}${path}`,
-    headers: getHeaders,
-    fetch: options.fetch
-  });
-  const createLanguageModel = (modelId) => {
-    if (new.target) {
-      throw new Error(
-        "The OpenAI model function cannot be called with the new keyword."
-      );
-    }
-    return createResponsesModel(modelId);
-  };
-  const createResponsesModel = (modelId) => {
-    return new OpenAIResponsesBatchLanguageModel(modelId, {
-      provider: `${providerName}.responses`,
-      url: ({ path }) => `${baseURL}${path}`,
-      headers: getHeaders,
-      fetch: options.fetch,
-      // Soft-deprecated. TODO: remove in v8
-      fileIdPrefixes: ["file-"]
-    });
-  };
-  const createRealtimeModel = (modelId) => new OpenAIRealtimeModel(modelId, {
-    provider: `${providerName}.realtime`,
-    baseURL,
-    headers: getHeaders,
-    fetch: options.fetch
-  });
-  const experimentalRealtimeFactory = Object.assign(
-    (modelId) => createRealtimeModel(modelId),
-    {
-      getToken: async (tokenOptions) => {
-        const model = createRealtimeModel(tokenOptions.model);
-        const secret = await model.doCreateClientSecret({
-          sessionConfig: tokenOptions.sessionConfig,
-          expiresAfterSeconds: tokenOptions.expiresAfterSeconds
-        });
-        return {
-          token: secret.token,
-          url: secret.url,
-          expiresAt: secret.expiresAt
-        };
-      }
-    }
-  );
-  const provider = function(modelId) {
-    return createLanguageModel(modelId);
-  };
+  const createImageModel = (modelId) => new OpenAICompatibleImageModel(modelId, getCommonModelConfig("image"));
+  const provider = (modelId) => createLanguageModel(modelId);
   provider.specificationVersion = "v4";
   provider.languageModel = createLanguageModel;
-  provider.chat = createChatModel;
-  provider.completion = createCompletionModel;
-  provider.responses = createResponsesModel;
-  provider.embedding = createEmbeddingModel;
+  provider.chatModel = createChatModel;
+  provider.completionModel = createCompletionModel;
   provider.embeddingModel = createEmbeddingModel;
-  provider.textEmbedding = createEmbeddingModel;
   provider.textEmbeddingModel = createEmbeddingModel;
-  provider.image = createImageModel;
   provider.imageModel = createImageModel;
-  provider.transcription = createTranscriptionModel;
-  provider.transcriptionModel = createTranscriptionModel;
-  provider.translation = createSpeechTranslationModel;
-  provider.speechTranslationModel = createSpeechTranslationModel;
-  provider.speech = createSpeechModel;
-  provider.speechModel = createSpeechModel;
-  provider.files = createFiles;
-  provider.skills = createSkills;
-  provider.experimental_realtime = experimentalRealtimeFactory;
-  provider.tools = openaiTools;
   return provider;
 }
-var openai = createOpenAI();
 
 // extension/lib/models/openai-model.js
 function createOpenAICompatibleModel(config3) {
@@ -33439,8 +25165,8 @@ function createOpenAICompatibleModel(config3) {
   if (!baseURL || !apiKey || !model) {
     throw new Error("OpenAI-compatible provider requires baseURL, apiKey, and model");
   }
-  const openai2 = createOpenAI({ baseURL, apiKey });
-  return openai2(model);
+  const openai = createOpenAICompatible({ baseURL, apiKey, name: "configured" });
+  return openai.chat(model);
 }
 
 // extension/lib/models/prompt-api-model.js
@@ -33639,11 +25365,20 @@ async function getModel() {
 
 // extension/lib/memory.js
 init_browser_shim_process();
-async function rootDir() {
-  return await navigator.storage.getDirectory();
+var ROOT = "memory";
+var MASTER = "master";
+function canonicalOrigin(value) {
+  try {
+    return new URL(String(value)).origin;
+  } catch {
+    return null;
+  }
 }
 function encodeOrigin(origin) {
-  return encodeURIComponent(origin).replace(/%/g, "_");
+  return encodeURIComponent(origin);
+}
+function decodeOrigin(encoded) {
+  return decodeURIComponent(encoded);
 }
 async function openDir(segments) {
   let dir = await rootDir();
@@ -33651,6 +25386,9 @@ async function openDir(segments) {
     dir = await dir.getDirectoryHandle(seg, { create: true });
   }
   return dir;
+}
+async function rootDir() {
+  return await navigator.storage.getDirectory();
 }
 async function readJson(dir, name25) {
   try {
@@ -33668,8 +25406,8 @@ async function writeJson(dir, name25, value) {
   await w.close();
 }
 function memoryStore(origin) {
-  const path = origin === "master" ? ["memory", "master"] : ["memory", "origins", encodeOrigin(origin)];
-  const isMaster = origin === "master";
+  const isMaster = origin === MASTER;
+  const path = isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(origin)];
   return {
     isMaster,
     origin,
@@ -33697,21 +25435,46 @@ function memoryStore(origin) {
       }
     },
     async clear() {
-      const parent = await openDir(["memory"]);
+      if (isMaster) {
+        const parent = await openDir([ROOT]);
+        try {
+          await parent.removeEntry(MASTER, { recursive: true });
+        } catch {
+        }
+        return;
+      }
+      const origins = await openDir([ROOT, "origins"]);
       try {
-        await parent.removeEntry(isMaster ? "master" : "origins");
+        await origins.removeEntry(encodeOrigin(origin), { recursive: true });
       } catch {
       }
     }
   };
 }
-var masterMemory = () => memoryStore("master");
-var siteMemory = (origin) => memoryStore(origin);
+var masterMemory = () => memoryStore(MASTER);
+function siteMemory(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) {
+    const invalid = memoryStore(`invalid:${origin}`);
+    return {
+      ...invalid,
+      async get() {
+        return null;
+      },
+      async set() {
+        throw new Error(`invalid origin: ${origin}`);
+      }
+    };
+  }
+  return memoryStore(canonical);
+}
 async function listOrigins() {
   try {
-    const dir = await openDir(["memory", "origins"]);
+    const dir = await openDir([ROOT, "origins"]);
     const out = [];
-    for await (const [name25] of dir.entries()) out.push(decodeURIComponent(name25.replace(/_/g, "%")));
+    for await (const [name25] of dir.entries()) {
+      out.push(decodeOrigin(name25));
+    }
     return out.sort();
   } catch {
     return [];
@@ -38308,7 +30071,7 @@ function prepareToolChoice({
 function isNonEmptyObject(object32) {
   return object32 != null && Object.keys(object32).length > 0;
 }
-async function prepareTools({
+async function prepareTools2({
   tools,
   toolOrder,
   toolsContext = {},
@@ -38439,19 +30202,19 @@ var z2 = {
   union,
   unknown
 };
-var jsonValueSchema3 = z2.lazy(
+var jsonValueSchema = z2.lazy(
   () => z2.union([
     z2.null(),
     z2.string(),
     z2.number(),
     z2.boolean(),
-    z2.record(z2.string(), jsonValueSchema3.optional()),
-    z2.array(jsonValueSchema3)
+    z2.record(z2.string(), jsonValueSchema.optional()),
+    z2.array(jsonValueSchema)
   ])
 );
 var providerMetadataSchema = z2.record(
   z2.string(),
-  z2.record(z2.string(), jsonValueSchema3.optional())
+  z2.record(z2.string(), jsonValueSchema.optional())
 );
 var fileInlineDataSchema = z2.union([
   z2.string(),
@@ -38538,7 +30301,7 @@ var outputSchema = z2.discriminatedUnion(
     }),
     z2.object({
       type: z2.literal("json"),
-      value: jsonValueSchema3,
+      value: jsonValueSchema,
       providerOptions: providerMetadataSchema.optional()
     }),
     z2.object({
@@ -38553,7 +30316,7 @@ var outputSchema = z2.discriminatedUnion(
     }),
     z2.object({
       type: z2.literal("error-json"),
-      value: jsonValueSchema3,
+      value: jsonValueSchema,
       providerOptions: providerMetadataSchema.optional()
     }),
     z2.object({
@@ -41405,7 +33168,7 @@ function getResponseUIMessageId({
 }
 var toolMetadataSchema = z2.record(
   z2.string(),
-  jsonValueSchema3.optional()
+  jsonValueSchema.optional()
 );
 var uiMessageChunkSchema = lazySchema(
   () => zodSchema(
@@ -43145,7 +34908,7 @@ async function streamLanguageModelCall({
     download: download2,
     provider: resolvedModel.provider.split(".")[0]
   });
-  const stepTools = await prepareTools({
+  const stepTools = await prepareTools2({
     tools,
     toolOrder,
     toolsContext,
@@ -44509,7 +36272,7 @@ var DefaultStreamTextResult = class {
             toolCallers: resolvedToolCallers
           });
           const stepToolOrder = (_g = prepareStepResult == null ? void 0 : prepareStepResult.toolOrder) != null ? _g : toolOrder;
-          const stepTools = await prepareTools({
+          const stepTools = await prepareTools2({
             tools: stepModelTools,
             toolOrder: stepToolOrder,
             // active tools context is a subset of the tools context, so we can cast to the unknown type
@@ -45213,7 +36976,7 @@ var DefaultStreamTextResult = class {
 };
 var toolMetadataSchema2 = z2.record(
   z2.string(),
-  jsonValueSchema3.optional()
+  jsonValueSchema.optional()
 );
 var providerReferenceSchema2 = z2.record(z2.string(), z2.string());
 var uiMessagesSchema = lazySchema(
@@ -73684,9 +65447,9 @@ async function mountConfigMcp(config3) {
   if (!config3.mcpServers || config3.mcpServers.length === 0) {
     return { config: config3, mcp: void 0 };
   }
-  const mcp2 = await mountMcpServers(config3.mcpServers);
-  const mergedTools = { ...mcp2.tools, ...config3.tools ?? {} };
-  return { config: { ...config3, tools: mergedTools }, mcp: mcp2 };
+  const mcp = await mountMcpServers(config3.mcpServers);
+  const mergedTools = { ...mcp.tools, ...config3.tools ?? {} };
+  return { config: { ...config3, tools: mergedTools }, mcp };
 }
 async function tryRouteSlashCommandRun(config3, task, context) {
   if (!config3.slashCommands)
@@ -73727,12 +65490,12 @@ async function runAgentLoop(config3, task, context, history) {
   const routed = await tryRouteSlashCommandRun(config3, task, context);
   if (routed)
     return routed;
-  const { config: resolvedConfig, mcp: mcp2 } = await mountConfigMcp(config3);
+  const { config: resolvedConfig, mcp } = await mountConfigMcp(config3);
   try {
     return await runAgentLoopDirect(resolvedConfig, task, context, history);
   } finally {
-    if (mcp2)
-      await mcp2.close();
+    if (mcp)
+      await mcp.close();
   }
 }
 async function runAgentLoopDirect(config3, task, context, history) {
@@ -73908,12 +65671,12 @@ async function* streamAgentLoop(config3, task, context, history) {
       return;
     }
   }
-  const { config: resolvedConfig, mcp: mcp2 } = await mountConfigMcp(config3);
+  const { config: resolvedConfig, mcp } = await mountConfigMcp(config3);
   try {
     yield* streamAgentLoopDirect(resolvedConfig, task, context, history);
   } finally {
-    if (mcp2)
-      await mcp2.close();
+    if (mcp)
+      await mcp.close();
   }
 }
 async function* streamAgentLoopDirect(config3, task, context, history) {
@@ -74712,9 +66475,23 @@ async function pendingApprovals(origin) {
 
 // extension/lib/browser-tools.js
 init_browser_shim_process();
+var GRANT_KEY = "cap:browserControlGrant";
+async function isBrowserControlGranted() {
+  const s = await chrome.storage.local.get(GRANT_KEY);
+  return Boolean(s[GRANT_KEY]);
+}
+async function setBrowserControlGrant(granted) {
+  await chrome.storage.local.set({ [GRANT_KEY]: Boolean(granted) });
+  return Boolean(granted);
+}
+async function activeTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] ?? null;
+}
 async function readPage(tabId) {
   try {
-    const target = tabId ? { tabId } : {};
+    const target = tabId ? { tabId } : await activeTab().then((t) => t?.id ? { tabId: t.id } : null);
+    if (!target) return { error: "no tab" };
     const results = await chrome.scripting.executeScript({
       target,
       func: () => ({
@@ -74729,27 +66506,33 @@ async function readPage(tabId) {
   }
 }
 function browserToolset() {
+  const guard = async () => {
+    if (!await isBrowserControlGranted()) {
+      return { error: "browser control not granted \u2014 ask the user to enable it in Settings" };
+    }
+    return null;
+  };
   return {
     open_tab: tool({
-      description: "Open a URL in a new browser tab.",
-      inputSchema: external_exports3.object({ url: external_exports3.string() }),
+      description: "Open a URL in a new browser tab. Requires browser-control permission.",
+      inputSchema: external_exports3.object({ url: external_exports3.string().url() }),
       execute: async ({ url: url3 }) => {
+        const g = await guard();
+        if (g) return g;
         const tab = await chrome.tabs.create({ url: url3 });
         return { ok: true, tabId: tab.id, url: url3 };
       }
     }),
     navigate_tab: tool({
-      description: "Navigate an existing tab to a URL.",
-      inputSchema: external_exports3.object({ tabId: external_exports3.number().optional(), url: external_exports3.string() }),
+      description: "Navigate an existing tab to a URL. Requires browser-control permission.",
+      inputSchema: external_exports3.object({ tabId: external_exports3.number().optional(), url: external_exports3.string().url() }),
       execute: async ({ tabId, url: url3 }) => {
-        if (tabId) {
-          await chrome.tabs.update(tabId, { url: url3 });
-          return { ok: true, tabId, url: url3 };
-        }
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tabs[0]?.id) return { error: "no active tab" };
-        await chrome.tabs.update(tabs[0].id, { url: url3 });
-        return { ok: true, tabId: tabs[0].id, url: url3 };
+        const g = await guard();
+        if (g) return g;
+        const id = tabId ?? (await activeTab())?.id;
+        if (!id) return { error: "no tab" };
+        await chrome.tabs.update(id, { url: url3 });
+        return { ok: true, tabId: id, url: url3 };
       }
     }),
     read_page: tool({
@@ -74762,7 +66545,9 @@ function browserToolset() {
       inputSchema: external_exports3.object({ tabId: external_exports3.number().optional() }),
       execute: async ({ tabId }) => {
         try {
-          const url3 = await chrome.tabs.captureVisibleTab(tabId ? { tabId } : void 0, { format: "png" });
+          const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
+          const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+          const url3 = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
           return { screenshot: url3 };
         } catch (e) {
           return { error: String(e?.message ?? e) };
@@ -74778,9 +66563,11 @@ function browserToolset() {
       }
     }),
     close_tab: tool({
-      description: "Close a tab by id.",
+      description: "Close a tab by id. Requires browser-control permission.",
       inputSchema: external_exports3.object({ tabId: external_exports3.number() }),
       execute: async ({ tabId }) => {
+        const g = await guard();
+        if (g) return g;
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };
       }
@@ -74810,28 +66597,28 @@ var RECIPES = [
   {
     id: "tab-hygiene",
     name: "Tab hygiene",
-    icon: "\u{1F9F9}",
+    icon: "broom",
     description: "Find duplicate/stale tabs and close or group them.",
     prompt: "List the open tabs. Identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close. Report your findings and close the obvious duplicates. Be conservative \u2014 never close a tab with unsaved form state you can't detect."
   },
   {
     id: "page-summary",
     name: "Summarise this page",
-    icon: "\u{1F4C4}",
+    icon: "doc",
     description: "Read the active tab and give a tight summary.",
     prompt: "Read the active tab's content and produce a concise summary: what the page is, the 3 key points, and one recommended next action. Keep it under 120 words."
   },
   {
     id: "link-collector",
     name: "Collect links",
-    icon: "\u{1F517}",
+    icon: "link",
     description: "Gather the outbound links from the active page.",
     prompt: "Read the active tab and collect its outbound links, grouped by domain, with the link text. Return the list as markdown. Skip navigation/boilerplate links."
   },
   {
     id: "reading-list",
     name: "Save to reading list",
-    icon: "\u{1F4DA}",
+    icon: "books",
     description: "Capture the active tab into memory as a reading-list entry.",
     prompt: "Read the active tab and save it to memory under the key 'reading-list' (append: title, url, and a one-line note). Confirm what you saved."
   }
@@ -74841,18 +66628,33 @@ function getRecipe(id) {
 }
 
 // extension/background/service-worker.js
-function registerAlarm(task) {
+var TASK_KEY = "cap:scheduledTasks";
+async function registerAlarm(task) {
+  const name25 = task.name ?? task.id ?? String(Date.now());
+  const store = await chrome.storage.local.get(TASK_KEY);
+  const tasks = store[TASK_KEY] ?? {};
+  tasks[name25] = { ...task, name: name25 };
+  await chrome.storage.local.set({ [TASK_KEY]: tasks });
   const info = { when: Date.now() + (task.when ?? 0) };
   if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
-  chrome.alarms.create(task.name ?? task.id ?? String(Date.now()), info);
+  chrome.alarms.create(name25, info);
+  return name25;
 }
-chrome.alarms.onAlarm.addListener((alarm) => {
-  runTask({ id: alarm.name, task: alarm.name, scheduled: true }).catch((e) => {
-    console.error("scheduled task failed", alarm.name, e);
-  });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  const store = await chrome.storage.local.get(TASK_KEY);
+  const task = store[TASK_KEY]?.[alarm.name];
+  if (!task) {
+    console.error("scheduled task payload missing", alarm.name);
+    return;
+  }
+  runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] }).catch((e) => console.error("scheduled task failed", alarm.name, e));
 });
 var orchestrator = null;
 var MODEL_CACHE = { model: null };
+function invalidateAgent() {
+  MODEL_CACHE.model = null;
+  orchestrator = null;
+}
 async function ensureModel() {
   if (!MODEL_CACHE.model) MODEL_CACHE.model = await getModel();
   return MODEL_CACHE.model;
@@ -74876,27 +66678,36 @@ async function ensureOrchestrator() {
   });
   return orchestrator;
 }
+function sanitizeToolName(origin, name25) {
+  const safe = String(name25).replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `site_${safe}`;
+}
 async function siteToolset(origin) {
   const tools = await listTools(origin);
   const set4 = {};
   for (const t of tools) {
-    set4[`${origin}:${t.name}`] = {
+    set4[sanitizeToolName(origin, t.name)] = tool({
       description: `${t.name} on ${origin} \u2014 ${t.description ?? ""}`,
-      // Defer real execution to the side-panel bridge; here return a marker
-      // that the content script actually invokes the page function.
+      inputSchema: external_exports3.record(external_exports3.any()),
       execute: async (args) => {
         if (!await isApproved(origin, t.name)) {
           return { error: `tool ${t.name} on ${origin} not approved` };
         }
         return await invokeSiteTool(origin, t.name, args);
       }
-    };
+    });
   }
   return set4;
 }
 async function invokeSiteTool(origin, name25, args) {
   const tabs = await chrome.tabs.query({});
-  const tab = tabs.find((t) => (t.url ?? "").startsWith(origin));
+  const tab = tabs.find((t) => {
+    try {
+      return t.url ? new URL(t.url).origin === origin : false;
+    } catch {
+      return false;
+    }
+  });
   if (!tab?.id) return { error: `no tab open for ${origin}` };
   try {
     const res = await chrome.tabs.sendMessage(tab.id, { type: "invoke-tool", name: name25, args });
@@ -74905,21 +66716,41 @@ async function invokeSiteTool(origin, name25, args) {
     return { error: `invoke failed: ${e.message}` };
   }
 }
+function attachmentContext(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return "";
+  const parts = [];
+  for (const a of attachments) {
+    parts.push(
+      `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${a.type ?? "unknown"}, ${a.size ?? "?"} bytes)]`
+    );
+    if (a.dataURL && a.type?.startsWith("text/")) {
+      try {
+        const body = atob(a.dataURL.split(",")[1] ?? "");
+        parts.push("--- text content ---\n" + body.slice(0, 4e3) + "\n---");
+      } catch {
+      }
+    }
+  }
+  return "Attachments:\n" + parts.join("\n");
+}
 async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
   await journalAppend(mem, { type: "task", id: taskId, task, scheduled, attachmentCount: attachments?.length ?? 0 });
-  const result = await orch.run(task, { taskId, attachments }, []);
+  const context = attachmentContext(attachments);
+  const result = await orch.run(task, context, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
   return { ok: true, result };
 }
 var handlers = {
-  async "provider.get"(m) {
+  async "provider.get"() {
     return await getProviderConfig();
   },
   async "provider.set"(m) {
-    return await setProviderConfig(m.config);
+    const next = await setProviderConfig(m.config);
+    invalidateAgent();
+    return next;
   },
   async "provider.models"() {
     return { choices: PROVIDER_CHOICES };
@@ -74934,8 +66765,12 @@ var handlers = {
     return await listTools(origin);
   },
   async "tools.upsert"({ origin, tools }) {
-    await enrollOrigin(origin);
-    return await upsertTools(origin, tools);
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    await enrollOrigin(canonical);
+    await upsertTools(canonical, tools);
+    invalidateAgent();
+    return { ok: true };
   },
   async "tools.approve"({ origin, name: name25, decision }) {
     return await approveTool(origin, name25, decision);
@@ -74978,8 +66813,8 @@ var handlers = {
     return { ok: true };
   },
   async "register-task"(m) {
-    registerAlarm(m.task);
-    return { ok: true };
+    const name25 = await registerAlarm(m.task);
+    return { ok: true, name: name25 };
   },
   async "run-task"(m) {
     return await runTask({ id: m.id, task: m.task });
@@ -74992,14 +66827,26 @@ var handlers = {
     if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
     return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
   },
+  async "browser-control.get"() {
+    return { granted: await isBrowserControlGranted() };
+  },
+  async "browser-control.set"({ granted }) {
+    await setBrowserControlGrant(granted);
+    return { granted };
+  },
   // Management tools — the agent can manage its own site-agents.
   async "agent.create"({ origin, name: name25 }) {
-    await enrollOrigin(origin);
-    return { ok: true, origin, name: name25 };
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    await enrollOrigin(canonical);
+    return { ok: true, origin: canonical, name: name25 };
   },
   async "agent.delete"({ origin }) {
-    await siteMemory(origin).clear();
-    return { ok: true, origin };
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    await siteMemory(canonical).clear();
+    invalidateAgent();
+    return { ok: true, origin: canonical };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();
@@ -75007,18 +66854,42 @@ var handlers = {
   },
   async "capture.tab"({ tabId }) {
     try {
-      const url3 = await chrome.tabs.captureVisibleTab(tabId ? { tabId } : void 0, { format: "png" });
+      const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
+      const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+      const url3 = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
       return { screenshot: url3 };
     } catch (e) {
       return { error: e.message };
     }
   }
 };
+var ADMIN_TYPES = /* @__PURE__ */ new Set(["memory.set", "memory.clear", "agent.delete", "agent.create", "provider.set", "usage.clear", "browser-control.set"]);
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = handlers[message?.type];
   if (!handler) {
     sendResponse({ ok: false, error: `unknown message: ${message?.type}` });
     return true;
+  }
+  const isContentScript = Boolean(sender?.tab?.url && sender?.id === chrome.runtime.id && sender?.documentId === void 0 && sender?.frameId === 0 && !sender?.url?.startsWith("chrome-extension://"));
+  if (isContentScript) {
+    if (ADMIN_TYPES.has(message.type)) {
+      sendResponse({ ok: false, error: "not authorized from a page" });
+      return true;
+    }
+    if (message.type === "tools.upsert") {
+      const origin = sender.tab.url ? (() => {
+        try {
+          return new URL(sender.tab.url).origin;
+        } catch {
+          return null;
+        }
+      })() : null;
+      if (!origin) {
+        sendResponse({ ok: false, error: "invalid sender origin" });
+        return true;
+      }
+      message.origin = origin;
+    }
   }
   handler(message).then((result) => sendResponse(result)).catch((e) => {
     sendResponse({ ok: false, error: String(e?.message ?? e) });
