@@ -117,6 +117,118 @@ document.getElementById("save-provider").addEventListener("click", async () => {
 document.getElementById("open-memory").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("open-directory").addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("directory/directory.html") }));
 
+// ---- attach menu: a single "+" opens Add file / audio / video / other ----
+const plusBtn = document.getElementById("plus-btn");
+const attachMenu = document.getElementById("attach-menu");
+const attachments = []; // { name, kind, size, dataURL? } attached to the next run
+plusBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  attachMenu.hidden = !attachMenu.hidden;
+});
+document.addEventListener("click", (e) => {
+  if (!attachMenu.contains(e.target) && e.target !== plusBtn) attachMenu.hidden = true;
+});
+attachMenu.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-kind]");
+  if (!btn) return;
+  attachMenu.hidden = true;
+  const kind = btn.dataset.kind;
+  try {
+    const [file] = await new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = kind === "audio" ? "audio/*" : kind === "video" ? "video/*" : "";
+      input.onchange = () => resolve(input.files ?? []);
+      input.oncancel = () => resolve([]);
+      input.click();
+    });
+    if (!file) return;
+    attachments.push({ name: file.name, kind, size: file.size, type: file.type });
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = `📎 ${file.name}`;
+    plusBtn.insertAdjacentElement("afterend", tag);
+  } catch (err) {
+    setStatus("attach error: " + String(err?.message ?? err), false);
+  }
+});
+
+// ---- microphone: Web Speech Recognition + waveform + real-time text (no dup) ----
+const micBtn = document.getElementById("mic-btn");
+const waveEl = document.getElementById("wave");
+let recognition = null;
+let listening = false;
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = "en-US";
+  return r;
+}
+micBtn.addEventListener("click", () => {
+  if (!listening) startListening();
+  else stopListening();
+});
+function startListening() {
+  if (!recognition) recognition = initRecognition();
+  if (!recognition) { setStatus("speech recognition not available", false); return; }
+  // the composer text before this listening session — final results append to it
+  // once, using the interim span for live preview so nothing is duplicated.
+  const baseText = taskInput.value;
+  let interimSpan = null;
+  let committed = baseText;
+  const appendInterim = (text) => {
+    if (!interimSpan) {
+      taskInput.value = committed + (committed && text ? " " : "") + text;
+    } else {
+      taskInput.value = committed + (committed && text ? " " : "") + text;
+    }
+    interimSpan = text;
+  };
+  recognition.onresult = (event) => {
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const res = event.results[i];
+      if (res.isFinal) {
+        // final: commit ONCE (replace any trailing interim, append the transcript)
+        const transcript = res[0].transcript.trim();
+        if (transcript) {
+          committed = committed ? committed + " " + transcript : transcript;
+        }
+        interim = "";
+      } else {
+        interim += res[0].transcript;
+      }
+    }
+    taskInput.value = (committed + (committed && interim ? " " : "") + interim).trim();
+    interimSpan = interim;
+  };
+  recognition.onend = () => {
+    // if the engine stops unexpectedly while we still want to listen, restart once
+    if (listening) { try { recognition.start(); } catch { /* ignore */ } return; }
+    stopListening();
+  };
+  recognition.onerror = (event) => {
+    if (event.error === "no-speech" || event.error === "aborted") return;
+    setStatus("speech error: " + event.error, false);
+    stopListening();
+  };
+  listening = true;
+  micBtn.classList.add("listening");
+  micBtn.setAttribute("aria-label", "Stop listening");
+  waveEl.hidden = false;
+  try { recognition.start(); } catch { /* already started */ }
+}
+function stopListening() {
+  listening = false;
+  micBtn.classList.remove("listening");
+  micBtn.setAttribute("aria-label", "Start listening");
+  waveEl.hidden = true;
+  if (recognition) { try { recognition.stop(); } catch { /* ignore */ } }
+}
+
 (async () => {
   const cfg = await send("provider.get");
   if (cfg && cfg.provider) {

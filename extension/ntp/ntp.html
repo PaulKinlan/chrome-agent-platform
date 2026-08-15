@@ -25,6 +25,21 @@
   .task .meta { color: var(--muted); font-size: 12px; }
   .settings { margin-bottom: 16px; font-size: 13px; color: var(--muted); }
   .settings input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; margin-left: 6px; }
+  .composer .row { position: relative; }
+  .mic { font-size: 15px; }
+  .mic.listening { color: var(--accent); }
+  .plus { font-size: 18px; line-height: 1; font-weight: 700; }
+  .attach-menu { position: absolute; bottom: calc(100% + 6px); left: 44px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); z-index: 20; min-width: 160px; padding: 4px; }
+  .attach-menu button { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text); padding: 8px 10px; border-radius: 7px; cursor: pointer; font: inherit; }
+  .attach-menu button:hover { background: var(--bg); }
+  .wave { display: flex; align-items: center; gap: 3px; height: 18px; margin-top: 8px; }
+  .wave span { width: 3px; background: var(--accent); border-radius: 2px; animation: wave 1s ease-in-out infinite; }
+  .wave span:nth-child(1) { height: 6px; animation-delay: 0s; }
+  .wave span:nth-child(2) { height: 12px; animation-delay: .15s; }
+  .wave span:nth-child(3) { height: 16px; animation-delay: .3s; }
+  .wave span:nth-child(4) { height: 10px; animation-delay: .45s; }
+  .wave span:nth-child(5) { height: 7px; animation-delay: .6s; }
+  @keyframes wave { 0%,100% { transform: scaleY(.5); } 50% { transform: scaleY(1); } }
 </style>
 </head>
 <body>
@@ -53,13 +68,18 @@
     <div class="tag">Start a task</div>
     <textarea id="task-input" placeholder="Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …"></textarea>
     <div class="row">
-      <button class="btn" id="run-task">Run task</button>
-      <button class="btn ghost" title="image">📷</button>
-      <button class="btn ghost" title="audio">🎙️</button>
-      <button class="btn ghost" title="video">🎥</button>
+      <button class="btn ghost mic" id="mic-btn" type="button" title="Speak" aria-label="Start listening">🎤</button>
+      <button class="btn ghost plus" id="plus-btn" type="button" title="Attach" aria-label="Add attachment">+</button>
       <div class="spacer"></div>
-      <span class="tag">text · image · audio · video</span>
+      <button class="btn" id="run-task">Run task</button>
+      <div class="attach-menu" id="attach-menu" hidden>
+        <button type="button" data-kind="file">Add file</button>
+        <button type="button" data-kind="audio">Add audio</button>
+        <button type="button" data-kind="video">Add video</button>
+        <button type="button" data-kind="other">Add other file</button>
+      </div>
     </div>
+    <div class="wave" id="wave" hidden><span></span><span></span><span></span><span></span><span></span></div>
   </div>
 
   <div class="grid">
