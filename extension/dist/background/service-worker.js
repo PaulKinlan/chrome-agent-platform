@@ -32,10 +32,41 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// browser-shim-process.js
+var init_browser_shim_process = __esm({
+  "browser-shim-process.js"() {
+    if (typeof globalThis.global === "undefined") {
+      globalThis.global = globalThis;
+    }
+    if (typeof globalThis.process === "undefined") {
+      globalThis.process = {
+        env: {},
+        browser: true,
+        version: "v20.0.0",
+        versions: { node: "20.0.0" },
+        platform: "browser",
+        nextTick: (fn, ...a) => Promise.resolve().then(() => fn(...a)),
+        cwd: () => "/",
+        on: () => {
+        },
+        once: () => {
+        },
+        emit: () => false,
+        listeners: () => [],
+        removeListener: () => {
+        },
+        removeAllListeners: () => {
+        }
+      };
+    }
+  }
+});
+
 // node_modules/@vercel/oidc/dist/get-context.js
 var require_get_context = __commonJS({
   "node_modules/@vercel/oidc/dist/get-context.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var __defProp3 = Object.defineProperty;
     var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
     var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -71,6 +102,7 @@ var require_get_context = __commonJS({
 var require_auth_errors = __commonJS({
   "node_modules/@vercel/oidc/dist/auth-errors.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var __defProp3 = Object.defineProperty;
     var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
     var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -115,6 +147,7 @@ var require_auth_errors = __commonJS({
 var require_index_browser = __commonJS({
   "node_modules/@vercel/oidc/dist/index-browser.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var __defProp3 = Object.defineProperty;
     var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
     var __getOwnPropNames2 = Object.getOwnPropertyNames;
@@ -160,6 +193,7 @@ var require_index_browser = __commonJS({
 var require_code = __commonJS({
   "node_modules/ajv/dist/compile/codegen/code.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
     var _CodeOrName = class {
@@ -314,6 +348,7 @@ var require_code = __commonJS({
 var require_scope = __commonJS({
   "node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = void 0;
     var code_1 = require_code();
@@ -459,6 +494,7 @@ var require_scope = __commonJS({
 var require_codegen = __commonJS({
   "node_modules/ajv/dist/compile/codegen/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = void 0;
     var code_1 = require_code();
@@ -1179,6 +1215,7 @@ var require_codegen = __commonJS({
 var require_util = __commonJS({
   "node_modules/ajv/dist/compile/util.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
     var codegen_1 = require_codegen();
@@ -1346,6 +1383,7 @@ var require_util = __commonJS({
 var require_names = __commonJS({
   "node_modules/ajv/dist/compile/names.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var names = {
@@ -1385,6 +1423,7 @@ var require_names = __commonJS({
 var require_errors = __commonJS({
   "node_modules/ajv/dist/compile/errors.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendErrors = exports.resetErrorsCount = exports.reportExtraError = exports.reportError = exports.keyword$DataError = exports.keywordError = void 0;
     var codegen_1 = require_codegen();
@@ -1507,6 +1546,7 @@ var require_errors = __commonJS({
 var require_boolSchema = __commonJS({
   "node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.boolOrEmptySchema = exports.topBoolOrEmptySchema = void 0;
     var errors_1 = require_errors();
@@ -1558,6 +1598,7 @@ var require_boolSchema = __commonJS({
 var require_rules = __commonJS({
   "node_modules/ajv/dist/compile/rules.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getRules = exports.isJSONType = void 0;
     var _jsonTypes = ["string", "number", "integer", "boolean", "null", "object", "array"];
@@ -1589,6 +1630,7 @@ var require_rules = __commonJS({
 var require_applicability = __commonJS({
   "node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = void 0;
     function schemaHasRulesForType({ schema: schema4, self }, type) {
@@ -1612,6 +1654,7 @@ var require_applicability = __commonJS({
 var require_dataType = __commonJS({
   "node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.reportTypeError = exports.checkDataTypes = exports.checkDataType = exports.coerceAndCheckDataType = exports.getJSONTypes = exports.getSchemaTypes = exports.DataType = void 0;
     var rules_1 = require_rules();
@@ -1796,6 +1839,7 @@ var require_dataType = __commonJS({
 var require_defaults = __commonJS({
   "node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.assignDefaults = void 0;
     var codegen_1 = require_codegen();
@@ -1833,6 +1877,7 @@ var require_defaults = __commonJS({
 var require_code2 = __commonJS({
   "node_modules/ajv/dist/vocabularies/code.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateUnion = exports.validateArray = exports.usePattern = exports.callValidateCode = exports.schemaProperties = exports.allSchemaProperties = exports.noPropertyInData = exports.propertyInData = exports.isOwnProperty = exports.hasPropFunc = exports.reportMissingProp = exports.checkMissingProp = exports.checkReportMissingProp = void 0;
     var codegen_1 = require_codegen();
@@ -1966,6 +2011,7 @@ var require_code2 = __commonJS({
 var require_keyword = __commonJS({
   "node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateKeywordUsage = exports.validSchemaType = exports.funcKeywordCode = exports.macroKeywordCode = void 0;
     var codegen_1 = require_codegen();
@@ -2084,6 +2130,7 @@ var require_keyword = __commonJS({
 var require_subschema = __commonJS({
   "node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendSubschemaMode = exports.extendSubschemaData = exports.getSubschema = void 0;
     var codegen_1 = require_codegen();
@@ -2167,6 +2214,7 @@ var require_subschema = __commonJS({
 var require_fast_deep_equal = __commonJS({
   "node_modules/fast-deep-equal/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     module2.exports = function equal(a, b) {
       if (a === b) return true;
       if (a && b && typeof a == "object" && typeof b == "object") {
@@ -2202,6 +2250,7 @@ var require_fast_deep_equal = __commonJS({
 var require_json_schema_traverse = __commonJS({
   "node_modules/json-schema-traverse/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var traverse = module2.exports = function(schema4, opts, cb) {
       if (typeof opts == "function") {
         cb = opts;
@@ -2290,6 +2339,7 @@ var require_json_schema_traverse = __commonJS({
 var require_resolve = __commonJS({
   "node_modules/ajv/dist/compile/resolve.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = void 0;
     var util_1 = require_util();
@@ -2446,6 +2496,7 @@ var require_resolve = __commonJS({
 var require_validate = __commonJS({
   "node_modules/ajv/dist/compile/validate/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getData = exports.KeywordCxt = exports.validateFunctionCode = void 0;
     var boolSchema_1 = require_boolSchema();
@@ -2954,6 +3005,7 @@ var require_validate = __commonJS({
 var require_validation_error = __commonJS({
   "node_modules/ajv/dist/runtime/validation_error.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var ValidationError = class extends Error {
       constructor(errors) {
@@ -2970,6 +3022,7 @@ var require_validation_error = __commonJS({
 var require_ref_error = __commonJS({
   "node_modules/ajv/dist/compile/ref_error.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var resolve_1 = require_resolve();
     var MissingRefError = class extends Error {
@@ -2987,6 +3040,7 @@ var require_ref_error = __commonJS({
 var require_compile = __commonJS({
   "node_modules/ajv/dist/compile/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.resolveSchema = exports.getCompilingSchema = exports.resolveRef = exports.compileSchema = exports.SchemaEnv = void 0;
     var codegen_1 = require_codegen();
@@ -3230,6 +3284,7 @@ var require_data = __commonJS({
 var require_utils = __commonJS({
   "node_modules/fast-uri/lib/utils.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
     var isIPv42 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
     var isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu);
@@ -3543,6 +3598,7 @@ var require_utils = __commonJS({
 var require_schemes = __commonJS({
   "node_modules/fast-uri/lib/schemes.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var { isUUID } = require_utils();
     var URN_REG = /([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-.:;=@]|%[\da-f]{2})+)/iu;
     var supportedSchemeNames = (
@@ -3753,6 +3809,7 @@ var require_schemes = __commonJS({
 var require_fast_uri = __commonJS({
   "node_modules/fast-uri/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4: isIPv42, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
     function normalize2(uri, options) {
@@ -4065,6 +4122,7 @@ var require_fast_uri = __commonJS({
 var require_uri = __commonJS({
   "node_modules/ajv/dist/runtime/uri.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var uri = require_fast_uri();
     uri.code = 'require("ajv/dist/runtime/uri").default';
@@ -4076,6 +4134,7 @@ var require_uri = __commonJS({
 var require_core = __commonJS({
   "node_modules/ajv/dist/core.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
     var validate_1 = require_validate();
@@ -4687,6 +4746,7 @@ var require_core = __commonJS({
 var require_id = __commonJS({
   "node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var def = {
       keyword: "id",
@@ -4702,6 +4762,7 @@ var require_id = __commonJS({
 var require_ref = __commonJS({
   "node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.callRef = exports.getValidate = void 0;
     var ref_error_1 = require_ref_error();
@@ -4824,6 +4885,7 @@ var require_ref = __commonJS({
 var require_core2 = __commonJS({
   "node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var id_1 = require_id();
     var ref_1 = require_ref();
@@ -4845,6 +4907,7 @@ var require_core2 = __commonJS({
 var require_limitNumber = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var ops = codegen_1.operators;
@@ -4877,6 +4940,7 @@ var require_limitNumber = __commonJS({
 var require_multipleOf = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var error90 = {
@@ -4905,6 +4969,7 @@ var require_multipleOf = __commonJS({
 var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     function ucs2length(str) {
       const len = str.length;
@@ -4931,6 +4996,7 @@ var require_ucs2length = __commonJS({
 var require_limitLength = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -4963,6 +5029,7 @@ var require_limitLength = __commonJS({
 var require_pattern = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
     var util_1 = require_util();
@@ -5000,6 +5067,7 @@ var require_pattern = __commonJS({
 var require_limitProperties = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var error90 = {
@@ -5029,6 +5097,7 @@ var require_limitProperties = __commonJS({
 var require_required = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
     var codegen_1 = require_codegen();
@@ -5111,6 +5180,7 @@ var require_required = __commonJS({
 var require_limitItems = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var error90 = {
@@ -5140,6 +5210,7 @@ var require_limitItems = __commonJS({
 var require_equal = __commonJS({
   "node_modules/ajv/dist/runtime/equal.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var equal = require_fast_deep_equal();
     equal.code = 'require("ajv/dist/runtime/equal").default';
@@ -5151,6 +5222,7 @@ var require_equal = __commonJS({
 var require_uniqueItems = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var dataType_1 = require_dataType();
     var codegen_1 = require_codegen();
@@ -5218,6 +5290,7 @@ var require_uniqueItems = __commonJS({
 var require_const = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -5247,6 +5320,7 @@ var require_const = __commonJS({
 var require_enum = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -5296,6 +5370,7 @@ var require_enum = __commonJS({
 var require_validation = __commonJS({
   "node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var limitNumber_1 = require_limitNumber();
     var multipleOf_1 = require_multipleOf();
@@ -5334,6 +5409,7 @@ var require_validation = __commonJS({
 var require_additionalItems = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateAdditionalItems = void 0;
     var codegen_1 = require_codegen();
@@ -5387,6 +5463,7 @@ var require_additionalItems = __commonJS({
 var require_items = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateTuple = void 0;
     var codegen_1 = require_codegen();
@@ -5444,6 +5521,7 @@ var require_items = __commonJS({
 var require_prefixItems = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var items_1 = require_items();
     var def = {
@@ -5461,6 +5539,7 @@ var require_prefixItems = __commonJS({
 var require_items2020 = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -5496,6 +5575,7 @@ var require_items2020 = __commonJS({
 var require_contains = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -5590,6 +5670,7 @@ var require_contains = __commonJS({
 var require_dependencies = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSchemaDeps = exports.validatePropertyDeps = exports.error = void 0;
     var codegen_1 = require_codegen();
@@ -5684,6 +5765,7 @@ var require_dependencies = __commonJS({
 var require_propertyNames = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -5727,6 +5809,7 @@ var require_propertyNames = __commonJS({
 var require_additionalProperties = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
     var codegen_1 = require_codegen();
@@ -5833,6 +5916,7 @@ var require_additionalProperties = __commonJS({
 var require_properties = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var validate_1 = require_validate();
     var code_1 = require_code2();
@@ -5891,6 +5975,7 @@ var require_properties = __commonJS({
 var require_patternProperties = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
     var codegen_1 = require_codegen();
@@ -5965,6 +6050,7 @@ var require_patternProperties = __commonJS({
 var require_not = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
     var def = {
@@ -5996,6 +6082,7 @@ var require_not = __commonJS({
 var require_anyOf = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
     var def = {
@@ -6013,6 +6100,7 @@ var require_anyOf = __commonJS({
 var require_oneOf = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -6071,6 +6159,7 @@ var require_oneOf = __commonJS({
 var require_allOf = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
     var def = {
@@ -6098,6 +6187,7 @@ var require_allOf = __commonJS({
 var require_if = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var util_1 = require_util();
@@ -6167,6 +6257,7 @@ var require_if = __commonJS({
 var require_thenElse = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
     var def = {
@@ -6185,6 +6276,7 @@ var require_thenElse = __commonJS({
 var require_applicator = __commonJS({
   "node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var additionalItems_1 = require_additionalItems();
     var prefixItems_1 = require_prefixItems();
@@ -6233,6 +6325,7 @@ var require_applicator = __commonJS({
 var require_format = __commonJS({
   "node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var error90 = {
@@ -6323,6 +6416,7 @@ var require_format = __commonJS({
 var require_format2 = __commonJS({
   "node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var format_1 = require_format();
     var format = [format_1.default];
@@ -6334,6 +6428,7 @@ var require_format2 = __commonJS({
 var require_metadata = __commonJS({
   "node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.contentVocabulary = exports.metadataVocabulary = void 0;
     exports.metadataVocabulary = [
@@ -6357,6 +6452,7 @@ var require_metadata = __commonJS({
 var require_draft7 = __commonJS({
   "node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var core_1 = require_core2();
     var validation_1 = require_validation();
@@ -6379,6 +6475,7 @@ var require_draft7 = __commonJS({
 var require_types = __commonJS({
   "node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DiscrError = void 0;
     var DiscrError;
@@ -6393,6 +6490,7 @@ var require_types = __commonJS({
 var require_discriminator = __commonJS({
   "node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
     var types_1 = require_types();
@@ -6655,6 +6753,7 @@ var require_json_schema_draft_07 = __commonJS({
 var require_ajv = __commonJS({
   "node_modules/ajv/dist/ajv.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv = void 0;
     var core_1 = require_core();
@@ -6725,6 +6824,7 @@ var require_ajv = __commonJS({
 var require_formats = __commonJS({
   "node_modules/ajv-formats/dist/formats.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.formatNames = exports.fastFormats = exports.fullFormats = void 0;
     function fmtDef(validate, compare) {
@@ -6928,6 +7028,7 @@ var require_formats = __commonJS({
 var require_limit = __commonJS({
   "node_modules/ajv-formats/dist/limit.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.formatLimitDefinition = void 0;
     var ajv_1 = require_ajv();
@@ -7000,6 +7101,7 @@ var require_limit = __commonJS({
 var require_dist = __commonJS({
   "node_modules/ajv-formats/dist/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     Object.defineProperty(exports, "__esModule", { value: true });
     var formats_1 = require_formats();
     var limit_1 = require_limit();
@@ -7084,6 +7186,7 @@ __export(browser_shim_node_exports, {
 var readFileSync, writeFileSync, readFile, writeFile, existsSync, mkdirSync, readdirSync, statSync, promises, join, dirname, basename, resolve2, extname, homedir, tmpdir, platform, hostname4, os, randomBytes, createHash, crypto2, process3, Stream, Readable, Writable, stream, createRequire, module, TextDecoder2, TextEncoder2, util2, mkdir, promisify, PassThrough, spawn, exec, child_process, browser_shim_node_default;
 var init_browser_shim_node = __esm({
   "browser-shim-node.js"() {
+    init_browser_shim_process();
     readFileSync = () => {
       throw new Error("fs not available in extension");
     };
@@ -7172,6 +7275,7 @@ var init_browser_shim_node = __esm({
 // node_modules/isexe/windows.js
 var require_windows = __commonJS({
   "node_modules/isexe/windows.js"(exports, module2) {
+    init_browser_shim_process();
     module2.exports = isexe;
     isexe.sync = sync;
     var fs = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
@@ -7212,6 +7316,7 @@ var require_windows = __commonJS({
 // node_modules/isexe/mode.js
 var require_mode = __commonJS({
   "node_modules/isexe/mode.js"(exports, module2) {
+    init_browser_shim_process();
     module2.exports = isexe;
     isexe.sync = sync;
     var fs = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
@@ -7245,6 +7350,7 @@ var require_mode = __commonJS({
 // node_modules/isexe/index.js
 var require_isexe = __commonJS({
   "node_modules/isexe/index.js"(exports, module2) {
+    init_browser_shim_process();
     var fs = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
     var core;
     if (process.platform === "win32" || global.TESTING_WINDOWS) {
@@ -7300,6 +7406,7 @@ var require_isexe = __commonJS({
 // node_modules/which/which.js
 var require_which = __commonJS({
   "node_modules/which/which.js"(exports, module2) {
+    init_browser_shim_process();
     var isWindows = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
     var path = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
     var COLON = isWindows ? ";" : ":";
@@ -7397,6 +7504,7 @@ var require_which = __commonJS({
 var require_path_key = __commonJS({
   "node_modules/path-key/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var pathKey = (options = {}) => {
       const environment = options.env || process.env;
       const platform2 = options.platform || process.platform;
@@ -7414,6 +7522,7 @@ var require_path_key = __commonJS({
 var require_resolveCommand = __commonJS({
   "node_modules/cross-spawn/lib/util/resolveCommand.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var path = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
     var which = require_which();
     var getPathKey = require_path_key();
@@ -7456,6 +7565,7 @@ var require_resolveCommand = __commonJS({
 var require_escape = __commonJS({
   "node_modules/cross-spawn/lib/util/escape.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var metaCharsRegExp = /([()\][%!^"`<>&|;, *?])/g;
     function escapeCommand(arg) {
       arg = arg.replace(metaCharsRegExp, "^$1");
@@ -7481,6 +7591,7 @@ var require_escape = __commonJS({
 var require_shebang_regex = __commonJS({
   "node_modules/shebang-regex/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     module2.exports = /^#!(.*)/;
   }
 });
@@ -7489,6 +7600,7 @@ var require_shebang_regex = __commonJS({
 var require_shebang_command = __commonJS({
   "node_modules/shebang-command/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var shebangRegex = require_shebang_regex();
     module2.exports = (string8 = "") => {
       const match = string8.match(shebangRegex);
@@ -7509,6 +7621,7 @@ var require_shebang_command = __commonJS({
 var require_readShebang = __commonJS({
   "node_modules/cross-spawn/lib/util/readShebang.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var fs = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
     var shebangCommand = require_shebang_command();
     function readShebang(command) {
@@ -7531,6 +7644,7 @@ var require_readShebang = __commonJS({
 var require_parse = __commonJS({
   "node_modules/cross-spawn/lib/parse.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var path = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
     var resolveCommand = require_resolveCommand();
     var escape2 = require_escape();
@@ -7593,6 +7707,7 @@ var require_parse = __commonJS({
 var require_enoent = __commonJS({
   "node_modules/cross-spawn/lib/enoent.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var isWin = process.platform === "win32";
     function notFoundError(original, syscall) {
       return Object.assign(new Error(`${syscall} ${original.command} ENOENT`), {
@@ -7643,6 +7758,7 @@ var require_enoent = __commonJS({
 var require_cross_spawn = __commonJS({
   "node_modules/cross-spawn/index.js"(exports, module2) {
     "use strict";
+    init_browser_shim_process();
     var cp = (init_browser_shim_node(), __toCommonJS(browser_shim_node_exports));
     var parse6 = require_parse();
     var enoent = require_enoent();
@@ -7670,6 +7786,7 @@ var require_cross_spawn = __commonJS({
 var require_content_type = __commonJS({
   "node_modules/content-type/index.js"(exports) {
     "use strict";
+    init_browser_shim_process();
     var PARAM_REGEXP = /; *([!#$%&'*+.^_`|~0-9A-Za-z-]+) *= *("(?:[\u000b\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\u000b\u0020-\u00ff])*"|[!#$%&'*+.^_`|~0-9A-Za-z-]+) */g;
     var TEXT_REGEXP = /^[\u000b\u0020-\u007e\u0080-\u00ff]+$/;
     var TOKEN_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -7773,6 +7890,7 @@ var require_content_type = __commonJS({
 // node_modules/ignore/index.js
 var require_ignore = __commonJS({
   "node_modules/ignore/index.js"(exports, module2) {
+    init_browser_shim_process();
     function makeArray(subject) {
       return Array.isArray(subject) ? subject : [subject];
     }
@@ -8228,7 +8346,23 @@ var require_ignore = __commonJS({
   }
 });
 
+// extension/background/service-worker.js
+init_browser_shim_process();
+
+// extension/lib/provider.js
+init_browser_shim_process();
+
+// extension/lib/models/openai-model.js
+init_browser_shim_process();
+
+// node_modules/@ai-sdk/openai/dist/index.js
+init_browser_shim_process();
+
+// node_modules/@ai-sdk/provider-utils/dist/index.js
+init_browser_shim_process();
+
 // node_modules/@ai-sdk/provider/dist/index.js
+init_browser_shim_process();
 var marker = "vercel.ai.error";
 var symbol = Symbol.for(marker);
 var _a;
@@ -8594,6 +8728,9 @@ var UnsupportedFunctionalityError = class extends (_b15 = AISDKError, _a15 = sym
   }
 };
 
+// node_modules/zod/v4/classic/index.js
+init_browser_shim_process();
+
 // node_modules/zod/v4/classic/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -8805,6 +8942,7 @@ __export(external_exports, {
   void: () => _void2,
   xid: () => xid2
 });
+init_browser_shim_process();
 
 // node_modules/zod/v4/core/index.js
 var core_exports2 = {};
@@ -9049,8 +9187,10 @@ __export(core_exports2, {
   util: () => util_exports,
   version: () => version
 });
+init_browser_shim_process();
 
 // node_modules/zod/v4/core/core.js
+init_browser_shim_process();
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -9110,6 +9250,12 @@ function config(newConfig) {
   return globalConfig;
 }
 
+// node_modules/zod/v4/core/parse.js
+init_browser_shim_process();
+
+// node_modules/zod/v4/core/errors.js
+init_browser_shim_process();
+
 // node_modules/zod/v4/core/util.js
 var util_exports = {};
 __export(util_exports, {
@@ -9163,6 +9309,7 @@ __export(util_exports, {
   stringifyPrimitive: () => stringifyPrimitive,
   unwrapMessage: () => unwrapMessage
 });
+init_browser_shim_process();
 function assertEqual(val) {
   return val;
 }
@@ -9830,6 +9977,12 @@ var _safeParseAsync = (_Err) => async (schema4, value, _ctx) => {
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
 
+// node_modules/zod/v4/core/schemas.js
+init_browser_shim_process();
+
+// node_modules/zod/v4/core/checks.js
+init_browser_shim_process();
+
 // node_modules/zod/v4/core/regexes.js
 var regexes_exports = {};
 __export(regexes_exports, {
@@ -9875,6 +10028,7 @@ __export(regexes_exports, {
   uuid7: () => uuid7,
   xid: () => xid
 });
+init_browser_shim_process();
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -10482,6 +10636,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
 });
 
 // node_modules/zod/v4/core/doc.js
+init_browser_shim_process();
 var Doc = class {
   constructor(args = []) {
     this.content = [];
@@ -10518,6 +10673,7 @@ var Doc = class {
 };
 
 // node_modules/zod/v4/core/versions.js
+init_browser_shim_process();
 var version = {
   major: 4,
   minor: 0,
@@ -12194,8 +12350,10 @@ __export(locales_exports, {
   zhCN: () => zh_CN_default,
   zhTW: () => zh_TW_default
 });
+init_browser_shim_process();
 
 // node_modules/zod/v4/locales/ar.js
+init_browser_shim_process();
 var error = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -12313,6 +12471,7 @@ function ar_default() {
 }
 
 // node_modules/zod/v4/locales/az.js
+init_browser_shim_process();
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
@@ -12429,6 +12588,7 @@ function az_default() {
 }
 
 // node_modules/zod/v4/locales/be.js
+init_browser_shim_process();
 function getBelarusianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -12594,6 +12754,7 @@ function be_default() {
 }
 
 // node_modules/zod/v4/locales/ca.js
+init_browser_shim_process();
 var error4 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
@@ -12714,6 +12875,7 @@ function ca_default() {
 }
 
 // node_modules/zod/v4/locales/cs.js
+init_browser_shim_process();
 var error5 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
@@ -12850,6 +13012,7 @@ function cs_default() {
 }
 
 // node_modules/zod/v4/locales/de.js
+init_browser_shim_process();
 var error6 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -12967,6 +13130,7 @@ function de_default() {
 }
 
 // node_modules/zod/v4/locales/en.js
+init_browser_shim_process();
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -13085,6 +13249,7 @@ function en_default() {
 }
 
 // node_modules/zod/v4/locales/eo.js
+init_browser_shim_process();
 var parsedType2 = (data) => {
   const t = typeof data;
   switch (t) {
@@ -13202,6 +13367,7 @@ function eo_default() {
 }
 
 // node_modules/zod/v4/locales/es.js
+init_browser_shim_process();
 var error9 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -13320,6 +13486,7 @@ function es_default() {
 }
 
 // node_modules/zod/v4/locales/fa.js
+init_browser_shim_process();
 var error10 = () => {
   const Sizable = {
     string: { unit: "\u06A9\u0627\u0631\u0627\u06A9\u062A\u0631", verb: "\u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F" },
@@ -13443,6 +13610,7 @@ function fa_default() {
 }
 
 // node_modules/zod/v4/locales/fi.js
+init_browser_shim_process();
 var error11 = () => {
   const Sizable = {
     string: { unit: "merkki\xE4", subject: "merkkijonon" },
@@ -13566,6 +13734,7 @@ function fi_default() {
 }
 
 // node_modules/zod/v4/locales/fr.js
+init_browser_shim_process();
 var error12 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -13683,6 +13852,7 @@ function fr_default() {
 }
 
 // node_modules/zod/v4/locales/fr-CA.js
+init_browser_shim_process();
 var error13 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -13801,6 +13971,7 @@ function fr_CA_default() {
 }
 
 // node_modules/zod/v4/locales/he.js
+init_browser_shim_process();
 var error14 = () => {
   const Sizable = {
     string: { unit: "\u05D0\u05D5\u05EA\u05D9\u05D5\u05EA", verb: "\u05DC\u05DB\u05DC\u05D5\u05DC" },
@@ -13919,6 +14090,7 @@ function he_default() {
 }
 
 // node_modules/zod/v4/locales/hu.js
+init_browser_shim_process();
 var error15 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -14037,6 +14209,7 @@ function hu_default() {
 }
 
 // node_modules/zod/v4/locales/id.js
+init_browser_shim_process();
 var error16 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -14154,6 +14327,7 @@ function id_default() {
 }
 
 // node_modules/zod/v4/locales/it.js
+init_browser_shim_process();
 var error17 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -14272,6 +14446,7 @@ function it_default() {
 }
 
 // node_modules/zod/v4/locales/ja.js
+init_browser_shim_process();
 var error18 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
@@ -14388,6 +14563,7 @@ function ja_default() {
 }
 
 // node_modules/zod/v4/locales/kh.js
+init_browser_shim_process();
 var error19 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -14506,6 +14682,7 @@ function kh_default() {
 }
 
 // node_modules/zod/v4/locales/ko.js
+init_browser_shim_process();
 var error20 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
@@ -14628,6 +14805,7 @@ function ko_default() {
 }
 
 // node_modules/zod/v4/locales/mk.js
+init_browser_shim_process();
 var error21 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -14747,6 +14925,7 @@ function mk_default() {
 }
 
 // node_modules/zod/v4/locales/ms.js
+init_browser_shim_process();
 var error22 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -14864,6 +15043,7 @@ function ms_default() {
 }
 
 // node_modules/zod/v4/locales/nl.js
+init_browser_shim_process();
 var error23 = () => {
   const Sizable = {
     string: { unit: "tekens" },
@@ -14982,6 +15162,7 @@ function nl_default() {
 }
 
 // node_modules/zod/v4/locales/no.js
+init_browser_shim_process();
 var error24 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
@@ -15099,6 +15280,7 @@ function no_default() {
 }
 
 // node_modules/zod/v4/locales/ota.js
+init_browser_shim_process();
 var error25 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
@@ -15217,6 +15399,7 @@ function ota_default() {
 }
 
 // node_modules/zod/v4/locales/ps.js
+init_browser_shim_process();
 var error26 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
@@ -15340,6 +15523,7 @@ function ps_default() {
 }
 
 // node_modules/zod/v4/locales/pl.js
+init_browser_shim_process();
 var error27 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
@@ -15458,6 +15642,7 @@ function pl_default() {
 }
 
 // node_modules/zod/v4/locales/pt.js
+init_browser_shim_process();
 var error28 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
@@ -15575,6 +15760,7 @@ function pt_default() {
 }
 
 // node_modules/zod/v4/locales/ru.js
+init_browser_shim_process();
 function getRussianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -15740,6 +15926,7 @@ function ru_default() {
 }
 
 // node_modules/zod/v4/locales/sl.js
+init_browser_shim_process();
 var error30 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -15858,6 +16045,7 @@ function sl_default() {
 }
 
 // node_modules/zod/v4/locales/sv.js
+init_browser_shim_process();
 var error31 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -15977,6 +16165,7 @@ function sv_default() {
 }
 
 // node_modules/zod/v4/locales/ta.js
+init_browser_shim_process();
 var error32 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -16095,6 +16284,7 @@ function ta_default() {
 }
 
 // node_modules/zod/v4/locales/th.js
+init_browser_shim_process();
 var error33 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -16213,6 +16403,7 @@ function th_default() {
 }
 
 // node_modules/zod/v4/locales/tr.js
+init_browser_shim_process();
 var parsedType3 = (data) => {
   const t = typeof data;
   switch (t) {
@@ -16329,6 +16520,7 @@ function tr_default() {
 }
 
 // node_modules/zod/v4/locales/ua.js
+init_browser_shim_process();
 var error35 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -16447,6 +16639,7 @@ function ua_default() {
 }
 
 // node_modules/zod/v4/locales/ur.js
+init_browser_shim_process();
 var error36 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
@@ -16565,6 +16758,7 @@ function ur_default() {
 }
 
 // node_modules/zod/v4/locales/vi.js
+init_browser_shim_process();
 var error37 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
@@ -16682,6 +16876,7 @@ function vi_default() {
 }
 
 // node_modules/zod/v4/locales/zh-CN.js
+init_browser_shim_process();
 var error38 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
@@ -16799,6 +16994,7 @@ function zh_CN_default() {
 }
 
 // node_modules/zod/v4/locales/zh-TW.js
+init_browser_shim_process();
 var error39 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
@@ -16917,6 +17113,7 @@ function zh_TW_default() {
 }
 
 // node_modules/zod/v4/core/registries.js
+init_browser_shim_process();
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 var $ZodRegistry = class {
@@ -16966,7 +17163,11 @@ function registry() {
 }
 var globalRegistry = /* @__PURE__ */ registry();
 
+// node_modules/zod/v4/core/function.js
+init_browser_shim_process();
+
 // node_modules/zod/v4/core/api.js
+init_browser_shim_process();
 function _string(Class3, params) {
   return new Class3({
     type: "string",
@@ -17895,6 +18096,7 @@ function _function(params) {
 }
 
 // node_modules/zod/v4/core/to-json-schema.js
+init_browser_shim_process();
 var JSONSchemaGenerator = class {
   constructor(params) {
     this.counter = 0;
@@ -18663,6 +18865,13 @@ function isTransforming(_schema, _ctx) {
 
 // node_modules/zod/v4/core/json-schema.js
 var json_schema_exports = {};
+init_browser_shim_process();
+
+// node_modules/zod/v4/classic/schemas.js
+init_browser_shim_process();
+
+// node_modules/zod/v4/classic/checks.js
+init_browser_shim_process();
 
 // node_modules/zod/v4/classic/iso.js
 var iso_exports = {};
@@ -18676,6 +18885,7 @@ __export(iso_exports, {
   duration: () => duration2,
   time: () => time2
 });
+init_browser_shim_process();
 var ZodISODateTime = /* @__PURE__ */ $constructor("ZodISODateTime", (inst, def) => {
   $ZodISODateTime.init(inst, def);
   ZodStringFormat.init(inst, def);
@@ -18705,7 +18915,11 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
+// node_modules/zod/v4/classic/parse.js
+init_browser_shim_process();
+
 // node_modules/zod/v4/classic/errors.js
+init_browser_shim_process();
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -19683,6 +19897,7 @@ function preprocess(fn, schema4) {
 }
 
 // node_modules/zod/v4/classic/compat.js
+init_browser_shim_process();
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -19714,6 +19929,7 @@ __export(coerce_exports, {
   number: () => number3,
   string: () => string3
 });
+init_browser_shim_process();
 function string3(params) {
   return _coercedString(ZodString, params);
 }
@@ -19733,7 +19949,11 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 
+// node_modules/eventsource-parser/dist/stream.js
+init_browser_shim_process();
+
 // node_modules/eventsource-parser/dist/index.js
+init_browser_shim_process();
 var ParseError = class extends Error {
   constructor(message, options) {
     super(message), this.name = "ParseError", this.type = options.type, this.field = options.field, this.value = options.value, this.line = options.line;
@@ -19935,6 +20155,7 @@ var EventSourceParserStream = class extends TransformStream {
 };
 
 // node_modules/@workflow/serde/dist/index.js
+init_browser_shim_process();
 var WORKFLOW_SERIALIZE = Symbol.for("workflow-serialize");
 var WORKFLOW_DESERIALIZE = Symbol.for("workflow-deserialize");
 
@@ -33223,6 +33444,7 @@ function createOpenAICompatibleModel(config3) {
 }
 
 // extension/lib/models/prompt-api-model.js
+init_browser_shim_process();
 function extractText(prompt) {
   let out = "";
   for (const msg of prompt ?? []) {
@@ -33317,6 +33539,7 @@ function createPromptApiModel() {
 }
 
 // extension/lib/models/demo-model.js
+init_browser_shim_process();
 function extractText2(prompt) {
   let out = "";
   for (const msg of prompt ?? []) {
@@ -33415,6 +33638,7 @@ async function getModel() {
 }
 
 // extension/lib/memory.js
+init_browser_shim_process();
 async function rootDir() {
   return await navigator.storage.getDirectory();
 }
@@ -33500,7 +33724,23 @@ async function journalAppend(store, entry) {
   return journal;
 }
 
+// extension/lib/agent.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/index.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/agent.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/loop.js
+init_browser_shim_process();
+
+// node_modules/ai/dist/index.js
+init_browser_shim_process();
+
 // node_modules/@ai-sdk/gateway/dist/index.js
+init_browser_shim_process();
 var import_oidc = __toESM(require_index_browser(), 1);
 var import_oidc2 = __toESM(require_index_browser(), 1);
 var GATEWAY_REALTIME_SUBPROTOCOL = "ai-gateway-realtime.v1";
@@ -45387,6 +45627,7 @@ var originalGenerateCallId6 = createIdGenerator({
 var defaultDownload2 = createDownload();
 
 // node_modules/agent-do/dist/src/debug-middleware.js
+init_browser_shim_process();
 var DEFAULT_MAX_BODY_BYTES = 16 * 1024;
 var encoder3 = new TextEncoder();
 var decoder = new TextDecoder();
@@ -45524,6 +45765,7 @@ function clampString(content, maxBytes) {
 }
 
 // node_modules/agent-do/dist/src/permissions.js
+init_browser_shim_process();
 async function evaluatePermission(toolName, args, config3) {
   if (config3.mode === "accept-all") {
     const toolLevel2 = config3.tools?.[toolName];
@@ -45547,6 +45789,12 @@ async function evaluatePermission(toolName, args, config3) {
   }
   return true;
 }
+
+// node_modules/agent-do/dist/src/skills.js
+init_browser_shim_process();
+
+// node_modules/agent-do/node_modules/zod/index.js
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/classic/external.js
 var external_exports2 = {};
@@ -45790,6 +46038,7 @@ __export(external_exports2, {
   xid: () => xid4,
   xor: () => xor
 });
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/core/index.js
 var core_exports4 = {};
@@ -46069,8 +46318,10 @@ __export(core_exports4, {
   util: () => util_exports2,
   version: () => version2
 });
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/core/core.js
+init_browser_shim_process();
 var _a25;
 var NEVER2 = /* @__PURE__ */ Object.freeze({
   status: "aborted"
@@ -46147,6 +46398,12 @@ function config2(newConfig) {
   return globalConfig2;
 }
 
+// node_modules/agent-do/node_modules/zod/v4/core/parse.js
+init_browser_shim_process();
+
+// node_modules/agent-do/node_modules/zod/v4/core/errors.js
+init_browser_shim_process();
+
 // node_modules/agent-do/node_modules/zod/v4/core/util.js
 var util_exports2 = {};
 __export(util_exports2, {
@@ -46214,6 +46471,7 @@ __export(util_exports2, {
   uint8ArrayToHex: () => uint8ArrayToHex,
   unwrapMessage: () => unwrapMessage2
 });
+init_browser_shim_process();
 function assertEqual2(val) {
   return val;
 }
@@ -47070,6 +47328,12 @@ var _safeDecodeAsync = (_Err) => async (schema4, value, _ctx) => {
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError2);
 
+// node_modules/agent-do/node_modules/zod/v4/core/schemas.js
+init_browser_shim_process();
+
+// node_modules/agent-do/node_modules/zod/v4/core/checks.js
+init_browser_shim_process();
+
 // node_modules/agent-do/node_modules/zod/v4/core/regexes.js
 var regexes_exports2 = {};
 __export(regexes_exports2, {
@@ -47133,6 +47397,7 @@ __export(regexes_exports2, {
   uuid7: () => uuid72,
   xid: () => xid3
 });
+init_browser_shim_process();
 var cuid4 = /^[cC][0-9a-z]{6,}$/;
 var cuid23 = /^[0-9a-z]+$/;
 var ulid3 = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -47778,6 +48043,7 @@ var $ZodCheckOverwrite2 = /* @__PURE__ */ $constructor2("$ZodCheckOverwrite", (i
 });
 
 // node_modules/agent-do/node_modules/zod/v4/core/doc.js
+init_browser_shim_process();
 var Doc2 = class {
   constructor(args = []) {
     this.content = [];
@@ -47814,6 +48080,7 @@ var Doc2 = class {
 };
 
 // node_modules/agent-do/node_modules/zod/v4/core/versions.js
+init_browser_shim_process();
 var version2 = {
   major: 4,
   minor: 4,
@@ -49969,8 +50236,10 @@ __export(locales_exports2, {
   zhCN: () => zh_CN_default2,
   zhTW: () => zh_TW_default2
 });
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ar.js
+init_browser_shim_process();
 var error40 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -50078,6 +50347,7 @@ function ar_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/az.js
+init_browser_shim_process();
 var error41 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
@@ -50184,6 +50454,7 @@ function az_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/be.js
+init_browser_shim_process();
 function getBelarusianPlural2(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -50341,6 +50612,7 @@ function be_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/bg.js
+init_browser_shim_process();
 var error43 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
@@ -50462,6 +50734,7 @@ function bg_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ca.js
+init_browser_shim_process();
 var error44 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
@@ -50571,6 +50844,7 @@ function ca_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/cs.js
+init_browser_shim_process();
 var error45 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
@@ -50683,6 +50957,7 @@ function cs_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/da.js
+init_browser_shim_process();
 var error46 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -50799,6 +51074,7 @@ function da_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/de.js
+init_browser_shim_process();
 var error47 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -50908,6 +51184,7 @@ function de_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/el.js
+init_browser_shim_process();
 var error48 = () => {
   const Sizable = {
     string: { unit: "\u03C7\u03B1\u03C1\u03B1\u03BA\u03C4\u03AE\u03C1\u03B5\u03C2", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
@@ -51018,6 +51295,7 @@ function el_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/en.js
+init_browser_shim_process();
 var error49 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -51131,6 +51409,7 @@ function en_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/eo.js
+init_browser_shim_process();
 var error50 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -51241,6 +51520,7 @@ function eo_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/es.js
+init_browser_shim_process();
 var error51 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -51374,6 +51654,7 @@ function es_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/fa.js
+init_browser_shim_process();
 var error52 = () => {
   const Sizable = {
     string: { unit: "\u06A9\u0627\u0631\u0627\u06A9\u062A\u0631", verb: "\u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F" },
@@ -51489,6 +51770,7 @@ function fa_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/fi.js
+init_browser_shim_process();
 var error53 = () => {
   const Sizable = {
     string: { unit: "merkki\xE4", subject: "merkkijonon" },
@@ -51602,6 +51884,7 @@ function fi_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/fr.js
+init_browser_shim_process();
 var error54 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -51728,6 +52011,7 @@ function fr_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/fr-CA.js
+init_browser_shim_process();
 var error55 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -51836,6 +52120,7 @@ function fr_CA_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/he.js
+init_browser_shim_process();
 var error56 = () => {
   const TypeNames = {
     string: { label: "\u05DE\u05D7\u05E8\u05D5\u05D6\u05EA", gender: "f" },
@@ -52031,6 +52316,7 @@ function he_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/hr.js
+init_browser_shim_process();
 var error57 = () => {
   const Sizable = {
     string: { unit: "znakova", verb: "imati" },
@@ -52154,6 +52440,7 @@ function hr_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/hu.js
+init_browser_shim_process();
 var error58 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -52263,6 +52550,7 @@ function hu_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/hy.js
+init_browser_shim_process();
 function getArmenianPlural(count, one, many) {
   return Math.abs(count) === 1 ? one : many;
 }
@@ -52411,6 +52699,7 @@ function hy_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/id.js
+init_browser_shim_process();
 var error60 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -52518,6 +52807,7 @@ function id_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/is.js
+init_browser_shim_process();
 var error61 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "a\xF0 hafa" },
@@ -52628,6 +52918,7 @@ function is_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/it.js
+init_browser_shim_process();
 var error62 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -52737,6 +53028,7 @@ function it_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ja.js
+init_browser_shim_process();
 var error63 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
@@ -52845,6 +53137,7 @@ function ja_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ka.js
+init_browser_shim_process();
 var error64 = () => {
   const Sizable = {
     string: { unit: "\u10E1\u10D8\u10DB\u10D1\u10DD\u10DA\u10DD", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
@@ -52957,7 +53250,11 @@ function ka_default() {
   };
 }
 
+// node_modules/agent-do/node_modules/zod/v4/locales/kh.js
+init_browser_shim_process();
+
 // node_modules/agent-do/node_modules/zod/v4/locales/km.js
+init_browser_shim_process();
 var error65 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -53074,6 +53371,7 @@ function kh_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ko.js
+init_browser_shim_process();
 var error66 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
@@ -53186,6 +53484,7 @@ function ko_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/lt.js
+init_browser_shim_process();
 var capitalizeFirstCharacter = (text2) => {
   return text2.charAt(0).toUpperCase() + text2.slice(1);
 };
@@ -53390,6 +53689,7 @@ function lt_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/mk.js
+init_browser_shim_process();
 var error68 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -53500,6 +53800,7 @@ function mk_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ms.js
+init_browser_shim_process();
 var error69 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -53608,6 +53909,7 @@ function ms_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/nl.js
+init_browser_shim_process();
 var error70 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -53719,6 +54021,7 @@ function nl_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/no.js
+init_browser_shim_process();
 var error71 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
@@ -53828,6 +54131,7 @@ function no_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ota.js
+init_browser_shim_process();
 var error72 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
@@ -53938,6 +54242,7 @@ function ota_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ps.js
+init_browser_shim_process();
 var error73 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
@@ -54053,6 +54358,7 @@ function ps_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/pl.js
+init_browser_shim_process();
 var error74 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
@@ -54163,6 +54469,7 @@ function pl_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/pt.js
+init_browser_shim_process();
 var error75 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
@@ -54272,6 +54579,7 @@ function pt_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ro.js
+init_browser_shim_process();
 var error76 = () => {
   const Sizable = {
     string: { unit: "caractere", verb: "s\u0103 aib\u0103" },
@@ -54392,6 +54700,7 @@ function ro_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ru.js
+init_browser_shim_process();
 function getRussianPlural2(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -54549,6 +54858,7 @@ function ru_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/sl.js
+init_browser_shim_process();
 var error78 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -54659,6 +54969,7 @@ function sl_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/sv.js
+init_browser_shim_process();
 var error79 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -54770,6 +55081,7 @@ function sv_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ta.js
+init_browser_shim_process();
 var error80 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -54881,6 +55193,7 @@ function ta_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/th.js
+init_browser_shim_process();
 var error81 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -54992,6 +55305,7 @@ function th_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/tr.js
+init_browser_shim_process();
 var error82 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmal\u0131" },
@@ -55097,7 +55411,11 @@ function tr_default2() {
   };
 }
 
+// node_modules/agent-do/node_modules/zod/v4/locales/ua.js
+init_browser_shim_process();
+
 // node_modules/agent-do/node_modules/zod/v4/locales/uk.js
+init_browser_shim_process();
 var error83 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -55212,6 +55530,7 @@ function ua_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/ur.js
+init_browser_shim_process();
 var error84 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
@@ -55323,6 +55642,7 @@ function ur_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/uz.js
+init_browser_shim_process();
 var error85 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo\u2018lishi kerak" },
@@ -55434,6 +55754,7 @@ function uz_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/vi.js
+init_browser_shim_process();
 var error86 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
@@ -55543,6 +55864,7 @@ function vi_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/zh-CN.js
+init_browser_shim_process();
 var error87 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
@@ -55653,6 +55975,7 @@ function zh_CN_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/zh-TW.js
+init_browser_shim_process();
 var error88 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
@@ -55761,6 +56084,7 @@ function zh_TW_default2() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/locales/yo.js
+init_browser_shim_process();
 var error89 = () => {
   const Sizable = {
     string: { unit: "\xE0mi", verb: "n\xED" },
@@ -55869,6 +56193,7 @@ function yo_default() {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/core/registries.js
+init_browser_shim_process();
 var _a26;
 var $output2 = Symbol("ZodOutput");
 var $input2 = Symbol("ZodInput");
@@ -55919,6 +56244,7 @@ function registry2() {
 var globalRegistry2 = globalThis.__zod_globalRegistry;
 
 // node_modules/agent-do/node_modules/zod/v4/core/api.js
+init_browser_shim_process();
 // @__NO_SIDE_EFFECTS__
 function _string2(Class3, params) {
   return new Class3({
@@ -56958,6 +57284,7 @@ function _stringFormat2(Class3, format, fnOrRegex, _params = {}) {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/core/to-json-schema.js
+init_browser_shim_process();
 function initializeContext(params) {
   let target = params?.target ?? "draft-2020-12";
   if (target === "draft-4")
@@ -57317,6 +57644,7 @@ var createStandardJSONSchemaMethod = (schema4, io, processors = {}) => (params) 
 };
 
 // node_modules/agent-do/node_modules/zod/v4/core/json-schema-processors.js
+init_browser_shim_process();
 var formatMap = {
   guid: "uuid",
   url: "uri",
@@ -57861,6 +58189,7 @@ function toJSONSchema2(input, params) {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/core/json-schema-generator.js
+init_browser_shim_process();
 var JSONSchemaGenerator2 = class {
   /** @deprecated Access via ctx instead */
   get metadataRegistry() {
@@ -57937,6 +58266,7 @@ var JSONSchemaGenerator2 = class {
 
 // node_modules/agent-do/node_modules/zod/v4/core/json-schema.js
 var json_schema_exports2 = {};
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/classic/schemas.js
 var schemas_exports4 = {};
@@ -58108,6 +58438,7 @@ __export(schemas_exports4, {
   xid: () => xid4,
   xor: () => xor
 });
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/classic/checks.js
 var checks_exports4 = {};
@@ -58142,6 +58473,7 @@ __export(checks_exports4, {
   trim: () => _trim2,
   uppercase: () => _uppercase2
 });
+init_browser_shim_process();
 
 // node_modules/agent-do/node_modules/zod/v4/classic/iso.js
 var iso_exports2 = {};
@@ -58155,6 +58487,7 @@ __export(iso_exports2, {
   duration: () => duration4,
   time: () => time4
 });
+init_browser_shim_process();
 var ZodISODateTime2 = /* @__PURE__ */ $constructor2("ZodISODateTime", (inst, def) => {
   $ZodISODateTime2.init(inst, def);
   ZodStringFormat2.init(inst, def);
@@ -58184,7 +58517,11 @@ function duration4(params) {
   return _isoDuration2(ZodISODuration2, params);
 }
 
+// node_modules/agent-do/node_modules/zod/v4/classic/parse.js
+init_browser_shim_process();
+
 // node_modules/agent-do/node_modules/zod/v4/classic/errors.js
+init_browser_shim_process();
 var initializer4 = (inst, issues) => {
   $ZodError2.init(inst, issues);
   inst.name = "ZodError";
@@ -59529,6 +59866,7 @@ function preprocess2(fn, schema4) {
 }
 
 // node_modules/agent-do/node_modules/zod/v4/classic/compat.js
+init_browser_shim_process();
 var ZodIssueCode2 = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -59555,6 +59893,7 @@ var ZodFirstPartyTypeKind;
 })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
 
 // node_modules/agent-do/node_modules/zod/v4/classic/from-json-schema.js
+init_browser_shim_process();
 var z3 = {
   ...schemas_exports4,
   ...checks_exports4,
@@ -60043,6 +60382,7 @@ __export(coerce_exports2, {
   number: () => number6,
   string: () => string6
 });
+init_browser_shim_process();
 function string6(params) {
   return _coercedString2(ZodString2, params);
 }
@@ -60062,7 +60402,20 @@ function date8(params) {
 // node_modules/agent-do/node_modules/zod/v4/classic/external.js
 config2(en_default2());
 
+// node_modules/yaml/browser/index.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/index.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/composer.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/doc/directives.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/nodes/identity.js
+init_browser_shim_process();
 var ALIAS = Symbol.for("yaml.alias");
 var DOC = Symbol.for("yaml.document");
 var MAP = Symbol.for("yaml.map");
@@ -60099,6 +60452,7 @@ function isNode(node) {
 var hasAnchor = (node) => (isScalar(node) || isCollection(node)) && !!node.anchor;
 
 // node_modules/yaml/browser/dist/visit.js
+init_browser_shim_process();
 var BREAK = Symbol("break visit");
 var SKIP = Symbol("skip children");
 var REMOVE = Symbol("remove node");
@@ -60411,7 +60765,14 @@ var Directives = class _Directives {
 Directives.defaultYaml = { explicit: false, version: "1.2" };
 Directives.defaultTags = { "!!": "tag:yaml.org,2002:" };
 
+// node_modules/yaml/browser/dist/doc/Document.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/nodes/Alias.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/doc/anchors.js
+init_browser_shim_process();
 function anchorIsValid(anchor) {
   if (/[\x00-\x19\s,[\]{}]/.test(anchor)) {
     const sa = JSON.stringify(anchor);
@@ -60421,7 +60782,11 @@ function anchorIsValid(anchor) {
   return true;
 }
 
+// node_modules/yaml/browser/dist/nodes/Node.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/doc/applyReviver.js
+init_browser_shim_process();
 function applyReviver(reviver, obj, key, val) {
   if (val && typeof val === "object") {
     if (Array.isArray(val)) {
@@ -60466,6 +60831,7 @@ function applyReviver(reviver, obj, key, val) {
 }
 
 // node_modules/yaml/browser/dist/nodes/toJS.js
+init_browser_shim_process();
 function toJS(value, arg, ctx) {
   if (Array.isArray(value))
     return value.map((v, i) => toJS(v, String(i), ctx));
@@ -60625,7 +60991,14 @@ function getAliasCount(doc, node, anchors) {
   return 1;
 }
 
+// node_modules/yaml/browser/dist/nodes/Collection.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/doc/createNode.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/nodes/Scalar.js
+init_browser_shim_process();
 var isScalarValue = (value) => !value || typeof value !== "function" && typeof value !== "object";
 var Scalar = class extends NodeBase {
   constructor(value) {
@@ -60843,7 +61216,17 @@ var Collection = class extends NodeBase {
   }
 };
 
+// node_modules/yaml/browser/dist/nodes/Pair.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/stringify/stringifyPair.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/stringify/stringify.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/stringify/stringifyComment.js
+init_browser_shim_process();
 var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
 function indentComment(comment, indent) {
   if (/^\n+$/.test(comment))
@@ -60852,7 +61235,11 @@ function indentComment(comment, indent) {
 }
 var lineComment = (str, indent, comment) => str.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str.endsWith(" ") ? "" : " ") + comment;
 
+// node_modules/yaml/browser/dist/stringify/stringifyString.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/stringify/foldFlowLines.js
+init_browser_shim_process();
 var FOLD_FLOW = "flow";
 var FOLD_BLOCK = "block";
 var FOLD_QUOTED = "quoted";
@@ -61490,7 +61877,11 @@ ${ctx.indent}`;
   return str;
 }
 
+// node_modules/yaml/browser/dist/nodes/addPairToJSMap.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/log.js
+init_browser_shim_process();
 function warn(logLevel, warning) {
   if (logLevel === "debug" || logLevel === "warn") {
     console.warn(warning);
@@ -61498,6 +61889,7 @@ function warn(logLevel, warning) {
 }
 
 // node_modules/yaml/browser/dist/schema/yaml-1.1/merge.js
+init_browser_shim_process();
 var MERGE_KEY = "<<";
 var merge3 = {
   identify: (value) => value === MERGE_KEY || typeof value === "symbol" && value.description === MERGE_KEY,
@@ -61629,7 +62021,17 @@ var Pair = class _Pair {
   }
 };
 
+// node_modules/yaml/browser/dist/schema/Schema.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/common/map.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/nodes/YAMLMap.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/stringify/stringifyCollection.js
+init_browser_shim_process();
 function stringifyCollection(collection, ctx, options) {
   const flow = ctx.inFlow ?? collection.flow;
   const stringify4 = flow ? stringifyFlowCollection : stringifyBlockCollection;
@@ -61916,7 +62318,11 @@ var map3 = {
   createNode: (schema4, obj, ctx) => YAMLMap.from(schema4, obj, ctx)
 };
 
+// node_modules/yaml/browser/dist/schema/common/seq.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/nodes/YAMLSeq.js
+init_browser_shim_process();
 var YAMLSeq = class extends Collection {
   static get tagName() {
     return "tag:yaml.org,2002:seq";
@@ -62034,7 +62440,32 @@ var seq = {
   createNode: (schema4, obj, ctx) => YAMLSeq.from(schema4, obj, ctx)
 };
 
+// node_modules/yaml/browser/dist/schema/common/string.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/tags.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/common/null.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/core/bool.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/core/float.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/stringify/stringifyNumber.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/core/int.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/core/schema.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/schema/json/schema.js
+init_browser_shim_process();
 function intIdentify(value) {
   return typeof value === "bigint" || Number.isInteger(value);
 }
@@ -62092,7 +62523,14 @@ var jsonError = {
 };
 var schema = [map3, seq].concat(jsonScalars, jsonError);
 
+// node_modules/yaml/browser/dist/schema/yaml-1.1/binary.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/yaml-1.1/omap.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/schema/yaml-1.1/pairs.js
+init_browser_shim_process();
 function createPairs(schema4, iterable, ctx) {
   const { replacer } = ctx;
   const pairs2 = new YAMLSeq(schema4);
@@ -62169,7 +62607,20 @@ var YAMLOMap = class _YAMLOMap extends YAMLSeq {
 };
 YAMLOMap.tag = "tag:yaml.org,2002:omap";
 
+// node_modules/yaml/browser/dist/schema/yaml-1.1/schema.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/yaml-1.1/bool.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/yaml-1.1/float.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/schema/yaml-1.1/int.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/schema/yaml-1.1/set.js
+init_browser_shim_process();
 var YAMLSet = class _YAMLSet extends YAMLMap {
   constructor(schema4) {
     super(schema4);
@@ -62231,6 +62682,7 @@ var YAMLSet = class _YAMLSet extends YAMLMap {
 YAMLSet.tag = "tag:yaml.org,2002:set";
 
 // node_modules/yaml/browser/dist/schema/yaml-1.1/timestamp.js
+init_browser_shim_process();
 function parseSexagesimal(str, asBigInt) {
   const sign = str[0];
   const parts = sign === "-" || sign === "+" ? str.substring(1) : str;
@@ -62265,7 +62717,68 @@ var timestamp = {
   stringify: ({ value }) => value?.toISOString().replace(/(T00:00:00)?\.000Z$/, "") ?? ""
 };
 
+// node_modules/yaml/browser/dist/stringify/stringifyDocument.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/errors.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/compose-doc.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/compose-node.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/compose-collection.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-block-map.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-props.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/util-contains-newline.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/util-flow-indent-check.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/util-map-includes.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-block-seq.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-flow-collection.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-end.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/compose-scalar.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-block-scalar.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/resolve-flow-scalar.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/compose/util-empty-scalar-position.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/parse/cst.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/parse/cst-scalar.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/parse/cst-stringify.js
+init_browser_shim_process();
+
 // node_modules/yaml/browser/dist/parse/cst-visit.js
+init_browser_shim_process();
 var BREAK2 = Symbol("break visit");
 var SKIP2 = Symbol("skip children");
 var REMOVE2 = Symbol("remove item");
@@ -62322,10 +62835,20 @@ function _visit(path, item, visitor) {
 }
 
 // node_modules/yaml/browser/dist/parse/lexer.js
+init_browser_shim_process();
 var hexDigits = new Set("0123456789ABCDEFabcdef");
 var tagChars = new Set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-#;/?:@&=+$_.!~*'()");
 var flowIndicatorChars = new Set(",[]{}");
 var invalidAnchorChars = new Set(" ,[]{}\n\r	");
+
+// node_modules/yaml/browser/dist/parse/line-counter.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/parse/parser.js
+init_browser_shim_process();
+
+// node_modules/yaml/browser/dist/public-api.js
+init_browser_shim_process();
 
 // node_modules/agent-do/dist/src/skills.js
 var SKILL_FIELD_SCHEMAS = {
@@ -62572,6 +63095,18 @@ ${description}${body}
   return tools;
 }
 
+// node_modules/agent-do/dist/src/mcp.js
+init_browser_shim_process();
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js
+init_browser_shim_process();
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
+init_browser_shim_process();
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
+init_browser_shim_process();
+
 // node_modules/zod/v3/external.js
 var external_exports3 = {};
 __export(external_exports3, {
@@ -62683,8 +63218,19 @@ __export(external_exports3, {
   util: () => util,
   void: () => voidType
 });
+init_browser_shim_process();
+
+// node_modules/zod/v3/errors.js
+init_browser_shim_process();
+
+// node_modules/zod/v3/locales/en.js
+init_browser_shim_process();
+
+// node_modules/zod/v3/ZodError.js
+init_browser_shim_process();
 
 // node_modules/zod/v3/helpers/util.js
+init_browser_shim_process();
 var util;
 (function(util3) {
   util3.assertEqual = (_) => {
@@ -63049,6 +63595,7 @@ function getErrorMap3() {
 }
 
 // node_modules/zod/v3/helpers/parseUtil.js
+init_browser_shim_process();
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -63158,7 +63705,11 @@ var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
+// node_modules/zod/v3/types.js
+init_browser_shim_process();
+
 // node_modules/zod/v3/helpers/errorUtil.js
+init_browser_shim_process();
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
@@ -66613,6 +67164,9 @@ var coerce = {
 };
 var NEVER3 = INVALID;
 
+// node_modules/zod/v4/mini/parse.js
+init_browser_shim_process();
+
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
 function isZ4Schema(s) {
   const schema4 = s;
@@ -66677,6 +67231,7 @@ function getLiteralValue(schema4) {
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
+init_browser_shim_process();
 var LATEST_PROTOCOL_VERSION = "2025-11-25";
 var SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 var RELATED_TASK_META_KEY = "io.modelcontextprotocol/related-task";
@@ -68197,15 +68752,132 @@ var UrlElicitationRequiredError = class extends McpError {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
+init_browser_shim_process();
 function isTerminal(status) {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/index.js
+init_browser_shim_process();
+
 // node_modules/zod-to-json-schema/dist/esm/Options.js
+init_browser_shim_process();
 var ignoreOverride2 = Symbol("Let zodToJsonSchema decide on which parser to use");
 
+// node_modules/zod-to-json-schema/dist/esm/Refs.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/errorMessages.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parseDef.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/selectParser.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/any.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/array.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/bigint.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/boolean.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/branded.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/catch.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/date.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/default.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/effects.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/enum.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/intersection.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/literal.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/map.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/record.js
+init_browser_shim_process();
+
 // node_modules/zod-to-json-schema/dist/esm/parsers/string.js
+init_browser_shim_process();
 var ALPHA_NUMERIC2 = new Set("ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvxyz0123456789");
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/nativeEnum.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/never.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/null.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/union.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/number.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/object.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/optional.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/pipeline.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/promise.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/set.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/tuple.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/undefined.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/unknown.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parsers/readonly.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/parseTypes.js
+init_browser_shim_process();
+
+// node_modules/zod-to-json-schema/dist/esm/zodToJsonSchema.js
+init_browser_shim_process();
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
 function getMethodLiteral(schema4) {
@@ -69183,6 +69855,7 @@ function mergeCapabilities(base, additional) {
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
+init_browser_shim_process();
 var import_ajv = __toESM(require_ajv(), 1);
 var import_ajv_formats = __toESM(require_dist(), 1);
 function createDefaultAjvInstance() {
@@ -69251,6 +69924,7 @@ var AjvJsonSchemaValidator = class {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js
+init_browser_shim_process();
 var ExperimentalClientTasks = class {
   constructor(_client) {
     this._client = _client;
@@ -69405,6 +70079,7 @@ var ExperimentalClientTasks = class {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js
+init_browser_shim_process();
 function assertToolsCallTaskCapability(requests, method, entityName) {
   if (!requests) {
     throw new Error(`${entityName} does not support task creation (required for ${method})`);
@@ -69951,11 +70626,13 @@ var Client = class extends Protocol {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
+init_browser_shim_process();
 var import_cross_spawn = __toESM(require_cross_spawn(), 1);
 init_browser_shim_node();
 init_browser_shim_node();
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
+init_browser_shim_process();
 var STDIO_DEFAULT_MAX_BUFFER_SIZE = 10 * 1024 * 1024;
 var ReadBuffer = class {
   constructor(options) {
@@ -70163,7 +70840,11 @@ var StdioClientTransport = class {
   }
 };
 
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js
+init_browser_shim_process();
+
 // node_modules/eventsource/dist/index.js
+init_browser_shim_process();
 var ErrorEvent = class extends Event {
   /**
    * Constructs a new `ErrorEvent` instance. This is typically not called directly,
@@ -70461,6 +71142,7 @@ function getBaseURL() {
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js
+init_browser_shim_process();
 function normalizeHeaders2(headers) {
   if (!headers)
     return {};
@@ -70487,7 +71169,11 @@ function createFetchWithInit(baseFetch = fetch, baseInit) {
   };
 }
 
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js
+init_browser_shim_process();
+
 // node_modules/pkce-challenge/dist/index.browser.js
+init_browser_shim_process();
 var crypto3;
 crypto3 = globalThis.crypto;
 async function getRandomValues(size) {
@@ -70529,6 +71215,7 @@ async function pkceChallenge(length) {
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js
+init_browser_shim_process();
 var SafeUrlSchema = url().superRefine((val, ctx) => {
   if (!URL.canParse(val)) {
     ctx.addIssue({
@@ -70673,6 +71360,7 @@ var OAuthTokenRevocationRequestSchema = object({
 }).strip();
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js
+init_browser_shim_process();
 function resourceUrlFromServerUrl(url3) {
   const resourceURL = typeof url3 === "string" ? new URL(url3) : new URL(url3.href);
   resourceURL.hash = "";
@@ -70693,6 +71381,7 @@ function checkResourceAllowed({ requestedResource, configuredResource }) {
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js
+init_browser_shim_process();
 var OAuthError = class extends Error {
   constructor(message, errorUri) {
     super(message);
@@ -71519,7 +72208,11 @@ var SSEClientTransport = class {
   }
 };
 
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js
+init_browser_shim_process();
+
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js
+init_browser_shim_process();
 var import_content_type = __toESM(require_content_type(), 1);
 function mediaTypeEssence(header) {
   if (!header) {
@@ -71937,6 +72630,7 @@ var StreamableHTTPClientTransport = class {
 init_browser_shim_node();
 
 // node_modules/agent-do/dist/src/tools/content-guards.js
+init_browser_shim_process();
 var DEFAULT_MAX_READ_BYTES = 256 * 1024;
 var DEFAULT_MAX_WRITE_BYTES = 1 * 1024 * 1024;
 var DEFAULT_MAX_GREP_LINE_BYTES = 4 * 1024;
@@ -72125,6 +72819,7 @@ function formatMcpToolResult(result) {
 }
 
 // node_modules/agent-do/dist/src/routines.js
+init_browser_shim_process();
 init_browser_shim_node();
 init_browser_shim_node();
 var ROUTINE_FIELD_SCHEMAS = {
@@ -72234,6 +72929,7 @@ function escapeRoutineBody(value) {
 }
 
 // node_modules/agent-do/dist/src/policies.js
+init_browser_shim_process();
 var POLICY_CONTENT_MAX = 16 * 1024;
 var POLICY_ID_MAX = 64;
 var POLICY_FIELD_SCHEMAS = {
@@ -72288,6 +72984,7 @@ function warnUnrenderablePolicy(policy) {
 }
 
 // node_modules/agent-do/dist/src/usage.js
+init_browser_shim_process();
 var DEFAULT_PRICING = {
   // Anthropic — newest first.
   "claude-fable-5": { input: 10, output: 50 },
@@ -72516,6 +73213,7 @@ var UsageTracker = class {
 };
 
 // node_modules/agent-do/dist/src/tools/types.js
+init_browser_shim_process();
 function isToolResult(value) {
   return typeof value === "object" && value !== null && typeof value.modelContent === "string" && typeof value.userSummary === "string";
 }
@@ -72537,6 +73235,7 @@ function normaliseToolResult(raw) {
 }
 
 // node_modules/agent-do/dist/src/loop-history.js
+init_browser_shim_process();
 var OPEN_PREFIX = "<tool_output";
 var CLOSE_TAG = "</tool_output>";
 var OPEN_TAG_RE = /<tool_output\b([^>]*)>/g;
@@ -72641,6 +73340,7 @@ function cutoffForKeepWindow(iterationStarts, keepWindow) {
 }
 
 // node_modules/agent-do/dist/src/slash-commands.js
+init_browser_shim_process();
 var SLASH_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 var HAS_SLASH_COMMANDS = Symbol("agent-do.hasSlashCommands");
 function parseSlashCommand(input) {
@@ -73496,10 +74196,12 @@ async function* streamAgentLoopDirect(config3, task, context, history) {
 }
 
 // node_modules/agent-do/dist/src/scheduled-tasks.js
+init_browser_shim_process();
 init_browser_shim_node();
 init_browser_shim_node();
 
 // node_modules/agent-do/dist/src/stores/file-lock.js
+init_browser_shim_process();
 init_browser_shim_node();
 init_browser_shim_node();
 init_browser_shim_node();
@@ -73641,13 +74343,30 @@ function createAgent(config3) {
   return agent;
 }
 
+// node_modules/agent-do/dist/src/tools/workspace-tools.js
+init_browser_shim_process();
+
 // node_modules/agent-do/dist/src/stores/filesystem.js
+init_browser_shim_process();
 init_browser_shim_node();
 init_browser_shim_node();
 init_browser_shim_node();
 init_browser_shim_node();
 
+// node_modules/agent-do/dist/src/stores/search-matcher.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/stores/agent-id.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/stores/sandbox.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/tools/file-tools.js
+init_browser_shim_process();
+
 // node_modules/agent-do/dist/src/tools/deny-list.js
+init_browser_shim_process();
 init_browser_shim_node();
 init_browser_shim_node();
 var import_ignore = __toESM(require_ignore(), 1);
@@ -73673,13 +74392,45 @@ var DEFAULT_WRITE_DENY = [
   "node_modules/**"
 ];
 
+// node_modules/agent-do/dist/src/tools/memory-tools.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/tools/shell-tool.js
+init_browser_shim_process();
+
 // node_modules/agent-do/dist/src/sandbox/connectors/host.js
+init_browser_shim_process();
 init_browser_shim_node();
 init_browser_shim_node();
 init_browser_shim_node();
 var execAsync = promisify(exec);
 
+// node_modules/agent-do/dist/src/orchestrator.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/stores/in-memory.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/sandbox/connectors/index.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/sandbox/connectors/just-bash.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/prompts/builder.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/prompts/sections.js
+init_browser_shim_process();
+
+// node_modules/agent-do/dist/src/prompts/templates.js
+init_browser_shim_process();
+
+// node_modules/zod/index.js
+init_browser_shim_process();
+
 // extension/lib/usage.js
+init_browser_shim_process();
 var STORAGE_KEY = "cairn:usage";
 var MAX_RECORDS = 5e3;
 var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -73739,6 +74490,7 @@ async function clearUsage() {
 }
 
 // extension/lib/skills.js
+init_browser_shim_process();
 async function setSkills(origin, skills) {
   await siteMemory(origin).set("skills", skills);
   return skills;
@@ -73905,6 +74657,7 @@ function createOrchestrator2({
 }
 
 // extension/lib/tools.js
+init_browser_shim_process();
 var DIR_KEY = "toolDirectory";
 function describeTool(t) {
   return {

@@ -16,6 +16,7 @@ await build({
   ...shared,
   entryPoints: ["extension/background/service-worker.js"],
   outfile: "extension/dist/background/service-worker.js",
+  inject: [new URL("./browser-shim-process.js", import.meta.url).pathname],
   alias: (() => {
     const root = new URL(".", import.meta.url).pathname;
     const shim = `${root}browser-shim-node.js`;
