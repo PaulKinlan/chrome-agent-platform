@@ -40,6 +40,14 @@
   .wave span:nth-child(4) { height: 10px; animation-delay: .45s; }
   .wave span:nth-child(5) { height: 7px; animation-delay: .6s; }
   @keyframes wave { 0%,100% { transform: scaleY(.5); } 50% { transform: scaleY(1); } }
+  .capture { margin-top: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .cap-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
+  .capture video { width: 100%; max-height: 240px; border-radius: 8px; background: #000; margin-bottom: 8px; }
+  .cap-controls { display: flex; align-items: center; gap: 12px; }
+  .cap-timer { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 42px; }
+  .cap-meter { display: flex; align-items: center; gap: 3px; height: 20px; }
+  .cap-meter span { width: 3px; height: 6px; background: var(--accent); border-radius: 2px; transition: height .08s; }
+  .cap-note { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -74,12 +82,23 @@
       <button class="btn" id="run-task">Run task</button>
       <div class="attach-menu" id="attach-menu" hidden>
         <button type="button" data-kind="file">Add file</button>
-        <button type="button" data-kind="audio">Add audio</button>
-        <button type="button" data-kind="video">Add video</button>
+        <button type="button" data-kind="record-audio">Record audio</button>
+        <button type="button" data-kind="capture-camera">Capture camera</button>
         <button type="button" data-kind="other">Add other file</button>
       </div>
     </div>
     <div class="wave" id="wave" hidden><span></span><span></span><span></span><span></span><span></span></div>
+  </div>
+
+  <div class="capture" id="capture-panel" hidden>
+    <div class="cap-head"><span id="cap-title">Record audio</span><button type="button" class="btn ghost" id="cap-close" aria-label="Close">✕</button></div>
+    <video id="cap-video" autoplay muted playsinline hidden></video>
+    <div class="cap-controls">
+      <button type="button" class="btn" id="cap-action">● Record</button>
+      <span class="cap-timer" id="cap-timer">0:00</span>
+      <div class="cap-meter" id="cap-meter"><span></span><span></span><span></span><span></span><span></span></div>
+    </div>
+    <p class="cap-note" id="cap-note" style="color:var(--muted);font-size:12px"></p>
   </div>
 
   <div class="grid">

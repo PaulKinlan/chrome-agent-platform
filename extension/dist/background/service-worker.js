@@ -74905,12 +74905,12 @@ async function invokeSiteTool(origin, name25, args) {
     return { error: `invoke failed: ${e.message}` };
   }
 }
-async function runTask({ id, task, scheduled = false }) {
+async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
-  await journalAppend(mem, { type: "task", id: taskId, task, scheduled });
-  const result = await orch.run(task, { taskId }, []);
+  await journalAppend(mem, { type: "task", id: taskId, task, scheduled, attachmentCount: attachments?.length ?? 0 });
+  const result = await orch.run(task, { taskId, attachments }, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
   return { ok: true, result };
 }
@@ -74925,7 +74925,7 @@ var handlers = {
     return { choices: PROVIDER_CHOICES };
   },
   async "agent.run"(m) {
-    return await runTask({ id: m.id, task: m.task });
+    return await runTask({ id: m.id, task: m.task, attachments: m.attachments });
   },
   async "agent.list"() {
     return await listOrigins();
