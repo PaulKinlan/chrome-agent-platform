@@ -34,28 +34,6 @@ const SUPPORTED_KEYWORDS = new Set([
   "anyOf", // union (exactly-one oneOf is NOT supported)
 ]);
 
-/** A zod schema enforcing a JSON-Schema `type` string (used to compose anyOf). */
-function typeZod(z, type) {
-  switch (type) {
-    case "string":
-      return z.string();
-    case "number":
-      return z.number();
-    case "integer":
-      return z.number().int();
-    case "boolean":
-      return z.boolean();
-    case "array":
-      return z.array(z.unknown());
-    case "object":
-      return z.object({}).passthrough();
-    case "null":
-      return z.null();
-    default:
-      return z.never();
-  }
-}
-
 function valueMatchesType(value, type) {
   switch (type) {
     case "string":
@@ -79,222 +57,211 @@ function valueMatchesType(value, type) {
 }
 
 /**
- * Convert a JSON-schema descriptor into a bounded zod schema — FAIL CLOSED.
- * An unsupported or malformed schema becomes z.never() (rejects everything),
- * never a permissive z.record(z.any()). Only a bounded, reviewed subset of
- * JSON Schema is supported; every keyword outside it is rejected, not ignored.
+ * Validate the COMPLETE schema AST first — every keyword value shape, every
+ * per-type keyword rule, every nested subschema — and only then compile.
+ * Returns true if the tree is a supported, well-formed schema; false otherwise.
+ * This prevents fail-open cases where a malformed child silently became
+ * optional z.never() or a lone union branch.
  */
-export function schemaToZod(z, schema, depth = 0) {
-  if (depth > SCHEMA_BOUNDS.maxDepth) return z.never();
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
-    return z.never();
-  }
+function validateSchemaAST(schema, depth) {
+  if (depth > SCHEMA_BOUNDS.maxDepth) return false;
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
 
-  // Fail closed on ANY unsupported keyword (strict allowlist, not permissiveness).
+  // Strict keyword allowlist — anything outside it is REJECTED.
   for (const key of Object.keys(schema)) {
-    if (!SUPPORTED_KEYWORDS.has(key)) return z.never();
+    if (!SUPPORTED_KEYWORDS.has(key)) return false;
   }
-  // oneOf (exactly-one) cannot be faithfully enforced with a zod union — reject.
-  if (schema.oneOf !== undefined) return z.never();
-  // pattern is a regex-DoS vector — reject.
-  if (schema.pattern !== undefined) return z.never();
-  // additionalProperties must be a boolean (false → strict); a schema-valued
-  // additionalProperties is NOT supported — reject rather than passthrough.
+  // oneOf (exactly-one) + pattern (regex DoS) are not supported — reject.
+  if (schema.oneOf !== undefined || schema.pattern !== undefined) return false;
+  // additionalProperties must be a boolean (false → strict). Schema-valued → reject.
   if (
     schema.additionalProperties !== undefined &&
     typeof schema.additionalProperties !== "boolean"
-  ) {
-    return z.never();
-  }
+  ) return false;
 
-  const t = schema.type;
-
-  // ---- per-keyword SHAPE validation (a malformed keyword fails closed) ----
-  // required: if present must be a non-empty array of strings.
+  // ---- keyword value SHAPES (malformed shape → reject) ----
   if (schema.required !== undefined) {
     if (
       !Array.isArray(schema.required) ||
       schema.required.some((k) => typeof k !== "string")
-    ) return z.never();
+    ) return false;
   }
-  // enum / anyOf: if present must be an array.
-  if (schema.enum !== undefined && !Array.isArray(schema.enum)) {
-    return z.never();
+  if (schema.enum !== undefined) {
+    if (!Array.isArray(schema.enum)) return false;
+    if (schema.enum.length === 0 || schema.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return false;
   }
-  if (schema.anyOf !== undefined && !Array.isArray(schema.anyOf)) {
-    return z.never();
+  if (schema.anyOf !== undefined) {
+    if (!Array.isArray(schema.anyOf)) return false;
+    if (schema.anyOf.length === 0 || schema.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return false;
   }
-  // items / properties: if present must be an object.
-  if (schema.items !== undefined && typeof schema.items !== "object") {
-    return z.never();
+  // items / properties must be plain objects (NOT null, NOT arrays).
+  if (schema.items !== undefined) {
+    if (schema.items === null || typeof schema.items !== "object" || Array.isArray(schema.items)) return false;
   }
-  if (
-    schema.properties !== undefined &&
-    (typeof schema.properties !== "object" || Array.isArray(schema.properties))
-  ) return z.never();
-  // numeric bounds: if present must be a finite number.
-  for (
-    const k of [
-      "minimum",
-      "maximum",
-      "minItems",
-      "maxItems",
-      "minLength",
-      "maxLength",
-    ]
-  ) {
-    if (schema[k] !== undefined && typeof schema[k] !== "number") {
-      return z.never();
+  if (schema.properties !== undefined) {
+    if (schema.properties === null || typeof schema.properties !== "object" || Array.isArray(schema.properties)) return false;
+    const keys = Object.keys(schema.properties);
+    if (keys.length > SCHEMA_BOUNDS.maxProperties) return false;
+  }
+  // numeric bounds: finite numbers for min/max; NON-NEGATIVE INTEGERS for
+  // length/item counts (negative or fractional bounds are malformed).
+  for (const k of ["minimum", "maximum"]) {
+    if (schema[k] !== undefined && (typeof schema[k] !== "number" || !Number.isFinite(schema[k]))) return false;
+  }
+  for (const k of ["minLength", "maxLength", "minItems", "maxItems"]) {
+    if (schema[k] !== undefined && (typeof schema[k] !== "number" || !Number.isInteger(schema[k]) || schema[k] < 0)) return false;
+  }
+
+  // ---- per-type keyword allowlist (a keyword on the wrong type → reject) ----
+  const t = schema.type;
+  if (t !== undefined && !["string", "number", "integer", "boolean", "array", "object", "null"].includes(t)) return false;
+  const nonString = (s) => schema[s] !== undefined;
+  if (t === "string") {
+    if (nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "number" || t === "integer") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "boolean") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "null") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "array") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
+  } else if (t === "object") {
+    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems")) return false;
+  }
+
+  // const must match the declared type (if declared) — a const value of the
+  // wrong type makes the schema unsatisfiable.
+  if (t !== undefined && schema.const !== undefined && !valueMatchesType(schema.const, t)) {
+    return false;
+  }
+  // enum values that mismatch the declared type are EXCLUDED at compile time
+  // (JSON Schema: a value that doesn't match the type simply never matches).
+
+  // ---- recursive validation of nested subschemas ----
+  if (schema.items !== undefined && !validateSchemaAST(schema.items, depth + 1)) return false;
+  if (schema.properties !== undefined) {
+    for (const key of Object.keys(schema.properties)) {
+      if (!validateSchemaAST(schema.properties[key], depth + 1)) return false;
+    }
+  }
+  if (schema.anyOf !== undefined) {
+    for (const branch of schema.anyOf) {
+      if (!validateSchemaAST(branch, depth + 1)) return false;
     }
   }
 
-  // const → literal, enum → union of literals — both validated against the
-  // declared type so `{type:"string", enum:[42]}` fails closed.
+  return true;
+}
+
+/**
+ * Does a literal value satisfy this schema's type + string/number bounds?
+ * (Used to compose const/enum with their sibling constraints — a value that
+ * violates a bound makes the whole schema unsatisfiable.)
+ */
+function valueSatisfiesBounds(value, schema) {
+  const t = schema.type;
+  if (t !== undefined && !valueMatchesType(value, t)) return false;
+  if (t === "string") {
+    if (typeof value !== "string") return false;
+    if (schema.minLength !== undefined && value.length < schema.minLength) return false;
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) return false;
+    return true;
+  }
+  if (t === "number") {
+    if (typeof value !== "number") return false;
+    if (schema.minimum !== undefined && value < schema.minimum) return false;
+    if (schema.maximum !== undefined && value > schema.maximum) return false;
+    return true;
+  }
+  if (t === "integer") {
+    if (!Number.isInteger(value)) return false;
+    if (schema.minimum !== undefined && value < Math.ceil(schema.minimum)) return false;
+    if (schema.maximum !== undefined && value > Math.floor(schema.maximum)) return false;
+    return true;
+  }
+  return true; // no bounds apply for other types
+}
+
+/**
+ * Convert a JSON-schema descriptor into a bounded zod schema — FAIL CLOSED.
+ * The whole tree is validated first (validateSchemaAST); an unsupported or
+ * malformed schema becomes z.never() (rejects everything), never a permissive
+ * fallback. All supported sibling constraints are composed, never dropped.
+ */
+export function schemaToZod(z, schema, depth = 0) {
+  // Phase 1: validate the complete AST. Any malformed/unsupported shape fails
+  // closed for the WHOLE schema (not just a branch that could become optional).
+  if (!validateSchemaAST(schema, depth)) return z.never();
+
+  // ---- const / enum / anyOf compose their siblings (type + bounds) ----
   if (schema.const !== undefined) {
-    if (t !== undefined && !valueMatchesType(schema.const, t)) return z.never();
+    // The value must satisfy type + every sibling bound, else no value works.
+    if (!valueSatisfiesBounds(schema.const, schema)) return z.never();
     return z.literal(schema.const);
   }
-  if (Array.isArray(schema.enum)) {
-    if (schema.enum.length === 0) return z.never(); // empty enum = rejects everything
-    if (schema.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z.never();
-    if (schema.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z.never();
-    // Enum values that mismatch the declared type are EXCLUDED (so
-    // {type:"string", enum:[42,"a"]} rejects 42 and accepts "a"); if none
-    // match, the enum is empty and rejects everything (fail closed).
-    const valid = t !== undefined
-      ? schema.enum.filter((v) => valueMatchesType(v, t))
-      : schema.enum;
+  if (schema.enum !== undefined) {
+    const valid = schema.enum.filter((v) => valueSatisfiesBounds(v, schema));
     if (valid.length === 0) return z.never();
-    return z.union(
-      valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z.literal(v)),
-    );
-  }
-  if (Array.isArray(schema.anyOf)) {
-    if (
-      schema.anyOf.length === 0 ||
-      schema.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches
-    ) return z.never();
-    const branches = schema.anyOf.map((b) => schemaToZod(z, b, depth + 1));
-    // Compose the declared `type` with anyOf (JSON Schema requires BOTH) by
-    // intersecting the union with a type guard built from `t`.
-    const typeGuard = t !== undefined ? typeZod(z, t) : null;
-    return typeGuard
-      ? z.intersection(z.union(branches), typeGuard)
-      : z.union(branches);
+    return z.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z.literal(v)));
   }
 
-  // ---- per-type keyword allowlist (a keyword on the wrong type fails closed) ----
+  // Build the type + bounds guard (the base schema WITHOUT anyOf).
+  const base = buildBaseZod(z, schema);
+  if (schema.anyOf !== undefined) {
+    const branches = schema.anyOf.map((b) => schemaToZod(z, b, depth + 1));
+    // Compose the declared type/bounds with anyOf — JSON Schema requires BOTH.
+    return z.intersection(base, z.union(branches));
+  }
+  return base;
+}
+
+/** Build the zod schema for a schema's own type + bounds (no anyOf/const/enum). */
+function buildBaseZod(z, schema) {
+  const t = schema.type;
   if (t === "string") {
-    if (
-      schema.minimum !== undefined || schema.maximum !== undefined ||
-      schema.items !== undefined || schema.minItems !== undefined ||
-      schema.maxItems !== undefined || schema.properties !== undefined ||
-      schema.required !== undefined || schema.additionalProperties !== undefined
-    ) return z.never();
     let s = z.string();
-    if (typeof schema.minLength === "number" && schema.minLength >= 0) {
-      s = s.min(schema.minLength);
-    }
-    // Global cap is ALWAYS applied (even when the page omits maxLength) so a
-    // hostile descriptor cannot describe an unbounded string.
-    const pageMax =
-      typeof schema.maxLength === "number" && schema.maxLength >= 0
-        ? schema.maxLength
-        : SCHEMA_BOUNDS.maxStringLength;
+    if (schema.minLength !== undefined) s = s.min(schema.minLength);
+    const pageMax = schema.maxLength !== undefined ? schema.maxLength : SCHEMA_BOUNDS.maxStringLength;
     s = s.max(Math.min(pageMax, SCHEMA_BOUNDS.maxStringLength));
     return s;
   }
   if (t === "number") {
-    if (
-      schema.minLength !== undefined || schema.maxLength !== undefined ||
-      schema.items !== undefined || schema.minItems !== undefined ||
-      schema.maxItems !== undefined || schema.properties !== undefined ||
-      schema.required !== undefined || schema.additionalProperties !== undefined
-    ) return z.never();
     let s = z.number();
-    if (typeof schema.minimum === "number") s = s.min(schema.minimum);
-    if (typeof schema.maximum === "number") s = s.max(schema.maximum);
+    if (schema.minimum !== undefined) s = s.min(schema.minimum);
+    if (schema.maximum !== undefined) s = s.max(schema.maximum);
     return s;
   }
   if (t === "integer") {
-    if (
-      schema.minLength !== undefined || schema.maxLength !== undefined ||
-      schema.items !== undefined || schema.minItems !== undefined ||
-      schema.maxItems !== undefined || schema.properties !== undefined ||
-      schema.required !== undefined || schema.additionalProperties !== undefined
-    ) return z.never();
     let s = z.number().int();
-    if (typeof schema.minimum === "number") {
-      s = s.min(Math.ceil(schema.minimum));
-    }
-    if (typeof schema.maximum === "number") {
-      s = s.max(Math.floor(schema.maximum));
-    }
+    if (schema.minimum !== undefined) s = s.min(Math.ceil(schema.minimum));
+    if (schema.maximum !== undefined) s = s.max(Math.floor(schema.maximum));
     return s;
   }
-  if (t === "boolean") {
-    if (
-      schema.minLength !== undefined || schema.maxLength !== undefined ||
-      schema.minimum !== undefined || schema.maximum !== undefined ||
-      schema.items !== undefined || schema.minItems !== undefined ||
-      schema.maxItems !== undefined || schema.properties !== undefined ||
-      schema.required !== undefined || schema.additionalProperties !== undefined
-    ) return z.never();
-    return z.boolean();
-  }
-  if (t === "null") {
-    return z.null();
-  }
+  if (t === "boolean") return z.boolean();
+  if (t === "null") return z.null();
   if (t === "array") {
-    if (
-      schema.minLength !== undefined || schema.maxLength !== undefined ||
-      schema.minimum !== undefined || schema.maximum !== undefined ||
-      schema.properties !== undefined || schema.required !== undefined ||
-      schema.additionalProperties !== undefined
-    ) return z.never();
-    const inner = schemaToZod(z, schema.items, depth + 1);
+    const inner = schemaToZod(z, schema.items, 1);
     let arr = z.array(inner);
-    if (typeof schema.minItems === "number" && schema.minItems >= 0) {
-      arr = arr.min(schema.minItems);
-    }
-    const pageMax = typeof schema.maxItems === "number" && schema.maxItems >= 0
-      ? schema.maxItems
-      : SCHEMA_BOUNDS.maxArrayItems;
-    arr = arr.max(Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems)); // global cap ALWAYS applied
+    if (schema.minItems !== undefined) arr = arr.min(schema.minItems);
+    const pageMax = schema.maxItems !== undefined ? schema.maxItems : SCHEMA_BOUNDS.maxArrayItems;
+    arr = arr.max(Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
     return arr;
   }
   if (t === "object") {
-    if (
-      schema.minLength !== undefined || schema.maxLength !== undefined ||
-      schema.minimum !== undefined || schema.maximum !== undefined ||
-      schema.items !== undefined || schema.minItems !== undefined ||
-      schema.maxItems !== undefined
-    ) return z.never();
-    const props = schema.properties && typeof schema.properties === "object"
-      ? schema.properties
-      : {};
-    const propKeys = Object.keys(props);
-    if (propKeys.length > SCHEMA_BOUNDS.maxProperties) return z.never();
-    const required = Array.isArray(schema.required)
-      ? new Set(schema.required)
-      : new Set();
-    // A `required` key not declared in `properties` is malformed — fail closed.
-    for (const key of required) {
-      if (!Object.prototype.hasOwnProperty.call(props, key)) return z.never();
-    }
+    const props = schema.properties || {};
+    const required = new Set(Array.isArray(schema.required) ? schema.required : []);
     const shape = {};
     for (const [key, sub] of Object.entries(props)) {
-      const subZod = schemaToZod(z, sub, depth + 1);
+      const subZod = schemaToZod(z, sub, 1);
       shape[key] = required.has(key) ? subZod : subZod.optional();
     }
     const obj = z.object(shape);
-    // additionalProperties:false → z.strict() (reject unknown keys). Absent or
-    // true → passthrough (accept extra keys, as JSON Schema defaults).
-    return schema.additionalProperties === false
-      ? obj.strict()
-      : obj.passthrough();
+    return schema.additionalProperties === false ? obj.strict() : obj.passthrough();
   }
-  // Unsupported / unknown → fail closed.
+  // no type declared: accept anything (only valid when combined with const/enum/anyOf,
+  // which are handled before buildBaseZod is called; reaching here with no type
+  // and no const/enum/anyOf means an unconstrained schema — reject fail-closed).
   return z.never();
 }
 

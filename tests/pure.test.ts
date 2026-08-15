@@ -284,6 +284,33 @@ Deno.test("schemaToZod composes anyOf with the declared type", () => {
   assertEquals(s.safeParse(42).success, false);
 });
 
+// ---- round-7 regressions: the 9 malformed-probe cases the reviewer found ----
+// Each previously returned success:true; each must now REJECT (fail closed).
+
+const malformedCases = [
+  ["const ignores minLength", { type: "string", minLength: 2, const: "x" }, "x"],
+  ["enum ignores minLength", { type: "string", minLength: 2, enum: ["x"] }, "x"],
+  ["anyOf ignores minLength", { type: "string", minLength: 5, anyOf: [{ type: "string" }] }, "x"],
+  ["null type ignores minLength", { type: "null", minLength: 2 }, null],
+  ["properties:null is malformed", { type: "object", properties: null }, { x: 1 }],
+  ["malformed optional property (properties:{x:null})", { type: "object", properties: { x: null } }, {}],
+  ["malformed anyOf branch (null branch)", { anyOf: [null, { type: "string" }] }, "ok"],
+  ["negative minLength", { type: "string", minLength: -1 }, "x"],
+  ["fractional maxItems", { type: "array", maxItems: 1.5 }, [1, 2]],
+];
+
+for (const [label, schema, value] of malformedCases) {
+  Deno.test(`schemaToZod fails closed: ${label}`, () => {
+    const s = schemaToZod(z, schema);
+    assertEquals(s.safeParse(value).success, false, `${label} accepted a value it must reject`);
+  });
+}
+
+Deno.test("schemaToZod composes const with satisfying bounds (valid const still works)", () => {
+  const s = schemaToZod(z, { type: "string", minLength: 1, const: "ok" });
+  assertEquals(s.safeParse("ok").success, true);
+});
+
 Deno.test("Ollama-compatible model allows an optional key (no key required)", async () => {
   const { createOpenAICompatibleModel } = await import(
     "../extension/lib/models/openai-model.js"
