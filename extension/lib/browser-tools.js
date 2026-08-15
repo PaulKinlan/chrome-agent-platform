@@ -5,31 +5,63 @@
 
 import { tool } from "ai";
 import { z } from "zod";
+import { scheduleTask } from "./scheduler.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
 
-// A grant is scoped: it expires, and destructive tab actions are limited to the
-// approved origins. NOT an indefinite global Boolean.
+// A grant is EXPLICITLY scoped, expiring, and revocable. Two scopes:
+//   - "global": the owner granted control over the whole browser (temporary).
+//   - "origins": the owner granted control over a non-empty origin allowlist.
+// A grant is NEVER an indefinite global Boolean, and an empty origin list is
+// never silently treated as unrestricted.
 export async function isBrowserControlGranted(origin) {
   const s = await chrome.storage.local.get(GRANT_KEY);
   const grant = s[GRANT_KEY];
   if (!grant || typeof grant !== "object") return false;
-  if (typeof grant.expiresAt !== "number" || grant.expiresAt <= Date.now()) return false;
-  if (origin && Array.isArray(grant.origins) && grant.origins.length > 0) {
-    return grant.origins.includes(origin);
+  if (typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)) return false;
+  if (grant.expiresAt <= Date.now()) return false;
+  if (grant.scope === "global") return true;
+  if (grant.scope === "origins" && Array.isArray(grant.origins) && grant.origins.length > 0) {
+    return typeof origin === "string" && grant.origins.includes(origin);
   }
-  return true;
+  return false; // an empty/unknown origin list is DENIED, never unrestricted
 }
 
-export async function setBrowserControlGrant({ origins = [], expiryMs = DEFAULT_GRANT_MS } = {}) {
+function clampExpiryMs(expiryMs) {
+  const ms = Number(expiryMs);
+  if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_GRANT_MS;
+  return Math.min(ms, 60 * 60 * 1000); // never longer than an hour without re-confirm
+}
+
+export async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   const grant = {
-    expiresAt: Date.now() + expiryMs,
-    origins: origins.slice(0, 50),
+    scope: "global",
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now(),
   };
   await chrome.storage.local.set({ [GRANT_KEY]: grant });
   return grant;
+}
+
+export async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
+  const canonical = [...new Set((origins ?? []).map((o) => {
+    try { return new URL(String(o)).origin; } catch { return null; }
+  }).filter(Boolean))].slice(0, 50);
+  if (canonical.length === 0) throw new Error("origin grant needs at least one valid origin");
+  const grant = {
+    scope: "origins",
+    origins: canonical,
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
+    grantedAt: Date.now(),
+  };
+  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  return grant;
+}
+
+export async function revokeBrowserControlGrant() {
+  await chrome.storage.local.remove(GRANT_KEY);
+  return { revoked: true };
 }
 
 /** Resolve the active tab in the current window. */
@@ -59,19 +91,18 @@ export async function readPage(tabId) {
 
 /** The browser-control toolset, passed into the agent. */
 export function browserToolset() {
-  const guard = async () => {
-    if (!(await isBrowserControlGranted())) {
-      return { error: "browser control not granted — ask the user to enable it in Settings" };
-    }
-    return null;
-  };
   return {
     open_tab: tool({
-      description: "Open a URL in a new browser tab. Requires browser-control permission.",
+      description: "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
       inputSchema: z.object({ url: z.string().url() }),
       execute: async ({ url }) => {
-        const g = await guard();
-        if (g) return g;
+        // Check the DESTINATION origin against the grant (a per-origin grant
+        // only authorizes its own origins; a global grant authorizes all).
+        let destOrigin;
+        try { destOrigin = new URL(url).origin; } catch { return { error: "invalid url" }; }
+        if (!(await isBrowserControlGranted(destOrigin))) {
+          return { error: "browser control not granted for this origin — ask the user to approve it in Settings" };
+        }
         const tab = await chrome.tabs.create({ url });
         return { ok: true, tabId: tab.id, url };
       },
@@ -80,15 +111,15 @@ export function browserToolset() {
       description: "Navigate an existing tab to a URL. Requires browser-control permission (scoped + expiring).",
       inputSchema: z.object({ tabId: z.number().optional(), url: z.string().url() }),
       execute: async ({ tabId, url }) => {
+        // Check the DESTINATION origin (not just the current tab's origin): an
+        // approved origin must not be navigated to an unapproved one.
+        let destOrigin;
+        try { destOrigin = new URL(url).origin; } catch { return { error: "invalid url" }; }
+        if (!(await isBrowserControlGranted(destOrigin))) {
+          return { error: "browser control not granted for the destination origin — ask the user to approve it in Settings" };
+        }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
-        const tab = await chrome.tabs.get(id).catch(() => null);
-        const origin = tab?.url ? new URL(tab.url).origin : undefined;
-        if (origin && !(await isBrowserControlGranted(origin))) {
-          return { error: "browser control not granted for this origin — ask the user to approve it in Settings" };
-        }
-        const g = await guard();
-        if (g) return g;
         await chrome.tabs.update(id, { url });
         return { ok: true, tabId: id, url };
       },
@@ -99,9 +130,13 @@ export function browserToolset() {
       execute: async ({ tabId }) => readPage(tabId),
     }),
     capture_screenshot: tool({
-      description: "Capture a PNG screenshot of the requested tab (or the active tab).",
+      description: "Capture a PNG screenshot of the requested tab (or the active tab). Requires browser-control permission.",
       inputSchema: z.object({ tabId: z.number().optional() }),
       execute: async ({ tabId }) => {
+        // Screenshots are gated like other browser-control operations.
+        if (!(await isBrowserControlGranted())) {
+          return { error: "browser control not granted — ask the user to enable it in Settings" };
+        }
         try {
           const tab = tabId
             ? await chrome.tabs.get(tabId).catch(() => null)
@@ -132,12 +167,10 @@ export function browserToolset() {
       inputSchema: z.object({ tabId: z.number() }),
       execute: async ({ tabId }) => {
         const tab = await chrome.tabs.get(tabId).catch(() => null);
-        const origin = tab?.url ? new URL(tab.url).origin : undefined;
-        if (origin && !(await isBrowserControlGranted(origin))) {
+        const origin = tab?.url ? (() => { try { return new URL(tab.url).origin; } catch { return undefined; } })() : undefined;
+        if (!(await isBrowserControlGranted(origin))) {
           return { error: "browser control not granted for this origin — ask the user to approve it in Settings" };
         }
-        const g = await guard();
-        if (g) return g;
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };
       },
@@ -160,22 +193,9 @@ export function browserToolset() {
         periodInMinutes: z.number().optional(),
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
-        // Same scheduling path as the register-task route: persist the full payload
-        // (so it survives worker restart) + create the chrome alarm.
-        const name = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        let when;
-        if (typeof at === "number" && at > Date.now()) when = at;
-        else if (typeof delayMs === "number" && delayMs > 0) when = Date.now() + delayMs;
-        else return { error: "provide a future `at` (absolute ms) or a positive `delayMs`" };
-        const KEY = "cap:scheduledTasks";
-        const store = await chrome.storage.local.get(KEY);
-        const tasks = store[KEY] ?? {};
-        tasks[name] = { name, task, periodInMinutes, at: when };
-        await chrome.storage.local.set({ [KEY]: tasks });
-        const info = { when };
-        if (periodInMinutes) info.periodInMinutes = periodInMinutes;
-        await chrome.alarms.create(name, info);
-        return { ok: true, name, when };
+        // The ONE atomic scheduling path (shared with the register-task route).
+        const name = await scheduleTask({ task, at, delayMs, periodInMinutes });
+        return { ok: true, name, when: (await chrome.storage.local.get(TASK_KEY))[TASK_KEY]?.[name]?.at };
       },
     }),
   };

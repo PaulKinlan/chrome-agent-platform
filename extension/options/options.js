@@ -5,7 +5,9 @@ import { clearUsage, getUsage } from "../lib/usage.js";
 import { listOrigins, siteMemory } from "../lib/memory.js";
 import {
   isBrowserControlGranted,
-  setBrowserControlGrant,
+  setGlobalBrowserControlGrant,
+  setOriginBrowserControlGrant,
+  revokeBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { RECIPES } from "../lib/recipes.js";
 
@@ -228,13 +230,11 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
-      await setBrowserControlGrant({ origins: [] });
+      await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
-      saveFlash("Browser control granted (scoped — set origins below).");
+      saveFlash("Browser control granted (global, 15 min — set origins below to scope it).");
     } else {
-      await storage.set({
-        "cap:browserControlGrant": { expiresAt: 0, origins: [] },
-      });
+      await revokeBrowserControlGrant();
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -243,8 +243,13 @@ async function renderBrowser() {
     const origins = e.target.value.split("\n").map((s) => s.trim()).filter(
       Boolean,
     );
-    await setBrowserControlGrant({ origins });
-    saveFlash("Allowed origins saved.");
+    if (origins.length > 0) {
+      await setOriginBrowserControlGrant(origins);
+      saveFlash("Allowed origins saved (scoped to " + origins.length + " origin(s)).");
+    } else {
+      await setGlobalBrowserControlGrant();
+      saveFlash("No origins listed — reverted to a global grant.");
+    }
   });
 }
 

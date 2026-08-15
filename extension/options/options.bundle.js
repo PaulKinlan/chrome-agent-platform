@@ -168,14 +168,41 @@ async function listOrigins() {
 // extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";
 var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
-async function setBrowserControlGrant({ origins = [], expiryMs = DEFAULT_GRANT_MS } = {}) {
+function clampExpiryMs(expiryMs) {
+  const ms = Number(expiryMs);
+  if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_GRANT_MS;
+  return Math.min(ms, 60 * 60 * 1e3);
+}
+async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   const grant = {
-    expiresAt: Date.now() + expiryMs,
-    origins: origins.slice(0, 50),
+    scope: "global",
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
   };
   await chrome.storage.local.set({ [GRANT_KEY]: grant });
   return grant;
+}
+async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
+  const canonical = [...new Set((origins ?? []).map((o) => {
+    try {
+      return new URL(String(o)).origin;
+    } catch {
+      return null;
+    }
+  }).filter(Boolean))].slice(0, 50);
+  if (canonical.length === 0) throw new Error("origin grant needs at least one valid origin");
+  const grant = {
+    scope: "origins",
+    origins: canonical,
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
+    grantedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  return grant;
+}
+async function revokeBrowserControlGrant() {
+  await chrome.storage.local.remove(GRANT_KEY);
+  return { revoked: true };
 }
 
 // extension/lib/recipes.js
@@ -212,13 +239,62 @@ var RECIPES = [
 
 // extension/options/options.js
 var PROVIDERS = [
-  { id: "demo", name: "Demo (local)", hint: "Deterministic local model \u2014 no key, always runs.", baseURL: "", needsKey: false, onDevice: false },
-  { id: "prompt-api", name: "Chrome Prompt API", hint: "Gemini nano on-device \u2014 no key, works offline.", baseURL: "", needsKey: false, onDevice: true },
-  { id: "openai", name: "OpenAI", hint: "Your OpenAI key + model.", baseURL: "https://api.openai.com/v1", needsKey: true, onDevice: false },
-  { id: "anthropic", name: "Anthropic", hint: "Your Anthropic key (OpenAI-compatible endpoint).", baseURL: "https://api.anthropic.com/v1", needsKey: true, onDevice: false },
-  { id: "gemini", name: "Google Gemini", hint: "Your Gemini API key (OpenAI-compatible endpoint).", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true, onDevice: false },
-  { id: "deepseek", name: "DeepSeek", hint: "Your DeepSeek key + model.", baseURL: "https://api.deepseek.com/v1", needsKey: true, onDevice: false },
-  { id: "ollama", name: "Ollama (local)", hint: "A local Ollama server.", baseURL: "http://localhost:11434/v1", needsKey: false, onDevice: false }
+  {
+    id: "demo",
+    name: "Demo (local)",
+    hint: "Deterministic local model \u2014 no key, always runs.",
+    baseURL: "",
+    needsKey: false,
+    onDevice: false
+  },
+  {
+    id: "prompt-api",
+    name: "Chrome Prompt API",
+    hint: "Gemini nano on-device \u2014 no key, works offline.",
+    baseURL: "",
+    needsKey: false,
+    onDevice: true
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    hint: "Your OpenAI key + model.",
+    baseURL: "https://api.openai.com/v1",
+    needsKey: true,
+    onDevice: false
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    hint: "Your Anthropic key (OpenAI-compatible endpoint).",
+    baseURL: "https://api.anthropic.com/v1",
+    needsKey: true,
+    onDevice: false
+  },
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    hint: "Your Gemini API key (OpenAI-compatible endpoint).",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    needsKey: true,
+    onDevice: false
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    hint: "Your DeepSeek key + model.",
+    baseURL: "https://api.deepseek.com/v1",
+    needsKey: true,
+    onDevice: false
+  },
+  {
+    id: "ollama",
+    name: "Ollama (local)",
+    hint: "A local Ollama server.",
+    baseURL: "http://localhost:11434/v1",
+    needsKey: false,
+    onDevice: false
+  }
 ];
 var THEMES = [
   { id: "midnight", label: "Midnight", swatch: "#0d1117,#58a6ff" },
@@ -261,7 +337,9 @@ async function renderProviders() {
     });
     list.appendChild(card);
   }
-  const active = list.querySelector(`.provider-card[data-provider="${cfg.provider}"]`);
+  const active = list.querySelector(
+    `.provider-card[data-provider="${cfg.provider}"]`
+  );
   if (active) {
     if (cfg.apiKey) {
       const k = active.querySelector(".api-key");
@@ -282,7 +360,10 @@ async function renderAgents() {
   const map = ap["cap:agentProviders"] ?? {};
   const list = $("#agent-provider-list");
   list.innerHTML = "";
-  const agents = [{ id: "hub", name: "Hub agent" }, ...RECIPES.map((r) => ({ id: r.id, name: r.name }))];
+  const agents = [
+    { id: "hub", name: "Hub agent" },
+    ...RECIPES.map((r) => ({ id: r.id, name: r.name }))
+  ];
   for (const a of agents) {
     const row = document.createElement("div");
     row.className = "provider-card";
@@ -291,7 +372,9 @@ async function renderAgents() {
         <span class="provider-name">${a.name}</span>
         <select class="agent-provider">
           <option value="">Default</option>
-          ${PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("")}
+          ${PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join(
+      ""
+    )}
         </select>
       </div>`;
     const sel = row.querySelector(".agent-provider");
@@ -331,22 +414,31 @@ async function renderBrowser() {
   const granted = Boolean(grant && grant.expiresAt > Date.now());
   $("#browser-grant").checked = granted;
   $("#grant-origins").hidden = !granted;
-  if (grant?.origins?.length) $("#grant-origin-list").value = grant.origins.join("\n");
+  if (grant?.origins?.length) {
+    $("#grant-origin-list").value = grant.origins.join("\n");
+  }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
-      await setBrowserControlGrant({ origins: [] });
+      await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
-      saveFlash("Browser control granted (scoped \u2014 set origins below).");
+      saveFlash("Browser control granted (global, 15 min \u2014 set origins below to scope it).");
     } else {
-      await storage.set({ "cap:browserControlGrant": { expiresAt: 0, origins: [] } });
+      await revokeBrowserControlGrant();
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
   });
   $("#grant-origin-list").addEventListener("change", async (e) => {
-    const origins = e.target.value.split("\n").map((s2) => s2.trim()).filter(Boolean);
-    await setBrowserControlGrant({ origins });
-    saveFlash("Allowed origins saved.");
+    const origins = e.target.value.split("\n").map((s2) => s2.trim()).filter(
+      Boolean
+    );
+    if (origins.length > 0) {
+      await setOriginBrowserControlGrant(origins);
+      saveFlash("Allowed origins saved (scoped to " + origins.length + " origin(s)).");
+    } else {
+      await setGlobalBrowserControlGrant();
+      saveFlash("No origins listed \u2014 reverted to a global grant.");
+    }
   });
 }
 async function renderUsage() {
@@ -359,7 +451,9 @@ async function renderUsage() {
   const detail = $("#usage-detail");
   detail.innerHTML = `<table>
     <thead><tr><th>Provider</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
-    <tbody>${u.byModel.map((m) => `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${m.inputTokens + m.outputTokens}</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`).join("")}</tbody></table>`;
+    <tbody>${u.byModel.map(
+    (m) => `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${m.inputTokens + m.outputTokens}</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`
+  ).join("")}</tbody></table>`;
   $("#usage-detail-toggle").addEventListener("click", () => {
     const d = $("#usage-detail");
     d.hidden = !d.hidden;
@@ -404,7 +498,9 @@ $("#open-hub").addEventListener("click", () => {
 });
 document.querySelectorAll(".nav-item").forEach((a) => {
   a.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach((x) => x.removeAttribute("aria-current"));
+    document.querySelectorAll(".nav-item").forEach(
+      (x) => x.removeAttribute("aria-current")
+    );
     a.setAttribute("aria-current", "true");
   });
 });

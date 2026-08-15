@@ -8,8 +8,9 @@ import { createOrchestrator, createAgent } from "../lib/agent.js";
 import { recordUsage, getUsage, clearUsage } from "../lib/usage.js";
 import { upsertTools, listTools, enrollOrigin, isApproved, approveTool, pendingApprovals } from "../lib/tools.js";
 import { setSkills, getSkills, allSkills } from "../lib/skills.js";
-import { browserToolset, recordBrowserEvent, setBrowserControlGrant, isBrowserControlGranted } from "../lib/browser-tools.js";
+import { browserToolset, recordBrowserEvent, setGlobalBrowserControlGrant, setOriginBrowserControlGrant, revokeBrowserControlGrant, isBrowserControlGranted } from "../lib/browser-tools.js";
 import { RECIPES, getRecipe } from "../lib/recipes.js";
+import { scheduleTask, markScheduledDone, tryAcquireInflight, releaseInflight, clearStaleInflight } from "../lib/scheduler.js";
 import { tool } from "ai";
 import { z } from "zod";
 import { schemaToZod as buildSchema, sanitizeToolName as safeToolName, authorizeToolReport, PAGE_ALLOWED_ROUTES } from "../lib/pure.js";
@@ -18,46 +19,41 @@ import { schemaToZod as buildSchema, sanitizeToolName as safeToolName, authorize
 const TASK_KEY = "cap:scheduledTasks";
 
 async function registerAlarm(task) {
-  const name = task.name ?? task.id ?? String(Date.now());
-  // Persist the full task payload (not just the name) so the alarm can resume it.
-  const store = await chrome.storage.local.get(TASK_KEY);
-  const tasks = store[TASK_KEY] ?? {};
-  tasks[name] = { ...task, name };
-  await chrome.storage.local.set({ [TASK_KEY]: tasks });
-
-  // Timing: task.at is an ABSOLUTE epoch-ms; task.delayMs is a RELATIVE delay.
-  // (Chrome's alarm `when` is absolute — never add a relative value to Date.now()
-  // blindly, and never treat an absolute timestamp as a delay.)
-  let when;
-  if (typeof task.at === "number" && task.at > Date.now()) {
-    when = task.at;
-  } else if (typeof task.delayMs === "number" && task.delayMs > 0) {
-    when = Date.now() + task.delayMs;
-  } else {
-    throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
-  }
-  const info = { when };
-  if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
-  chrome.alarms.create(name, info);
-  return name;
+  // The ONE atomic scheduling path (validation → persist → alarm.create).
+  return await scheduleTask({
+    task: task.task,
+    at: task.at,
+    delayMs: task.delayMs,
+    periodInMinutes: task.periodInMinutes,
+    attachments: task.attachments ?? [],
+  });
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  // In-flight lock: a slow run must not overlap the next alarm (periodic).
+  if (!(await tryAcquireInflight(alarm.name))) {
+    console.warn("scheduled task already in flight", alarm.name);
+    return;
+  }
   const store = await chrome.storage.local.get(TASK_KEY);
   const task = store[TASK_KEY]?.[alarm.name];
   if (!task) {
+    await releaseInflight(alarm.name);
     console.error("scheduled task payload missing", alarm.name);
     return;
   }
-  // One-shot (non-periodic) tasks are removed once fired; periodic tasks stay.
-  if (!task.periodInMinutes) {
-    const remaining = { ...(store[TASK_KEY] ?? {}) };
-    delete remaining[alarm.name];
-    await chrome.storage.local.set({ [TASK_KEY]: remaining });
-    chrome.alarms.clear(alarm.name).catch(() => {});
+  try {
+    // Run FIRST, delete only on success (durable across worker interruption).
+    await runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] });
+    if (!task.periodInMinutes) {
+      await markScheduledDone(alarm.name);
+    }
+  } catch (e) {
+    console.error("scheduled task failed", alarm.name, e);
+    // Keep the one-shot payload so a retry/restart can resume it.
+  } finally {
+    await releaseInflight(alarm.name);
   }
-  runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] })
-    .catch((e) => console.error("scheduled task failed", alarm.name, e));
 });
 
 // ---- lazy agent bootstrap (invalidated on provider change) ----
@@ -100,12 +96,20 @@ async function ensureOrchestrator() {
 async function siteToolset(origin) {
   const tools = await listTools(origin);
   const set = {};
+  const seen = new Map(); // tool id → (origin, name) for explicit duplicate rejection
   for (const t of tools) {
     // A valid AI-SDK tool needs an inputSchema. The JSON-schema descriptor is
     // converted by schemaToZod (fail-closed: unsupported → z.never()), and the
-    // invocation is approval-gated + origin-bound. The content script does NOT
-    // validate arguments — this boundary enforces the schema.
-    set[safeToolName(origin, t.name)] = tool({
+    // invocation is approval-gated + origin-bound.
+    let id = safeToolName(origin, t.name);
+    let n = 2;
+    // Even with a 64-bit hash, reject an actual collision explicitly: append a
+    // disambiguator rather than silently overwriting another tool.
+    while (seen.has(id) && (seen.get(id).origin !== origin || seen.get(id).name !== t.name)) {
+      id = `${safeToolName(origin, t.name)}_${n++}`.slice(0, 64);
+    }
+    seen.set(id, { origin, name: t.name });
+    set[id] = tool({
       description: `${t.name} on ${origin} — ${t.description ?? ""}`,
       inputSchema: buildSchema(z, t.inputSchema),
       execute: async (args) => {
@@ -196,7 +200,7 @@ const handlers = {
   async "agent.run"(m) {
     // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust
     // a client-claimed size), enforce per-item AND aggregate limits + a count cap,
-    // and drop (not silently truncate) anything over budget.
+    // and report (not silently drop) anything over budget.
     const MAX_ITEM_BYTES = 8 * 1024 * 1024; // 8 MiB per attachment
     const MAX_TOTAL_BYTES = 16 * 1024 * 1024; // 16 MiB aggregate
     const MAX_COUNT = 8;
@@ -208,14 +212,22 @@ const handlers = {
     };
     let total = 0;
     const bounded = [];
-    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT * 4)) {
+    const dropped = [];
+    // Enforce MAX_COUNT exactly (not MAX_COUNT * 4).
+    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
       const bytes = measured(a);
-      if (bytes > MAX_ITEM_BYTES) continue;
-      if (total + bytes > MAX_TOTAL_BYTES) continue;
-      bounded.push(a);
+      const name = String(a?.name ?? "unnamed").slice(0, 200);
+      const type = String(a?.type ?? "unknown").slice(0, 100);
+      if (bytes > MAX_ITEM_BYTES) { dropped.push({ name, reason: "over per-item limit" }); continue; }
+      if (total + bytes > MAX_TOTAL_BYTES) { dropped.push({ name, reason: "over aggregate limit" }); continue; }
+      bounded.push({ ...a, name, type });
       total += bytes;
     }
-    return await runTask({ id: m.id, task: m.task, attachments: bounded });
+    const overCount = (m.attachments ?? []).length - MAX_COUNT;
+    if (overCount > 0) dropped.push({ reason: `over count limit (${overCount} dropped)` });
+    const result = await runTask({ id: m.id, task: m.task, attachments: bounded });
+    if (dropped.length > 0) result.droppedAttachments = dropped;
+    return result;
   },
   async "agent.list"() { return await listOrigins(); },
 
@@ -256,8 +268,32 @@ const handlers = {
     return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
   },
 
-  async "browser-control.get"() { return { granted: await isBrowserControlGranted(), expiresInMs: (await chrome.storage.local.get("cap:browserControlGrant"))["cap:browserControlGrant"]?.expiresAt - Date.now() ?? 0 }; },
-  async "browser-control.set"(m) { const grant = await setBrowserControlGrant({ origins: m?.origins, expiryMs: m?.expiryMs }); return { grant }; },
+  async "browser-control.get"() {
+    const s = await chrome.storage.local.get("cap:browserControlGrant");
+    const grant = s["cap:browserControlGrant"];
+    let expiresInMs = 0;
+    if (grant && typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt)) {
+      expiresInMs = Math.max(0, grant.expiresAt - Date.now());
+    }
+    return {
+      granted: await isBrowserControlGranted(),
+      scope: grant?.scope ?? null,
+      expiresInMs,
+    };
+  },
+  async "browser-control.set"(m) {
+    // Explicit grant / revoke: granted=false REVOKES (never creates a fresh grant).
+    if (m?.granted === false) {
+      return { grant: await revokeBrowserControlGrant() };
+    }
+    let grant;
+    if (Array.isArray(m?.origins) && m.origins.length > 0) {
+      grant = await setOriginBrowserControlGrant(m.origins, m?.expiryMs);
+    } else {
+      grant = await setGlobalBrowserControlGrant(m?.expiryMs);
+    }
+    return { grant };
+  },
 
   // Management tools — the agent can manage its own site-agents.
   async "agent.create"({ origin, name }) {
@@ -365,3 +401,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
   console.log("Chrome Agent Platform installed");
 });
+
+// Recover stale in-flight locks on every worker boot so a crashed task doesn't
+// permanently block its alarm.
+chrome.runtime.onStartup?.addListener(() => { clearStaleInflight().catch(() => {}); });
+clearStaleInflight().catch(() => {});

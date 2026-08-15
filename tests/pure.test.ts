@@ -50,14 +50,16 @@ Deno.test("schemaToZod honors additionalProperties:false (extra property rejecte
   assertEquals(s.safeParse({ name: "x", admin: true }).success, false);
 });
 
-Deno.test("schemaToZod honors min/max length + pattern", () => {
+Deno.test("schemaToZod honors min/max length; pattern fails closed", () => {
   const s = schemaToZod(z, { type: "string", minLength: 2, maxLength: 4 });
   assertEquals(s.safeParse("ab").success, true);
   assertEquals(s.safeParse("a").success, false);
   assertEquals(s.safeParse("abcde").success, false);
 
+  // Pattern/regex is NOT supported (regex-DoS vector) — a descriptor carrying
+  // `pattern` fails closed and rejects every value.
   const p = schemaToZod(z, { type: "string", pattern: "^[a-z]+$" });
-  assertEquals(p.safeParse("abc").success, true);
+  assertEquals(p.safeParse("abc").success, false);
   assertEquals(p.safeParse("ABC1").success, false);
 });
 

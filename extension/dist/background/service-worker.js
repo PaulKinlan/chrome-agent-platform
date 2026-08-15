@@ -66426,6 +66426,15 @@ function createOrchestrator2({
 // extension/lib/tools.js
 init_browser_shim_process();
 var DIR_KEY = "toolDirectory";
+var TOOL_BOUNDS = {
+  maxNameLength: 128,
+  maxDescriptionLength: 2e3,
+  maxSchemaBytes: 8192,
+  // serialized JSON-schema size per tool
+  maxToolsPerOrigin: 200,
+  maxTotalBytes: 1024 * 1024
+  // serialized directory size per origin
+};
 function describeTool(t) {
   return {
     origin: t.origin,
@@ -66436,12 +66445,43 @@ function describeTool(t) {
     // "declared" | "inferred" | "linked"
   };
 }
+function boundTool(t) {
+  const name25 = String(t.name ?? "");
+  const description = String(t.description ?? "");
+  const schema4 = t.inputSchema ?? { type: "object", properties: {} };
+  if (name25.length === 0 || name25.length > TOOL_BOUNDS.maxNameLength) return null;
+  if (description.length > TOOL_BOUNDS.maxDescriptionLength) return null;
+  let schemaBytes;
+  try {
+    schemaBytes = JSON.stringify(schema4).length;
+  } catch {
+    return null;
+  }
+  if (schemaBytes > TOOL_BOUNDS.maxSchemaBytes) return null;
+  return describeTool({ origin: t.origin, name: name25, description, inputSchema: schema4, source: t.source });
+}
 async function upsertTools(origin, tools) {
   const store = siteMemory(origin);
   const dir = await store.get(DIR_KEY) ?? [];
   const byName = new Map(dir.map((t) => [t.name, t]));
-  for (const t of tools) byName.set(t.name, describeTool({ ...t, origin }));
-  const next = [...byName.values()];
+  for (const t of tools) {
+    const bounded = boundTool(t);
+    if (!bounded) continue;
+    byName.set(bounded.name, bounded);
+  }
+  let next = [...byName.values()];
+  if (next.length > TOOL_BOUNDS.maxToolsPerOrigin) next = next.slice(0, TOOL_BOUNDS.maxToolsPerOrigin);
+  let total = 0;
+  next = next.filter((t) => {
+    let b;
+    try {
+      b = JSON.stringify(t).length;
+    } catch {
+      b = TOOL_BOUNDS.maxTotalBytes + 1;
+    }
+    total += b;
+    return total <= TOOL_BOUNDS.maxTotalBytes;
+  });
   await store.set(DIR_KEY, next);
   return next;
 }
@@ -66477,26 +66517,115 @@ async function pendingApprovals(origin) {
 
 // extension/lib/browser-tools.js
 init_browser_shim_process();
+
+// extension/lib/scheduler.js
+init_browser_shim_process();
+var TASK_KEY2 = "cap:scheduledTasks";
+var INFLIGHT_KEY = "cap:scheduledInflight";
+async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = [] }) {
+  let when;
+  if (typeof at === "number" && Number.isFinite(at) && at > Date.now()) {
+    when = at;
+  } else if (typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs > 0) {
+    when = Date.now() + delayMs;
+  } else {
+    throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
+  }
+  const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const store = await chrome.storage.local.get(TASK_KEY2);
+  const tasks = store[TASK_KEY2] ?? {};
+  tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
+  await chrome.storage.local.set({ [TASK_KEY2]: tasks });
+  const info = { when };
+  if (periodInMinutes) info.periodInMinutes = periodInMinutes;
+  await chrome.alarms.create(name25, info);
+  return name25;
+}
+async function markScheduledDone(name25) {
+  const store = await chrome.storage.local.get(TASK_KEY2);
+  const tasks = { ...store[TASK_KEY2] ?? {} };
+  delete tasks[name25];
+  await chrome.storage.local.set({ [TASK_KEY2]: tasks });
+  await chrome.alarms.clear(name25).catch(() => {
+  });
+}
+async function tryAcquireInflight(name25) {
+  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const inflight = store[INFLIGHT_KEY] ?? {};
+  if (inflight[name25]) return false;
+  inflight[name25] = Date.now();
+  await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+  return true;
+}
+async function releaseInflight(name25) {
+  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+  delete inflight[name25];
+  await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+}
+async function clearStaleInflight(bootTime = Date.now()) {
+  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+  let changed = false;
+  for (const [name25, ts] of Object.entries(inflight)) {
+    if (typeof ts === "number" && ts < bootTime - 10 * 60 * 1e3) {
+      delete inflight[name25];
+      changed = true;
+    }
+  }
+  if (changed) await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+}
+
+// extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";
 var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
 async function isBrowserControlGranted(origin) {
   const s = await chrome.storage.local.get(GRANT_KEY);
   const grant = s[GRANT_KEY];
   if (!grant || typeof grant !== "object") return false;
-  if (typeof grant.expiresAt !== "number" || grant.expiresAt <= Date.now()) return false;
-  if (origin && Array.isArray(grant.origins) && grant.origins.length > 0) {
-    return grant.origins.includes(origin);
+  if (typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)) return false;
+  if (grant.expiresAt <= Date.now()) return false;
+  if (grant.scope === "global") return true;
+  if (grant.scope === "origins" && Array.isArray(grant.origins) && grant.origins.length > 0) {
+    return typeof origin === "string" && grant.origins.includes(origin);
   }
-  return true;
+  return false;
 }
-async function setBrowserControlGrant({ origins = [], expiryMs = DEFAULT_GRANT_MS } = {}) {
+function clampExpiryMs(expiryMs) {
+  const ms = Number(expiryMs);
+  if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_GRANT_MS;
+  return Math.min(ms, 60 * 60 * 1e3);
+}
+async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   const grant = {
-    expiresAt: Date.now() + expiryMs,
-    origins: origins.slice(0, 50),
+    scope: "global",
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
   };
   await chrome.storage.local.set({ [GRANT_KEY]: grant });
   return grant;
+}
+async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
+  const canonical = [...new Set((origins ?? []).map((o) => {
+    try {
+      return new URL(String(o)).origin;
+    } catch {
+      return null;
+    }
+  }).filter(Boolean))].slice(0, 50);
+  if (canonical.length === 0) throw new Error("origin grant needs at least one valid origin");
+  const grant = {
+    scope: "origins",
+    origins: canonical,
+    expiresAt: Date.now() + clampExpiryMs(expiryMs),
+    grantedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  return grant;
+}
+async function revokeBrowserControlGrant() {
+  await chrome.storage.local.remove(GRANT_KEY);
+  return { revoked: true };
 }
 async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -66520,19 +66649,20 @@ async function readPage(tabId) {
   }
 }
 function browserToolset() {
-  const guard = async () => {
-    if (!await isBrowserControlGranted()) {
-      return { error: "browser control not granted \u2014 ask the user to enable it in Settings" };
-    }
-    return null;
-  };
   return {
     open_tab: tool({
-      description: "Open a URL in a new browser tab. Requires browser-control permission.",
+      description: "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ url: external_exports3.string().url() }),
       execute: async ({ url: url3 }) => {
-        const g = await guard();
-        if (g) return g;
+        let destOrigin;
+        try {
+          destOrigin = new URL(url3).origin;
+        } catch {
+          return { error: "invalid url" };
+        }
+        if (!await isBrowserControlGranted(destOrigin)) {
+          return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
+        }
         const tab = await chrome.tabs.create({ url: url3 });
         return { ok: true, tabId: tab.id, url: url3 };
       }
@@ -66541,15 +66671,17 @@ function browserToolset() {
       description: "Navigate an existing tab to a URL. Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ tabId: external_exports3.number().optional(), url: external_exports3.string().url() }),
       execute: async ({ tabId, url: url3 }) => {
+        let destOrigin;
+        try {
+          destOrigin = new URL(url3).origin;
+        } catch {
+          return { error: "invalid url" };
+        }
+        if (!await isBrowserControlGranted(destOrigin)) {
+          return { error: "browser control not granted for the destination origin \u2014 ask the user to approve it in Settings" };
+        }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
-        const tab = await chrome.tabs.get(id).catch(() => null);
-        const origin = tab?.url ? new URL(tab.url).origin : void 0;
-        if (origin && !await isBrowserControlGranted(origin)) {
-          return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
-        }
-        const g = await guard();
-        if (g) return g;
         await chrome.tabs.update(id, { url: url3 });
         return { ok: true, tabId: id, url: url3 };
       }
@@ -66560,9 +66692,12 @@ function browserToolset() {
       execute: async ({ tabId }) => readPage(tabId)
     }),
     capture_screenshot: tool({
-      description: "Capture a PNG screenshot of the requested tab (or the active tab).",
+      description: "Capture a PNG screenshot of the requested tab (or the active tab). Requires browser-control permission.",
       inputSchema: external_exports3.object({ tabId: external_exports3.number().optional() }),
       execute: async ({ tabId }) => {
+        if (!await isBrowserControlGranted()) {
+          return { error: "browser control not granted \u2014 ask the user to enable it in Settings" };
+        }
         try {
           const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
           if (!tab?.windowId) return { error: "no tab" };
@@ -66589,12 +66724,16 @@ function browserToolset() {
       inputSchema: external_exports3.object({ tabId: external_exports3.number() }),
       execute: async ({ tabId }) => {
         const tab = await chrome.tabs.get(tabId).catch(() => null);
-        const origin = tab?.url ? new URL(tab.url).origin : void 0;
-        if (origin && !await isBrowserControlGranted(origin)) {
+        const origin = tab?.url ? (() => {
+          try {
+            return new URL(tab.url).origin;
+          } catch {
+            return void 0;
+          }
+        })() : void 0;
+        if (!await isBrowserControlGranted(origin)) {
           return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
         }
-        const g = await guard();
-        if (g) return g;
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };
       }
@@ -66617,20 +66756,8 @@ function browserToolset() {
         periodInMinutes: external_exports3.number().optional()
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
-        const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        let when;
-        if (typeof at === "number" && at > Date.now()) when = at;
-        else if (typeof delayMs === "number" && delayMs > 0) when = Date.now() + delayMs;
-        else return { error: "provide a future `at` (absolute ms) or a positive `delayMs`" };
-        const KEY = "cap:scheduledTasks";
-        const store = await chrome.storage.local.get(KEY);
-        const tasks = store[KEY] ?? {};
-        tasks[name25] = { name: name25, task, periodInMinutes, at: when };
-        await chrome.storage.local.set({ [KEY]: tasks });
-        const info = { when };
-        if (periodInMinutes) info.periodInMinutes = periodInMinutes;
-        await chrome.alarms.create(name25, info);
-        return { ok: true, name: name25, when };
+        const name25 = await scheduleTask({ task, at, delayMs, periodInMinutes });
+        return { ok: true, name: name25, when: (await chrome.storage.local.get(TASK_KEY))[TASK_KEY]?.[name25]?.at };
       }
     })
   };
@@ -66705,14 +66832,9 @@ function schemaToZod(z4, schema4, depth = 0) {
   if (t === "string") {
     let s = z4.string();
     if (typeof schema4.minLength === "number" && schema4.minLength >= 0) s = s.min(schema4.minLength);
-    if (typeof schema4.maxLength === "number" && schema4.maxLength >= 0) s = s.max(Math.min(schema4.maxLength, SCHEMA_BOUNDS.maxStringLength));
-    if (typeof schema4.pattern === "string") {
-      try {
-        s = s.regex(new RegExp(schema4.pattern));
-      } catch {
-        return z4.never();
-      }
-    }
+    const pageMax = typeof schema4.maxLength === "number" && schema4.maxLength >= 0 ? schema4.maxLength : SCHEMA_BOUNDS.maxStringLength;
+    s = s.max(Math.min(pageMax, SCHEMA_BOUNDS.maxStringLength));
+    if (schema4.pattern !== void 0) return z4.never();
     return s;
   }
   if (t === "number") {
@@ -66732,7 +66854,8 @@ function schemaToZod(z4, schema4, depth = 0) {
     const inner = schemaToZod(z4, schema4.items, depth + 1);
     let arr = z4.array(inner);
     if (typeof schema4.minItems === "number" && schema4.minItems >= 0) arr = arr.min(schema4.minItems);
-    if (typeof schema4.maxItems === "number" && schema4.maxItems >= 0) arr = arr.max(Math.min(schema4.maxItems, SCHEMA_BOUNDS.maxArrayItems));
+    const pageMax = typeof schema4.maxItems === "number" && schema4.maxItems >= 0 ? schema4.maxItems : SCHEMA_BOUNDS.maxArrayItems;
+    arr = arr.max(Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
     return arr;
   }
   if (t === "object") {
@@ -66740,6 +66863,9 @@ function schemaToZod(z4, schema4, depth = 0) {
     const propKeys = Object.keys(props);
     if (propKeys.length > SCHEMA_BOUNDS.maxProperties) return z4.never();
     const required3 = Array.isArray(schema4.required) ? new Set(schema4.required) : /* @__PURE__ */ new Set();
+    for (const key of required3) {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) return z4.never();
+    }
     const shape = {};
     for (const [key, sub] of Object.entries(props)) {
       const subZod = schemaToZod(z4, sub, depth + 1);
@@ -66752,16 +66878,18 @@ function schemaToZod(z4, schema4, depth = 0) {
 }
 function sanitizeToolName(origin, name25) {
   const safe = String(name25).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
-  const h = fnv1a(`${origin}\0${name25}`).toString(16).padStart(8, "0");
+  const h = fnv1a64(`${origin}\0${name25}`);
   return `site_${h}_${safe}`.slice(0, 64);
 }
-function fnv1a(input) {
-  let hash2 = 2166136261;
+function fnv1a64(input) {
+  const seedA = 2166136261, seedB = 16777619;
+  let a = seedA, b = seedB;
   for (let i = 0; i < input.length; i++) {
-    hash2 ^= input.charCodeAt(i);
-    hash2 = Math.imul(hash2, 16777619) >>> 0;
+    const c = input.charCodeAt(i);
+    a = Math.imul((a ^ c) >>> 0, 16777619) >>> 0;
+    b = Math.imul((b ^ c + 158) >>> 0, 16777619) >>> 0;
   }
-  return hash2 >>> 0;
+  return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
 }
 function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionId) {
   const senderUrl = sender?.url ?? "";
@@ -66785,41 +66913,38 @@ function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionI
 var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set(["tools.list", "tools.upsert", "tools.approve", "tools.pending"]);
 
 // extension/background/service-worker.js
-var TASK_KEY = "cap:scheduledTasks";
+var TASK_KEY3 = "cap:scheduledTasks";
 async function registerAlarm(task) {
-  const name25 = task.name ?? task.id ?? String(Date.now());
-  const store = await chrome.storage.local.get(TASK_KEY);
-  const tasks = store[TASK_KEY] ?? {};
-  tasks[name25] = { ...task, name: name25 };
-  await chrome.storage.local.set({ [TASK_KEY]: tasks });
-  let when;
-  if (typeof task.at === "number" && task.at > Date.now()) {
-    when = task.at;
-  } else if (typeof task.delayMs === "number" && task.delayMs > 0) {
-    when = Date.now() + task.delayMs;
-  } else {
-    throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
-  }
-  const info = { when };
-  if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
-  chrome.alarms.create(name25, info);
-  return name25;
+  return await scheduleTask({
+    task: task.task,
+    at: task.at,
+    delayMs: task.delayMs,
+    periodInMinutes: task.periodInMinutes,
+    attachments: task.attachments ?? []
+  });
 }
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  const store = await chrome.storage.local.get(TASK_KEY);
-  const task = store[TASK_KEY]?.[alarm.name];
+  if (!await tryAcquireInflight(alarm.name)) {
+    console.warn("scheduled task already in flight", alarm.name);
+    return;
+  }
+  const store = await chrome.storage.local.get(TASK_KEY3);
+  const task = store[TASK_KEY3]?.[alarm.name];
   if (!task) {
+    await releaseInflight(alarm.name);
     console.error("scheduled task payload missing", alarm.name);
     return;
   }
-  if (!task.periodInMinutes) {
-    const remaining = { ...store[TASK_KEY] ?? {} };
-    delete remaining[alarm.name];
-    await chrome.storage.local.set({ [TASK_KEY]: remaining });
-    chrome.alarms.clear(alarm.name).catch(() => {
-    });
+  try {
+    await runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] });
+    if (!task.periodInMinutes) {
+      await markScheduledDone(alarm.name);
+    }
+  } catch (e) {
+    console.error("scheduled task failed", alarm.name, e);
+  } finally {
+    await releaseInflight(alarm.name);
   }
-  runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] }).catch((e) => console.error("scheduled task failed", alarm.name, e));
 });
 var orchestrator = null;
 var MODEL_CACHE = { model: null };
@@ -66853,8 +66978,15 @@ async function ensureOrchestrator() {
 async function siteToolset(origin) {
   const tools = await listTools(origin);
   const set4 = {};
+  const seen = /* @__PURE__ */ new Map();
   for (const t of tools) {
-    set4[sanitizeToolName(origin, t.name)] = tool({
+    let id = sanitizeToolName(origin, t.name);
+    let n = 2;
+    while (seen.has(id) && (seen.get(id).origin !== origin || seen.get(id).name !== t.name)) {
+      id = `${sanitizeToolName(origin, t.name)}_${n++}`.slice(0, 64);
+    }
+    seen.set(id, { origin, name: t.name });
+    set4[id] = tool({
       description: `${t.name} on ${origin} \u2014 ${t.description ?? ""}`,
       inputSchema: schemaToZod(external_exports3, t.inputSchema),
       execute: async (args) => {
@@ -66949,14 +67081,27 @@ var handlers = {
     };
     let total = 0;
     const bounded = [];
-    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT * 4)) {
+    const dropped = [];
+    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
       const bytes = measured(a);
-      if (bytes > MAX_ITEM_BYTES) continue;
-      if (total + bytes > MAX_TOTAL_BYTES) continue;
-      bounded.push(a);
+      const name25 = String(a?.name ?? "unnamed").slice(0, 200);
+      const type = String(a?.type ?? "unknown").slice(0, 100);
+      if (bytes > MAX_ITEM_BYTES) {
+        dropped.push({ name: name25, reason: "over per-item limit" });
+        continue;
+      }
+      if (total + bytes > MAX_TOTAL_BYTES) {
+        dropped.push({ name: name25, reason: "over aggregate limit" });
+        continue;
+      }
+      bounded.push({ ...a, name: name25, type });
       total += bytes;
     }
-    return await runTask({ id: m.id, task: m.task, attachments: bounded });
+    const overCount = (m.attachments ?? []).length - MAX_COUNT;
+    if (overCount > 0) dropped.push({ reason: `over count limit (${overCount} dropped)` });
+    const result = await runTask({ id: m.id, task: m.task, attachments: bounded });
+    if (dropped.length > 0) result.droppedAttachments = dropped;
+    return result;
   },
   async "agent.list"() {
     return await listOrigins();
@@ -67028,10 +67173,28 @@ var handlers = {
     return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
   },
   async "browser-control.get"() {
-    return { granted: await isBrowserControlGranted(), expiresInMs: (await chrome.storage.local.get("cap:browserControlGrant"))["cap:browserControlGrant"]?.expiresAt - Date.now() };
+    const s = await chrome.storage.local.get("cap:browserControlGrant");
+    const grant = s["cap:browserControlGrant"];
+    let expiresInMs = 0;
+    if (grant && typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt)) {
+      expiresInMs = Math.max(0, grant.expiresAt - Date.now());
+    }
+    return {
+      granted: await isBrowserControlGranted(),
+      scope: grant?.scope ?? null,
+      expiresInMs
+    };
   },
   async "browser-control.set"(m) {
-    const grant = await setBrowserControlGrant({ origins: m?.origins, expiryMs: m?.expiryMs });
+    if (m?.granted === false) {
+      return { grant: await revokeBrowserControlGrant() };
+    }
+    let grant;
+    if (Array.isArray(m?.origins) && m.origins.length > 0) {
+      grant = await setOriginBrowserControlGrant(m.origins, m?.expiryMs);
+    } else {
+      grant = await setGlobalBrowserControlGrant(m?.expiryMs);
+    }
     return { grant };
   },
   // Management tools — the agent can manage its own site-agents.
@@ -67127,4 +67290,10 @@ chrome.runtime.onInstalled.addListener(async () => {
     await mem.set("preferences", { theme: "dark", model: "demo", multiAgent: true });
   }
   console.log("Chrome Agent Platform installed");
+});
+chrome.runtime.onStartup?.addListener(() => {
+  clearStaleInflight().catch(() => {
+  });
+});
+clearStaleInflight().catch(() => {
 });

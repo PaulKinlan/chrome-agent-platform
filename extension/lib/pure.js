@@ -36,10 +36,13 @@ export function schemaToZod(z, schema, depth = 0) {
   if (t === "string") {
     let s = z.string();
     if (typeof schema.minLength === "number" && schema.minLength >= 0) s = s.min(schema.minLength);
-    if (typeof schema.maxLength === "number" && schema.maxLength >= 0) s = s.max(Math.min(schema.maxLength, SCHEMA_BOUNDS.maxStringLength));
-    if (typeof schema.pattern === "string") {
-      try { s = s.regex(new RegExp(schema.pattern)); } catch { return z.never(); }
-    }
+    // Global cap is ALWAYS applied (even when the page omits maxLength) so a
+    // hostile descriptor cannot describe an unbounded string.
+    const pageMax = typeof schema.maxLength === "number" && schema.maxLength >= 0 ? schema.maxLength : SCHEMA_BOUNDS.maxStringLength;
+    s = s.max(Math.min(pageMax, SCHEMA_BOUNDS.maxStringLength));
+    // Pattern/regex is NOT supported: arbitrary page-controlled regex is a
+    // regex-DoS vector. A descriptor carrying `pattern` fails closed.
+    if (schema.pattern !== undefined) return z.never();
     return s;
   }
   if (t === "number") {
@@ -59,7 +62,8 @@ export function schemaToZod(z, schema, depth = 0) {
     const inner = schemaToZod(z, schema.items, depth + 1);
     let arr = z.array(inner);
     if (typeof schema.minItems === "number" && schema.minItems >= 0) arr = arr.min(schema.minItems);
-    if (typeof schema.maxItems === "number" && schema.maxItems >= 0) arr = arr.max(Math.min(schema.maxItems, SCHEMA_BOUNDS.maxArrayItems));
+    const pageMax = typeof schema.maxItems === "number" && schema.maxItems >= 0 ? schema.maxItems : SCHEMA_BOUNDS.maxArrayItems;
+    arr = arr.max(Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems)); // global cap ALWAYS applied
     return arr;
   }
   if (t === "object") {
@@ -67,6 +71,10 @@ export function schemaToZod(z, schema, depth = 0) {
     const propKeys = Object.keys(props);
     if (propKeys.length > SCHEMA_BOUNDS.maxProperties) return z.never();
     const required = Array.isArray(schema.required) ? new Set(schema.required) : new Set();
+    // A `required` key not declared in `properties` is malformed — fail closed.
+    for (const key of required) {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) return z.never();
+    }
     const shape = {};
     for (const [key, sub] of Object.entries(props)) {
       const subZod = schemaToZod(z, sub, depth + 1);
@@ -83,12 +91,13 @@ export function schemaToZod(z, schema, depth = 0) {
 
 /**
  * Build a collision-resistant, bounded AI-SDK tool id from an origin + name.
- * Includes a hash of (origin, name) so distinct tools can never collide after
- * punctuation sanitization, and the whole id is length-bounded.
+ * Uses a 64-bit FNV-1a (two independent 32-bit rounds) so distinct
+ * (origin, name) pairs are astronomically unlikely to collide after
+ * punctuation sanitization. The caller additionally checks for duplicates.
  */
 export function sanitizeToolName(origin, name) {
   const safe = String(name).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
-  const h = fnv1a(`${origin}\u0000${name}`).toString(16).padStart(8, "0");
+  const h = fnv1a64(`${origin}\u0000${name}`);
   return `site_${h}_${safe}`.slice(0, 64);
 }
 
@@ -100,6 +109,18 @@ export function fnv1a(input) {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash >>> 0;
+}
+
+/** FNV-1a 64-bit: two independent 32-bit FNV rounds, hex-encoded (16 chars). */
+export function fnv1a64(input) {
+  const seedA = 0x811c9dc5, seedB = 0x01000193;
+  let a = seedA, b = seedB;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    a = Math.imul((a ^ c) >>> 0, 0x01000193) >>> 0;
+    b = Math.imul((b ^ (c + 0x9e)) >>> 0, 0x01000193) >>> 0;
+  }
+  return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
 }
 
 /**

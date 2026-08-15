@@ -5,6 +5,15 @@ import { masterMemory, siteMemory } from "./memory.js";
 
 const DIR_KEY = "toolDirectory";
 
+/** Bounds for the tool directory (fail-closed against hostile descriptors). */
+export const TOOL_BOUNDS = {
+  maxNameLength: 128,
+  maxDescriptionLength: 2000,
+  maxSchemaBytes: 8192, // serialized JSON-schema size per tool
+  maxToolsPerOrigin: 200,
+  maxTotalBytes: 1024 * 1024, // serialized directory size per origin
+};
+
 /**
  * The canonical tool-descriptor shape. declared/inferred/linked marks the source.
  */
@@ -18,12 +27,38 @@ export function describeTool(t) {
   };
 }
 
+/** Bound a single descriptor; returns null when it violates the bounds. */
+function boundTool(t) {
+  const name = String(t.name ?? "");
+  const description = String(t.description ?? "");
+  const schema = t.inputSchema ?? { type: "object", properties: {} };
+  if (name.length === 0 || name.length > TOOL_BOUNDS.maxNameLength) return null;
+  if (description.length > TOOL_BOUNDS.maxDescriptionLength) return null;
+  let schemaBytes;
+  try { schemaBytes = JSON.stringify(schema).length; } catch { return null; }
+  if (schemaBytes > TOOL_BOUNDS.maxSchemaBytes) return null;
+  return describeTool({ origin: t.origin, name, description, inputSchema: schema, source: t.source });
+}
+
 export async function upsertTools(origin, tools) {
   const store = siteMemory(origin);
   const dir = (await store.get(DIR_KEY)) ?? [];
   const byName = new Map(dir.map((t) => [t.name, t]));
-  for (const t of tools) byName.set(t.name, describeTool({ ...t, origin }));
-  const next = [...byName.values()];
+  for (const t of tools) {
+    const bounded = boundTool(t);
+    if (!bounded) continue; // reject (not silently accept) out-of-bounds descriptors
+    byName.set(bounded.name, bounded);
+  }
+  let next = [...byName.values()];
+  // Total directory size + count bounds: drop the tail when over budget.
+  if (next.length > TOOL_BOUNDS.maxToolsPerOrigin) next = next.slice(0, TOOL_BOUNDS.maxToolsPerOrigin);
+  let total = 0;
+  next = next.filter((t) => {
+    let b;
+    try { b = JSON.stringify(t).length; } catch { b = TOOL_BOUNDS.maxTotalBytes + 1; }
+    total += b;
+    return total <= TOOL_BOUNDS.maxTotalBytes;
+  });
   await store.set(DIR_KEY, next);
   return next;
 }
