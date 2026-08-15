@@ -37,10 +37,13 @@
   <div class="settings" id="settings">
     <strong>Provider:</strong>
     <select id="model-select">
-      <option value="deepseek">DeepSeek (deepseek-v4-pro)</option>
-      <option value="glm">GLM-5.3 (deferred via intercom)</option>
+      <option value="demo">Demo (no key — deterministic local)</option>
+      <option value="openai">OpenAI-compatible (your endpoint + key)</option>
+      <option value="prompt-api">Chrome Prompt API (on-device)</option>
     </select>
-    <input id="api-key" type="password" placeholder="API key (stored locally)">
+    <input id="base-url" type="text" placeholder="Base URL (e.g. https://api.openai.com/v1)" style="display:none">
+    <input id="model-name" type="text" placeholder="Model id (e.g. gpt-4o-mini)" style="display:none">
+    <input id="api-key" type="password" placeholder="API key (stored locally)" style="display:none">
     <button class="btn ghost" id="save-provider">Save</button>
     <button class="btn ghost" id="open-memory">Memory</button>
     <button class="btn ghost" id="open-directory">Directory</button>

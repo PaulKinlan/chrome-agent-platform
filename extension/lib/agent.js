@@ -1,29 +1,23 @@
-// lib/agent.js — the agent core (agent-do pattern, browser-adapted, AI SDK).
+// lib/agent.js — the agent core, built on the REAL agent-do library.
 //
-// createAgent: a single agent with a model, system prompt, tools, and memory.
-// createOrchestrator: a hub agent + worker agents, with delegation tools
-// (delegate_task / list_agents / get_agent_status) so the hub fans out to
-// per-site sub-agents. The 1-agent vs multi-agent choice is a config flag.
+// This imports createAgent from "agent-do" (bundled by esbuild) — not a
+// reimplementation. Our `createAgent` wrapper calls agent-do's createAgent.
+// memory tools + the onUsage hook (→ usage.js). The hub can fan out to
+// per-site sub-agents via delegation tools (the 1-agent vs N-agent flag).
 
-import { generateText, tool } from "ai";
+import { createAgent as agentDoCreateAgent } from "agent-do";
+import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
 
-// A small async in-memory cache of generated text (no cross-import of agent-do).
 const DEFAULT_SYSTEM = `You are the Chrome Agent Platform hub agent. You help the
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
-export async function createAgent({
-  model,            // { provider, model, providerName } from provider.js
-  system = DEFAULT_SYSTEM,
-  tools = {},
-  memory = null,    // a memoryStore() handle
-  taskId = "adhoc",
-  skills = [],
-}) {
-  const memoryTools = memory ? {
+function memoryToolset(memory) {
+  if (!memory) return {};
+  return {
     memory_get: tool({
       description: "Read a value from the agent's memory.",
       inputSchema: z.object({ key: z.string() }),
@@ -39,48 +33,84 @@ export async function createAgent({
       inputSchema: z.object({}),
       execute: async () => ({ keys: await memory.keys() }),
     }),
-  } : {};
-
-  async function run(task, { onStep = () => {} } = {}) {
-    const { provider, model: modelId, providerName } = model;
-    const result = await generateText({
-      model: provider,
-      system: system + buildSkillsPrompt(skills),
-      prompt: task,
-      tools: { ...memoryTools, ...tools },
-      maxSteps: 12,
-      onStepFinish: (e) => {
-        onStep(e);
-        const u = e.usage;
-        if (u) recordUsage({
-          taskId, model: modelId, provider: providerName,
-          tokensIn: u.promptTokens ?? 0, tokensOut: u.completionTokens ?? 0,
-        });
-      },
-    });
-    return result.text;
-  }
-
-  return { run, memory, tools: { ...memoryTools, ...tools } };
+  };
 }
 
 /**
- * Multi-agent orchestrator: a hub (master) agent + per-site workers.
- * `multiAgent: false` runs everything on the master (no workers).
+ * Wrap agent-do's createAgent with our conventions.
+ * `model` is the resolved { model: LanguageModel, modelId, providerName } from provider.js.
  */
-export async function createOrchestrator({
+export function createAgent({
+  model,
+  id = "hub",
+  name = "hub",
+  system = DEFAULT_SYSTEM,
+  tools = {},
+  memory = null,
+  skills = [],
+  taskId = "adhoc",
+  maxIterations = 12,
+}) {
+  const allTools = { ...memoryToolset(memory), ...tools };
+  const systemPrompt = system + buildSkillsPrompt(skills);
+
+  const agent = agentDoCreateAgent({
+    id,
+    name,
+    model: model.model,
+    systemPrompt,
+    tools: allTools,
+    maxIterations,
+    hooks: {
+      onUsage: async (record) => {
+        await recordUsage({
+          agentId: id,
+          taskId,
+          provider: model.providerName,
+          model: model.modelId,
+          inputTokens: record.inputTokens ?? 0,
+          outputTokens: record.outputTokens ?? 0,
+          estimatedCost: record.estimatedCost ?? 0,
+        });
+      },
+    },
+  });
+
+  return {
+    id,
+    name,
+    // agent-do's run(task, context, history) -> string
+    run: (task, context, history) => agent.run(task, context, history),
+    abort: () => agent.abort(),
+  };
+}
+
+/**
+ * Hub + per-site sub-agents. The hub is a single agent-do agent with delegation
+ * tools; each worker is an agent-do agent for one site origin. `multiAgent`
+ * toggles between the full fan-out and a solo hub agent.
+ */
+export function createOrchestrator({
   model,
   system = DEFAULT_SYSTEM,
   masterMemory,
-  workers = [], // [{ origin, system, skills, tools }]
+  workers = [], // [{ origin, memory, skills, tools }]
   multiAgent = true,
   taskId = "adhoc",
 }) {
   const workerAgents = new Map();
   for (const w of workers) {
-    workerAgents.set(w.origin, await createAgent({
-      model, system: w.system ?? system, memory: w.memory, skills: w.skills ?? [], tools: w.tools ?? {}, taskId,
-    }));
+    const a = createAgent({
+      model,
+      id: w.origin,
+      name: w.origin,
+      system: w.system ?? system,
+      memory: w.memory,
+      skills: w.skills ?? [],
+      tools: w.tools ?? {},
+      taskId,
+    });
+    workerAgents.set(w.origin, a);
   }
 
   const delegate = multiAgent ? {
@@ -93,35 +123,42 @@ export async function createOrchestrator({
       description: "Delegate a task to a site sub-agent and return its result.",
       inputSchema: z.object({ agentId: z.string(), task: z.string() }),
       execute: async ({ agentId, task }) => {
-        const agent = workerAgents.get(agentId);
-        if (!agent) return { error: `no agent for ${agentId}` };
-        return { agentId, result: await agent.run(task) };
+        const a = workerAgents.get(agentId);
+        if (!a) return { error: `no agent for ${agentId}` };
+        return { agentId, result: await a.run(task) };
       },
-    }),
-    get_agent_status: tool({
-      description: "Whether a site sub-agent is available.",
-      inputSchema: z.object({ agentId: z.string() }),
-      execute: async ({ agentId }) => ({ agentId, available: workerAgents.has(agentId) }),
     }),
   } : {};
 
-  const master = await createAgent({
-    model, system, memory: masterMemory, tools: delegate, taskId,
+  const master = createAgent({
+    model,
+    system,
+    memory: masterMemory,
+    tools: delegate,
+    taskId,
   });
 
   return {
     master,
     workers: workerAgents,
-    async run(task, { onStep } = {}) {
-      if (multiAgent) return await master.run(task, { onStep });
-      // single-agent mode: no workers, just the master with no delegation tools
-      const solo = await createAgent({ model, system, memory: masterMemory, taskId });
-      return await solo.run(task, { onStep });
+    async run(task, context, history) {
+      if (multiAgent) return await master.run(task, context, history);
+      const solo = createAgent({ model, system, memory: masterMemory, taskId });
+      return await solo.run(task, context, history);
     },
-    async addWorker(config) {
-      const agent = await createAgent({ model, system: config.system ?? system, memory: config.memory, skills: config.skills ?? [], tools: config.tools ?? {}, taskId });
-      workerAgents.set(config.origin, agent);
-      return agent;
+    addWorker(config) {
+      const a = createAgent({
+        model,
+        id: config.origin,
+        name: config.origin,
+        system: config.system ?? system,
+        memory: config.memory,
+        skills: config.skills ?? [],
+        tools: config.tools ?? {},
+        taskId,
+      });
+      workerAgents.set(config.origin, a);
+      return a;
     },
   };
 }

@@ -65,10 +65,25 @@ runBtn.addEventListener("click", async () => {
   }
 });
 
+const modelSelect = document.getElementById("model-select");
+const baseUrlInput = document.getElementById("base-url");
+const apiKeyInput = document.getElementById("api-key");
+function syncProviderInputs() {
+  const isOpenAI = modelSelect.value === "openai";
+  baseUrlInput.style.display = isOpenAI ? "" : "none";
+  apiKeyInput.style.display = isOpenAI ? "" : "none";
+}
+modelSelect.addEventListener("change", syncProviderInputs);
+
 document.getElementById("save-provider").addEventListener("click", async () => {
-  const model = document.getElementById("model-select").value;
-  const apiKey = document.getElementById("api-key").value;
-  await send("provider.set", { config: { model: model === "glm" ? "glm-5.3" : "deepseek-chat", provider: model, apiKey: apiKey || undefined } });
+  const provider = modelSelect.value;
+  const config = { provider };
+  if (provider === "openai") {
+    config.baseURL = baseUrlInput.value.trim();
+    config.apiKey = apiKeyInput.value.trim();
+    config.model = document.getElementById("model-name")?.value?.trim() || "gpt-4o-mini";
+  }
+  await send("provider.set", { config });
   setStatus("provider saved");
 });
 
@@ -77,7 +92,12 @@ document.getElementById("open-directory").addEventListener("click", () => chrome
 
 (async () => {
   const cfg = await send("provider.get");
-  if (cfg && cfg.provider === "glm") document.getElementById("model-select").value = "glm";
+  if (cfg && cfg.provider) {
+    modelSelect.value = cfg.provider;
+    if (cfg.baseURL) baseUrlInput.value = cfg.baseURL;
+    if (cfg.apiKey) apiKeyInput.value = cfg.apiKey;
+    syncProviderInputs();
+  }
   refreshAgents();
   refreshTasks();
   setStatus("agent ready");

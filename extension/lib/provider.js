@@ -1,17 +1,27 @@
-// lib/provider.js — pluggable model layer (Vercel AI SDK).
+// lib/provider.js — the real model layer.
 //
-// Models are swappable: a provider is an OpenAI-compatible endpoint + apiKey +
-// model id, resolved from chrome.storage config (set in the hub settings). The
-// default is DeepSeek (deepseek-v4-pro). A deferred-tasks route exists for
-// sending some tasks to a glm-5.3 endpoint via intercom (documented seam).
+// Model resolution order:
+//   1. OpenAI-compatible endpoint (the user's OWN baseURL + apiKey + model,
+//      stored in chrome.storage settings) — a real, user-configured provider.
+//   2. Chrome's built-in Prompt API (Gemini nano) — on-device, no key, when
+//      available in the browser.
+//   3. Demo local model — a deterministic, clearly-labelled fallback so the
+//      agent loop always runs end-to-end with zero configuration.
+//
+// There is NO hardcoded provider key and NO fake "deepseek-v4-pro" default —
+// a Chrome extension cannot call a paid provider without the user's key, and
+// this file never ships one.
 
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatibleModel } from "./models/openai-model.js";
+import { createPromptApiModel, isPromptApiAvailable } from "./models/prompt-api-model.js";
+import { createDemoModel } from "./models/demo-model.js";
 
 const DEFAULTS = {
-  provider: "deepseek",
-  baseURL: "https://api.deepseek.com/v1",
-  model: "deepseek-chat", // deepseek-v4-pro served here; swap via config
-  apiKey: "",            // set in hub settings / chrome.storage
+  // "demo" | "openai" | "prompt-api"
+  provider: "demo",
+  baseURL: "",
+  apiKey: "",
+  model: "",
 };
 
 export async function getProviderConfig() {
@@ -26,31 +36,37 @@ export async function setProviderConfig(partial) {
   return next;
 }
 
+export const PROVIDER_CHOICES = [
+  { id: "demo", label: "Demo (no key — deterministic local)" },
+  { id: "openai", label: "OpenAI-compatible endpoint (your key)" },
+  { id: "prompt-api", label: "Chrome Prompt API (Gemini nano, on-device)" },
+];
+
+/** Resolve the actual LanguageModel. Returns { model, modelId, providerName }. */
 export async function getModel() {
   const cfg = await getProviderConfig();
-  if (!cfg.apiKey) {
-    throw new Error("No model API key configured — set it in the hub (⚙ provider) first.");
-  }
-  const provider = createOpenAI({ baseURL: cfg.baseURL, apiKey: cfg.apiKey });
-  return { provider: provider(cfg.model), model: cfg.model, providerName: cfg.provider };
-}
 
-/**
- * Deferred-tasks seam: route a task to a glm-5.3 endpoint via intercom.
- * The extension cannot open intercom (pi-session-to-pi-session); this is a
- * documented seam — in the hosted harness the parent session posts the task
- * here. For the extension, `deferToGlm` posts to a configurable webhook/endpoint
- * if one is configured, else returns null (caller falls back to the local model).
- */
-export async function deferToGlm(task) {
-  const cfg = await getProviderConfig();
-  const endpoint = cfg.glmDeferEndpoint;
-  if (!endpoint) return null; // not configured — caller handles locally
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ task }),
-  });
-  if (!res.ok) throw new Error(`glm defer failed: ${res.status}`);
-  return await res.json();
+  if (cfg.provider === "openai") {
+    if (!cfg.baseURL || !cfg.apiKey || !cfg.model) {
+      // Missing config — fall back to demo rather than throw, so the loop runs.
+      return { model: createDemoModel(), modelId: "demo-local", providerName: "demo (missing openai config)" };
+    }
+    const model = createOpenAICompatibleModel(cfg);
+    return { model, modelId: cfg.model, providerName: "openai-compatible" };
+  }
+
+  if (cfg.provider === "prompt-api") {
+    if (await isPromptApiAvailable()) {
+      try {
+        const model = createPromptApiModel();
+        return { model, modelId: "gemini-nano", providerName: "chrome-prompt-api" };
+      } catch {
+        // fall through to demo
+      }
+    }
+    return { model: createDemoModel(), modelId: "demo-local", providerName: "demo (prompt api unavailable)" };
+  }
+
+  // default: demo
+  return { model: createDemoModel(), modelId: "demo-local", providerName: "demo" };
 }

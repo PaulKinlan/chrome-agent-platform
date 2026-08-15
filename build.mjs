@@ -16,6 +16,24 @@ await build({
   ...shared,
   entryPoints: ["extension/background/service-worker.js"],
   outfile: "extension/dist/background/service-worker.js",
-  alias: { "node:fs": "browser-shim-fs.js", "node:path": "browser-shim-path.js" },
+  alias: (() => {
+    const root = new URL(".", import.meta.url).pathname;
+    const shim = `${root}browser-shim-node.js`;
+    return {
+    "node:fs": shim,
+    "node:fs/promises": shim,
+    "node:path": shim,
+    "node:os": shim,
+    "node:crypto": shim,
+    "node:process": shim,
+    "node:stream": shim,
+    "node:util": shim,
+    "node:module": shim,
+    "node:child_process": shim,
+    "fs": shim,
+    "path": shim,
+    "child_process": shim,
+  };
+  })(),
 });
 console.log("built extension/dist/background/service-worker.js");

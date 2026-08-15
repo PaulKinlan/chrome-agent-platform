@@ -9,8 +9,10 @@
     "watch": "node build.mjs --watch"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.41",
-    "ai": "^4.3.0",
+    "@ai-sdk/google": "^4.0.44",
+    "@ai-sdk/openai": "^4.0.42",
+    "agent-do": "^0.7.0",
+    "ai": "^7.0.66",
     "zod": "^3.24.0"
   },
   "devDependencies": {

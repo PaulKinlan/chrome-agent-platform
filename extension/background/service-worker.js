@@ -2,7 +2,7 @@
 // Bundled with esbuild (the AI SDK + zod need bundling). This is the single
 // place the agent loop runs; UI pages talk to it via chrome.runtime messages.
 
-import { getModel, getProviderConfig, setProviderConfig, deferToGlm } from "../lib/provider.js";
+import { getModel, getProviderConfig, setProviderConfig, PROVIDER_CHOICES } from "../lib/provider.js";
 import { masterMemory, siteMemory, listOrigins, journalAppend } from "../lib/memory.js";
 import { createOrchestrator, createAgent } from "../lib/agent.js";
 import { recordUsage, getUsage, clearUsage } from "../lib/usage.js";
@@ -87,8 +87,8 @@ async function runTask({ id, task, scheduled = false }) {
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
   await journalAppend(mem, { type: "task", id: taskId, task, scheduled });
-  const onStep = () => {};
-  const result = await orch.run(task, { onStep });
+  // agent-do's run(task, context, history) -> result text
+  const result = await orch.run(task, { taskId }, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
   return { ok: true, result };
 }
@@ -97,11 +97,10 @@ async function runTask({ id, task, scheduled = false }) {
 const handlers = {
   async "provider.get"(m) { return await getProviderConfig(); },
   async "provider.set"(m) { return await setProviderConfig(m.config); },
-  async "provider.models"() { return { note: "pluggable: deepseek + glm defer seam" }; },
+  async "provider.models"() { return { choices: PROVIDER_CHOICES }; },
 
   async "agent.run"(m) { return await runTask({ id: m.id, task: m.task }); },
   async "agent.list"() { return await listOrigins(); },
-  async "agent.defer"({ task }) { return await deferToGlm(task); },
 
   async "tools.list"({ origin }) { return await listTools(origin); },
   async "tools.upsert"({ origin, tools }) { await enrollOrigin(origin); return await upsertTools(origin, tools); },
@@ -149,7 +148,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(async () => {
   const mem = masterMemory();
   if (!(await mem.get("preferences"))) {
-    await mem.set("preferences", { theme: "dark", model: "deepseek-v4-pro", multiAgent: true });
+    await mem.set("preferences", { theme: "dark", model: "demo", multiAgent: true });
   }
   console.log("Chrome Agent Platform installed");
 });
