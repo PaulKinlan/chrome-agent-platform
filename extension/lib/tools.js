@@ -14,7 +14,13 @@ const GEN_KEY = "cap:enrollmentGen";
 // old map and overwrite each other (the round-14 finding: 49/50 pairs lost one
 // origin). One global lock serializes the registry RMW.
 let enrollmentMutex = Promise.resolve();
-function withEnrollmentLock(fn) {
+/** The GLOBAL enrollment-state mutex. enrollOrigin/disenrollOrigin (and the
+ * scripting-Disable capability transition) must hold it so a concurrent
+ * enroll/delete can never interleave with a capability transition that snapshots
+ * the origin set. EXPORTED so the SW's scripting-Disable can hold it across the
+ * whole transition (a fixed-point recheck would still let a new enrollment slip
+ * in after the final read — one global barrier is authoritative). */
+export function withEnrollmentLock(fn) {
   const run = enrollmentMutex.then(fn, fn);
   enrollmentMutex = run.then(() => {}, () => {});
   return run;
@@ -183,32 +189,39 @@ export async function enrollOrigin(origin) {
  * generation bump is the preemptive revocation fence: any in-flight operation
  * holding the old generation is rejected at its next revalidation. */
 export async function disenrollOrigin(origin) {
+  return withEnrollmentLock(() => disenrollOriginLocked(origin));
+}
+
+/** The LOCKED body of disenrollOrigin (no re-acquisition). Exported so the SW's
+ * scripting-Disable can tombstone every enrolled origin while ALREADY holding the
+ * global enrollment lock (re-acquiring it inside the per-origin cleanup would
+ * deadlock, and NOT holding it would let a concurrent enroll slip between the
+ * snapshot and the tombstone — the round-20 scripting-Disable-snapshot finding). */
+export async function disenrollOriginLocked(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return [];
-  return withEnrollmentLock(async () => {
-    const map = await enrolledMap();
-    map[canonical] = {
-      enrolled: false, // tombstone
-      at: Date.now(),
-      gen: await nextGeneration(),
-    };
-    await kvSet({ [ENROLL_KEY]: map });
-    // Bound tombstone retention: enrolled:false entries only exist to fence a
-    // still-running bridge's generation. Keep at most MAX_TOMBSTONES (oldest
-    // first) so a churn of enroll/delete cycles cannot grow the registry without
-    // bound (the round-16 quota finding: tombstones accumulated indefinitely).
-    const MAX_TOMBSTONES = 200;
-    const tombstones = Object.entries(map)
-      .filter(([, v]) => v?.enrolled !== true)
-      .sort((a, b) => (a[1]?.at ?? 0) - (b[1]?.at ?? 0));
-    if (tombstones.length > MAX_TOMBSTONES) {
-      for (const [o] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
-        delete map[o];
-      }
-      await kvSet({ [ENROLL_KEY]: map });
+  const map = await enrolledMap();
+  map[canonical] = {
+    enrolled: false, // tombstone
+    at: Date.now(),
+    gen: await nextGeneration(),
+  };
+  await kvSet({ [ENROLL_KEY]: map });
+  // Bound tombstone retention: enrolled:false entries only exist to fence a
+  // still-running bridge's generation. Keep at most MAX_TOMBSTONES (oldest
+  // first) so a churn of enroll/delete cycles cannot grow the registry without
+  // bound (the round-16 quota finding: tombstones accumulated indefinitely).
+  const MAX_TOMBSTONES = 200;
+  const tombstones = Object.entries(map)
+    .filter(([, v]) => v?.enrolled !== true)
+    .sort((a, b) => (a[1]?.at ?? 0) - (b[1]?.at ?? 0));
+  if (tombstones.length > MAX_TOMBSTONES) {
+    for (const [o] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
+      delete map[o];
     }
-    return Object.keys(map).filter((o) => map[o]?.enrolled === true);
-  });
+    await kvSet({ [ENROLL_KEY]: map });
+  }
+  return Object.keys(map).filter((o) => map[o]?.enrolled === true);
 }
 
 /**

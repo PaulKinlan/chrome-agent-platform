@@ -66689,7 +66689,11 @@ var STORAGE_KEY = "cairn:usage";
 var MAX_RECORDS = 5e3;
 var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
 async function recordUsage(p) {
-  if (runAborted()) return;
+  try {
+    await assertRunOwned();
+  } catch {
+    return;
+  }
   const inputTokens = p.inputTokens ?? 0;
   const outputTokens = p.outputTokens ?? 0;
   if (inputTokens === 0 && outputTokens === 0) return;
@@ -66811,19 +66815,24 @@ function memoryToolset(memory) {
       description: "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
       inputSchema: external_exports3.object({ key: external_exports3.string().min(1).max(128), value: external_exports3.any() }),
       execute: async ({ key, value }) => {
-        if (runAborted()) {
+        try {
+          await assertRunOwned();
+        } catch {
           return { error: "run aborted \u2014 memory not written" };
         }
         let prev = void 0;
         let existed = false;
+        let committed = false;
         try {
           prev = await memory.get(key);
           existed = prev !== void 0 && prev !== null;
+          await assertRunOwned();
           await memory.set(key, value);
+          committed = true;
           await assertRunOwned();
           return { ok: true, key };
         } catch (e) {
-          if (runAborted() && typeof memory.set === "function") {
+          if (committed && typeof memory.set === "function") {
             try {
               if (existed) await memory.set(key, prev);
               else await memory.delete(key);
@@ -66921,7 +66930,9 @@ function createOrchestrator2({
       description: "Delegate a task to a site sub-agent and return its result.",
       inputSchema: external_exports3.object({ agentId: external_exports3.string(), task: external_exports3.string() }),
       execute: async ({ agentId, task }) => {
-        if (runAborted()) {
+        try {
+          await assertRunOwned();
+        } catch {
           return { error: "run aborted \u2014 delegation not started" };
         }
         const a = workerAgents.get(agentId);
@@ -67107,27 +67118,28 @@ async function enrollOrigin(origin) {
   });
 }
 async function disenrollOrigin(origin) {
+  return withEnrollmentLock(() => disenrollOriginLocked(origin));
+}
+async function disenrollOriginLocked(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return [];
-  return withEnrollmentLock(async () => {
-    const map4 = await enrolledMap();
-    map4[canonical] = {
-      enrolled: false,
-      // tombstone
-      at: Date.now(),
-      gen: await nextGeneration()
-    };
-    await kvSet({ [ENROLL_KEY2]: map4 });
-    const MAX_TOMBSTONES = 200;
-    const tombstones = Object.entries(map4).filter(([, v]) => v?.enrolled !== true).sort((a, b) => (a[1]?.at ?? 0) - (b[1]?.at ?? 0));
-    if (tombstones.length > MAX_TOMBSTONES) {
-      for (const [o] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
-        delete map4[o];
-      }
-      await kvSet({ [ENROLL_KEY2]: map4 });
+  const map4 = await enrolledMap();
+  map4[canonical] = {
+    enrolled: false,
+    // tombstone
+    at: Date.now(),
+    gen: await nextGeneration()
+  };
+  await kvSet({ [ENROLL_KEY2]: map4 });
+  const MAX_TOMBSTONES = 200;
+  const tombstones = Object.entries(map4).filter(([, v]) => v?.enrolled !== true).sort((a, b) => (a[1]?.at ?? 0) - (b[1]?.at ?? 0));
+  if (tombstones.length > MAX_TOMBSTONES) {
+    for (const [o] of tombstones.slice(0, tombstones.length - MAX_TOMBSTONES)) {
+      delete map4[o];
     }
-    return Object.keys(map4).filter((o) => map4[o]?.enrolled === true);
-  });
+    await kvSet({ [ENROLL_KEY2]: map4 });
+  }
+  return Object.keys(map4).filter((o) => map4[o]?.enrolled === true);
 }
 async function isApproved(origin, toolName) {
   const approved = await siteMemory(origin).get("approvals") ?? {};
@@ -67251,14 +67263,24 @@ async function markScheduledDone(name25, token) {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     delete tasks[name25];
-    let cleared = true;
     try {
-      const res = await alarmsApi()?.clear(name25);
-      cleared = res !== false;
+      await alarmsApi()?.clear(name25);
     } catch {
-      cleared = false;
     }
-    if (cleared) {
+    let stillArmed = true;
+    try {
+      stillArmed = await alarmsApi()?.get(name25) != null;
+    } catch {
+      stillArmed = true;
+    }
+    if (token) {
+      const inflightNow = await kvGet(INFLIGHT_KEY);
+      const cur = inflightNow[INFLIGHT_KEY]?.[name25];
+      if (!validLock(cur) || cur.token !== token) {
+        throw new Error("ownership lost \u2014 scheduled task NOT removed");
+      }
+    }
+    if (!stillArmed) {
       await kvSet({ [TASK_KEY]: tasks });
     }
   });
@@ -67536,7 +67558,9 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 async function captureTabScreenshot(tabId) {
-  if (runAborted()) {
+  try {
+    await assertRunOwned();
+  } catch {
     return { error: "run aborted \u2014 screenshot not captured" };
   }
   if (!await hasActiveTabPermission() && !await hasTabsPermission()) {
@@ -67572,6 +67596,20 @@ async function captureTabScreenshot(tabId) {
       if (!grantIdBefore) {
         return {
           error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
+        };
+      }
+      const fresh = await chrome.tabs.get(tabId).catch(() => null);
+      if (!fresh?.id) return { error: "no tab" };
+      const freshOrigin = fresh.url ? (() => {
+        try {
+          return canonicalOrigin(fresh.url);
+        } catch {
+          return void 0;
+        }
+      })() : void 0;
+      if (!freshOrigin || freshOrigin !== origin) {
+        return {
+          error: "tab navigated before capture \u2014 screenshot discarded (identity changed)"
         };
       }
       if (tabId) {
@@ -67679,7 +67717,9 @@ function browserToolset() {
               error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
             };
           }
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted \u2014 tab not opened" };
           }
           const tab = await chrome.tabs.create({ url: url3 });
@@ -67735,8 +67775,23 @@ function browserToolset() {
               error: "browser control not granted for the source tab's origin \u2014 ask the user to approve it in Settings"
             };
           }
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted \u2014 tab not navigated" };
+          }
+          const boundSrc = await chrome.tabs.get(id).catch(() => null);
+          const boundOrigin = boundSrc?.url ? (() => {
+            try {
+              return canonicalOrigin(boundSrc.url);
+            } catch {
+              return void 0;
+            }
+          })() : void 0;
+          if (!boundOrigin || boundOrigin !== srcOrigin) {
+            return {
+              error: "tab navigated before navigate \u2014 source identity changed"
+            };
           }
           await chrome.tabs.update(id, { url: url3 });
           try {
@@ -67782,22 +67837,37 @@ function browserToolset() {
             error: "tabs permission not granted \u2014 enable Browser control in Settings"
           };
         }
-        const tab = await chrome.tabs.get(tabId).catch(() => null);
-        const origin = tab?.url ? (() => {
-          try {
-            return canonicalOrigin(tab.url);
-          } catch {
-            return void 0;
-          }
-        })() : void 0;
         return await withGrantLock(async () => {
+          const tab = await chrome.tabs.get(tabId).catch(() => null);
+          const origin = tab?.url ? (() => {
+            try {
+              return canonicalOrigin(tab.url);
+            } catch {
+              return void 0;
+            }
+          })() : void 0;
           if (!await isBrowserControlGranted(origin)) {
             return {
               error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
             };
           }
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted \u2014 tab not closed" };
+          }
+          const bound = await chrome.tabs.get(tabId).catch(() => null);
+          const boundOrigin = bound?.url ? (() => {
+            try {
+              return canonicalOrigin(bound.url);
+            } catch {
+              return void 0;
+            }
+          })() : void 0;
+          if (!boundOrigin || boundOrigin !== origin) {
+            return {
+              error: "tab navigated before close \u2014 source identity changed"
+            };
           }
           await chrome.tabs.remove(tabId);
           try {
@@ -67827,7 +67897,9 @@ function browserToolset() {
         periodInMinutes: external_exports3.number().optional()
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
-        if (runAborted()) {
+        try {
+          await assertRunOwned();
+        } catch {
           return { error: "run aborted \u2014 task not scheduled" };
         }
         const { name: name25, when } = await scheduleTask({
@@ -68555,6 +68627,24 @@ async function siteToolset(origin) {
   }
   return set4;
 }
+async function notifyOriginBridge(canonical, message) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.allSettled(
+      tabs.filter((t) => {
+        try {
+          return t.id != null && t.url ? new URL(t.url).origin === canonical : false;
+        } catch {
+          return false;
+        }
+      }).map(
+        (t) => chrome.tabs.sendMessage(t.id, message).catch(() => {
+        })
+      )
+    );
+  } catch {
+  }
+}
 async function invokeSiteTool(origin, name25, args) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
@@ -68707,19 +68797,20 @@ var handlers = {
       });
     }
     if (id === "scripting") {
-      const origins = await listOrigins();
-      const results = await Promise.allSettled(origins.map(
-        (o) => withOriginLock(o, async () => {
+      const results = await withEnrollmentLock(async () => {
+        const origins = await listOrigins();
+        return await Promise.allSettled(origins.map(async (o) => {
           abortWorker(o);
-          await disenrollOrigin(o);
+          await disenrollOriginLocked(o);
+          await notifyOriginBridge(o, { type: "disenrollment" });
           const res3 = await unregisterOriginScripts(o);
           if (!res3.ok) {
             await markCleanupPending(o);
             return { origin: o, error: res3.error ?? o };
           }
           return { origin: o, ok: true };
-        })
-      ));
+        }));
+      });
       invalidateAgent();
       const failures = results.filter(
         (r) => r.status === "rejected" || r.status === "fulfilled" && r.value?.error
@@ -69024,6 +69115,11 @@ var handlers = {
         };
       }
       invalidateAgent();
+      const snap = await enrollmentSnapshot(canonical);
+      await notifyOriginBridge(canonical, {
+        type: "enrollment-sync",
+        gen: snap.gen
+      });
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },
@@ -69033,6 +69129,7 @@ var handlers = {
     return await withOriginLock(canonical, async () => {
       abortWorker(canonical);
       await disenrollOrigin(canonical);
+      await notifyOriginBridge(canonical, { type: "disenrollment" });
       const [unregRes, clearRes] = await Promise.allSettled([
         unregisterOriginScripts(canonical),
         siteMemory(canonical).clear()

@@ -10,7 +10,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
-import { runAborted, assertRunOwned } from "./run-fence.js";
+import { assertRunOwned } from "./run-fence.js";
 
 const DEFAULT_SYSTEM =
   `You are the Chrome Agent Platform hub agent. You help the
@@ -36,23 +36,34 @@ function memoryToolset(memory) {
         // RESTORE the previous value (or delete a newly-created key) — never
         // delete an existing key wholesale (the round-19 blocker: an overwrite
         // abort deleted the ENTIRE prior key).
-        if (runAborted()) {
+        // DUrable ownership must be asserted BEFORE the write (not merely the
+        // signal) — the round-20 blocker where a memory_set ownership-only loss
+        // threw while the signal was still live and the catch did NOT compensate.
+        try {
+          await assertRunOwned();
+        } catch {
           return { error: "run aborted — memory not written" };
         }
         let prev = undefined;
         let existed = false;
+        let committed = false;
         try {
           prev = await memory.get(key);
           existed = prev !== undefined && prev !== null;
+          await assertRunOwned();
           await memory.set(key, value);
+          committed = true;
           await assertRunOwned();
           return { ok: true, key };
         } catch (e) {
           // A bounded/reserved-key rejection is surfaced honestly, never thrown
-          // into the agent loop. A run-abort AFTER the write compensates by
-          // restoring the prior value (or removing a new key), not deleting an
-          // existing key's history.
-          if (runAborted() && typeof memory.set === "function") {
+          // into the agent loop. An abort/ownership loss AFTER the write (the
+          // `committed` flag) compensates by restoring the prior value (or removing
+          // a new key), not deleting an existing key's history. Ownership-only loss
+          // (durable owner gone while the signal is still live) is compensated here
+          // too — `committed` is set on ANY post-write fence failure, not just a
+          // signal abort (the round-20 finding).
+          if (committed && typeof memory.set === "function") {
             try {
               if (existed) await memory.set(key, prev);
               else await memory.delete(key);
@@ -165,8 +176,12 @@ export function createOrchestrator({
           // The model-facing delegate path must be fenced like every other
           // side-effecting tool (the round-15 finding: a cached deleted worker
           // could still run via delegate_task). An aborted run must not start a
-          // delegated worker's side effects.
-          if (runAborted()) {
+          // delegated worker's side effects. DUrable ownership must be asserted
+          // BEFORE starting the worker (not just the signal — the round-20
+          // durable-ownership-before-commit finding).
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted — delegation not started" };
           }
           const a = workerAgents.get(agentId);

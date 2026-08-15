@@ -39,6 +39,7 @@ import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   approveTool,
   disenrollOrigin,
+  disenrollOriginLocked,
   enrollmentSnapshot,
   enrollOrigin,
   isApproved,
@@ -46,6 +47,7 @@ import {
   listTools,
   pendingApprovals,
   upsertTools,
+  withEnrollmentLock,
 } from "../lib/tools.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
 import {
@@ -380,6 +382,32 @@ async function siteToolset(origin) {
 // hung/malicious page tool can never block agent.delete), and the generation is
 // REVALIDATED after the call — a delete during the call tombstones + bumps the
 // generation, so the result is discarded rather than journaled.
+/** Send a lifecycle message to every open tab of an origin's content script.
+ * `enrollment-sync` carries the CURRENT generation (so the bridge accepts invokes
+ * with that gen); `disenrollment` clears it (so a stale in-flight invoke is
+ * rejected before reaching the MAIN world). Best-effort: a tab that closed or a
+ * bridge that failed to respond must not fail the enroll/delete operation. */
+async function notifyOriginBridge(canonical, message) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.allSettled(
+      tabs
+        .filter((t) => {
+          try {
+            return t.id != null && t.url
+              ? new URL(t.url).origin === canonical
+              : false;
+          } catch {
+            return false;
+          }
+        })
+        .map((t) =>
+          chrome.tabs.sendMessage(t.id, message).catch(() => {})
+        ),
+    );
+  } catch { /* best-effort */ }
+}
+
 async function invokeSiteTool(origin, name, args) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
@@ -587,24 +615,36 @@ const handlers = {
       // just unregister the scripts (the round-18 high: Disable left origins
       // enrolled + existing bridges authoritative). Tombstone every enrolled
       // origin FIRST (a running bridge is rejected from this instant), then
-      // unregister scripts + remove host permissions. Each origin's cleanup runs
-      // under its OWN withOriginLock so it SERIALIZES against a concurrent
-      // enroll/delete/retry for that origin (the round-19 blocker: scripting
-      // Disable bypassed the origin lock and raced enrollment), and allSettled so
-      // one origin's thrown tombstone never aborts the rest.
-      const origins = await listOrigins();
-      const results = await Promise.allSettled(origins.map((o) =>
-        withOriginLock(o, async () => {
+      // unregister scripts + remove host permissions.
+      //
+      // The WHOLE transition holds the GLOBAL enrollment lock (round-20 blocker:
+      // scripting Disable snapshotted the origin set, so a NEWLY enrolling origin
+      // could complete during the disable and remain enrolled/host-authorized
+      // when scripting was removed). Holding withEnrollmentLock for the snapshot
+      // + tombstone means a concurrent enrollOrigin (which also takes the global
+      // lock) is serialized OUT of the transition — it cannot complete until the
+      // disable is done, at which point scripting is already revoked and its
+      // script-registration would fail closed + roll back.
+      //
+      // NOTE: do NOT take withOriginLock here while holding withEnrollmentLock.
+      // enroll/delete take withOriginLock THEN withEnrollmentLock; acquiring the
+      // origin lock under the enrollment lock would invert that order and deadlock
+      // (the round-20 scripting-Disable-snapshot finding). disenrollOriginLocked
+      // (no re-acquisition) is used because we already hold the global lock.
+      const results = await withEnrollmentLock(async () => {
+        const origins = await listOrigins(); // read under the global enrollment lock
+        return await Promise.allSettled(origins.map(async (o) => {
           abortWorker(o);
-          await disenrollOrigin(o);
+          await disenrollOriginLocked(o); // already under the global lock
+          await notifyOriginBridge(o, { type: "disenrollment" });
           const res = await unregisterOriginScripts(o);
           if (!res.ok) {
             await markCleanupPending(o);
             return { origin: o, error: res.error ?? o };
           }
           return { origin: o, ok: true };
-        }),
-      ));
+        }));
+      });
       invalidateAgent();
       const failures = results
         .filter((r) =>
@@ -995,6 +1035,13 @@ const handlers = {
         };
       }
       invalidateAgent();
+      // Tell the origin's live content scripts the CURRENT enrollment generation
+      // so their bridge enforces it (a stale invoke is rejected at the bridge).
+      const snap = await enrollmentSnapshot(canonical);
+      await notifyOriginBridge(canonical, {
+        type: "enrollment-sync",
+        gen: snap.gen,
+      });
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },
@@ -1010,6 +1057,10 @@ const handlers = {
       // finding that delete was not preemptive).
       abortWorker(canonical);
       await disenrollOrigin(canonical);
+      // Tell the origin's live content scripts the origin was DISENROLLED so a
+      // stale in-flight invoke is rejected at the bridge before the MAIN world
+      // runs (preemptive revocation — the round-20 enrollment-signal finding).
+      await notifyOriginBridge(canonical, { type: "disenrollment" });
       // allSettled: attempt scripts/host-permission + OPFS cleanup INDEPENDENTLY,
       // never short-circuit on the first failure (the round-17 non-retryable
       // finding: a sequential rollback skipped later host cleanup on an earlier

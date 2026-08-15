@@ -42,6 +42,7 @@ globalThis.chrome = {
   alarms: {
     create: async () => true,
     clear: async () => true,
+    get: async () => undefined, // absent by default (no alarm)
     getAll: async () => [],
   },
 };
@@ -237,9 +238,11 @@ Deno.test("ownsInflight is false when the durable lock is lost (round-16 blocker
 
 import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
 
-Deno.test("markScheduledDone keeps the payload when alarms.clear returns false (round-19 blocker)", async () => {
+Deno.test("markScheduledDone keeps the payload when the alarm is STILL ARMED (round-19 + round-20)", async () => {
   const origClear = chrome.alarms.clear;
-  chrome.alarms.clear = async () => false; // the (periodic) alarm is still armed
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => false; // clear failed
+  chrome.alarms.get = async () => ({ name: "still-armed" }); // alarm STILL present
   try {
     const { name } = await scheduleTask({
       task: "periodic-clear-false",
@@ -250,10 +253,37 @@ Deno.test("markScheduledDone keeps the payload when alarms.clear returns false (
     const store = await chrome.storage.local.get("cap:scheduledTasks");
     assert(
       store["cap:scheduledTasks"][name] !== undefined,
-      "payload must survive when the alarm cannot be cleared (still armed)",
+      "payload must survive when the alarm is STILL armed (clear failed)",
     );
   } finally {
     chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+  }
+});
+
+Deno.test("markScheduledDone DELETES a completed one-shot whose alarm is already absent (round-20 replay blocker)", async () => {
+  // A fired one-shot: Chrome consumed the alarm, so alarms.clear returns false
+  // (nothing to clear) AND alarms.get returns undefined (the alarm is absent).
+  // The old code treated clear-false as "still armed", KEPT the payload, and
+  // reconcileScheduledTasks recreated + reran the completed task (replay loop).
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => false; // nothing to clear (already fired)
+  chrome.alarms.get = async () => undefined; // alarm is ABSENT
+  try {
+    const { name } = await scheduleTask({
+      task: "completed-one-shot",
+      delayMs: 1000,
+    });
+    await markScheduledDone(name);
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    assert(
+      store["cap:scheduledTasks"][name] === undefined,
+      "a completed one-shot's payload must be DELETED (never replayed)",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
   }
 });
 

@@ -15,6 +15,17 @@ const CHANNEL = "__cairn_bridge";
 const nonce = crypto.randomUUID();
 let initialized = false;
 
+// The enrollment generation the service worker has told us is CURRENT for this
+// origin. A delete/disenroll tombstones + bumps the generation in the worker, so
+// threading it into invoke-tool + enforcing it here lets a stale in-flight
+// invocation be REJECTED at this bridge boundary (preemptive revocation: a
+// deleted origin's page function must not run).
+let currentGen = null; // null = never synced yet (first invoke accepts + records)
+let disenrolled = false; // a disenrollment was seen — reject ANY stale invoke
+                         // (distinct from "never synced": the two must not be
+                         // conflated, or a post-delete stale invoke would be
+                         // accepted and re-record its old generation)
+
 function ensureMainWorld() {
   if (initialized) return;
   initialized = true;
@@ -47,7 +58,55 @@ window.addEventListener("message", (event) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "enrollment-sync") {
+    // The SW confirms the origin's CURRENT enrollment generation (sent on
+    // enroll/re-enroll). Record it so a stale-generation invoke can be rejected.
+    currentGen = typeof message.gen === "number" ? message.gen : null;
+    disenrolled = false;
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (message?.type === "disenrollment") {
+    // The origin was tombstoned/deleted. From this instant a stale in-flight
+    // invoke (holding the old generation) is rejected before reaching the MAIN
+    // world — preemptive revocation.
+    disenrolled = true;
+    currentGen = null;
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message?.type === "invoke-tool") {
+    // ENROLLMENT-SCOPED cancellation (round-20 blocker): thread the generation
+    // into the invoke and enforce it here. If the origin was disenrolled OR the
+    // message carries a stale generation (mismatches a newer synced gen), reject
+    // WITHOUT forwarding to the MAIN world. A first invoke (never synced, not
+    // disenrolled) accepts + records the gen.
+    if (disenrolled) {
+      sendResponse({
+        ok: false,
+        error: "origin disenrolled — invocation rejected",
+      });
+      return true;
+    }
+    if (typeof message.gen === "number") {
+      if (currentGen === null) {
+        currentGen = message.gen; // first sync — accept + record
+      } else if (message.gen !== currentGen) {
+        sendResponse({
+          ok: false,
+          error: "enrollment generation mismatch — invocation rejected",
+        });
+        return true;
+      }
+    } else if (currentGen !== null) {
+      // A synced origin received an invoke WITHOUT a generation: reject
+      // (fail closed) rather than run a page function unvalidated.
+      sendResponse({
+        ok: false,
+        error: "missing enrollment generation — invocation rejected",
+      });
+      return true;
+    }
     ensureMainWorld();
     const requestId = String(++reqSeq);
     pending.set(requestId, sendResponse);
@@ -58,6 +117,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       requestId,
       name: message.name,
       args: message.args,
+      gen: message.gen,
     }, "*");
     // Timeout so a hung page function doesn't leak the sendResponse.
     setTimeout(() => {

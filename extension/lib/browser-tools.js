@@ -8,7 +8,7 @@ import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
-import { runAborted, assertRunOwned } from "./run-fence.js";
+import { assertRunOwned } from "./run-fence.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
@@ -283,7 +283,12 @@ function validateGrantFor(grant, origin) {
 export async function captureTabScreenshot(tabId) {
   // Screenshot capture is a side-effecting boundary (it captures + may return
   // privileged page pixels) — fence it (the round-16 fence coverage finding).
-  if (runAborted()) {
+  // DUrable ownership must be asserted BEFORE activation/capture, not merely the
+  // signal after the fact (the round-20 durable-ownership-before-commit finding:
+  // durable ownership can already be absent while the signal remains live).
+  try {
+    await assertRunOwned();
+  } catch {
     return { error: "run aborted — screenshot not captured" };
   }
   if (!(await hasActiveTabPermission()) && !(await hasTabsPermission())) {
@@ -342,17 +347,38 @@ export async function captureTabScreenshot(tabId) {
         };
       }
 
-      // Activate the requested tab (if any) so it is the active tab — capture
-      // targets the ACTIVE tab under activeTab. Activating needs no permission,
-      // and it now happens ONLY AFTER the grant check (a denied capture must
-      // never change the owner's active tab).
-      if (tabId) {
-        try {
-          await chrome.tabs.update(tabId, { active: true });
-        } catch (e) {
-          return { error: `could not activate tab: ${e?.message ?? e}` };
-        }
-      }
+          // Activate the requested tab (if any) so it is the active tab — capture
+          // targets the ACTIVE tab under activeTab. Activating needs no permission,
+          // and it now happens ONLY AFTER the grant check (a denied capture must
+          // never change the owner's active tab).
+          // Re-read + REVALIDATE the target identity IMMEDIATELY before activation
+          // (after the grant check's awaits): a navigation between the pre-lock
+          // snapshot and this point must not let us activate a newly-unauthorized
+          // tab (the round-20 capture-navigation-race finding).
+          const fresh = await chrome.tabs.get(tabId).catch(() => null);
+          if (!fresh?.id) return { error: "no tab" };
+          const freshOrigin = fresh.url
+            ? (() => {
+              try {
+                return canonicalOrigin(fresh.url);
+              } catch {
+                return undefined;
+              }
+            })()
+            : undefined;
+          if (!freshOrigin || freshOrigin !== origin) {
+            return {
+              error:
+                "tab navigated before capture — screenshot discarded (identity changed)",
+            };
+          }
+          if (tabId) {
+            try {
+              await chrome.tabs.update(tabId, { active: true });
+            } catch (e) {
+              return { error: `could not activate tab: ${e?.message ?? e}` };
+            }
+          }
       // The active tab (its url is visible under activeTab / tabs).
       const active = (await chrome.tabs.query({ active: true, currentWindow: true }))
         .find((t) => !tabId || t.id === tabId) ?? null;
@@ -488,7 +514,9 @@ export function browserToolset() {
                 "browser control not granted for this origin — ask the user to approve it in Settings",
             };
           }
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted — tab not opened" };
           }
           const tab = await chrome.tabs.create({ url });
@@ -561,8 +589,32 @@ export function browserToolset() {
                 "browser control not granted for the source tab's origin — ask the user to approve it in Settings",
             };
           }
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted — tab not navigated" };
+          }
+          // Re-read the SOURCE tab identity IMMEDIATELY before the mutation (after
+          // the grant-check awaits): the earlier srcTab read was several awaits ago,
+          // and a real page navigation in that gap could have moved the tab from an
+          // authorized origin to an unauthorized one (the round-20 navigation-
+          // source-race finding — the source snapshot raced real page navigation).
+          // Re-derive + compare the origin NOW, bound to the mutation.
+          const boundSrc = await chrome.tabs.get(id).catch(() => null);
+          const boundOrigin = boundSrc?.url
+            ? (() => {
+              try {
+                return canonicalOrigin(boundSrc.url);
+              } catch {
+                return undefined;
+              }
+            })()
+            : undefined;
+          if (!boundOrigin || boundOrigin !== srcOrigin) {
+            return {
+              error:
+                "tab navigated before navigate — source identity changed",
+            };
           }
           await chrome.tabs.update(id, { url });
           // Re-check the fence AFTER the await: an abort during tabs.update must
@@ -616,27 +668,51 @@ export function browserToolset() {
               "tabs permission not granted — enable Browser control in Settings",
           };
         }
-        const tab = await chrome.tabs.get(tabId).catch(() => null);
-        const origin = tab?.url
-          ? (() => {
-            try {
-              return canonicalOrigin(tab.url);
-            } catch {
-              return undefined;
-            }
-          })()
-          : undefined;
         // Check the grant + perform the mutation under the SAME grant lock (a
         // revoke can no longer interleave with the checked tabs.remove).
         return await withGrantLock(async () => {
+          // Re-read the SOURCE tab INSIDE the lock (the round-20 blocker: close
+          // snapshotted the tab/origin BEFORE the lock, so an unauthorized page
+          // could replace the authorized source before removal).
+          const tab = await chrome.tabs.get(tabId).catch(() => null);
+          const origin = tab?.url
+            ? (() => {
+              try {
+                return canonicalOrigin(tab.url);
+              } catch {
+                return undefined;
+              }
+            })()
+            : undefined;
           if (!(await isBrowserControlGranted(origin))) {
             return {
               error:
                 "browser control not granted for this origin — ask the user to approve it in Settings",
             };
           }
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted — tab not closed" };
+          }
+          // Re-read + compare the tab identity IMMEDIATELY before the mutation
+          // (after the grant-check awaits): a navigation since the read above must
+          // not close a newly-unauthorized tab (the round-20 close-identity race).
+          const bound = await chrome.tabs.get(tabId).catch(() => null);
+          const boundOrigin = bound?.url
+            ? (() => {
+              try {
+                return canonicalOrigin(bound.url);
+              } catch {
+                return undefined;
+              }
+            })()
+            : undefined;
+          if (!boundOrigin || boundOrigin !== origin) {
+            return {
+              error:
+                "tab navigated before close — source identity changed",
+            };
           }
           await chrome.tabs.remove(tabId);
           // Re-check the fence AFTER the await: an abort/ownership loss during
@@ -673,8 +749,12 @@ export function browserToolset() {
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
         // schedule_task is a durable side-effecting boundary (persists a payload
         // + creates a Chrome alarm) — fence it (the round-16 fence coverage
-        // finding: schedule_task persisted without a run-abort check).
-        if (runAborted()) {
+        // finding: schedule_task persisted without a run-abort check). DUrable
+        // ownership must be asserted BEFORE the commit, not just the signal (the
+        // round-20 durable-ownership-before-commit finding).
+        try {
+          await assertRunOwned();
+        } catch {
           return { error: "run aborted — task not scheduled" };
         }
         // The ONE atomic scheduling path (shared with the register-task route).

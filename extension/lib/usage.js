@@ -5,7 +5,7 @@
 // aggregates by agent/provider/model. The memory explorer surfaces a usage view.
 // Every agent-do onUsage event flows through recordUsage().
 import { kvGet, kvRemove, kvSet } from "./kv.js";
-import { runAborted } from "./run-fence.js";
+import { assertRunOwned } from "./run-fence.js";
 
 const STORAGE_KEY = "cairn:usage";
 const MAX_RECORDS = 5000;
@@ -19,8 +19,14 @@ export async function recordUsage(p) {
   // Usage accounting is a durable write (the ledger persists in chrome.storage)
   // — fence it like every other side-effecting boundary: an aborted run must not
   // append a usage row as a silently-degraded owner (the round-19 finding:
-  // recordUsage was completely unfenced).
-  if (runAborted()) return;
+  // recordUsage was completely unfenced). DUrable ownership must be verified too
+  // (not merely the signal) — the round-20 finding that usage checked the signal
+  // only once and never verified durable ownership.
+  try {
+    await assertRunOwned();
+  } catch {
+    return; // ownership lost / run aborted — do not record a stale usage row
+  }
   const inputTokens = p.inputTokens ?? 0;
   const outputTokens = p.outputTokens ?? 0;
   if (inputTokens === 0 && outputTokens === 0) return; // nothing to record

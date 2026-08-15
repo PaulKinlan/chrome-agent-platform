@@ -190,19 +190,36 @@ export async function markScheduledDone(name, token) {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     delete tasks[name];
-    // Clear the alarm BEFORE (or at least atomically with) deleting the payload,
-    // and CHECK the result: a `false`/rejecting clear means the (periodic) alarm
-    // is STILL ARMED, so the payload must be KEPT for it to fire on — never
-    // delete a payload while its alarm is still active (the round-19 alarm-clear
-    // blocker).
-    let cleared = true;
+    // Clear the alarm, then AUTHORITATIVELY determine whether it still exists via
+    // alarms.get — `clear` returning false is AMBIGUOUS: it means BOTH "clear
+    // failed" AND "the alarm was already absent". For a COMPLETED one-shot the
+    // alarm is legitimately GONE (Chrome consumed it when it fired), so the
+    // payload must be DELETED — a kept payload would be recreated + rerun by
+    // reconcileScheduledTasks (the round-20 one-shot replay blocker). For a
+    // periodic alarm whose clear FAILED, the alarm is STILL present, so the
+    // payload must be KEPT for it to fire on (the round-19 alarm-clear blocker).
+    // alarms.get disambiguates: absent → delete payload; present → keep it.
     try {
-      const res = await alarmsApi()?.clear(name);
-      cleared = res !== false;
+      await alarmsApi()?.clear(name);
+    } catch { /* clear may throw if the alarm is already gone; get() below decides */ }
+    let stillArmed = true;
+    try {
+      stillArmed = (await alarmsApi()?.get(name)) != null;
     } catch {
-      cleared = false;
+      stillArmed = true; // fail closed — cannot confirm absence → keep the payload
     }
-    if (cleared) {
+    // Re-verify the ownership fence at the DESTRUCTIVE commit (not just up front):
+    // the token check above ran before the kvGet + clear awaits, so a
+    // re-acquisition during those awaits must not let a stale owner delete a
+    // later owner's payload (the round-20 durable-ownership-at-commit finding).
+    if (token) {
+      const inflightNow = await kvGet(INFLIGHT_KEY);
+      const cur = inflightNow[INFLIGHT_KEY]?.[name];
+      if (!validLock(cur) || cur.token !== token) {
+        throw new Error("ownership lost — scheduled task NOT removed");
+      }
+    }
+    if (!stillArmed) {
       await kvSet({ [TASK_KEY]: tasks });
     }
   });
