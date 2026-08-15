@@ -10,7 +10,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
-import { runAborted, assertRunAlive } from "./run-fence.js";
+import { runAborted, assertRunOwned } from "./run-fence.js";
 
 const DEFAULT_SYSTEM =
   `You are the Chrome Agent Platform hub agent. You help the
@@ -32,22 +32,30 @@ function memoryToolset(memory) {
       execute: async ({ key, value }) => {
         // memory_set is a durable side-effecting boundary — fence it BEFORE the
         // write (the round-16 fence coverage finding) AND AFTER the awaited OPFS
-        // write (the round-18 finding: memory_set checked once before the await
-        // and never rechecked, so an abort during the write still returned ok).
+        // write (the round-18 finding). On abort AFTER a committed overwrite,
+        // RESTORE the previous value (or delete a newly-created key) — never
+        // delete an existing key wholesale (the round-19 blocker: an overwrite
+        // abort deleted the ENTIRE prior key).
         if (runAborted()) {
           return { error: "run aborted — memory not written" };
         }
+        let prev = undefined;
+        let existed = false;
         try {
+          prev = await memory.get(key);
+          existed = prev !== undefined && prev !== null;
           await memory.set(key, value);
-          assertRunAlive();
+          await assertRunOwned();
           return { ok: true, key };
         } catch (e) {
           // A bounded/reserved-key rejection is surfaced honestly, never thrown
-          // into the agent loop. A run-abort after the write is also surfaced as
-          // an error (best-effort compensate by deleting the just-written key).
-          if (runAborted() && typeof memory.delete === "function") {
+          // into the agent loop. A run-abort AFTER the write compensates by
+          // restoring the prior value (or removing a new key), not deleting an
+          // existing key's history.
+          if (runAborted() && typeof memory.set === "function") {
             try {
-              await memory.delete(key);
+              if (existed) await memory.set(key, prev);
+              else await memory.delete(key);
             } catch { /* best-effort */ }
           }
           return { error: String(e?.message ?? e) };
@@ -180,9 +188,7 @@ export function createOrchestrator({
           // delegateGuard await must still prevent the worker from starting
           // (the round-16 blocker: delegate_task could abort during the guard
           // then still start the worker).
-          if (runAborted()) {
-            return { error: "run aborted — delegation not started" };
-          }
+          await assertRunOwned();
           const result = await a.run(task);
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded

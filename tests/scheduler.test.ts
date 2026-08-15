@@ -237,6 +237,60 @@ Deno.test("ownsInflight is false when the durable lock is lost (round-16 blocker
 
 import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
 
+Deno.test("markScheduledDone keeps the payload when alarms.clear returns false (round-19 blocker)", async () => {
+  const origClear = chrome.alarms.clear;
+  chrome.alarms.clear = async () => false; // the (periodic) alarm is still armed
+  try {
+    const { name } = await scheduleTask({
+      task: "periodic-clear-false",
+      delayMs: 1000,
+      periodInMinutes: 1,
+    });
+    await markScheduledDone(name);
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    assert(
+      store["cap:scheduledTasks"][name] !== undefined,
+      "payload must survive when the alarm cannot be cleared (still armed)",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+  }
+});
+
+Deno.test("scheduleTask rollback keeps the payload when alarms.clear fails (round-19 blocker)", async () => {
+  const origCreate = chrome.alarms.create;
+  const origClear = chrome.alarms.clear;
+  chrome.alarms.create = async () => {
+    throw new Error("create failed");
+  };
+  chrome.alarms.clear = async () => false; // cannot clear the (periodic) alarm
+  try {
+    let threw = false;
+    try {
+      await scheduleTask({
+        task: "rollback-clear-false",
+        delayMs: 1000,
+        periodInMinutes: 1,
+      });
+    } catch {
+      threw = true;
+    }
+    assert(threw, "scheduleTask must reject when alarms.create fails");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    const tasks = store["cap:scheduledTasks"] ?? {};
+    const kept = Object.values(tasks).some((t) =>
+      t?.task === "rollback-clear-false"
+    );
+    assert(
+      kept,
+      "payload must be KEPT when the alarm clear fails (the still-armed alarm needs it)",
+    );
+  } finally {
+    chrome.alarms.create = origCreate;
+    chrome.alarms.clear = origClear;
+  }
+});
+
 Deno.test("an abort during the first storage await prevents scheduleTask persisting (round-17)", async () => {
   const controller = new AbortController();
   setRunFence({ signal: controller.signal });

@@ -25444,9 +25444,10 @@ function resetStorageTransition() {
 }
 async function migrateSessionToStorage() {
   if (migrated) return;
-  if (!await storageAvailable()) return;
   if (!migrationInFlight) {
     migrationInFlight = withStorageModeLock(async () => {
+      if (migrated) return;
+      if (!await storageAvailable()) return;
       const entries = {};
       for (const [k, v] of session) entries[k] = clone2(v);
       if (Object.keys(entries).length === 0) {
@@ -25679,46 +25680,47 @@ function withWriteLock(fn) {
 function utf8Bytes(str) {
   return new TextEncoder().encode(str).byteLength;
 }
+async function setValueInner(path, key, value, { isMaster, trusted = false }) {
+  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
+  if (!trusted && reserved.has(String(key))) {
+    throw new Error(`key "${key}" is reserved on this store`);
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error(`value for "${key}" is not JSON-serializable`);
+  }
+  const newBytes = utf8Bytes(serialized);
+  if (newBytes > MAX_VALUE_BYTES) {
+    throw new Error(
+      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
+    );
+  }
+  const dir = await openDir(path);
+  const usage = await storeUsage(dir);
+  let oldBytes = 0;
+  let isNew = true;
+  try {
+    const fh = await dir.getFileHandle(`${key}.json`);
+    oldBytes = (await fh.getFile()).size;
+    isNew = false;
+  } catch {
+  }
+  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
+    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
+  }
+  const delta = newBytes - oldBytes;
+  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
+    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
+  }
+  if (await globalUsage() + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
+    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+  }
+  await writeJson(dir, `${key}.json`, value);
+}
 async function setValue(path, key, value, { isMaster, trusted = false }) {
-  return withWriteLock(async () => {
-    const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
-    if (!trusted && reserved.has(String(key))) {
-      throw new Error(`key "${key}" is reserved on this store`);
-    }
-    let serialized;
-    try {
-      serialized = JSON.stringify(value);
-    } catch {
-      throw new Error(`value for "${key}" is not JSON-serializable`);
-    }
-    const newBytes = utf8Bytes(serialized);
-    if (newBytes > MAX_VALUE_BYTES) {
-      throw new Error(
-        `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
-      );
-    }
-    const dir = await openDir(path);
-    const usage = await storeUsage(dir);
-    let oldBytes = 0;
-    let isNew = true;
-    try {
-      const fh = await dir.getFileHandle(`${key}.json`);
-      oldBytes = (await fh.getFile()).size;
-      isNew = false;
-    } catch {
-    }
-    if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
-      throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
-    }
-    const delta = newBytes - oldBytes;
-    if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
-      throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
-    }
-    if (await globalUsage() + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
-      throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
-    }
-    await writeJson(dir, `${key}.json`, value);
-  });
+  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
 }
 function memoryStore(origin) {
   const isMaster = origin === MASTER;
@@ -25827,11 +25829,19 @@ async function saveScreenshot(mem, { url: url3, dataURL }) {
   return withWriteLock(async () => {
     const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const dir = await openDir([ROOT, MASTER, "screenshots"]);
+    const indexPath = mem.isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(mem.origin)];
+    if (await globalUsage() + bytes > MAX_BYTES_GLOBAL) {
+      throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+    }
     try {
       await writeJson(dir, `${id}.json`, { url: url3, dataURL, at: Date.now() });
       const index = await mem.get("screenshots") ?? [];
       index.push({ id, at: Date.now(), url: url3 });
       const next = index.slice(-MAX_SCREENSHOTS);
+      await setValueInner(indexPath, "screenshots", next, {
+        isMaster: mem.isMaster,
+        trusted: true
+      });
       const kept = new Set(next.map((s) => s.id));
       for (const s of index) {
         if (!kept.has(s.id)) {
@@ -25841,7 +25851,6 @@ async function saveScreenshot(mem, { url: url3, dataURL }) {
           }
         }
       }
-      await mem.setTrusted("screenshots", next);
       return { id, url: url3 };
     } catch (e) {
       try {
@@ -66650,10 +66659,37 @@ init_browser_shim_process();
 
 // extension/lib/usage.js
 init_browser_shim_process();
+
+// extension/lib/run-fence.js
+init_browser_shim_process();
+var fence = null;
+function setRunFence(f) {
+  fence = f ?? null;
+}
+function clearRunFence() {
+  fence = null;
+}
+function runAborted() {
+  return Boolean(fence?.signal?.aborted);
+}
+function assertRunAlive() {
+  if (runAborted()) {
+    throw new Error("run aborted");
+  }
+}
+async function assertRunOwned() {
+  if (fence?.assertOwned) {
+    await fence.assertOwned();
+  }
+  assertRunAlive();
+}
+
+// extension/lib/usage.js
 var STORAGE_KEY = "cairn:usage";
 var MAX_RECORDS = 5e3;
 var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
 async function recordUsage(p) {
+  if (runAborted()) return;
   const inputTokens = p.inputTokens ?? 0;
   const outputTokens = p.outputTokens ?? 0;
   if (inputTokens === 0 && outputTokens === 0) return;
@@ -66759,24 +66795,6 @@ async function allSkills() {
   return out;
 }
 
-// extension/lib/run-fence.js
-init_browser_shim_process();
-var fence = null;
-function setRunFence(f) {
-  fence = f ?? null;
-}
-function clearRunFence() {
-  fence = null;
-}
-function runAborted() {
-  return Boolean(fence?.signal?.aborted);
-}
-function assertRunAlive() {
-  if (runAborted()) {
-    throw new Error("run aborted");
-  }
-}
-
 // extension/lib/agent.js
 var DEFAULT_SYSTEM = `You are the Chrome Agent Platform hub agent. You help the
 user get things done on the web. You can read and write memory, call tools, and
@@ -66796,14 +66814,19 @@ function memoryToolset(memory) {
         if (runAborted()) {
           return { error: "run aborted \u2014 memory not written" };
         }
+        let prev = void 0;
+        let existed = false;
         try {
+          prev = await memory.get(key);
+          existed = prev !== void 0 && prev !== null;
           await memory.set(key, value);
-          assertRunAlive();
+          await assertRunOwned();
           return { ok: true, key };
         } catch (e) {
-          if (runAborted() && typeof memory.delete === "function") {
+          if (runAborted() && typeof memory.set === "function") {
             try {
-              await memory.delete(key);
+              if (existed) await memory.set(key, prev);
+              else await memory.delete(key);
             } catch {
             }
           }
@@ -66913,9 +66936,7 @@ function createOrchestrator2({
           }
           gen = g.gen ?? 0;
         }
-        if (runAborted()) {
-          return { error: "run aborted \u2014 delegation not started" };
-        }
+        await assertRunOwned();
         const result = await a.run(task);
         if (delegateGuard && gen) {
           const after = await delegateGuard(agentId);
@@ -67177,7 +67198,7 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
     const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     assertRunAlive();
     const store = await kvGet(TASK_KEY);
-    assertRunAlive();
+    await assertRunOwned();
     const tasks = { ...store[TASK_KEY] ?? {} };
     tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
     await kvSet({ [TASK_KEY]: tasks });
@@ -67198,16 +67219,20 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       const info = { when };
       if (periodInMinutes) info.periodInMinutes = periodInMinutes;
       await alarms.create(name25, info);
-      assertRunAlive();
+      await assertRunOwned();
     } catch (e) {
+      let cleared = false;
       try {
-        await alarmsApi()?.clear(name25);
+        cleared = await alarmsApi()?.clear(name25) !== false;
       } catch {
+        cleared = false;
       }
-      const cur = await kvGet(TASK_KEY);
-      const rollback = { ...cur[TASK_KEY] ?? {} };
-      delete rollback[name25];
-      await kvSet({ [TASK_KEY]: rollback });
+      if (cleared) {
+        const cur = await kvGet(TASK_KEY);
+        const rollback = { ...cur[TASK_KEY] ?? {} };
+        delete rollback[name25];
+        await kvSet({ [TASK_KEY]: rollback });
+      }
       throw e;
     }
     return { name: name25, when };
@@ -67226,9 +67251,16 @@ async function markScheduledDone(name25, token) {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     delete tasks[name25];
-    await kvSet({ [TASK_KEY]: tasks });
-    await alarmsApi()?.clear(name25).catch(() => {
-    });
+    let cleared = true;
+    try {
+      const res = await alarmsApi()?.clear(name25);
+      cleared = res !== false;
+    } catch {
+      cleared = false;
+    }
+    if (cleared) {
+      await kvSet({ [TASK_KEY]: tasks });
+    }
   });
 }
 async function tryAcquireInflight(name25) {
@@ -67513,86 +67545,93 @@ async function captureTabScreenshot(tabId) {
     };
   }
   return await withTabCaptureLock(tabId ?? "active", async () => {
+    let target = null;
     if (tabId) {
-      try {
-        await chrome.tabs.update(tabId, { active: true });
-      } catch (e) {
-        return { error: `could not activate tab: ${e?.message ?? e}` };
-      }
+      target = await chrome.tabs.get(tabId).catch(() => null);
+    } else {
+      target = (await chrome.tabs.query({ active: true, currentWindow: true }))[0] ?? null;
     }
-    const active = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => !tabId || t.id === tabId) ?? null;
-    if (!active?.id) return { error: "no active tab" };
-    const origin = active.url ? (() => {
+    if (!target?.id) return { error: "no tab" };
+    const origin = target.url ? (() => {
       try {
-        return canonicalOrigin(active.url);
+        return canonicalOrigin(target.url);
       } catch {
         return void 0;
       }
     })() : void 0;
     if (!origin) {
       return {
-        error: "cannot read the active tab's URL \u2014 capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)"
+        error: "cannot read the tab's URL \u2014 capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)"
       };
     }
-    const grantIdBefore = validateGrantFor(
-      (await kvGet(GRANT_KEY))[GRANT_KEY],
-      origin
-    );
-    if (!grantIdBefore) {
-      return {
-        error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
-      };
-    }
-    const cur = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
-    const curOrigin = cur?.url ? (() => {
-      try {
-        return canonicalOrigin(cur.url);
-      } catch {
-        return void 0;
-      }
-    })() : void 0;
-    if (!curOrigin || curOrigin !== origin) {
-      return { error: "tab navigated during capture \u2014 screenshot discarded" };
-    }
-    let dataUrl;
-    try {
-      dataUrl = await chrome.tabs.captureVisibleTab(
-        cur.windowId ?? void 0,
-        { format: "png" }
+    return await withGrantLock(async () => {
+      const grantIdBefore = validateGrantFor(
+        (await kvGet(GRANT_KEY))[GRANT_KEY],
+        origin
       );
-    } catch (e) {
-      return { error: `capture failed: ${e?.message ?? e}` };
-    }
-    const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
-    const nowOrigin = nowTab?.url ? (() => {
-      try {
-        return canonicalOrigin(nowTab.url);
-      } catch {
-        return void 0;
+      if (!grantIdBefore) {
+        return {
+          error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
+        };
       }
-    })() : void 0;
-    if (!nowOrigin || nowOrigin !== origin) {
-      return { error: "tab navigated during capture \u2014 screenshot discarded" };
-    }
-    if (validateGrantFor(
-      (await kvGet(GRANT_KEY))[GRANT_KEY],
-      nowOrigin
-    ) !== grantIdBefore) {
+      if (tabId) {
+        try {
+          await chrome.tabs.update(tabId, { active: true });
+        } catch (e) {
+          return { error: `could not activate tab: ${e?.message ?? e}` };
+        }
+      }
+      const active = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => !tabId || t.id === tabId) ?? null;
+      if (!active?.id) return { error: "no active tab" };
+      const cur = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
+      const curOrigin = cur?.url ? (() => {
+        try {
+          return canonicalOrigin(cur.url);
+        } catch {
+          return void 0;
+        }
+      })() : void 0;
+      if (!curOrigin || curOrigin !== origin) {
+        return { error: "tab navigated during capture \u2014 screenshot discarded" };
+      }
+      let dataUrl;
+      try {
+        dataUrl = await chrome.tabs.captureVisibleTab(
+          cur.windowId ?? void 0,
+          { format: "png" }
+        );
+      } catch (e) {
+        return { error: `capture failed: ${e?.message ?? e}` };
+      }
+      const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
+      const nowOrigin = nowTab?.url ? (() => {
+        try {
+          return canonicalOrigin(nowTab.url);
+        } catch {
+          return void 0;
+        }
+      })() : void 0;
+      if (!nowOrigin || nowOrigin !== origin) {
+        return { error: "tab navigated during capture \u2014 screenshot discarded" };
+      }
+      if (validateGrantFor(
+        (await kvGet(GRANT_KEY))[GRANT_KEY],
+        nowOrigin
+      ) !== grantIdBefore) {
+        return {
+          error: "browser control grant changed during capture \u2014 screenshot discarded"
+        };
+      }
+      if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+        return { error: "capture returned no image data" };
+      }
+      await assertRunOwned();
       return {
-        error: "browser control grant changed during capture \u2014 screenshot discarded"
+        screenshot: dataUrl,
+        url: nowTab.url
+        // the SOURCE page, so the UI re-opens the page (not the data URL)
       };
-    }
-    if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
-      return { error: "capture returned no image data" };
-    }
-    if (runAborted()) {
-      return { error: "run aborted \u2014 screenshot discarded" };
-    }
-    return {
-      screenshot: dataUrl,
-      url: nowTab.url
-      // the SOURCE page, so the UI re-opens the page (not the data URL)
-    };
+    });
   });
 }
 async function readPage(tabId) {
@@ -67644,7 +67683,9 @@ function browserToolset() {
             return { error: "run aborted \u2014 tab not opened" };
           }
           const tab = await chrome.tabs.create({ url: url3 });
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             try {
               await chrome.tabs.remove(tab.id);
             } catch {
@@ -67675,15 +67716,15 @@ function browserToolset() {
         }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
-        const srcTab = await chrome.tabs.get(id).catch(() => null);
-        const srcOrigin = srcTab?.url ? (() => {
-          try {
-            return canonicalOrigin(srcTab.url);
-          } catch {
-            return void 0;
-          }
-        })() : void 0;
         return await withGrantLock(async () => {
+          const srcTab = await chrome.tabs.get(id).catch(() => null);
+          const srcOrigin = srcTab?.url ? (() => {
+            try {
+              return canonicalOrigin(srcTab.url);
+            } catch {
+              return void 0;
+            }
+          })() : void 0;
           if (!await isBrowserControlGranted(destOrigin)) {
             return {
               error: "browser control not granted for the destination origin \u2014 ask the user to approve it in Settings"
@@ -67698,7 +67739,9 @@ function browserToolset() {
             return { error: "run aborted \u2014 tab not navigated" };
           }
           await chrome.tabs.update(id, { url: url3 });
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted \u2014 tab navigated then aborted" };
           }
           return { ok: true, tabId: id, url: url3 };
@@ -67757,7 +67800,9 @@ function browserToolset() {
             return { error: "run aborted \u2014 tab not closed" };
           }
           await chrome.tabs.remove(tabId);
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted \u2014 tab closed then aborted" };
           }
           return { ok: true, tabId };
@@ -68602,10 +68647,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
         scheduled,
         attachmentCount: attachments?.length ?? 0
       });
+      await fence2?.assertOwned?.();
       const context = attachmentContext(attachments);
       const result = await orch.run(task, context, []);
       await fence2?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result });
+      await fence2?.assertOwned?.();
       if (scheduled) {
         await fence2?.assertOwned?.();
         if (chrome.notifications?.create) {
@@ -68620,6 +68667,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
             console.error("notification failed", e);
           }
         }
+        await fence2?.assertOwned?.();
       }
       return { ok: true, result };
     } finally {
@@ -68660,17 +68708,24 @@ var handlers = {
     }
     if (id === "scripting") {
       const origins = await listOrigins();
-      const failures = [];
-      for (const o of origins) {
-        abortWorker(o);
-        await disenrollOrigin(o);
-        const res3 = await unregisterOriginScripts(o);
-        if (!res3.ok) {
-          await markCleanupPending(o);
-          failures.push(res3.error ?? o);
-        }
-      }
+      const results = await Promise.allSettled(origins.map(
+        (o) => withOriginLock(o, async () => {
+          abortWorker(o);
+          await disenrollOrigin(o);
+          const res3 = await unregisterOriginScripts(o);
+          if (!res3.ok) {
+            await markCleanupPending(o);
+            return { origin: o, error: res3.error ?? o };
+          }
+          return { origin: o, ok: true };
+        })
+      ));
       invalidateAgent();
+      const failures = results.filter(
+        (r) => r.status === "rejected" || r.status === "fulfilled" && r.value?.error
+      ).map(
+        (r) => r.status === "rejected" ? String(r.reason?.message ?? r.reason) : r.value.error
+      );
       const res2 = await revokeCapability(id);
       if (failures.length > 0) {
         res2.cleanupPending = failures.length;
@@ -69183,13 +69238,13 @@ chrome.action?.onClicked?.addListener(async (tab) => {
     const shot = await captureTabScreenshot(tab?.id);
     if (shot?.screenshot) {
       const mem = masterMemory();
-      await saveScreenshot(mem, {
+      const saved = await saveScreenshot(mem, {
         url: shot.url,
         dataURL: shot.screenshot
       });
       await journalAppend(mem, {
         type: "screenshot",
-        id: `shot:${Date.now()}`,
+        id: saved?.id ?? `shot:${Date.now()}`,
         url: shot.url
       });
     }

@@ -228,9 +228,18 @@ export function resetStorageTransition() {
  * concurrent KV writes (the round-18 storage-transition race). */
 export async function migrateSessionToStorage() {
   if (migrated) return;
-  if (!(await storageAvailable())) return;
+  // Install the migration barrier SYNCHRONOUSLY (set `migrationInFlight` BEFORE
+  // any await) so a concurrent KV operation that enters AFTER the permission
+  // grant but BEFORE this migration runs cannot read stale persistent state
+  // (the round-19 blocker: the old code awaited `storageAvailable()` FIRST, so
+  // `migrationInFlight` was still null during that await and a concurrent kvGet
+  // passed `waitForMigration()` and read the stale persistent backend). The
+  // availability check now runs INSIDE the storage-mode lock, so it is atomic
+  // with every KV operation.
   if (!migrationInFlight) {
     migrationInFlight = withStorageModeLock(async () => {
+      if (migrated) return;
+      if (!(await storageAvailable())) return;
       const entries = {};
       for (const [k, v] of session) entries[k] = clone(v);
       if (Object.keys(entries).length === 0) {

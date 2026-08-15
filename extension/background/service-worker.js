@@ -501,11 +501,16 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         scheduled,
         attachmentCount: attachments?.length ?? 0,
       });
+      // Re-check durable ownership AFTER the task journal COMMIT (never only
+      // before — the round-19 blocker: journal ownership was checked before the
+      // awaited commit, never after).
+      await fence?.assertOwned?.();
       const context = attachmentContext(attachments);
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       const result = await orch.run(task, context, []);
       await fence?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result });
+      await fence?.assertOwned?.();
       if (scheduled) {
         await fence?.assertOwned?.();
         // Completion lifecycle: surface the result as a notification. The
@@ -523,6 +528,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             console.error("notification failed", e);
           }
         }
+        // Re-check ownership AFTER the notification commit as well.
+        await fence?.assertOwned?.();
       }
       return { ok: true, result };
     } finally {
@@ -580,20 +587,35 @@ const handlers = {
       // just unregister the scripts (the round-18 high: Disable left origins
       // enrolled + existing bridges authoritative). Tombstone every enrolled
       // origin FIRST (a running bridge is rejected from this instant), then
-      // unregister scripts + remove host permissions; failed dependent cleanup
-      // is recorded as retryable pending-cleanup rather than silently dropped.
+      // unregister scripts + remove host permissions. Each origin's cleanup runs
+      // under its OWN withOriginLock so it SERIALIZES against a concurrent
+      // enroll/delete/retry for that origin (the round-19 blocker: scripting
+      // Disable bypassed the origin lock and raced enrollment), and allSettled so
+      // one origin's thrown tombstone never aborts the rest.
       const origins = await listOrigins();
-      const failures = [];
-      for (const o of origins) {
-        abortWorker(o);
-        await disenrollOrigin(o);
-        const res = await unregisterOriginScripts(o);
-        if (!res.ok) {
-          await markCleanupPending(o);
-          failures.push(res.error ?? o);
-        }
-      }
+      const results = await Promise.allSettled(origins.map((o) =>
+        withOriginLock(o, async () => {
+          abortWorker(o);
+          await disenrollOrigin(o);
+          const res = await unregisterOriginScripts(o);
+          if (!res.ok) {
+            await markCleanupPending(o);
+            return { origin: o, error: res.error ?? o };
+          }
+          return { origin: o, ok: true };
+        }),
+      ));
       invalidateAgent();
+      const failures = results
+        .filter((r) =>
+          r.status === "rejected" ||
+          (r.status === "fulfilled" && r.value?.error)
+        )
+        .map((r) =>
+          r.status === "rejected"
+            ? String(r.reason?.message ?? r.reason)
+            : r.value.error
+        );
       const res = await revokeCapability(id);
       if (failures.length > 0) {
         res.cleanupPending = failures.length;
@@ -1269,13 +1291,15 @@ chrome.action?.onClicked?.addListener(async (tab) => {
       // Store the screenshot as a DEDICATED OPFS file (bounded + evict-oldest),
       // never as an inline base64 value that overflows the 256 KiB memory bound
       // (the round-17 blocker: one base64 PNG (~300 KiB) exceeded the cap).
-      await saveScreenshot(mem, {
+      const saved = await saveScreenshot(mem, {
         url: shot.url,
         dataURL: shot.screenshot,
       });
+      // Journal the REAL saved screenshot id (not an unrelated generated id) so
+      // the owner can retrieve the exact stored blob (the round-19 finding).
       await journalAppend(mem, {
         type: "screenshot",
-        id: `shot:${Date.now()}`,
+        id: saved?.id ?? `shot:${Date.now()}`,
         url: shot.url,
       });
     }

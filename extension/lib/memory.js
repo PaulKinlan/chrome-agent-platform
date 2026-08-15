@@ -159,8 +159,12 @@ function utf8Bytes(str) {
   return new TextEncoder().encode(str).byteLength;
 }
 
-async function setValue(path, key, value, { isMaster, trusted = false }) {
-  return withWriteLock(async () => {
+/** The LOCKED body of setValue (no lock acquisition). Exported so callers that
+ * ALREADY hold the global write mutex (saveScreenshot) can perform a nested
+ * write without re-acquiring the same non-reentrant mutex (the round-19
+ * critical deadlock: withWriteLock → setTrusted → setValue → withWriteLock hung
+ * forever and poisoned all later OPFS writes). */
+async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
   if (!trusted && reserved.has(String(key))) {
     throw new Error(`key "${key}" is reserved on this store`);
@@ -204,7 +208,10 @@ async function setValue(path, key, value, { isMaster, trusted = false }) {
     throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
   }
   await writeJson(dir, `${key}.json`, value);
-  });
+}
+
+async function setValue(path, key, value, { isMaster, trusted = false }) {
+  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
 }
 
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */
@@ -355,14 +362,37 @@ export async function saveScreenshot(mem, { url, dataURL }) {
   return withWriteLock(async () => {
     const id = `shot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const dir = await openDir([ROOT, MASTER, "screenshots"]);
+    // The metadata index lives on the same store `mem` points at (master). The
+    // index write must NOT re-acquire the global write mutex (it is already held
+    // by the surrounding withWriteLock) — call setValueInner directly with the
+    // store's own path + trusted (the round-19 re-entrant deadlock).
+    const indexPath = mem.isMaster
+      ? [ROOT, MASTER]
+      : [ROOT, "origins", encodeOrigin(mem.origin)];
+    // Screenshots are LARGE media — charge the new blob against the GLOBAL quota
+    // BEFORE writing (five 4 MiB blobs are 20 MiB and must count toward the
+    // 64 MiB budget, the round-18 screenshot-quota finding).
+    if ((await globalUsage()) + bytes > MAX_BYTES_GLOBAL) {
+      throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+    }
     try {
-      // Write the blob first, then the index, under ONE lock acquisition.
+      // Write the blob first, under ONE lock acquisition.
       await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });
 
       // Metadata index (small): id/at/url only, never the dataURL inline.
       const index = (await mem.get("screenshots")) ?? [];
       index.push({ id, at: Date.now(), url });
       const next = index.slice(-MAX_SCREENSHOTS);
+
+      // COMMIT the index FIRST (the authoritative step), THEN evict the
+      // orphaned blobs. If the index commit fails, the just-written blob is
+      // removed and NO old blob is deleted — the persisted index still matches
+      // the retained blobs (the round-18 "old blobs deleted before the index
+      // commits" orphan bug).
+      await setValueInner(indexPath, "screenshots", next, {
+        isMaster: mem.isMaster,
+        trusted: true,
+      });
       const kept = new Set(next.map((s) => s.id));
       for (const s of index) {
         if (!kept.has(s.id)) {
@@ -371,10 +401,9 @@ export async function saveScreenshot(mem, { url, dataURL }) {
           } catch { /* absent */ }
         }
       }
-      await mem.setTrusted("screenshots", next);
       return { id, url };
     } catch (e) {
-      // Compensate: a failed index update must not leave an orphaned blob.
+      // Compensate: a failed index commit must not leave an orphaned blob.
       try {
         await dir.removeEntry(`${id}.json`);
       } catch { /* absent */ }

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
-import { runAborted, assertRunAlive } from "./run-fence.js";
+import { runAborted, assertRunOwned } from "./run-fence.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
@@ -294,24 +294,23 @@ export async function captureTabScreenshot(tabId) {
   }
 
   return await withTabCaptureLock(tabId ?? "active", async () => {
-    // Activate the requested tab (if any) so it is the active tab — capture
-    // targets the ACTIVE tab under activeTab. Activating needs no permission.
+    // Resolve the TARGET tab + its origin FIRST, BEFORE any activation, so the
+    // grant can be checked BEFORE mutating the owner's active tab (the round-19
+    // blocker: a denied capture still switched the active tab because activation
+    // preceded the grant check).
+    let target = null;
     if (tabId) {
-      try {
-        await chrome.tabs.update(tabId, { active: true });
-      } catch (e) {
-        return { error: `could not activate tab: ${e?.message ?? e}` };
-      }
+      target = await chrome.tabs.get(tabId).catch(() => null);
+    } else {
+      target = (await chrome.tabs.query({ active: true, currentWindow: true }))[0] ??
+        null;
     }
-    // The active tab (its url is visible under activeTab / tabs).
-    const active = (await chrome.tabs.query({ active: true, currentWindow: true }))
-      .find((t) => !tabId || t.id === tabId) ?? null;
-    if (!active?.id) return { error: "no active tab" };
+    if (!target?.id) return { error: "no tab" };
 
-    const origin = active.url
+    const origin = target.url
       ? (() => {
         try {
-          return canonicalOrigin(active.url);
+          return canonicalOrigin(target.url);
         } catch {
           return undefined;
         }
@@ -320,93 +319,113 @@ export async function captureTabScreenshot(tabId) {
     if (!origin) {
       return {
         error:
-          "cannot read the active tab's URL — capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)",
-      };
-    }
-    // Read the grant ONCE and validate id + scope + expiry + origin together (an
-    // atomic snapshot, not separate reads). The returned id is the fence for the
-    // whole capture.
-    const grantIdBefore = validateGrantFor(
-      (await kvGet(GRANT_KEY))[GRANT_KEY],
-      origin,
-    );
-    if (!grantIdBefore) {
-      return {
-        error:
-          "browser control not granted for this tab's origin — ask the user to approve it in Settings",
+          "cannot read the tab's URL — capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)",
       };
     }
 
-    // Post-activation the tab could have navigated — re-derive + re-check BEFORE
-    // capturing (closes the active-tab ABA: activation itself can race a nav).
-    const cur = (await chrome.tabs.query({ active: true, currentWindow: true }))
-      .find((t) => t.id === active.id) ?? null;
-    const curOrigin = cur?.url
-      ? (() => {
-        try {
-          return canonicalOrigin(cur.url);
-        } catch {
-          return undefined;
-        }
-      })()
-      : undefined;
-    if (!curOrigin || curOrigin !== origin) {
-      return { error: "tab navigated during capture — screenshot discarded" };
-    }
-
-    let dataUrl;
-    try {
-      dataUrl = await chrome.tabs.captureVisibleTab(
-        cur.windowId ?? undefined,
-        { format: "png" },
-      );
-    } catch (e) {
-      return { error: `capture failed: ${e?.message ?? e}` };
-    }
-
-    // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
-    // 1. the tab is STILL on the same origin (no navigation during capture);
-    // 2. the SAME grant record still authorizes the SAME origin with the SAME
-    //    id (closes the revoke→regrant ABA race atomically).
-    const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true }))
-      .find((t) => t.id === active.id) ?? null;
-    const nowOrigin = nowTab?.url
-      ? (() => {
-        try {
-          return canonicalOrigin(nowTab.url);
-        } catch {
-          return undefined;
-        }
-      })()
-      : undefined;
-    if (!nowOrigin || nowOrigin !== origin) {
-      return { error: "tab navigated during capture — screenshot discarded" };
-    }
-    if (
-      validateGrantFor(
+    // The WHOLE capture (grant check + activation + capture + post-check) holds
+    // the SAME grant lock as the grant setters/revoke, so a re-scope/revoke can
+    // never interleave with the check + capture (the round-19 blocker: capture
+    // used only withTabCaptureLock and never withGrantLock, so a re-scope
+    // completed during captureVisibleTab).
+    return await withGrantLock(async () => {
+      // Read the grant ONCE and validate id + scope + expiry + origin together
+      // (an atomic snapshot, not separate reads). Check BEFORE activation.
+      const grantIdBefore = validateGrantFor(
         (await kvGet(GRANT_KEY))[GRANT_KEY],
-        nowOrigin,
-      ) !== grantIdBefore
-    ) {
+        origin,
+      );
+      if (!grantIdBefore) {
+        return {
+          error:
+            "browser control not granted for this tab's origin — ask the user to approve it in Settings",
+        };
+      }
+
+      // Activate the requested tab (if any) so it is the active tab — capture
+      // targets the ACTIVE tab under activeTab. Activating needs no permission,
+      // and it now happens ONLY AFTER the grant check (a denied capture must
+      // never change the owner's active tab).
+      if (tabId) {
+        try {
+          await chrome.tabs.update(tabId, { active: true });
+        } catch (e) {
+          return { error: `could not activate tab: ${e?.message ?? e}` };
+        }
+      }
+      // The active tab (its url is visible under activeTab / tabs).
+      const active = (await chrome.tabs.query({ active: true, currentWindow: true }))
+        .find((t) => !tabId || t.id === tabId) ?? null;
+      if (!active?.id) return { error: "no active tab" };
+
+      // Post-activation the tab could have navigated — re-derive + re-check BEFORE
+      // capturing (closes the active-tab ABA: activation itself can race a nav).
+      const cur = (await chrome.tabs.query({ active: true, currentWindow: true }))
+        .find((t) => t.id === active.id) ?? null;
+      const curOrigin = cur?.url
+        ? (() => {
+          try {
+            return canonicalOrigin(cur.url);
+          } catch {
+            return undefined;
+          }
+        })()
+        : undefined;
+      if (!curOrigin || curOrigin !== origin) {
+        return { error: "tab navigated during capture — screenshot discarded" };
+      }
+
+      let dataUrl;
+      try {
+        dataUrl = await chrome.tabs.captureVisibleTab(
+          cur.windowId ?? undefined,
+          { format: "png" },
+        );
+      } catch (e) {
+        return { error: `capture failed: ${e?.message ?? e}` };
+      }
+
+      // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
+      // 1. the tab is STILL on the same origin (no navigation during capture);
+      // 2. the SAME grant record still authorizes the SAME origin with the SAME
+      //    id (closes the revoke→regrant ABA race atomically).
+      const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true }))
+        .find((t) => t.id === active.id) ?? null;
+      const nowOrigin = nowTab?.url
+        ? (() => {
+          try {
+            return canonicalOrigin(nowTab.url);
+          } catch {
+            return undefined;
+          }
+        })()
+        : undefined;
+      if (!nowOrigin || nowOrigin !== origin) {
+        return { error: "tab navigated during capture — screenshot discarded" };
+      }
+      if (
+        validateGrantFor(
+          (await kvGet(GRANT_KEY))[GRANT_KEY],
+          nowOrigin,
+        ) !== grantIdBefore
+      ) {
+        return {
+          error:
+            "browser control grant changed during capture — screenshot discarded",
+        };
+      }
+      if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+        return { error: "capture returned no image data" };
+      }
+      // Final DUrable ownership check at the post-capture COMMIT boundary: an
+      // abort/ownership loss during the captureVisibleTab await must discard the
+      // bytes rather than return them (the round-18 fence coverage finding).
+      await assertRunOwned();
       return {
-        error:
-          "browser control grant changed during capture — screenshot discarded",
+        screenshot: dataUrl,
+        url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
       };
-    }
-    if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
-      return { error: "capture returned no image data" };
-    }
-    // Final fence check at the post-capture COMMIT boundary: an abort during the
-    // captureVisibleTab await must discard the bytes rather than return them
-    // (the round-18 fence coverage finding — screenshot checked abort only
-    // before capture, never at the post-capture commit).
-    if (runAborted()) {
-      return { error: "run aborted — screenshot discarded" };
-    }
-    return {
-      screenshot: dataUrl,
-      url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
-    };
+    });
   });
 }
 
@@ -474,10 +493,12 @@ export function browserToolset() {
           }
           const tab = await chrome.tabs.create({ url });
           // Re-check the fence AFTER the await, before returning success: an
-          // abort during tabs.create must NOT report a committed open. Compensate
-          // (close the just-opened tab) + return aborted (the round-18 fence
-          // coverage finding).
-          if (runAborted()) {
+          // abort/ownership loss during tabs.create must NOT report a committed
+          // open. Compensate (close the just-opened tab) + return aborted (the
+          // round-18 fence coverage finding + round-19 durable ownership).
+          try {
+            await assertRunOwned();
+          } catch {
             try {
               await chrome.tabs.remove(tab.id);
             } catch { /* best-effort compensation */ }
@@ -511,22 +532,23 @@ export function browserToolset() {
         }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
-        // Source origin must ALSO be authorized (not just the destination): a
-        // grant for A must not be able to destroy an unapproved B tab by
-        // navigating it to A (the round-15 over-broad-navigation finding).
-        const srcTab = await chrome.tabs.get(id).catch(() => null);
-        const srcOrigin = srcTab?.url
-          ? (() => {
-            try {
-              return canonicalOrigin(srcTab.url);
-            } catch {
-              return undefined;
-            }
-          })()
-          : undefined;
         // Check BOTH origins + perform the mutation under the SAME grant lock
         // (a revoke can no longer interleave with the checked tabs.update).
         return await withGrantLock(async () => {
+          // Re-read the SOURCE tab INSIDE the grant lock, immediately before the
+          // mutation, so the source identity is authorized atomically with the
+          // navigate (the round-19 blocker: the source was snapshotted BEFORE the
+          // lock, so an authorized-B→unauthorized-C move still navigated C).
+          const srcTab = await chrome.tabs.get(id).catch(() => null);
+          const srcOrigin = srcTab?.url
+            ? (() => {
+              try {
+                return canonicalOrigin(srcTab.url);
+              } catch {
+                return undefined;
+              }
+            })()
+            : undefined;
           if (!(await isBrowserControlGranted(destOrigin))) {
             return {
               error:
@@ -546,7 +568,9 @@ export function browserToolset() {
           // Re-check the fence AFTER the await: an abort during tabs.update must
           // not report success (the navigation side effect may be irreversible,
           // so we return aborted rather than claim ok — the round-18 finding).
-          if (runAborted()) {
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted — tab navigated then aborted" };
           }
           return { ok: true, tabId: id, url };
@@ -615,9 +639,12 @@ export function browserToolset() {
             return { error: "run aborted — tab not closed" };
           }
           await chrome.tabs.remove(tabId);
-          // Re-check the fence AFTER the await: an abort during tabs.remove must
-          // not report success (the round-18 finding).
-          if (runAborted()) {
+          // Re-check the fence AFTER the await: an abort/ownership loss during
+          // tabs.remove must not report success (the round-18 finding + round-19
+          // durable ownership).
+          try {
+            await assertRunOwned();
+          } catch {
             return { error: "run aborted — tab closed then aborted" };
           }
           return { ok: true, tabId };

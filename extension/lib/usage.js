@@ -5,6 +5,7 @@
 // aggregates by agent/provider/model. The memory explorer surfaces a usage view.
 // Every agent-do onUsage event flows through recordUsage().
 import { kvGet, kvRemove, kvSet } from "./kv.js";
+import { runAborted } from "./run-fence.js";
 
 const STORAGE_KEY = "cairn:usage";
 const MAX_RECORDS = 5000;
@@ -15,6 +16,11 @@ const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  *   inputTokens?: number, outputTokens?: number, estimatedCost?: number }} p
  */
 export async function recordUsage(p) {
+  // Usage accounting is a durable write (the ledger persists in chrome.storage)
+  // — fence it like every other side-effecting boundary: an aborted run must not
+  // append a usage row as a silently-degraded owner (the round-19 finding:
+  // recordUsage was completely unfenced).
+  if (runAborted()) return;
   const inputTokens = p.inputTokens ?? 0;
   const outputTokens = p.outputTokens ?? 0;
   if (inputTokens === 0 && outputTokens === 0) return; // nothing to record

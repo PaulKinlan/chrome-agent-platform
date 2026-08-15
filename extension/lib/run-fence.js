@@ -40,3 +40,18 @@ export function assertRunAlive() {
     throw new Error("run aborted");
   }
 }
+
+/** Re-check DUrable ownership (not merely the signal) at every commit boundary.
+ * A scheduled run's fence carries `assertOwned` — the PERSISTED in-flight lock
+ * check that aborts on heartbeat-renewal failure OR ownership loss (re-
+ * acquisition by a later firing), even when the in-memory AbortSignal has not
+ * fired yet (durable ownership can disappear up to 30s before the heartbeat
+ * abort). Ad-hoc runs (no in-flight lock) fall back to the signal check.
+ * Tools call this AFTER every durable await, before reporting success — the
+ * round-19 blocker where `assertRunAlive` only read the module-global signal. */
+export async function assertRunOwned() {
+  if (fence?.assertOwned) {
+    await fence.assertOwned();
+  }
+  assertRunAlive();
+}

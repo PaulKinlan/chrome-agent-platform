@@ -3,7 +3,7 @@
 // validation, persistence, and alarm creation stay in a single place.
 
 import { kvGet, kvSet } from "./kv.js";
-import { runAborted, assertRunAlive } from "./run-fence.js";
+import { runAborted, assertRunAlive, assertRunOwned } from "./run-fence.js";
 
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
@@ -115,7 +115,7 @@ export async function scheduleTask(
     // during the kvGet await must reject with NO payload persisted (the
     // round-17 crash-window finding: the old code wrote first, then rolled
     // back, leaving a window where a partial write could survive).
-    assertRunAlive();
+    await assertRunOwned();
 
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     tasks[name] = { name, task, at: when, periodInMinutes, attachments };
@@ -148,16 +148,24 @@ export async function scheduleTask(
       // Re-check the fence AFTER `alarms.create` resolves: an abort during the
       // await must roll back BOTH the now-created alarm AND the persisted
       // payload, and REJECT (never return ok) — the round-18 blocker.
-      assertRunAlive();
+      await assertRunOwned();
     } catch (e) {
       // Roll back the alarm (if it was created) AND the payload together.
+      // The alarm-clear RESULT is checked: a `false`/rejecting clear means a
+      // (periodic) alarm is STILL ARMED, so the payload must be KEPT for it to
+      // fire on — never delete the payload while the alarm is still active
+      // (the round-19 blocker: alarm clear false left a periodic alarm firing
+      // with no payload).
+      let cleared = false;
       try {
-        await alarmsApi()?.clear(name);
-      } catch { /* alarm may not exist yet */ }
-      const cur = await kvGet(TASK_KEY);
-      const rollback = { ...(cur[TASK_KEY] ?? {}) };
-      delete rollback[name];
-      await kvSet({ [TASK_KEY]: rollback });
+        cleared = (await alarmsApi()?.clear(name)) !== false;
+      } catch { /* alarm may not exist yet */ cleared = false; }
+      if (cleared) {
+        const cur = await kvGet(TASK_KEY);
+        const rollback = { ...(cur[TASK_KEY] ?? {}) };
+        delete rollback[name];
+        await kvSet({ [TASK_KEY]: rollback });
+      }
       throw e;
     }
     return { name, when };
@@ -182,8 +190,21 @@ export async function markScheduledDone(name, token) {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     delete tasks[name];
-    await kvSet({ [TASK_KEY]: tasks });
-    await alarmsApi()?.clear(name).catch(() => {});
+    // Clear the alarm BEFORE (or at least atomically with) deleting the payload,
+    // and CHECK the result: a `false`/rejecting clear means the (periodic) alarm
+    // is STILL ARMED, so the payload must be KEPT for it to fire on — never
+    // delete a payload while its alarm is still active (the round-19 alarm-clear
+    // blocker).
+    let cleared = true;
+    try {
+      const res = await alarmsApi()?.clear(name);
+      cleared = res !== false;
+    } catch {
+      cleared = false;
+    }
+    if (cleared) {
+      await kvSet({ [TASK_KEY]: tasks });
+    }
   });
 }
 
