@@ -5,9 +5,9 @@ import { clearUsage, getUsage } from "../lib/usage.js";
 import { listOrigins, siteMemory } from "../lib/memory.js";
 import {
   isBrowserControlGranted,
+  revokeBrowserControlGrant,
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
-  revokeBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { RECIPES } from "../lib/recipes.js";
 
@@ -103,19 +103,19 @@ async function renderProviders() {
         ? `
       <div class="fields">
         ${
-          p.needsKey || p.baseURL
+          p.needsKey || p.needsModel || p.baseURL || p.needsModel
             ? `<input class="base-url" type="text" placeholder="Base URL" value="${
               escapeAttr(p.baseURL)
             }">`
             : ""
         }
         ${
-          p.needsKey
+          p.needsKey || p.needsModel
             ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">`
             : ""
         }
         ${
-          p.needsKey
+          p.needsKey || p.needsModel
             ? `<input class="model" type="text" placeholder="Model id" value="${
               escapeAttr(cfg.provider === p.id ? cfg.model : "")
             }">`
@@ -131,7 +131,12 @@ async function renderProviders() {
         apiKey: card.querySelector(".api-key")?.value ?? "",
         model: card.querySelector(".model")?.value ?? "",
       };
-      await setProviderConfig({ provider: p.id, ...fields });
+      // Route through the worker's provider.set so the running agent's cached
+      // model/orchestrator is invalidated immediately (no stale provider).
+      await chrome.runtime.sendMessage({
+        type: "provider.set",
+        config: { provider: p.id, ...fields },
+      });
       await saveFlash(`Set ${p.name} as default.`);
       renderProviders();
     });
@@ -232,7 +237,9 @@ async function renderBrowser() {
     if (e.target.checked) {
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
-      saveFlash("Browser control granted (global, 15 min — set origins below to scope it).");
+      saveFlash(
+        "Browser control granted (global, 15 min — set origins below to scope it).",
+      );
     } else {
       await revokeBrowserControlGrant();
       $("#grant-origins").hidden = true;
@@ -245,7 +252,9 @@ async function renderBrowser() {
     );
     if (origins.length > 0) {
       await setOriginBrowserControlGrant(origins);
-      saveFlash("Allowed origins saved (scoped to " + origins.length + " origin(s)).");
+      saveFlash(
+        "Allowed origins saved (scoped to " + origins.length + " origin(s)).",
+      );
     } else {
       await setGlobalBrowserControlGrant();
       saveFlash("No origins listed — reverted to a global grant.");
@@ -266,15 +275,36 @@ async function renderUsage() {
     u.totals.estimatedCost.toFixed(4)
   }</div><div class="l">est. cost</div></div>`;
   const detail = $("#usage-detail");
-  detail.innerHTML = `<table>
-    <thead><tr><th>Provider</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
-    <tbody>${
-    u.byModel.map((m) =>
-      `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${
-        m.inputTokens + m.outputTokens
-      }</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`
-    ).join("")
-  }</tbody></table>`;
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const h of ["Provider", "Model", "Calls", "Tokens", "Cost"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  for (const m of u.byModel) {
+    const tr = document.createElement("tr");
+    for (
+      const v of [
+        m.provider,
+        m.model,
+        String(m.calls),
+        String(m.inputTokens + m.outputTokens),
+        "$" + m.estimatedCost.toFixed(4),
+      ]
+    ) {
+      const td = document.createElement("td");
+      td.textContent = v; // textContent — never interpolate into innerHTML
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  detail.replaceChildren(table);
   $("#usage-detail-toggle").addEventListener("click", () => {
     const d = $("#usage-detail");
     d.hidden = !d.hidden;

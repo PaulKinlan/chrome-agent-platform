@@ -2,18 +2,56 @@
 // Bundled with esbuild (the AI SDK + zod need bundling). This is the single
 // place the agent loop runs; UI pages talk to it via chrome.runtime messages.
 
-import { getModel, getProviderConfig, setProviderConfig, PROVIDER_CHOICES } from "../lib/provider.js";
-import { masterMemory, siteMemory, listOrigins, journalAppend, canonicalOrigin } from "../lib/memory.js";
-import { createOrchestrator, createAgent } from "../lib/agent.js";
-import { recordUsage, getUsage, clearUsage } from "../lib/usage.js";
-import { upsertTools, listTools, enrollOrigin, isApproved, approveTool, pendingApprovals } from "../lib/tools.js";
-import { setSkills, getSkills, allSkills } from "../lib/skills.js";
-import { browserToolset, recordBrowserEvent, setGlobalBrowserControlGrant, setOriginBrowserControlGrant, revokeBrowserControlGrant, isBrowserControlGranted } from "../lib/browser-tools.js";
-import { RECIPES, getRecipe } from "../lib/recipes.js";
-import { scheduleTask, markScheduledDone, tryAcquireInflight, releaseInflight, clearStaleInflight } from "../lib/scheduler.js";
+import {
+  getModel,
+  getProviderConfig,
+  PROVIDER_CHOICES,
+  setProviderConfig,
+} from "../lib/provider.js";
+import {
+  canonicalOrigin,
+  journalAppend,
+  listOrigins,
+  masterMemory,
+  siteMemory,
+} from "../lib/memory.js";
+import { createAgent, createOrchestrator } from "../lib/agent.js";
+import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
+import {
+  approveTool,
+  enrollOrigin,
+  isApproved,
+  listTools,
+  pendingApprovals,
+  upsertTools,
+} from "../lib/tools.js";
+import { allSkills, getSkills, setSkills } from "../lib/skills.js";
+import {
+  browserToolset,
+  captureTabScreenshot,
+  isBrowserControlGranted,
+  recordBrowserEvent,
+  revokeBrowserControlGrant,
+  setGlobalBrowserControlGrant,
+  setOriginBrowserControlGrant,
+} from "../lib/browser-tools.js";
+import { getRecipe, RECIPES } from "../lib/recipes.js";
+import {
+  clearStaleInflight,
+  markScheduledDone,
+  reconcileScheduledTasks,
+  releaseInflight,
+  scheduleTask,
+  tryAcquireInflight,
+} from "../lib/scheduler.js";
 import { tool } from "ai";
 import { z } from "zod";
-import { schemaToZod as buildSchema, sanitizeToolName as safeToolName, authorizeToolReport, PAGE_ALLOWED_ROUTES } from "../lib/pure.js";
+import {
+  authorizeToolReport,
+  PAGE_ALLOWED_ROUTES,
+  sanitizeToolName as safeToolName,
+  schemaToZod as buildSchema,
+} from "../lib/pure.js";
 
 // ---- alarm scheduler (persists the full task payload) ----
 const TASK_KEY = "cap:scheduledTasks";
@@ -44,7 +82,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   try {
     // Run FIRST, delete only on success (durable across worker interruption).
-    await runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] });
+    await runTask({
+      id: alarm.name,
+      task: task.task ?? alarm.name,
+      scheduled: true,
+      attachments: task.attachments ?? [],
+    });
     if (!task.periodInMinutes) {
       await markScheduledDone(alarm.name);
     }
@@ -58,15 +101,26 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // ---- lazy agent bootstrap (invalidated on provider change) ----
 let orchestrator = null;
-const MODEL_CACHE = { model: null };
+const MODEL_CACHE = { model: null, key: null };
 
 function invalidateAgent() {
   MODEL_CACHE.model = null;
   orchestrator = null;
 }
 
-async function ensureModel() {
-  if (!MODEL_CACHE.model) MODEL_CACHE.model = await getModel();
+async function ensureModel(agentId) {
+  // Per-agent provider resolution: an agent's override (cap:agentProviders) wins
+  // over the global default. Cache per resolved config so a provider change
+  // invalidates + rebuilds the affected model.
+  const cfg = await getProviderConfig();
+  const ap = await chrome.storage.local.get("cap:agentProviders");
+  const overrides = ap["cap:agentProviders"] ?? {};
+  const resolvedId = (agentId && overrides[agentId]) || cfg.provider;
+  const cacheKey = `${resolvedId}:${cfg.baseURL}:${cfg.model}`;
+  if (MODEL_CACHE.key !== cacheKey) {
+    MODEL_CACHE.key = cacheKey;
+    MODEL_CACHE.model = await getModel(resolvedId);
+  }
   return MODEL_CACHE.model;
 }
 
@@ -75,7 +129,7 @@ async function ensureOrchestrator() {
   const model = await ensureModel();
   const mem = masterMemory();
   // Workers = enrolled site origins, each with its own memory + skills.
-  const origins = (await listOrigins());
+  const origins = await listOrigins();
   const workers = await Promise.all(origins.map(async (origin) => ({
     origin,
     memory: siteMemory(origin),
@@ -91,7 +145,6 @@ async function ensureOrchestrator() {
   return orchestrator;
 }
 
-
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
 async function siteToolset(origin) {
   const tools = await listTools(origin);
@@ -105,7 +158,10 @@ async function siteToolset(origin) {
     let n = 2;
     // Even with a 64-bit hash, reject an actual collision explicitly: append a
     // disambiguator rather than silently overwriting another tool.
-    while (seen.has(id) && (seen.get(id).origin !== origin || seen.get(id).name !== t.name)) {
+    while (
+      seen.has(id) &&
+      (seen.get(id).origin !== origin || seen.get(id).name !== t.name)
+    ) {
       id = `${safeToolName(origin, t.name)}_${n++}`.slice(0, 64);
     }
     seen.set(id, { origin, name: t.name });
@@ -127,11 +183,19 @@ async function siteToolset(origin) {
 async function invokeSiteTool(origin, name, args) {
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
-    try { return t.url ? new URL(t.url).origin === origin : false; } catch { return false; }
+    try {
+      return t.url ? new URL(t.url).origin === origin : false;
+    } catch {
+      return false;
+    }
   });
   if (!tab?.id) return { error: `no tab open for ${origin}` };
   try {
-    const res = await chrome.tabs.sendMessage(tab.id, { type: "invoke-tool", name, args });
+    const res = await chrome.tabs.sendMessage(tab.id, {
+      type: "invoke-tool",
+      name,
+      args,
+    });
     return res ?? { ok: true };
   } catch (e) {
     return { error: `invoke failed: ${e.message}` };
@@ -144,7 +208,9 @@ function attachmentContext(attachments) {
   const parts = [];
   for (const a of attachments) {
     parts.push(
-      `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${a.type ?? "unknown"}, ${a.size ?? "?"} bytes)]`,
+      `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${
+        a.type ?? "unknown"
+      }, ${a.size ?? "?"} bytes)]`,
     );
     // Text attachments are inlined so the model can read them. Media (image/
     // audio/video) bytes are NOT supplied to the model in this build — they are
@@ -156,7 +222,9 @@ function attachmentContext(attachments) {
         parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
       } catch { /* not decodable */ }
     } else if (!a.type?.startsWith("text/")) {
-      parts.push("  (media attached — not transcribed/described in this build)");
+      parts.push(
+        "  (media attached — not transcribed/described in this build)",
+      );
     }
   }
   return "Attachments:\n" + parts.join("\n");
@@ -166,7 +234,13 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
-  await journalAppend(mem, { type: "task", id: taskId, task, scheduled, attachmentCount: attachments?.length ?? 0 });
+  await journalAppend(mem, {
+    type: "task",
+    id: taskId,
+    task,
+    scheduled,
+    attachmentCount: attachments?.length ?? 0,
+  });
   const context = attachmentContext(attachments);
   // agent-do's run(task, context, history) -> result text; context is a STRING.
   const result = await orch.run(task, context, []);
@@ -177,25 +251,32 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
     try {
       await chrome.notifications.create(`cap:${taskId}`, {
         type: "basic",
-        iconUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%2378b3ff'/%3E%3C/svg%3E",
+        iconUrl:
+          "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%2378b3ff'/%3E%3C/svg%3E",
         title: "Scheduled task complete",
         message: String(result ?? "").slice(0, 160),
       });
-    } catch (e) { console.error("notification failed", e); }
+    } catch (e) {
+      console.error("notification failed", e);
+    }
   }
   return { ok: true, result };
 }
 
 // ---- message router ----
 const handlers = {
-  async "provider.get"() { return await getProviderConfig(); },
+  async "provider.get"() {
+    return await getProviderConfig();
+  },
   async "provider.set"(m) {
     const next = await setProviderConfig(m.config);
     // The running agent must switch immediately — invalidate the cached model + orchestrator.
     invalidateAgent();
     return next;
   },
-  async "provider.models"() { return { choices: PROVIDER_CHOICES }; },
+  async "provider.models"() {
+    return { choices: PROVIDER_CHOICES };
+  },
 
   async "agent.run"(m) {
     // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust
@@ -204,34 +285,58 @@ const handlers = {
     const MAX_ITEM_BYTES = 8 * 1024 * 1024; // 8 MiB per attachment
     const MAX_TOTAL_BYTES = 16 * 1024 * 1024; // 16 MiB aggregate
     const MAX_COUNT = 8;
+    // Validate the dataURL SHAPE + measure the ENTIRE encoded string (never
+    // just the payload after the comma — a malformed/huge-prefix dataURL must
+    // not slip through at "0 bytes"). Accept only data:<mime>;base64,<payload>.
     const measured = (a) => {
-      if (!a?.dataURL) return 0;
-      const comma = a.dataURL.indexOf(",");
-      if (comma < 0) return 0;
-      return Math.ceil((a.dataURL.length - comma - 1) * 0.75);
+      if (!a?.dataURL) return { bytes: 0, valid: true };
+      const m = /^data:([a-z0-9.+-]+);base64,/.exec(String(a.dataURL));
+      if (!m) return { bytes: 0, valid: false }; // malformed → rejected
+      // Count the WHOLE dataURL string (it all travels through runtime messaging).
+      return { bytes: Math.ceil(String(a.dataURL).length * 0.75), valid: true };
     };
     let total = 0;
     const bounded = [];
     const dropped = [];
     // Enforce MAX_COUNT exactly (not MAX_COUNT * 4).
     for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
-      const bytes = measured(a);
+      const { bytes, valid } = measured(a);
       const name = String(a?.name ?? "unnamed").slice(0, 200);
       const type = String(a?.type ?? "unknown").slice(0, 100);
-      if (bytes > MAX_ITEM_BYTES) { dropped.push({ name, reason: "over per-item limit" }); continue; }
-      if (total + bytes > MAX_TOTAL_BYTES) { dropped.push({ name, reason: "over aggregate limit" }); continue; }
+      if (!valid) {
+        dropped.push({ name, reason: "malformed dataURL" });
+        continue;
+      }
+      if (bytes > MAX_ITEM_BYTES) {
+        dropped.push({ name, reason: "over per-item limit" });
+        continue;
+      }
+      if (total + bytes > MAX_TOTAL_BYTES) {
+        dropped.push({ name, reason: "over aggregate limit" });
+        continue;
+      }
       bounded.push({ ...a, name, type });
       total += bytes;
     }
     const overCount = (m.attachments ?? []).length - MAX_COUNT;
-    if (overCount > 0) dropped.push({ reason: `over count limit (${overCount} dropped)` });
-    const result = await runTask({ id: m.id, task: m.task, attachments: bounded });
+    if (overCount > 0) {
+      dropped.push({ reason: `over count limit (${overCount} dropped)` });
+    }
+    const result = await runTask({
+      id: m.id,
+      task: m.task,
+      attachments: bounded,
+    });
     if (dropped.length > 0) result.droppedAttachments = dropped;
     return result;
   },
-  async "agent.list"() { return await listOrigins(); },
+  async "agent.list"() {
+    return await listOrigins();
+  },
 
-  async "tools.list"({ origin }) { return await listTools(origin); },
+  async "tools.list"({ origin }) {
+    return await listTools(origin);
+  },
   async "tools.upsert"({ origin, tools }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
@@ -241,43 +346,95 @@ const handlers = {
     invalidateAgent();
     return { ok: true };
   },
-  async "tools.approve"({ origin, name, decision }) { return await approveTool(origin, name, decision); },
-  async "tools.pending"({ origin }) { return await pendingApprovals(origin); },
-  async "tools.allOrigins"() { return await listOrigins(); },
+  async "tools.approve"({ origin, name, decision }) {
+    return await approveTool(origin, name, decision);
+  },
+  async "tools.pending"({ origin }) {
+    return await pendingApprovals(origin);
+  },
+  async "tools.allOrigins"() {
+    return await listOrigins();
+  },
 
-  async "skills.set"({ origin, skills }) { return await setSkills(origin, skills); },
-  async "skills.get"({ origin }) { return await getSkills(origin); },
-  async "skills.all"() { return await allSkills(); },
+  async "skills.set"({ origin, skills }) {
+    return await setSkills(origin, skills);
+  },
+  async "skills.get"({ origin }) {
+    return await getSkills(origin);
+  },
+  async "skills.all"() {
+    return await allSkills();
+  },
 
-  async "memory.get"({ origin, key }) { return await (origin === "master" ? masterMemory() : siteMemory(origin)).get(key); },
-  async "memory.set"({ origin, key, value }) { return await (origin === "master" ? masterMemory() : siteMemory(origin)).set(key, value); },
-  async "memory.list"({ origin }) { return await (origin === "master" ? masterMemory() : siteMemory(origin)).keys(); },
-  async "memory.clear"({ origin }) { return await (origin === "master" ? masterMemory() : siteMemory(origin)).clear(); },
-  async "memory.origins"() { return await listOrigins(); },
+  async "memory.get"({ origin, key }) {
+    return await (origin === "master" ? masterMemory() : siteMemory(origin))
+      .get(key);
+  },
+  async "memory.set"({ origin, key, value }) {
+    return await (origin === "master" ? masterMemory() : siteMemory(origin))
+      .set(key, value);
+  },
+  async "memory.list"({ origin }) {
+    return await (origin === "master" ? masterMemory() : siteMemory(origin))
+      .keys();
+  },
+  async "memory.clear"({ origin }) {
+    return await (origin === "master" ? masterMemory() : siteMemory(origin))
+      .clear();
+  },
+  async "memory.origins"() {
+    return await listOrigins();
+  },
 
-  async "usage.get"() { return await getUsage(); },
-  async "usage.clear"() { await clearUsage(); return { ok: true }; },
+  async "usage.get"() {
+    return await getUsage();
+  },
+  async "usage.clear"() {
+    await clearUsage();
+    return { ok: true };
+  },
 
-  async "register-task"(m) { const name = await registerAlarm(m.task); return { ok: true, name }; },
-  async "run-task"(m) { return await runTask({ id: m.id, task: m.task }); },
+  async "register-task"(m) {
+    const { name, when } = await registerAlarm(m.task);
+    return { ok: true, name, when };
+  },
+  async "run-task"(m) {
+    return await runTask({ id: m.id, task: m.task });
+  },
 
-  async "recipe.list"() { return { recipes: RECIPES }; },
+  async "recipe.list"() {
+    return { recipes: RECIPES };
+  },
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);
     if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
-    return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
+    return await runTask({
+      id: `recipe:${recipe.id}:${Date.now()}`,
+      task: recipe.prompt,
+    });
   },
 
   async "browser-control.get"() {
     const s = await chrome.storage.local.get("cap:browserControlGrant");
     const grant = s["cap:browserControlGrant"];
     let expiresInMs = 0;
-    if (grant && typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt)) {
+    if (
+      grant && typeof grant.expiresAt === "number" &&
+      Number.isFinite(grant.expiresAt)
+    ) {
       expiresInMs = Math.max(0, grant.expiresAt - Date.now());
     }
+    const active = Boolean(
+      grant && typeof grant === "object" && grant.expiresAt > Date.now(),
+    );
     return {
-      granted: await isBrowserControlGranted(),
+      // "active" = a grant EXISTS and is unexpired (regardless of scope).
+      // "granted" (global scope) is a separate concept from per-origin authorization.
+      active,
       scope: grant?.scope ?? null,
+      origins: grant?.scope === "origins" && Array.isArray(grant.origins)
+        ? grant.origins
+        : null,
       expiresInMs,
     };
   },
@@ -315,17 +472,10 @@ const handlers = {
   },
 
   async "capture.tab"({ tabId }) {
-    try {
-      const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
-      if (!tab?.id) return { error: "no such tab" };
-      // Activate the REQUESTED tab, then VERIFY it became active before capture
-      // (captureVisibleTab always captures the active tab — never another tab).
-      await chrome.tabs.update(tab.id, { active: true });
-      const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
-      if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
-      const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-      return { screenshot: url };
-    } catch (e) { return { error: String(e?.message ?? e) }; }
+    // The SAME gated capture as the agent tool: resolves the tab, derives its
+    // origin, checks the grant FOR THAT ORIGIN, then activates + verifies +
+    // captures. A post-revoke or wrong-origin capture is denied here.
+    return await captureTabScreenshot(tabId);
   },
 };
 
@@ -343,7 +493,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Sender authorization: a content script may only upsert/read its OWN origin's
   // tools; it may never touch memory/admin routes. The pure classifier in
   // lib/pure.js derives + validates the origin (never trusts a message origin).
-  const auth = authorizeToolReport(sender, message.origin, canonicalOrigin, chrome.runtime.id);
+  const auth = authorizeToolReport(
+    sender,
+    message.origin,
+    canonicalOrigin,
+    chrome.runtime.id,
+  );
   if (auth.kind === "content-script") {
     if (auth.error) {
       sendResponse({ ok: false, error: auth.error });
@@ -353,9 +508,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }
-    if (message.type === "tools.upsert") {
-      message.origin = auth.origin; // derive, never trust the message-supplied origin
-    }
+    // Derive the origin for every permitted page route — never trust a
+    // message-supplied origin (a page must not be able to act on another origin).
+    message.origin = auth.origin;
   } else if (auth.kind === "unmatched") {
     sendResponse({ ok: false, error: auth.error });
     return true;
@@ -368,10 +523,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---- browser event listening (the agent sees what happens in the browser) ----
-for (const [event, kind] of [
-  ["onCreated", "tab-created"],
-  ["onActivated", "tab-activated"],
-]) {
+for (
+  const [event, kind] of [
+    ["onCreated", "tab-created"],
+    ["onActivated", "tab-activated"],
+  ]
+) {
   chrome.tabs[event]?.addListener((tabOrInfo) => {
     recordBrowserEvent(kind, {
       tabId: tabOrInfo?.tabId ?? tabOrInfo?.id,
@@ -397,12 +554,20 @@ chrome.runtime.onInstalled?.addListener(() => {
 chrome.runtime.onInstalled.addListener(async () => {
   const mem = masterMemory();
   if (!(await mem.get("preferences"))) {
-    await mem.set("preferences", { theme: "dark", model: "demo", multiAgent: true });
+    await mem.set("preferences", {
+      theme: "dark",
+      model: "demo",
+      multiAgent: true,
+    });
   }
   console.log("Chrome Agent Platform installed");
 });
 
 // Recover stale in-flight locks on every worker boot so a crashed task doesn't
 // permanently block its alarm.
-chrome.runtime.onStartup?.addListener(() => { clearStaleInflight().catch(() => {}); });
+chrome.runtime.onStartup?.addListener(() => {
+  clearStaleInflight().catch(() => {});
+  reconcileScheduledTasks().catch(() => {});
+});
 clearStaleInflight().catch(() => {});
+reconcileScheduledTasks().catch(() => {});

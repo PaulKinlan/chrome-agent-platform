@@ -1,28 +1,88 @@
 // lib/provider.js — the real model layer.
 //
 // Model resolution order:
-//   1. OpenAI-compatible endpoint (the user's OWN baseURL + apiKey + model,
+//   1. An OpenAI-compatible provider (the user's OWN baseURL + apiKey + model,
 //      stored in chrome.storage settings) — a real, user-configured provider.
-//   2. Chrome's built-in Prompt API (Gemini nano) — on-device, no key, when
-//      available in the browser.
+//      Every advertised OpenAI-compatible provider (OpenAI, Anthropic, Gemini,
+//      DeepSeek, Ollama) goes through the SAME compatible adapter with ITS OWN
+//      endpoint — none silently falls back to a different model.
+//   2. Chrome's built-in Prompt API (Gemini nano) — on-device, no key.
 //   3. Demo local model — a deterministic, clearly-labelled fallback so the
 //      agent loop always runs end-to-end with zero configuration.
 //
-// There is NO hardcoded provider key and NO fake "deepseek-v4-pro" default —
-// a Chrome extension cannot call a paid provider without the user's key, and
-// this file never ships one.
+// There is NO hardcoded provider key and NO fake default — a Chrome extension
+// cannot call a paid provider without the user's key, and this file never ships
+// one.
 
 import { createOpenAICompatibleModel } from "./models/openai-model.js";
-import { createPromptApiModel, isPromptApiAvailable } from "./models/prompt-api-model.js";
+import {
+  createPromptApiModel,
+  isPromptApiAvailable,
+} from "./models/prompt-api-model.js";
 import { createDemoModel } from "./models/demo-model.js";
 
 const DEFAULTS = {
-  // "demo" | "openai" | "prompt-api"
+  // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
   provider: "demo",
   baseURL: "",
   apiKey: "",
   model: "",
 };
+
+/** The providers the options page may advertise — every one is real. */
+export const PROVIDER_CHOICES = [
+  { id: "demo", label: "Demo (no key — deterministic local)" },
+  {
+    id: "openai",
+    label: "OpenAI-compatible endpoint (your key)",
+    needsKey: true,
+    baseURL: "https://api.openai.com/v1",
+    needsModel: true,
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic (OpenAI-compatible endpoint, your key)",
+    needsKey: true,
+    baseURL: "https://api.anthropic.com/v1",
+    needsModel: true,
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini (OpenAI-compatible endpoint, your key)",
+    needsKey: true,
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    needsModel: true,
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek (OpenAI-compatible endpoint, your key)",
+    needsKey: true,
+    baseURL: "https://api.deepseek.com/v1",
+    needsModel: true,
+  },
+  {
+    id: "ollama",
+    label: "Ollama (local, OpenAI-compatible)",
+    needsKey: false,
+    baseURL: "http://localhost:11434/v1",
+    needsModel: true,
+  },
+  {
+    id: "prompt-api",
+    label: "Chrome Prompt API (Gemini nano, on-device)",
+    needsKey: false,
+    needsModel: false,
+  },
+];
+
+/** Every provider id that resolves through the OpenAI-compatible adapter. */
+const OPENAI_COMPATIBLE_IDS = new Set([
+  "openai",
+  "anthropic",
+  "gemini",
+  "deepseek",
+  "ollama",
+]);
 
 export async function getProviderConfig() {
   const stored = await chrome.storage.local.get("providerConfig");
@@ -36,37 +96,57 @@ export async function setProviderConfig(partial) {
   return next;
 }
 
-export const PROVIDER_CHOICES = [
-  { id: "demo", label: "Demo (no key — deterministic local)" },
-  { id: "openai", label: "OpenAI-compatible endpoint (your key)" },
-  { id: "prompt-api", label: "Chrome Prompt API (Gemini nano, on-device)" },
-];
-
-/** Resolve the actual LanguageModel. Returns { model, modelId, providerName }. */
-export async function getModel() {
+/** Resolve the actual LanguageModel. `providerId` overrides the stored default
+ * (per-agent provider resolution). Returns { model, modelId, providerName }. */
+export async function getModel(providerId) {
   const cfg = await getProviderConfig();
+  const id = providerId ?? cfg.provider;
 
-  if (cfg.provider === "openai") {
-    if (!cfg.baseURL || !cfg.apiKey || !cfg.model) {
-      // Missing config — fall back to demo rather than throw, so the loop runs.
-      return { model: createDemoModel(), modelId: "demo-local", providerName: "demo (missing openai config)" };
+  if (OPENAI_COMPATIBLE_IDS.has(id)) {
+    const baseURL = cfg.baseURL ||
+      (PROVIDER_CHOICES.find((p) => p.id === id)?.baseURL ?? "");
+    const apiKey = cfg.apiKey ?? "";
+    const model = cfg.model ?? "";
+    const needsKey = PROVIDER_CHOICES.find((p) => p.id === id)?.needsKey ??
+      true;
+    // Ollama needs no key; the others do. A model id is always required.
+    if (!baseURL || !model || (needsKey && !apiKey)) {
+      return {
+        model: createDemoModel(),
+        modelId: "demo-local",
+        providerName: `${id} (missing ${
+          !baseURL ? "base URL" : !model ? "model id" : "API key"
+        } — fell back to demo)`,
+      };
     }
-    const model = createOpenAICompatibleModel(cfg);
-    return { model, modelId: cfg.model, providerName: "openai-compatible" };
+    const m = createOpenAICompatibleModel({ baseURL, apiKey, model });
+    return { model: m, modelId: model, providerName: id };
   }
 
-  if (cfg.provider === "prompt-api") {
+  if (id === "prompt-api") {
     if (await isPromptApiAvailable()) {
       try {
         const model = createPromptApiModel();
-        return { model, modelId: "gemini-nano", providerName: "chrome-prompt-api" };
+        return {
+          model,
+          modelId: "gemini-nano",
+          providerName: "chrome-prompt-api",
+        };
       } catch {
         // fall through to demo
       }
     }
-    return { model: createDemoModel(), modelId: "demo-local", providerName: "demo (prompt api unavailable)" };
+    return {
+      model: createDemoModel(),
+      modelId: "demo-local",
+      providerName: "demo (prompt api unavailable)",
+    };
   }
 
   // default: demo
-  return { model: createDemoModel(), modelId: "demo-local", providerName: "demo" };
+  return {
+    model: createDemoModel(),
+    modelId: "demo-local",
+    providerName: "demo",
+  };
 }

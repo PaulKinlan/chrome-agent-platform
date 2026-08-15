@@ -98,17 +98,23 @@ export function memoryStore(origin) {
     },
     async delete(key) {
       const dir = await openDir(path);
-      try { await dir.removeEntry(`${key}.json`); } catch { /* absent */ }
+      try {
+        await dir.removeEntry(`${key}.json`);
+      } catch { /* absent */ }
     },
     async clear() {
       if (isMaster) {
         const parent = await openDir([ROOT]);
-        try { await parent.removeEntry(MASTER, { recursive: true }); } catch { /* absent */ }
+        try {
+          await parent.removeEntry(MASTER, { recursive: true });
+        } catch { /* absent */ }
         return;
       }
       // Remove ONLY this origin's subdirectory — never the whole origins tree.
       const origins = await openDir([ROOT, "origins"]);
-      try { await origins.removeEntry(encodeOrigin(origin), { recursive: true }); } catch { /* absent */ }
+      try {
+        await origins.removeEntry(encodeOrigin(origin), { recursive: true });
+      } catch { /* absent */ }
     },
   };
 }
@@ -123,8 +129,12 @@ export function siteMemory(origin) {
     const invalid = memoryStore(`invalid:${origin}`);
     return {
       ...invalid,
-      async get() { return null; },
-      async set() { throw new Error(`invalid origin: ${origin}`); },
+      async get() {
+        return null;
+      },
+      async set() {
+        throw new Error(`invalid origin: ${origin}`);
+      },
     };
   }
   return memoryStore(canonical);

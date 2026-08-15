@@ -35,9 +35,19 @@ function boundTool(t) {
   if (name.length === 0 || name.length > TOOL_BOUNDS.maxNameLength) return null;
   if (description.length > TOOL_BOUNDS.maxDescriptionLength) return null;
   let schemaBytes;
-  try { schemaBytes = JSON.stringify(schema).length; } catch { return null; }
+  try {
+    schemaBytes = JSON.stringify(schema).length;
+  } catch {
+    return null;
+  }
   if (schemaBytes > TOOL_BOUNDS.maxSchemaBytes) return null;
-  return describeTool({ origin: t.origin, name, description, inputSchema: schema, source: t.source });
+  return describeTool({
+    origin: t.origin,
+    name,
+    description,
+    inputSchema: schema,
+    source: t.source,
+  });
 }
 
 export async function upsertTools(origin, tools) {
@@ -51,11 +61,17 @@ export async function upsertTools(origin, tools) {
   }
   let next = [...byName.values()];
   // Total directory size + count bounds: drop the tail when over budget.
-  if (next.length > TOOL_BOUNDS.maxToolsPerOrigin) next = next.slice(0, TOOL_BOUNDS.maxToolsPerOrigin);
+  if (next.length > TOOL_BOUNDS.maxToolsPerOrigin) {
+    next = next.slice(0, TOOL_BOUNDS.maxToolsPerOrigin);
+  }
   let total = 0;
   next = next.filter((t) => {
     let b;
-    try { b = JSON.stringify(t).length; } catch { b = TOOL_BOUNDS.maxTotalBytes + 1; }
+    try {
+      b = JSON.stringify(t).length;
+    } catch {
+      b = TOOL_BOUNDS.maxTotalBytes + 1;
+    }
     total += b;
     return total <= TOOL_BOUNDS.maxTotalBytes;
   });

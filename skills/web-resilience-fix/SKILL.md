@@ -63,7 +63,7 @@ hydration-consistency).
 ## Leak detection
 
 For memory-related findings, use the CDP memory domains: `Memory.getDOMCounters`
-(node/JS listener counts before vs after repeated interactions), 
+(node/JS listener counts before vs after repeated interactions),
 `Memory.prepareForLeakDetection`, and heap snapshots via the HeapProfiler domain.
 A growing DOM-node or listener count across repeated flows = a leak to fix
 (event listener cleanup, detached nodes, closures retaining DOM).

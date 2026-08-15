@@ -4,8 +4,9 @@ export function send(type, payload = {}) {
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendMessage({ type, ...payload }, (res) => {
-        if (chrome.runtime.lastError) resolve({ ok: false, error: chrome.runtime.lastError.message });
-        else resolve(res ?? { ok: true });
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+        } else resolve(res ?? { ok: true });
       });
     } catch (e) {
       resolve({ ok: false, error: String(e) });

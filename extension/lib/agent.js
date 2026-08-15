@@ -11,7 +11,8 @@ import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
 
-const DEFAULT_SYSTEM = `You are the Chrome Agent Platform hub agent. You help the
+const DEFAULT_SYSTEM =
+  `You are the Chrome Agent Platform hub agent. You help the
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
@@ -26,7 +27,10 @@ function memoryToolset(memory) {
     memory_set: tool({
       description: "Write a value to the agent's memory.",
       inputSchema: z.object({ key: z.string(), value: z.any() }),
-      execute: async ({ key, value }) => { await memory.set(key, value); return { ok: true, key }; },
+      execute: async ({ key, value }) => {
+        await memory.set(key, value);
+        return { ok: true, key };
+      },
     }),
     memory_list: tool({
       description: "List memory keys.",
@@ -114,22 +118,25 @@ export function createOrchestrator({
     workerAgents.set(w.origin, a);
   }
 
-  const delegate = multiAgent ? {
-    list_agents: tool({
-      description: "List the available site sub-agents.",
-      inputSchema: z.object({}),
-      execute: async () => ({ agents: [...workerAgents.keys()] }),
-    }),
-    delegate_task: tool({
-      description: "Delegate a task to a site sub-agent and return its result.",
-      inputSchema: z.object({ agentId: z.string(), task: z.string() }),
-      execute: async ({ agentId, task }) => {
-        const a = workerAgents.get(agentId);
-        if (!a) return { error: `no agent for ${agentId}` };
-        return { agentId, result: await a.run(task) };
-      },
-    }),
-  } : {};
+  const delegate = multiAgent
+    ? {
+      list_agents: tool({
+        description: "List the available site sub-agents.",
+        inputSchema: z.object({}),
+        execute: async () => ({ agents: [...workerAgents.keys()] }),
+      }),
+      delegate_task: tool({
+        description:
+          "Delegate a task to a site sub-agent and return its result.",
+        inputSchema: z.object({ agentId: z.string(), task: z.string() }),
+        execute: async ({ agentId, task }) => {
+          const a = workerAgents.get(agentId);
+          if (!a) return { error: `no agent for ${agentId}` };
+          return { agentId, result: await a.run(task) };
+        },
+      }),
+    }
+    : {};
 
   const master = createAgent({
     model,

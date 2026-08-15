@@ -25320,12 +25320,22 @@ function createDemoModel() {
 
 // extension/lib/provider.js
 var DEFAULTS = {
-  // "demo" | "openai" | "prompt-api"
+  // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
   provider: "demo",
   baseURL: "",
   apiKey: "",
   model: ""
 };
+var PROVIDER_CHOICES = [
+  { id: "demo", label: "Demo (no key \u2014 deterministic local)" },
+  { id: "openai", label: "OpenAI-compatible endpoint (your key)", needsKey: true, baseURL: "https://api.openai.com/v1", needsModel: true },
+  { id: "anthropic", label: "Anthropic (OpenAI-compatible endpoint, your key)", needsKey: true, baseURL: "https://api.anthropic.com/v1", needsModel: true },
+  { id: "gemini", label: "Google Gemini (OpenAI-compatible endpoint, your key)", needsKey: true, baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsModel: true },
+  { id: "deepseek", label: "DeepSeek (OpenAI-compatible endpoint, your key)", needsKey: true, baseURL: "https://api.deepseek.com/v1", needsModel: true },
+  { id: "ollama", label: "Ollama (local, OpenAI-compatible)", needsKey: false, baseURL: "http://localhost:11434/v1", needsModel: true },
+  { id: "prompt-api", label: "Chrome Prompt API (Gemini nano, on-device)", needsKey: false, needsModel: false }
+];
+var OPENAI_COMPATIBLE_IDS = /* @__PURE__ */ new Set(["openai", "anthropic", "gemini", "deepseek", "ollama"]);
 async function getProviderConfig() {
   const stored = await chrome.storage.local.get("providerConfig");
   return { ...DEFAULTS, ...stored.providerConfig ?? {} };
@@ -25336,21 +25346,25 @@ async function setProviderConfig(partial3) {
   await chrome.storage.local.set({ providerConfig: next });
   return next;
 }
-var PROVIDER_CHOICES = [
-  { id: "demo", label: "Demo (no key \u2014 deterministic local)" },
-  { id: "openai", label: "OpenAI-compatible endpoint (your key)" },
-  { id: "prompt-api", label: "Chrome Prompt API (Gemini nano, on-device)" }
-];
-async function getModel() {
+async function getModel(providerId) {
   const cfg = await getProviderConfig();
-  if (cfg.provider === "openai") {
-    if (!cfg.baseURL || !cfg.apiKey || !cfg.model) {
-      return { model: createDemoModel(), modelId: "demo-local", providerName: "demo (missing openai config)" };
+  const id = providerId ?? cfg.provider;
+  if (OPENAI_COMPATIBLE_IDS.has(id)) {
+    const baseURL = cfg.baseURL || (PROVIDER_CHOICES.find((p) => p.id === id)?.baseURL ?? "");
+    const apiKey = cfg.apiKey ?? "";
+    const model = cfg.model ?? "";
+    const needsKey = PROVIDER_CHOICES.find((p) => p.id === id)?.needsKey ?? true;
+    if (!baseURL || !model || needsKey && !apiKey) {
+      return {
+        model: createDemoModel(),
+        modelId: "demo-local",
+        providerName: `${id} (missing ${!baseURL ? "base URL" : !model ? "model id" : "API key"} \u2014 fell back to demo)`
+      };
     }
-    const model = createOpenAICompatibleModel(cfg);
-    return { model, modelId: cfg.model, providerName: "openai-compatible" };
+    const m = createOpenAICompatibleModel({ baseURL, apiKey, model });
+    return { model: m, modelId: model, providerName: id };
   }
-  if (cfg.provider === "prompt-api") {
+  if (id === "prompt-api") {
     if (await isPromptApiAvailable()) {
       try {
         const model = createPromptApiModel();
@@ -66520,60 +66534,102 @@ init_browser_shim_process();
 
 // extension/lib/scheduler.js
 init_browser_shim_process();
-var TASK_KEY2 = "cap:scheduledTasks";
+var TASK_KEY = "cap:scheduledTasks";
 var INFLIGHT_KEY = "cap:scheduledInflight";
+var mutex = Promise.resolve();
+function withLock(fn) {
+  const run = mutex.then(fn, fn);
+  mutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
 async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = [] }) {
-  let when;
-  if (typeof at === "number" && Number.isFinite(at) && at > Date.now()) {
-    when = at;
-  } else if (typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs > 0) {
-    when = Date.now() + delayMs;
-  } else {
-    throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
-  }
-  const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const store = await chrome.storage.local.get(TASK_KEY2);
-  const tasks = store[TASK_KEY2] ?? {};
-  tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
-  await chrome.storage.local.set({ [TASK_KEY2]: tasks });
-  const info = { when };
-  if (periodInMinutes) info.periodInMinutes = periodInMinutes;
-  await chrome.alarms.create(name25, info);
-  return name25;
+  return withLock(async () => {
+    let when;
+    if (typeof at === "number" && Number.isFinite(at) && at > Date.now()) {
+      when = at;
+    } else if (typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs > 0) {
+      when = Date.now() + delayMs;
+    } else {
+      throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
+    }
+    const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const store = await chrome.storage.local.get(TASK_KEY);
+    const tasks = { ...store[TASK_KEY] ?? {} };
+    tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
+    await chrome.storage.local.set({ [TASK_KEY]: tasks });
+    try {
+      const info = { when };
+      if (periodInMinutes) info.periodInMinutes = periodInMinutes;
+      await chrome.alarms.create(name25, info);
+    } catch (e) {
+      const cur = await chrome.storage.local.get(TASK_KEY);
+      const rollback = { ...cur[TASK_KEY] ?? {} };
+      delete rollback[name25];
+      await chrome.storage.local.set({ [TASK_KEY]: rollback });
+      throw e;
+    }
+    return { name: name25, when };
+  });
 }
 async function markScheduledDone(name25) {
-  const store = await chrome.storage.local.get(TASK_KEY2);
-  const tasks = { ...store[TASK_KEY2] ?? {} };
-  delete tasks[name25];
-  await chrome.storage.local.set({ [TASK_KEY2]: tasks });
-  await chrome.alarms.clear(name25).catch(() => {
+  await withLock(async () => {
+    const store = await chrome.storage.local.get(TASK_KEY);
+    const tasks = { ...store[TASK_KEY] ?? {} };
+    delete tasks[name25];
+    await chrome.storage.local.set({ [TASK_KEY]: tasks });
+    await chrome.alarms.clear(name25).catch(() => {
+    });
   });
 }
 async function tryAcquireInflight(name25) {
-  const store = await chrome.storage.local.get(INFLIGHT_KEY);
-  const inflight = store[INFLIGHT_KEY] ?? {};
-  if (inflight[name25]) return false;
-  inflight[name25] = Date.now();
-  await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
-  return true;
+  return withLock(async () => {
+    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+    if (inflight[name25]) return false;
+    inflight[name25] = Date.now();
+    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    return true;
+  });
 }
 async function releaseInflight(name25) {
-  const store = await chrome.storage.local.get(INFLIGHT_KEY);
-  const inflight = { ...store[INFLIGHT_KEY] ?? {} };
-  delete inflight[name25];
-  await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+  await withLock(async () => {
+    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+    delete inflight[name25];
+    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+  });
 }
-async function clearStaleInflight(bootTime = Date.now()) {
-  const store = await chrome.storage.local.get(INFLIGHT_KEY);
-  const inflight = { ...store[INFLIGHT_KEY] ?? {} };
-  let changed = false;
-  for (const [name25, ts] of Object.entries(inflight)) {
-    if (typeof ts === "number" && ts < bootTime - 10 * 60 * 1e3) {
-      delete inflight[name25];
-      changed = true;
+async function clearStaleInflight() {
+  await withLock(async () => {
+    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const inflight = store[INFLIGHT_KEY];
+    if (inflight && Object.keys(inflight).length > 0) {
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: {} });
+    }
+  });
+}
+async function reconcileScheduledTasks() {
+  const store = await chrome.storage.local.get(TASK_KEY);
+  const tasks = { ...store[TASK_KEY] ?? {} };
+  const names = Object.keys(tasks);
+  if (names.length === 0) return [];
+  const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
+  const resumed = [];
+  const now2 = Date.now();
+  for (const name25 of names) {
+    const task = tasks[name25];
+    if (!existing.has(name25)) {
+      const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
+      const info = { when };
+      if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
+      await chrome.alarms.create(name25, info).catch(() => {
+      });
+      resumed.push(name25);
     }
   }
-  if (changed) await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+  return resumed;
 }
 
 // extension/lib/browser-tools.js
@@ -66630,6 +66686,30 @@ async function revokeBrowserControlGrant() {
 async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0] ?? null;
+}
+async function captureTabScreenshot(tabId) {
+  const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
+  if (!tab?.id) return { error: "no tab" };
+  const origin = tab.url ? (() => {
+    try {
+      return new URL(tab.url).origin;
+    } catch {
+      return void 0;
+    }
+  })() : void 0;
+  if (!origin) return { error: "no origin" };
+  if (!await isBrowserControlGranted(origin)) {
+    return { error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings" };
+  }
+  try {
+    await chrome.tabs.update(tab.id, { active: true });
+    const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+    if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
+    const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    return { screenshot: url3 };
+  } catch (e) {
+    return { error: String(e?.message ?? e) };
+  }
 }
 async function readPage(tabId) {
   try {
@@ -66692,24 +66772,9 @@ function browserToolset() {
       execute: async ({ tabId }) => readPage(tabId)
     }),
     capture_screenshot: tool({
-      description: "Capture a PNG screenshot of the requested tab (or the active tab). Requires browser-control permission.",
+      description: "Capture a PNG screenshot of the requested tab (or the active tab). Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ tabId: external_exports3.number().optional() }),
-      execute: async ({ tabId }) => {
-        if (!await isBrowserControlGranted()) {
-          return { error: "browser control not granted \u2014 ask the user to enable it in Settings" };
-        }
-        try {
-          const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
-          if (!tab?.windowId) return { error: "no tab" };
-          if (tab.id) await chrome.tabs.update(tab.id, { active: true });
-          const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
-          if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
-          const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-          return { screenshot: url3 };
-        } catch (e) {
-          return { error: String(e?.message ?? e) };
-        }
-      }
+      execute: async ({ tabId }) => captureTabScreenshot(tabId)
     }),
     list_tabs: tool({
       description: "List the open tabs.",
@@ -66756,8 +66821,8 @@ function browserToolset() {
         periodInMinutes: external_exports3.number().optional()
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
-        const name25 = await scheduleTask({ task, at, delayMs, periodInMinutes });
-        return { ok: true, name: name25, when: (await chrome.storage.local.get(TASK_KEY))[TASK_KEY]?.[name25]?.at };
+        const { name: name25, when } = await scheduleTask({ task, at, delayMs, periodInMinutes });
+        return { ok: true, name: name25, when };
       }
     })
   };
@@ -66815,26 +66880,81 @@ var SCHEMA_BOUNDS = {
   maxStringLength: 1e4,
   maxUnionBranches: 5
 };
+var SUPPORTED_KEYWORDS = /* @__PURE__ */ new Set([
+  "type",
+  "const",
+  "enum",
+  "description",
+  "default",
+  "title",
+  "minLength",
+  "maxLength",
+  // string
+  "minimum",
+  "maximum",
+  // number/integer
+  "items",
+  "minItems",
+  "maxItems",
+  // array
+  "properties",
+  "required",
+  "additionalProperties",
+  // object
+  "anyOf"
+  // union (exactly-one oneOf is NOT supported)
+]);
+function valueMatchesType(value, type) {
+  switch (type) {
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number";
+    case "integer":
+      return Number.isInteger(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "array":
+      return Array.isArray(value);
+    case "object":
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    case "null":
+      return value === null;
+    default:
+      return false;
+  }
+}
 function schemaToZod(z4, schema4, depth = 0) {
   if (depth > SCHEMA_BOUNDS.maxDepth) return z4.never();
-  if (!schema4 || typeof schema4 !== "object") return z4.never();
-  if (schema4.const !== void 0) return z4.literal(schema4.const);
-  if (Array.isArray(schema4.enum) && schema4.enum.length > 0) {
-    if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
-    return z4.union(schema4.enum.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
+  if (!schema4 || typeof schema4 !== "object" || Array.isArray(schema4)) return z4.never();
+  for (const key of Object.keys(schema4)) {
+    if (!SUPPORTED_KEYWORDS.has(key)) return z4.never();
   }
-  if (Array.isArray(schema4.oneOf) || Array.isArray(schema4.anyOf)) {
-    const branches = schema4.oneOf ?? schema4.anyOf ?? [];
-    if (branches.length === 0 || branches.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
-    return z4.union(branches.map((b) => schemaToZod(z4, b, depth + 1)));
+  if (schema4.oneOf !== void 0) return z4.never();
+  if (schema4.pattern !== void 0) return z4.never();
+  if (schema4.additionalProperties !== void 0 && typeof schema4.additionalProperties !== "boolean") {
+    return z4.never();
   }
   const t = schema4.type;
+  if (schema4.const !== void 0) {
+    if (t !== void 0 && !valueMatchesType(schema4.const, t)) return z4.never();
+    return z4.literal(schema4.const);
+  }
+  if (Array.isArray(schema4.enum) && schema4.enum.length > 0) {
+    if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
+    const valid = t !== void 0 ? schema4.enum.filter((v) => valueMatchesType(v, t)) : schema4.enum;
+    if (valid.length === 0) return z4.never();
+    return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
+  }
+  if (Array.isArray(schema4.anyOf)) {
+    if (schema4.anyOf.length === 0 || schema4.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
+    return z4.union(schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1)));
+  }
   if (t === "string") {
     let s = z4.string();
     if (typeof schema4.minLength === "number" && schema4.minLength >= 0) s = s.min(schema4.minLength);
     const pageMax = typeof schema4.maxLength === "number" && schema4.maxLength >= 0 ? schema4.maxLength : SCHEMA_BOUNDS.maxStringLength;
     s = s.max(Math.min(pageMax, SCHEMA_BOUNDS.maxStringLength));
-    if (schema4.pattern !== void 0) return z4.never();
     return s;
   }
   if (t === "number") {
@@ -66910,10 +67030,10 @@ function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionI
   }
   return { kind: "content-script", origin: senderOrigin };
 }
-var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set(["tools.list", "tools.upsert", "tools.approve", "tools.pending"]);
+var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set(["tools.list", "tools.upsert", "tools.pending"]);
 
 // extension/background/service-worker.js
-var TASK_KEY3 = "cap:scheduledTasks";
+var TASK_KEY2 = "cap:scheduledTasks";
 async function registerAlarm(task) {
   return await scheduleTask({
     task: task.task,
@@ -66928,8 +67048,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.warn("scheduled task already in flight", alarm.name);
     return;
   }
-  const store = await chrome.storage.local.get(TASK_KEY3);
-  const task = store[TASK_KEY3]?.[alarm.name];
+  const store = await chrome.storage.local.get(TASK_KEY2);
+  const task = store[TASK_KEY2]?.[alarm.name];
   if (!task) {
     await releaseInflight(alarm.name);
     console.error("scheduled task payload missing", alarm.name);
@@ -66947,13 +67067,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 var orchestrator = null;
-var MODEL_CACHE = { model: null };
+var MODEL_CACHE = { model: null, key: null };
 function invalidateAgent() {
   MODEL_CACHE.model = null;
   orchestrator = null;
 }
-async function ensureModel() {
-  if (!MODEL_CACHE.model) MODEL_CACHE.model = await getModel();
+async function ensureModel(agentId) {
+  const cfg = await getProviderConfig();
+  const ap = await chrome.storage.local.get("cap:agentProviders");
+  const overrides = ap["cap:agentProviders"] ?? {};
+  const resolvedId = agentId && overrides[agentId] || cfg.provider;
+  const cacheKey = `${resolvedId}:${cfg.baseURL}:${cfg.model}`;
+  if (MODEL_CACHE.key !== cacheKey) {
+    MODEL_CACHE.key = cacheKey;
+    MODEL_CACHE.model = await getModel(resolvedId);
+  }
   return MODEL_CACHE.model;
 }
 async function ensureOrchestrator() {
@@ -67074,18 +67202,22 @@ var handlers = {
     const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
     const MAX_COUNT = 8;
     const measured = (a) => {
-      if (!a?.dataURL) return 0;
-      const comma = a.dataURL.indexOf(",");
-      if (comma < 0) return 0;
-      return Math.ceil((a.dataURL.length - comma - 1) * 0.75);
+      if (!a?.dataURL) return { bytes: 0, valid: true };
+      const m2 = /^data:([a-z0-9.+-]+);base64,/.exec(String(a.dataURL));
+      if (!m2) return { bytes: 0, valid: false };
+      return { bytes: Math.ceil(String(a.dataURL).length * 0.75), valid: true };
     };
     let total = 0;
     const bounded = [];
     const dropped = [];
     for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
-      const bytes = measured(a);
+      const { bytes, valid } = measured(a);
       const name25 = String(a?.name ?? "unnamed").slice(0, 200);
       const type = String(a?.type ?? "unknown").slice(0, 100);
+      if (!valid) {
+        dropped.push({ name: name25, reason: "malformed dataURL" });
+        continue;
+      }
       if (bytes > MAX_ITEM_BYTES) {
         dropped.push({ name: name25, reason: "over per-item limit" });
         continue;
@@ -67158,8 +67290,8 @@ var handlers = {
     return { ok: true };
   },
   async "register-task"(m) {
-    const name25 = await registerAlarm(m.task);
-    return { ok: true, name: name25 };
+    const { name: name25, when } = await registerAlarm(m.task);
+    return { ok: true, name: name25, when };
   },
   async "run-task"(m) {
     return await runTask({ id: m.id, task: m.task });
@@ -67179,9 +67311,13 @@ var handlers = {
     if (grant && typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt)) {
       expiresInMs = Math.max(0, grant.expiresAt - Date.now());
     }
+    const active = Boolean(grant && typeof grant === "object" && grant.expiresAt > Date.now());
     return {
-      granted: await isBrowserControlGranted(),
+      // "active" = a grant EXISTS and is unexpired (regardless of scope).
+      // "granted" (global scope) is a separate concept from per-origin authorization.
+      active,
       scope: grant?.scope ?? null,
+      origins: grant?.scope === "origins" && Array.isArray(grant.origins) ? grant.origins : null,
       expiresInMs
     };
   },
@@ -67216,17 +67352,7 @@ var handlers = {
     return { agents: origins.map((o) => ({ origin: o })) };
   },
   async "capture.tab"({ tabId }) {
-    try {
-      const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
-      if (!tab?.id) return { error: "no such tab" };
-      await chrome.tabs.update(tab.id, { active: true });
-      const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
-      if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
-      const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-      return { screenshot: url3 };
-    } catch (e) {
-      return { error: String(e?.message ?? e) };
-    }
+    return await captureTabScreenshot(tabId);
   }
 };
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -67245,9 +67371,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }
-    if (message.type === "tools.upsert") {
-      message.origin = auth2.origin;
-    }
+    message.origin = auth2.origin;
   } else if (auth2.kind === "unmatched") {
     sendResponse({ ok: false, error: auth2.error });
     return true;
@@ -67294,6 +67418,10 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup?.addListener(() => {
   clearStaleInflight().catch(() => {
   });
+  reconcileScheduledTasks().catch(() => {
+  });
 });
 clearStaleInflight().catch(() => {
+});
+reconcileScheduledTasks().catch(() => {
 });

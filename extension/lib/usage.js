@@ -50,16 +50,33 @@ export async function getUsage() {
 
   const byModel = {};
   const byAgent = {};
-  const totals = { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+  const totals = {
+    calls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    estimatedCost: 0,
+  };
   for (const r of rows) {
     const mk = `${r.provider}/${r.model}`;
-    byModel[mk] ??= { provider: r.provider, model: r.model, calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+    byModel[mk] ??= {
+      provider: r.provider,
+      model: r.model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0,
+    };
     byModel[mk].calls++;
     byModel[mk].inputTokens += r.inputTokens;
     byModel[mk].outputTokens += r.outputTokens;
     byModel[mk].estimatedCost += r.estimatedCost;
 
-    byAgent[r.agentId] ??= { agentId: r.agentId, calls: 0, inputTokens: 0, outputTokens: 0 };
+    byAgent[r.agentId] ??= {
+      agentId: r.agentId,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
     byAgent[r.agentId].calls++;
     byAgent[r.agentId].inputTokens += r.inputTokens;
     byAgent[r.agentId].outputTokens += r.outputTokens;
@@ -69,7 +86,12 @@ export async function getUsage() {
     totals.outputTokens += r.outputTokens;
     totals.estimatedCost += r.estimatedCost;
   }
-  return { totals, byModel: Object.values(byModel), byAgent: Object.values(byAgent), rows };
+  return {
+    totals,
+    byModel: Object.values(byModel),
+    byAgent: Object.values(byAgent),
+    rows,
+  };
 }
 
 export async function clearUsage() {

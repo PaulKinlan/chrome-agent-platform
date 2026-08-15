@@ -1,6 +1,6 @@
 // extension/lib/provider.js
 var DEFAULTS = {
-  // "demo" | "openai" | "prompt-api"
+  // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
   provider: "demo",
   baseURL: "",
   apiKey: "",
@@ -9,12 +9,6 @@ var DEFAULTS = {
 async function getProviderConfig() {
   const stored = await chrome.storage.local.get("providerConfig");
   return { ...DEFAULTS, ...stored.providerConfig ?? {} };
-}
-async function setProviderConfig(partial) {
-  const cur = await getProviderConfig();
-  const next = { ...cur, ...partial };
-  await chrome.storage.local.set({ providerConfig: next });
-  return next;
 }
 
 // extension/lib/usage.js
@@ -164,6 +158,9 @@ async function listOrigins() {
     return [];
   }
 }
+
+// extension/lib/scheduler.js
+var mutex = Promise.resolve();
 
 // extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";
@@ -320,9 +317,9 @@ async function renderProviders() {
       </div>
       ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
       <div class="fields">
-        ${p.needsKey || p.baseURL ? `<input class="base-url" type="text" placeholder="Base URL" value="${escapeAttr(p.baseURL)}">` : ""}
-        ${p.needsKey ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">` : ""}
-        ${p.needsKey ? `<input class="model" type="text" placeholder="Model id" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}">` : ""}
+        ${p.needsKey || p.needsModel || p.baseURL || p.needsModel ? `<input class="base-url" type="text" placeholder="Base URL" value="${escapeAttr(p.baseURL)}">` : ""}
+        ${p.needsKey || p.needsModel ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">` : ""}
+        ${p.needsKey || p.needsModel ? `<input class="model" type="text" placeholder="Model id" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}">` : ""}
       </div>` : ""}
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
@@ -331,7 +328,7 @@ async function renderProviders() {
         apiKey: card.querySelector(".api-key")?.value ?? "",
         model: card.querySelector(".model")?.value ?? ""
       };
-      await setProviderConfig({ provider: p.id, ...fields });
+      await chrome.runtime.sendMessage({ type: "provider.set", config: { provider: p.id, ...fields } });
       await saveFlash(`Set ${p.name} as default.`);
       renderProviders();
     });
@@ -449,11 +446,28 @@ async function renderUsage() {
     <div class="usage-stat"><div class="n">${u.totals.inputTokens + u.totals.outputTokens}</div><div class="l">tokens</div></div>
     <div class="usage-stat"><div class="n">$${u.totals.estimatedCost.toFixed(4)}</div><div class="l">est. cost</div></div>`;
   const detail = $("#usage-detail");
-  detail.innerHTML = `<table>
-    <thead><tr><th>Provider</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
-    <tbody>${u.byModel.map(
-    (m) => `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${m.inputTokens + m.outputTokens}</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`
-  ).join("")}</tbody></table>`;
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const h of ["Provider", "Model", "Calls", "Tokens", "Cost"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  for (const m of u.byModel) {
+    const tr = document.createElement("tr");
+    for (const v of [m.provider, m.model, String(m.calls), String(m.inputTokens + m.outputTokens), "$" + m.estimatedCost.toFixed(4)]) {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  detail.replaceChildren(table);
   $("#usage-detail-toggle").addEventListener("click", () => {
     const d = $("#usage-detail");
     d.hidden = !d.hidden;
