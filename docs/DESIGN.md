@@ -104,6 +104,16 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
 - Inferred tools are advisory only until the user approves an origin's tools.
 - OPFS memory is per-origin scoped; master memory is extension-scoped.
 - Alarms run in the background; the agent's capabilities are the user's session's.
+- **Screenshot capture (threat model, honest):** pixel capture of a tab uses the
+  Chrome `debugger` API. That permission is **optional**, never permanent — it is
+  requested from a real owner gesture (the Settings "Allow the agent to control the
+  browser" toggle) and removed on revoke. Chrome's install-time warning for `debugger`
+  is "Read and change all your data on all websites"; we accept this because the
+  capability is (a) opt-in per the owner, (b) scoped at runtime to the browser-control
+  grant's origin allowlist, (c) attached to ONE tab by id for a single
+  capture-and-detach call (no lingering attachment), and (d) fail-closed — capture
+  is refused and detach failures are surfaced when the permission or grant is absent.
+  A failed debugger detach is treated as an error, never silently swallowed.
 
 ## 4. Phasing
 1. **Design** (this doc) → 2. **Mock UI** (static HTML for review) → 3. **Scaffold**

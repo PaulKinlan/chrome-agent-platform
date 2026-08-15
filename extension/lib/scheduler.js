@@ -253,6 +253,7 @@ export async function clearStaleInflight() {
 // transient failure resets the promise so a later call RETRIES — it never
 // permanently poisons recovery for the worker lifetime.
 let bootRecoveryPromise = null;
+let bootRecoveryTimer = null;
 export function recoverOnBoot() {
   if (bootRecoveryPromise) return bootRecoveryPromise;
   // NOTE: clearStaleInflight + reconcileScheduledTasks each take the lock
@@ -262,6 +263,14 @@ export function recoverOnBoot() {
     return await reconcileScheduledTasks();
   })().catch((err) => {
     bootRecoveryPromise = null; // reset so a later call retries
+    // Schedule an automatic retry (bounded) so a transient boot failure is not
+    // left un-reconciled until an unrelated caller wakes the worker (the
+    // round-13 medium: boot recovery had no scheduled retry).
+    if (bootRecoveryTimer) clearTimeout(bootRecoveryTimer);
+    bootRecoveryTimer = setTimeout(() => {
+      bootRecoveryTimer = null;
+      recoverOnBoot().catch(() => {});
+    }, 30 * 1000);
     throw err;
   });
   return bootRecoveryPromise;

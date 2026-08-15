@@ -224,11 +224,28 @@ plusBtn.addEventListener("click", (e) => {
   if (attachMenu.hidden) openAttachMenu();
   else closeAttachMenu();
 });
-// Escape closes the menu + returns focus (menu semantics + focus return).
+// Escape closes the menu + returns focus; arrow keys navigate the menu items
+// (full keyboard menu semantics). Home/End jump to the first/last item.
 attachMenu.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     e.preventDefault();
     closeAttachMenu(true);
+    return;
+  }
+  const items = [...attachMenu.querySelectorAll("button[role='menuitem']")];
+  if (items.length === 0) return;
+  const idx = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const delta = e.key === "ArrowDown" ? 1 : -1;
+    const next = items[(idx + delta + items.length) % items.length];
+    next.focus();
+  } else if (e.key === "Home") {
+    e.preventDefault();
+    items[0].focus();
+  } else if (e.key === "End") {
+    e.preventDefault();
+    items[items.length - 1].focus();
   }
 });
 document.addEventListener("click", (e) => {
@@ -262,7 +279,10 @@ attachMenu.addEventListener("click", async (e) => {
       input.oncancel = () => resolve([]);
       input.click();
     });
-    if (!file) return;
+    if (!file) {
+      plusBtn.focus(); // deterministic focus return on file-picker cancel
+      return;
+    }
     // Read the bytes up front as a data URL (Blob URLs don't survive runtime
     // messaging — the background worker must receive the actual bytes).
     let dataURL = "";
@@ -281,9 +301,11 @@ attachMenu.addEventListener("click", async (e) => {
       type: file.type,
       dataURL,
     });
-    addAttachTag(ICONS.attach + " " + file.name);
+    addAttachTag(file.name, "attach");
+    plusBtn.focus(); // deterministic focus return after selection
   } catch (err) {
     setStatus("attach error: " + String(err?.message ?? err), false);
+    plusBtn.focus(); // deterministic focus return after error
   }
 });
 
@@ -388,10 +410,20 @@ const capMeter = document.getElementById("cap-meter");
 const capNote = document.getElementById("cap-note");
 const capClose = document.getElementById("cap-close");
 
-function addAttachTag(label) {
+function addAttachTag(label, iconKey) {
   const tag = document.createElement("span");
   tag.className = "tag";
-  tag.textContent = label;
+  // The icon is a TRUSTED constant SVG (never user data); render it as markup,
+  // then append the (user-supplied) label as TEXT so a filename can never
+  // inject markup or show literal `<svg …>` tags (the round-13 a11y finding).
+  if (iconKey && ICONS[iconKey]) {
+    const icon = document.createElement("span");
+    icon.className = "tag-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = ICONS[iconKey];
+    tag.appendChild(icon);
+  }
+  tag.appendChild(document.createTextNode(label));
   plusBtn.insertAdjacentElement("afterend", tag);
 }
 
@@ -591,7 +623,7 @@ async function finishCapture(blob, kind, name) {
     });
   } catch { /* non-fatal */ }
   attachments.push({ name, kind, size: blob.size, type: blob.type, dataURL });
-  addAttachTag((kind === "audio" ? ICONS.audio : ICONS.camera) + " " + name);
+  addAttachTag(name, kind === "audio" ? "audio" : "camera");
   setStatus(`attached ${name}`);
   capClosePanel();
 }

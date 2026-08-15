@@ -87,7 +87,7 @@ const $ = (sel) => document.querySelector(sel);
 const storage = chrome.storage.local;
 
 // ── Providers ──
-async function renderProviders() {
+async function renderProviders(restoreFocus = false) {
   const cfg = await getProviderConfig();
   const list = $("#provider-list");
   list.innerHTML = "";
@@ -157,7 +157,7 @@ async function renderProviders() {
         config: { provider: p.id, ...fields },
       });
       await saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
-      renderProviders();
+      renderProviders(true);
     });
     list.appendChild(card);
   }
@@ -185,10 +185,15 @@ async function renderProviders() {
           config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model },
         });
         saveFlash("API key cleared.");
-        renderProviders();
+        renderProviders(true);
       });
       active.querySelector(".provider-head")?.appendChild(clear);
     }
+  }
+  if (restoreFocus) {
+    // Rerender replaces the focused subtree — re-focus the active provider's
+    // Set/Update button so a keyboard/AT user is not stranded.
+    active?.querySelector(".set-default")?.focus();
   }
 }
 
@@ -265,9 +270,9 @@ async function renderAgents() {
 }
 
 // ── Appearance ──
-async function renderAppearance() {
+async function renderAppearance(restoreFocus = false) {
   const s = await storage.get("cap:theme");
-  const current = s["cap:theme"] ?? "midnight";
+  const current = s["cap:theme"] ?? "sunlit";
   const grid = $("#theme-grid");
   grid.innerHTML = "";
   for (const t of THEMES) {
@@ -281,12 +286,17 @@ async function renderAppearance() {
     card.addEventListener("click", async () => {
       await storage.set({ "cap:theme": t.id });
       document.documentElement.dataset.theme = t.id;
-      renderAppearance();
+      renderAppearance(true); // restore focus to the active card after rerender
       saveFlash(`Theme: ${t.label}.`);
     });
     grid.appendChild(card);
   }
   document.documentElement.dataset.theme = current;
+  if (restoreFocus) {
+    // A rerender replaces the focused subtree — re-focus the (now) active card
+    // so a keyboard/AT user is not stranded (the round-13 focus finding).
+    grid.querySelector(".theme-card.active")?.focus();
+  }
 }
 
 // ── Browser control ──
@@ -301,13 +311,28 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
+      // Screenshot capture uses the Chrome debugger API. It is an OPTIONAL,
+      // owner-authorized capability requested HERE (a real user gesture) — never
+      // a permanent manifest permission. Denial degrades gracefully: the grant
+      // still covers open/navigate/close; only screenshots become unavailable.
+      let debuggerGranted = false;
+      try {
+        debuggerGranted = await chrome.permissions.request({
+          permissions: ["debugger"],
+        });
+      } catch { /* unsupported — debugger stays absent */ }
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
       saveFlash(
-        "Browser control granted (global, 15 min — set origins below to scope it).",
+        debuggerGranted
+          ? "Browser control granted (global, 15 min — set origins below to scope it)."
+          : "Browser control granted (screenshots unavailable — debugger permission not granted).",
       );
     } else {
       await revokeBrowserControlGrant();
+      try {
+        await chrome.permissions.remove({ permissions: ["debugger"] });
+      } catch { /* already absent */ }
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -384,22 +409,57 @@ async function renderUsage() {
 async function renderData() {
   const origins = await listOrigins();
   const list = $("#origin-list");
-  list.innerHTML = "";
+  list.replaceChildren();
   if (!origins.length) {
-    list.innerHTML = `<p class="muted">No per-site memory yet.</p>`;
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No enrolled sites yet.";
+    list.appendChild(p);
     return;
   }
   for (const origin of origins) {
     const row = document.createElement("div");
     row.className = "origin-row";
-    row.innerHTML =
-      `<span class="origin">${origin}</span><button class="btn small ghost clear-origin" type="button">Clear</button>`;
-    row.querySelector(".clear-origin").addEventListener("click", async () => {
-      const store = siteMemory(origin);
-      await store.clear();
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = origin; // textContent — never interpolate an origin
+    row.appendChild(label);
+
+    // Clear = clear that origin's memory only (NOT a revocation).
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "btn small ghost clear-origin";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", async () => {
+      await siteMemory(origin).clear();
       saveFlash(`Cleared memory for ${origin}.`);
       renderData();
     });
+    row.appendChild(clear);
+
+    // Disenroll = AUTHORITATIVE revocation: unregister the content scripts,
+    // remove the host permission, tombstone the enrollment, and clear OPFS (the
+    // agent.delete route). "Clear" alone must never masquerade as revocation.
+    const disenroll = document.createElement("button");
+    disenroll.type = "button";
+    disenroll.className = "btn small ghost disenroll-origin";
+    disenroll.textContent = "Disenroll";
+    disenroll.setAttribute("aria-label", `Disenroll ${origin}`);
+    disenroll.addEventListener("click", async () => {
+      const res = await chrome.runtime
+        .sendMessage({ type: "agent.delete", origin })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok) {
+        saveFlash(
+          `Disenrolled ${origin} (scripts + host permission removed).`,
+        );
+      } else {
+        saveFlash(`Disenroll incomplete: ${res?.error ?? "unknown"}.`);
+      }
+      renderData();
+    });
+    row.appendChild(disenroll);
+
     list.appendChild(row);
   }
 }

@@ -66799,6 +66799,7 @@ async function clearStaleInflight() {
   });
 }
 var bootRecoveryPromise = null;
+var bootRecoveryTimer = null;
 function recoverOnBoot() {
   if (bootRecoveryPromise) return bootRecoveryPromise;
   bootRecoveryPromise = (async () => {
@@ -66806,6 +66807,12 @@ function recoverOnBoot() {
     return await reconcileScheduledTasks();
   })().catch((err) => {
     bootRecoveryPromise = null;
+    if (bootRecoveryTimer) clearTimeout(bootRecoveryTimer);
+    bootRecoveryTimer = setTimeout(() => {
+      bootRecoveryTimer = null;
+      recoverOnBoot().catch(() => {
+      });
+    }, 30 * 1e3);
     throw err;
   });
   return bootRecoveryPromise;
@@ -66854,11 +66861,6 @@ var grantSeq = 0;
 function newGrantId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
   return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
-}
-async function getBrowserControlGrantIdentity() {
-  const s = await chrome.storage.local.get(GRANT_KEY);
-  const grant = s[GRANT_KEY];
-  return grant && typeof grant === "object" && typeof grant.id === "string" ? grant.id : null;
 }
 async function isBrowserControlGranted(origin) {
   const s = await chrome.storage.local.get(GRANT_KEY);
@@ -66920,6 +66922,27 @@ async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0] ?? null;
 }
+async function hasDebuggerPermission() {
+  try {
+    return await chrome.permissions.contains({ permissions: ["debugger"] });
+  } catch {
+    return false;
+  }
+}
+function validateGrantFor(grant, origin) {
+  if (!grant || typeof grant !== "object") return null;
+  if (typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)) return null;
+  if (grant.expiresAt <= Date.now()) return null;
+  let authorized = false;
+  if (grant.scope === "global") {
+    authorized = true;
+  } else if (grant.scope === "origins" && Array.isArray(grant.origins) && grant.origins.length > 0) {
+    authorized = typeof origin === "string" && grant.origins.includes(origin);
+  }
+  if (!authorized) return null;
+  if (typeof grant.id !== "string" || grant.id.length === 0) return null;
+  return grant.id;
+}
 async function captureTabScreenshot(tabId) {
   const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
   if (!tab?.id) return { error: "no tab" };
@@ -66931,49 +66954,64 @@ async function captureTabScreenshot(tabId) {
     }
   })() : void 0;
   if (!origin) return { error: "no origin" };
-  if (!await isBrowserControlGranted(origin)) {
+  const grantIdBefore = validateGrantFor(
+    (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
+    origin
+  );
+  if (!grantIdBefore) {
     return {
       error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
     };
   }
-  const grantIdBefore = await getBrowserControlGrantIdentity();
-  if (!grantIdBefore) return { error: "browser control grant missing" };
+  if (!await hasDebuggerPermission()) {
+    return {
+      error: "debugger permission not granted \u2014 enable browser control in Settings to allow screenshots"
+    };
+  }
   const debuggee = { tabId: tab.id };
+  let result;
+  let detachError = null;
   try {
     await chrome.debugger.attach(debuggee, "1.3");
-    try {
-      await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
-      const shot = await chrome.debugger.sendCommand(
-        debuggee,
-        "Page.captureScreenshot",
-        { format: "png" }
-      );
-      const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
-      const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : void 0;
-      if (!currentOrigin || currentOrigin !== origin) {
-        return { error: "tab navigated during capture \u2014 screenshot discarded" };
-      }
-      if (await getBrowserControlGrantIdentity() !== grantIdBefore) {
-        return {
-          error: "browser control grant changed during capture \u2014 screenshot discarded"
-        };
-      }
-      if (!await isBrowserControlGranted(currentOrigin)) {
-        return {
-          error: "browser control grant changed during capture \u2014 screenshot discarded"
-        };
-      }
-      if (!shot?.data) return { error: "capture returned no data" };
-      return { screenshot: `data:image/png;base64,${shot.data}` };
-    } finally {
-      await chrome.debugger.detach(debuggee).catch(() => {
-      });
+    await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
+    const shot = await chrome.debugger.sendCommand(
+      debuggee,
+      "Page.captureScreenshot",
+      { format: "png" }
+    );
+    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : void 0;
+    if (!currentOrigin || currentOrigin !== origin) {
+      result = { error: "tab navigated during capture \u2014 screenshot discarded" };
+    } else if (validateGrantFor(
+      (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
+      currentOrigin
+    ) !== grantIdBefore) {
+      result = {
+        error: "browser control grant changed during capture \u2014 screenshot discarded"
+      };
+    } else if (!shot?.data) {
+      result = { error: "capture returned no data" };
+    } else {
+      result = {
+        screenshot: `data:image/png;base64,${shot.data}`,
+        url: tab.url
+        // the SOURCE page, so the UI re-opens the page (not the data URL)
+      };
     }
   } catch (e) {
-    await chrome.debugger.detach(debuggee).catch(() => {
-    });
-    return { error: String(e?.message ?? e) };
+    result = { error: String(e?.message ?? e) };
+  } finally {
+    try {
+      await chrome.debugger.detach(debuggee);
+    } catch (e) {
+      detachError = String(e?.message ?? e);
+    }
   }
+  if (detachError) {
+    return { error: `debugger detach failed: ${detachError}` };
+  }
+  return result;
 }
 async function readPage(tabId) {
   try {
@@ -67212,15 +67250,29 @@ async function ensureOriginScriptsRegistered(origin) {
 async function unregisterOriginScripts(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { ok: false, error: "invalid origin" };
-  await chrome.scripting.unregisterContentScripts({
-    ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
-  }).catch(() => {
-  });
+  let scriptsRemoved = true;
+  let error90 = null;
   try {
-    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
-  } catch {
+    await chrome.scripting.unregisterContentScripts({
+      ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
+    });
+  } catch (e) {
+    scriptsRemoved = false;
+    error90 = String(e?.message ?? e);
   }
-  return { ok: true, origin: canonical };
+  let permissionRemoved = true;
+  try {
+    permissionRemoved = await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+  } catch {
+    permissionRemoved = false;
+  }
+  return {
+    ok: scriptsRemoved,
+    origin: canonical,
+    scriptsRemoved,
+    permissionRemoved,
+    error: error90
+  };
 }
 
 // extension/lib/pure.js
@@ -68025,24 +68077,42 @@ var handlers = {
       const registered = await ensureOriginScriptsRegistered(canonical).catch(
         (e) => ({ ok: false, error: String(e?.message ?? e) })
       );
+      if (registered?.ok !== true) {
+        await disenrollOrigin(canonical);
+        await siteMemory(canonical).clear();
+        return {
+          ok: false,
+          origin: canonical,
+          error: registered?.error ?? "script registration failed"
+        };
+      }
       invalidateAgent();
-      return {
-        ok: true,
-        origin: canonical,
-        scriptsRegistered: registered?.ok === true
-      };
+      return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },
   async "agent.delete"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
-      await unregisterOriginScripts(canonical).catch(() => {
-      });
+      const unreg = await unregisterOriginScripts(canonical);
       await disenrollOrigin(canonical);
       await siteMemory(canonical).clear();
       invalidateAgent();
-      return { ok: true, origin: canonical };
+      if (!unreg.ok) {
+        return {
+          ok: false,
+          origin: canonical,
+          error: unreg.error ?? "content-script unregister failed",
+          scriptsRemoved: false,
+          permissionRemoved: unreg.permissionRemoved
+        };
+      }
+      return {
+        ok: true,
+        origin: canonical,
+        scriptsRemoved: true,
+        permissionRemoved: unreg.permissionRemoved
+      };
     });
   },
   async "agent.delegate"({ origin, task }) {

@@ -302,7 +302,7 @@ var THEMES = [
 ];
 var $ = (sel) => document.querySelector(sel);
 var storage = chrome.storage.local;
-async function renderProviders() {
+async function renderProviders(restoreFocus = false) {
   const cfg = await getProviderConfig();
   const list = $("#provider-list");
   list.innerHTML = "";
@@ -341,7 +341,7 @@ async function renderProviders() {
         config: { provider: p.id, ...fields }
       });
       await saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
-      renderProviders();
+      renderProviders(true);
     });
     list.appendChild(card);
   }
@@ -365,10 +365,13 @@ async function renderProviders() {
           config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model }
         });
         saveFlash("API key cleared.");
-        renderProviders();
+        renderProviders(true);
       });
       active.querySelector(".provider-head")?.appendChild(clear);
     }
+  }
+  if (restoreFocus) {
+    active?.querySelector(".set-default")?.focus();
   }
 }
 async function renderEnroll() {
@@ -427,9 +430,9 @@ async function renderAgents() {
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;
   $("#agent-provider-list").replaceChildren();
 }
-async function renderAppearance() {
+async function renderAppearance(restoreFocus = false) {
   const s = await storage.get("cap:theme");
-  const current = s["cap:theme"] ?? "midnight";
+  const current = s["cap:theme"] ?? "sunlit";
   const grid = $("#theme-grid");
   grid.innerHTML = "";
   for (const t of THEMES) {
@@ -443,12 +446,15 @@ async function renderAppearance() {
     card.addEventListener("click", async () => {
       await storage.set({ "cap:theme": t.id });
       document.documentElement.dataset.theme = t.id;
-      renderAppearance();
+      renderAppearance(true);
       saveFlash(`Theme: ${t.label}.`);
     });
     grid.appendChild(card);
   }
   document.documentElement.dataset.theme = current;
+  if (restoreFocus) {
+    grid.querySelector(".theme-card.active")?.focus();
+  }
 }
 async function renderBrowser() {
   const s = await storage.get("cap:browserControlGrant");
@@ -461,13 +467,24 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
+      let debuggerGranted = false;
+      try {
+        debuggerGranted = await chrome.permissions.request({
+          permissions: ["debugger"]
+        });
+      } catch {
+      }
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
       saveFlash(
-        "Browser control granted (global, 15 min \u2014 set origins below to scope it)."
+        debuggerGranted ? "Browser control granted (global, 15 min \u2014 set origins below to scope it)." : "Browser control granted (screenshots unavailable \u2014 debugger permission not granted)."
       );
     } else {
       await revokeBrowserControlGrant();
+      try {
+        await chrome.permissions.remove({ permissions: ["debugger"] });
+      } catch {
+      }
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -532,21 +549,48 @@ async function renderUsage() {
 async function renderData() {
   const origins = await listOrigins();
   const list = $("#origin-list");
-  list.innerHTML = "";
+  list.replaceChildren();
   if (!origins.length) {
-    list.innerHTML = `<p class="muted">No per-site memory yet.</p>`;
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No enrolled sites yet.";
+    list.appendChild(p);
     return;
   }
   for (const origin of origins) {
     const row = document.createElement("div");
     row.className = "origin-row";
-    row.innerHTML = `<span class="origin">${origin}</span><button class="btn small ghost clear-origin" type="button">Clear</button>`;
-    row.querySelector(".clear-origin").addEventListener("click", async () => {
-      const store = siteMemory(origin);
-      await store.clear();
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = origin;
+    row.appendChild(label);
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "btn small ghost clear-origin";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", async () => {
+      await siteMemory(origin).clear();
       saveFlash(`Cleared memory for ${origin}.`);
       renderData();
     });
+    row.appendChild(clear);
+    const disenroll = document.createElement("button");
+    disenroll.type = "button";
+    disenroll.className = "btn small ghost disenroll-origin";
+    disenroll.textContent = "Disenroll";
+    disenroll.setAttribute("aria-label", `Disenroll ${origin}`);
+    disenroll.addEventListener("click", async () => {
+      const res = await chrome.runtime.sendMessage({ type: "agent.delete", origin }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok) {
+        saveFlash(
+          `Disenrolled ${origin} (scripts + host permission removed).`
+        );
+      } else {
+        saveFlash(`Disenroll incomplete: ${res?.error ?? "unknown"}.`);
+      }
+      renderData();
+    });
+    row.appendChild(disenroll);
     list.appendChild(row);
   }
 }

@@ -661,16 +661,25 @@ const handlers = {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
+      // TRANSACTIONAL: enroll the origin, then register its scripts. If
+      // registration FAILS (permission absent or registerContentScripts error),
+      // ROLL BACK the enrollment so the UI never reports "Enrolled" while
+      // scriptsRegistered is false (the round-13 honesty finding).
       await enrollOrigin(canonical);
       const registered = await ensureOriginScriptsRegistered(canonical).catch(
         (e) => ({ ok: false, error: String(e?.message ?? e) }),
       );
+      if (registered?.ok !== true) {
+        await disenrollOrigin(canonical);
+        await siteMemory(canonical).clear();
+        return {
+          ok: false,
+          origin: canonical,
+          error: registered?.error ?? "script registration failed",
+        };
+      }
       invalidateAgent();
-      return {
-        ok: true,
-        origin: canonical,
-        scriptsRegistered: registered?.ok === true,
-      };
+      return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },
   async "agent.delete"({ origin }) {
@@ -680,11 +689,27 @@ const handlers = {
       // Authoritative revocation: remove the dynamic content scripts AND revoke
       // the optional host permission, then tombstone the enrollment (a running
       // bridge's reports are rejected via isEnrolled) + clear the OPFS store.
-      await unregisterOriginScripts(canonical).catch(() => {});
+      // A FAILED unregister is surfaced (ok:false) — revocation is only claimed
+      // as authoritative when the scripts were actually removed.
+      const unreg = await unregisterOriginScripts(canonical);
       await disenrollOrigin(canonical);
       await siteMemory(canonical).clear();
       invalidateAgent();
-      return { ok: true, origin: canonical };
+      if (!unreg.ok) {
+        return {
+          ok: false,
+          origin: canonical,
+          error: unreg.error ?? "content-script unregister failed",
+          scriptsRemoved: false,
+          permissionRemoved: unreg.permissionRemoved,
+        };
+      }
+      return {
+        ok: true,
+        origin: canonical,
+        scriptsRemoved: true,
+        permissionRemoved: unreg.permissionRemoved,
+      };
     });
   },
   async "agent.delegate"({ origin, task }) {

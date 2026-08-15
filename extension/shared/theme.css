@@ -18,17 +18,6 @@ body {
   color: var(--text);
   font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-
-position: fixed;
-bottom: 8px;
-right: 12px;
-font-size: 11px;
-color: var(--muted);
-background: var(--panel);
-border: 1px solid var(--border);
-border-radius: 6px;
-padding: 3px 8px;
-}
 a {
   color: var(--accent);
   text-decoration: none;
@@ -75,6 +64,11 @@ a:hover {
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 13px;
+  /* <button> defaults to near-black buttontext on dark themes — set the text
+     color explicitly so recipe/status chips stay legible in every theme. */
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
 }
 .chip .dot {
   width: 7px;

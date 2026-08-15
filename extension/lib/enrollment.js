@@ -93,16 +93,37 @@ export async function ensureOriginScriptsRegistered(origin) {
 }
 
 /** Remove the dynamic content scripts for an origin AND revoke the optional
- * host permission (authoritative revocation on agent.delete). */
+ * host permission (authoritative revocation on agent.delete). Returns HONEST
+ * results — a failed unregisterContentScripts or permissions.remove is surfaced
+ * (never silently swallowed), so the caller never claims authoritative
+ * revocation it did not achieve. */
 export async function unregisterOriginScripts(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { ok: false, error: "invalid origin" };
-  await chrome.scripting.unregisterContentScripts({
-    ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
-  }).catch(() => {});
-  // Revoke the host permission so the origin loses capture/inject authority.
+  let scriptsRemoved = true;
+  let error = null;
   try {
-    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
-  } catch { /* permission may not have been granted */ }
-  return { ok: true, origin: canonical };
+    await chrome.scripting.unregisterContentScripts({
+      ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
+    });
+  } catch (e) {
+    scriptsRemoved = false;
+    error = String(e?.message ?? e);
+  }
+  // Revoke the host permission so the origin loses capture/inject authority.
+  // `permissions.remove` resolves false when the permission was never granted
+  // (a no-op, NOT a failure) — that is honest and distinct from an exception.
+  let permissionRemoved = true;
+  try {
+    permissionRemoved = await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+  } catch {
+    permissionRemoved = false; // could not confirm removal
+  }
+  return {
+    ok: scriptsRemoved,
+    origin: canonical,
+    scriptsRemoved,
+    permissionRemoved,
+    error,
+  };
 }

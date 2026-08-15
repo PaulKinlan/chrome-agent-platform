@@ -9,7 +9,9 @@
     "sidePanel",
     "tabs",
     "scripting",
-    "notifications",
+    "notifications"
+  ],
+  "optional_permissions": [
     "debugger"
   ],
   "optional_host_permissions": [

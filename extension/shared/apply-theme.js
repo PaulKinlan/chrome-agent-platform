@@ -3,7 +3,7 @@
 (async () => {
   try {
     const s = await chrome.storage.local.get("cap:theme");
-    const theme = s["cap:theme"] ?? "midnight";
+    const theme = s["cap:theme"] ?? "sunlit";
     document.documentElement.dataset.theme = theme;
   } catch {
     // storage unavailable (e.g. file:// preview) — default theme stays

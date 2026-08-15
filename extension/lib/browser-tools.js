@@ -111,14 +111,54 @@ async function activeTab() {
   return tabs[0] ?? null;
 }
 
+/** Whether the OPTIONAL debugger permission is currently granted. Screenshot
+ * capture attaches the Chrome debugger API to a specific tab; that capability
+ * is requested from a real owner gesture (the Settings browser-control toggle),
+ * never a permanent manifest permission. Fail closed when it is absent. */
+async function hasDebuggerPermission() {
+  try {
+    return await chrome.permissions.contains({ permissions: ["debugger"] });
+  } catch {
+    return false;
+  }
+}
+
+/** Validate a SINGLE grant record (id + scope + expiry + origin) together.
+ * Returns the grant id when the record authorizes `origin`, else null. Reading
+ * ONE record and validating id/scope/expiry/origin atomically closes the
+ * separate-storage-reads race (the round-13 medium: a revoke→regrant could
+ * otherwise slip between a scope check and an identity check). */
+function validateGrantFor(grant, origin) {
+  if (!grant || typeof grant !== "object") return null;
+  if (
+    typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)
+  ) return null;
+  if (grant.expiresAt <= Date.now()) return null;
+  let authorized = false;
+  if (grant.scope === "global") {
+    authorized = true;
+  } else if (
+    grant.scope === "origins" && Array.isArray(grant.origins) &&
+    grant.origins.length > 0
+  ) {
+    authorized = typeof origin === "string" && grant.origins.includes(origin);
+  }
+  if (!authorized) return null;
+  if (typeof grant.id !== "string" || grant.id.length === 0) return null;
+  return grant.id;
+}
+
 /**
  * Capture a PNG screenshot of the requested tab, gated by the browser-control
- * grant FOR THAT TAB'S ORIGIN. Uses chrome.debugger + Page.captureScreenshot
+ * grant FOR THAT TAB'S ORIGIN plus the OPTIONAL debugger permission (requested
+ * from a real owner gesture). Uses chrome.debugger + Page.captureScreenshot
  * targeting the SPECIFIC tab by id (NOT captureVisibleTab, which captures
  * whatever tab is visible and needs the permanent <all_urls> host permission).
  * Targeting a tab by id eliminates the active-tab ABA race entirely and works
- * with only the `debugger` permission — the tab is attached, captured, and
- * detached within a single call, so there is no lingering broad access.
+ * with only the optional `debugger` permission — the tab is attached, captured,
+ * and detached within a single call, so there is no lingering broad access.
+ * Detach failures are surfaced (fail closed): a failed detach leaves a
+ * privileged debugger attachment, so it is never swallowed.
  */
 export async function captureTabScreenshot(tabId) {
   // Resolve the tab first so we can derive its origin for the grant check.
@@ -137,59 +177,80 @@ export async function captureTabScreenshot(tabId) {
     })()
     : undefined;
   if (!origin) return { error: "no origin" };
-  if (!(await isBrowserControlGranted(origin))) {
+  // Read the grant ONCE and validate id + scope + expiry + origin together (an
+  // atomic snapshot, not separate reads). The returned id is the fence for the
+  // whole capture.
+  const grantIdBefore = validateGrantFor(
+    (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
+    origin,
+  );
+  if (!grantIdBefore) {
     return {
       error:
         "browser control not granted for this tab's origin — ask the user to approve it in Settings",
     };
   }
-  // Snapshot the grant IDENTITY (a unique id per grant). A revoke→regrant during
-  // the capture produces a NEW id, so a before/after Boolean check alone cannot
-  // catch it — the identity must remain IDENTICAL across the whole capture.
-  const grantIdBefore = await getBrowserControlGrantIdentity();
-  if (!grantIdBefore) return { error: "browser control grant missing" };
+  // The debugger capability must be explicitly granted (owner gesture). Without
+  // it, capture is impossible — fail closed rather than throw or silently skip.
+  if (!(await hasDebuggerPermission())) {
+    return {
+      error:
+        "debugger permission not granted — enable browser control in Settings to allow screenshots",
+    };
+  }
 
   const debuggee = { tabId: tab.id };
+  let result;
+  let detachError = null;
   try {
     await chrome.debugger.attach(debuggee, "1.3");
-    try {
-      await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
-      const shot = await chrome.debugger.sendCommand(
-        debuggee,
-        "Page.captureScreenshot",
-        { format: "png" },
-      );
-      // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
-      // 1. the tab is STILL on the same origin (no navigation during capture);
-      // 2. the grant is STILL valid AND the SAME grant identity (closes the
-      //    revoke→regrant ABA race).
-      const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
-      const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : undefined;
-      if (!currentOrigin || currentOrigin !== origin) {
-        return { error: "tab navigated during capture — screenshot discarded" };
-      }
-      if ((await getBrowserControlGrantIdentity()) !== grantIdBefore) {
-        return {
-          error:
-            "browser control grant changed during capture — screenshot discarded",
-        };
-      }
-      if (!(await isBrowserControlGranted(currentOrigin))) {
-        return {
-          error:
-            "browser control grant changed during capture — screenshot discarded",
-        };
-      }
-      if (!shot?.data) return { error: "capture returned no data" };
-      return { screenshot: `data:image/png;base64,${shot.data}` };
-    } finally {
-      await chrome.debugger.detach(debuggee).catch(() => {});
+    await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
+    const shot = await chrome.debugger.sendCommand(
+      debuggee,
+      "Page.captureScreenshot",
+      { format: "png" },
+    );
+    // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
+    // 1. the tab is STILL on the same origin (no navigation during capture);
+    // 2. the SAME grant record still authorizes the SAME origin with the SAME
+    //    id (closes the revoke→regrant ABA race atomically).
+    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : undefined;
+    if (!currentOrigin || currentOrigin !== origin) {
+      result = { error: "tab navigated during capture — screenshot discarded" };
+    } else if (
+      validateGrantFor(
+        (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
+        currentOrigin,
+      ) !== grantIdBefore
+    ) {
+      result = {
+        error:
+          "browser control grant changed during capture — screenshot discarded",
+      };
+    } else if (!shot?.data) {
+      result = { error: "capture returned no data" };
+    } else {
+      result = {
+        screenshot: `data:image/png;base64,${shot.data}`,
+        url: tab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
+      };
     }
   } catch (e) {
-    // Detach on attach/command failure too (never leave a lingering debugger).
-    await chrome.debugger.detach(debuggee).catch(() => {});
-    return { error: String(e?.message ?? e) };
+    result = { error: String(e?.message ?? e) };
+  } finally {
+    try {
+      await chrome.debugger.detach(debuggee);
+    } catch (e) {
+      detachError = String(e?.message ?? e);
+    }
   }
+  // A failed detach leaves a privileged debugger attachment behind — surface it
+  // (fail closed), never return the screenshot silently.
+  if (detachError) {
+    return { error: `debugger detach failed: ${detachError}` };
+  }
+  return result;
 }
 
 /** Read the visible text of a tab (or the active tab) via scripting. */
