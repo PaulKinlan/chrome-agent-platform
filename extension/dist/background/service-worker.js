@@ -67089,14 +67089,27 @@ function schemaToZod(z4, schema4, depth = 0) {
   if (schema4.required !== void 0) {
     if (!Array.isArray(schema4.required) || schema4.required.some((k) => typeof k !== "string")) return z4.never();
   }
-  if (schema4.enum !== void 0 && !Array.isArray(schema4.enum)) return z4.never();
-  if (schema4.anyOf !== void 0 && !Array.isArray(schema4.anyOf)) return z4.never();
+  if (schema4.enum !== void 0 && !Array.isArray(schema4.enum)) {
+    return z4.never();
+  }
+  if (schema4.anyOf !== void 0 && !Array.isArray(schema4.anyOf)) {
+    return z4.never();
+  }
   if (schema4.items !== void 0 && typeof schema4.items !== "object") {
     return z4.never();
   }
   if (schema4.properties !== void 0 && (typeof schema4.properties !== "object" || Array.isArray(schema4.properties))) return z4.never();
-  for (const k of ["minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength"]) {
-    if (schema4[k] !== void 0 && typeof schema4[k] !== "number") return z4.never();
+  for (const k of [
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength"
+  ]) {
+    if (schema4[k] !== void 0 && typeof schema4[k] !== "number") {
+      return z4.never();
+    }
   }
   if (schema4.const !== void 0) {
     if (t !== void 0 && !valueMatchesType(schema4.const, t)) return z4.never();
@@ -67655,8 +67668,16 @@ chrome.runtime.onInstalled.addListener(async () => {
   console.log("Chrome Agent Platform installed");
 });
 chrome.runtime.onStartup?.addListener(() => {
-  clearStaleInflight().catch((e) => console.error("clearStaleInflight:", e?.message ?? e));
-  reconcileScheduledTasks().catch((e) => console.error("reconcileScheduledTasks:", e?.message ?? e));
+  clearStaleInflight().catch(
+    (e) => console.error("clearStaleInflight:", e?.message ?? e)
+  );
+  reconcileScheduledTasks().catch(
+    (e) => console.error("reconcileScheduledTasks:", e?.message ?? e)
+  );
 });
-clearStaleInflight().catch((e) => console.error("clearStaleInflight:", e?.message ?? e));
-reconcileScheduledTasks().catch((e) => console.error("reconcileScheduledTasks:", e?.message ?? e));
+clearStaleInflight().catch(
+  (e) => console.error("clearStaleInflight:", e?.message ?? e)
+);
+reconcileScheduledTasks().catch(
+  (e) => console.error("reconcileScheduledTasks:", e?.message ?? e)
+);
