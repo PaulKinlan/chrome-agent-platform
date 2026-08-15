@@ -188,6 +188,10 @@ document.getElementById("save-provider").addEventListener("click", async () => {
   setStatus("provider saved");
 });
 
+document.getElementById("open-settings")?.addEventListener(
+  "click",
+  () => chrome.runtime.openOptionsPage(),
+);
 document.getElementById("open-memory").addEventListener(
   "click",
   () => chrome.runtime.openOptionsPage(),

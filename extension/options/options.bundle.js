@@ -1,0 +1,416 @@
+// extension/lib/provider.js
+var DEFAULTS = {
+  // "demo" | "openai" | "prompt-api"
+  provider: "demo",
+  baseURL: "",
+  apiKey: "",
+  model: ""
+};
+async function getProviderConfig() {
+  const stored = await chrome.storage.local.get("providerConfig");
+  return { ...DEFAULTS, ...stored.providerConfig ?? {} };
+}
+async function setProviderConfig(partial) {
+  const cur = await getProviderConfig();
+  const next = { ...cur, ...partial };
+  await chrome.storage.local.set({ providerConfig: next });
+  return next;
+}
+
+// extension/lib/usage.js
+var STORAGE_KEY = "cairn:usage";
+var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
+async function getUsage() {
+  const store = await chrome.storage.local.get(STORAGE_KEY);
+  const rows = (store[STORAGE_KEY] ?? []).filter(
+    (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
+  );
+  const byModel = {};
+  const byAgent = {};
+  const totals = { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+  for (const r of rows) {
+    const mk = `${r.provider}/${r.model}`;
+    byModel[mk] ??= { provider: r.provider, model: r.model, calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+    byModel[mk].calls++;
+    byModel[mk].inputTokens += r.inputTokens;
+    byModel[mk].outputTokens += r.outputTokens;
+    byModel[mk].estimatedCost += r.estimatedCost;
+    byAgent[r.agentId] ??= { agentId: r.agentId, calls: 0, inputTokens: 0, outputTokens: 0 };
+    byAgent[r.agentId].calls++;
+    byAgent[r.agentId].inputTokens += r.inputTokens;
+    byAgent[r.agentId].outputTokens += r.outputTokens;
+    totals.calls++;
+    totals.inputTokens += r.inputTokens;
+    totals.outputTokens += r.outputTokens;
+    totals.estimatedCost += r.estimatedCost;
+  }
+  return { totals, byModel: Object.values(byModel), byAgent: Object.values(byAgent), rows };
+}
+
+// extension/lib/memory.js
+var ROOT = "memory";
+var MASTER = "master";
+function canonicalOrigin(value) {
+  try {
+    const u = new URL(String(value));
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+function encodeOrigin(origin) {
+  return encodeURIComponent(origin);
+}
+function decodeOrigin(encoded) {
+  return decodeURIComponent(encoded);
+}
+async function openDir(segments) {
+  let dir = await rootDir();
+  for (const seg of segments) {
+    dir = await dir.getDirectoryHandle(seg, { create: true });
+  }
+  return dir;
+}
+async function rootDir() {
+  return await navigator.storage.getDirectory();
+}
+async function readJson(dir, name) {
+  try {
+    const fh = await dir.getFileHandle(name);
+    const f = await fh.getFile();
+    return JSON.parse(await f.text());
+  } catch {
+    return null;
+  }
+}
+async function writeJson(dir, name, value) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(JSON.stringify(value));
+  await w.close();
+}
+function memoryStore(origin) {
+  const isMaster = origin === MASTER;
+  const path = isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(origin)];
+  return {
+    isMaster,
+    origin,
+    async get(key) {
+      const dir = await openDir(path);
+      return await readJson(dir, `${key}.json`);
+    },
+    async set(key, value) {
+      const dir = await openDir(path);
+      await writeJson(dir, `${key}.json`, value);
+    },
+    async keys() {
+      const dir = await openDir(path);
+      const out = [];
+      for await (const [name] of dir.entries()) {
+        if (name.endsWith(".json")) out.push(name.slice(0, -5));
+      }
+      return out.sort();
+    },
+    async delete(key) {
+      const dir = await openDir(path);
+      try {
+        await dir.removeEntry(`${key}.json`);
+      } catch {
+      }
+    },
+    async clear() {
+      if (isMaster) {
+        const parent = await openDir([ROOT]);
+        try {
+          await parent.removeEntry(MASTER, { recursive: true });
+        } catch {
+        }
+        return;
+      }
+      const origins = await openDir([ROOT, "origins"]);
+      try {
+        await origins.removeEntry(encodeOrigin(origin), { recursive: true });
+      } catch {
+      }
+    }
+  };
+}
+function siteMemory(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) {
+    const invalid = memoryStore(`invalid:${origin}`);
+    return {
+      ...invalid,
+      async get() {
+        return null;
+      },
+      async set() {
+        throw new Error(`invalid origin: ${origin}`);
+      }
+    };
+  }
+  return memoryStore(canonical);
+}
+async function listOrigins() {
+  try {
+    const dir = await openDir([ROOT, "origins"]);
+    const out = [];
+    for await (const [name] of dir.entries()) {
+      out.push(decodeOrigin(name));
+    }
+    return out.sort();
+  } catch {
+    return [];
+  }
+}
+
+// extension/lib/browser-tools.js
+var GRANT_KEY = "cap:browserControlGrant";
+var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
+async function setBrowserControlGrant({ origins = [], expiryMs = DEFAULT_GRANT_MS } = {}) {
+  const grant = {
+    expiresAt: Date.now() + expiryMs,
+    origins: origins.slice(0, 50),
+    grantedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  return grant;
+}
+
+// extension/lib/recipes.js
+var RECIPES = [
+  {
+    id: "tab-hygiene",
+    name: "Tab hygiene",
+    icon: "broom",
+    description: "Find duplicate/stale tabs and close or group them.",
+    prompt: "List the open tabs. Identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close. Report your findings and close the obvious duplicates. Be conservative \u2014 never close a tab with unsaved form state you can't detect."
+  },
+  {
+    id: "page-summary",
+    name: "Summarise this page",
+    icon: "doc",
+    description: "Read the active tab and give a tight summary.",
+    prompt: "Read the active tab's content and produce a concise summary: what the page is, the 3 key points, and one recommended next action. Keep it under 120 words."
+  },
+  {
+    id: "link-collector",
+    name: "Collect links",
+    icon: "link",
+    description: "Gather the outbound links from the active page.",
+    prompt: "Read the active tab and collect its outbound links, grouped by domain, with the link text. Return the list as markdown. Skip navigation/boilerplate links."
+  },
+  {
+    id: "reading-list",
+    name: "Save to reading list",
+    icon: "books",
+    description: "Capture the active tab into memory as a reading-list entry.",
+    prompt: "Read the active tab and save it to memory under the key 'reading-list' (append: title, url, and a one-line note). Confirm what you saved."
+  }
+];
+
+// extension/options/options.js
+var PROVIDERS = [
+  { id: "demo", name: "Demo (local)", hint: "Deterministic local model \u2014 no key, always runs.", baseURL: "", needsKey: false, onDevice: false },
+  { id: "prompt-api", name: "Chrome Prompt API", hint: "Gemini nano on-device \u2014 no key, works offline.", baseURL: "", needsKey: false, onDevice: true },
+  { id: "openai", name: "OpenAI", hint: "Your OpenAI key + model.", baseURL: "https://api.openai.com/v1", needsKey: true, onDevice: false },
+  { id: "anthropic", name: "Anthropic", hint: "Your Anthropic key (OpenAI-compatible endpoint).", baseURL: "https://api.anthropic.com/v1", needsKey: true, onDevice: false },
+  { id: "gemini", name: "Google Gemini", hint: "Your Gemini API key (OpenAI-compatible endpoint).", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true, onDevice: false },
+  { id: "deepseek", name: "DeepSeek", hint: "Your DeepSeek key + model.", baseURL: "https://api.deepseek.com/v1", needsKey: true, onDevice: false },
+  { id: "ollama", name: "Ollama (local)", hint: "A local Ollama server.", baseURL: "http://localhost:11434/v1", needsKey: false, onDevice: false }
+];
+var THEMES = [
+  { id: "midnight", label: "Midnight", swatch: "#0d1117,#58a6ff" },
+  { id: "sunlit", label: "Sunlit", swatch: "#ffffff,#0969da" },
+  { id: "neon", label: "Neon", swatch: "#0a0a12,#ff3ea5" },
+  { id: "terminal", label: "Terminal", swatch: "#0c0c0c,#4ec9b0" }
+];
+var $ = (sel) => document.querySelector(sel);
+var storage = chrome.storage.local;
+async function renderProviders() {
+  const cfg = await getProviderConfig();
+  const list = $("#provider-list");
+  list.innerHTML = "";
+  for (const p of PROVIDERS) {
+    const card = document.createElement("div");
+    card.className = "provider-card" + (cfg.provider === p.id ? " active" : "");
+    card.dataset.provider = p.id;
+    card.innerHTML = `
+      <div class="provider-head">
+        <span class="provider-name">${p.name}</span>
+        <span class="muted">${p.hint}</span>
+        <button class="btn small set-default" type="button" ${cfg.provider === p.id ? "disabled" : ""}>Use</button>
+      </div>
+      ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
+      <div class="fields">
+        ${p.needsKey || p.baseURL ? `<input class="base-url" type="text" placeholder="Base URL" value="${escapeAttr(p.baseURL)}">` : ""}
+        ${p.needsKey ? `<input class="api-key" type="password" placeholder="API key" autocomplete="off">` : ""}
+        ${p.needsKey ? `<input class="model" type="text" placeholder="Model id" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}">` : ""}
+      </div>` : ""}
+    `;
+    card.querySelector(".set-default")?.addEventListener("click", async () => {
+      const fields = {
+        baseURL: card.querySelector(".base-url")?.value ?? p.baseURL,
+        apiKey: card.querySelector(".api-key")?.value ?? "",
+        model: card.querySelector(".model")?.value ?? ""
+      };
+      await setProviderConfig({ provider: p.id, ...fields });
+      await saveFlash(`Set ${p.name} as default.`);
+      renderProviders();
+    });
+    list.appendChild(card);
+  }
+  const active = list.querySelector(`.provider-card[data-provider="${cfg.provider}"]`);
+  if (active) {
+    if (cfg.apiKey) {
+      const k = active.querySelector(".api-key");
+      if (k) k.placeholder = "API key (set)";
+    }
+  }
+}
+async function renderAgents() {
+  const s = await storage.get("cap:multiAgent");
+  $("#multi-agent").checked = Boolean(s["cap:multiAgent"]);
+  $("#multi-agent").addEventListener("change", async (e) => {
+    await storage.set({ "cap:multiAgent": e.target.checked });
+    $("#per-agent-provider").hidden = !e.target.checked;
+    saveFlash("Agent mode saved.");
+  });
+  $("#per-agent-provider").hidden = !$("#multi-agent").checked;
+  const ap = await storage.get("cap:agentProviders");
+  const map = ap["cap:agentProviders"] ?? {};
+  const list = $("#agent-provider-list");
+  list.innerHTML = "";
+  const agents = [{ id: "hub", name: "Hub agent" }, ...RECIPES.map((r) => ({ id: r.id, name: r.name }))];
+  for (const a of agents) {
+    const row = document.createElement("div");
+    row.className = "provider-card";
+    row.innerHTML = `
+      <div class="provider-head">
+        <span class="provider-name">${a.name}</span>
+        <select class="agent-provider">
+          <option value="">Default</option>
+          ${PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("")}
+        </select>
+      </div>`;
+    const sel = row.querySelector(".agent-provider");
+    sel.value = map[a.id] ?? "";
+    sel.addEventListener("change", async () => {
+      map[a.id] = sel.value || void 0;
+      await storage.set({ "cap:agentProviders": map });
+      saveFlash("Agent provider saved.");
+    });
+    list.appendChild(row);
+  }
+}
+async function renderAppearance() {
+  const s = await storage.get("cap:theme");
+  const current = s["cap:theme"] ?? "midnight";
+  const grid = $("#theme-grid");
+  grid.innerHTML = "";
+  for (const t of THEMES) {
+    const card = document.createElement("div");
+    card.className = "theme-card" + (current === t.id ? " active" : "");
+    card.innerHTML = `
+      <div class="theme-swatch" style="background: linear-gradient(135deg, ${t.swatch})"></div>
+      <div class="theme-label">${t.label}</div>`;
+    card.addEventListener("click", async () => {
+      await storage.set({ "cap:theme": t.id });
+      document.documentElement.dataset.theme = t.id;
+      renderAppearance();
+      saveFlash(`Theme: ${t.label}.`);
+    });
+    grid.appendChild(card);
+  }
+  document.documentElement.dataset.theme = current;
+}
+async function renderBrowser() {
+  const s = await storage.get("cap:browserControlGrant");
+  const grant = s["cap:browserControlGrant"];
+  const granted = Boolean(grant && grant.expiresAt > Date.now());
+  $("#browser-grant").checked = granted;
+  $("#grant-origins").hidden = !granted;
+  if (grant?.origins?.length) $("#grant-origin-list").value = grant.origins.join("\n");
+  $("#browser-grant").addEventListener("change", async (e) => {
+    if (e.target.checked) {
+      await setBrowserControlGrant({ origins: [] });
+      $("#grant-origins").hidden = false;
+      saveFlash("Browser control granted (scoped \u2014 set origins below).");
+    } else {
+      await storage.set({ "cap:browserControlGrant": { expiresAt: 0, origins: [] } });
+      $("#grant-origins").hidden = true;
+      saveFlash("Browser control revoked.");
+    }
+  });
+  $("#grant-origin-list").addEventListener("change", async (e) => {
+    const origins = e.target.value.split("\n").map((s2) => s2.trim()).filter(Boolean);
+    await setBrowserControlGrant({ origins });
+    saveFlash("Allowed origins saved.");
+  });
+}
+async function renderUsage() {
+  const u = await getUsage();
+  const sum = $("#usage-summary");
+  sum.innerHTML = `
+    <div class="usage-stat"><div class="n">${u.totals.calls}</div><div class="l">calls</div></div>
+    <div class="usage-stat"><div class="n">${u.totals.inputTokens + u.totals.outputTokens}</div><div class="l">tokens</div></div>
+    <div class="usage-stat"><div class="n">$${u.totals.estimatedCost.toFixed(4)}</div><div class="l">est. cost</div></div>`;
+  const detail = $("#usage-detail");
+  detail.innerHTML = `<table>
+    <thead><tr><th>Provider</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+    <tbody>${u.byModel.map((m) => `<tr><td>${m.provider}</td><td>${m.model}</td><td>${m.calls}</td><td>${m.inputTokens + m.outputTokens}</td><td>$${m.estimatedCost.toFixed(4)}</td></tr>`).join("")}</tbody></table>`;
+  $("#usage-detail-toggle").addEventListener("click", () => {
+    const d = $("#usage-detail");
+    d.hidden = !d.hidden;
+    $("#usage-detail-toggle").textContent = d.hidden ? "Show detail" : "Hide detail";
+  });
+}
+async function renderData() {
+  const origins = await listOrigins();
+  const list = $("#origin-list");
+  list.innerHTML = "";
+  if (!origins.length) {
+    list.innerHTML = `<p class="muted">No per-site memory yet.</p>`;
+    return;
+  }
+  for (const origin of origins) {
+    const row = document.createElement("div");
+    row.className = "origin-row";
+    row.innerHTML = `<span class="origin">${origin}</span><button class="btn small ghost clear-origin" type="button">Clear</button>`;
+    row.querySelector(".clear-origin").addEventListener("click", async () => {
+      const store = siteMemory(origin);
+      await store.clear();
+      saveFlash(`Cleared memory for ${origin}.`);
+      renderData();
+    });
+    list.appendChild(row);
+  }
+}
+function escapeAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+var flashTimer;
+function saveFlash(msg) {
+  const el = $("#save-status");
+  el.textContent = msg;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    el.textContent = "Changes save automatically.";
+  }, 2500);
+}
+$("#open-hub").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("ntp/ntp.html") });
+});
+document.querySelectorAll(".nav-item").forEach((a) => {
+  a.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach((x) => x.removeAttribute("aria-current"));
+    a.setAttribute("aria-current", "true");
+  });
+});
+await renderProviders();
+await renderAgents();
+await renderAppearance();
+await renderBrowser();
+await renderUsage();
+await renderData();

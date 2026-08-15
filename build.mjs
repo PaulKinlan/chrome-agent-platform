@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
 
 const OUT = "extension/dist/background/service-worker.js";
+const OPTIONS_OUT = "extension/options/options.bundle.js";
 
 const shared = {
   bundle: true,
@@ -40,6 +41,24 @@ await build({
   };
   })(),
 });
+
+// Bundle the options page too — it imports lib/provider.js which pulls the AI
+// SDK (bare npm specifiers), which a plain module script cannot resolve.
+await build({
+  ...shared,
+  entryPoints: ["extension/options/options.js"],
+  outfile: OPTIONS_OUT,
+  alias: (() => {
+    const root = new URL(".", import.meta.url).pathname;
+    const shim = `${root}browser-shim-node.js`;
+    return {
+      "node:fs": shim, "node:fs/promises": shim, "node:path": shim, "node:os": shim,
+      "node:crypto": shim, "node:process": shim, "node:stream": shim, "node:util": shim,
+      "node:module": shim, "node:child_process": shim, "fs": shim, "path": shim, "child_process": shim,
+    };
+  })(),
+});
+console.log(`built ${OPTIONS_OUT}`);
 
 // MV3 CSP forbids eval / new Function. ajv (a transitive dep of the MCP SDK,
 // which agent-do pulls in for MCP-tool support we do NOT use at runtime) emits

@@ -28,6 +28,9 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 - [ ] End-to-end task completion verification (a task runs a real model + produces a result + usage recorded)
 - [ ] Per-agent provider config (TBD)
 
+## In flight (2026-08-15)
+- **Dedicated configuration pane** — a proper settings/options page (options_page) like the chaos/NotebookLM extensions: providers (Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt API, each with endpoint+key+model, per-agent assignment), agents (1-vs-N), appearance (theme picker), browser-control grant (scoped), usage view, per-origin data. The hub's inline dropdown links to it. Plus the UI polish (clean, modern, chaos-options-style). STEERED.
+
 ## Open questions for Paul
 - The provider default for a real model: Prompt API (on-device) vs a configured endpoint. Which?
 - The side-panel vs background-tab choice for driving pages (worker is evaluating).

@@ -1,0 +1,263 @@
+/* Options / settings page — a dedicated configuration pane. */
+body {
+  display: flex;
+  min-height: 100vh;
+}
+.side {
+  width: 240px;
+  flex: 0 0 240px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 4px;
+}
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+  padding: 4px 8px 16px;
+}
+.brand span {
+  color: var(--accent);
+}
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+}
+.nav-item:hover {
+  background: var(--bg);
+}
+.nav-item[aria-current="true"] {
+  background: var(--bg);
+  color: var(--accent);
+}
+.side-foot {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.content {
+  flex: 1;
+  padding: 28px 36px;
+  max-width: 760px;
+}
+.head {
+  margin-bottom: 24px;
+}
+.head h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+.save-status {
+  color: var(--accent2);
+  font-size: 13px;
+  margin: 0;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+.panel h3 {
+  font-size: 14px;
+  margin: 16px 0 6px;
+}
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.hint {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* Providers */
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.provider-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+.provider-card.active {
+  border-color: var(--accent);
+}
+.provider-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.provider-name {
+  font-weight: 600;
+  flex: 1;
+}
+.provider-card .fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.provider-card .fields input {
+  width: 100%;
+}
+input, select, textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+}
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+/* Switches */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.switch input {
+  width: 40px;
+  height: 22px;
+  accent-color: var(--accent);
+  transform: scale(1.1);
+}
+/* Theme grid */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+.theme-card {
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg);
+}
+.theme-card.active {
+  border-color: var(--accent);
+}
+.theme-swatch {
+  height: 60px;
+}
+.theme-card .theme-label {
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* Usage */
+.usage-summary {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.usage-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.usage-stat .n {
+  font-size: 22px;
+  font-weight: 700;
+}
+.usage-stat .l {
+  color: var(--muted);
+  font-size: 12px;
+}
+.usage-detail {
+  margin-top: 10px;
+  max-height: 300px;
+  overflow: auto;
+}
+.usage-detail table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.usage-detail th, .usage-detail td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+/* Data / memory */
+.origin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.origin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.origin-row .origin {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+/* Buttons */
+.btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn.small {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

@@ -28,7 +28,7 @@
   "action": {
     "default_title": "Open Agent Hub"
   },
-  "options_page": "memory/explorer.html",
+  "options_page": "options/options.html",
   "content_scripts": [
     {
       "matches": [
