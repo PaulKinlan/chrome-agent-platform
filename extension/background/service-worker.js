@@ -270,30 +270,35 @@ async function siteToolset(origin) {
 
 // Drive a page function on an origin via the content script (WebMCP/injection).
 async function invokeSiteTool(origin, name, args) {
-  // A site that has been deleted (tombstoned) must not have its tools invoked
-  // through a still-running content-script bridge in an open tab.
-  if (!(await isEnrolled(origin))) {
-    return { error: `origin ${origin} is not enrolled` };
-  }
-  const tabs = await chrome.tabs.query({});
-  const tab = tabs.find((t) => {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { error: `invalid origin ${origin}` };
+  // Serialize the enrollment check + invocation under the SAME origin lifecycle
+  // lock that create/delete use, and re-validate enrollment INSIDE the lock, so
+  // a delete cannot interleave between the check and the page call.
+  return await withOriginLock(canonical, async () => {
+    if (!(await isEnrolled(canonical))) {
+      return { error: `origin ${canonical} is not enrolled` };
+    }
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((t) => {
+      try {
+        return t.url ? new URL(t.url).origin === canonical : false;
+      } catch {
+        return false;
+      }
+    });
+    if (!tab?.id) return { error: `no tab open for ${canonical}` };
     try {
-      return t.url ? new URL(t.url).origin === origin : false;
-    } catch {
-      return false;
+      const res = await chrome.tabs.sendMessage(tab.id, {
+        type: "invoke-tool",
+        name,
+        args,
+      });
+      return res ?? { ok: true };
+    } catch (e) {
+      return { error: `invoke failed: ${e.message}` };
     }
   });
-  if (!tab?.id) return { error: `no tab open for ${origin}` };
-  try {
-    const res = await chrome.tabs.sendMessage(tab.id, {
-      type: "invoke-tool",
-      name,
-      args,
-    });
-    return res ?? { ok: true };
-  } catch (e) {
-    return { error: `invoke failed: ${e.message}` };
-  }
 }
 
 /** Build a bounded, honest context string from attachments (never an object). */
@@ -505,16 +510,20 @@ const handlers = {
   async "tools.upsert"({ origin, tools }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    // A running content-script bridge must NOT re-enroll a deleted origin: the
-    // upsert is rejected unless the origin is CURRENTLY enrolled (an
-    // owner-controlled tombstone state, never recreated by a page report).
-    if (!(await isEnrolled(canonical))) {
-      return { ok: false, error: "origin not enrolled — enroll it in Settings" };
-    }
-    await upsertTools(canonical, tools);
-    // New tools/sites must reach the running orchestrator — rebuild it.
-    invalidateAgent();
-    return { ok: true };
+    // Serialize the isEnrolled check + the OPFS write under the SAME origin
+    // lifecycle lock as create/delete. A running content-script bridge must NOT
+    // re-enroll a deleted origin: the upsert is rejected unless the origin is
+    // CURRENTLY enrolled, and the check+write is atomic w.r.t. delete (the
+    // round-13 race where a delayed write resurrected a tombstoned worker).
+    return await withOriginLock(canonical, async () => {
+      if (!(await isEnrolled(canonical))) {
+        return { ok: false, error: "origin not enrolled — enroll it in Settings" };
+      }
+      await upsertTools(canonical, tools);
+      // New tools/sites must reach the running orchestrator — rebuild it.
+      invalidateAgent();
+      return { ok: true };
+    });
   },
   async "tools.approve"({ origin, name, decision }) {
     return await approveTool(origin, name, decision);
@@ -685,17 +694,24 @@ const handlers = {
     // sub-agent, not merely that the worker map is populated.
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    await ensureOrchestrator();
-    const a = orchestrator?.workers?.get(canonical);
-    if (!a) return { ok: false, error: `no agent for ${origin}` };
-    const result = await a.run(task, "", []);
-    await journalAppend(siteMemory(canonical), {
-      type: "delegated-result",
-      id: `delegate:${canonical}:${Date.now()}`,
-      task,
-      result,
+    return await withOriginLock(canonical, async () => {
+      // Re-validate LIVE enrollment under the lock (a deleted origin must not
+      // be delegated to through a stale worker reference).
+      if (!(await isEnrolled(canonical))) {
+        return { ok: false, error: `origin ${canonical} is not enrolled` };
+      }
+      await ensureOrchestrator();
+      const a = orchestrator?.workers?.get(canonical);
+      if (!a) return { ok: false, error: `no agent for ${origin}` };
+      const result = await a.run(task, "", []);
+      await journalAppend(siteMemory(canonical), {
+        type: "delegated-result",
+        id: `delegate:${canonical}:${Date.now()}`,
+        task,
+        result,
+      });
+      return { ok: true, origin: canonical, result };
     });
-    return { ok: true, origin: canonical, result };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();

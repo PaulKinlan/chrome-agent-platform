@@ -78,9 +78,6 @@ function canonicalOrigin(value) {
 function encodeOrigin(origin) {
   return encodeURIComponent(origin);
 }
-function decodeOrigin(encoded) {
-  return decodeURIComponent(encoded);
-}
 async function openDir(segments) {
   let dir = await rootDir();
   for (const seg of segments) {
@@ -152,6 +149,7 @@ function memoryStore(origin) {
     }
   };
 }
+var masterMemory = () => memoryStore(MASTER);
 function siteMemory(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) {
@@ -169,23 +167,15 @@ function siteMemory(origin) {
   return memoryStore(canonical);
 }
 async function listOrigins() {
-  try {
-    const dir = await openDir([ROOT, "origins"]);
-    const out = [];
-    for await (const [name] of dir.entries()) {
-      out.push(decodeOrigin(name));
-    }
-    return out.sort();
-  } catch {
-    return [];
-  }
+  const origins = await masterMemory().get("origins");
+  return Array.isArray(origins) ? origins : [];
 }
 
 // extension/lib/scheduler.js
 var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
 var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
-var mutex = Promise.resolve();
 var BOOT_AT = Date.now();
+var mutex = Promise.resolve();
 
 // extension/lib/browser-tools.js
 var GRANT_KEY = "cap:browserControlGrant";

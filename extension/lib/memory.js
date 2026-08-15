@@ -140,18 +140,14 @@ export function siteMemory(origin) {
   return memoryStore(canonical);
 }
 
-/** Enumerate all enrolled site origins (the sub-agent directory). */
+/** Enumerate all enrolled site origins (the sub-agent directory).
+ * Derived from AUTHORITATIVE enrollment state (the master-memory origins list
+ * maintained by enrollOrigin/disenrollOrigin), NOT from OPFS directory
+ * existence. A delayed write that recreates an OPFS directory after a delete
+ * must never resurrect a worker in the listing (the round-13 delete race). */
 export async function listOrigins() {
-  try {
-    const dir = await openDir([ROOT, "origins"]);
-    const out = [];
-    for await (const [name] of dir.entries()) {
-      out.push(decodeOrigin(name));
-    }
-    return out.sort();
-  } catch {
-    return [];
-  }
+  const origins = await masterMemory().get("origins");
+  return Array.isArray(origins) ? origins : [];
 }
 
 // A small journal abstraction over a store (agent-do's memory pattern).

@@ -25450,9 +25450,6 @@ function canonicalOrigin(value) {
 function encodeOrigin(origin) {
   return encodeURIComponent(origin);
 }
-function decodeOrigin(encoded) {
-  return decodeURIComponent(encoded);
-}
 async function openDir(segments) {
   let dir = await rootDir();
   for (const seg of segments) {
@@ -25542,16 +25539,8 @@ function siteMemory(origin) {
   return memoryStore(canonical);
 }
 async function listOrigins() {
-  try {
-    const dir = await openDir([ROOT, "origins"]);
-    const out = [];
-    for await (const [name25] of dir.entries()) {
-      out.push(decodeOrigin(name25));
-    }
-    return out.sort();
-  } catch {
-    return [];
-  }
+  const origins = await masterMemory().get("origins");
+  return Array.isArray(origins) ? origins : [];
 }
 async function journalAppend(store, entry) {
   const journal = await store.get("journal") ?? [];
@@ -66499,6 +66488,9 @@ function createOrchestrator2({
     async run(task, context, history) {
       return await master.run(task, context, history);
     },
+    abort() {
+      master.abort();
+    },
     addWorker(config3) {
       const a = createAgent2({
         model,
@@ -66664,6 +66656,8 @@ var TASK_KEY = "cap:scheduledTasks";
 var INFLIGHT_KEY = "cap:scheduledInflight";
 var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
 var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
+var activeRuns = /* @__PURE__ */ new Map();
+var BOOT_AT = Date.now();
 var lockSeq = 0;
 function newToken() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -66733,25 +66727,30 @@ async function markScheduledDone(name25, token) {
 }
 async function tryAcquireInflight(name25) {
   return withLock(async () => {
+    if (activeRuns.has(name25)) {
+      return { acquired: false, reason: "running in this worker" };
+    }
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
-    const now2 = Date.now();
     const existing = inflight[name25];
-    if (existing !== void 0) {
-      if (!validLock(existing)) {
-        return { acquired: false, reason: "malformed lock" };
-      }
-      if (now2 - existing.heartbeatAt <= INFLIGHT_LEASE_MS) {
-        return { acquired: false, reason: "in flight" };
-      }
+    if (existing !== void 0 && !validLock(existing)) {
+      return { acquired: false, reason: "malformed lock" };
     }
     const token = newToken();
-    inflight[name25] = { token, at: now2, heartbeatAt: now2 };
-    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
-    return { acquired: true, token };
+    const controller = new AbortController();
+    inflight[name25] = { token, at: Date.now(), heartbeatAt: Date.now() };
+    try {
+      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    } catch {
+      return { acquired: false, reason: "persist failed" };
+    }
+    activeRuns.set(name25, { token, controller });
+    return { acquired: true, token, signal: controller.signal };
   });
 }
 async function ownsInflight(name25, token) {
+  const active = activeRuns.get(name25);
+  if (active) return active.token === token;
   const store = await chrome.storage.local.get(INFLIGHT_KEY);
   const existing = store[INFLIGHT_KEY]?.[name25];
   return Boolean(validLock(existing) && existing.token === token);
@@ -66776,9 +66775,16 @@ async function releaseInflight(name25, token) {
       delete inflight[name25];
       await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
     }
+    const active = activeRuns.get(name25);
+    if (active && active.token === token) {
+      try {
+        active.controller.abort();
+      } catch {
+      }
+      activeRuns.delete(name25);
+    }
   });
 }
-var BOOT_AT = Date.now();
 async function clearStaleInflight() {
   await withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
@@ -67587,11 +67593,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const hb = setInterval(() => {
     heartbeatInflight(alarm.name, token).catch(() => {
       heartbeatFailed = true;
+      lock.signal?.abort();
     });
   }, INFLIGHT_HEARTBEAT_MS);
   const fence = {
+    signal: lock.signal,
     async assertOwned() {
-      if (heartbeatFailed) {
+      if (heartbeatFailed || lock.signal?.aborted) {
         throw new Error("heartbeat renewal failed \u2014 aborting run");
       }
       if (!await ownsInflight(alarm.name, token)) {
@@ -67706,28 +67714,32 @@ async function siteToolset(origin) {
   return set4;
 }
 async function invokeSiteTool(origin, name25, args) {
-  if (!await isEnrolled(origin)) {
-    return { error: `origin ${origin} is not enrolled` };
-  }
-  const tabs = await chrome.tabs.query({});
-  const tab = tabs.find((t) => {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { error: `invalid origin ${origin}` };
+  return await withOriginLock(canonical, async () => {
+    if (!await isEnrolled(canonical)) {
+      return { error: `origin ${canonical} is not enrolled` };
+    }
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((t) => {
+      try {
+        return t.url ? new URL(t.url).origin === canonical : false;
+      } catch {
+        return false;
+      }
+    });
+    if (!tab?.id) return { error: `no tab open for ${canonical}` };
     try {
-      return t.url ? new URL(t.url).origin === origin : false;
-    } catch {
-      return false;
+      const res = await chrome.tabs.sendMessage(tab.id, {
+        type: "invoke-tool",
+        name: name25,
+        args
+      });
+      return res ?? { ok: true };
+    } catch (e) {
+      return { error: `invoke failed: ${e.message}` };
     }
   });
-  if (!tab?.id) return { error: `no tab open for ${origin}` };
-  try {
-    const res = await chrome.tabs.sendMessage(tab.id, {
-      type: "invoke-tool",
-      name: name25,
-      args
-    });
-    return res ?? { ok: true };
-  } catch (e) {
-    return { error: `invoke failed: ${e.message}` };
-  }
 }
 function attachmentContext(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return "";
@@ -67754,6 +67766,16 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
+  if (fence?.signal) {
+    const abortNow = () => {
+      try {
+        orch.abort?.();
+      } catch {
+      }
+    };
+    fence.signal.addEventListener("abort", abortNow);
+    if (fence.signal.aborted) abortNow();
+  }
   await fence?.assertOwned?.();
   await journalAppend(mem, {
     type: "task",
@@ -67884,12 +67906,14 @@ var handlers = {
   async "tools.upsert"({ origin, tools }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    if (!await isEnrolled(canonical)) {
-      return { ok: false, error: "origin not enrolled \u2014 enroll it in Settings" };
-    }
-    await upsertTools(canonical, tools);
-    invalidateAgent();
-    return { ok: true };
+    return await withOriginLock(canonical, async () => {
+      if (!await isEnrolled(canonical)) {
+        return { ok: false, error: "origin not enrolled \u2014 enroll it in Settings" };
+      }
+      await upsertTools(canonical, tools);
+      invalidateAgent();
+      return { ok: true };
+    });
   },
   async "tools.approve"({ origin, name: name25, decision }) {
     return await approveTool(origin, name25, decision);
@@ -68024,17 +68048,22 @@ var handlers = {
   async "agent.delegate"({ origin, task }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    await ensureOrchestrator();
-    const a = orchestrator?.workers?.get(canonical);
-    if (!a) return { ok: false, error: `no agent for ${origin}` };
-    const result = await a.run(task, "", []);
-    await journalAppend(siteMemory(canonical), {
-      type: "delegated-result",
-      id: `delegate:${canonical}:${Date.now()}`,
-      task,
-      result
+    return await withOriginLock(canonical, async () => {
+      if (!await isEnrolled(canonical)) {
+        return { ok: false, error: `origin ${canonical} is not enrolled` };
+      }
+      await ensureOrchestrator();
+      const a = orchestrator?.workers?.get(canonical);
+      if (!a) return { ok: false, error: `no agent for ${origin}` };
+      const result = await a.run(task, "", []);
+      await journalAppend(siteMemory(canonical), {
+        type: "delegated-result",
+        id: `delegate:${canonical}:${Date.now()}`,
+        task,
+        result
+      });
+      return { ok: true, origin: canonical, result };
     });
-    return { ok: true, origin: canonical, result };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();
