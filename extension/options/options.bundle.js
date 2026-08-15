@@ -21,15 +21,32 @@ async function getUsage() {
   );
   const byModel = {};
   const byAgent = {};
-  const totals = { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+  const totals = {
+    calls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    estimatedCost: 0
+  };
   for (const r of rows) {
     const mk = `${r.provider}/${r.model}`;
-    byModel[mk] ??= { provider: r.provider, model: r.model, calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+    byModel[mk] ??= {
+      provider: r.provider,
+      model: r.model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0
+    };
     byModel[mk].calls++;
     byModel[mk].inputTokens += r.inputTokens;
     byModel[mk].outputTokens += r.outputTokens;
     byModel[mk].estimatedCost += r.estimatedCost;
-    byAgent[r.agentId] ??= { agentId: r.agentId, calls: 0, inputTokens: 0, outputTokens: 0 };
+    byAgent[r.agentId] ??= {
+      agentId: r.agentId,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0
+    };
     byAgent[r.agentId].calls++;
     byAgent[r.agentId].inputTokens += r.inputTokens;
     byAgent[r.agentId].outputTokens += r.outputTokens;
@@ -38,7 +55,12 @@ async function getUsage() {
     totals.outputTokens += r.outputTokens;
     totals.estimatedCost += r.estimatedCost;
   }
-  return { totals, byModel: Object.values(byModel), byAgent: Object.values(byAgent), rows };
+  return {
+    totals,
+    byModel: Object.values(byModel),
+    byAgent: Object.values(byAgent),
+    rows
+  };
 }
 
 // extension/lib/memory.js
@@ -180,14 +202,20 @@ async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   return grant;
 }
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
-  const canonical = [...new Set((origins ?? []).map((o) => {
-    try {
-      return new URL(String(o)).origin;
-    } catch {
-      return null;
-    }
-  }).filter(Boolean))].slice(0, 50);
-  if (canonical.length === 0) throw new Error("origin grant needs at least one valid origin");
+  const canonical = [
+    ...new Set(
+      (origins ?? []).map((o) => {
+        try {
+          return new URL(String(o)).origin;
+        } catch {
+          return null;
+        }
+      }).filter(Boolean)
+    )
+  ].slice(0, 50);
+  if (canonical.length === 0) {
+    throw new Error("origin grant needs at least one valid origin");
+  }
   const grant = {
     scope: "origins",
     origins: canonical,
@@ -328,7 +356,10 @@ async function renderProviders() {
         apiKey: card.querySelector(".api-key")?.value ?? "",
         model: card.querySelector(".model")?.value ?? ""
       };
-      await chrome.runtime.sendMessage({ type: "provider.set", config: { provider: p.id, ...fields } });
+      await chrome.runtime.sendMessage({
+        type: "provider.set",
+        config: { provider: p.id, ...fields }
+      });
       await saveFlash(`Set ${p.name} as default.`);
       renderProviders();
     });
@@ -418,7 +449,9 @@ async function renderBrowser() {
     if (e.target.checked) {
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
-      saveFlash("Browser control granted (global, 15 min \u2014 set origins below to scope it).");
+      saveFlash(
+        "Browser control granted (global, 15 min \u2014 set origins below to scope it)."
+      );
     } else {
       await revokeBrowserControlGrant();
       $("#grant-origins").hidden = true;
@@ -431,7 +464,9 @@ async function renderBrowser() {
     );
     if (origins.length > 0) {
       await setOriginBrowserControlGrant(origins);
-      saveFlash("Allowed origins saved (scoped to " + origins.length + " origin(s)).");
+      saveFlash(
+        "Allowed origins saved (scoped to " + origins.length + " origin(s))."
+      );
     } else {
       await setGlobalBrowserControlGrant();
       saveFlash("No origins listed \u2014 reverted to a global grant.");
@@ -459,7 +494,13 @@ async function renderUsage() {
   const tbody = document.createElement("tbody");
   for (const m of u.byModel) {
     const tr = document.createElement("tr");
-    for (const v of [m.provider, m.model, String(m.calls), String(m.inputTokens + m.outputTokens), "$" + m.estimatedCost.toFixed(4)]) {
+    for (const v of [
+      m.provider,
+      m.model,
+      String(m.calls),
+      String(m.inputTokens + m.outputTokens),
+      "$" + m.estimatedCost.toFixed(4)
+    ]) {
       const td = document.createElement("td");
       td.textContent = v;
       tr.appendChild(td);

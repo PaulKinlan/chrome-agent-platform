@@ -25328,14 +25328,55 @@ var DEFAULTS = {
 };
 var PROVIDER_CHOICES = [
   { id: "demo", label: "Demo (no key \u2014 deterministic local)" },
-  { id: "openai", label: "OpenAI-compatible endpoint (your key)", needsKey: true, baseURL: "https://api.openai.com/v1", needsModel: true },
-  { id: "anthropic", label: "Anthropic (OpenAI-compatible endpoint, your key)", needsKey: true, baseURL: "https://api.anthropic.com/v1", needsModel: true },
-  { id: "gemini", label: "Google Gemini (OpenAI-compatible endpoint, your key)", needsKey: true, baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", needsModel: true },
-  { id: "deepseek", label: "DeepSeek (OpenAI-compatible endpoint, your key)", needsKey: true, baseURL: "https://api.deepseek.com/v1", needsModel: true },
-  { id: "ollama", label: "Ollama (local, OpenAI-compatible)", needsKey: false, baseURL: "http://localhost:11434/v1", needsModel: true },
-  { id: "prompt-api", label: "Chrome Prompt API (Gemini nano, on-device)", needsKey: false, needsModel: false }
+  {
+    id: "openai",
+    label: "OpenAI-compatible endpoint (your key)",
+    needsKey: true,
+    baseURL: "https://api.openai.com/v1",
+    needsModel: true
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic (OpenAI-compatible endpoint, your key)",
+    needsKey: true,
+    baseURL: "https://api.anthropic.com/v1",
+    needsModel: true
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini (OpenAI-compatible endpoint, your key)",
+    needsKey: true,
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    needsModel: true
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek (OpenAI-compatible endpoint, your key)",
+    needsKey: true,
+    baseURL: "https://api.deepseek.com/v1",
+    needsModel: true
+  },
+  {
+    id: "ollama",
+    label: "Ollama (local, OpenAI-compatible)",
+    needsKey: false,
+    baseURL: "http://localhost:11434/v1",
+    needsModel: true
+  },
+  {
+    id: "prompt-api",
+    label: "Chrome Prompt API (Gemini nano, on-device)",
+    needsKey: false,
+    needsModel: false
+  }
 ];
-var OPENAI_COMPATIBLE_IDS = /* @__PURE__ */ new Set(["openai", "anthropic", "gemini", "deepseek", "ollama"]);
+var OPENAI_COMPATIBLE_IDS = /* @__PURE__ */ new Set([
+  "openai",
+  "anthropic",
+  "gemini",
+  "deepseek",
+  "ollama"
+]);
 async function getProviderConfig() {
   const stored = await chrome.storage.local.get("providerConfig");
   return { ...DEFAULTS, ...stored.providerConfig ?? {} };
@@ -25368,13 +25409,25 @@ async function getModel(providerId) {
     if (await isPromptApiAvailable()) {
       try {
         const model = createPromptApiModel();
-        return { model, modelId: "gemini-nano", providerName: "chrome-prompt-api" };
+        return {
+          model,
+          modelId: "gemini-nano",
+          providerName: "chrome-prompt-api"
+        };
       } catch {
       }
     }
-    return { model: createDemoModel(), modelId: "demo-local", providerName: "demo (prompt api unavailable)" };
+    return {
+      model: createDemoModel(),
+      modelId: "demo-local",
+      providerName: "demo (prompt api unavailable)"
+    };
   }
-  return { model: createDemoModel(), modelId: "demo-local", providerName: "demo" };
+  return {
+    model: createDemoModel(),
+    modelId: "demo-local",
+    providerName: "demo"
+  };
 }
 
 // extension/lib/memory.js
@@ -66245,15 +66298,32 @@ async function getUsage() {
   );
   const byModel = {};
   const byAgent = {};
-  const totals = { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+  const totals = {
+    calls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    estimatedCost: 0
+  };
   for (const r of rows) {
     const mk = `${r.provider}/${r.model}`;
-    byModel[mk] ??= { provider: r.provider, model: r.model, calls: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+    byModel[mk] ??= {
+      provider: r.provider,
+      model: r.model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0
+    };
     byModel[mk].calls++;
     byModel[mk].inputTokens += r.inputTokens;
     byModel[mk].outputTokens += r.outputTokens;
     byModel[mk].estimatedCost += r.estimatedCost;
-    byAgent[r.agentId] ??= { agentId: r.agentId, calls: 0, inputTokens: 0, outputTokens: 0 };
+    byAgent[r.agentId] ??= {
+      agentId: r.agentId,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0
+    };
     byAgent[r.agentId].calls++;
     byAgent[r.agentId].inputTokens += r.inputTokens;
     byAgent[r.agentId].outputTokens += r.outputTokens;
@@ -66262,7 +66332,12 @@ async function getUsage() {
     totals.outputTokens += r.outputTokens;
     totals.estimatedCost += r.estimatedCost;
   }
-  return { totals, byModel: Object.values(byModel), byAgent: Object.values(byAgent), rows };
+  return {
+    totals,
+    byModel: Object.values(byModel),
+    byAgent: Object.values(byAgent),
+    rows
+  };
 }
 async function clearUsage() {
   await chrome.storage.local.remove(STORAGE_KEY);
@@ -66279,7 +66354,9 @@ async function getSkills(origin) {
 }
 function buildSkillsPrompt2(skills) {
   if (!skills?.length) return "";
-  const lines = skills.map((s) => `- ${s.name}: ${s.description ?? ""}`).join("\n");
+  const lines = skills.map((s) => `- ${s.name}: ${s.description ?? ""}`).join(
+    "\n"
+  );
   return `
 ## Available skills
 ${lines}
@@ -66472,7 +66549,13 @@ function boundTool(t) {
     return null;
   }
   if (schemaBytes > TOOL_BOUNDS.maxSchemaBytes) return null;
-  return describeTool({ origin: t.origin, name: name25, description, inputSchema: schema4, source: t.source });
+  return describeTool({
+    origin: t.origin,
+    name: name25,
+    description,
+    inputSchema: schema4,
+    source: t.source
+  });
 }
 async function upsertTools(origin, tools) {
   const store = siteMemory(origin);
@@ -66484,7 +66567,9 @@ async function upsertTools(origin, tools) {
     byName.set(bounded.name, bounded);
   }
   let next = [...byName.values()];
-  if (next.length > TOOL_BOUNDS.maxToolsPerOrigin) next = next.slice(0, TOOL_BOUNDS.maxToolsPerOrigin);
+  if (next.length > TOOL_BOUNDS.maxToolsPerOrigin) {
+    next = next.slice(0, TOOL_BOUNDS.maxToolsPerOrigin);
+  }
   let total = 0;
   next = next.filter((t) => {
     let b;
@@ -66552,7 +66637,9 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
     } else if (typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs > 0) {
       when = Date.now() + delayMs;
     } else {
-      throw new Error("task needs a future `at` (absolute ms) or a positive `delayMs`");
+      throw new Error(
+        "task needs a future `at` (absolute ms) or a positive `delayMs`"
+      );
     }
     const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const store = await chrome.storage.local.get(TASK_KEY);
@@ -66662,14 +66749,20 @@ async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
   return grant;
 }
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
-  const canonical = [...new Set((origins ?? []).map((o) => {
-    try {
-      return new URL(String(o)).origin;
-    } catch {
-      return null;
-    }
-  }).filter(Boolean))].slice(0, 50);
-  if (canonical.length === 0) throw new Error("origin grant needs at least one valid origin");
+  const canonical = [
+    ...new Set(
+      (origins ?? []).map((o) => {
+        try {
+          return new URL(String(o)).origin;
+        } catch {
+          return null;
+        }
+      }).filter(Boolean)
+    )
+  ].slice(0, 50);
+  if (canonical.length === 0) {
+    throw new Error("origin grant needs at least one valid origin");
+  }
   const grant = {
     scope: "origins",
     origins: canonical,
@@ -66699,13 +66792,22 @@ async function captureTabScreenshot(tabId) {
   })() : void 0;
   if (!origin) return { error: "no origin" };
   if (!await isBrowserControlGranted(origin)) {
-    return { error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings" };
+    return {
+      error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
+    };
   }
   try {
     await chrome.tabs.update(tab.id, { active: true });
-    const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
-    if (active?.[0]?.id !== tab.id) return { error: "could not activate the requested tab" };
-    const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    const active = await chrome.tabs.query({
+      active: true,
+      windowId: tab.windowId
+    });
+    if (active?.[0]?.id !== tab.id) {
+      return { error: "could not activate the requested tab" };
+    }
+    const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "png"
+    });
     return { screenshot: url3 };
   } catch (e) {
     return { error: String(e?.message ?? e) };
@@ -66741,7 +66843,9 @@ function browserToolset() {
           return { error: "invalid url" };
         }
         if (!await isBrowserControlGranted(destOrigin)) {
-          return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
+          return {
+            error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
+          };
         }
         const tab = await chrome.tabs.create({ url: url3 });
         return { ok: true, tabId: tab.id, url: url3 };
@@ -66749,7 +66853,10 @@ function browserToolset() {
     }),
     navigate_tab: tool({
       description: "Navigate an existing tab to a URL. Requires browser-control permission (scoped + expiring).",
-      inputSchema: external_exports3.object({ tabId: external_exports3.number().optional(), url: external_exports3.string().url() }),
+      inputSchema: external_exports3.object({
+        tabId: external_exports3.number().optional(),
+        url: external_exports3.string().url()
+      }),
       execute: async ({ tabId, url: url3 }) => {
         let destOrigin;
         try {
@@ -66758,7 +66865,9 @@ function browserToolset() {
           return { error: "invalid url" };
         }
         if (!await isBrowserControlGranted(destOrigin)) {
-          return { error: "browser control not granted for the destination origin \u2014 ask the user to approve it in Settings" };
+          return {
+            error: "browser control not granted for the destination origin \u2014 ask the user to approve it in Settings"
+          };
         }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
@@ -66781,7 +66890,9 @@ function browserToolset() {
       inputSchema: external_exports3.object({}),
       execute: async () => {
         const tabs = await chrome.tabs.query({});
-        return { tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })) };
+        return {
+          tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url }))
+        };
       }
     }),
     close_tab: tool({
@@ -66797,7 +66908,9 @@ function browserToolset() {
           }
         })() : void 0;
         if (!await isBrowserControlGranted(origin)) {
-          return { error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings" };
+          return {
+            error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
+          };
         }
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };
@@ -66821,7 +66934,12 @@ function browserToolset() {
         periodInMinutes: external_exports3.number().optional()
       }),
       execute: async ({ task, at, delayMs, periodInMinutes }) => {
-        const { name: name25, when } = await scheduleTask({ task, at, delayMs, periodInMinutes });
+        const { name: name25, when } = await scheduleTask({
+          task,
+          at,
+          delayMs,
+          periodInMinutes
+        });
         return { ok: true, name: name25, when };
       }
     })
@@ -66926,7 +67044,9 @@ function valueMatchesType(value, type) {
 }
 function schemaToZod(z4, schema4, depth = 0) {
   if (depth > SCHEMA_BOUNDS.maxDepth) return z4.never();
-  if (!schema4 || typeof schema4 !== "object" || Array.isArray(schema4)) return z4.never();
+  if (!schema4 || typeof schema4 !== "object" || Array.isArray(schema4)) {
+    return z4.never();
+  }
   for (const key of Object.keys(schema4)) {
     if (!SUPPORTED_KEYWORDS.has(key)) return z4.never();
   }
@@ -66944,7 +67064,9 @@ function schemaToZod(z4, schema4, depth = 0) {
     if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
     const valid = t !== void 0 ? schema4.enum.filter((v) => valueMatchesType(v, t)) : schema4.enum;
     if (valid.length === 0) return z4.never();
-    return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v)));
+    return z4.union(
+      valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => z4.literal(v))
+    );
   }
   if (Array.isArray(schema4.anyOf)) {
     if (schema4.anyOf.length === 0 || schema4.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
@@ -66952,7 +67074,9 @@ function schemaToZod(z4, schema4, depth = 0) {
   }
   if (t === "string") {
     let s = z4.string();
-    if (typeof schema4.minLength === "number" && schema4.minLength >= 0) s = s.min(schema4.minLength);
+    if (typeof schema4.minLength === "number" && schema4.minLength >= 0) {
+      s = s.min(schema4.minLength);
+    }
     const pageMax = typeof schema4.maxLength === "number" && schema4.maxLength >= 0 ? schema4.maxLength : SCHEMA_BOUNDS.maxStringLength;
     s = s.max(Math.min(pageMax, SCHEMA_BOUNDS.maxStringLength));
     return s;
@@ -66965,15 +67089,21 @@ function schemaToZod(z4, schema4, depth = 0) {
   }
   if (t === "integer") {
     let s = z4.number().int();
-    if (typeof schema4.minimum === "number") s = s.min(Math.ceil(schema4.minimum));
-    if (typeof schema4.maximum === "number") s = s.max(Math.floor(schema4.maximum));
+    if (typeof schema4.minimum === "number") {
+      s = s.min(Math.ceil(schema4.minimum));
+    }
+    if (typeof schema4.maximum === "number") {
+      s = s.max(Math.floor(schema4.maximum));
+    }
     return s;
   }
   if (t === "boolean") return z4.boolean();
   if (t === "array") {
     const inner = schemaToZod(z4, schema4.items, depth + 1);
     let arr = z4.array(inner);
-    if (typeof schema4.minItems === "number" && schema4.minItems >= 0) arr = arr.min(schema4.minItems);
+    if (typeof schema4.minItems === "number" && schema4.minItems >= 0) {
+      arr = arr.min(schema4.minItems);
+    }
     const pageMax = typeof schema4.maxItems === "number" && schema4.maxItems >= 0 ? schema4.maxItems : SCHEMA_BOUNDS.maxArrayItems;
     arr = arr.max(Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
     return arr;
@@ -67019,18 +67149,30 @@ function authorizeToolReport(sender, messageOrigin, canonicalOrigin2, extensionI
   );
   if (!isContentScript) {
     if (!senderUrl.startsWith("chrome-extension://") && senderTabUrl) {
-      return { kind: "unmatched", error: "tool reports must come from the page's top frame" };
+      return {
+        kind: "unmatched",
+        error: "tool reports must come from the page's top frame"
+      };
     }
     return { kind: "extension" };
   }
   const senderOrigin = canonicalOrigin2(senderTabUrl);
-  if (!senderOrigin) return { kind: "content-script", error: "invalid sender origin" };
+  if (!senderOrigin) {
+    return { kind: "content-script", error: "invalid sender origin" };
+  }
   if (messageOrigin && canonicalOrigin2(messageOrigin) !== senderOrigin) {
-    return { kind: "content-script", error: "origin mismatch \u2014 tool report rejected" };
+    return {
+      kind: "content-script",
+      error: "origin mismatch \u2014 tool report rejected"
+    };
   }
   return { kind: "content-script", origin: senderOrigin };
 }
-var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set(["tools.list", "tools.upsert", "tools.pending"]);
+var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set([
+  "tools.list",
+  "tools.upsert",
+  "tools.pending"
+]);
 
 // extension/background/service-worker.js
 var TASK_KEY2 = "cap:scheduledTasks";
@@ -67056,7 +67198,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
   try {
-    await runTask({ id: alarm.name, task: task.task ?? alarm.name, scheduled: true, attachments: task.attachments ?? [] });
+    await runTask({
+      id: alarm.name,
+      task: task.task ?? alarm.name,
+      scheduled: true,
+      attachments: task.attachments ?? []
+    });
     if (!task.periodInMinutes) {
       await markScheduledDone(alarm.name);
     }
@@ -67138,7 +67285,11 @@ async function invokeSiteTool(origin, name25, args) {
   });
   if (!tab?.id) return { error: `no tab open for ${origin}` };
   try {
-    const res = await chrome.tabs.sendMessage(tab.id, { type: "invoke-tool", name: name25, args });
+    const res = await chrome.tabs.sendMessage(tab.id, {
+      type: "invoke-tool",
+      name: name25,
+      args
+    });
     return res ?? { ok: true };
   } catch (e) {
     return { error: `invoke failed: ${e.message}` };
@@ -67158,7 +67309,9 @@ function attachmentContext(attachments) {
       } catch {
       }
     } else if (!a.type?.startsWith("text/")) {
-      parts.push("  (media attached \u2014 not transcribed/described in this build)");
+      parts.push(
+        "  (media attached \u2014 not transcribed/described in this build)"
+      );
     }
   }
   return "Attachments:\n" + parts.join("\n");
@@ -67167,7 +67320,13 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
-  await journalAppend(mem, { type: "task", id: taskId, task, scheduled, attachmentCount: attachments?.length ?? 0 });
+  await journalAppend(mem, {
+    type: "task",
+    id: taskId,
+    task,
+    scheduled,
+    attachmentCount: attachments?.length ?? 0
+  });
   const context = attachmentContext(attachments);
   const result = await orch.run(task, context, []);
   await journalAppend(mem, { type: "result", id: taskId, result });
@@ -67230,8 +67389,14 @@ var handlers = {
       total += bytes;
     }
     const overCount = (m.attachments ?? []).length - MAX_COUNT;
-    if (overCount > 0) dropped.push({ reason: `over count limit (${overCount} dropped)` });
-    const result = await runTask({ id: m.id, task: m.task, attachments: bounded });
+    if (overCount > 0) {
+      dropped.push({ reason: `over count limit (${overCount} dropped)` });
+    }
+    const result = await runTask({
+      id: m.id,
+      task: m.task,
+      attachments: bounded
+    });
     if (dropped.length > 0) result.droppedAttachments = dropped;
     return result;
   },
@@ -67302,7 +67467,10 @@ var handlers = {
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);
     if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
-    return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
+    return await runTask({
+      id: `recipe:${recipe.id}:${Date.now()}`,
+      task: recipe.prompt
+    });
   },
   async "browser-control.get"() {
     const s = await chrome.storage.local.get("cap:browserControlGrant");
@@ -67311,7 +67479,9 @@ var handlers = {
     if (grant && typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt)) {
       expiresInMs = Math.max(0, grant.expiresAt - Date.now());
     }
-    const active = Boolean(grant && typeof grant === "object" && grant.expiresAt > Date.now());
+    const active = Boolean(
+      grant && typeof grant === "object" && grant.expiresAt > Date.now()
+    );
     return {
       // "active" = a grant EXISTS and is unexpired (regardless of scope).
       // "granted" (global scope) is a separate concept from per-origin authorization.
@@ -67361,7 +67531,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, error: `unknown message: ${message?.type}` });
     return true;
   }
-  const auth2 = authorizeToolReport(sender, message.origin, canonicalOrigin, chrome.runtime.id);
+  const auth2 = authorizeToolReport(
+    sender,
+    message.origin,
+    canonicalOrigin,
+    chrome.runtime.id
+  );
   if (auth2.kind === "content-script") {
     if (auth2.error) {
       sendResponse({ ok: false, error: auth2.error });
@@ -67411,7 +67586,11 @@ chrome.runtime.onInstalled?.addListener(() => {
 chrome.runtime.onInstalled.addListener(async () => {
   const mem = masterMemory();
   if (!await mem.get("preferences")) {
-    await mem.set("preferences", { theme: "dark", model: "demo", multiAgent: true });
+    await mem.set("preferences", {
+      theme: "dark",
+      model: "demo",
+      multiAgent: true
+    });
   }
   console.log("Chrome Agent Platform installed");
 });
