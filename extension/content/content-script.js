@@ -69,9 +69,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "disenrollment") {
     // The origin was tombstoned/deleted. From this instant a stale in-flight
     // invoke (holding the old generation) is rejected before reaching the MAIN
-    // world — preemptive revocation.
+    // world — preemptive revocation. This is COOPERATIVE CANCELLATION, not just
+    // a flag flip (the round-21 blocker): (1) every ALREADY-FORWARDED invoke's
+    // sendResponse is rejected so its result is never reported to the SW, and
+    // (2) the MAIN world is signalled to DISCARD any in-flight page function's
+    // result (the page function's own side effect cannot be unwound, but its
+    // result is never surfaced).
     disenrolled = true;
     currentGen = null;
+    for (const [requestId, send] of pending) {
+      pending.delete(requestId);
+      try {
+        send({ ok: false, error: "origin disenrolled — invocation cancelled" });
+      } catch { /* sendResponse already consumed */ }
+    }
+    window.postMessage({ [CHANNEL]: true, type: "cancel", nonce }, "*");
     sendResponse({ ok: true });
     return true;
   }

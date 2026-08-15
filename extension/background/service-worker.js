@@ -523,13 +523,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // in-flight lock: a stale owner aborts before committing the task journal,
       // the result journal, or the completion notification.
       await fence?.assertOwned?.();
+      // Thread the fence as the journal's COMMIT guard so the ownership check is
+      // adjacent to the setTrusted commit (not merely before the journalAppend's
+      // internal `get` await) — the round-21 stale-commit finding.
+      const journalGuard = fence
+        ? async () => {
+          await fence.assertOwned();
+        }
+        : null;
       await journalAppend(mem, {
         type: "task",
         id: taskId,
         task,
         scheduled,
         attachmentCount: attachments?.length ?? 0,
-      });
+      }, journalGuard);
       // Re-check durable ownership AFTER the task journal COMMIT (never only
       // before — the round-19 blocker: journal ownership was checked before the
       // awaited commit, never after).
@@ -538,7 +546,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       const result = await orch.run(task, context, []);
       await fence?.assertOwned?.();
-      await journalAppend(mem, { type: "result", id: taskId, result });
+      await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
       await fence?.assertOwned?.();
       if (scheduled) {
         await fence?.assertOwned?.();
@@ -616,52 +624,58 @@ const handlers = {
       // just unregister the scripts (the round-18 high: Disable left origins
       // enrolled + existing bridges authoritative). Tombstone every enrolled
       // origin FIRST (a running bridge is rejected from this instant), then
-      // unregister scripts + remove host permissions.
+      // unregister scripts + remove host permissions, then revoke the scripting
+      // permission — ALL under the SAME global enrollment lock.
       //
-      // The WHOLE transition holds the GLOBAL enrollment lock (round-20 blocker:
-      // scripting Disable snapshotted the origin set, so a NEWLY enrolling origin
-      // could complete during the disable and remain enrolled/host-authorized
-      // when scripting was removed). Holding withEnrollmentLock for the snapshot
-      // + tombstone means a concurrent enrollOrigin (which also takes the global
-      // lock) is serialized OUT of the transition — it cannot complete until the
-      // disable is done, at which point scripting is already revoked and its
-      // script-registration would fail closed + roll back.
+      // SERIALIZED per origin (a SEQUENTIAL loop, never Promise.allSettled):
+      // each disenrollOriginLocked performs a read-modify-write on the SHARED
+      // `cap:enrollment` registry + generation counter. Running them concurrently
+      // lets two origins read the same map/counter, both issue generation N+1,
+      // then overwrite one another's tombstones (the round-21 scripting-Disable-
+      // concurrency blocker: a two-origin probe reused gen 3 and lost A's
+      // tombstone, leaving A enrolled).
+      //
+      // revokeCapability("scripting") must ALSO happen INSIDE the lock — the old
+      // code released the lock before removing the permission, so a concurrent
+      // enrollOrigin could acquire the lock and complete while the permission
+      // removal was still pending, leaving enrolled/host state after a claimed
+      // Disable (the round-21 second transition gap).
       //
       // NOTE: do NOT take withOriginLock here while holding withEnrollmentLock.
       // enroll/delete take withOriginLock THEN withEnrollmentLock; acquiring the
-      // origin lock under the enrollment lock would invert that order and deadlock
-      // (the round-20 scripting-Disable-snapshot finding). disenrollOriginLocked
-      // (no re-acquisition) is used because we already hold the global lock.
-      const results = await withEnrollmentLock(async () => {
+      // origin lock under the enrollment lock would invert that order and deadlock.
+      // disenrollOriginLocked (no re-acquisition) is used because we already hold
+      // the global lock.
+      return await withEnrollmentLock(async () => {
         const origins = await listOrigins(); // read under the global enrollment lock
-        return await Promise.allSettled(origins.map(async (o) => {
-          abortWorker(o);
-          await disenrollOriginLocked(o); // already under the global lock
-          await notifyOriginBridge(o, { type: "disenrollment" });
-          const res = await unregisterOriginScripts(o);
-          if (!res.ok) {
+        const results = [];
+        for (const o of origins) {
+          try {
+            abortWorker(o);
+            await disenrollOriginLocked(o); // already under the global lock
+            await notifyOriginBridge(o, { type: "disenrollment" });
+            const res = await unregisterOriginScripts(o);
+            if (!res.ok) {
+              await markCleanupPending(o);
+              results.push({ origin: o, error: res.error ?? o });
+            } else {
+              results.push({ origin: o, ok: true });
+            }
+          } catch (e) {
             await markCleanupPending(o);
-            return { origin: o, error: res.error ?? o };
+            results.push({ origin: o, error: String(e?.message ?? e) });
           }
-          return { origin: o, ok: true };
-        }));
+        }
+        invalidateAgent();
+        const res = await revokeCapability(id);
+        const failures = results
+          .filter((r) => r.error)
+          .map((r) => r.error);
+        if (failures.length > 0) {
+          res.cleanupPending = failures.length;
+        }
+        return res;
       });
-      invalidateAgent();
-      const failures = results
-        .filter((r) =>
-          r.status === "rejected" ||
-          (r.status === "fulfilled" && r.value?.error)
-        )
-        .map((r) =>
-          r.status === "rejected"
-            ? String(r.reason?.message ?? r.reason)
-            : r.value.error
-        );
-      const res = await revokeCapability(id);
-      if (failures.length > 0) {
-        res.cleanupPending = failures.length;
-      }
-      return res;
     }
     const res = await revokeCapability(id);
     if (id === "storage") {

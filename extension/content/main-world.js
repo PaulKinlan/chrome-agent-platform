@@ -11,6 +11,17 @@
   const CHANNEL = "__cairn_bridge";
   let nonce = null;
 
+  // In-flight invocations (requestId) + the set the bridge has CANCELLED. The
+  // MAIN world is the PAGE's world (untrusted) — the isolated content script is
+  // the trust boundary that validates enrollment generation before forwarding
+  // an invoke. This module's cancellation state is cooperative: when the bridge
+  // signals `cancel` (a disenrollment), every in-flight invoke's RESULT is
+  // discarded (never posted back) so a deleted origin's page function cannot
+  // surface its result — the round-21 blocker where the MAIN world ignored the
+  // generation entirely and kept reporting results after a delete.
+  const inFlight = new Set();
+  const cancelled = new Set();
+
   function isDomOwned(name) {
     const platform = new Set([
       "window", "self", "document", "location", "navigator", "history", "screen",
@@ -150,10 +161,27 @@
       post({ type: "tools", origin: location.origin, tools: collectTools() });
     } else if (data.type === "collect") {
       post({ type: "tools", origin: location.origin, tools: collectTools() });
+    } else if (data.type === "cancel") {
+      // Disenrollment cancellation: mark every currently in-flight invoke as
+      // cancelled so its result is discarded. A NEW invoke forwarded after a
+      // re-enrollment uses a fresh requestId and is unaffected.
+      for (const id of inFlight) cancelled.add(id);
     } else if (data.type === "invoke" && data.nonce === nonce) {
+      inFlight.add(data.requestId);
       invoke(data.name, data.args)
-        .then((result) => post({ type: "result", nonce, requestId: data.requestId, ok: true, result }))
-        .catch((e) => post({ type: "result", nonce, requestId: data.requestId, ok: false, error: String(e?.message ?? e) }));
+        .then((result) => {
+          inFlight.delete(data.requestId);
+          if (cancelled.delete(data.requestId)) {
+            post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
+            return;
+          }
+          post({ type: "result", nonce, requestId: data.requestId, ok: true, result });
+        })
+        .catch((e) => {
+          inFlight.delete(data.requestId);
+          cancelled.delete(data.requestId);
+          post({ type: "result", nonce, requestId: data.requestId, ok: false, error: String(e?.message ?? e) });
+        });
     }
   });
 

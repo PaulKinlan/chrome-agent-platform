@@ -417,6 +417,9 @@ const EXPECTED = [
   "Settings: Disenroll button present for an enrolled agent",
   "Settings: clicked Disenroll via a real click",
   "disenroll: agent removed from list + enrollment tombstoned",
+  "scripting Disable: two origins enrolled before the revoke",
+  "scripting Disable: capability revoked",
+  "scripting Disable: BOTH origins tombstoned (no lost update)",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -1311,6 +1314,37 @@ async function main() {
       "disenroll: agent removed from list + enrollment tombstoned",
       Array.isArray(afterDisenroll) &&
         !afterDisenroll.includes("https://disenroll.example"),
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // MULTI-ORIGIN SCRIPTING DISABLE (round-21 blocker 2): revoking scripting
+    // must tombstone EVERY enrolled origin with NO lost update. The old code ran
+    // disenrollOriginLocked CONCURRENTLY (Promise.allSettled) under the global
+    // enrollment lock, so two origins reused the same generation and one
+    // tombstone overwrote the other (a two-origin probe lost A's tombstone).
+    // Create two origins, disable scripting, and assert BOTH are gone from the
+    // authoritative enrollment list.
+    // ─────────────────────────────────────────────────────────────
+    await msgValue({ type: "agent.create", origin: "https://script-disable-a.example", name: "a" });
+    await msgValue({ type: "agent.create", origin: "https://script-disable-b.example", name: "b" });
+    const preDisable = await msgValue({ type: "agent.list" });
+    check(
+      "scripting Disable: two origins enrolled before the revoke",
+      Array.isArray(preDisable) &&
+        preDisable.includes("https://script-disable-a.example") &&
+        preDisable.includes("https://script-disable-b.example"),
+    );
+    const revokeScripting = await msgValue({ type: "capability.revoke", id: "scripting" });
+    check(
+      "scripting Disable: capability revoked",
+      revokeScripting?.ok === true && revokeScripting?.revoked !== false,
+    );
+    const postDisable = await msgValue({ type: "agent.list" });
+    check(
+      "scripting Disable: BOTH origins tombstoned (no lost update)",
+      Array.isArray(postDisable) &&
+        !postDisable.includes("https://script-disable-a.example") &&
+        !postDisable.includes("https://script-disable-b.example"),
     );
 
     // ─────────────────────────────────────────────────────────────

@@ -311,7 +311,11 @@ export async function listOrigins() {
 // journal is bounded by BOTH count (500 entries) AND serialized size (a long
 // model result must not blow past the value bound); long result/task text is
 // truncated.
-export async function journalAppend(store, entry) {
+// `guard` (optional) is an async function awaited IMMEDIATELY before the durable
+// `setTrusted` commit — a scheduled run passes its fence so an ownership loss
+// during the preceding `store.get("journal")` await cannot stale-commit a row
+// (the round-21 finding: journals detected ownership loss only after the commit).
+export async function journalAppend(store, entry, guard = null) {
   const MAX_ENTRY_TEXT = 16 * 1024;
   const MAX_JOURNAL_BYTES = 200 * 1024;
   const journal = (await store.get("journal")) ?? [];
@@ -330,6 +334,9 @@ export async function journalAppend(store, entry) {
   ) {
     entries = entries.slice(1); // cap bytes
   }
+  // Re-check the caller's fence IMMEDIATELY before the commit (no other await
+  // between this check and setTrusted).
+  if (guard) await guard();
   await store.setTrusted("journal", entries);
   return entries;
 }

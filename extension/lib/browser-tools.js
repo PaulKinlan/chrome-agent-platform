@@ -375,6 +375,15 @@ export async function captureTabScreenshot(tabId) {
             };
           }
           if (tabId) {
+            // DUrable ownership must be re-checked IMMEDIATELY before the
+            // activation mutation (the round-21 finding: capture asserted at
+            // function entry then performed several awaits before activating —
+            // no ownership assertion was adjacent to the mutation).
+            try {
+              await assertRunOwned();
+            } catch {
+              return { error: "run aborted — tab not activated" };
+            }
             try {
               await chrome.tabs.update(tabId, { active: true });
             } catch (e) {
@@ -403,6 +412,15 @@ export async function captureTabScreenshot(tabId) {
         return { error: "tab navigated during capture — screenshot discarded" };
       }
 
+      // DUrable ownership must be re-checked IMMEDIATELY before the capture
+      // mutation (the round-21 finding: capture asserted ownership at function
+      // entry, then performed several permission/tab/grant awaits before the
+      // actual capture — no ownership assertion was adjacent to the mutation).
+      try {
+        await assertRunOwned();
+      } catch {
+        return { error: "run aborted — screenshot not captured" };
+      }
       let dataUrl;
       try {
         dataUrl = await chrome.tabs.captureVisibleTab(
@@ -618,6 +636,15 @@ export function browserToolset() {
                 "tab navigated before navigate — source identity changed",
             };
           }
+          // DUrable ownership re-checked IMMEDIATELY before the navigation
+          // mutation (no other await between this check and tabs.update) — the
+          // round-21 finding that navigate asserted ownership before an awaited
+          // second identity read, not adjacent to the mutation.
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — tab not navigated" };
+          }
           await chrome.tabs.update(id, { url });
           // Re-check the fence AFTER the await: an abort during tabs.update must
           // not report success (the navigation side effect may be irreversible,
@@ -715,6 +742,15 @@ export function browserToolset() {
               error:
                 "tab navigated before close — source identity changed",
             };
+          }
+          // DUrable ownership re-checked IMMEDIATELY before the close mutation
+          // (no other await between this check and tabs.remove) — the round-21
+          // finding that close asserted ownership before an awaited second
+          // identity read, not adjacent to the mutation.
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — tab not closed" };
           }
           await chrome.tabs.remove(tabId);
           // Re-check the fence AFTER the await: an abort/ownership loss during

@@ -51,7 +51,23 @@ export async function recordUsage(p) {
   rows.push(record);
   // cap the ledger (keep the newest)
   const trimmed = rows.slice(-MAX_RECORDS);
+  // DUrable ownership re-checked IMMEDIATELY before the ledger commit (no other
+  // await between this check and kvSet) — the round-21 finding that usage
+  // checked ownership only before the read-modify-write, never adjacent to the
+  // commit.
+  try {
+    await assertRunOwned();
+  } catch {
+    return; // ownership lost — do not append a stale usage row
+  }
   await kvSet({ [STORAGE_KEY]: trimmed });
+  // Post-commit re-check: ownership lost DURING the kvSet await must not report
+  // a successfully recorded row.
+  try {
+    await assertRunOwned();
+  } catch {
+    return; // ownership lost during the commit — the row is not reported
+  }
   return record;
 }
 

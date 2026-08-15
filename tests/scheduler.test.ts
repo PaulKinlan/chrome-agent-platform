@@ -287,20 +287,68 @@ Deno.test("markScheduledDone DELETES a completed one-shot whose alarm is already
   }
 });
 
-Deno.test("scheduleTask rollback keeps the payload when alarms.clear fails (round-19 blocker)", async () => {
+Deno.test("scheduleTask rollback keeps the payload when a still-armed alarm's clear fails (round-19)", async () => {
   const origCreate = chrome.alarms.create;
   const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  const controller = new AbortController();
+  // alarms.create succeeds; we abort DURING it so the post-create ownership
+  // re-check throws (the round-19 scenario: a periodic alarm was created, then
+  // ownership was lost). The alarm is STILL armed and its clear FAILS.
   chrome.alarms.create = async () => {
-    throw new Error("create failed");
+    controller.abort();
+    return true;
   };
-  chrome.alarms.clear = async () => false; // cannot clear the (periodic) alarm
+  chrome.alarms.clear = async () => false; // clear FAILS (alarm still armed)
+  chrome.alarms.get = async () => ({ name: "still-armed" }); // alarm PRESENT
+  setRunFence({ signal: controller.signal });
   try {
     let threw = false;
     try {
       await scheduleTask({
-        task: "rollback-clear-false",
+        task: "rollback-clear-false-armed",
         delayMs: 1000,
         periodInMinutes: 1,
+      });
+    } catch {
+      threw = true;
+    }
+    assert(threw, "scheduleTask must reject when ownership is lost after create");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    const tasks = store["cap:scheduledTasks"] ?? {};
+    const kept = Object.values(tasks).some((t) =>
+      t?.task === "rollback-clear-false-armed"
+    );
+    assert(
+      kept,
+      "payload must be KEPT when the still-armed alarm's clear fails",
+    );
+  } finally {
+    clearRunFence();
+    chrome.alarms.create = origCreate;
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+  }
+});
+
+Deno.test("scheduleTask deletes the payload when create fails and the alarm is absent (round-21 replay blocker)", async () => {
+  const origCreate = chrome.alarms.create;
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  // alarms.create rejects BEFORE creating an alarm; clear returns false because
+  // the alarm is ABSENT (not because it failed). The old code kept the payload
+  // here, and reconcileScheduledTasks recreated + reran the failed task.
+  chrome.alarms.create = async () => {
+    throw new Error("create failed");
+  };
+  chrome.alarms.clear = async () => false; // nothing to clear (never created)
+  chrome.alarms.get = async () => undefined; // alarm ABSENT
+  try {
+    let threw = false;
+    try {
+      await scheduleTask({
+        task: "create-failed-absent",
+        delayMs: 1000,
       });
     } catch {
       threw = true;
@@ -308,16 +356,14 @@ Deno.test("scheduleTask rollback keeps the payload when alarms.clear fails (roun
     assert(threw, "scheduleTask must reject when alarms.create fails");
     const store = await chrome.storage.local.get("cap:scheduledTasks");
     const tasks = store["cap:scheduledTasks"] ?? {};
-    const kept = Object.values(tasks).some((t) =>
-      t?.task === "rollback-clear-false"
+    const leaked = Object.values(tasks).some((t) =>
+      t?.task === "create-failed-absent"
     );
-    assert(
-      kept,
-      "payload must be KEPT when the alarm clear fails (the still-armed alarm needs it)",
-    );
+    assert(!leaked, "a failed schedule must NOT leave a rerunnable payload");
   } finally {
     chrome.alarms.create = origCreate;
     chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
   }
 });
 

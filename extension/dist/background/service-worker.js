@@ -25798,7 +25798,7 @@ async function listOrigins() {
   const map4 = s[ENROLL_KEY] ?? {};
   return Object.keys(map4).filter((o) => map4[o]?.enrolled === true).sort();
 }
-async function journalAppend(store, entry) {
+async function journalAppend(store, entry, guard = null) {
   const MAX_ENTRY_TEXT = 16 * 1024;
   const MAX_JOURNAL_BYTES = 200 * 1024;
   const journal = await store.get("journal") ?? [];
@@ -25813,6 +25813,7 @@ async function journalAppend(store, entry) {
   while (entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_JOURNAL_BYTES) {
     entries = entries.slice(1);
   }
+  if (guard) await guard();
   await store.setTrusted("journal", entries);
   return entries;
 }
@@ -66715,7 +66716,17 @@ async function recordUsage(p) {
   );
   rows.push(record3);
   const trimmed = rows.slice(-MAX_RECORDS);
+  try {
+    await assertRunOwned();
+  } catch {
+    return;
+  }
   await kvSet({ [STORAGE_KEY]: trimmed });
+  try {
+    await assertRunOwned();
+  } catch {
+    return;
+  }
   return record3;
 }
 async function getUsage() {
@@ -66803,7 +66814,7 @@ async function allSkills() {
 var DEFAULT_SYSTEM = `You are the Chrome Agent Platform hub agent. You help the
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
-function memoryToolset(memory) {
+function memoryToolset(memory, enrollmentGuard = null) {
   if (!memory) return {};
   return {
     memory_get: tool({
@@ -66817,6 +66828,12 @@ function memoryToolset(memory) {
       execute: async ({ key, value }) => {
         try {
           await assertRunOwned();
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            if (!g?.ok) {
+              return { error: g?.error ?? "origin not enrolled \u2014 memory not written" };
+            }
+          }
         } catch {
           return { error: "run aborted \u2014 memory not written" };
         }
@@ -66859,9 +66876,10 @@ function createAgent2({
   memory = null,
   skills = [],
   taskId = "adhoc",
-  maxIterations = 12
+  maxIterations = 12,
+  enrollmentGuard = null
 }) {
-  const allTools = { ...memoryToolset(memory), ...tools };
+  const allTools = { ...memoryToolset(memory, enrollmentGuard), ...tools };
   const systemPrompt = system + buildSkillsPrompt2(skills);
   const agent = createAgent({
     id,
@@ -66916,7 +66934,12 @@ function createOrchestrator2({
       memory: w.memory,
       skills: w.skills ?? [],
       tools: w.tools ?? {},
-      taskId
+      taskId,
+      // Thread the delegateGuard into each worker's memory tools so a worker's
+      // memory_set revalidates LIVE enrollment before committing (the round-21
+      // blocker: worker tools got no enrollment token). The guard already
+      // revalidates enrollment + generation; reuse it per-origin.
+      enrollmentGuard: delegateGuard ? async () => delegateGuard(w.origin) : null
     });
     workerAgents.set(w.origin, a);
   }
@@ -66986,7 +67009,8 @@ function createOrchestrator2({
         memory: config3.memory,
         skills: config3.skills ?? [],
         tools: config3.tools ?? {},
-        taskId
+        taskId,
+        enrollmentGuard: delegateGuard ? async () => delegateGuard(config3.origin) : null
       });
       workerAgents.set(config3.origin, a);
       return a;
@@ -67214,7 +67238,9 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
     const tasks = { ...store[TASK_KEY] ?? {} };
     tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
     await kvSet({ [TASK_KEY]: tasks });
-    if (runAborted()) {
+    try {
+      await assertRunOwned();
+    } catch {
       const cur = await kvGet(TASK_KEY);
       const rollback = { ...cur[TASK_KEY] ?? {} };
       delete rollback[name25];
@@ -67233,13 +67259,14 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       await alarms.create(name25, info);
       await assertRunOwned();
     } catch (e) {
-      let cleared = false;
+      let stillArmed = true;
       try {
-        cleared = await alarmsApi()?.clear(name25) !== false;
+        await alarmsApi()?.clear(name25);
+        stillArmed = await alarmsApi()?.get(name25) != null;
       } catch {
-        cleared = false;
+        stillArmed = true;
       }
-      if (cleared) {
+      if (!stillArmed) {
         const cur = await kvGet(TASK_KEY);
         const rollback = { ...cur[TASK_KEY] ?? {} };
         delete rollback[name25];
@@ -67614,6 +67641,11 @@ async function captureTabScreenshot(tabId) {
       }
       if (tabId) {
         try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted \u2014 tab not activated" };
+        }
+        try {
           await chrome.tabs.update(tabId, { active: true });
         } catch (e) {
           return { error: `could not activate tab: ${e?.message ?? e}` };
@@ -67631,6 +67663,11 @@ async function captureTabScreenshot(tabId) {
       })() : void 0;
       if (!curOrigin || curOrigin !== origin) {
         return { error: "tab navigated during capture \u2014 screenshot discarded" };
+      }
+      try {
+        await assertRunOwned();
+      } catch {
+        return { error: "run aborted \u2014 screenshot not captured" };
       }
       let dataUrl;
       try {
@@ -67793,6 +67830,11 @@ function browserToolset() {
               error: "tab navigated before navigate \u2014 source identity changed"
             };
           }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted \u2014 tab not navigated" };
+          }
           await chrome.tabs.update(id, { url: url3 });
           try {
             await assertRunOwned();
@@ -67868,6 +67910,11 @@ function browserToolset() {
             return {
               error: "tab navigated before close \u2014 source identity changed"
             };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted \u2014 tab not closed" };
           }
           await chrome.tabs.remove(tabId);
           try {
@@ -68732,18 +68779,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
     }
     try {
       await fence2?.assertOwned?.();
+      const journalGuard = fence2 ? async () => {
+        await fence2.assertOwned();
+      } : null;
       await journalAppend(mem, {
         type: "task",
         id: taskId,
         task,
         scheduled,
         attachmentCount: attachments?.length ?? 0
-      });
+      }, journalGuard);
       await fence2?.assertOwned?.();
       const context = attachmentContext(attachments);
       const result = await orch.run(task, context, []);
       await fence2?.assertOwned?.();
-      await journalAppend(mem, { type: "result", id: taskId, result });
+      await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
       await fence2?.assertOwned?.();
       if (scheduled) {
         await fence2?.assertOwned?.();
@@ -68799,31 +68849,34 @@ var handlers = {
       });
     }
     if (id === "scripting") {
-      const results = await withEnrollmentLock(async () => {
+      return await withEnrollmentLock(async () => {
         const origins = await listOrigins();
-        return await Promise.allSettled(origins.map(async (o) => {
-          abortWorker(o);
-          await disenrollOriginLocked(o);
-          await notifyOriginBridge(o, { type: "disenrollment" });
-          const res3 = await unregisterOriginScripts(o);
-          if (!res3.ok) {
+        const results = [];
+        for (const o of origins) {
+          try {
+            abortWorker(o);
+            await disenrollOriginLocked(o);
+            await notifyOriginBridge(o, { type: "disenrollment" });
+            const res3 = await unregisterOriginScripts(o);
+            if (!res3.ok) {
+              await markCleanupPending(o);
+              results.push({ origin: o, error: res3.error ?? o });
+            } else {
+              results.push({ origin: o, ok: true });
+            }
+          } catch (e) {
             await markCleanupPending(o);
-            return { origin: o, error: res3.error ?? o };
+            results.push({ origin: o, error: String(e?.message ?? e) });
           }
-          return { origin: o, ok: true };
-        }));
+        }
+        invalidateAgent();
+        const res2 = await revokeCapability(id);
+        const failures = results.filter((r) => r.error).map((r) => r.error);
+        if (failures.length > 0) {
+          res2.cleanupPending = failures.length;
+        }
+        return res2;
       });
-      invalidateAgent();
-      const failures = results.filter(
-        (r) => r.status === "rejected" || r.status === "fulfilled" && r.value?.error
-      ).map(
-        (r) => r.status === "rejected" ? String(r.reason?.message ?? r.reason) : r.value.error
-      );
-      const res2 = await revokeCapability(id);
-      if (failures.length > 0) {
-        res2.cleanupPending = failures.length;
-      }
-      return res2;
     }
     const res = await revokeCapability(id);
     if (id === "storage") {

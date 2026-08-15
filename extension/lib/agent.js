@@ -17,7 +17,7 @@ const DEFAULT_SYSTEM =
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
-function memoryToolset(memory) {
+function memoryToolset(memory, enrollmentGuard = null) {
   if (!memory) return {};
   return {
     memory_get: tool({
@@ -41,6 +41,18 @@ function memoryToolset(memory) {
         // threw while the signal was still live and the catch did NOT compensate.
         try {
           await assertRunOwned();
+          // A WORKER's memory write must also revalidate LIVE enrollment: a
+          // worker deleted mid-run must not recreate its tombstoned OPFS store
+          // through a lingering memory_set (the round-21 blocker: worker tools
+          // got no enrollment token, so already-running worker side effects
+          // continued after delete). The guard returns {ok, gen}; a stale/
+          // missing generation aborts the write.
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            if (!g?.ok) {
+              return { error: g?.error ?? "origin not enrolled — memory not written" };
+            }
+          }
         } catch {
           return { error: "run aborted — memory not written" };
         }
@@ -95,8 +107,9 @@ export function createAgent({
   skills = [],
   taskId = "adhoc",
   maxIterations = 12,
+  enrollmentGuard = null,
 }) {
-  const allTools = { ...memoryToolset(memory), ...tools };
+  const allTools = { ...memoryToolset(memory, enrollmentGuard), ...tools };
   const systemPrompt = system + buildSkillsPrompt(skills);
 
   const agent = agentDoCreateAgent({
@@ -157,6 +170,13 @@ export function createOrchestrator({
       skills: w.skills ?? [],
       tools: w.tools ?? {},
       taskId,
+      // Thread the delegateGuard into each worker's memory tools so a worker's
+      // memory_set revalidates LIVE enrollment before committing (the round-21
+      // blocker: worker tools got no enrollment token). The guard already
+      // revalidates enrollment + generation; reuse it per-origin.
+      enrollmentGuard: delegateGuard
+        ? async () => delegateGuard(w.origin)
+        : null,
     });
     workerAgents.set(w.origin, a);
   }
@@ -253,6 +273,9 @@ export function createOrchestrator({
         skills: config.skills ?? [],
         tools: config.tools ?? {},
         taskId,
+        enrollmentGuard: delegateGuard
+          ? async () => delegateGuard(config.origin)
+          : null,
       });
       workerAgents.set(config.origin, a);
       return a;

@@ -3,7 +3,7 @@
 // validation, persistence, and alarm creation stay in a single place.
 
 import { kvGet, kvSet } from "./kv.js";
-import { runAborted, assertRunAlive, assertRunOwned } from "./run-fence.js";
+import { assertRunAlive, assertRunOwned } from "./run-fence.js";
 
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
@@ -122,8 +122,13 @@ export async function scheduleTask(
     await kvSet({ [TASK_KEY]: tasks });
 
     // Re-check the fence before the IRREVERSIBLE alarm creation (a second abort
-    // window exists between the persist and the alarm create).
-    if (runAborted()) {
+    // window exists between the persist and the alarm create). DUrable ownership
+    // (not merely the signal) must be checked here — the round-21 finding that
+    // this boundary used signal-only `runAborted()`, so a durable-ownership loss
+    // after the payload write was not detected until the post-create check.
+    try {
+      await assertRunOwned();
+    } catch {
       // Roll back the just-persisted payload so an aborted schedule leaves no
       // orphaned task behind.
       const cur = await kvGet(TASK_KEY);
@@ -151,16 +156,24 @@ export async function scheduleTask(
       await assertRunOwned();
     } catch (e) {
       // Roll back the alarm (if it was created) AND the payload together.
-      // The alarm-clear RESULT is checked: a `false`/rejecting clear means a
-      // (periodic) alarm is STILL ARMED, so the payload must be KEPT for it to
-      // fire on — never delete the payload while the alarm is still active
-      // (the round-19 blocker: alarm clear false left a periodic alarm firing
-      // with no payload).
-      let cleared = false;
+      // `alarms.clear()` returning `false` is AMBIGUOUS: it means BOTH "clear
+      // failed" AND "the alarm was already absent". For a FAILED schedule
+      // (alarms.create rejected BEFORE creating an alarm), the alarm is absent
+      // and the payload must be DELETED — a kept payload would be recreated +
+      // rerun by reconcileScheduledTasks (the round-21 schedule-create-failure
+      // replay blocker). For a periodic alarm whose clear FAILED, the alarm is
+      // STILL present, so the payload must be KEPT for it to fire on (the
+      // round-19 alarm-clear blocker). alarms.get disambiguates:
+      //   absent  → delete the payload (nothing is armed to fire on it);
+      //   present → keep the payload (a still-armed periodic alarm needs it).
+      let stillArmed = true;
       try {
-        cleared = (await alarmsApi()?.clear(name)) !== false;
-      } catch { /* alarm may not exist yet */ cleared = false; }
-      if (cleared) {
+        await alarmsApi()?.clear(name);
+        stillArmed = (await alarmsApi()?.get(name)) != null;
+      } catch {
+        stillArmed = true; // fail closed — cannot confirm absence → keep the payload
+      }
+      if (!stillArmed) {
         const cur = await kvGet(TASK_KEY);
         const rollback = { ...(cur[TASK_KEY] ?? {}) };
         delete rollback[name];
