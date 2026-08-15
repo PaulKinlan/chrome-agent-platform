@@ -1,11 +1,29 @@
 // lib/tools.js — the tool directory: declared (WebMCP) + linked (agent.md/skills)
 // + inferred (window.* functions) tools, with first-run approval per origin.
 
-import { canonicalOrigin, masterMemory, siteMemory } from "./memory.js";
+import { canonicalOrigin, listOrigins, siteMemory } from "./memory.js";
 import { kvGet, kvSet } from "./kv.js";
 
 const DIR_KEY = "toolDirectory";
 const ENROLL_KEY = "cap:enrollment";
+
+// A GLOBAL enrollment-state mutex: enrollOrigin/disenrollOrigin perform a
+// read-modify-write on the SHARED `cap:enrollment` registry. Per-origin locks
+// are NOT sufficient — two DIFFERENT origins created concurrently read the same
+// old map and overwrite each other (the round-14 finding: 49/50 pairs lost one
+// origin). One global lock serializes the registry RMW.
+let enrollmentMutex = Promise.resolve();
+function withEnrollmentLock(fn) {
+  const run = enrollmentMutex.then(fn, fn);
+  enrollmentMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Read the enrollment registry (the authoritative enrolled:true set). */
+async function enrolledMap() {
+  const s = await kvGet(ENROLL_KEY);
+  return s[ENROLL_KEY] ?? {};
+}
 
 /** Bounds for the tool directory (fail-closed against hostile descriptors). */
 export const TOOL_BOUNDS = {
@@ -86,8 +104,7 @@ export async function listTools(origin) {
 }
 
 export async function listAllOrigins() {
-  const master = await masterMemory().get("origins");
-  return master ?? [];
+  return await listOrigins();
 }
 
 /** Whether an origin is CURRENTLY enrolled (owner-controlled). A deleted origin
@@ -96,59 +113,57 @@ export async function listAllOrigins() {
 export async function isEnrolled(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return false;
-  const s = await kvGet(ENROLL_KEY);
-  const rec = s[ENROLL_KEY]?.[canonical];
-  return Boolean(rec && rec.enrolled === true);
+  const map = await enrolledMap();
+  return Boolean(map[canonical] && map[canonical].enrolled === true);
+}
+
+/** The enrollment GENERATION for an origin — the revocation fence. Every
+ * delegation/invocation path revalidates this (see service-worker agent.delegate
+ * + invokeSiteTool) so a delete tombstones + bumps the generation atomically, and
+ * a stale bridge/worker reference from before the delete is rejected. */
+export async function enrollmentGeneration(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return 0;
+  const map = await enrolledMap();
+  return map[canonical]?.gen ?? 0;
 }
 
 export async function enrollOrigin(origin) {
-  const store = masterMemory();
   const canonical = canonicalOrigin(origin);
   if (!canonical) throw new Error(`invalid origin: ${origin}`);
-  // Create the site's OWN OPFS store directory (so listOrigins() — which
-  // enumerates the per-origin directories — discovers it as a worker). This
-  // fixes the bug where agent.create wrote only the master-memory list and the
-  // worker stayed invisible to listOrigins()/the orchestrator.
-  await siteMemory(canonical).set("enrolled", { at: Date.now() });
-  const origins = (await store.get("origins")) ?? [];
-  if (!origins.includes(canonical)) {
-    origins.push(canonical);
-    await store.set("origins", origins);
-  }
-  // Persist the ENROLLMENT STATE (enrolled:true) — the authority a running
-  // bridge's reports are gated on (isEnrolled).
-  const s = await kvGet(ENROLL_KEY);
-  const map = { ...(s[ENROLL_KEY] ?? {}) };
-  map[canonical] = {
-    enrolled: true,
-    at: Date.now(),
-    gen: (map[canonical]?.gen ?? 0) + 1,
-  };
-  await kvSet({ [ENROLL_KEY]: map });
-  return origins;
+  return withEnrollmentLock(async () => {
+    // Create the site's OWN OPFS store directory (so per-site memory works)
+    // BEFORE the registry update. The registry is the authority; the OPFS dir
+    // is just data (listOrigins never enumerates OPFS directories).
+    await siteMemory(canonical).set("enrolled", { at: Date.now() });
+    const map = await enrolledMap();
+    map[canonical] = {
+      enrolled: true,
+      at: Date.now(),
+      gen: (map[canonical]?.gen ?? 0) + 1,
+    };
+    await kvSet({ [ENROLL_KEY]: map });
+    return Object.keys(map).filter((o) => map[o]?.enrolled === true);
+  });
 }
 
-/** Remove an origin from the master-memory origins list + TOMBSTONE its
- * enrollment (enrolled:false) so a running bridge's reports are rejected. This
- * is the authoritative revocation — not merely removing the list entry. */
+/** Tombstone an origin's enrollment (enrolled:false) under the GLOBAL lock so a
+ * running bridge's reports are rejected and listOrigins drops it. The
+ * generation bump is the preemptive revocation fence: any in-flight operation
+ * holding the old generation is rejected at its next revalidation. */
 export async function disenrollOrigin(origin) {
-  const store = masterMemory();
-  const origins = (await store.get("origins")) ?? [];
   const canonical = canonicalOrigin(origin);
-  if (!canonical) return origins;
-  const next = origins.filter((o) => o !== canonical);
-  if (next.length !== origins.length) {
-    await store.set("origins", next);
-  }
-  const s = await kvGet(ENROLL_KEY);
-  const map = { ...(s[ENROLL_KEY] ?? {}) };
-  map[canonical] = {
-    enrolled: false, // tombstone
-    at: Date.now(),
-    gen: (map[canonical]?.gen ?? 0) + 1,
-  };
-  await kvSet({ [ENROLL_KEY]: map });
-  return next;
+  if (!canonical) return [];
+  return withEnrollmentLock(async () => {
+    const map = await enrolledMap();
+    map[canonical] = {
+      enrolled: false, // tombstone
+      at: Date.now(),
+      gen: (map[canonical]?.gen ?? 0) + 1,
+    };
+    await kvSet({ [ENROLL_KEY]: map });
+    return Object.keys(map).filter((o) => map[o]?.enrolled === true);
+  });
 }
 
 /**

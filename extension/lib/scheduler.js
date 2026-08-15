@@ -222,21 +222,26 @@ export async function heartbeatInflight(name, token) {
  * lock — that was the exact stale-owner-unlock the reviewer reproduced. */
 export async function releaseInflight(name, token) {
   await withLock(async () => {
-    const store = await kvGet(INFLIGHT_KEY);
-    const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
-    const existing = inflight[name];
-    if (validLock(existing) && existing.token === token) {
-      delete inflight[name];
-      await kvSet({ [INFLIGHT_KEY]: inflight });
-    }
-    // Same-boot: abort + drop the in-memory run regardless of the persisted
-    // compare-and-release result (the run is ending either way).
-    const active = activeRuns.get(name);
-    if (active && active.token === token) {
-      try {
-        active.controller.abort();
-      } catch { /* already aborted */ }
-      activeRuns.delete(name);
+    try {
+      const store = await kvGet(INFLIGHT_KEY);
+      const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
+      const existing = inflight[name];
+      if (validLock(existing) && existing.token === token) {
+        delete inflight[name];
+        await kvSet({ [INFLIGHT_KEY]: inflight });
+      }
+    } finally {
+      // Same-boot: abort + drop the in-memory run REGARDLESS of the persisted
+      // compare-and-release result (the run is ending either way). A failed
+      // persist must never leave the active-runs map poisoned (the round-14
+      // medium: a storage failure before activeRuns.delete blocked the task).
+      const active = activeRuns.get(name);
+      if (active && active.token === token) {
+        try {
+          active.controller.abort();
+        } catch { /* already aborted */ }
+        activeRuns.delete(name);
+      }
     }
   });
 }

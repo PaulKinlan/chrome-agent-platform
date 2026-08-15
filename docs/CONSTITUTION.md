@@ -30,14 +30,15 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 - **MV3 CSP** — no `eval`/`new Function` in the bundle (verified: 0 sites).
 - **XSS** — chat/directory/memory render untrusted data with `textContent`/
   escaping, never `innerHTML` with unvalidated data.
-- **Permissions** — minimal: prefer optional host permissions + per-origin
-  enrollment over `<all_urls>` injection on every page. The `debugger`
-  permission (used for screenshot pixel capture) is OPTIONAL + owner-authorized
-  from the Settings gesture, never permanent — Chrome's all-sites warning for it
-  is accepted ONLY because it is opt-in, origin-scoped at runtime by the
-  browser-control grant, attached to a single tab by id for one capture/detach
-  call, and fail-closed (absent permission or grant → capture refused; detach
-  failure → surfaced, never swallowed).
+- **Permissions** — ALL optional (Paul's hard requirement): the manifest declares
+  an empty `permissions` array; `alarms`/`storage`/`sidePanel`/`tabs`/`scripting`/
+  `notifications` are `optional_permissions`, host access is
+  `optional_host_permissions`. No `debugger` anywhere (it cannot be optional and
+  carries Chrome's all-sites warning) — screenshots use
+  `chrome.tabs.captureVisibleTab`. The extension boots + runs with ZERO optional
+  permissions (degrade gracefully), and each capability is requested from a real
+  owner gesture in Settings → Permissions (the SW never requests). Enrollment
+  requests `scripting` + exact host access; browser control requests `tabs`.
 - **Credentials** — provider keys live in chrome.storage (user-entered), never
   in the bundle, never logged, never in receipts.
 

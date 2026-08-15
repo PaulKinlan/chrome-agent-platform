@@ -104,16 +104,24 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
 - Inferred tools are advisory only until the user approves an origin's tools.
 - OPFS memory is per-origin scoped; master memory is extension-scoped.
 - Alarms run in the background; the agent's capabilities are the user's session's.
-- **Screenshot capture (threat model, honest):** pixel capture of a tab uses the
-  Chrome `debugger` API. That permission is **optional**, never permanent — it is
-  requested from a real owner gesture (the Settings "Allow the agent to control the
-  browser" toggle) and removed on revoke. Chrome's install-time warning for `debugger`
-  is "Read and change all your data on all websites"; we accept this because the
-  capability is (a) opt-in per the owner, (b) scoped at runtime to the browser-control
-  grant's origin allowlist, (c) attached to ONE tab by id for a single
-  capture-and-detach call (no lingering attachment), and (d) fail-closed — capture
-  is refused and detach failures are surfaced when the permission or grant is absent.
-  A failed debugger detach is treated as an error, never silently swallowed.
+- **Screenshot capture (threat model, honest):** pixel capture of a tab uses
+  `chrome.tabs.captureVisibleTab` (the standard extension API — the same one the
+  chaos extension uses, NOT the Chrome `debugger` API, which cannot be optional
+  and carries Chrome's all-sites warning). The target tab is activated first, then
+  its window is captured; the capture is gated by (a) the OPTIONAL `tabs`
+  capability (owner-granted in Settings) and (b) the scoped, expiring
+  browser-control grant for that tab's origin. The origin + grant id are
+  re-validated before AND after the capture (atomic snapshot) so a navigation or
+  revoke→regrant during capture discards the bytes (fail closed).
+
+- **Permissions (all optional):** the manifest declares an EMPTY `permissions`
+  array. `alarms`, `storage`, `sidePanel`, `tabs`, `scripting`, and `notifications`
+  are all in `optional_permissions`; host access is in `optional_host_permissions`.
+  The extension boots and runs with ZERO optional permissions (degrading
+  gracefully: session-only storage, no scheduled tasks, read-only, no
+  notifications). Each capability is requested from a real owner gesture in the
+  Settings → Permissions panel; the service worker never requests a permission
+  itself (no gesture).
 
 ## 4. Phasing
 1. **Design** (this doc) → 2. **Mock UI** (static HTML for review) → 3. **Scaffold**

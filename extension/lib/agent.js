@@ -25,11 +25,18 @@ function memoryToolset(memory) {
       execute: async ({ key }) => ({ key, value: await memory.get(key) }),
     }),
     memory_set: tool({
-      description: "Write a value to the agent's memory.",
-      inputSchema: z.object({ key: z.string(), value: z.any() }),
+      description:
+        "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
+      inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
       execute: async ({ key, value }) => {
-        await memory.set(key, value);
-        return { ok: true, key };
+        try {
+          await memory.set(key, value);
+          return { ok: true, key };
+        } catch (e) {
+          // A bounded/reserved-key rejection is surfaced honestly, never thrown
+          // into the agent loop.
+          return { error: String(e?.message ?? e) };
+        }
       },
     }),
     memory_list: tool({

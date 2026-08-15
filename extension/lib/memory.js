@@ -13,6 +13,18 @@
 const ROOT = "memory";
 const MASTER = "master";
 
+import { kvGet } from "./kv.js";
+
+const ENROLL_KEY = "cap:enrollment";
+
+// OPFS memory bounds (Constitution §4): a single value may not exceed this
+// serialized size, and the master store may not write these reserved registry
+// keys (the enrollment authority must never be reachable via the model's
+// `memory_set`). Per-origin stores are keyed separately so one site's growth
+// cannot crowd another; the journal is separately capped in journalAppend.
+const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
+const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled"]);
+
 /** Canonicalize an origin string (https://example.com:443 → https://example.com). */
 export function canonicalOrigin(value) {
   try {
@@ -85,6 +97,23 @@ export function memoryStore(origin) {
       return await readJson(dir, `${key}.json`);
     },
     async set(key, value) {
+      // Bound the value by its SERIALIZED size (fail closed against a model or
+      // page writing an unbounded value). Reject reserved registry keys on the
+      // master store (the enrollment authority must never be model-writable).
+      if (isMaster && MASTER_RESERVED_KEYS.has(String(key))) {
+        throw new Error(`key "${key}" is reserved on the master store`);
+      }
+      let serialized;
+      try {
+        serialized = JSON.stringify(value);
+      } catch {
+        throw new Error(`value for "${key}" is not JSON-serializable`);
+      }
+      if (serialized.length > MAX_VALUE_BYTES) {
+        throw new Error(
+          `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
+        );
+      }
       const dir = await openDir(path);
       await writeJson(dir, `${key}.json`, value);
     },
@@ -141,19 +170,41 @@ export function siteMemory(origin) {
 }
 
 /** Enumerate all enrolled site origins (the sub-agent directory).
- * Derived from AUTHORITATIVE enrollment state (the master-memory origins list
- * maintained by enrollOrigin/disenrollOrigin), NOT from OPFS directory
- * existence. A delayed write that recreates an OPFS directory after a delete
- * must never resurrect a worker in the listing (the round-13 delete race). */
+ * Derived from the AUTHORITATIVE enrollment registry (`cap:enrollment` in
+ * chrome.storage — NOT writable by the model's `memory_set`), never from OPFS
+ * directory existence or the model-writable master-memory `origins` key. A
+ * delayed write that recreates an OPFS directory after a delete, or a model
+ * overwriting the `origins` key, must never resurrect or forge a worker in the
+ * listing (the round-13/14 delete-race + enrollment findings). */
 export async function listOrigins() {
-  const origins = await masterMemory().get("origins");
-  return Array.isArray(origins) ? origins : [];
+  const s = await kvGet(ENROLL_KEY);
+  const map = s[ENROLL_KEY] ?? {};
+  return Object.keys(map)
+    .filter((o) => map[o]?.enrolled === true)
+    .sort();
 }
 
-// A small journal abstraction over a store (agent-do's memory pattern).
+// A small journal abstraction over a store (agent-do's memory pattern). The
+// journal is bounded by BOTH count (500 entries) AND serialized size (a long
+// model result must not blow past the value bound); long result/task text is
+// truncated.
 export async function journalAppend(store, entry) {
+  const MAX_ENTRY_TEXT = 16 * 1024;
+  const MAX_JOURNAL_BYTES = 200 * 1024;
   const journal = (await store.get("journal")) ?? [];
-  journal.push({ ts: Date.now(), ...entry });
-  await store.set("journal", journal.slice(-500)); // cap per-origin journal
-  return journal;
+  const bounded = { ...entry };
+  for (const k of ["result", "task"]) {
+    if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
+      bounded[k] = bounded[k].slice(0, MAX_ENTRY_TEXT);
+    }
+  }
+  journal.push({ ts: Date.now(), ...bounded });
+  let entries = journal.slice(-500); // cap count
+  while (
+    entries.length > 1 && JSON.stringify(entries).length > MAX_JOURNAL_BYTES
+  ) {
+    entries = entries.slice(1); // cap bytes
+  }
+  await store.set("journal", entries);
+  return entries;
 }

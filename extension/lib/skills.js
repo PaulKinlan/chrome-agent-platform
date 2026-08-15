@@ -6,7 +6,7 @@
 // them per origin. Skills become agent tools when injected as a system prompt
 // or as explicit callable procedures.
 
-import { masterMemory, siteMemory } from "./memory.js";
+import { listOrigins, siteMemory } from "./memory.js";
 
 export async function setSkills(origin, skills) {
   await siteMemory(origin).set("skills", skills);
@@ -29,7 +29,7 @@ export function buildSkillsPrompt(skills) {
 }
 
 export async function allSkills() {
-  const origins = (await masterMemory().get("origins")) ?? [];
+  const origins = await listOrigins();
   const out = {};
   for (const o of origins) {
     const s = await getSkills(o);

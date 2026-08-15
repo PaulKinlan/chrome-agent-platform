@@ -145,6 +145,9 @@ async function getUsage() {
 // extension/lib/memory.js
 var ROOT = "memory";
 var MASTER = "master";
+var ENROLL_KEY = "cap:enrollment";
+var MAX_VALUE_BYTES = 256 * 1024;
+var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled"]);
 function canonicalOrigin(value) {
   try {
     const u = new URL(String(value));
@@ -193,6 +196,20 @@ function memoryStore(origin) {
       return await readJson(dir, `${key}.json`);
     },
     async set(key, value) {
+      if (isMaster && MASTER_RESERVED_KEYS.has(String(key))) {
+        throw new Error(`key "${key}" is reserved on the master store`);
+      }
+      let serialized;
+      try {
+        serialized = JSON.stringify(value);
+      } catch {
+        throw new Error(`value for "${key}" is not JSON-serializable`);
+      }
+      if (serialized.length > MAX_VALUE_BYTES) {
+        throw new Error(
+          `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
+        );
+      }
       const dir = await openDir(path);
       await writeJson(dir, `${key}.json`, value);
     },
@@ -228,7 +245,6 @@ function memoryStore(origin) {
     }
   };
 }
-var masterMemory = () => memoryStore(MASTER);
 function siteMemory(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) {
@@ -246,8 +262,9 @@ function siteMemory(origin) {
   return memoryStore(canonical);
 }
 async function listOrigins() {
-  const origins = await masterMemory().get("origins");
-  return Array.isArray(origins) ? origins : [];
+  const s = await kvGet(ENROLL_KEY);
+  const map = s[ENROLL_KEY] ?? {};
+  return Object.keys(map).filter((o) => map[o]?.enrolled === true).sort();
 }
 
 // extension/lib/scheduler.js

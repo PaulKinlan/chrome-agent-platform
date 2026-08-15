@@ -94,36 +94,68 @@ export async function ensureOriginScriptsRegistered(origin) {
 
 /** Remove the dynamic content scripts for an origin AND revoke the optional
  * host permission (authoritative revocation on agent.delete). Returns HONEST
- * results — a failed unregisterContentScripts or permissions.remove is surfaced
- * (never silently swallowed), so the caller never claims authoritative
- * revocation it did not achieve. */
+ * results — ok is true ONLY when BOTH the scripts AND the host permission are
+ * confirmed ABSENT (a partial revocation is never reported as success, the
+ * round-14 transactional finding). `permissions.remove` resolving false means
+ * "already absent" (a no-op, not a failure), so absence is re-confirmed via
+ * `permissions.contains`. */
 export async function unregisterOriginScripts(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { ok: false, error: "invalid origin" };
+
+  // Scripts: without the `scripting` permission no content scripts can be
+  // registered, so they are absent by definition. With it, unregister + confirm.
   let scriptsRemoved = true;
   let error = null;
-  try {
-    await chrome.scripting.unregisterContentScripts({
-      ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
-    });
-  } catch (e) {
-    scriptsRemoved = false;
-    error = String(e?.message ?? e);
+  if (typeof chrome !== "undefined" && chrome.scripting?.unregisterContentScripts) {
+    try {
+      await chrome.scripting.unregisterContentScripts({
+        ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
+      });
+      const remaining = await chrome.scripting
+        .getRegisteredContentScripts({
+          ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
+        })
+        .catch(() => null);
+      scriptsRemoved = remaining === null || remaining.length === 0;
+      if (!scriptsRemoved) error = "content scripts still registered after unregister";
+    } catch (e) {
+      scriptsRemoved = false;
+      error = String(e?.message ?? e);
+    }
   }
-  // Revoke the host permission so the origin loses capture/inject authority.
-  // `permissions.remove` resolves false when the permission was never granted
-  // (a no-op, NOT a failure) — that is honest and distinct from an exception.
+
+  // Host permission: remove, then CONFIRM absence (a `false` remove result is
+  // "already absent", which is the goal — not a failure).
   let permissionRemoved = true;
   try {
-    permissionRemoved = await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    permissionRemoved = !(await chrome.permissions.contains({
+      origins: [`${canonical}/*`],
+    }));
+    if (!permissionRemoved && !error) error = "host permission still present after remove";
   } catch {
-    permissionRemoved = false; // could not confirm removal
+    permissionRemoved = false;
   }
   return {
-    ok: scriptsRemoved,
+    ok: scriptsRemoved && permissionRemoved,
     origin: canonical,
     scriptsRemoved,
     permissionRemoved,
     error,
   };
+}
+
+/** Revoke ONLY the optional host permission for an origin (enrollment rollback).
+ * Returns whether the permission is now ABSENT (confirmed via contains, not
+ * merely the `remove` boolean, which is false for an already-absent permission). */
+export async function removeOriginHostPermission(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return false;
+  try {
+    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    return !(await chrome.permissions.contains({ origins: [`${canonical}/*`] }));
+  } catch {
+    return false;
+  }
 }

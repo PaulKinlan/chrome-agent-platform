@@ -160,8 +160,15 @@ runBtn.addEventListener("click", async () => {
     id: String(Date.now()),
     attachments: attachments.splice(0),
   });
+  clearAttachTags(); // the composer's tags are consumed by this run
   if (res.ok) {
-    setStatus("agent ready");
+    if (Array.isArray(res.droppedAttachments) && res.droppedAttachments.length) {
+      setStatus(
+        `agent ready — ${res.droppedAttachments.length} attachment(s) dropped (over limit)`,
+      );
+    } else {
+      setStatus("agent ready");
+    }
     await refreshTasks();
   } else {
     setStatus("error: " + (res.error ?? "unknown"), false);
@@ -434,6 +441,11 @@ function addAttachTag(label, iconKey) {
   plusBtn.insertAdjacentElement("afterend", tag);
 }
 
+/** Remove all visible attachment tags (after the composer submits them). */
+function clearAttachTags() {
+  document.querySelectorAll(".tag").forEach((t) => t.remove());
+}
+
 let capStream = null;
 let capRecorder = null;
 let capChunks = [];
@@ -477,7 +489,29 @@ function capClosePanel() {
 
 capClose.addEventListener("click", capClosePanel);
 
+// prefers-reduced-motion: the mic equalizer + recording meter must not animate.
+function reducedMotion() {
+  try {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ===
+      true;
+  } catch {
+    return false;
+  }
+}
+
+function staticMeter() {
+  // A single, static bar height (no rAF loop) for reduced-motion users.
+  const bars = [...capMeter.children];
+  bars.forEach((b) => {
+    b.style.height = "8px";
+  });
+}
+
 function startMeter(stream) {
+  if (reducedMotion()) {
+    staticMeter();
+    return;
+  }
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) {
@@ -512,6 +546,10 @@ function startMeter(stream) {
 }
 
 function pulseMeter() {
+  if (reducedMotion()) {
+    staticMeter();
+    return;
+  }
   // fallback: animate the meter without an AnalyserNode (e.g. no audio API)
   const bars = [...capMeter.children];
   const draw = () => {
@@ -600,6 +638,9 @@ function handleCaptureError(kind, err) {
   } else {
     setStatus(`${kind} capture error: ${String(err?.message ?? err)}`, false);
   }
+  // Deterministic focus return after a permission/device denial (the round-14
+  // media-denial focus finding) — the user is back on the attach trigger.
+  plusBtn.focus();
 }
 
 function stopCapRecording() {

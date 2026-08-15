@@ -22,6 +22,7 @@ import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   approveTool,
   disenrollOrigin,
+  enrollmentGeneration,
   enrollOrigin,
   isApproved,
   isEnrolled,
@@ -53,6 +54,7 @@ import {
 
 import {
   ensureOriginScriptsRegistered,
+  removeOriginHostPermission,
   unregisterOriginScripts,
   withOriginLock,
 } from "../lib/enrollment.js";
@@ -274,36 +276,46 @@ async function siteToolset(origin) {
 }
 
 // Drive a page function on an origin via the content script (WebMCP/injection).
+// Preemptive revocation: enrollment + GENERATION are read atomically up front,
+// the untrusted page call runs WITHOUT holding the origin lifecycle lock (so a
+// hung/malicious page tool can never block agent.delete), and the generation is
+// REVALIDATED after the call — a delete during the call tombstones + bumps the
+// generation, so the result is discarded rather than journaled.
 async function invokeSiteTool(origin, name, args) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
-  // Serialize the enrollment check + invocation under the SAME origin lifecycle
-  // lock that create/delete use, and re-validate enrollment INSIDE the lock, so
-  // a delete cannot interleave between the check and the page call.
-  return await withOriginLock(canonical, async () => {
-    if (!(await isEnrolled(canonical))) {
-      return { error: `origin ${canonical} is not enrolled` };
-    }
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((t) => {
-      try {
-        return t.url ? new URL(t.url).origin === canonical : false;
-      } catch {
-        return false;
-      }
-    });
-    if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  if (!(await isEnrolled(canonical))) {
+    return { error: `origin ${canonical} is not enrolled` };
+  }
+  const gen = await enrollmentGeneration(canonical);
+  const tabs = await chrome.tabs.query({});
+  const tab = tabs.find((t) => {
     try {
-      const res = await chrome.tabs.sendMessage(tab.id, {
-        type: "invoke-tool",
-        name,
-        args,
-      });
-      return res ?? { ok: true };
-    } catch (e) {
-      return { error: `invoke failed: ${e.message}` };
+      return t.url ? new URL(t.url).origin === canonical : false;
+    } catch {
+      return false;
     }
   });
+  if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, {
+      type: "invoke-tool",
+      name,
+      args,
+    });
+    // Revalidate live enrollment + the SAME generation AFTER the page call.
+    if (
+      !(await isEnrolled(canonical)) ||
+      (await enrollmentGeneration(canonical)) !== gen
+    ) {
+      return {
+        error: `origin ${canonical} was disenrolled during the call — result discarded`,
+      };
+    }
+    return res ?? { ok: true };
+  } catch (e) {
+    return { error: `invoke failed: ${e.message}` };
+  }
 }
 
 /** Build a bounded, honest context string from attachments (never an object). */
@@ -677,8 +689,10 @@ const handlers = {
     return await withOriginLock(canonical, async () => {
       // TRANSACTIONAL: enroll the origin, then register its scripts. If
       // registration FAILS (permission absent or registerContentScripts error),
-      // ROLL BACK the enrollment so the UI never reports "Enrolled" while
-      // scriptsRegistered is false (the round-13 honesty finding).
+      // ROLL BACK the enrollment AND remove the host permission the Settings page
+      // granted, so the UI never reports "Enrolled" while scriptsRegistered is
+      // false and never leaves a dangling host permission behind (the round-14
+      // transactional finding).
       await enrollOrigin(canonical);
       const registered = await ensureOriginScriptsRegistered(canonical).catch(
         (e) => ({ ok: false, error: String(e?.message ?? e) }),
@@ -686,6 +700,7 @@ const handlers = {
       if (registered?.ok !== true) {
         await disenrollOrigin(canonical);
         await siteMemory(canonical).clear();
+        await removeOriginHostPermission(canonical);
         return {
           ok: false,
           origin: canonical,
@@ -709,12 +724,18 @@ const handlers = {
       await disenrollOrigin(canonical);
       await siteMemory(canonical).clear();
       invalidateAgent();
+      // Authoritative revocation is claimed ONLY when BOTH the scripts AND the
+      // host permission are confirmed removed (ok is scriptsRemoved &&
+      // permissionRemoved in unregisterOriginScripts). A partial revocation is
+      // surfaced as incomplete, never silently reported as success.
       if (!unreg.ok) {
         return {
           ok: false,
           origin: canonical,
-          error: unreg.error ?? "content-script unregister failed",
-          scriptsRemoved: false,
+          error:
+            unreg.error ??
+            "content-script unregister or host-permission removal failed",
+          scriptsRemoved: unreg.scriptsRemoved,
           permissionRemoved: unreg.permissionRemoved,
         };
       }
@@ -722,35 +743,44 @@ const handlers = {
         ok: true,
         origin: canonical,
         scriptsRemoved: true,
-        permissionRemoved: unreg.permissionRemoved,
+        permissionRemoved: true,
       };
     });
   },
   async "agent.delegate"({ origin, task }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
-    // memory. This is the honest proof that delegation executes a distinct
-    // sub-agent, not merely that the worker map is populated.
+    // memory. Preemptive revocation: the generation is captured up front, the
+    // worker run happens WITHOUT holding the origin lifecycle lock (a hung
+    // provider/model must never block agent.delete), and the generation is
+    // revalidated BEFORE committing the journal write.
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
-      // Re-validate LIVE enrollment under the lock (a deleted origin must not
-      // be delegated to through a stale worker reference).
-      if (!(await isEnrolled(canonical))) {
-        return { ok: false, error: `origin ${canonical} is not enrolled` };
-      }
-      await ensureOrchestrator();
-      const a = orchestrator?.workers?.get(canonical);
-      if (!a) return { ok: false, error: `no agent for ${origin}` };
-      const result = await a.run(task, "", []);
-      await journalAppend(siteMemory(canonical), {
-        type: "delegated-result",
-        id: `delegate:${canonical}:${Date.now()}`,
-        task,
-        result,
-      });
-      return { ok: true, origin: canonical, result };
+    if (!(await isEnrolled(canonical))) {
+      return { ok: false, error: `origin ${canonical} is not enrolled` };
+    }
+    const gen = await enrollmentGeneration(canonical);
+    await ensureOrchestrator();
+    const a = orchestrator?.workers?.get(canonical);
+    if (!a) return { ok: false, error: `no agent for ${origin}` };
+    const result = await a.run(task, "", []);
+    if (
+      !(await isEnrolled(canonical)) ||
+      (await enrollmentGeneration(canonical)) !== gen
+    ) {
+      return {
+        ok: false,
+        error:
+          `origin ${canonical} was disenrolled during delegation — result discarded`,
+      };
+    }
+    await journalAppend(siteMemory(canonical), {
+      type: "delegated-result",
+      id: `delegate:${canonical}:${Date.now()}`,
+      task,
+      result,
     });
+    return { ok: true, origin: canonical, result };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();

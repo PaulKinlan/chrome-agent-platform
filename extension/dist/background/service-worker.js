@@ -25518,6 +25518,9 @@ async function getModel() {
 init_browser_shim_process();
 var ROOT = "memory";
 var MASTER = "master";
+var ENROLL_KEY = "cap:enrollment";
+var MAX_VALUE_BYTES = 256 * 1024;
+var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled"]);
 function canonicalOrigin(value) {
   try {
     const u = new URL(String(value));
@@ -25566,6 +25569,20 @@ function memoryStore(origin) {
       return await readJson(dir, `${key}.json`);
     },
     async set(key, value) {
+      if (isMaster && MASTER_RESERVED_KEYS.has(String(key))) {
+        throw new Error(`key "${key}" is reserved on the master store`);
+      }
+      let serialized;
+      try {
+        serialized = JSON.stringify(value);
+      } catch {
+        throw new Error(`value for "${key}" is not JSON-serializable`);
+      }
+      if (serialized.length > MAX_VALUE_BYTES) {
+        throw new Error(
+          `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
+        );
+      }
       const dir = await openDir(path);
       await writeJson(dir, `${key}.json`, value);
     },
@@ -25619,14 +25636,27 @@ function siteMemory(origin) {
   return memoryStore(canonical);
 }
 async function listOrigins() {
-  const origins = await masterMemory().get("origins");
-  return Array.isArray(origins) ? origins : [];
+  const s = await kvGet(ENROLL_KEY);
+  const map4 = s[ENROLL_KEY] ?? {};
+  return Object.keys(map4).filter((o) => map4[o]?.enrolled === true).sort();
 }
 async function journalAppend(store, entry) {
+  const MAX_ENTRY_TEXT = 16 * 1024;
+  const MAX_JOURNAL_BYTES = 200 * 1024;
   const journal = await store.get("journal") ?? [];
-  journal.push({ ts: Date.now(), ...entry });
-  await store.set("journal", journal.slice(-500));
-  return journal;
+  const bounded = { ...entry };
+  for (const k of ["result", "task"]) {
+    if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
+      bounded[k] = bounded[k].slice(0, MAX_ENTRY_TEXT);
+    }
+  }
+  journal.push({ ts: Date.now(), ...bounded });
+  let entries = journal.slice(-500);
+  while (entries.length > 1 && JSON.stringify(entries).length > MAX_JOURNAL_BYTES) {
+    entries = entries.slice(1);
+  }
+  await store.set("journal", entries);
+  return entries;
 }
 
 // extension/lib/capabilities.js
@@ -66500,7 +66530,7 @@ ${lines}
 `;
 }
 async function allSkills() {
-  const origins = await masterMemory().get("origins") ?? [];
+  const origins = await listOrigins();
   const out = {};
   for (const o of origins) {
     const s = await getSkills(o);
@@ -66522,11 +66552,15 @@ function memoryToolset(memory) {
       execute: async ({ key }) => ({ key, value: await memory.get(key) })
     }),
     memory_set: tool({
-      description: "Write a value to the agent's memory.",
-      inputSchema: external_exports3.object({ key: external_exports3.string(), value: external_exports3.any() }),
+      description: "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
+      inputSchema: external_exports3.object({ key: external_exports3.string().min(1).max(128), value: external_exports3.any() }),
       execute: async ({ key, value }) => {
-        await memory.set(key, value);
-        return { ok: true, key };
+        try {
+          await memory.set(key, value);
+          return { ok: true, key };
+        } catch (e) {
+          return { error: String(e?.message ?? e) };
+        }
       }
     }),
     memory_list: tool({
@@ -66655,7 +66689,19 @@ function createOrchestrator2({
 // extension/lib/tools.js
 init_browser_shim_process();
 var DIR_KEY = "toolDirectory";
-var ENROLL_KEY = "cap:enrollment";
+var ENROLL_KEY2 = "cap:enrollment";
+var enrollmentMutex = Promise.resolve();
+function withEnrollmentLock(fn) {
+  const run = enrollmentMutex.then(fn, fn);
+  enrollmentMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
+async function enrolledMap() {
+  const s = await kvGet(ENROLL_KEY2);
+  return s[ENROLL_KEY2] ?? {};
+}
 var TOOL_BOUNDS = {
   maxNameLength: 128,
   maxDescriptionLength: 2e3,
@@ -66729,49 +66775,44 @@ async function listTools(origin) {
 async function isEnrolled(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return false;
-  const s = await kvGet(ENROLL_KEY);
-  const rec = s[ENROLL_KEY]?.[canonical];
-  return Boolean(rec && rec.enrolled === true);
+  const map4 = await enrolledMap();
+  return Boolean(map4[canonical] && map4[canonical].enrolled === true);
+}
+async function enrollmentGeneration(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return 0;
+  const map4 = await enrolledMap();
+  return map4[canonical]?.gen ?? 0;
 }
 async function enrollOrigin(origin) {
-  const store = masterMemory();
   const canonical = canonicalOrigin(origin);
   if (!canonical) throw new Error(`invalid origin: ${origin}`);
-  await siteMemory(canonical).set("enrolled", { at: Date.now() });
-  const origins = await store.get("origins") ?? [];
-  if (!origins.includes(canonical)) {
-    origins.push(canonical);
-    await store.set("origins", origins);
-  }
-  const s = await kvGet(ENROLL_KEY);
-  const map4 = { ...s[ENROLL_KEY] ?? {} };
-  map4[canonical] = {
-    enrolled: true,
-    at: Date.now(),
-    gen: (map4[canonical]?.gen ?? 0) + 1
-  };
-  await kvSet({ [ENROLL_KEY]: map4 });
-  return origins;
+  return withEnrollmentLock(async () => {
+    await siteMemory(canonical).set("enrolled", { at: Date.now() });
+    const map4 = await enrolledMap();
+    map4[canonical] = {
+      enrolled: true,
+      at: Date.now(),
+      gen: (map4[canonical]?.gen ?? 0) + 1
+    };
+    await kvSet({ [ENROLL_KEY2]: map4 });
+    return Object.keys(map4).filter((o) => map4[o]?.enrolled === true);
+  });
 }
 async function disenrollOrigin(origin) {
-  const store = masterMemory();
-  const origins = await store.get("origins") ?? [];
   const canonical = canonicalOrigin(origin);
-  if (!canonical) return origins;
-  const next = origins.filter((o) => o !== canonical);
-  if (next.length !== origins.length) {
-    await store.set("origins", next);
-  }
-  const s = await kvGet(ENROLL_KEY);
-  const map4 = { ...s[ENROLL_KEY] ?? {} };
-  map4[canonical] = {
-    enrolled: false,
-    // tombstone
-    at: Date.now(),
-    gen: (map4[canonical]?.gen ?? 0) + 1
-  };
-  await kvSet({ [ENROLL_KEY]: map4 });
-  return next;
+  if (!canonical) return [];
+  return withEnrollmentLock(async () => {
+    const map4 = await enrolledMap();
+    map4[canonical] = {
+      enrolled: false,
+      // tombstone
+      at: Date.now(),
+      gen: (map4[canonical]?.gen ?? 0) + 1
+    };
+    await kvSet({ [ENROLL_KEY2]: map4 });
+    return Object.keys(map4).filter((o) => map4[o]?.enrolled === true);
+  });
 }
 async function isApproved(origin, toolName) {
   const approved = await siteMemory(origin).get("approvals") ?? {};
@@ -66925,20 +66966,23 @@ async function heartbeatInflight(name25, token) {
 }
 async function releaseInflight(name25, token) {
   await withLock(async () => {
-    const store = await kvGet(INFLIGHT_KEY);
-    const inflight = { ...store[INFLIGHT_KEY] ?? {} };
-    const existing = inflight[name25];
-    if (validLock(existing) && existing.token === token) {
-      delete inflight[name25];
-      await kvSet({ [INFLIGHT_KEY]: inflight });
-    }
-    const active = activeRuns.get(name25);
-    if (active && active.token === token) {
-      try {
-        active.controller.abort();
-      } catch {
+    try {
+      const store = await kvGet(INFLIGHT_KEY);
+      const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+      const existing = inflight[name25];
+      if (validLock(existing) && existing.token === token) {
+        delete inflight[name25];
+        await kvSet({ [INFLIGHT_KEY]: inflight });
       }
-      activeRuns.delete(name25);
+    } finally {
+      const active = activeRuns.get(name25);
+      if (active && active.token === token) {
+        try {
+          active.controller.abort();
+        } catch {
+        }
+        activeRuns.delete(name25);
+      }
     }
   });
 }
@@ -67464,27 +67508,48 @@ async function unregisterOriginScripts(origin) {
   if (!canonical) return { ok: false, error: "invalid origin" };
   let scriptsRemoved = true;
   let error90 = null;
-  try {
-    await chrome.scripting.unregisterContentScripts({
-      ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
-    });
-  } catch (e) {
-    scriptsRemoved = false;
-    error90 = String(e?.message ?? e);
+  if (typeof chrome !== "undefined" && chrome.scripting?.unregisterContentScripts) {
+    try {
+      await chrome.scripting.unregisterContentScripts({
+        ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
+      });
+      const remaining = await chrome.scripting.getRegisteredContentScripts({
+        ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
+      }).catch(() => null);
+      scriptsRemoved = remaining === null || remaining.length === 0;
+      if (!scriptsRemoved) error90 = "content scripts still registered after unregister";
+    } catch (e) {
+      scriptsRemoved = false;
+      error90 = String(e?.message ?? e);
+    }
   }
   let permissionRemoved = true;
   try {
-    permissionRemoved = await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    permissionRemoved = !await chrome.permissions.contains({
+      origins: [`${canonical}/*`]
+    });
+    if (!permissionRemoved && !error90) error90 = "host permission still present after remove";
   } catch {
     permissionRemoved = false;
   }
   return {
-    ok: scriptsRemoved,
+    ok: scriptsRemoved && permissionRemoved,
     origin: canonical,
     scriptsRemoved,
     permissionRemoved,
     error: error90
   };
+}
+async function removeOriginHostPermission(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return false;
+  try {
+    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    return !await chrome.permissions.contains({ origins: [`${canonical}/*`] });
+  } catch {
+    return false;
+  }
 }
 
 // extension/lib/pure.js
@@ -67980,30 +68045,34 @@ async function siteToolset(origin) {
 async function invokeSiteTool(origin, name25, args) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
-  return await withOriginLock(canonical, async () => {
-    if (!await isEnrolled(canonical)) {
-      return { error: `origin ${canonical} is not enrolled` };
-    }
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((t) => {
-      try {
-        return t.url ? new URL(t.url).origin === canonical : false;
-      } catch {
-        return false;
-      }
-    });
-    if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  if (!await isEnrolled(canonical)) {
+    return { error: `origin ${canonical} is not enrolled` };
+  }
+  const gen = await enrollmentGeneration(canonical);
+  const tabs = await chrome.tabs.query({});
+  const tab = tabs.find((t) => {
     try {
-      const res = await chrome.tabs.sendMessage(tab.id, {
-        type: "invoke-tool",
-        name: name25,
-        args
-      });
-      return res ?? { ok: true };
-    } catch (e) {
-      return { error: `invoke failed: ${e.message}` };
+      return t.url ? new URL(t.url).origin === canonical : false;
+    } catch {
+      return false;
     }
   });
+  if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, {
+      type: "invoke-tool",
+      name: name25,
+      args
+    });
+    if (!await isEnrolled(canonical) || await enrollmentGeneration(canonical) !== gen) {
+      return {
+        error: `origin ${canonical} was disenrolled during the call \u2014 result discarded`
+      };
+    }
+    return res ?? { ok: true };
+  } catch (e) {
+    return { error: `invoke failed: ${e.message}` };
+  }
 }
 function attachmentContext(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return "";
@@ -68297,6 +68366,7 @@ var handlers = {
       if (registered?.ok !== true) {
         await disenrollOrigin(canonical);
         await siteMemory(canonical).clear();
+        await removeOriginHostPermission(canonical);
         return {
           ok: false,
           origin: canonical,
@@ -68319,8 +68389,8 @@ var handlers = {
         return {
           ok: false,
           origin: canonical,
-          error: unreg.error ?? "content-script unregister failed",
-          scriptsRemoved: false,
+          error: unreg.error ?? "content-script unregister or host-permission removal failed",
+          scriptsRemoved: unreg.scriptsRemoved,
           permissionRemoved: unreg.permissionRemoved
         };
       }
@@ -68328,29 +68398,34 @@ var handlers = {
         ok: true,
         origin: canonical,
         scriptsRemoved: true,
-        permissionRemoved: unreg.permissionRemoved
+        permissionRemoved: true
       };
     });
   },
   async "agent.delegate"({ origin, task }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
-      if (!await isEnrolled(canonical)) {
-        return { ok: false, error: `origin ${canonical} is not enrolled` };
-      }
-      await ensureOrchestrator();
-      const a = orchestrator?.workers?.get(canonical);
-      if (!a) return { ok: false, error: `no agent for ${origin}` };
-      const result = await a.run(task, "", []);
-      await journalAppend(siteMemory(canonical), {
-        type: "delegated-result",
-        id: `delegate:${canonical}:${Date.now()}`,
-        task,
-        result
-      });
-      return { ok: true, origin: canonical, result };
+    if (!await isEnrolled(canonical)) {
+      return { ok: false, error: `origin ${canonical} is not enrolled` };
+    }
+    const gen = await enrollmentGeneration(canonical);
+    await ensureOrchestrator();
+    const a = orchestrator?.workers?.get(canonical);
+    if (!a) return { ok: false, error: `no agent for ${origin}` };
+    const result = await a.run(task, "", []);
+    if (!await isEnrolled(canonical) || await enrollmentGeneration(canonical) !== gen) {
+      return {
+        ok: false,
+        error: `origin ${canonical} was disenrolled during delegation \u2014 result discarded`
+      };
+    }
+    await journalAppend(siteMemory(canonical), {
+      type: "delegated-result",
+      id: `delegate:${canonical}:${Date.now()}`,
+      task,
+      result
     });
+    return { ok: true, origin: canonical, result };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();

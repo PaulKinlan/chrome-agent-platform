@@ -33,8 +33,15 @@ async function runTask(text) {
   status.setAttribute("aria-live", "polite");
   body.append(status);
   body.scrollTop = body.scrollHeight;
-  const res = await send("agent.run", { task: text, id: String(Date.now()) });
-  status.remove();
+  let res;
+  try {
+    res = await send("agent.run", { task: text, id: String(Date.now()) });
+  } catch (e) {
+    // A rejected send must never leave "Thinking…" stuck (the round-14 medium).
+    res = { ok: false, error: String(e?.message ?? e) };
+  } finally {
+    status.remove();
+  }
   addMessage(
     "agent",
     res.ok ? (res.result ?? "(done)") : "Error: " + (res.error ?? "unknown"),
