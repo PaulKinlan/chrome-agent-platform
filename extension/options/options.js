@@ -10,6 +10,12 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { RECIPES } from "../lib/recipes.js";
+import { kvGet, kvRemove, kvSet } from "../lib/kv.js";
+import {
+  CAPABILITIES,
+  capabilityStatus,
+  requestCapability,
+} from "../lib/capabilities.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 const PROVIDERS = [
@@ -84,7 +90,10 @@ const THEMES = [
 ];
 
 const $ = (sel) => document.querySelector(sel);
-const storage = chrome.storage.local;
+// The guarded key-value shim: chrome.storage.local is OPTIONAL, so all storage
+// access routes through kv.js (which falls back to session memory when the
+// storage permission is not yet granted).
+const storage = { get: kvGet, set: kvSet, remove: kvRemove };
 
 // ── Providers ──
 async function renderProviders(restoreFocus = false) {
@@ -311,28 +320,28 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
-      // Screenshot capture uses the Chrome debugger API. It is an OPTIONAL,
-      // owner-authorized capability requested HERE (a real user gesture) — never
-      // a permanent manifest permission. Denial degrades gracefully: the grant
-      // still covers open/navigate/close; only screenshots become unavailable.
-      let debuggerGranted = false;
+      // Screenshot capture uses chrome.tabs.captureVisibleTab (the standard
+      // extension API — NOT the Chrome debugger, which cannot be optional and
+      // carries Chrome's all-sites warning). It needs the OPTIONAL `tabs`
+      // capability, requested HERE (a real user gesture). Denial degrades
+      // gracefully: the grant still covers open/navigate/close; only tab
+      // listing + screenshots become unavailable.
+      let tabsGranted = false;
       try {
-        debuggerGranted = await chrome.permissions.request({
-          permissions: ["debugger"],
+        tabsGranted = await chrome.permissions.request({
+          permissions: ["tabs"],
         });
-      } catch { /* unsupported — debugger stays absent */ }
+      } catch { /* unsupported — tabs stays absent */ }
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
       saveFlash(
-        debuggerGranted
+        tabsGranted
           ? "Browser control granted (global, 15 min — set origins below to scope it)."
-          : "Browser control granted (screenshots unavailable — debugger permission not granted).",
+          : "Browser control granted (tab control unavailable — tabs permission not granted).",
       );
+      renderPermissions();
     } else {
       await revokeBrowserControlGrant();
-      try {
-        await chrome.permissions.remove({ permissions: ["debugger"] });
-      } catch { /* already absent */ }
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -351,6 +360,54 @@ async function renderBrowser() {
       saveFlash("No origins listed — reverted to a global grant.");
     }
   });
+}
+
+// ── Permissions (optional capability onboarding) ──
+async function renderPermissions() {
+  const status = await capabilityStatus();
+  const list = $("#permission-list");
+  list.replaceChildren();
+  for (const cap of CAPABILITIES) {
+    const row = document.createElement("div");
+    row.className = "perm-row";
+    const granted = Boolean(status[cap.id]);
+
+    const name = document.createElement("span");
+    name.className = "perm-name";
+    name.textContent = cap.label;
+
+    const state = document.createElement("span");
+    state.className = "perm-state" + (granted ? " granted" : " missing");
+    state.textContent = granted ? "Granted" : "Not granted";
+
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = cap.hint;
+
+    row.append(name, state, hint);
+    if (!granted) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn small grant-perm";
+      btn.dataset.capability = cap.id;
+      btn.textContent = "Enable";
+      btn.setAttribute("aria-label", `Enable ${cap.label}`);
+      btn.addEventListener("click", async () => {
+        // The real chrome.permissions.request happens here, inside the click
+        // handler (a genuine user gesture — the SW can never request).
+        const res = await requestCapability(cap.id);
+        if (res?.granted) saveFlash(`Enabled ${cap.label}.`);
+        else {
+          saveFlash(
+            `Enable ${cap.label} declined: ${res?.error ?? "not granted"}.`,
+          );
+        }
+        renderPermissions();
+      });
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  }
 }
 
 // ── Usage ──
@@ -488,6 +545,7 @@ const sections = [
   "agents",
   "appearance",
   "browser",
+  "permissions",
   "usage",
   "data",
 ];
@@ -505,5 +563,6 @@ await renderAgents();
 await renderEnroll();
 await renderAppearance();
 await renderBrowser();
+await renderPermissions();
 await renderUsage();
 await renderData();

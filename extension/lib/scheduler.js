@@ -2,8 +2,20 @@
 // `register-task` route and the `schedule_task` agent tool call into this, so
 // validation, persistence, and alarm creation stay in a single place.
 
+import { kvGet, kvSet } from "./kv.js";
+
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
+
+/** The chrome.alarms API when the OPTIONAL `alarms` permission is granted,
+ * else null. Scheduling degrades gracefully to a clear error when absent. */
+function alarmsApi() {
+  try {
+    return typeof chrome !== "undefined" && chrome.alarms ? chrome.alarms : null;
+  } catch {
+    return null;
+  }
+}
 
 // A same-boot run is tracked IN MEMORY (the active-runs map below), never
 // inferred from a persisted timestamp. The single-threaded MV3 service worker
@@ -85,22 +97,28 @@ export async function scheduleTask(
     const name = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     // Persist the task (inside the lock so the read-modify-write is atomic).
-    const store = await chrome.storage.local.get(TASK_KEY);
+    const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     tasks[name] = { name, task, at: when, periodInMinutes, attachments };
-    await chrome.storage.local.set({ [TASK_KEY]: tasks });
+    await kvSet({ [TASK_KEY]: tasks });
 
     // Create the alarm LAST. On failure, roll back the persisted task so it is
     // never orphaned.
     try {
+      const alarms = alarmsApi();
+      if (!alarms) {
+        throw new Error(
+          "alarms permission not granted — enable Scheduled tasks in Settings",
+        );
+      }
       const info = { when };
       if (periodInMinutes) info.periodInMinutes = periodInMinutes;
-      await chrome.alarms.create(name, info);
+      await alarms.create(name, info);
     } catch (e) {
-      const cur = await chrome.storage.local.get(TASK_KEY);
+      const cur = await kvGet(TASK_KEY);
       const rollback = { ...(cur[TASK_KEY] ?? {}) };
       delete rollback[name];
-      await chrome.storage.local.set({ [TASK_KEY]: rollback });
+      await kvSet({ [TASK_KEY]: rollback });
       throw e;
     }
     return { name, when };
@@ -115,18 +133,18 @@ export async function scheduleTask(
 export async function markScheduledDone(name, token) {
   await withLock(async () => {
     if (token) {
-      const inflightStore = await chrome.storage.local.get(INFLIGHT_KEY);
+      const inflightStore = await kvGet(INFLIGHT_KEY);
       const inflight = { ...(inflightStore[INFLIGHT_KEY] ?? {}) };
       const existing = inflight[name];
       if (!validLock(existing) || existing.token !== token) {
         throw new Error("ownership lost — scheduled task NOT removed");
       }
     }
-    const store = await chrome.storage.local.get(TASK_KEY);
+    const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     delete tasks[name];
-    await chrome.storage.local.set({ [TASK_KEY]: tasks });
-    await chrome.alarms.clear(name).catch(() => {});
+    await kvSet({ [TASK_KEY]: tasks });
+    await alarmsApi()?.clear(name).catch(() => {});
   });
 }
 
@@ -144,7 +162,7 @@ export async function tryAcquireInflight(name) {
     if (activeRuns.has(name)) {
       return { acquired: false, reason: "running in this worker" };
     }
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     const existing = inflight[name];
     if (existing !== undefined && !validLock(existing)) {
@@ -159,12 +177,15 @@ export async function tryAcquireInflight(name) {
     const controller = new AbortController();
     inflight[name] = { token, at: Date.now(), heartbeatAt: Date.now() };
     try {
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+      await kvSet({ [INFLIGHT_KEY]: inflight });
     } catch {
       return { acquired: false, reason: "persist failed" };
     }
     activeRuns.set(name, { token, controller });
-    return { acquired: true, token, signal: controller.signal };
+    // Expose BOTH the signal (for listening) and the controller (for aborting)
+    // — the heartbeat-failure path must call controller.abort() (an AbortSignal
+    // has no `abort` method; that was the round-13 TypeError).
+    return { acquired: true, token, signal: controller.signal, controller };
   });
 }
 
@@ -178,7 +199,7 @@ export async function ownsInflight(name, token) {
   const active = activeRuns.get(name);
   if (active) return active.token === token;
   // No live run: fall back to the persisted lock (cross-boot / released).
-  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const store = await kvGet(INFLIGHT_KEY);
   const existing = store[INFLIGHT_KEY]?.[name];
   return Boolean(validLock(existing) && existing.token === token);
 }
@@ -186,12 +207,12 @@ export async function ownsInflight(name, token) {
 /** Renew a live owner's heartbeat so a slow-but-alive run never looks stale. */
 export async function heartbeatInflight(name, token) {
   await withLock(async () => {
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     const existing = inflight[name];
     if (validLock(existing) && existing.token === token) {
       inflight[name] = { ...existing, heartbeatAt: Date.now() };
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+      await kvSet({ [INFLIGHT_KEY]: inflight });
     }
   });
 }
@@ -201,12 +222,12 @@ export async function heartbeatInflight(name, token) {
  * lock — that was the exact stale-owner-unlock the reviewer reproduced. */
 export async function releaseInflight(name, token) {
   await withLock(async () => {
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     const existing = inflight[name];
     if (validLock(existing) && existing.token === token) {
       delete inflight[name];
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+      await kvSet({ [INFLIGHT_KEY]: inflight });
     }
     // Same-boot: abort + drop the in-memory run regardless of the persisted
     // compare-and-release result (the run is ending either way).
@@ -236,7 +257,7 @@ export function __resetBootForTest() {
  */
 export async function clearStaleInflight() {
   await withLock(async () => {
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     for (const name of Object.keys(inflight)) {
       const v = inflight[name];
@@ -244,7 +265,7 @@ export async function clearStaleInflight() {
         delete inflight[name];
       }
     }
-    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    await kvSet({ [INFLIGHT_KEY]: inflight });
   });
 }
 
@@ -287,12 +308,14 @@ export async function reconcileScheduledTasks() {
   // a recovery pass can never recreate an alarm whose payload was just deleted
   // (the round-11 race: snapshot outside the mutex, delete inside it).
   return withLock(async () => {
-  const store = await chrome.storage.local.get(TASK_KEY);
+  const store = await kvGet(TASK_KEY);
   const tasks = { ...(store[TASK_KEY] ?? {}) };
   const names = Object.keys(tasks);
   if (names.length === 0) return [];
 
-  const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
+  const alarms = alarmsApi();
+  if (!alarms) return []; // alarms not granted — nothing to reconcile (graceful)
+  const existing = new Set((await alarms.getAll()).map((a) => a.name));
   const resumed = [];
   const failed = [];
   const now = Date.now();
@@ -309,7 +332,7 @@ export async function reconcileScheduledTasks() {
       // Only record `resumed` when the alarm was ACTUALLY (re)created; a failed
       // create is surfaced, never silently claimed as resumed.
       try {
-        await chrome.alarms.create(name, info);
+        await alarms.create(name, info);
         resumed.push(name);
       } catch (err) {
         failed.push(name);

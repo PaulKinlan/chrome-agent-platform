@@ -1,3 +1,82 @@
+// extension/lib/kv.js
+var session = /* @__PURE__ */ new Map();
+var warned = false;
+function available() {
+  try {
+    return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+  } catch {
+    return false;
+  }
+}
+function clone(v) {
+  return v === void 0 ? void 0 : JSON.parse(JSON.stringify(v));
+}
+function warnOnce() {
+  if (!warned) {
+    warned = true;
+    console.warn(
+      "storage permission not granted \u2014 changes are session-only until enabled in Settings"
+    );
+  }
+}
+async function kvGet(keys) {
+  if (!available()) {
+    warnOnce();
+    const out = {};
+    if (keys == null) {
+      for (const [k, v] of session) out[k] = clone(v);
+      return out;
+    }
+    for (const k of Array.isArray(keys) ? keys : [keys]) {
+      if (k != null && session.has(k)) out[k] = clone(session.get(k));
+    }
+    return out;
+  }
+  try {
+    return await chrome.storage.local.get(keys);
+  } catch (e) {
+    warnOnce();
+    const out = {};
+    for (const k of Array.isArray(keys) ? keys : [keys]) {
+      if (k != null && session.has(k)) out[k] = clone(session.get(k));
+    }
+    return out;
+  }
+}
+async function kvSet(obj) {
+  if (!available()) {
+    warnOnce();
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === void 0) session.delete(k);
+      else session.set(k, clone(v));
+    }
+    return;
+  }
+  try {
+    await chrome.storage.local.set(obj);
+  } catch (e) {
+    warnOnce();
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === void 0) session.delete(k);
+      else session.set(k, clone(v));
+    }
+  }
+}
+async function kvRemove(keys) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  if (!available()) {
+    warnOnce();
+    for (const k of list) session.delete(k);
+    return;
+  }
+  try {
+    await chrome.storage.local.remove(list);
+  } catch (e) {
+    warnOnce();
+    for (const k of list) session.delete(k);
+  }
+}
+
 // extension/lib/provider.js
 var DEFAULTS = {
   // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
@@ -7,7 +86,7 @@ var DEFAULTS = {
   model: ""
 };
 async function getProviderConfig() {
-  const stored = await chrome.storage.local.get("providerConfig");
+  const stored = await kvGet("providerConfig");
   return { ...DEFAULTS, ...stored.providerConfig ?? {} };
 }
 
@@ -15,7 +94,7 @@ async function getProviderConfig() {
 var STORAGE_KEY = "cairn:usage";
 var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
 async function getUsage() {
-  const store = await chrome.storage.local.get(STORAGE_KEY);
+  const store = await kvGet(STORAGE_KEY);
   const rows = (store[STORAGE_KEY] ?? []).filter(
     (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
   );
@@ -197,7 +276,7 @@ async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
   };
-  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
@@ -222,12 +301,87 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
   };
-  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
 async function revokeBrowserControlGrant() {
-  await chrome.storage.local.remove(GRANT_KEY);
+  await kvRemove(GRANT_KEY);
   return { revoked: true };
+}
+
+// extension/lib/capabilities.js
+var CAPABILITIES = [
+  {
+    id: "storage",
+    permissions: ["storage"],
+    label: "Memory & settings",
+    hint: "Persist settings, tasks, usage and enrollment across restarts. Without it the hub still runs, but nothing survives a restart."
+  },
+  {
+    id: "alarms",
+    permissions: ["alarms"],
+    label: "Scheduled tasks",
+    hint: "Run the agent on a schedule (or after a delay). Without it, scheduled tasks are unavailable."
+  },
+  {
+    id: "tabs",
+    permissions: ["tabs"],
+    label: "Browser control",
+    hint: "Open/navigate/close tabs and capture screenshots. Without it, read-only page access remains."
+  },
+  {
+    id: "scripting",
+    permissions: ["scripting"],
+    label: "Site agents (read pages)",
+    hint: "Inject the discovery/content scripts into enrolled origins so a site's WebMCP tools can be discovered and driven."
+  },
+  {
+    id: "notifications",
+    permissions: ["notifications"],
+    label: "Notifications",
+    hint: "Surface scheduled-task completions as system notifications."
+  },
+  {
+    id: "sidePanel",
+    permissions: ["sidePanel"],
+    label: "Side panel",
+    hint: "Open the hub in Chrome's side panel alongside a page."
+  }
+];
+async function hasPermission(permission) {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: [permission] });
+  } catch {
+    return false;
+  }
+}
+async function hasCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return false;
+  for (const p of cap.permissions) {
+    if (!await hasPermission(p)) return false;
+  }
+  return true;
+}
+async function capabilityStatus() {
+  const out = {};
+  for (const c of CAPABILITIES) {
+    out[c.id] = await hasCapability(c.id);
+  }
+  return out;
+}
+async function requestCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  try {
+    const granted = await chrome.permissions.request({
+      permissions: cap.permissions
+    });
+    return { ok: true, granted: Boolean(granted), capability: id };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e), capability: id };
+  }
 }
 
 // extension/options/options.js
@@ -301,7 +455,7 @@ var THEMES = [
   { id: "terminal", label: "Terminal", swatch: "#0c0c0c,#4ec9b0" }
 ];
 var $ = (sel) => document.querySelector(sel);
-var storage = chrome.storage.local;
+var storage = { get: kvGet, set: kvSet, remove: kvRemove };
 async function renderProviders(restoreFocus = false) {
   const cfg = await getProviderConfig();
   const list = $("#provider-list");
@@ -467,24 +621,21 @@ async function renderBrowser() {
   }
   $("#browser-grant").addEventListener("change", async (e) => {
     if (e.target.checked) {
-      let debuggerGranted = false;
+      let tabsGranted = false;
       try {
-        debuggerGranted = await chrome.permissions.request({
-          permissions: ["debugger"]
+        tabsGranted = await chrome.permissions.request({
+          permissions: ["tabs"]
         });
       } catch {
       }
       await setGlobalBrowserControlGrant();
       $("#grant-origins").hidden = false;
       saveFlash(
-        debuggerGranted ? "Browser control granted (global, 15 min \u2014 set origins below to scope it)." : "Browser control granted (screenshots unavailable \u2014 debugger permission not granted)."
+        tabsGranted ? "Browser control granted (global, 15 min \u2014 set origins below to scope it)." : "Browser control granted (tab control unavailable \u2014 tabs permission not granted)."
       );
+      renderPermissions();
     } else {
       await revokeBrowserControlGrant();
-      try {
-        await chrome.permissions.remove({ permissions: ["debugger"] });
-      } catch {
-      }
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -503,6 +654,46 @@ async function renderBrowser() {
       saveFlash("No origins listed \u2014 reverted to a global grant.");
     }
   });
+}
+async function renderPermissions() {
+  const status = await capabilityStatus();
+  const list = $("#permission-list");
+  list.replaceChildren();
+  for (const cap of CAPABILITIES) {
+    const row = document.createElement("div");
+    row.className = "perm-row";
+    const granted = Boolean(status[cap.id]);
+    const name = document.createElement("span");
+    name.className = "perm-name";
+    name.textContent = cap.label;
+    const state = document.createElement("span");
+    state.className = "perm-state" + (granted ? " granted" : " missing");
+    state.textContent = granted ? "Granted" : "Not granted";
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = cap.hint;
+    row.append(name, state, hint);
+    if (!granted) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn small grant-perm";
+      btn.dataset.capability = cap.id;
+      btn.textContent = "Enable";
+      btn.setAttribute("aria-label", `Enable ${cap.label}`);
+      btn.addEventListener("click", async () => {
+        const res = await requestCapability(cap.id);
+        if (res?.granted) saveFlash(`Enabled ${cap.label}.`);
+        else {
+          saveFlash(
+            `Enable ${cap.label} declined: ${res?.error ?? "not granted"}.`
+          );
+        }
+        renderPermissions();
+      });
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  }
 }
 async function renderUsage() {
   const u = await getUsage();
@@ -622,5 +813,6 @@ await renderAgents();
 await renderEnroll();
 await renderAppearance();
 await renderBrowser();
+await renderPermissions();
 await renderUsage();
 await renderData();

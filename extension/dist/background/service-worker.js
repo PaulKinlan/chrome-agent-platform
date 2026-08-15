@@ -25213,14 +25213,14 @@ async function isPromptApiAvailable() {
 function createPromptApiModel() {
   const api = getPromptApi();
   if (!api) throw new Error("Chrome Prompt API not available");
-  let session = null;
+  let session2 = null;
   const ensureSession = async () => {
-    if (session) return session;
-    session = await api.create({
+    if (session2) return session2;
+    session2 = await api.create({
       systemPrompt: "You are the Chrome Agent Platform hub agent. Be concise and helpful.",
       temperature: 0.4
     });
-    return session;
+    return session2;
   };
   return {
     specificationVersion: "v2",
@@ -25322,6 +25322,86 @@ function createDemoModel() {
   };
 }
 
+// extension/lib/kv.js
+init_browser_shim_process();
+var session = /* @__PURE__ */ new Map();
+var warned = false;
+function available() {
+  try {
+    return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+  } catch {
+    return false;
+  }
+}
+function clone2(v) {
+  return v === void 0 ? void 0 : JSON.parse(JSON.stringify(v));
+}
+function warnOnce() {
+  if (!warned) {
+    warned = true;
+    console.warn(
+      "storage permission not granted \u2014 changes are session-only until enabled in Settings"
+    );
+  }
+}
+async function kvGet(keys) {
+  if (!available()) {
+    warnOnce();
+    const out = {};
+    if (keys == null) {
+      for (const [k, v] of session) out[k] = clone2(v);
+      return out;
+    }
+    for (const k of Array.isArray(keys) ? keys : [keys]) {
+      if (k != null && session.has(k)) out[k] = clone2(session.get(k));
+    }
+    return out;
+  }
+  try {
+    return await chrome.storage.local.get(keys);
+  } catch (e) {
+    warnOnce();
+    const out = {};
+    for (const k of Array.isArray(keys) ? keys : [keys]) {
+      if (k != null && session.has(k)) out[k] = clone2(session.get(k));
+    }
+    return out;
+  }
+}
+async function kvSet(obj) {
+  if (!available()) {
+    warnOnce();
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === void 0) session.delete(k);
+      else session.set(k, clone2(v));
+    }
+    return;
+  }
+  try {
+    await chrome.storage.local.set(obj);
+  } catch (e) {
+    warnOnce();
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === void 0) session.delete(k);
+      else session.set(k, clone2(v));
+    }
+  }
+}
+async function kvRemove(keys) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  if (!available()) {
+    warnOnce();
+    for (const k of list) session.delete(k);
+    return;
+  }
+  try {
+    await chrome.storage.local.remove(list);
+  } catch (e) {
+    warnOnce();
+    for (const k of list) session.delete(k);
+  }
+}
+
 // extension/lib/provider.js
 var DEFAULTS = {
   // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
@@ -25382,13 +25462,13 @@ var OPENAI_COMPATIBLE_IDS = /* @__PURE__ */ new Set([
   "ollama"
 ]);
 async function getProviderConfig() {
-  const stored = await chrome.storage.local.get("providerConfig");
+  const stored = await kvGet("providerConfig");
   return { ...DEFAULTS, ...stored.providerConfig ?? {} };
 }
 async function setProviderConfig(partial3) {
   const cur = await getProviderConfig();
   const next = { ...cur, ...partial3 };
-  await chrome.storage.local.set({ providerConfig: next });
+  await kvSet({ providerConfig: next });
   return next;
 }
 async function getModel() {
@@ -25547,6 +25627,70 @@ async function journalAppend(store, entry) {
   journal.push({ ts: Date.now(), ...entry });
   await store.set("journal", journal.slice(-500));
   return journal;
+}
+
+// extension/lib/capabilities.js
+init_browser_shim_process();
+var CAPABILITIES = [
+  {
+    id: "storage",
+    permissions: ["storage"],
+    label: "Memory & settings",
+    hint: "Persist settings, tasks, usage and enrollment across restarts. Without it the hub still runs, but nothing survives a restart."
+  },
+  {
+    id: "alarms",
+    permissions: ["alarms"],
+    label: "Scheduled tasks",
+    hint: "Run the agent on a schedule (or after a delay). Without it, scheduled tasks are unavailable."
+  },
+  {
+    id: "tabs",
+    permissions: ["tabs"],
+    label: "Browser control",
+    hint: "Open/navigate/close tabs and capture screenshots. Without it, read-only page access remains."
+  },
+  {
+    id: "scripting",
+    permissions: ["scripting"],
+    label: "Site agents (read pages)",
+    hint: "Inject the discovery/content scripts into enrolled origins so a site's WebMCP tools can be discovered and driven."
+  },
+  {
+    id: "notifications",
+    permissions: ["notifications"],
+    label: "Notifications",
+    hint: "Surface scheduled-task completions as system notifications."
+  },
+  {
+    id: "sidePanel",
+    permissions: ["sidePanel"],
+    label: "Side panel",
+    hint: "Open the hub in Chrome's side panel alongside a page."
+  }
+];
+async function hasPermission(permission) {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: [permission] });
+  } catch {
+    return false;
+  }
+}
+async function hasCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return false;
+  for (const p of cap.permissions) {
+    if (!await hasPermission(p)) return false;
+  }
+  return true;
+}
+async function capabilityStatus() {
+  const out = {};
+  for (const c of CAPABILITIES) {
+    out[c.id] = await hasCapability(c.id);
+  }
+  return out;
 }
 
 // extension/lib/agent.js
@@ -37719,7 +37863,7 @@ __export(external_exports2, {
   check: () => check2,
   cidrv4: () => cidrv44,
   cidrv6: () => cidrv64,
-  clone: () => clone2,
+  clone: () => clone3,
   codec: () => codec,
   coerce: () => coerce_exports2,
   config: () => config2,
@@ -38104,7 +38248,7 @@ __export(core_exports4, {
   _void: () => _void3,
   _xid: () => _xid2,
   _xor: () => _xor,
-  clone: () => clone2,
+  clone: () => clone3,
   config: () => config2,
   createStandardJSONSchemaMethod: () => createStandardJSONSchemaMethod,
   createToJSONSchemaMethod: () => createToJSONSchemaMethod,
@@ -38249,7 +38393,7 @@ __export(util_exports2, {
   captureStackTrace: () => captureStackTrace2,
   cleanEnum: () => cleanEnum2,
   cleanRegex: () => cleanRegex2,
-  clone: () => clone2,
+  clone: () => clone3,
   cloneDef: () => cloneDef,
   createTransparentProxy: () => createTransparentProxy2,
   defineLazy: () => defineLazy2,
@@ -38539,7 +38683,7 @@ var primitiveTypes2 = /* @__PURE__ */ new Set([
 function escapeRegex2(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function clone2(inst, def, params) {
+function clone3(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
   if (!def || params?.parent)
     cl._zod.parent = inst;
@@ -38640,7 +38784,7 @@ function pick2(schema4, mask) {
     },
     checks: []
   });
-  return clone2(schema4, def);
+  return clone3(schema4, def);
 }
 function omit2(schema4, mask) {
   const currDef = schema4._zod.def;
@@ -38665,7 +38809,7 @@ function omit2(schema4, mask) {
     },
     checks: []
   });
-  return clone2(schema4, def);
+  return clone3(schema4, def);
 }
 function extend2(schema4, shape) {
   if (!isPlainObject2(shape)) {
@@ -38688,7 +38832,7 @@ function extend2(schema4, shape) {
       return _shape;
     }
   });
-  return clone2(schema4, def);
+  return clone3(schema4, def);
 }
 function safeExtend(schema4, shape) {
   if (!isPlainObject2(shape)) {
@@ -38701,7 +38845,7 @@ function safeExtend(schema4, shape) {
       return _shape;
     }
   });
-  return clone2(schema4, def);
+  return clone3(schema4, def);
 }
 function merge2(a, b) {
   if (a._zod.def.checks?.length) {
@@ -38718,7 +38862,7 @@ function merge2(a, b) {
     },
     checks: b._zod.def.checks ?? []
   });
-  return clone2(a, def);
+  return clone3(a, def);
 }
 function partial2(Class3, schema4, mask) {
   const currDef = schema4._zod.def;
@@ -38756,7 +38900,7 @@ function partial2(Class3, schema4, mask) {
     },
     checks: []
   });
-  return clone2(schema4, def);
+  return clone3(schema4, def);
 }
 function required2(Class3, schema4, mask) {
   const def = mergeDefs(schema4._zod.def, {
@@ -38787,7 +38931,7 @@ function required2(Class3, schema4, mask) {
       return shape;
     }
   });
-  return clone2(schema4, def);
+  return clone3(schema4, def);
 }
 function aborted2(x, startIndex = 0) {
   if (x.aborted === true)
@@ -50477,7 +50621,7 @@ var ZodType2 = /* @__PURE__ */ $constructor2("ZodType", (inst, def) => {
       return this.check(...chks);
     },
     clone(def2, params) {
-      return clone2(this, def2, params);
+      return clone3(this, def2, params);
     },
     brand() {
       return this;
@@ -51228,7 +51372,7 @@ function record2(keyType, valueType, params) {
   });
 }
 function partialRecord2(keyType, valueType, params) {
-  const k = clone2(keyType);
+  const k = clone3(keyType);
   k._zod.values = void 0;
   return new ZodRecord2({
     type: "record",
@@ -65208,8 +65352,8 @@ function markHasSlashCommands(agent) {
 }
 function unknownSlashCommandMessage(name25, commands) {
   const names = commands ? Object.keys(commands).sort() : [];
-  const available = names.length > 0 ? names.map((n) => `/${n}`).join(", ") : "(none configured)";
-  return `Unknown slash command "/${name25}". Available commands: ${available}.`;
+  const available2 = names.length > 0 ? names.map((n) => `/${n}`).join(", ") : "(none configured)";
+  return `Unknown slash command "/${name25}". Available commands: ${available2}.`;
 }
 
 // node_modules/agent-do/dist/src/loop.js
@@ -66275,17 +66419,17 @@ async function recordUsage(p) {
     totalTokens: inputTokens + outputTokens,
     estimatedCost: p.estimatedCost ?? 0
   };
-  const store = await chrome.storage.local.get(STORAGE_KEY);
+  const store = await kvGet(STORAGE_KEY);
   const rows = (store[STORAGE_KEY] ?? []).filter(
     (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
   );
   rows.push(record3);
   const trimmed = rows.slice(-MAX_RECORDS);
-  await chrome.storage.local.set({ [STORAGE_KEY]: trimmed });
+  await kvSet({ [STORAGE_KEY]: trimmed });
   return record3;
 }
 async function getUsage() {
-  const store = await chrome.storage.local.get(STORAGE_KEY);
+  const store = await kvGet(STORAGE_KEY);
   const rows = (store[STORAGE_KEY] ?? []).filter(
     (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
   );
@@ -66333,7 +66477,7 @@ async function getUsage() {
   };
 }
 async function clearUsage() {
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await kvRemove(STORAGE_KEY);
 }
 
 // extension/lib/skills.js
@@ -66585,7 +66729,7 @@ async function listTools(origin) {
 async function isEnrolled(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return false;
-  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const s = await kvGet(ENROLL_KEY);
   const rec = s[ENROLL_KEY]?.[canonical];
   return Boolean(rec && rec.enrolled === true);
 }
@@ -66599,14 +66743,14 @@ async function enrollOrigin(origin) {
     origins.push(canonical);
     await store.set("origins", origins);
   }
-  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const s = await kvGet(ENROLL_KEY);
   const map4 = { ...s[ENROLL_KEY] ?? {} };
   map4[canonical] = {
     enrolled: true,
     at: Date.now(),
     gen: (map4[canonical]?.gen ?? 0) + 1
   };
-  await chrome.storage.local.set({ [ENROLL_KEY]: map4 });
+  await kvSet({ [ENROLL_KEY]: map4 });
   return origins;
 }
 async function disenrollOrigin(origin) {
@@ -66618,7 +66762,7 @@ async function disenrollOrigin(origin) {
   if (next.length !== origins.length) {
     await store.set("origins", next);
   }
-  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const s = await kvGet(ENROLL_KEY);
   const map4 = { ...s[ENROLL_KEY] ?? {} };
   map4[canonical] = {
     enrolled: false,
@@ -66626,7 +66770,7 @@ async function disenrollOrigin(origin) {
     at: Date.now(),
     gen: (map4[canonical]?.gen ?? 0) + 1
   };
-  await chrome.storage.local.set({ [ENROLL_KEY]: map4 });
+  await kvSet({ [ENROLL_KEY]: map4 });
   return next;
 }
 async function isApproved(origin, toolName) {
@@ -66654,6 +66798,13 @@ init_browser_shim_process();
 init_browser_shim_process();
 var TASK_KEY = "cap:scheduledTasks";
 var INFLIGHT_KEY = "cap:scheduledInflight";
+function alarmsApi() {
+  try {
+    return typeof chrome !== "undefined" && chrome.alarms ? chrome.alarms : null;
+  } catch {
+    return null;
+  }
+}
 var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
 var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
 var activeRuns = /* @__PURE__ */ new Map();
@@ -66689,19 +66840,25 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       );
     }
     const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const store = await chrome.storage.local.get(TASK_KEY);
+    const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     tasks[name25] = { name: name25, task, at: when, periodInMinutes, attachments };
-    await chrome.storage.local.set({ [TASK_KEY]: tasks });
+    await kvSet({ [TASK_KEY]: tasks });
     try {
+      const alarms = alarmsApi();
+      if (!alarms) {
+        throw new Error(
+          "alarms permission not granted \u2014 enable Scheduled tasks in Settings"
+        );
+      }
       const info = { when };
       if (periodInMinutes) info.periodInMinutes = periodInMinutes;
-      await chrome.alarms.create(name25, info);
+      await alarms.create(name25, info);
     } catch (e) {
-      const cur = await chrome.storage.local.get(TASK_KEY);
+      const cur = await kvGet(TASK_KEY);
       const rollback = { ...cur[TASK_KEY] ?? {} };
       delete rollback[name25];
-      await chrome.storage.local.set({ [TASK_KEY]: rollback });
+      await kvSet({ [TASK_KEY]: rollback });
       throw e;
     }
     return { name: name25, when };
@@ -66710,18 +66867,18 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
 async function markScheduledDone(name25, token) {
   await withLock(async () => {
     if (token) {
-      const inflightStore = await chrome.storage.local.get(INFLIGHT_KEY);
+      const inflightStore = await kvGet(INFLIGHT_KEY);
       const inflight = { ...inflightStore[INFLIGHT_KEY] ?? {} };
       const existing = inflight[name25];
       if (!validLock(existing) || existing.token !== token) {
         throw new Error("ownership lost \u2014 scheduled task NOT removed");
       }
     }
-    const store = await chrome.storage.local.get(TASK_KEY);
+    const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     delete tasks[name25];
-    await chrome.storage.local.set({ [TASK_KEY]: tasks });
-    await chrome.alarms.clear(name25).catch(() => {
+    await kvSet({ [TASK_KEY]: tasks });
+    await alarmsApi()?.clear(name25).catch(() => {
     });
   });
 }
@@ -66730,7 +66887,7 @@ async function tryAcquireInflight(name25) {
     if (activeRuns.has(name25)) {
       return { acquired: false, reason: "running in this worker" };
     }
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     const existing = inflight[name25];
     if (existing !== void 0 && !validLock(existing)) {
@@ -66740,40 +66897,40 @@ async function tryAcquireInflight(name25) {
     const controller = new AbortController();
     inflight[name25] = { token, at: Date.now(), heartbeatAt: Date.now() };
     try {
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+      await kvSet({ [INFLIGHT_KEY]: inflight });
     } catch {
       return { acquired: false, reason: "persist failed" };
     }
     activeRuns.set(name25, { token, controller });
-    return { acquired: true, token, signal: controller.signal };
+    return { acquired: true, token, signal: controller.signal, controller };
   });
 }
 async function ownsInflight(name25, token) {
   const active = activeRuns.get(name25);
   if (active) return active.token === token;
-  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const store = await kvGet(INFLIGHT_KEY);
   const existing = store[INFLIGHT_KEY]?.[name25];
   return Boolean(validLock(existing) && existing.token === token);
 }
 async function heartbeatInflight(name25, token) {
   await withLock(async () => {
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     const existing = inflight[name25];
     if (validLock(existing) && existing.token === token) {
       inflight[name25] = { ...existing, heartbeatAt: Date.now() };
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+      await kvSet({ [INFLIGHT_KEY]: inflight });
     }
   });
 }
 async function releaseInflight(name25, token) {
   await withLock(async () => {
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     const existing = inflight[name25];
     if (validLock(existing) && existing.token === token) {
       delete inflight[name25];
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+      await kvSet({ [INFLIGHT_KEY]: inflight });
     }
     const active = activeRuns.get(name25);
     if (active && active.token === token) {
@@ -66787,7 +66944,7 @@ async function releaseInflight(name25, token) {
 }
 async function clearStaleInflight() {
   await withLock(async () => {
-    const store = await chrome.storage.local.get(INFLIGHT_KEY);
+    const store = await kvGet(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     for (const name25 of Object.keys(inflight)) {
       const v = inflight[name25];
@@ -66795,7 +66952,7 @@ async function clearStaleInflight() {
         delete inflight[name25];
       }
     }
-    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+    await kvSet({ [INFLIGHT_KEY]: inflight });
   });
 }
 var bootRecoveryPromise = null;
@@ -66819,11 +66976,13 @@ function recoverOnBoot() {
 }
 async function reconcileScheduledTasks() {
   return withLock(async () => {
-    const store = await chrome.storage.local.get(TASK_KEY);
+    const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     const names = Object.keys(tasks);
     if (names.length === 0) return [];
-    const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name));
+    const alarms = alarmsApi();
+    if (!alarms) return [];
+    const existing = new Set((await alarms.getAll()).map((a) => a.name));
     const resumed = [];
     const failed = [];
     const now2 = Date.now();
@@ -66834,7 +66993,7 @@ async function reconcileScheduledTasks() {
         const info = { when };
         if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
         try {
-          await chrome.alarms.create(name25, info);
+          await alarms.create(name25, info);
           resumed.push(name25);
         } catch (err) {
           failed.push(name25);
@@ -66863,7 +67022,7 @@ function newGrantId() {
   return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
 }
 async function isBrowserControlGranted(origin) {
-  const s = await chrome.storage.local.get(GRANT_KEY);
+  const s = await kvGet(GRANT_KEY);
   const grant = s[GRANT_KEY];
   if (!grant || typeof grant !== "object") return false;
   if (typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)) return false;
@@ -66886,7 +67045,7 @@ async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
   };
-  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
@@ -66911,23 +67070,41 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now()
   };
-  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
 async function revokeBrowserControlGrant() {
-  await chrome.storage.local.remove(GRANT_KEY);
+  await kvRemove(GRANT_KEY);
   return { revoked: true };
 }
 async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0] ?? null;
 }
-async function hasDebuggerPermission() {
+async function hasTabsPermission() {
   try {
-    return await chrome.permissions.contains({ permissions: ["debugger"] });
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["tabs"] });
   } catch {
     return false;
   }
+}
+async function hasScriptingPermission() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["scripting"] });
+  } catch {
+    return false;
+  }
+}
+var captureLocks = /* @__PURE__ */ new Map();
+function withTabCaptureLock(tabId, fn) {
+  const prev = captureLocks.get(tabId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  captureLocks.set(tabId, run.then(() => {
+  }, () => {
+  }));
+  return run;
 }
 function validateGrantFor(grant, origin) {
   if (!grant || typeof grant !== "object") return null;
@@ -66944,6 +67121,11 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 async function captureTabScreenshot(tabId) {
+  if (!await hasTabsPermission()) {
+    return {
+      error: "tabs permission not granted \u2014 enable Browser control in Settings to allow screenshots"
+    };
+  }
   const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
   if (!tab?.id) return { error: "no tab" };
   const origin = tab.url ? (() => {
@@ -66955,7 +67137,7 @@ async function captureTabScreenshot(tabId) {
   })() : void 0;
   if (!origin) return { error: "no origin" };
   const grantIdBefore = validateGrantFor(
-    (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
+    (await kvGet(GRANT_KEY))[GRANT_KEY],
     origin
   );
   if (!grantIdBefore) {
@@ -66963,58 +67145,68 @@ async function captureTabScreenshot(tabId) {
       error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
     };
   }
-  if (!await hasDebuggerPermission()) {
-    return {
-      error: "debugger permission not granted \u2014 enable browser control in Settings to allow screenshots"
-    };
-  }
-  const debuggee = { tabId: tab.id };
-  let result;
-  let detachError = null;
-  try {
-    await chrome.debugger.attach(debuggee, "1.3");
-    await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
-    const shot = await chrome.debugger.sendCommand(
-      debuggee,
-      "Page.captureScreenshot",
-      { format: "png" }
-    );
+  return await withTabCaptureLock(tab.id, async () => {
+    try {
+      await chrome.tabs.update(tab.id, { active: true });
+    } catch (e) {
+      return { error: `could not activate tab: ${e?.message ?? e}` };
+    }
+    const cur = await chrome.tabs.get(tab.id).catch(() => null);
+    const curOrigin = cur?.url ? (() => {
+      try {
+        return canonicalOrigin(cur.url);
+      } catch {
+        return void 0;
+      }
+    })() : void 0;
+    if (!curOrigin || curOrigin !== origin) {
+      return { error: "tab navigated during capture \u2014 screenshot discarded" };
+    }
+    let dataUrl;
+    try {
+      dataUrl = await chrome.tabs.captureVisibleTab(
+        cur.windowId ?? void 0,
+        { format: "png" }
+      );
+    } catch (e) {
+      return { error: `capture failed: ${e?.message ?? e}` };
+    }
     const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
-    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : void 0;
-    if (!currentOrigin || currentOrigin !== origin) {
-      result = { error: "tab navigated during capture \u2014 screenshot discarded" };
-    } else if (validateGrantFor(
-      (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
-      currentOrigin
+    const nowOrigin = nowTab?.url ? (() => {
+      try {
+        return canonicalOrigin(nowTab.url);
+      } catch {
+        return void 0;
+      }
+    })() : void 0;
+    if (!nowOrigin || nowOrigin !== origin) {
+      return { error: "tab navigated during capture \u2014 screenshot discarded" };
+    }
+    if (validateGrantFor(
+      (await kvGet(GRANT_KEY))[GRANT_KEY],
+      nowOrigin
     ) !== grantIdBefore) {
-      result = {
+      return {
         error: "browser control grant changed during capture \u2014 screenshot discarded"
       };
-    } else if (!shot?.data) {
-      result = { error: "capture returned no data" };
-    } else {
-      result = {
-        screenshot: `data:image/png;base64,${shot.data}`,
-        url: tab.url
-        // the SOURCE page, so the UI re-opens the page (not the data URL)
-      };
     }
-  } catch (e) {
-    result = { error: String(e?.message ?? e) };
-  } finally {
-    try {
-      await chrome.debugger.detach(debuggee);
-    } catch (e) {
-      detachError = String(e?.message ?? e);
+    if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+      return { error: "capture returned no image data" };
     }
-  }
-  if (detachError) {
-    return { error: `debugger detach failed: ${detachError}` };
-  }
-  return result;
+    return {
+      screenshot: dataUrl,
+      url: nowTab.url
+      // the SOURCE page, so the UI re-opens the page (not the data URL)
+    };
+  });
 }
 async function readPage(tabId) {
   try {
+    if (!await hasScriptingPermission()) {
+      return {
+        error: "scripting permission not granted \u2014 enable Site agents in Settings"
+      };
+    }
     const target = tabId ? { tabId } : await activeTab().then((t) => t?.id ? { tabId: t.id } : null);
     if (!target) return { error: "no tab" };
     const results = await chrome.scripting.executeScript({
@@ -67036,6 +67228,11 @@ function browserToolset() {
       description: "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ url: external_exports3.string().url() }),
       execute: async ({ url: url3 }) => {
+        if (!await hasTabsPermission()) {
+          return {
+            error: "tabs permission not granted \u2014 enable Browser control in Settings"
+          };
+        }
         let destOrigin;
         try {
           destOrigin = canonicalOrigin(url3);
@@ -67058,6 +67255,11 @@ function browserToolset() {
         url: external_exports3.string().url()
       }),
       execute: async ({ tabId, url: url3 }) => {
+        if (!await hasTabsPermission()) {
+          return {
+            error: "tabs permission not granted \u2014 enable Browser control in Settings"
+          };
+        }
         let destOrigin;
         try {
           destOrigin = canonicalOrigin(url3);
@@ -67089,6 +67291,11 @@ function browserToolset() {
       description: "List the open tabs.",
       inputSchema: external_exports3.object({}),
       execute: async () => {
+        if (!await hasTabsPermission()) {
+          return {
+            error: "tabs permission not granted \u2014 enable Browser control in Settings"
+          };
+        }
         const tabs = await chrome.tabs.query({});
         return {
           tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url }))
@@ -67099,6 +67306,11 @@ function browserToolset() {
       description: "Close a tab by id. Requires browser-control permission (scoped + expiring).",
       inputSchema: external_exports3.object({ tabId: external_exports3.number() }),
       execute: async ({ tabId }) => {
+        if (!await hasTabsPermission()) {
+          return {
+            error: "tabs permission not granted \u2014 enable Browser control in Settings"
+          };
+        }
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         const origin = tab?.url ? (() => {
           try {
@@ -67120,7 +67332,7 @@ function browserToolset() {
       description: "Read the recent browser events (tab opened/updated/navigated).",
       inputSchema: external_exports3.object({ limit: external_exports3.number().optional() }),
       execute: async ({ limit }) => {
-        const events = await chrome.storage.local.get("cap:events");
+        const events = await kvGet("cap:events");
         const list = events["cap:events"] ?? [];
         return { events: list.slice(0, limit ?? 20) };
       }
@@ -67147,10 +67359,10 @@ function browserToolset() {
 }
 async function recordBrowserEvent(kind, payload) {
   const key = "cap:events";
-  const stored = await chrome.storage.local.get(key);
+  const stored = await kvGet(key);
   const list = stored[key] ?? [];
   list.unshift({ kind, at: (/* @__PURE__ */ new Date()).toISOString(), ...payload });
-  await chrome.storage.local.set({ [key]: list.slice(0, 200) });
+  await kvSet({ [key]: list.slice(0, 200) });
 }
 
 // extension/lib/recipes.js
@@ -67634,7 +67846,7 @@ async function registerAlarm(task) {
     attachments: task.attachments ?? []
   });
 }
-chrome.alarms.onAlarm.addListener(async (alarm) => {
+chrome.alarms?.onAlarm?.addListener(async (alarm) => {
   const lock = await tryAcquireInflight(alarm.name);
   if (!lock.acquired) {
     console.warn("scheduled task already in flight", alarm.name, lock.reason);
@@ -67645,7 +67857,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const hb = setInterval(() => {
     heartbeatInflight(alarm.name, token).catch(() => {
       heartbeatFailed = true;
-      lock.signal?.abort();
+      lock.controller?.abort();
     });
   }, INFLIGHT_HEARTBEAT_MS);
   const fence = {
@@ -67660,7 +67872,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
   };
   try {
-    const store = await chrome.storage.local.get(TASK_KEY2);
+    const store = await kvGet(TASK_KEY2);
     const task = store[TASK_KEY2]?.[alarm.name];
     if (!task) {
       console.error("scheduled task payload missing", alarm.name);
@@ -67725,7 +67937,7 @@ async function ensureOrchestrator() {
       skills: await getSkills(origin),
       tools: await siteToolset(origin)
     })));
-    const prefs = await chrome.storage.local.get("cap:multiAgent") ?? {};
+    const prefs = await kvGet("cap:multiAgent") ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
     const orch = await createOrchestrator2({
       model,
@@ -67842,20 +68054,25 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
   await journalAppend(mem, { type: "result", id: taskId, result });
   if (scheduled) {
     await fence?.assertOwned?.();
-    try {
-      await chrome.notifications.create(`cap:${taskId}`, {
-        type: "basic",
-        iconUrl: chrome.runtime.getURL("icon128.png"),
-        title: "Scheduled task complete",
-        message: String(result ?? "").slice(0, 160)
-      });
-    } catch (e) {
-      console.error("notification failed", e);
+    if (chrome.notifications?.create) {
+      try {
+        await chrome.notifications.create(`cap:${taskId}`, {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icon128.png"),
+          title: "Scheduled task complete",
+          message: String(result ?? "").slice(0, 160)
+        });
+      } catch (e) {
+        console.error("notification failed", e);
+      }
     }
   }
   return { ok: true, result };
 }
 var handlers = {
+  async "capabilities.status"() {
+    return await capabilityStatus();
+  },
   async "provider.get"() {
     return await getProviderConfig();
   },
@@ -67874,7 +68091,7 @@ var handlers = {
   },
   async "agent.orchestrator"() {
     await ensureOrchestrator();
-    const prefs = await chrome.storage.local.get("cap:multiAgent") ?? {};
+    const prefs = await kvGet("cap:multiAgent") ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
     return {
       multiAgent,
@@ -68029,7 +68246,7 @@ var handlers = {
     });
   },
   async "browser-control.get"() {
-    const s = await chrome.storage.local.get("cap:browserControlGrant");
+    const s = await kvGet("cap:browserControlGrant");
     const grant = s["cap:browserControlGrant"];
     let expiresInMs = 0;
     if (grant && typeof grant.expiresAt === "number" && Number.isFinite(grant.expiresAt)) {
@@ -68178,7 +68395,7 @@ for (const [event, kind] of [
   ["onCreated", "tab-created"],
   ["onActivated", "tab-activated"]
 ]) {
-  chrome.tabs[event]?.addListener((tabOrInfo) => {
+  chrome.tabs?.[event]?.addListener((tabOrInfo) => {
     recordBrowserEvent(kind, {
       tabId: tabOrInfo?.tabId ?? tabOrInfo?.id,
       windowId: tabOrInfo?.windowId
@@ -68186,7 +68403,7 @@ for (const [event, kind] of [
     });
   });
 }
-chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url || changeInfo.status === "complete" || changeInfo.title) {
     recordBrowserEvent("tab-updated", {
       tabId,

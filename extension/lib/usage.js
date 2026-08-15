@@ -4,6 +4,7 @@
 // estimated cost) into chrome.storage.local with a rolling 7-day window, then
 // aggregates by agent/provider/model. The memory explorer surfaces a usage view.
 // Every agent-do onUsage event flows through recordUsage().
+import { kvGet, kvRemove, kvSet } from "./kv.js";
 
 const STORAGE_KEY = "cairn:usage";
 const MAX_RECORDS = 5000;
@@ -31,19 +32,19 @@ export async function recordUsage(p) {
     estimatedCost: p.estimatedCost ?? 0,
   };
 
-  const store = await chrome.storage.local.get(STORAGE_KEY);
+  const store = await kvGet(STORAGE_KEY);
   const rows = (store[STORAGE_KEY] ?? []).filter(
     (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS,
   );
   rows.push(record);
   // cap the ledger (keep the newest)
   const trimmed = rows.slice(-MAX_RECORDS);
-  await chrome.storage.local.set({ [STORAGE_KEY]: trimmed });
+  await kvSet({ [STORAGE_KEY]: trimmed });
   return record;
 }
 
 export async function getUsage() {
-  const store = await chrome.storage.local.get(STORAGE_KEY);
+  const store = await kvGet(STORAGE_KEY);
   const rows = (store[STORAGE_KEY] ?? []).filter(
     (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS,
   );
@@ -95,5 +96,5 @@ export async function getUsage() {
 }
 
 export async function clearUsage() {
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await kvRemove(STORAGE_KEY);
 }

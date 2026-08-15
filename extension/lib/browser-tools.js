@@ -7,6 +7,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
+import { kvGet, kvRemove, kvSet } from "./kv.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
@@ -22,7 +23,7 @@ function newGrantId() {
 
 /** The current grant's identity id, or null when no grant exists. */
 export async function getBrowserControlGrantIdentity() {
-  const s = await chrome.storage.local.get(GRANT_KEY);
+  const s = await kvGet(GRANT_KEY);
   const grant = s[GRANT_KEY];
   return grant && typeof grant === "object" && typeof grant.id === "string"
     ? grant.id
@@ -35,7 +36,7 @@ export async function getBrowserControlGrantIdentity() {
 // A grant is NEVER an indefinite global Boolean, and an empty origin list is
 // never silently treated as unrestricted.
 export async function isBrowserControlGranted(origin) {
-  const s = await chrome.storage.local.get(GRANT_KEY);
+  const s = await kvGet(GRANT_KEY);
   const grant = s[GRANT_KEY];
   if (!grant || typeof grant !== "object") return false;
   if (
@@ -67,7 +68,7 @@ export async function setGlobalBrowserControlGrant(
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now(),
   };
-  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
 
@@ -96,12 +97,12 @@ export async function setOriginBrowserControlGrant(
     expiresAt: Date.now() + clampExpiryMs(expiryMs),
     grantedAt: Date.now(),
   };
-  await chrome.storage.local.set({ [GRANT_KEY]: grant });
+  await kvSet({ [GRANT_KEY]: grant });
   return grant;
 }
 
 export async function revokeBrowserControlGrant() {
-  await chrome.storage.local.remove(GRANT_KEY);
+  await kvRemove(GRANT_KEY);
   return { revoked: true };
 }
 
@@ -111,16 +112,38 @@ async function activeTab() {
   return tabs[0] ?? null;
 }
 
-/** Whether the OPTIONAL debugger permission is currently granted. Screenshot
- * capture attaches the Chrome debugger API to a specific tab; that capability
- * is requested from a real owner gesture (the Settings browser-control toggle),
- * never a permanent manifest permission. Fail closed when it is absent. */
-async function hasDebuggerPermission() {
+/** Whether the OPTIONAL `tabs` permission is currently granted. Screenshot
+ * capture uses chrome.tabs.captureVisibleTab (the standard extension API — the
+ * same one the chaos extension uses, NOT the Chrome debugger), which requires
+ * the `tabs` permission (or `activeTab`). Fail closed when it is absent. */
+async function hasTabsPermission() {
   try {
-    return await chrome.permissions.contains({ permissions: ["debugger"] });
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["tabs"] });
   } catch {
     return false;
   }
+}
+
+/** Whether the OPTIONAL `scripting` permission is currently granted. */
+async function hasScriptingPermission() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["scripting"] });
+  } catch {
+    return false;
+  }
+}
+
+/** A per-tab capture mutex: two concurrent captures of the SAME tab must not
+ * interleave (activate + capture + post-check is not atomic across calls), and
+ * a losing capture must never return another capture's bytes. */
+const captureLocks = new Map();
+function withTabCaptureLock(tabId, fn) {
+  const prev = captureLocks.get(tabId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  captureLocks.set(tabId, run.then(() => {}, () => {}));
+  return run;
 }
 
 /** Validate a SINGLE grant record (id + scope + expiry + origin) together.
@@ -150,17 +173,23 @@ function validateGrantFor(grant, origin) {
 
 /**
  * Capture a PNG screenshot of the requested tab, gated by the browser-control
- * grant FOR THAT TAB'S ORIGIN plus the OPTIONAL debugger permission (requested
- * from a real owner gesture). Uses chrome.debugger + Page.captureScreenshot
- * targeting the SPECIFIC tab by id (NOT captureVisibleTab, which captures
- * whatever tab is visible and needs the permanent <all_urls> host permission).
- * Targeting a tab by id eliminates the active-tab ABA race entirely and works
- * with only the optional `debugger` permission — the tab is attached, captured,
- * and detached within a single call, so there is no lingering broad access.
- * Detach failures are surfaced (fail closed): a failed detach leaves a
- * privileged debugger attachment, so it is never swallowed.
+ * grant FOR THAT TAB'S ORIGIN. Uses chrome.tabs.captureVisibleTab (the standard
+ * extension screenshot API — NOT the Chrome debugger, which cannot be optional
+ * and carries Chrome's all-sites warning). To target a SPECIFIC tab by id, the
+ * tab is ACTIVATED first (chrome.tabs.update({active:true})), then its window is
+ * captured; the active-tab ABA window is closed by re-deriving + re-checking the
+ * origin before AND after the capture, under a per-tab mutex.
+ *
+ * Requires the OPTIONAL `tabs` permission (requested from the Settings
+ * browser-control toggle). Fail closed when it is absent.
  */
 export async function captureTabScreenshot(tabId) {
+  if (!(await hasTabsPermission())) {
+    return {
+      error:
+        "tabs permission not granted — enable Browser control in Settings to allow screenshots",
+    };
+  }
   // Resolve the tab first so we can derive its origin for the grant check.
   const tab = tabId
     ? await chrome.tabs.get(tabId).catch(() => null)
@@ -181,7 +210,7 @@ export async function captureTabScreenshot(tabId) {
   // atomic snapshot, not separate reads). The returned id is the fence for the
   // whole capture.
   const grantIdBefore = validateGrantFor(
-    (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
+    (await kvGet(GRANT_KEY))[GRANT_KEY],
     origin,
   );
   if (!grantIdBefore) {
@@ -190,72 +219,88 @@ export async function captureTabScreenshot(tabId) {
         "browser control not granted for this tab's origin — ask the user to approve it in Settings",
     };
   }
-  // The debugger capability must be explicitly granted (owner gesture). Without
-  // it, capture is impossible — fail closed rather than throw or silently skip.
-  if (!(await hasDebuggerPermission())) {
-    return {
-      error:
-        "debugger permission not granted — enable browser control in Settings to allow screenshots",
-    };
-  }
 
-  const debuggee = { tabId: tab.id };
-  let result;
-  let detachError = null;
-  try {
-    await chrome.debugger.attach(debuggee, "1.3");
-    await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
-    const shot = await chrome.debugger.sendCommand(
-      debuggee,
-      "Page.captureScreenshot",
-      { format: "png" },
-    );
+  return await withTabCaptureLock(tab.id, async () => {
+    // Activate the target tab in its window so captureVisibleTab captures IT
+    // (not whatever tab happens to be visible).
+    try {
+      await chrome.tabs.update(tab.id, { active: true });
+    } catch (e) {
+      return { error: `could not activate tab: ${e?.message ?? e}` };
+    }
+    // Post-activation the tab could have navigated — re-derive + re-check BEFORE
+    // capturing (closes the active-tab ABA: activation itself can race a nav).
+    const cur = await chrome.tabs.get(tab.id).catch(() => null);
+    const curOrigin = cur?.url
+      ? (() => {
+        try {
+          return canonicalOrigin(cur.url);
+        } catch {
+          return undefined;
+        }
+      })()
+      : undefined;
+    if (!curOrigin || curOrigin !== origin) {
+      return { error: "tab navigated during capture — screenshot discarded" };
+    }
+
+    let dataUrl;
+    try {
+      dataUrl = await chrome.tabs.captureVisibleTab(
+        cur.windowId ?? undefined,
+        { format: "png" },
+      );
+    } catch (e) {
+      return { error: `capture failed: ${e?.message ?? e}` };
+    }
+
     // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
     // 1. the tab is STILL on the same origin (no navigation during capture);
     // 2. the SAME grant record still authorizes the SAME origin with the SAME
     //    id (closes the revoke→regrant ABA race atomically).
     const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
-    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : undefined;
-    if (!currentOrigin || currentOrigin !== origin) {
-      result = { error: "tab navigated during capture — screenshot discarded" };
-    } else if (
+    const nowOrigin = nowTab?.url
+      ? (() => {
+        try {
+          return canonicalOrigin(nowTab.url);
+        } catch {
+          return undefined;
+        }
+      })()
+      : undefined;
+    if (!nowOrigin || nowOrigin !== origin) {
+      return { error: "tab navigated during capture — screenshot discarded" };
+    }
+    if (
       validateGrantFor(
-        (await chrome.storage.local.get(GRANT_KEY))[GRANT_KEY],
-        currentOrigin,
+        (await kvGet(GRANT_KEY))[GRANT_KEY],
+        nowOrigin,
       ) !== grantIdBefore
     ) {
-      result = {
+      return {
         error:
           "browser control grant changed during capture — screenshot discarded",
       };
-    } else if (!shot?.data) {
-      result = { error: "capture returned no data" };
-    } else {
-      result = {
-        screenshot: `data:image/png;base64,${shot.data}`,
-        url: tab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
-      };
     }
-  } catch (e) {
-    result = { error: String(e?.message ?? e) };
-  } finally {
-    try {
-      await chrome.debugger.detach(debuggee);
-    } catch (e) {
-      detachError = String(e?.message ?? e);
+    if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+      return { error: "capture returned no image data" };
     }
-  }
-  // A failed detach leaves a privileged debugger attachment behind — surface it
-  // (fail closed), never return the screenshot silently.
-  if (detachError) {
-    return { error: `debugger detach failed: ${detachError}` };
-  }
-  return result;
+    return {
+      screenshot: dataUrl,
+      url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
+    };
+  });
 }
 
 /** Read the visible text of a tab (or the active tab) via scripting. */
 export async function readPage(tabId) {
   try {
+    if (!(await hasScriptingPermission())) {
+      return {
+        error:
+          "scripting permission not granted — enable Site agents in Settings",
+      };
+    }
     const target = tabId
       ? { tabId }
       : await activeTab().then((t) => (t?.id ? { tabId: t.id } : null));
@@ -282,6 +327,12 @@ export function browserToolset() {
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
       inputSchema: z.object({ url: z.string().url() }),
       execute: async ({ url }) => {
+        if (!(await hasTabsPermission())) {
+          return {
+            error:
+              "tabs permission not granted — enable Browser control in Settings",
+          };
+        }
         // Check the DESTINATION origin against the grant (a per-origin grant
         // only authorizes its own origins; a global grant authorizes all).
         let destOrigin;
@@ -308,6 +359,12 @@ export function browserToolset() {
         url: z.string().url(),
       }),
       execute: async ({ tabId, url }) => {
+        if (!(await hasTabsPermission())) {
+          return {
+            error:
+              "tabs permission not granted — enable Browser control in Settings",
+          };
+        }
         // Check the DESTINATION origin (not just the current tab's origin): an
         // approved origin must not be navigated to an unapproved one.
         let destOrigin;
@@ -344,6 +401,12 @@ export function browserToolset() {
       description: "List the open tabs.",
       inputSchema: z.object({}),
       execute: async () => {
+        if (!(await hasTabsPermission())) {
+          return {
+            error:
+              "tabs permission not granted — enable Browser control in Settings",
+          };
+        }
         const tabs = await chrome.tabs.query({});
         return {
           tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })),
@@ -355,6 +418,12 @@ export function browserToolset() {
         "Close a tab by id. Requires browser-control permission (scoped + expiring).",
       inputSchema: z.object({ tabId: z.number() }),
       execute: async ({ tabId }) => {
+        if (!(await hasTabsPermission())) {
+          return {
+            error:
+              "tabs permission not granted — enable Browser control in Settings",
+          };
+        }
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         const origin = tab?.url
           ? (() => {
@@ -380,7 +449,7 @@ export function browserToolset() {
         "Read the recent browser events (tab opened/updated/navigated).",
       inputSchema: z.object({ limit: z.number().optional() }),
       execute: async ({ limit }) => {
-        const events = await chrome.storage.local.get("cap:events");
+        const events = await kvGet("cap:events");
         const list = events["cap:events"] ?? [];
         return { events: list.slice(0, limit ?? 20) };
       },
@@ -411,8 +480,8 @@ export function browserToolset() {
 /** Record a browser event into the rolling event log (kept in chrome.storage). */
 export async function recordBrowserEvent(kind, payload) {
   const key = "cap:events";
-  const stored = await chrome.storage.local.get(key);
+  const stored = await kvGet(key);
   const list = stored[key] ?? [];
   list.unshift({ kind, at: new Date().toISOString(), ...payload });
-  await chrome.storage.local.set({ [key]: list.slice(0, 200) });
+  await kvSet({ [key]: list.slice(0, 200) });
 }

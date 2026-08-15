@@ -15,6 +15,8 @@ import {
   masterMemory,
   siteMemory,
 } from "../lib/memory.js";
+import { kvGet, kvSet } from "../lib/kv.js";
+import { hasCapability, capabilityStatus, requestCapability } from "../lib/capabilities.js";
 import { createAgent, createOrchestrator } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
@@ -77,7 +79,7 @@ async function registerAlarm(task) {
   });
 }
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
+chrome.alarms?.onAlarm?.addListener(async (alarm) => {
   // In-flight lock: a slow run must not overlap the next alarm (periodic).
   const lock = await tryAcquireInflight(alarm.name);
   if (!lock.acquired) {
@@ -93,7 +95,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const hb = setInterval(() => {
     heartbeatInflight(alarm.name, token).catch(() => {
       heartbeatFailed = true;
-      lock.signal?.abort();
+      // Abort the RUNNING agent/tools: call the CONTROLLER (an AbortSignal has
+      // no `abort` method — the round-13 TypeError), so the fence signal fires
+      // and every side-effecting tool checks it before committing.
+      lock.controller?.abort();
     });
   }, INFLIGHT_HEARTBEAT_MS);
   // The EXECUTION fence: checked at every durable/destructive boundary inside
@@ -116,7 +121,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   // run inside try/finally so a read/validation rejection still releases the
   // in-flight lock (otherwise future firings block forever).
   try {
-    const store = await chrome.storage.local.get(TASK_KEY);
+    const store = await kvGet(TASK_KEY);
     const task = store[TASK_KEY]?.[alarm.name];
     if (!task) {
       console.error("scheduled task payload missing", alarm.name);
@@ -214,7 +219,7 @@ async function ensureOrchestrator() {
     // multiAgent toggles fan-out (hub + per-site sub-agents) vs a solo hub agent.
     // Read it at orchestration time; the options page changes it via
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
-    const prefs = (await chrome.storage.local.get("cap:multiAgent")) ?? {};
+    const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
     const orch = await createOrchestrator({
       model,
@@ -363,17 +368,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
   await journalAppend(mem, { type: "result", id: taskId, result });
   if (scheduled) {
     await fence?.assertOwned?.();
-    // Completion lifecycle: surface the result as a notification. Await + handle
-    // failure; the icon is an inline data-URI (no external icon file to go missing).
-    try {
-      await chrome.notifications.create(`cap:${taskId}`, {
-        type: "basic",
-        iconUrl: chrome.runtime.getURL("icon128.png"),
-        title: "Scheduled task complete",
-        message: String(result ?? "").slice(0, 160),
-      });
-    } catch (e) {
-      console.error("notification failed", e);
+    // Completion lifecycle: surface the result as a notification. The
+    // `notifications` permission is OPTIONAL — when absent, skip silently (a
+    // missing permission is not a failure worth a console error).
+    if (chrome.notifications?.create) {
+      try {
+        await chrome.notifications.create(`cap:${taskId}`, {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icon128.png"),
+          title: "Scheduled task complete",
+          message: String(result ?? "").slice(0, 160),
+        });
+      } catch (e) {
+        console.error("notification failed", e);
+      }
     }
   }
   return { ok: true, result };
@@ -381,6 +389,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
 
 // ---- message router ----
 const handlers = {
+  async "capabilities.status"() {
+    // Granted/absent status of every OPTIONAL capability (storage, alarms,
+    // tabs, scripting, notifications, sidePanel). The Settings panel renders
+    // enable buttons from this; the Chrome suite asserts the empty base list.
+    return await capabilityStatus();
+  },
   async "provider.get"() {
     return await getProviderConfig();
   },
@@ -408,7 +422,7 @@ const handlers = {
     // orchestrator is multi-agent, how many workers it fans out to, which
     // delegation tools it exposes, and the build generation (the rebuild boundary).
     await ensureOrchestrator();
-    const prefs = (await chrome.storage.local.get("cap:multiAgent")) ?? {};
+    const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
     return {
       multiAgent,
@@ -599,7 +613,7 @@ const handlers = {
   },
 
   async "browser-control.get"() {
-    const s = await chrome.storage.local.get("cap:browserControlGrant");
+    const s = await kvGet("cap:browserControlGrant");
     const grant = s["cap:browserControlGrant"];
     let expiresInMs = 0;
     if (
@@ -795,20 +809,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---- browser event listening (the agent sees what happens in the browser) ----
+// Guarded with `chrome.tabs?.` — the `tabs` permission is OPTIONAL, so a boot
+// with zero permissions must not throw here (the listeners simply don't attach
+// until the owner enables Browser control).
 for (
   const [event, kind] of [
     ["onCreated", "tab-created"],
     ["onActivated", "tab-activated"],
   ]
 ) {
-  chrome.tabs[event]?.addListener((tabOrInfo) => {
+  chrome.tabs?.[event]?.addListener((tabOrInfo) => {
     recordBrowserEvent(kind, {
       tabId: tabOrInfo?.tabId ?? tabOrInfo?.id,
       windowId: tabOrInfo?.windowId,
     }).catch(() => {});
   });
 }
-chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url || changeInfo.status === "complete" || changeInfo.title) {
     recordBrowserEvent("tab-updated", {
       tabId,

@@ -311,3 +311,42 @@ input:focus, select:focus, textarea:focus {
   align-items: flex-end;
   margin-top: 10px;
 }
+
+/* Optional-permission capability panel. */
+.permission-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.perm-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name state"
+    "hint btn";
+  gap: 0.15rem 0.75rem;
+  align-items: center;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.perm-name {
+  grid-area: name;
+  font-weight: 600;
+}
+.perm-state {
+  grid-area: state;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.perm-state.granted { color: var(--accent2, #1a7f37); }
+.perm-state.missing { color: var(--danger, #cf222e); }
+.perm-row .muted {
+  grid-area: hint;
+  font-size: 0.8rem;
+}
+.perm-row .btn {
+  grid-area: btn;
+}

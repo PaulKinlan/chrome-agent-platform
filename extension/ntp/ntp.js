@@ -196,10 +196,17 @@ document.getElementById("open-memory").addEventListener(
 );
 document.getElementById("open-directory").addEventListener(
   "click",
-  () =>
-    chrome.tabs.create({
-      url: chrome.runtime.getURL("directory/directory.html"),
-    }),
+  () => {
+    // chrome.tabs.create needs the OPTIONAL `tabs` permission — degrade to a
+    // window.open (an extension page) when it is absent, never an unhandled throw.
+    try {
+      chrome.tabs.create({
+        url: chrome.runtime.getURL("directory/directory.html"),
+      });
+    } catch {
+      window.open(chrome.runtime.getURL("directory/directory.html"), "_blank");
+    }
+  },
 );
 
 // ---- attach menu: a single "+" opens Add file / audio / video / other ----

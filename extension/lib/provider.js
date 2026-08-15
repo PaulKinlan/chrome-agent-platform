@@ -20,6 +20,7 @@ import {
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
 import { createDemoModel } from "./models/demo-model.js";
+import { kvGet, kvSet } from "./kv.js";
 
 const DEFAULTS = {
   // "demo" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "prompt-api"
@@ -85,14 +86,14 @@ const OPENAI_COMPATIBLE_IDS = new Set([
 ]);
 
 export async function getProviderConfig() {
-  const stored = await chrome.storage.local.get("providerConfig");
+  const stored = await kvGet("providerConfig");
   return { ...DEFAULTS, ...(stored.providerConfig ?? {}) };
 }
 
 export async function setProviderConfig(partial) {
   const cur = await getProviderConfig();
   const next = { ...cur, ...partial };
-  await chrome.storage.local.set({ providerConfig: next });
+  await kvSet({ providerConfig: next });
   return next;
 }
 

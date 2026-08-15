@@ -2,6 +2,7 @@
 // + inferred (window.* functions) tools, with first-run approval per origin.
 
 import { canonicalOrigin, masterMemory, siteMemory } from "./memory.js";
+import { kvGet, kvSet } from "./kv.js";
 
 const DIR_KEY = "toolDirectory";
 const ENROLL_KEY = "cap:enrollment";
@@ -95,7 +96,7 @@ export async function listAllOrigins() {
 export async function isEnrolled(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return false;
-  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const s = await kvGet(ENROLL_KEY);
   const rec = s[ENROLL_KEY]?.[canonical];
   return Boolean(rec && rec.enrolled === true);
 }
@@ -116,14 +117,14 @@ export async function enrollOrigin(origin) {
   }
   // Persist the ENROLLMENT STATE (enrolled:true) — the authority a running
   // bridge's reports are gated on (isEnrolled).
-  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const s = await kvGet(ENROLL_KEY);
   const map = { ...(s[ENROLL_KEY] ?? {}) };
   map[canonical] = {
     enrolled: true,
     at: Date.now(),
     gen: (map[canonical]?.gen ?? 0) + 1,
   };
-  await chrome.storage.local.set({ [ENROLL_KEY]: map });
+  await kvSet({ [ENROLL_KEY]: map });
   return origins;
 }
 
@@ -139,14 +140,14 @@ export async function disenrollOrigin(origin) {
   if (next.length !== origins.length) {
     await store.set("origins", next);
   }
-  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const s = await kvGet(ENROLL_KEY);
   const map = { ...(s[ENROLL_KEY] ?? {}) };
   map[canonical] = {
     enrolled: false, // tombstone
     at: Date.now(),
     gen: (map[canonical]?.gen ?? 0) + 1,
   };
-  await chrome.storage.local.set({ [ENROLL_KEY]: map });
+  await kvSet({ [ENROLL_KEY]: map });
   return next;
 }
 

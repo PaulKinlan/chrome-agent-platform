@@ -23,6 +23,9 @@
         <a href="#browser" class="nav-item" data-section="browser">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Browser control</a>
+        <a href="#permissions" class="nav-item" data-section="permissions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Permissions</a>
         <a href="#usage" class="nav-item" data-section="usage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Usage</a>
@@ -100,6 +103,13 @@
             placeholder="https://github.com"></textarea>
           <p class="muted">Empty = a global (all-origins) grant.</p>
         </div>
+      </section>
+
+      <section id="permissions" class="panel">
+        <h2>Permissions</h2>
+        <p
+          class="muted">Every permission is optional. The hub runs with none of these; enable each capability when you need it. Each Enable button asks Chrome for just that permission.</p>
+        <div id="permission-list" class="permission-list"></div>
       </section>
 
       <section id="usage" class="panel">
