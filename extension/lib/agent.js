@@ -97,6 +97,7 @@ export function createOrchestrator({
   workers = [], // [{ origin, memory, skills, tools }]
   multiAgent = true,
   taskId = "adhoc",
+  extraTools = {}, // browser-control + management tools (chrome.* — SW context)
 }) {
   const workerAgents = new Map();
   for (const w of workers) {
@@ -134,7 +135,7 @@ export function createOrchestrator({
     model,
     system,
     memory: masterMemory,
-    tools: delegate,
+    tools: { ...delegate, ...extraTools },
     taskId,
   });
 

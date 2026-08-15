@@ -21156,10 +21156,10 @@ async function fetchWithValidatedRedirects({
       }
       return await fetch2(currentUrl, perHopInit("follow"));
     }
-    const location = response.headers.get("location");
-    if (REDIRECT_STATUS_CODES.has(response.status) && location) {
+    const location2 = response.headers.get("location");
+    if (REDIRECT_STATUS_CODES.has(response.status) && location2) {
       await cancelResponseBody(response);
-      const nextUrl = new URL(location, currentUrl).toString();
+      const nextUrl = new URL(location2, currentUrl).toString();
       if (currentHeaders !== void 0 && !isSameOrigin(nextUrl, currentUrl)) {
         const userAgent = currentHeaders.get("user-agent");
         currentHeaders = new Headers(
@@ -74592,7 +74592,9 @@ function createOrchestrator2({
   workers = [],
   // [{ origin, memory, skills, tools }]
   multiAgent = true,
-  taskId = "adhoc"
+  taskId = "adhoc",
+  extraTools = {}
+  // browser-control + management tools (chrome.* — SW context)
 }) {
   const workerAgents = /* @__PURE__ */ new Map();
   for (const w of workers) {
@@ -74628,7 +74630,7 @@ function createOrchestrator2({
     model,
     system,
     memory: masterMemory2,
-    tools: delegate,
+    tools: { ...delegate, ...extraTools },
     taskId
   });
   return {
@@ -74708,6 +74710,136 @@ async function pendingApprovals(origin) {
   return tools.filter((t) => !approved[t.name]);
 }
 
+// extension/lib/browser-tools.js
+init_browser_shim_process();
+async function readPage(tabId) {
+  try {
+    const target = tabId ? { tabId } : {};
+    const results = await chrome.scripting.executeScript({
+      target,
+      func: () => ({
+        title: document.title,
+        url: location.href,
+        text: (document.body?.innerText ?? "").slice(0, 2e4)
+      })
+    });
+    return results?.[0]?.result ?? { error: "no result" };
+  } catch (e) {
+    return { error: String(e?.message ?? e) };
+  }
+}
+function browserToolset() {
+  return {
+    open_tab: tool({
+      description: "Open a URL in a new browser tab.",
+      inputSchema: external_exports3.object({ url: external_exports3.string() }),
+      execute: async ({ url: url3 }) => {
+        const tab = await chrome.tabs.create({ url: url3 });
+        return { ok: true, tabId: tab.id, url: url3 };
+      }
+    }),
+    navigate_tab: tool({
+      description: "Navigate an existing tab to a URL.",
+      inputSchema: external_exports3.object({ tabId: external_exports3.number().optional(), url: external_exports3.string() }),
+      execute: async ({ tabId, url: url3 }) => {
+        if (tabId) {
+          await chrome.tabs.update(tabId, { url: url3 });
+          return { ok: true, tabId, url: url3 };
+        }
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tabs[0]?.id) return { error: "no active tab" };
+        await chrome.tabs.update(tabs[0].id, { url: url3 });
+        return { ok: true, tabId: tabs[0].id, url: url3 };
+      }
+    }),
+    read_page: tool({
+      description: "Read the title, URL and visible text of a tab (or the active tab).",
+      inputSchema: external_exports3.object({ tabId: external_exports3.number().optional() }),
+      execute: async ({ tabId }) => readPage(tabId)
+    }),
+    capture_screenshot: tool({
+      description: "Capture a PNG screenshot of the visible tab.",
+      inputSchema: external_exports3.object({ tabId: external_exports3.number().optional() }),
+      execute: async ({ tabId }) => {
+        try {
+          const url3 = await chrome.tabs.captureVisibleTab(tabId ? { tabId } : void 0, { format: "png" });
+          return { screenshot: url3 };
+        } catch (e) {
+          return { error: String(e?.message ?? e) };
+        }
+      }
+    }),
+    list_tabs: tool({
+      description: "List the open tabs.",
+      inputSchema: external_exports3.object({}),
+      execute: async () => {
+        const tabs = await chrome.tabs.query({});
+        return { tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })) };
+      }
+    }),
+    close_tab: tool({
+      description: "Close a tab by id.",
+      inputSchema: external_exports3.object({ tabId: external_exports3.number() }),
+      execute: async ({ tabId }) => {
+        await chrome.tabs.remove(tabId);
+        return { ok: true, tabId };
+      }
+    }),
+    recent_browser_events: tool({
+      description: "Read the recent browser events (tab opened/updated/navigated).",
+      inputSchema: external_exports3.object({ limit: external_exports3.number().optional() }),
+      execute: async ({ limit }) => {
+        const events = await chrome.storage.local.get("cap:events");
+        const list = events["cap:events"] ?? [];
+        return { events: list.slice(0, limit ?? 20) };
+      }
+    })
+  };
+}
+async function recordBrowserEvent(kind, payload) {
+  const key = "cap:events";
+  const stored = await chrome.storage.local.get(key);
+  const list = stored[key] ?? [];
+  list.unshift({ kind, at: (/* @__PURE__ */ new Date()).toISOString(), ...payload });
+  await chrome.storage.local.set({ [key]: list.slice(0, 200) });
+}
+
+// extension/lib/recipes.js
+init_browser_shim_process();
+var RECIPES = [
+  {
+    id: "tab-hygiene",
+    name: "Tab hygiene",
+    icon: "\u{1F9F9}",
+    description: "Find duplicate/stale tabs and close or group them.",
+    prompt: "List the open tabs. Identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close. Report your findings and close the obvious duplicates. Be conservative \u2014 never close a tab with unsaved form state you can't detect."
+  },
+  {
+    id: "page-summary",
+    name: "Summarise this page",
+    icon: "\u{1F4C4}",
+    description: "Read the active tab and give a tight summary.",
+    prompt: "Read the active tab's content and produce a concise summary: what the page is, the 3 key points, and one recommended next action. Keep it under 120 words."
+  },
+  {
+    id: "link-collector",
+    name: "Collect links",
+    icon: "\u{1F517}",
+    description: "Gather the outbound links from the active page.",
+    prompt: "Read the active tab and collect its outbound links, grouped by domain, with the link text. Return the list as markdown. Skip navigation/boilerplate links."
+  },
+  {
+    id: "reading-list",
+    name: "Save to reading list",
+    icon: "\u{1F4DA}",
+    description: "Capture the active tab into memory as a reading-list entry.",
+    prompt: "Read the active tab and save it to memory under the key 'reading-list' (append: title, url, and a one-line note). Confirm what you saved."
+  }
+];
+function getRecipe(id) {
+  return RECIPES.find((r) => r.id === id);
+}
+
 // extension/background/service-worker.js
 function registerAlarm(task) {
   const info = { when: Date.now() + (task.when ?? 0) };
@@ -74736,7 +74868,12 @@ async function ensureOrchestrator() {
     skills: await getSkills(origin),
     tools: await siteToolset(origin)
   })));
-  orchestrator = await createOrchestrator2({ model, masterMemory: mem, workers });
+  orchestrator = await createOrchestrator2({
+    model,
+    masterMemory: mem,
+    workers,
+    extraTools: browserToolset()
+  });
   return orchestrator;
 }
 async function siteToolset(origin) {
@@ -74847,6 +74984,27 @@ var handlers = {
   async "run-task"(m) {
     return await runTask({ id: m.id, task: m.task });
   },
+  async "recipe.list"() {
+    return { recipes: RECIPES };
+  },
+  async "recipe.run"(m) {
+    const recipe = getRecipe(m.id);
+    if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
+    return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
+  },
+  // Management tools — the agent can manage its own site-agents.
+  async "agent.create"({ origin, name: name25 }) {
+    await enrollOrigin(origin);
+    return { ok: true, origin, name: name25 };
+  },
+  async "agent.delete"({ origin }) {
+    await siteMemory(origin).clear();
+    return { ok: true, origin };
+  },
+  async "agent.listAll"() {
+    const origins = await listOrigins();
+    return { agents: origins.map((o) => ({ origin: o })) };
+  },
   async "capture.tab"({ tabId }) {
     try {
       const url3 = await chrome.tabs.captureVisibleTab(tabId ? { tabId } : void 0, { format: "png" });
@@ -74866,6 +75024,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, error: String(e?.message ?? e) });
   });
   return true;
+});
+for (const [event, kind] of [
+  ["onCreated", "tab-created"],
+  ["onActivated", "tab-activated"]
+]) {
+  chrome.tabs[event]?.addListener((tabOrInfo) => {
+    recordBrowserEvent(kind, {
+      tabId: tabOrInfo?.tabId ?? tabOrInfo?.id,
+      windowId: tabOrInfo?.windowId
+    }).catch(() => {
+    });
+  });
+}
+chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === "complete" || changeInfo.title) {
+    recordBrowserEvent("tab-updated", {
+      tabId,
+      url: tab?.url,
+      title: tab?.title,
+      status: changeInfo.status
+    }).catch(() => {
+    });
+  }
+});
+chrome.runtime.onInstalled?.addListener(() => {
+  recordBrowserEvent("extension-installed", {}).catch(() => {
+  });
 });
 chrome.runtime.onInstalled.addListener(async () => {
   const mem = masterMemory();

@@ -30,3 +30,32 @@ a:hover { text-decoration: underline; }
 }
 .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); }
 .tag { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+
+/* The "thinking" glow — a multicolor animated halo around the composer while
+   the agent is responding. Respects prefers-reduced-motion (static glow). */
+.glow {
+  position: relative;
+}
+.glow::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    #58a6ff, #7ee787, #ff7b72, #d2a8ff, #f0b72f, #58a6ff
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+  filter: blur(1px);
+  animation: glow-rotate 3s linear infinite;
+}
+@keyframes glow-rotate {
+  to { filter: blur(1px) hue-rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow::before { animation: none; filter: none; }
+}

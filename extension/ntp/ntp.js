@@ -11,6 +11,8 @@ const agentsEl = document.getElementById("site-agents");
 function setStatus(text, ready = true) {
   statusEl.textContent = text;
   statusEl.closest(".chip").querySelector(".dot").style.background = ready ? "var(--accent2)" : "var(--danger)";
+  // the "thinking" glow — toggle the halo on the composer while the agent runs
+  document.querySelector(".composer")?.classList.toggle("glow", !ready);
 }
 
 async function refreshAgents() {
@@ -28,6 +30,27 @@ async function refreshAgents() {
     chip.innerHTML = `<span class="name">@${origin.replace(/^https?:\/\//, "").replace(/\/.*/, "")}</span><span class="tools">${(Array.isArray(tools) ? tools.length : 0)} tools</span>`;
     chip.onclick = () => { taskInput.value = `@${origin} `; taskInput.focus(); };
     agentsEl.append(chip);
+  }
+}
+
+async function refreshRecipes() {
+  const recipesEl = document.getElementById("recipes");
+  if (!recipesEl) return;
+  const res = await send("recipe.list");
+  const list = Array.isArray(res.recipes) ? res.recipes : [];
+  recipesEl.replaceChildren();
+  for (const r of list) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.style.cursor = "pointer";
+    chip.innerHTML = `<span>${r.icon ?? ""}</span><span>${escapeHtml(r.name)}</span>`;
+    chip.onclick = async () => {
+      setStatus(`running recipe: ${r.name}`, false);
+      const out = await send("recipe.run", { id: r.id });
+      if (out.ok) { setStatus("agent ready"); await refreshTasks(); }
+      else setStatus("error: " + (out.error ?? "unknown"), false);
+    };
+    recipesEl.append(chip);
   }
 }
 
@@ -51,6 +74,10 @@ async function refreshTasks() {
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+refreshRecipes();
+refreshAgents();
+refreshTasks();
 
 runBtn.addEventListener("click", async () => {
   const task = taskInput.value.trim();

@@ -8,6 +8,8 @@ import { createOrchestrator, createAgent } from "../lib/agent.js";
 import { recordUsage, getUsage, clearUsage } from "../lib/usage.js";
 import { upsertTools, listTools, enrollOrigin, isApproved, approveTool, pendingApprovals } from "../lib/tools.js";
 import { setSkills, getSkills, allSkills } from "../lib/skills.js";
+import { browserToolset, recordBrowserEvent } from "../lib/browser-tools.js";
+import { RECIPES, getRecipe } from "../lib/recipes.js";
 
 // ---- alarm scheduler (agent-do pattern) ----
 function registerAlarm(task) {
@@ -44,7 +46,12 @@ async function ensureOrchestrator() {
     skills: await getSkills(origin),
     tools: await siteToolset(origin),
   })));
-  orchestrator = await createOrchestrator({ model, masterMemory: mem, workers });
+  orchestrator = await createOrchestrator({
+    model,
+    masterMemory: mem,
+    workers,
+    extraTools: browserToolset(),
+  });
   return orchestrator;
 }
 
@@ -124,6 +131,27 @@ const handlers = {
   async "register-task"(m) { registerAlarm(m.task); return { ok: true }; },
   async "run-task"(m) { return await runTask({ id: m.id, task: m.task }); },
 
+  async "recipe.list"() { return { recipes: RECIPES }; },
+  async "recipe.run"(m) {
+    const recipe = getRecipe(m.id);
+    if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
+    return await runTask({ id: `recipe:${recipe.id}:${Date.now()}`, task: recipe.prompt });
+  },
+
+  // Management tools — the agent can manage its own site-agents.
+  async "agent.create"({ origin, name }) {
+    await enrollOrigin(origin);
+    return { ok: true, origin, name };
+  },
+  async "agent.delete"({ origin }) {
+    await siteMemory(origin).clear();
+    return { ok: true, origin };
+  },
+  async "agent.listAll"() {
+    const origins = await listOrigins();
+    return { agents: origins.map((o) => ({ origin: o })) };
+  },
+
   async "capture.tab"({ tabId }) {
     try {
       const url = await chrome.tabs.captureVisibleTab(tabId ? { tabId } : undefined, { format: "png" });
@@ -142,6 +170,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, error: String(e?.message ?? e) });
   });
   return true; // async response
+});
+
+// ---- browser event listening (the agent sees what happens in the browser) ----
+for (const [event, kind] of [
+  ["onCreated", "tab-created"],
+  ["onActivated", "tab-activated"],
+]) {
+  chrome.tabs[event]?.addListener((tabOrInfo) => {
+    recordBrowserEvent(kind, {
+      tabId: tabOrInfo?.tabId ?? tabOrInfo?.id,
+      windowId: tabOrInfo?.windowId,
+    }).catch(() => {});
+  });
+}
+chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === "complete" || changeInfo.title) {
+    recordBrowserEvent("tab-updated", {
+      tabId,
+      url: tab?.url,
+      title: tab?.title,
+      status: changeInfo.status,
+    }).catch(() => {});
+  }
+});
+chrome.runtime.onInstalled?.addListener(() => {
+  recordBrowserEvent("extension-installed", {}).catch(() => {});
 });
 
 // On install, seed the master memory + notify.

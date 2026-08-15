@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Mood C — Neon</title><style>
+:root{--bg:#12031f;--panel:#1d0a33;--border:#3a1d5e;--text:#f0eaff;--muted:#a78fc7;--accent:#e04eff;--green:#3df0a8;--red:#ff5d8f;--purple:#b388ff;--gold:#ffd166}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:32px;max-width:760px}
+h1{font-size:20px;margin:0 0 4px;text-shadow:0 0 12px var(--accent)}.tag{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.composer{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:16px;margin:20px 0;position:relative}
+.composer textarea{width:100%;background:transparent;border:0;color:var(--text);font:inherit;resize:vertical;min-height:60px;outline:none}
+.row{display:flex;gap:8px;align-items:center;margin-top:8px}.spacer{flex:1}
+.btn{background:var(--accent);color:#1a0;color:#fff;border:0;border-radius:8px;padding:7px 14px;font-weight:600;cursor:pointer;box-shadow:0 0 10px var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:13px;cursor:pointer}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.glow::before{content:"";position:absolute;inset:-2px;border-radius:inherit;padding:2px;background:conic-gradient(from 0deg,var(--accent),var(--green),var(--red),var(--purple),var(--gold),var(--accent));-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;z-index:-1;filter:blur(2px);animation:g 2s linear infinite}
+@keyframes g{to{filter:blur(2px) hue-rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.glow::before{animation:none;filter:none}}
+.agent{display:flex;justify-content:space-between;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:6px 0}
+</style></head><body>
+<h1>Chrome Agent Platform</h1><div class="tag">Neon — synthwave, glow-heavy</div>
+<div class="composer glow"><textarea placeholder="Ask anything — or @mention a site agent…"></textarea>
+<div class="row"><div class="chip"><span class="dot"></span><span>agent ready</span></div><span class="spacer"></span><button class="btn">Run task</button></div></div>
+<div class="tag">Recipes</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+<span class="chip">🧹 Tab hygiene</span><span class="chip">📄 Summarise</span><span class="chip">🔗 Collect links</span><span class="chip">📚 Reading list</span></div>
+<div class="tag">Site agents</div>
+<div class="agent"><span>@github</span><span style="color:var(--muted)">12 tools</span></div>
+<div class="agent"><span>@aifocus</span><span style="color:var(--muted)">8 tools</span></div>
+</body></html>
