@@ -25162,10 +25162,14 @@ function createOpenAICompatible(options) {
 // extension/lib/models/openai-model.js
 function createOpenAICompatibleModel(config3) {
   const { baseURL, apiKey, model } = config3 ?? {};
-  if (!baseURL || !apiKey || !model) {
-    throw new Error("OpenAI-compatible provider requires baseURL, apiKey, and model");
+  if (!baseURL || !model) {
+    throw new Error("OpenAI-compatible provider requires baseURL and model");
   }
-  const openai = createOpenAICompatible({ baseURL, apiKey, name: "configured" });
+  const openai = createOpenAICompatible({
+    baseURL,
+    apiKey: apiKey ?? "",
+    name: "configured"
+  });
   return openai(model);
 }
 
@@ -66711,9 +66715,15 @@ async function reconcileScheduledTasks() {
       const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
       const info = { when };
       if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
-      await chrome.alarms.create(name25, info).catch(() => {
-      });
-      resumed.push(name25);
+      try {
+        await chrome.alarms.create(name25, info);
+        resumed.push(name25);
+      } catch (err) {
+        console.error(
+          `reconcile: failed to recreate alarm "${name25}":`,
+          err?.message ?? err
+        );
+      }
     }
   }
   return resumed;
@@ -67022,6 +67032,26 @@ var SUPPORTED_KEYWORDS = /* @__PURE__ */ new Set([
   "anyOf"
   // union (exactly-one oneOf is NOT supported)
 ]);
+function typeZod(z4, type) {
+  switch (type) {
+    case "string":
+      return z4.string();
+    case "number":
+      return z4.number();
+    case "integer":
+      return z4.number().int();
+    case "boolean":
+      return z4.boolean();
+    case "array":
+      return z4.array(z4.unknown());
+    case "object":
+      return z4.object({}).passthrough();
+    case "null":
+      return z4.null();
+    default:
+      return z4.never();
+  }
+}
 function valueMatchesType(value, type) {
   switch (type) {
     case "string":
@@ -67056,11 +67086,25 @@ function schemaToZod(z4, schema4, depth = 0) {
     return z4.never();
   }
   const t = schema4.type;
+  if (schema4.required !== void 0) {
+    if (!Array.isArray(schema4.required) || schema4.required.some((k) => typeof k !== "string")) return z4.never();
+  }
+  if (schema4.enum !== void 0 && !Array.isArray(schema4.enum)) return z4.never();
+  if (schema4.anyOf !== void 0 && !Array.isArray(schema4.anyOf)) return z4.never();
+  if (schema4.items !== void 0 && typeof schema4.items !== "object") {
+    return z4.never();
+  }
+  if (schema4.properties !== void 0 && (typeof schema4.properties !== "object" || Array.isArray(schema4.properties))) return z4.never();
+  for (const k of ["minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength"]) {
+    if (schema4[k] !== void 0 && typeof schema4[k] !== "number") return z4.never();
+  }
   if (schema4.const !== void 0) {
     if (t !== void 0 && !valueMatchesType(schema4.const, t)) return z4.never();
     return z4.literal(schema4.const);
   }
-  if (Array.isArray(schema4.enum) && schema4.enum.length > 0) {
+  if (Array.isArray(schema4.enum)) {
+    if (schema4.enum.length === 0) return z4.never();
+    if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
     if (schema4.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
     const valid = t !== void 0 ? schema4.enum.filter((v) => valueMatchesType(v, t)) : schema4.enum;
     if (valid.length === 0) return z4.never();
@@ -67070,9 +67114,12 @@ function schemaToZod(z4, schema4, depth = 0) {
   }
   if (Array.isArray(schema4.anyOf)) {
     if (schema4.anyOf.length === 0 || schema4.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return z4.never();
-    return z4.union(schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1)));
+    const branches = schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1));
+    const typeGuard = t !== void 0 ? typeZod(z4, t) : null;
+    return typeGuard ? z4.intersection(z4.union(branches), typeGuard) : z4.union(branches);
   }
   if (t === "string") {
+    if (schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     let s = z4.string();
     if (typeof schema4.minLength === "number" && schema4.minLength >= 0) {
       s = s.min(schema4.minLength);
@@ -67082,12 +67129,14 @@ function schemaToZod(z4, schema4, depth = 0) {
     return s;
   }
   if (t === "number") {
+    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     let s = z4.number();
     if (typeof schema4.minimum === "number") s = s.min(schema4.minimum);
     if (typeof schema4.maximum === "number") s = s.max(schema4.maximum);
     return s;
   }
   if (t === "integer") {
+    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     let s = z4.number().int();
     if (typeof schema4.minimum === "number") {
       s = s.min(Math.ceil(schema4.minimum));
@@ -67097,8 +67146,15 @@ function schemaToZod(z4, schema4, depth = 0) {
     }
     return s;
   }
-  if (t === "boolean") return z4.boolean();
+  if (t === "boolean") {
+    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
+    return z4.boolean();
+  }
+  if (t === "null") {
+    return z4.null();
+  }
   if (t === "array") {
+    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) return z4.never();
     const inner = schemaToZod(z4, schema4.items, depth + 1);
     let arr = z4.array(inner);
     if (typeof schema4.minItems === "number" && schema4.minItems >= 0) {
@@ -67109,6 +67165,7 @@ function schemaToZod(z4, schema4, depth = 0) {
     return arr;
   }
   if (t === "object") {
+    if (schema4.minLength !== void 0 || schema4.maxLength !== void 0 || schema4.minimum !== void 0 || schema4.maximum !== void 0 || schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0) return z4.never();
     const props = schema4.properties && typeof schema4.properties === "object" ? schema4.properties : {};
     const propKeys = Object.keys(props);
     if (propKeys.length > SCHEMA_BOUNDS.maxProperties) return z4.never();
@@ -67217,17 +67274,16 @@ var orchestrator = null;
 var MODEL_CACHE = { model: null, key: null };
 function invalidateAgent() {
   MODEL_CACHE.model = null;
+  MODEL_CACHE.key = null;
   orchestrator = null;
 }
-async function ensureModel(agentId) {
+async function ensureModel(_agentId) {
   const cfg = await getProviderConfig();
-  const ap = await chrome.storage.local.get("cap:agentProviders");
-  const overrides = ap["cap:agentProviders"] ?? {};
-  const resolvedId = agentId && overrides[agentId] || cfg.provider;
-  const cacheKey = `${resolvedId}:${cfg.baseURL}:${cfg.model}`;
-  if (MODEL_CACHE.key !== cacheKey) {
+  const credVersion = cfg.apiKey ? "k1" : "k0";
+  const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
+  if (MODEL_CACHE.key !== cacheKey || !MODEL_CACHE.model) {
     MODEL_CACHE.key = cacheKey;
-    MODEL_CACHE.model = await getModel(resolvedId);
+    MODEL_CACHE.model = await getModel(cfg.provider);
   }
   return MODEL_CACHE.model;
 }
@@ -67362,8 +67418,12 @@ var handlers = {
     const MAX_COUNT = 8;
     const measured = (a) => {
       if (!a?.dataURL) return { bytes: 0, valid: true };
-      const m2 = /^data:([a-z0-9.+-]+);base64,/.exec(String(a.dataURL));
+      const m2 = /^data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*)(?:;\s*[a-z0-9-]+=(?:"[^"]*"|[^;,\s]*))*;base64,([A-Za-z0-9+/]*={0,2})\s*$/.exec(
+        String(a.dataURL)
+      );
       if (!m2) return { bytes: 0, valid: false };
+      const payload = m2[2];
+      if (payload.length % 4 !== 0) return { bytes: 0, valid: false };
       return { bytes: Math.ceil(String(a.dataURL).length * 0.75), valid: true };
     };
     let total = 0;
@@ -67595,12 +67655,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   console.log("Chrome Agent Platform installed");
 });
 chrome.runtime.onStartup?.addListener(() => {
-  clearStaleInflight().catch(() => {
-  });
-  reconcileScheduledTasks().catch(() => {
-  });
+  clearStaleInflight().catch((e) => console.error("clearStaleInflight:", e?.message ?? e));
+  reconcileScheduledTasks().catch((e) => console.error("reconcileScheduledTasks:", e?.message ?? e));
 });
-clearStaleInflight().catch(() => {
-});
-reconcileScheduledTasks().catch(() => {
-});
+clearStaleInflight().catch((e) => console.error("clearStaleInflight:", e?.message ?? e));
+reconcileScheduledTasks().catch((e) => console.error("reconcileScheduledTasks:", e?.message ?? e));

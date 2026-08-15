@@ -245,3 +245,54 @@ Deno.test("PAGE_ALLOWED_ROUTES is an allowlist (admin routes are NOT in it)", ()
   // Approval is an OWNER decision — a content script must NEVER approve its own tools.
   assert(!PAGE_ALLOWED_ROUTES.has("tools.approve"));
 });
+
+Deno.test("schemaToZod rejects a keyword on the wrong type (per-type allowlist)", () => {
+  // minLength is string-only; on a number it must fail closed, not be ignored.
+  const n = schemaToZod(z, { type: "number", minLength: 99 });
+  assertEquals(n.safeParse(1).success, false);
+  // minimum is number-only; on a string it fails closed.
+  const s = schemaToZod(z, { type: "string", minimum: 5 });
+  assertEquals(s.safeParse("ok").success, false);
+});
+
+Deno.test("schemaToZod rejects malformed keyword shapes", () => {
+  // required must be an array of strings.
+  const r = schemaToZod(z, {
+    type: "object",
+    properties: { x: { type: "string" } },
+    required: "x",
+  });
+  assertEquals(r.safeParse({ x: "ok" }).success, false);
+  // anyOf must be an array.
+  const a = schemaToZod(z, { type: "string", anyOf: "bad" });
+  assertEquals(a.safeParse("ok").success, false);
+  // enum must be an array.
+  const e = schemaToZod(z, { type: "string", enum: "bad" });
+  assertEquals(e.safeParse("ok").success, false);
+});
+
+Deno.test("schemaToZod rejects an empty enum", () => {
+  const s = schemaToZod(z, { type: "string", enum: [] });
+  assertEquals(s.safeParse("anything").success, false);
+});
+
+Deno.test("schemaToZod composes anyOf with the declared type", () => {
+  // {type:"string", anyOf:[{type:"number"}]} — JSON Schema requires BOTH the
+  // type AND an anyOf branch to match; 42 matches the number branch but not the
+  // string type, so it must be rejected.
+  const s = schemaToZod(z, { type: "string", anyOf: [{ type: "number" }] });
+  assertEquals(s.safeParse(42).success, false);
+});
+
+Deno.test("Ollama-compatible model allows an optional key (no key required)", async () => {
+  const { createOpenAICompatibleModel } = await import(
+    "../extension/lib/models/openai-model.js"
+  );
+  // Ollama (local) has NO apiKey — construction must succeed with an empty key.
+  const model = createOpenAICompatibleModel({
+    baseURL: "http://localhost:11434/v1",
+    apiKey: "",
+    model: "llama3",
+  });
+  assertEquals(typeof model?.doGenerate, "function");
+});

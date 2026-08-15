@@ -214,6 +214,52 @@ async function main() {
       provRes !== undefined && provRes !== null,
     );
 
+    // 3b. WARM PROVIDER INVALIDATION: run a task (warm the agent), then re-save
+    // the SAME provider — the next run must NOT crash on a null model (the
+    // round-6 blocker). Use the demo provider (no key needed).
+    const warmRun1 = await evaluate(
+      `chrome.runtime.sendMessage({ type: "agent.run", task: "ping" }).catch(e => ({ ok:false, error: e.message }))`,
+    );
+    await evaluate(
+      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo" } })`,
+    );
+    const warmRun2 = await evaluate(
+      `chrome.runtime.sendMessage({ type: "agent.run", task: "ping again" }).catch(e => ({ ok:false, error: e.message }))`,
+    );
+    check(
+      "warm provider re-save does not crash the next run",
+      warmRun2?.error === undefined && warmRun2?.ok !== false,
+    );
+    // Rotate the demo credential flag (a non-secret presence signal) — still demo,
+    // still must not crash.
+    await evaluate(
+      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "rotated-test-key" } })`,
+    );
+    const warmRun3 = await evaluate(
+      `chrome.runtime.sendMessage({ type: "agent.run", task: "ping after rotate" }).catch(e => ({ ok:false, error: e.message }))`,
+    );
+    check(
+      "credential rotation rebuilds the model (no crash)",
+      warmRun3?.error === undefined && warmRun3?.ok !== false,
+    );
+    await evaluate(
+      `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "" } })`,
+    );
+
+    // 3c. SCREENSHOT GATE: after an explicit revoke, capture.tab must be DENIED
+    // (round-4/5 fix); granting the exact origin allows it.
+    await evaluate(
+      `chrome.runtime.sendMessage({ type: "browser-control.set", granted: false })`,
+    );
+    const deniedShot = await evaluate(
+      `chrome.runtime.sendMessage({ type: "capture.tab", tabId: 0 }).catch(e => ({ denied: true, error: e.message }))`,
+    );
+    check(
+      "capture.tab denied after revoke",
+      deniedShot?.denied === true || deniedShot?.error !== undefined ||
+        deniedShot?.ok === false,
+    );
+
     // 4. attachment count cap: 12 attachments → exactly 8 kept, 4+ dropped reported.
     const twelve = Array.from(
       { length: 12 },
@@ -270,8 +316,9 @@ async function main() {
       `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
     );
     ws.close();
+    // Owner-clean: kill + AWAIT process termination, THEN remove the profile.
     proc.kill();
-    // Owner-clean: remove the leaked profile directory.
+    await proc.status.catch(() => {});
     try {
       await new Deno.Command("rm", { args: ["-rf", profile] }).output();
     } catch { /* best effort */ }
@@ -280,6 +327,7 @@ async function main() {
     check("journeys completed", false);
     console.error("journey failure:", String(e?.message ?? e));
     proc.kill();
+    await proc.status.catch(() => {});
     try {
       await new Deno.Command("rm", { args: ["-rf", profile] }).output();
     } catch { /* best effort */ }

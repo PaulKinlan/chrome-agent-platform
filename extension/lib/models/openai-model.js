@@ -9,9 +9,15 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 export function createOpenAICompatibleModel(config) {
   const { baseURL, apiKey, model } = config ?? {};
-  if (!baseURL || !apiKey || !model) {
-    throw new Error("OpenAI-compatible provider requires baseURL, apiKey, and model");
+  // baseURL + model are always required; apiKey is OPTIONAL (local Ollama has
+  // no key). The SDK accepts an empty-string key for keyless local endpoints.
+  if (!baseURL || !model) {
+    throw new Error("OpenAI-compatible provider requires baseURL and model");
   }
-  const openai = createOpenAICompatible({ baseURL, apiKey, name: "configured" });
+  const openai = createOpenAICompatible({
+    baseURL,
+    apiKey: apiKey ?? "",
+    name: "configured",
+  });
   return openai(model);
 }

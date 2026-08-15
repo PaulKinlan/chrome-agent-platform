@@ -34,6 +34,28 @@ const SUPPORTED_KEYWORDS = new Set([
   "anyOf", // union (exactly-one oneOf is NOT supported)
 ]);
 
+/** A zod schema enforcing a JSON-Schema `type` string (used to compose anyOf). */
+function typeZod(z, type) {
+  switch (type) {
+    case "string":
+      return z.string();
+    case "number":
+      return z.number();
+    case "integer":
+      return z.number().int();
+    case "boolean":
+      return z.boolean();
+    case "array":
+      return z.array(z.unknown());
+    case "object":
+      return z.object({}).passthrough();
+    case "null":
+      return z.null();
+    default:
+      return z.never();
+  }
+}
+
 function valueMatchesType(value, type) {
   switch (type) {
     case "string":
@@ -87,13 +109,54 @@ export function schemaToZod(z, schema, depth = 0) {
 
   const t = schema.type;
 
+  // ---- per-keyword SHAPE validation (a malformed keyword fails closed) ----
+  // required: if present must be a non-empty array of strings.
+  if (schema.required !== undefined) {
+    if (
+      !Array.isArray(schema.required) ||
+      schema.required.some((k) => typeof k !== "string")
+    ) return z.never();
+  }
+  // enum / anyOf: if present must be an array.
+  if (schema.enum !== undefined && !Array.isArray(schema.enum)) {
+    return z.never();
+  }
+  if (schema.anyOf !== undefined && !Array.isArray(schema.anyOf)) {
+    return z.never();
+  }
+  // items / properties: if present must be an object.
+  if (schema.items !== undefined && typeof schema.items !== "object") {
+    return z.never();
+  }
+  if (
+    schema.properties !== undefined &&
+    (typeof schema.properties !== "object" || Array.isArray(schema.properties))
+  ) return z.never();
+  // numeric bounds: if present must be a finite number.
+  for (
+    const k of [
+      "minimum",
+      "maximum",
+      "minItems",
+      "maxItems",
+      "minLength",
+      "maxLength",
+    ]
+  ) {
+    if (schema[k] !== undefined && typeof schema[k] !== "number") {
+      return z.never();
+    }
+  }
+
   // const → literal, enum → union of literals — both validated against the
   // declared type so `{type:"string", enum:[42]}` fails closed.
   if (schema.const !== undefined) {
     if (t !== undefined && !valueMatchesType(schema.const, t)) return z.never();
     return z.literal(schema.const);
   }
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+  if (Array.isArray(schema.enum)) {
+    if (schema.enum.length === 0) return z.never(); // empty enum = rejects everything
+    if (schema.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z.never();
     if (schema.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return z.never();
     // Enum values that mismatch the declared type are EXCLUDED (so
     // {type:"string", enum:[42,"a"]} rejects 42 and accepts "a"); if none
@@ -111,10 +174,23 @@ export function schemaToZod(z, schema, depth = 0) {
       schema.anyOf.length === 0 ||
       schema.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches
     ) return z.never();
-    return z.union(schema.anyOf.map((b) => schemaToZod(z, b, depth + 1)));
+    const branches = schema.anyOf.map((b) => schemaToZod(z, b, depth + 1));
+    // Compose the declared `type` with anyOf (JSON Schema requires BOTH) by
+    // intersecting the union with a type guard built from `t`.
+    const typeGuard = t !== undefined ? typeZod(z, t) : null;
+    return typeGuard
+      ? z.intersection(z.union(branches), typeGuard)
+      : z.union(branches);
   }
 
+  // ---- per-type keyword allowlist (a keyword on the wrong type fails closed) ----
   if (t === "string") {
+    if (
+      schema.minimum !== undefined || schema.maximum !== undefined ||
+      schema.items !== undefined || schema.minItems !== undefined ||
+      schema.maxItems !== undefined || schema.properties !== undefined ||
+      schema.required !== undefined || schema.additionalProperties !== undefined
+    ) return z.never();
     let s = z.string();
     if (typeof schema.minLength === "number" && schema.minLength >= 0) {
       s = s.min(schema.minLength);
@@ -129,12 +205,24 @@ export function schemaToZod(z, schema, depth = 0) {
     return s;
   }
   if (t === "number") {
+    if (
+      schema.minLength !== undefined || schema.maxLength !== undefined ||
+      schema.items !== undefined || schema.minItems !== undefined ||
+      schema.maxItems !== undefined || schema.properties !== undefined ||
+      schema.required !== undefined || schema.additionalProperties !== undefined
+    ) return z.never();
     let s = z.number();
     if (typeof schema.minimum === "number") s = s.min(schema.minimum);
     if (typeof schema.maximum === "number") s = s.max(schema.maximum);
     return s;
   }
   if (t === "integer") {
+    if (
+      schema.minLength !== undefined || schema.maxLength !== undefined ||
+      schema.items !== undefined || schema.minItems !== undefined ||
+      schema.maxItems !== undefined || schema.properties !== undefined ||
+      schema.required !== undefined || schema.additionalProperties !== undefined
+    ) return z.never();
     let s = z.number().int();
     if (typeof schema.minimum === "number") {
       s = s.min(Math.ceil(schema.minimum));
@@ -144,8 +232,26 @@ export function schemaToZod(z, schema, depth = 0) {
     }
     return s;
   }
-  if (t === "boolean") return z.boolean();
+  if (t === "boolean") {
+    if (
+      schema.minLength !== undefined || schema.maxLength !== undefined ||
+      schema.minimum !== undefined || schema.maximum !== undefined ||
+      schema.items !== undefined || schema.minItems !== undefined ||
+      schema.maxItems !== undefined || schema.properties !== undefined ||
+      schema.required !== undefined || schema.additionalProperties !== undefined
+    ) return z.never();
+    return z.boolean();
+  }
+  if (t === "null") {
+    return z.null();
+  }
   if (t === "array") {
+    if (
+      schema.minLength !== undefined || schema.maxLength !== undefined ||
+      schema.minimum !== undefined || schema.maximum !== undefined ||
+      schema.properties !== undefined || schema.required !== undefined ||
+      schema.additionalProperties !== undefined
+    ) return z.never();
     const inner = schemaToZod(z, schema.items, depth + 1);
     let arr = z.array(inner);
     if (typeof schema.minItems === "number" && schema.minItems >= 0) {
@@ -158,6 +264,12 @@ export function schemaToZod(z, schema, depth = 0) {
     return arr;
   }
   if (t === "object") {
+    if (
+      schema.minLength !== undefined || schema.maxLength !== undefined ||
+      schema.minimum !== undefined || schema.maximum !== undefined ||
+      schema.items !== undefined || schema.minItems !== undefined ||
+      schema.maxItems !== undefined
+    ) return z.never();
     const props = schema.properties && typeof schema.properties === "object"
       ? schema.properties
       : {};

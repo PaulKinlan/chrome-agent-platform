@@ -104,22 +104,27 @@ let orchestrator = null;
 const MODEL_CACHE = { model: null, key: null };
 
 function invalidateAgent() {
+  // Clear BOTH the cached model AND its cache key: re-saving the same provider
+  // (or rotating credentials for the same base URL/model) must rebuild the
+  // model, not leave MODEL_CACHE.model=null with a still-matching key.
   MODEL_CACHE.model = null;
+  MODEL_CACHE.key = null;
   orchestrator = null;
 }
 
-async function ensureModel(agentId) {
-  // Per-agent provider resolution: an agent's override (cap:agentProviders) wins
-  // over the global default. Cache per resolved config so a provider change
-  // invalidates + rebuilds the affected model.
+async function ensureModel(_agentId) {
+  // A single safe GLOBAL provider. Per-agent provider resolution is TODO
+  // (it needs COMPLETE provider-specific configs keyed by provider, not one
+  // global {baseURL,apiKey,model} that can mix one provider's credential with
+  // another's endpoint). The cache key carries a credential-version signal (a
+  // NON-secret presence flag) so credential rotation rebuilds the model.
   const cfg = await getProviderConfig();
-  const ap = await chrome.storage.local.get("cap:agentProviders");
-  const overrides = ap["cap:agentProviders"] ?? {};
-  const resolvedId = (agentId && overrides[agentId]) || cfg.provider;
-  const cacheKey = `${resolvedId}:${cfg.baseURL}:${cfg.model}`;
-  if (MODEL_CACHE.key !== cacheKey) {
+  const credVersion = cfg.apiKey ? "k1" : "k0";
+  const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
+  // Rebuild whenever the key changed OR the cached model is null.
+  if (MODEL_CACHE.key !== cacheKey || !MODEL_CACHE.model) {
     MODEL_CACHE.key = cacheKey;
-    MODEL_CACHE.model = await getModel(resolvedId);
+    MODEL_CACHE.model = await getModel(cfg.provider);
   }
   return MODEL_CACHE.model;
 }
@@ -290,8 +295,17 @@ const handlers = {
     // not slip through at "0 bytes"). Accept only data:<mime>;base64,<payload>.
     const measured = (a) => {
       if (!a?.dataURL) return { bytes: 0, valid: true };
-      const m = /^data:([a-z0-9.+-]+);base64,/.exec(String(a.dataURL));
+      // A bounded type/subtype MIME + base64 payload. The "/" between type and
+      // subtype is REQUIRED (every normal MIME is type/subtype), and the base64
+      // payload must be well-formed (valid alphabet + padding).
+      const m =
+        /^data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*)(?:;\s*[a-z0-9-]+=(?:"[^"]*"|[^;,\s]*))*;base64,([A-Za-z0-9+/]*={0,2})\s*$/
+          .exec(
+            String(a.dataURL),
+          );
       if (!m) return { bytes: 0, valid: false }; // malformed → rejected
+      const payload = m[2];
+      if (payload.length % 4 !== 0) return { bytes: 0, valid: false };
       // Count the WHOLE dataURL string (it all travels through runtime messaging).
       return { bytes: Math.ceil(String(a.dataURL).length * 0.75), valid: true };
     };
@@ -564,10 +578,19 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // Recover stale in-flight locks on every worker boot so a crashed task doesn't
-// permanently block its alarm.
+// permanently block its alarm. Reconciliation failures are surfaced (logged),
+// not silently discarded.
 chrome.runtime.onStartup?.addListener(() => {
-  clearStaleInflight().catch(() => {});
-  reconcileScheduledTasks().catch(() => {});
+  clearStaleInflight().catch((e) =>
+    console.error("clearStaleInflight:", e?.message ?? e)
+  );
+  reconcileScheduledTasks().catch((e) =>
+    console.error("reconcileScheduledTasks:", e?.message ?? e)
+  );
 });
-clearStaleInflight().catch(() => {});
-reconcileScheduledTasks().catch(() => {});
+clearStaleInflight().catch((e) =>
+  console.error("clearStaleInflight:", e?.message ?? e)
+);
+reconcileScheduledTasks().catch((e) =>
+  console.error("reconcileScheduledTasks:", e?.message ?? e)
+);

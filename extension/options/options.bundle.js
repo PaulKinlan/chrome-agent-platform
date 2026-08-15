@@ -230,38 +230,6 @@ async function revokeBrowserControlGrant() {
   return { revoked: true };
 }
 
-// extension/lib/recipes.js
-var RECIPES = [
-  {
-    id: "tab-hygiene",
-    name: "Tab hygiene",
-    icon: "broom",
-    description: "Find duplicate/stale tabs and close or group them.",
-    prompt: "List the open tabs. Identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close. Report your findings and close the obvious duplicates. Be conservative \u2014 never close a tab with unsaved form state you can't detect."
-  },
-  {
-    id: "page-summary",
-    name: "Summarise this page",
-    icon: "doc",
-    description: "Read the active tab and give a tight summary.",
-    prompt: "Read the active tab's content and produce a concise summary: what the page is, the 3 key points, and one recommended next action. Keep it under 120 words."
-  },
-  {
-    id: "link-collector",
-    name: "Collect links",
-    icon: "link",
-    description: "Gather the outbound links from the active page.",
-    prompt: "Read the active tab and collect its outbound links, grouped by domain, with the link text. Return the list as markdown. Skip navigation/boilerplate links."
-  },
-  {
-    id: "reading-list",
-    name: "Save to reading list",
-    icon: "books",
-    description: "Capture the active tab into memory as a reading-list entry.",
-    prompt: "Read the active tab and save it to memory under the key 'reading-list' (append: title, url, and a one-line note). Confirm what you saved."
-  }
-];
-
 // extension/options/options.js
 var PROVIDERS = [
   {
@@ -286,6 +254,7 @@ var PROVIDERS = [
     hint: "Your OpenAI key + model.",
     baseURL: "https://api.openai.com/v1",
     needsKey: true,
+    needsModel: true,
     onDevice: false
   },
   {
@@ -294,6 +263,7 @@ var PROVIDERS = [
     hint: "Your Anthropic key (OpenAI-compatible endpoint).",
     baseURL: "https://api.anthropic.com/v1",
     needsKey: true,
+    needsModel: true,
     onDevice: false
   },
   {
@@ -302,6 +272,7 @@ var PROVIDERS = [
     hint: "Your Gemini API key (OpenAI-compatible endpoint).",
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsKey: true,
+    needsModel: true,
     onDevice: false
   },
   {
@@ -310,6 +281,7 @@ var PROVIDERS = [
     hint: "Your DeepSeek key + model.",
     baseURL: "https://api.deepseek.com/v1",
     needsKey: true,
+    needsModel: true,
     onDevice: false
   },
   {
@@ -318,6 +290,7 @@ var PROVIDERS = [
     hint: "A local Ollama server.",
     baseURL: "http://localhost:11434/v1",
     needsKey: false,
+    needsModel: true,
     onDevice: false
   }
 ];
@@ -384,36 +357,12 @@ async function renderAgents() {
     saveFlash("Agent mode saved.");
   });
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;
-  const ap = await storage.get("cap:agentProviders");
-  const map = ap["cap:agentProviders"] ?? {};
   const list = $("#agent-provider-list");
   list.innerHTML = "";
-  const agents = [
-    { id: "hub", name: "Hub agent" },
-    ...RECIPES.map((r) => ({ id: r.id, name: r.name }))
-  ];
-  for (const a of agents) {
-    const row = document.createElement("div");
-    row.className = "provider-card";
-    row.innerHTML = `
-      <div class="provider-head">
-        <span class="provider-name">${a.name}</span>
-        <select class="agent-provider">
-          <option value="">Default</option>
-          ${PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join(
-      ""
-    )}
-        </select>
-      </div>`;
-    const sel = row.querySelector(".agent-provider");
-    sel.value = map[a.id] ?? "";
-    sel.addEventListener("change", async () => {
-      map[a.id] = sel.value || void 0;
-      await storage.set({ "cap:agentProviders": map });
-      saveFlash("Agent provider saved.");
-    });
-    list.appendChild(row);
-  }
+  const note = document.createElement("p");
+  note.className = "muted";
+  note.textContent = "Per-agent provider assignment is planned but not enabled yet \u2014 every agent uses the global provider for now.";
+  list.appendChild(note);
 }
 async function renderAppearance() {
   const s = await storage.get("cap:theme");

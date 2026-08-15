@@ -1,102 +1,112 @@
 <!doctype html>
 <html lang="en" data-theme="midnight">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Settings — Chrome Agent Platform</title>
-  <link rel="stylesheet" href="../shared/theme.css">
-  <link rel="stylesheet" href="options.css">
-</head>
-<body>
-  <aside class="side" aria-label="Settings navigation">
-    <div class="brand">Chrome <span>Agent</span> Platform</div>
-    <nav>
-      <a href="#providers" class="nav-item" data-section="providers">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Settings — Chrome Agent Platform</title>
+    <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <aside class="side" aria-label="Settings navigation">
+      <div class="brand">Chrome <span>Agent</span> Platform</div>
+      <nav>
+        <a href="#providers" class="nav-item" data-section="providers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 0 0-10 10c0 5.5 4.5 10 10 10s10-4.5 10-10A10 10 0 0 0 12 2z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         Providers</a>
-      <a href="#agents" class="nav-item" data-section="agents">
+        <a href="#agents" class="nav-item" data-section="agents">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Agents</a>
-      <a href="#appearance" class="nav-item" data-section="appearance">
+        <a href="#appearance" class="nav-item" data-section="appearance">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
         Appearance</a>
-      <a href="#browser" class="nav-item" data-section="browser">
+        <a href="#browser" class="nav-item" data-section="browser">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Browser control</a>
-      <a href="#usage" class="nav-item" data-section="usage">
+        <a href="#usage" class="nav-item" data-section="usage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Usage</a>
-      <a href="#data" class="nav-item" data-section="data">
+        <a href="#data" class="nav-item" data-section="data">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
         Data & memory</a>
-    </nav>
-    <div class="side-foot">
-      <button class="btn" id="open-hub">Back to hub</button>
-    </div>
-  </aside>
+      </nav>
+      <div class="side-foot">
+        <button class="btn" id="open-hub">Back to hub</button>
+      </div>
+    </aside>
 
-  <main class="content">
-    <header class="head">
-      <h1>Settings</h1>
-      <p id="save-status" class="save-status" role="status" aria-live="polite">Changes save automatically.</p>
-    </header>
+    <main class="content">
+      <header class="head">
+        <h1>Settings</h1>
+        <p id="save-status" class="save-status" role="status"
+          aria-live="polite">Changes save automatically.</p>
+      </header>
 
-    <section id="providers" class="panel">
-      <h2>Providers</h2>
-      <p class="muted">Choose the model the hub agent uses. Your API key is stored locally in <code>chrome.storage</code> — never in the bundle, logs, or receipts.</p>
-      <div id="provider-list" class="provider-list"></div>
-      <div class="hint">The on-device Prompt API (Gemini nano) needs no key and works offline. Demo mode runs a deterministic local model — useful for testing the loop without a provider.</div>
-    </section>
+      <section id="providers" class="panel">
+        <h2>Providers</h2>
+        <p
+          class="muted">Choose the model the hub agent uses. Your API key is stored locally in <code>chrome.storage</code> — never in the bundle, logs, or receipts.</p>
+        <div id="provider-list" class="provider-list"></div>
+        <div
+          class="hint">The on-device Prompt API (Gemini nano) needs no key and works offline. Demo mode runs a deterministic local model — useful for testing the loop without a provider.</div>
+      </section>
 
-    <section id="agents" class="panel">
-      <h2>Agents</h2>
-      <div class="field-row">
+      <section id="agents" class="panel">
+        <h2>Agents</h2>
+        <div class="field-row">
+          <label class="switch">
+            <input type="checkbox" id="multi-agent">
+            <span>Multiple agents</span>
+          </label>
+          <p
+            class="muted">When off, the hub is a single agent. When on, the hub fans out to per-site sub-agents.</p>
+        </div>
+        <div id="per-agent-provider" class="per-agent" hidden>
+          <h3>Per-agent providers</h3>
+          <p
+            class="muted">Per-agent provider assignment is planned but not enabled yet — every agent uses the global provider for now.</p>
+          <div id="agent-provider-list" class="agent-provider-list"></div>
+        </div>
+      </section>
+
+      <section id="appearance" class="panel">
+        <h2>Appearance</h2>
+        <div id="theme-grid" class="theme-grid"></div>
+      </section>
+
+      <section id="browser" class="panel">
+        <h2>Browser control</h2>
+        <p
+          class="muted">Destructive actions (open / navigate / close tabs) need your explicit, scoped permission. Reading, listing, and screenshots of the active page are always allowed.</p>
         <label class="switch">
-          <input type="checkbox" id="multi-agent">
-          <span>Multiple agents</span>
+          <input type="checkbox" id="browser-grant">
+          <span>Allow the agent to control the browser</span>
         </label>
-        <p class="muted">When off, the hub is a single agent. When on, the hub fans out to per-site sub-agents.</p>
-      </div>
-      <div id="per-agent-provider" class="per-agent" hidden>
-        <h3>Per-agent providers</h3>
-        <p class="muted">Each sub-agent can override the default provider. Leave "default" to inherit the hub's provider.</p>
-        <div id="agent-provider-list" class="agent-provider-list"></div>
-      </div>
-    </section>
+        <div id="grant-origins" class="grant-origins" hidden>
+          <h3>Allowed origins</h3>
+          <p
+            class="muted">Restrict control to these origins (one per line; empty = all).</p>
+          <textarea id="grant-origin-list" rows="4"
+            placeholder="https://github.com"></textarea>
+        </div>
+      </section>
 
-    <section id="appearance" class="panel">
-      <h2>Appearance</h2>
-      <div id="theme-grid" class="theme-grid"></div>
-    </section>
+      <section id="usage" class="panel">
+        <h2>Usage</h2>
+        <div id="usage-summary" class="usage-summary"></div>
+        <button class="btn ghost" id="usage-detail-toggle"
+          type="button">Show detail</button>
+        <div id="usage-detail" class="usage-detail" hidden></div>
+      </section>
 
-    <section id="browser" class="panel">
-      <h2>Browser control</h2>
-      <p class="muted">Destructive actions (open / navigate / close tabs) need your explicit, scoped permission. Reading, listing, and screenshots of the active page are always allowed.</p>
-      <label class="switch">
-        <input type="checkbox" id="browser-grant">
-        <span>Allow the agent to control the browser</span>
-      </label>
-      <div id="grant-origins" class="grant-origins" hidden>
-        <h3>Allowed origins</h3>
-        <p class="muted">Restrict control to these origins (one per line; empty = all).</p>
-        <textarea id="grant-origin-list" rows="4" placeholder="https://github.com"></textarea>
-      </div>
-    </section>
+      <section id="data" class="panel">
+        <h2>Data & memory</h2>
+        <p
+          class="muted">Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. Clear is per-origin.</p>
+        <div id="origin-list" class="origin-list"></div>
+      </section>
+    </main>
 
-    <section id="usage" class="panel">
-      <h2>Usage</h2>
-      <div id="usage-summary" class="usage-summary"></div>
-      <button class="btn ghost" id="usage-detail-toggle" type="button">Show detail</button>
-      <div id="usage-detail" class="usage-detail" hidden></div>
-    </section>
-
-    <section id="data" class="panel">
-      <h2>Data & memory</h2>
-      <p class="muted">Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. Clear is per-origin.</p>
-      <div id="origin-list" class="origin-list"></div>
-    </section>
-  </main>
-
-  <script type="module" src="options.bundle.js"></script>
-</body>
+    <script type="module" src="options.bundle.js"></script>
+  </body>
 </html>

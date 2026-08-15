@@ -132,8 +132,17 @@ export async function reconcileScheduledTasks() {
         : (task.at > now ? task.at : now + 1000); // one-shot: fire soon, then resume
       const info = { when };
       if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
-      await chrome.alarms.create(name, info).catch(() => {});
-      resumed.push(name);
+      // Only record `resumed` when the alarm was ACTUALLY (re)created; a failed
+      // create is surfaced, never silently claimed as resumed.
+      try {
+        await chrome.alarms.create(name, info);
+        resumed.push(name);
+      } catch (err) {
+        console.error(
+          `reconcile: failed to recreate alarm "${name}":`,
+          err?.message ?? err,
+        );
+      }
     }
   }
   return resumed;

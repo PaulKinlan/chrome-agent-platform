@@ -35,6 +35,7 @@ const PROVIDERS = [
     hint: "Your OpenAI key + model.",
     baseURL: "https://api.openai.com/v1",
     needsKey: true,
+    needsModel: true,
     onDevice: false,
   },
   {
@@ -43,6 +44,7 @@ const PROVIDERS = [
     hint: "Your Anthropic key (OpenAI-compatible endpoint).",
     baseURL: "https://api.anthropic.com/v1",
     needsKey: true,
+    needsModel: true,
     onDevice: false,
   },
   {
@@ -51,6 +53,7 @@ const PROVIDERS = [
     hint: "Your Gemini API key (OpenAI-compatible endpoint).",
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsKey: true,
+    needsModel: true,
     onDevice: false,
   },
   {
@@ -59,6 +62,7 @@ const PROVIDERS = [
     hint: "Your DeepSeek key + model.",
     baseURL: "https://api.deepseek.com/v1",
     needsKey: true,
+    needsModel: true,
     onDevice: false,
   },
   {
@@ -67,6 +71,7 @@ const PROVIDERS = [
     hint: "A local Ollama server.",
     baseURL: "http://localhost:11434/v1",
     needsKey: false,
+    needsModel: true,
     onDevice: false,
   },
 ];
@@ -165,39 +170,17 @@ async function renderAgents() {
   });
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;
 
-  // per-agent provider list (the recipes + a generic "hub" agent)
-  const ap = await storage.get("cap:agentProviders");
-  const map = ap["cap:agentProviders"] ?? {};
+  // Per-agent provider assignment is TODO: it needs COMPLETE provider-specific
+  // configs keyed by provider/agent (never one global {baseURL,apiKey,model}
+  // that could mix one provider's credential with another's endpoint). Until
+  // then, a single safe global provider is used for every agent.
   const list = $("#agent-provider-list");
   list.innerHTML = "";
-  const agents = [
-    { id: "hub", name: "Hub agent" },
-    ...RECIPES.map((r) => ({ id: r.id, name: r.name })),
-  ];
-  for (const a of agents) {
-    const row = document.createElement("div");
-    row.className = "provider-card";
-    row.innerHTML = `
-      <div class="provider-head">
-        <span class="provider-name">${a.name}</span>
-        <select class="agent-provider">
-          <option value="">Default</option>
-          ${
-      PROVIDERS.map((p) => `<option value="${p.id}">${p.name}</option>`).join(
-        "",
-      )
-    }
-        </select>
-      </div>`;
-    const sel = row.querySelector(".agent-provider");
-    sel.value = map[a.id] ?? "";
-    sel.addEventListener("change", async () => {
-      map[a.id] = sel.value || undefined;
-      await storage.set({ "cap:agentProviders": map });
-      saveFlash("Agent provider saved.");
-    });
-    list.appendChild(row);
-  }
+  const note = document.createElement("p");
+  note.className = "muted";
+  note.textContent =
+    "Per-agent provider assignment is planned but not enabled yet — every agent uses the global provider for now.";
+  list.appendChild(note);
 }
 
 // ── Appearance ──
