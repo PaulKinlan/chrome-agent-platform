@@ -1,0 +1,328 @@
+{
+  "commit": "40c627c9c02102556cdbfd8e3dbc53748fb197bc",
+  "runId": "cap-1786819820669",
+  "retain": true,
+  "ts": "2026-08-15T18:50:48.783Z",
+  "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
+  "passed": 75,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "SW auto-attach configured (waitForDebuggerOnStart)",
+      "pass": true
+    },
+    {
+      "name": "extension loaded",
+      "pass": true
+    },
+    {
+      "name": "SW attach returned a session id",
+      "pass": true
+    },
+    {
+      "name": "SW Runtime.enable succeeded",
+      "pass": true
+    },
+    {
+      "name": "initial SW closed for a pre-attached restart",
+      "pass": true
+    },
+    {
+      "name": "SW woken for the pre-attached restart",
+      "pass": true
+    },
+    {
+      "name": "initial SW boot observed via pre-attached restart",
+      "pass": true
+    },
+    {
+      "name": "NTP: task input present",
+      "pass": true
+    },
+    {
+      "name": "NTP: typed a task via Input events",
+      "pass": true
+    },
+    {
+      "name": "NTP: textarea reflects the typed text",
+      "pass": true
+    },
+    {
+      "name": "NTP: clicked Run task via a real click",
+      "pass": true
+    },
+    {
+      "name": "NTP: retained a driven-UI screenshot",
+      "pass": true
+    },
+    {
+      "name": "NTP: the typed task reached the agent journal",
+      "pass": true
+    },
+    {
+      "name": "Settings: OpenAI provider card rendered",
+      "pass": true
+    },
+    {
+      "name": "Settings: Clear key button present for the keyed provider",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked Clear key via a real click",
+      "pass": true
+    },
+    {
+      "name": "Settings: Clear key removed only the key (endpoint/model preserved)",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked Update via a real click",
+      "pass": true
+    },
+    {
+      "name": "Settings: Update preserved endpoint/model + empty key",
+      "pass": true
+    },
+    {
+      "name": "Settings: switched back to Demo via a real click",
+      "pass": true
+    },
+    {
+      "name": "Settings: provider restored to demo",
+      "pass": true
+    },
+    {
+      "name": "Settings: retained a driven-UI screenshot",
+      "pass": true
+    },
+    {
+      "name": "warm run 1 returns a concrete demo result",
+      "pass": true
+    },
+    {
+      "name": "warm run 2 (after re-save) returns a concrete demo result",
+      "pass": true
+    },
+    {
+      "name": "real red tab resolved via chrome.tabs.query",
+      "pass": true
+    },
+    {
+      "name": "screenshot: denied after revoke (secondary probe)",
+      "pass": true
+    },
+    {
+      "name": "screenshot: exact-origin grant captures a real PNG (secondary probe)",
+      "pass": true
+    },
+    {
+      "name": "screenshot: retained to disk (non-empty)",
+      "pass": true
+    },
+    {
+      "name": "screenshot: decoded pixels are predominantly red",
+      "pass": true
+    },
+    {
+      "name": "screenshot: wrong-origin grant is denied (secondary probe)",
+      "pass": true
+    },
+    {
+      "name": "screenshot: expired grant is denied (secondary probe)",
+      "pass": true
+    },
+    {
+      "name": "Settings: browser-grant checkbox present",
+      "pass": true
+    },
+    {
+      "name": "screenshot: clicked the browser-grant checkbox",
+      "pass": true
+    },
+    {
+      "name": "screenshot: granted browser control via a real checkbox click",
+      "pass": true
+    },
+    {
+      "name": "screenshot: typed the red origin into the allowed-origins field",
+      "pass": true
+    },
+    {
+      "name": "screenshot: grant scoped to the red origin via the UI",
+      "pass": true
+    },
+    {
+      "name": "screenshot: UI-granted capture succeeds (real PNG)",
+      "pass": true
+    },
+    {
+      "name": "screenshot: revoked via a real checkbox click",
+      "pass": true
+    },
+    {
+      "name": "screenshot: revoked → capture denied",
+      "pass": true
+    },
+    {
+      "name": "per-origin clear leaves B intact",
+      "pass": true
+    },
+    {
+      "name": "attachment count cap (12 → 4 over-count dropped, journal records 8)",
+      "pass": true
+    },
+    {
+      "name": "attachment: declared/image vs text/plain MIME mismatch is dropped",
+      "pass": true
+    },
+    {
+      "name": "alarm scheduled (name returned)",
+      "pass": true
+    },
+    {
+      "name": "one-shot alarm fired + journaled task AND result",
+      "pass": true
+    },
+    {
+      "name": "reconcile task scheduled",
+      "pass": true
+    },
+    {
+      "name": "alarm cleared (persisted task remains)",
+      "pass": true
+    },
+    {
+      "name": "persisted task payload survives the clear",
+      "pass": true
+    },
+    {
+      "name": "old worker target closed (closeTarget success)",
+      "pass": true
+    },
+    {
+      "name": "worker woken after restart",
+      "pass": true
+    },
+    {
+      "name": "worker restarted (execution context recreated)",
+      "pass": true
+    },
+    {
+      "name": "recreated alarm observed before fire",
+      "pass": true
+    },
+    {
+      "name": "restarted worker reconciled + ran the persisted task",
+      "pass": true
+    },
+    {
+      "name": "agent.create returns ok",
+      "pass": true
+    },
+    {
+      "name": "agent.create created a discoverable worker (list includes it)",
+      "pass": true
+    },
+    {
+      "name": "orchestrator: multi-agent ON + delegation tools present",
+      "pass": true
+    },
+    {
+      "name": "orchestrator: worker fanned out (workerCount >= 1)",
+      "pass": true
+    },
+    {
+      "name": "worker delegated task ran (worker result journaled)",
+      "pass": true
+    },
+    {
+      "name": "Settings: multi-agent toggle present",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked the multi-agent toggle OFF",
+      "pass": true
+    },
+    {
+      "name": "Settings: multi-agent setting persisted OFF",
+      "pass": true
+    },
+    {
+      "name": "orchestrator: solo mode drops delegation tools",
+      "pass": true
+    },
+    {
+      "name": "orchestrator: generation advanced after rebuild",
+      "pass": true
+    },
+    {
+      "name": "solo mode still runs a task",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked the multi-agent toggle ON",
+      "pass": true
+    },
+    {
+      "name": "Settings: multi-agent setting persisted ON",
+      "pass": true
+    },
+    {
+      "name": "orchestrator: delegation tools restored",
+      "pass": true
+    },
+    {
+      "name": "agent.delete removed the worker from the list",
+      "pass": true
+    },
+    {
+      "name": "no service-worker console errors",
+      "pass": true
+    },
+    {
+      "name": "no SW Runtime.enable errors (auto-attach)",
+      "pass": true
+    },
+    {
+      "name": "no NTP/Settings console errors",
+      "pass": true
+    },
+    {
+      "name": "profile removed (no leak)",
+      "pass": true
+    },
+    {
+      "name": "cleanup hard-failed on descendants (none survived)",
+      "pass": true
+    },
+    {
+      "name": "no leftover temporary evidence dir",
+      "pass": true
+    },
+    {
+      "name": "assertion set exact (no missing/extra checks)",
+      "pass": true
+    },
+    {
+      "name": "assertion order matches EXPECTED",
+      "pass": true
+    }
+  ],
+  "files": [
+    {
+      "name": "ntp-driven.png",
+      "sha256": "044113d64b7c12cf70bb7416ae8f98a47dacd154ca674c1b386208a8845e7dc6",
+      "bytes": 79788
+    },
+    {
+      "name": "options-driven.png",
+      "sha256": "c1012cbbea846e4ddf9ceb8e212db0f6a4ca8a81c1ad160bdd557f3fa2f395fd",
+      "bytes": 203820
+    },
+    {
+      "name": "allowed-red.png",
+      "sha256": "e80ebbfda4431e02ca30c833fdca471bb555d36845feaff72a7d787cebb6e06e",
+      "bytes": 14609
+    }
+  ]
+}
