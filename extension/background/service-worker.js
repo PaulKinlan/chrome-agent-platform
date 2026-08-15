@@ -22,6 +22,7 @@ import {
   disenrollOrigin,
   enrollOrigin,
   isApproved,
+  isEnrolled,
   listTools,
   pendingApprovals,
   upsertTools,
@@ -42,6 +43,7 @@ import {
   heartbeatInflight,
   recoverOnBoot,
   markScheduledDone,
+  ownsInflight,
   releaseInflight,
   scheduleTask,
   tryAcquireInflight,
@@ -50,6 +52,7 @@ import {
 import {
   ensureOriginScriptsRegistered,
   unregisterOriginScripts,
+  withOriginLock,
 } from "../lib/enrollment.js";
 import { tool } from "ai";
 import { z } from "zod";
@@ -83,10 +86,29 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   const { token } = lock;
   // Heartbeat while the task runs so a live-but-slow run never looks stale to a
-  // later firing (timeout alone must never create overlapping agents).
+  // later firing (timeout alone must never create overlapping agents). A FAILED
+  // heartbeat renewal is tracked (not swallowed): the run must ABORT once it can
+  // no longer prove ownership, rather than commit side effects as a stale owner.
+  let heartbeatFailed = false;
   const hb = setInterval(() => {
-    heartbeatInflight(alarm.name, token).catch(() => {});
+    heartbeatInflight(alarm.name, token).catch(() => {
+      heartbeatFailed = true;
+    });
   }, INFLIGHT_HEARTBEAT_MS);
+  // The EXECUTION fence: checked at every durable/destructive boundary inside
+  // runTask + before markScheduledDone. Ownership loss (re-acquisition by a
+  // later firing) or a heartbeat-renewal failure aborts the run BEFORE it
+  // commits journal/notification/task-deletion side effects.
+  const fence = {
+    async assertOwned() {
+      if (heartbeatFailed) {
+        throw new Error("heartbeat renewal failed — aborting run");
+      }
+      if (!(await ownsInflight(alarm.name, token))) {
+        throw new Error("in-flight ownership lost — aborting run");
+      }
+    },
+  };
   // The lock is acquired; EVERYTHING below (including the storage read) must
   // run inside try/finally so a read/validation rejection still releases the
   // in-flight lock (otherwise future firings block forever).
@@ -103,9 +125,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       task: task.task ?? alarm.name,
       scheduled: true,
       attachments: task.attachments ?? [],
+      fence,
     });
     if (!task.periodInMinutes) {
-      await markScheduledDone(alarm.name);
+      await fence.assertOwned();
+      await markScheduledDone(alarm.name, token);
     }
   } catch (e) {
     console.error("scheduled task failed", alarm.name, e);
@@ -243,6 +267,11 @@ async function siteToolset(origin) {
 
 // Drive a page function on an origin via the content script (WebMCP/injection).
 async function invokeSiteTool(origin, name, args) {
+  // A site that has been deleted (tombstoned) must not have its tools invoked
+  // through a still-running content-script bridge in an open tab.
+  if (!(await isEnrolled(origin))) {
+    return { error: `origin ${origin} is not enrolled` };
+  }
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -292,10 +321,14 @@ function attachmentContext(attachments) {
   return "Attachments:\n" + parts.join("\n");
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [] }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null }) {
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
+  // Every durable/destructive boundary is FENCED when a scheduled run owns an
+  // in-flight lock: a stale owner aborts before committing the task journal,
+  // the result journal, or the completion notification.
+  await fence?.assertOwned?.();
   await journalAppend(mem, {
     type: "task",
     id: taskId,
@@ -306,8 +339,10 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   const context = attachmentContext(attachments);
   // agent-do's run(task, context, history) -> result text; context is a STRING.
   const result = await orch.run(task, context, []);
+  await fence?.assertOwned?.();
   await journalAppend(mem, { type: "result", id: taskId, result });
   if (scheduled) {
+    await fence?.assertOwned?.();
     // Completion lifecycle: surface the result as a notification. Await + handle
     // failure; the icon is an inline data-URI (no external icon file to go missing).
     try {
@@ -449,12 +484,18 @@ const handlers = {
   },
 
   async "tools.list"({ origin }) {
+    if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
     return await listTools(origin);
   },
   async "tools.upsert"({ origin, tools }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    await enrollOrigin(canonical);
+    // A running content-script bridge must NOT re-enroll a deleted origin: the
+    // upsert is rejected unless the origin is CURRENTLY enrolled (an
+    // owner-controlled tombstone state, never recreated by a page report).
+    if (!(await isEnrolled(canonical))) {
+      return { ok: false, error: "origin not enrolled — enroll it in Settings" };
+    }
     await upsertTools(canonical, tools);
     // New tools/sites must reach the running orchestrator — rebuild it.
     invalidateAgent();
@@ -464,6 +505,7 @@ const handlers = {
     return await approveTool(origin, name, decision);
   },
   async "tools.pending"({ origin }) {
+    if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
     return await pendingApprovals(origin);
   },
   async "tools.allOrigins"() {
@@ -574,34 +616,71 @@ const handlers = {
   async "agent.create"({ origin, name }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    // Enroll creates the site's OPFS store directory (so listOrigins() discovers
-    // the worker) AND the master-memory origins list — both, never just one.
-    await enrollOrigin(canonical);
-    // Rebuild the orchestrator so the new worker is actually fan-out-able now.
-    invalidateAgent();
-    // Best-effort: register the discovery content scripts for THIS origin via an
-    // optional host permission (never <all_urls>). A denied permission leaves the
-    // origin enrolled in memory (its tools are just not auto-discovered yet).
-    const registered = await ensureOriginScriptsRegistered(canonical).catch(
-      (e) => ({ ok: false, error: String(e?.message ?? e) }),
-    );
-    return {
-      ok: true,
-      origin: canonical,
-      name,
-      scriptsRegistered: registered?.ok === true,
-    };
+    // Serialized per origin: create/delete/registration never interleave.
+    return await withOriginLock(canonical, async () => {
+      // Enroll creates the site's OPFS store directory (so listOrigins()
+      // discovers the worker) AND the master-memory origins list — both, never
+      // just one. The CONTENT-SCRIPT host permission is a SEPARATE owner-driven
+      // step (agent.enroll-origin from a user gesture) — never requested from
+      // the SW (no gesture), so a management create cannot silently gain host
+      // access or inject scripts.
+      await enrollOrigin(canonical);
+      // Rebuild the orchestrator so the new worker is actually fan-out-able now.
+      invalidateAgent();
+      return { ok: true, origin: canonical, name };
+    });
+  },
+  async "agent.enroll-origin"({ origin }) {
+    // The OWNER-gesture path: the Settings page already requested the optional
+    // host permission via chrome.permissions.request (a real user gesture); this
+    // route registers the discovery scripts for the now-granted origin.
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical, async () => {
+      await enrollOrigin(canonical);
+      const registered = await ensureOriginScriptsRegistered(canonical).catch(
+        (e) => ({ ok: false, error: String(e?.message ?? e) }),
+      );
+      invalidateAgent();
+      return {
+        ok: true,
+        origin: canonical,
+        scriptsRegistered: registered?.ok === true,
+      };
+    });
   },
   async "agent.delete"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    // Remove the dynamic content scripts (optional host permission) + the master
-    // list entry + the per-site OPFS store, then rebuild the orchestrator.
-    await unregisterOriginScripts(canonical).catch(() => {});
-    await disenrollOrigin(canonical);
-    await siteMemory(canonical).clear();
-    invalidateAgent();
-    return { ok: true, origin: canonical };
+    return await withOriginLock(canonical, async () => {
+      // Authoritative revocation: remove the dynamic content scripts AND revoke
+      // the optional host permission, then tombstone the enrollment (a running
+      // bridge's reports are rejected via isEnrolled) + clear the OPFS store.
+      await unregisterOriginScripts(canonical).catch(() => {});
+      await disenrollOrigin(canonical);
+      await siteMemory(canonical).clear();
+      invalidateAgent();
+      return { ok: true, origin: canonical };
+    });
+  },
+  async "agent.delegate"({ origin, task }) {
+    // Direct, observable fan-out: run a WORKER agent (not the hub) for an
+    // enrolled origin and journal its result to the worker's OWN per-origin
+    // memory. This is the honest proof that delegation executes a distinct
+    // sub-agent, not merely that the worker map is populated.
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    await ensureOrchestrator();
+    const a = orchestrator?.workers?.get(canonical);
+    if (!a) return { ok: false, error: `no agent for ${origin}` };
+    const result = await a.run(task, "", []);
+    await journalAppend(siteMemory(canonical), {
+      type: "delegated-result",
+      id: `delegate:${canonical}:${Date.now()}`,
+      task,
+      result,
+    });
+    return { ok: true, origin: canonical, result };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();

@@ -112,36 +112,15 @@ async function activeTab() {
 }
 
 /**
- * An activation-generation counter. Every tab-activation or navigation event
- * increments it, so a switch-away-and-back (an ABA active-tab swap) DURING the
- * capture interval is observable even if the requested tab is restored before
- * the post-capture active-tab query. captureVisibleTab captures whichever tab
- * is visible when the API executes, so the counter closes the gap that a
- * before/after query pair cannot.
- */
-let activationGen = 0;
-let genListenerInstalled = false;
-function ensureActivationGenListener() {
-  if (genListenerInstalled) return;
-  genListenerInstalled = true;
-  chrome.tabs.onActivated?.addListener(() => {
-    activationGen++;
-  });
-  chrome.tabs.onUpdated?.addListener((_tabId, changeInfo) => {
-    // A navigation (or a load) during the capture interval invalidates the
-    // captured bytes; it must be observed, not merely re-read after the fact.
-    if (changeInfo.status === "loading" || changeInfo.url) activationGen++;
-  });
-}
-
-/**
- * Capture a PNG screenshot of the requested tab (or the active tab), gated by
- * the browser-control grant FOR THAT TAB'S ORIGIN. This is the ONE gated
- * implementation shared by the agent tool AND the chat runtime route — a
- * post-revoke or wrong-origin capture must fail here.
+ * Capture a PNG screenshot of the requested tab, gated by the browser-control
+ * grant FOR THAT TAB'S ORIGIN. Uses chrome.debugger + Page.captureScreenshot
+ * targeting the SPECIFIC tab by id (NOT captureVisibleTab, which captures
+ * whatever tab is visible and needs the permanent <all_urls> host permission).
+ * Targeting a tab by id eliminates the active-tab ABA race entirely and works
+ * with only the `debugger` permission — the tab is attached, captured, and
+ * detached within a single call, so there is no lingering broad access.
  */
 export async function captureTabScreenshot(tabId) {
-  ensureActivationGenListener();
   // Resolve the tab first so we can derive its origin for the grant check.
   const tab = tabId
     ? await chrome.tabs.get(tabId).catch(() => null)
@@ -170,73 +149,45 @@ export async function captureTabScreenshot(tabId) {
   const grantIdBefore = await getBrowserControlGrantIdentity();
   if (!grantIdBefore) return { error: "browser control grant missing" };
 
+  const debuggee = { tabId: tab.id };
   try {
-    // Activate the REQUESTED tab, then VERIFY it became active before capture
-    // (captureVisibleTab captures the active tab — never another).
-    await chrome.tabs.update(tab.id, { active: true });
-    const active = await chrome.tabs.query({
-      active: true,
-      windowId: tab.windowId,
-    });
-    if (active?.[0]?.id !== tab.id) {
-      return { error: "could not activate the requested tab" };
+    await chrome.debugger.attach(debuggee, "1.3");
+    try {
+      await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
+      const shot = await chrome.debugger.sendCommand(
+        debuggee,
+        "Page.captureScreenshot",
+        { format: "png" },
+      );
+      // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
+      // 1. the tab is STILL on the same origin (no navigation during capture);
+      // 2. the grant is STILL valid AND the SAME grant identity (closes the
+      //    revoke→regrant ABA race).
+      const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+      const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : undefined;
+      if (!currentOrigin || currentOrigin !== origin) {
+        return { error: "tab navigated during capture — screenshot discarded" };
+      }
+      if ((await getBrowserControlGrantIdentity()) !== grantIdBefore) {
+        return {
+          error:
+            "browser control grant changed during capture — screenshot discarded",
+        };
+      }
+      if (!(await isBrowserControlGranted(currentOrigin))) {
+        return {
+          error:
+            "browser control grant changed during capture — screenshot discarded",
+        };
+      }
+      if (!shot?.data) return { error: "capture returned no data" };
+      return { screenshot: `data:image/png;base64,${shot.data}` };
+    } finally {
+      await chrome.debugger.detach(debuggee).catch(() => {});
     }
-    // TOCTOU guard: re-read the tab's CURRENT url after activation. It must be
-    // the SAME authorized origin — a tab that navigated from an allowed origin
-    // to a denied one between authorization and capture must NOT be captured.
-    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
-    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : undefined;
-    if (!currentOrigin || currentOrigin !== origin) {
-      return { error: "tab navigated to a different origin — capture denied" };
-    }
-    if (!(await isBrowserControlGranted(currentOrigin))) {
-      return {
-        error:
-          "browser control not granted for this tab's origin — ask the user to approve it in Settings",
-      };
-    }
-    // Sample the activation generation IMMEDIATELY before capture.
-    const genBefore = activationGen;
-    const url = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-    });
-    // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
-    // 1. no activation/navigation happened during the capture interval (closes
-    //    the switch-away-and-back ABA race);
-    // 2. the requested tab is STILL the active one;
-    // 3. its origin is unchanged;
-    // 4. the grant is STILL valid (closes the mid-capture revoke/expiry race).
-    if (activationGen !== genBefore) {
-      return { error: "active tab changed during capture — screenshot discarded" };
-    }
-    const afterActive = await chrome.tabs.query({
-      active: true,
-      windowId: tab.windowId,
-    });
-    if (afterActive?.[0]?.id !== tab.id) {
-      return { error: "active tab changed during capture — screenshot discarded" };
-    }
-    const afterTab = await chrome.tabs.get(tab.id).catch(() => null);
-    const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : undefined;
-    if (!afterOrigin || afterOrigin !== origin) {
-      return { error: "tab navigated during capture — screenshot discarded" };
-    }
-    // The grant must be BOTH still valid AND the SAME grant identity. A revoke
-    // (id → null) or a revoke→regrant (id → a new value) invalidates the bytes.
-    if ((await getBrowserControlGrantIdentity()) !== grantIdBefore) {
-      return {
-        error:
-          "browser control grant changed during capture — screenshot discarded",
-      };
-    }
-    if (!(await isBrowserControlGranted(afterOrigin))) {
-      return {
-        error:
-          "browser control grant changed during capture — screenshot discarded",
-      };
-    }
-    return { screenshot: url };
   } catch (e) {
+    // Detach on attach/command failure too (never leave a lingering debugger).
+    await chrome.debugger.detach(debuggee).catch(() => {});
     return { error: String(e?.message ?? e) };
   }
 }

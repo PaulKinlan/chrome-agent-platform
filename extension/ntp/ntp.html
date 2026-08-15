@@ -106,6 +106,8 @@
     }
     .task .t {
       font-weight: 600;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
     }
     .task .meta {
       color: var(--muted);
@@ -286,15 +288,18 @@
             aria-label="Start listening"><span class="mic-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span><span class="mic-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span></button>
           <button class="btn ghost icon-btn plus" id="plus-btn" type="button"
             title="Attach"
-            aria-label="Add attachment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+            aria-label="Add attachment"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="attach-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
           <div class="spacer"></div>
           <button class="btn" id="run-task">Run task</button>
-          <div class="attach-menu" id="attach-menu" hidden>
-            <button type="button" data-kind="file">Add file</button>
-            <button type="button" data-kind="record-audio">Record audio</button>
-            <button type="button"
+          <div class="attach-menu" id="attach-menu" role="menu" aria-label="Attach" hidden>
+            <button type="button" role="menuitem" data-kind="file">Add file</button>
+            <button type="button" role="menuitem" data-kind="record-audio">Record audio</button>
+            <button type="button" role="menuitem"
               data-kind="capture-camera">Capture camera</button>
-            <button type="button" data-kind="other">Add other file</button>
+            <button type="button" role="menuitem" data-kind="other">Add other file</button>
             <p class="attach-note">Text files are read by the agent. Audio/video/image
               are attached but NOT read by the model yet (multimodal is coming) —
               their bytes are not sent to the model or stored with the message.</p>

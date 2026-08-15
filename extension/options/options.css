@@ -253,7 +253,7 @@ input:focus, select:focus, textarea:focus {
 /* Buttons */
 .btn {
   background: var(--accent);
-  color: #fff;
+  color: var(--btn-fg, #001);
   border: none;
   border-radius: 6px;
   padding: 8px 14px;
@@ -294,4 +294,20 @@ input:focus, select:focus, textarea:focus {
 .grant-origins label {
   display: block;
   margin: 0.5rem 0 0.35rem;
+}
+/* Site enrollment row. */
+.enroll {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.enroll h3 {
+  font-size: 14px;
+  margin: 0 0 4px;
+}
+.enroll-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 10px;
 }

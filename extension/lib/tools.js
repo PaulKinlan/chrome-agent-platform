@@ -1,9 +1,10 @@
 // lib/tools.js — the tool directory: declared (WebMCP) + linked (agent.md/skills)
 // + inferred (window.* functions) tools, with first-run approval per origin.
 
-import { masterMemory, siteMemory } from "./memory.js";
+import { canonicalOrigin, masterMemory, siteMemory } from "./memory.js";
 
 const DIR_KEY = "toolDirectory";
+const ENROLL_KEY = "cap:enrollment";
 
 /** Bounds for the tool directory (fail-closed against hostile descriptors). */
 export const TOOL_BOUNDS = {
@@ -88,31 +89,64 @@ export async function listAllOrigins() {
   return master ?? [];
 }
 
+/** Whether an origin is CURRENTLY enrolled (owner-controlled). A deleted origin
+ * is TOMBSTONED (enrolled:false), so a still-running content-script bridge can
+ * never re-enroll it or report tools for it. */
+export async function isEnrolled(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return false;
+  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const rec = s[ENROLL_KEY]?.[canonical];
+  return Boolean(rec && rec.enrolled === true);
+}
+
 export async function enrollOrigin(origin) {
   const store = masterMemory();
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) throw new Error(`invalid origin: ${origin}`);
   // Create the site's OWN OPFS store directory (so listOrigins() — which
   // enumerates the per-origin directories — discovers it as a worker). This
   // fixes the bug where agent.create wrote only the master-memory list and the
   // worker stayed invisible to listOrigins()/the orchestrator.
-  await siteMemory(origin).set("enrolled", { at: Date.now() });
+  await siteMemory(canonical).set("enrolled", { at: Date.now() });
   const origins = (await store.get("origins")) ?? [];
-  const canonical = siteMemory(origin).origin;
   if (!origins.includes(canonical)) {
     origins.push(canonical);
     await store.set("origins", origins);
   }
+  // Persist the ENROLLMENT STATE (enrolled:true) — the authority a running
+  // bridge's reports are gated on (isEnrolled).
+  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const map = { ...(s[ENROLL_KEY] ?? {}) };
+  map[canonical] = {
+    enrolled: true,
+    at: Date.now(),
+    gen: (map[canonical]?.gen ?? 0) + 1,
+  };
+  await chrome.storage.local.set({ [ENROLL_KEY]: map });
   return origins;
 }
 
-/** Remove an origin from the master-memory origins list (mirror of enroll). */
+/** Remove an origin from the master-memory origins list + TOMBSTONE its
+ * enrollment (enrolled:false) so a running bridge's reports are rejected. This
+ * is the authoritative revocation — not merely removing the list entry. */
 export async function disenrollOrigin(origin) {
   const store = masterMemory();
   const origins = (await store.get("origins")) ?? [];
-  const canonical = siteMemory(origin).origin;
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return origins;
   const next = origins.filter((o) => o !== canonical);
   if (next.length !== origins.length) {
     await store.set("origins", next);
   }
+  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const map = { ...(s[ENROLL_KEY] ?? {}) };
+  map[canonical] = {
+    enrolled: false, // tombstone
+    at: Date.now(),
+    gen: (map[canonical]?.gen ?? 0) + 1,
+  };
+  await chrome.storage.local.set({ [ENROLL_KEY]: map });
   return next;
 }
 

@@ -170,21 +170,72 @@ async function renderProviders() {
       const k = active.querySelector(".api-key");
       if (k) k.placeholder = "API key (set — leave blank to keep)";
     }
-    const clear = document.createElement("button");
-    clear.className = "btn ghost small clear-key";
-    clear.type = "button";
-    clear.textContent = "Clear key";
-    clear.setAttribute("aria-label", `Clear API key for ${cfg.provider}`);
-    clear.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({
-        type: "provider.set",
-        config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model },
+    // A keyless provider (Demo / Prompt API) has nothing to clear — only offer
+    // the Clear key control when a key is actually configured (never the
+    // contradictory "Clear key" on a keyless provider).
+    if (cfg.apiKey) {
+      const clear = document.createElement("button");
+      clear.className = "btn ghost small clear-key";
+      clear.type = "button";
+      clear.textContent = "Clear key";
+      clear.setAttribute("aria-label", `Clear API key for ${cfg.provider}`);
+      clear.addEventListener("click", async () => {
+        await chrome.runtime.sendMessage({
+          type: "provider.set",
+          config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model },
+        });
+        saveFlash("API key cleared.");
+        renderProviders();
       });
-      saveFlash("API key cleared.");
-      renderProviders();
-    });
-    active.querySelector(".provider-head")?.appendChild(clear);
+      active.querySelector(".provider-head")?.appendChild(clear);
+    }
   }
+}
+
+// ── Site enrollment (owner-driven optional host permission) ──
+async function renderEnroll() {
+  const input = $("#enroll-origin");
+  const btn = $("#enroll-btn");
+  btn.addEventListener("click", async () => {
+    const raw = input.value.trim();
+    let origin;
+    try {
+      origin = new URL(raw).origin;
+    } catch {
+      saveFlash("Enter a valid origin, e.g. https://github.com");
+      return;
+    }
+    if (!/^https?:$/.test(new URL(origin).protocol)) {
+      saveFlash("Only http/https origins can be enrolled.");
+      return;
+    }
+    const matches = [`${origin}/*`];
+    // The OWNER gesture: request the exact origin's host permission from the
+    // Settings page (a real user gesture). Only after it is granted do we ask
+    // the SW to register the discovery scripts. Never request from the SW.
+    let granted;
+    try {
+      granted = await chrome.permissions.request({ origins: matches });
+    } catch (e) {
+      saveFlash("Permission request failed: " + String(e?.message ?? e));
+      return;
+    }
+    if (!granted) {
+      saveFlash("Host permission not granted — the origin was not enrolled.");
+      return;
+    }
+    const res = await chrome.runtime.sendMessage({
+      type: "agent.enroll-origin",
+      origin,
+    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    input.value = "";
+    if (res?.ok) {
+      saveFlash(`Enrolled ${origin}${res.scriptsRegistered ? " (scripts registered)" : ""}.`);
+      renderData();
+    } else {
+      saveFlash("Enroll failed: " + (res?.error ?? "unknown"));
+    }
+  });
 }
 
 // ── Agents ──
@@ -391,6 +442,7 @@ document.querySelectorAll(".nav-item").forEach((a) => {
 
 await renderProviders();
 await renderAgents();
+await renderEnroll();
 await renderAppearance();
 await renderBrowser();
 await renderUsage();

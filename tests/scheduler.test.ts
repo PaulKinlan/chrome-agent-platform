@@ -8,7 +8,10 @@ import {
   INFLIGHT_LEASE_MS,
   clearStaleInflight,
   heartbeatInflight,
+  markScheduledDone,
+  ownsInflight,
   releaseInflight,
+  scheduleTask,
   tryAcquireInflight,
 } from "../extension/lib/scheduler.js";
 
@@ -121,4 +124,52 @@ Deno.test("clearStaleInflight clears malformed locks but preserves live post-boo
   assert(after["cap:scheduledInflight"]["lease-d"] !== undefined, "live lock preserved");
   assert(after["cap:scheduledInflight"]["malformed"] === undefined, "malformed lock cleared");
   await releaseInflight("lease-d", a.token);
+});
+
+Deno.test("ownsInflight is true for the owner and false after re-acquisition", async () => {
+  const a = await tryAcquireInflight("lease-e");
+  assertEquals(a.acquired, true);
+  assert(await ownsInflight("lease-e", a.token), "owner must own the lock");
+
+  // A stale owner's lock is re-acquired by B (owner went silent past the lease).
+  const s1 = await chrome.storage.local.get("cap:scheduledInflight");
+  s1["cap:scheduledInflight"]["lease-e"].heartbeatAt =
+    Date.now() - INFLIGHT_LEASE_MS * 2;
+  await chrome.storage.local.set({ "cap:scheduledInflight": s1["cap:scheduledInflight"] });
+  const b = await tryAcquireInflight("lease-e");
+  assertEquals(b.acquired, true);
+  assert(!(await ownsInflight("lease-e", a.token)), "stale owner A no longer owns");
+  assert(await ownsInflight("lease-e", b.token), "new owner B owns the lock");
+  await releaseInflight("lease-e", b.token);
+});
+
+Deno.test("markScheduledDone is fenced: a stale owner cannot delete a later owner's task", async () => {
+  // Schedule a one-shot task + acquire its in-flight lock as owner A.
+  const { name } = await scheduleTask({ task: "fenced-task", delayMs: 1000 });
+  const a = await tryAcquireInflight(name);
+  assertEquals(a.acquired, true);
+
+  // A ages out; B re-acquires (stale owner demonstrably dead).
+  const s1 = await chrome.storage.local.get("cap:scheduledInflight");
+  s1["cap:scheduledInflight"][name].heartbeatAt = Date.now() - INFLIGHT_LEASE_MS * 2;
+  await chrome.storage.local.set({ "cap:scheduledInflight": s1["cap:scheduledInflight"] });
+  const b = await tryAcquireInflight(name);
+  assertEquals(b.acquired, true);
+
+  // Stale owner A attempts markScheduledDone — it must THROW and NOT delete the
+  // task payload (B owns the lock now).
+  let threw = false;
+  try {
+    await markScheduledDone(name, a.token);
+  } catch {
+    threw = true;
+  }
+  assert(threw, "stale owner's fenced markScheduledDone must throw");
+  const store = await chrome.storage.local.get("cap:scheduledTasks");
+  assert(store["cap:scheduledTasks"][name] !== undefined, "task payload must survive");
+
+  // The current owner B can mark it done.
+  await markScheduledDone(name, b.token);
+  const store2 = await chrome.storage.local.get("cap:scheduledTasks");
+  assert(store2["cap:scheduledTasks"][name] === undefined, "owner B removed the task");
 });

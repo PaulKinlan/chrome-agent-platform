@@ -9,10 +9,12 @@
     "sidePanel",
     "tabs",
     "scripting",
-    "notifications"
+    "notifications",
+    "debugger"
   ],
-  "host_permissions": [
-    "<all_urls>"
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "chrome_url_overrides": {
     "newtab": "ntp/ntp.html"

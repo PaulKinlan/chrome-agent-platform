@@ -66519,6 +66519,7 @@ function createOrchestrator2({
 // extension/lib/tools.js
 init_browser_shim_process();
 var DIR_KEY = "toolDirectory";
+var ENROLL_KEY = "cap:enrollment";
 var TOOL_BOUNDS = {
   maxNameLength: 128,
   maxDescriptionLength: 2e3,
@@ -66589,25 +66590,51 @@ async function upsertTools(origin, tools) {
 async function listTools(origin) {
   return await siteMemory(origin).get(DIR_KEY) ?? [];
 }
+async function isEnrolled(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return false;
+  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const rec = s[ENROLL_KEY]?.[canonical];
+  return Boolean(rec && rec.enrolled === true);
+}
 async function enrollOrigin(origin) {
   const store = masterMemory();
-  await siteMemory(origin).set("enrolled", { at: Date.now() });
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) throw new Error(`invalid origin: ${origin}`);
+  await siteMemory(canonical).set("enrolled", { at: Date.now() });
   const origins = await store.get("origins") ?? [];
-  const canonical = siteMemory(origin).origin;
   if (!origins.includes(canonical)) {
     origins.push(canonical);
     await store.set("origins", origins);
   }
+  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const map4 = { ...s[ENROLL_KEY] ?? {} };
+  map4[canonical] = {
+    enrolled: true,
+    at: Date.now(),
+    gen: (map4[canonical]?.gen ?? 0) + 1
+  };
+  await chrome.storage.local.set({ [ENROLL_KEY]: map4 });
   return origins;
 }
 async function disenrollOrigin(origin) {
   const store = masterMemory();
   const origins = await store.get("origins") ?? [];
-  const canonical = siteMemory(origin).origin;
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return origins;
   const next = origins.filter((o) => o !== canonical);
   if (next.length !== origins.length) {
     await store.set("origins", next);
   }
+  const s = await chrome.storage.local.get(ENROLL_KEY);
+  const map4 = { ...s[ENROLL_KEY] ?? {} };
+  map4[canonical] = {
+    enrolled: false,
+    // tombstone
+    at: Date.now(),
+    gen: (map4[canonical]?.gen ?? 0) + 1
+  };
+  await chrome.storage.local.set({ [ENROLL_KEY]: map4 });
   return next;
 }
 async function isApproved(origin, toolName) {
@@ -66644,7 +66671,7 @@ function newToken() {
 }
 function validLock(v) {
   return Boolean(
-    v && typeof v === "object" && typeof v.token === "string" && v.token.length > 0 && typeof v.heartbeatAt === "number" && Number.isFinite(v.heartbeatAt)
+    v && typeof v === "object" && typeof v.token === "string" && v.token.length > 0 && typeof v.at === "number" && Number.isFinite(v.at) && typeof v.heartbeatAt === "number" && Number.isFinite(v.heartbeatAt)
   );
 }
 var mutex = Promise.resolve();
@@ -66686,8 +66713,16 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
     return { name: name25, when };
   });
 }
-async function markScheduledDone(name25) {
+async function markScheduledDone(name25, token) {
   await withLock(async () => {
+    if (token) {
+      const inflightStore = await chrome.storage.local.get(INFLIGHT_KEY);
+      const inflight = { ...inflightStore[INFLIGHT_KEY] ?? {} };
+      const existing = inflight[name25];
+      if (!validLock(existing) || existing.token !== token) {
+        throw new Error("ownership lost \u2014 scheduled task NOT removed");
+      }
+    }
     const store = await chrome.storage.local.get(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     delete tasks[name25];
@@ -66715,6 +66750,11 @@ async function tryAcquireInflight(name25) {
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
     return { acquired: true, token };
   });
+}
+async function ownsInflight(name25, token) {
+  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const existing = store[INFLIGHT_KEY]?.[name25];
+  return Boolean(validLock(existing) && existing.token === token);
 }
 async function heartbeatInflight(name25, token) {
   await withLock(async () => {
@@ -66874,20 +66914,7 @@ async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0] ?? null;
 }
-var activationGen = 0;
-var genListenerInstalled = false;
-function ensureActivationGenListener() {
-  if (genListenerInstalled) return;
-  genListenerInstalled = true;
-  chrome.tabs.onActivated?.addListener(() => {
-    activationGen++;
-  });
-  chrome.tabs.onUpdated?.addListener((_tabId, changeInfo) => {
-    if (changeInfo.status === "loading" || changeInfo.url) activationGen++;
-  });
-}
 async function captureTabScreenshot(tabId) {
-  ensureActivationGenListener();
   const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
   if (!tab?.id) return { error: "no tab" };
   const origin = tab.url ? (() => {
@@ -66905,56 +66932,40 @@ async function captureTabScreenshot(tabId) {
   }
   const grantIdBefore = await getBrowserControlGrantIdentity();
   if (!grantIdBefore) return { error: "browser control grant missing" };
+  const debuggee = { tabId: tab.id };
   try {
-    await chrome.tabs.update(tab.id, { active: true });
-    const active = await chrome.tabs.query({
-      active: true,
-      windowId: tab.windowId
-    });
-    if (active?.[0]?.id !== tab.id) {
-      return { error: "could not activate the requested tab" };
+    await chrome.debugger.attach(debuggee, "1.3");
+    try {
+      await chrome.debugger.sendCommand(debuggee, "Page.enable", {});
+      const shot = await chrome.debugger.sendCommand(
+        debuggee,
+        "Page.captureScreenshot",
+        { format: "png" }
+      );
+      const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
+      const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : void 0;
+      if (!currentOrigin || currentOrigin !== origin) {
+        return { error: "tab navigated during capture \u2014 screenshot discarded" };
+      }
+      if (await getBrowserControlGrantIdentity() !== grantIdBefore) {
+        return {
+          error: "browser control grant changed during capture \u2014 screenshot discarded"
+        };
+      }
+      if (!await isBrowserControlGranted(currentOrigin)) {
+        return {
+          error: "browser control grant changed during capture \u2014 screenshot discarded"
+        };
+      }
+      if (!shot?.data) return { error: "capture returned no data" };
+      return { screenshot: `data:image/png;base64,${shot.data}` };
+    } finally {
+      await chrome.debugger.detach(debuggee).catch(() => {
+      });
     }
-    const nowTab = await chrome.tabs.get(tab.id).catch(() => null);
-    const currentOrigin = nowTab?.url ? canonicalOrigin(nowTab.url) : void 0;
-    if (!currentOrigin || currentOrigin !== origin) {
-      return { error: "tab navigated to a different origin \u2014 capture denied" };
-    }
-    if (!await isBrowserControlGranted(currentOrigin)) {
-      return {
-        error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
-      };
-    }
-    const genBefore = activationGen;
-    const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png"
-    });
-    if (activationGen !== genBefore) {
-      return { error: "active tab changed during capture \u2014 screenshot discarded" };
-    }
-    const afterActive = await chrome.tabs.query({
-      active: true,
-      windowId: tab.windowId
-    });
-    if (afterActive?.[0]?.id !== tab.id) {
-      return { error: "active tab changed during capture \u2014 screenshot discarded" };
-    }
-    const afterTab = await chrome.tabs.get(tab.id).catch(() => null);
-    const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : void 0;
-    if (!afterOrigin || afterOrigin !== origin) {
-      return { error: "tab navigated during capture \u2014 screenshot discarded" };
-    }
-    if (await getBrowserControlGrantIdentity() !== grantIdBefore) {
-      return {
-        error: "browser control grant changed during capture \u2014 screenshot discarded"
-      };
-    }
-    if (!await isBrowserControlGranted(afterOrigin)) {
-      return {
-        error: "browser control grant changed during capture \u2014 screenshot discarded"
-      };
-    }
-    return { screenshot: url3 };
   } catch (e) {
+    await chrome.debugger.detach(debuggee).catch(() => {
+    });
     return { error: String(e?.message ?? e) };
   }
 }
@@ -67141,42 +67152,55 @@ var BRIDGE_JS = "content/content-script.js";
 function scriptId(origin, role) {
   return `cap-${encodeURIComponent(origin)}-${role}`;
 }
+var originLocks = /* @__PURE__ */ new Map();
+function withOriginLock(origin, fn) {
+  const key = canonicalOrigin(origin) ?? String(origin);
+  const prev = originLocks.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  originLocks.set(key, run.then(() => {
+  }, () => {
+  }));
+  return run;
+}
 async function ensureOriginScriptsRegistered(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { ok: false, error: "invalid origin" };
   const matches = [`${canonical}/*`];
   const has = await chrome.permissions.contains({ origins: matches });
   if (!has) {
-    const granted = await Promise.race([
-      chrome.permissions.request({ origins: matches }),
-      new Promise((r) => setTimeout(() => r(false), 3e3))
-    ]);
-    if (!granted) {
-      return { ok: false, error: "host permission denied", origin: canonical };
-    }
+    return {
+      ok: false,
+      error: "host permission not granted \u2014 enroll this origin from Settings",
+      origin: canonical
+    };
   }
-  const existing = await chrome.scripting.getRegisteredContentScripts({
-    ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
-  }).catch(() => []);
-  if (existing.length === 2) return { ok: true, origin: canonical };
-  await chrome.scripting.registerContentScripts([
-    {
+  const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids }).catch(() => []);
+  const existingIds = new Set(existing.map((s) => s.id));
+  const toRegister = [];
+  if (!existingIds.has(scriptId(canonical, "main"))) {
+    toRegister.push({
       id: scriptId(canonical, "main"),
       matches,
       js: [MAIN_WORLD_JS],
       runAt: "document_start",
       world: "MAIN",
       allFrames: false
-    },
-    {
+    });
+  }
+  if (!existingIds.has(scriptId(canonical, "bridge"))) {
+    toRegister.push({
       id: scriptId(canonical, "bridge"),
       matches,
       js: [BRIDGE_JS],
       runAt: "document_idle",
       world: "ISOLATED",
       allFrames: false
-    }
-  ]);
+    });
+  }
+  if (toRegister.length > 0) {
+    await chrome.scripting.registerContentScripts(toRegister);
+  }
   return { ok: true, origin: canonical };
 }
 async function unregisterOriginScripts(origin) {
@@ -67186,6 +67210,10 @@ async function unregisterOriginScripts(origin) {
     ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
   }).catch(() => {
   });
+  try {
+    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+  } catch {
+  }
   return { ok: true, origin: canonical };
 }
 
@@ -67555,10 +67583,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
   const { token } = lock;
+  let heartbeatFailed = false;
   const hb = setInterval(() => {
     heartbeatInflight(alarm.name, token).catch(() => {
+      heartbeatFailed = true;
     });
   }, INFLIGHT_HEARTBEAT_MS);
+  const fence = {
+    async assertOwned() {
+      if (heartbeatFailed) {
+        throw new Error("heartbeat renewal failed \u2014 aborting run");
+      }
+      if (!await ownsInflight(alarm.name, token)) {
+        throw new Error("in-flight ownership lost \u2014 aborting run");
+      }
+    }
+  };
   try {
     const store = await chrome.storage.local.get(TASK_KEY2);
     const task = store[TASK_KEY2]?.[alarm.name];
@@ -67570,10 +67610,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       id: alarm.name,
       task: task.task ?? alarm.name,
       scheduled: true,
-      attachments: task.attachments ?? []
+      attachments: task.attachments ?? [],
+      fence
     });
     if (!task.periodInMinutes) {
-      await markScheduledDone(alarm.name);
+      await fence.assertOwned();
+      await markScheduledDone(alarm.name, token);
     }
   } catch (e) {
     console.error("scheduled task failed", alarm.name, e);
@@ -67664,6 +67706,9 @@ async function siteToolset(origin) {
   return set4;
 }
 async function invokeSiteTool(origin, name25, args) {
+  if (!await isEnrolled(origin)) {
+    return { error: `origin ${origin} is not enrolled` };
+  }
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -67705,10 +67750,11 @@ function attachmentContext(attachments) {
   }
   return "Attachments:\n" + parts.join("\n");
 }
-async function runTask({ id, task, scheduled = false, attachments = [] }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null }) {
   const orch = await ensureOrchestrator();
   const taskId = id ?? String(Date.now());
   const mem = masterMemory();
+  await fence?.assertOwned?.();
   await journalAppend(mem, {
     type: "task",
     id: taskId,
@@ -67718,8 +67764,10 @@ async function runTask({ id, task, scheduled = false, attachments = [] }) {
   });
   const context = attachmentContext(attachments);
   const result = await orch.run(task, context, []);
+  await fence?.assertOwned?.();
   await journalAppend(mem, { type: "result", id: taskId, result });
   if (scheduled) {
+    await fence?.assertOwned?.();
     try {
       await chrome.notifications.create(`cap:${taskId}`, {
         type: "basic",
@@ -67830,12 +67878,15 @@ var handlers = {
     return await listOrigins();
   },
   async "tools.list"({ origin }) {
+    if (!await isEnrolled(origin)) return { ok: false, error: "origin not enrolled" };
     return await listTools(origin);
   },
   async "tools.upsert"({ origin, tools }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    await enrollOrigin(canonical);
+    if (!await isEnrolled(canonical)) {
+      return { ok: false, error: "origin not enrolled \u2014 enroll it in Settings" };
+    }
     await upsertTools(canonical, tools);
     invalidateAgent();
     return { ok: true };
@@ -67844,6 +67895,7 @@ var handlers = {
     return await approveTool(origin, name25, decision);
   },
   async "tools.pending"({ origin }) {
+    if (!await isEnrolled(origin)) return { ok: false, error: "origin not enrolled" };
     return await pendingApprovals(origin);
   },
   async "tools.allOrigins"() {
@@ -67935,27 +67987,54 @@ var handlers = {
   async "agent.create"({ origin, name: name25 }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    await enrollOrigin(canonical);
-    invalidateAgent();
-    const registered = await ensureOriginScriptsRegistered(canonical).catch(
-      (e) => ({ ok: false, error: String(e?.message ?? e) })
-    );
-    return {
-      ok: true,
-      origin: canonical,
-      name: name25,
-      scriptsRegistered: registered?.ok === true
-    };
+    return await withOriginLock(canonical, async () => {
+      await enrollOrigin(canonical);
+      invalidateAgent();
+      return { ok: true, origin: canonical, name: name25 };
+    });
+  },
+  async "agent.enroll-origin"({ origin }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical, async () => {
+      await enrollOrigin(canonical);
+      const registered = await ensureOriginScriptsRegistered(canonical).catch(
+        (e) => ({ ok: false, error: String(e?.message ?? e) })
+      );
+      invalidateAgent();
+      return {
+        ok: true,
+        origin: canonical,
+        scriptsRegistered: registered?.ok === true
+      };
+    });
   },
   async "agent.delete"({ origin }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
-    await unregisterOriginScripts(canonical).catch(() => {
+    return await withOriginLock(canonical, async () => {
+      await unregisterOriginScripts(canonical).catch(() => {
+      });
+      await disenrollOrigin(canonical);
+      await siteMemory(canonical).clear();
+      invalidateAgent();
+      return { ok: true, origin: canonical };
     });
-    await disenrollOrigin(canonical);
-    await siteMemory(canonical).clear();
-    invalidateAgent();
-    return { ok: true, origin: canonical };
+  },
+  async "agent.delegate"({ origin, task }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    await ensureOrchestrator();
+    const a = orchestrator?.workers?.get(canonical);
+    if (!a) return { ok: false, error: `no agent for ${origin}` };
+    const result = await a.run(task, "", []);
+    await journalAppend(siteMemory(canonical), {
+      type: "delegated-result",
+      id: `delegate:${canonical}:${Date.now()}`,
+      task,
+      result
+    });
+    return { ok: true, origin: canonical, result };
   },
   async "agent.listAll"() {
     const origins = await listOrigins();

@@ -20,12 +20,26 @@ function scriptId(origin, role) {
   return `cap-${encodeURIComponent(origin)}-${role}`;
 }
 
+// A per-origin promise chain serializes create/delete/registration so two
+// concurrent lifecycle operations for the SAME origin can never interleave
+// (a delete racing a create, or a re-registration racing an unregister).
+const originLocks = new Map();
+/** Run `fn` serially per canonical origin. */
+export function withOriginLock(origin, fn) {
+  const key = canonicalOrigin(origin) ?? String(origin);
+  const prev = originLocks.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  originLocks.set(key, run.then(() => {}, () => {}));
+  return run;
+}
+
 /**
- * Request the optional host permission for ONE origin, then register its
- * MAIN-world + isolated-world discovery scripts. Returns { ok:true } on success
- * (or if already registered); { ok:false, error } if the host permission is
- * denied (the origin stays enrolled in memory, but no scripts run until the user
- * grants access — honest, never silent).
+ * Register the MAIN-world + isolated-world discovery scripts for an origin ONLY
+ * when the optional host permission is ALREADY granted. This route is called
+ * from the owner-gesture enrollment path (Settings), where the permission was
+ * requested via chrome.permissions.request — a service worker has no user
+ * gesture, so it must NEVER attempt the request itself (it would be denied or
+ * throw, and could hang an agent.create).
  */
 export async function ensureOriginScriptsRegistered(origin) {
   const canonical = canonicalOrigin(origin);
@@ -34,49 +48,61 @@ export async function ensureOriginScriptsRegistered(origin) {
 
   const has = await chrome.permissions.contains({ origins: matches });
   if (!has) {
-    // chrome.permissions.request from a SW context (no user gesture) resolves
-    // false; a defensive deadline guarantees it can never hang an agent.create.
-    const granted = await Promise.race([
-      chrome.permissions.request({ origins: matches }),
-      new Promise((r) => setTimeout(() => r(false), 3000)),
-    ]);
-    if (!granted) {
-      return { ok: false, error: "host permission denied", origin: canonical };
-    }
+    // Honest: the host permission was NOT granted — the origin can be enrolled
+    // in memory but its scripts must not run until the owner grants it.
+    return {
+      ok: false,
+      error: "host permission not granted — enroll this origin from Settings",
+      origin: canonical,
+    };
   }
 
-  const existing = await chrome.scripting.getRegisteredContentScripts({
-    ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
-  }).catch(() => []);
-  if (existing.length === 2) return { ok: true, origin: canonical };
+  // Register ONLY the missing ids (never re-register an existing id: a
+  // partial state — exactly one of the pair already present — would otherwise
+  // collide and throw). Determine which of the two scripts already exist.
+  const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids })
+    .catch(() => []);
+  const existingIds = new Set(existing.map((s) => s.id));
 
-  await chrome.scripting.registerContentScripts([
-    {
+  const toRegister = [];
+  if (!existingIds.has(scriptId(canonical, "main"))) {
+    toRegister.push({
       id: scriptId(canonical, "main"),
       matches,
       js: [MAIN_WORLD_JS],
       runAt: "document_start",
       world: "MAIN",
       allFrames: false,
-    },
-    {
+    });
+  }
+  if (!existingIds.has(scriptId(canonical, "bridge"))) {
+    toRegister.push({
       id: scriptId(canonical, "bridge"),
       matches,
       js: [BRIDGE_JS],
       runAt: "document_idle",
       world: "ISOLATED",
       allFrames: false,
-    },
-  ]);
+    });
+  }
+  if (toRegister.length > 0) {
+    await chrome.scripting.registerContentScripts(toRegister);
+  }
   return { ok: true, origin: canonical };
 }
 
-/** Remove the dynamic content scripts for an origin (on agent.delete). */
+/** Remove the dynamic content scripts for an origin AND revoke the optional
+ * host permission (authoritative revocation on agent.delete). */
 export async function unregisterOriginScripts(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { ok: false, error: "invalid origin" };
   await chrome.scripting.unregisterContentScripts({
     ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
   }).catch(() => {});
+  // Revoke the host permission so the origin loses capture/inject authority.
+  try {
+    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+  } catch { /* permission may not have been granted */ }
   return { ok: true, origin: canonical };
 }

@@ -28,20 +28,20 @@ async function runTask(text) {
 
 async function captureShot(label) {
   const res = await send("capture.tab");
+  const s = document.createElement("button");
+  s.type = "button";
+  s.className = "shot";
   if (res.screenshot) {
-    const s = document.createElement("div");
-    s.className = "shot";
-    s.title = label;
+    // A real button (keyboard-operable) with an accessible name, not a clickable
+    // <div> with no focus/keyboard semantics or image description.
     s.style.background = `url(${res.screenshot}) center/cover`;
-    s.onclick = () => window.open(res.screenshot);
-    shotsEl.append(s);
+    s.setAttribute("aria-label", `Open screenshot: ${label}`);
+    s.addEventListener("click", () => window.open(res.screenshot));
   } else {
-    const s = document.createElement("div");
-    s.className = "shot";
     s.textContent = "MHTML";
-    s.title = "MHTML save (seam: chrome.pageCapture)";
-    shotsEl.append(s);
+    s.setAttribute("aria-label", `MHTML save for ${label} (seam: chrome.pageCapture)`);
   }
+  shotsEl.append(s);
 }
 
 document.getElementById("send").addEventListener("click", () => {

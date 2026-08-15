@@ -23,13 +23,16 @@ function newToken() {
   return `lock_${Date.now()}_${Math.random().toString(36).slice(2)}_${lockSeq++}`;
 }
 
-/** A lock value is well-formed only if it carries a unique owner token + a
- * finite heartbeat timestamp. Anything else is malformed and can never be
- * released by compare-and-release → it blocks (fail closed) until boot clears it. */
+/** A lock value is well-formed only if it carries a unique owner token + finite
+ * `at` + `heartbeatAt` timestamps. Anything else is malformed and can never be
+ * released by compare-and-release → it blocks (fail closed) until boot clears it.
+ * `at` must be finite too: clearStaleInflight trusts v.at < BOOT_AT, so a missing
+ * or non-finite `at` must never pass validation and be cleared as "pre-boot". */
 function validLock(v) {
   return Boolean(
     v && typeof v === "object" &&
       typeof v.token === "string" && v.token.length > 0 &&
+      typeof v.at === "number" && Number.isFinite(v.at) &&
       typeof v.heartbeatAt === "number" && Number.isFinite(v.heartbeatAt),
   );
 }
@@ -89,9 +92,21 @@ export async function scheduleTask(
   });
 }
 
-/** Remove a one-shot task only AFTER its result is committed (durable). */
-export async function markScheduledDone(name) {
+/** Remove a one-shot task only AFTER its result is committed (durable).
+ * When a `token` is supplied, the removal is FENCED: it proceeds only if the
+ * caller still owns the in-flight lock. A stale owner (whose lock was
+ * re-acquired after its heartbeat lapsed) must NOT delete a later owner's
+ * scheduled payload/alarm. */
+export async function markScheduledDone(name, token) {
   await withLock(async () => {
+    if (token) {
+      const inflightStore = await chrome.storage.local.get(INFLIGHT_KEY);
+      const inflight = { ...(inflightStore[INFLIGHT_KEY] ?? {}) };
+      const existing = inflight[name];
+      if (!validLock(existing) || existing.token !== token) {
+        throw new Error("ownership lost — scheduled task NOT removed");
+      }
+    }
     const store = await chrome.storage.local.get(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     delete tasks[name];
@@ -129,6 +144,16 @@ export async function tryAcquireInflight(name) {
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
     return { acquired: true, token };
   });
+}
+
+/** Whether `token` still owns the in-flight lock for `name`. This is the
+ * execution fence: a run checks it at every durable/destructive boundary so a
+ * stale owner (whose lock was re-acquired) aborts before committing side
+ * effects (journal writes, notifications, task deletion). */
+export async function ownsInflight(name, token) {
+  const store = await chrome.storage.local.get(INFLIGHT_KEY);
+  const existing = store[INFLIGHT_KEY]?.[name];
+  return Boolean(validLock(existing) && existing.token === token);
 }
 
 /** Renew a live owner's heartbeat so a slow-but-alive run never looks stale. */

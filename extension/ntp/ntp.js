@@ -125,9 +125,9 @@ async function refreshTasks() {
     // through to String(r) (which produced a raw "[object Object]" row for
     // result entries that carry no `task` field).
     const text = (() => {
-      if (typeof r !== "object" || r === null) return String(r).slice(0, 80);
+      if (typeof r !== "object" || r === null) return String(r);
       if (typeof r.task === "string" && r.task) return r.task;
-      if (typeof r.result === "string") return r.result.slice(0, 80);
+      if (typeof r.result === "string") return r.result;
       return "(entry)";
     })();
     const kind = r?.type === "result"
@@ -206,19 +206,40 @@ document.getElementById("open-directory").addEventListener(
 const plusBtn = document.getElementById("plus-btn");
 const attachMenu = document.getElementById("attach-menu");
 const attachments = []; // { name, kind, size, dataURL? } attached to the next run
+function openAttachMenu() {
+  attachMenu.hidden = false;
+  plusBtn.setAttribute("aria-expanded", "true");
+  // Move focus into the menu (the first item) so keyboard users land there.
+  const first = attachMenu.querySelector("button[role='menuitem']");
+  first?.focus();
+}
+function closeAttachMenu(returnFocus = true) {
+  if (attachMenu.hidden) return;
+  attachMenu.hidden = true;
+  plusBtn.setAttribute("aria-expanded", "false");
+  if (returnFocus) plusBtn.focus();
+}
 plusBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  attachMenu.hidden = !attachMenu.hidden;
+  if (attachMenu.hidden) openAttachMenu();
+  else closeAttachMenu();
+});
+// Escape closes the menu + returns focus (menu semantics + focus return).
+attachMenu.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeAttachMenu(true);
+  }
 });
 document.addEventListener("click", (e) => {
   if (!attachMenu.contains(e.target) && e.target !== plusBtn) {
-    attachMenu.hidden = true;
+    closeAttachMenu(false);
   }
 });
 attachMenu.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-kind]");
   if (!btn) return;
-  attachMenu.hidden = true;
+  closeAttachMenu(false);
   const kind = btn.dataset.kind;
   if (kind === "record-audio") {
     await startAudioCapture();
@@ -398,6 +419,8 @@ function capShow(mode) {
   capNote.textContent = "";
   capVideo.hidden = mode === "audio";
   capPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  // Move focus into the panel so keyboard/screen-reader users are not stranded.
+  capAction.focus();
 }
 
 function capClosePanel() {
@@ -409,6 +432,8 @@ function capClosePanel() {
   stopMeter();
   capPanel.hidden = true;
   capVideo.srcObject = null;
+  // Restore focus to the attach trigger (focus return after closing the panel).
+  plusBtn.focus();
 }
 
 capClose.addEventListener("click", capClosePanel);

@@ -29,9 +29,10 @@
 <div class="wrap">
   <div class="chat">
     <div class="head" id="head">Agent conversation</div>
-    <div class="body" id="body"></div>
-    <div class="shots" id="shots"></div>
+    <div class="body" id="body" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <div class="shots" id="shots" aria-label="Screenshot history"></div>
     <div class="composer">
+      <label class="sr-only" for="input">Message</label>
       <input id="input" placeholder="Reply, or @mention a site agent…">
       <button class="btn" id="send">Send</button>
     </div>

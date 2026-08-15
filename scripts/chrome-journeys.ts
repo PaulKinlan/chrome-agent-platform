@@ -88,6 +88,7 @@ function launchChrome(profile: string) {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
       "--remote-debugging-port=0",
@@ -125,6 +126,7 @@ class Cdp {
   pending = new Map();
   consoleErrors = [];
   swSessions = new Set();
+  pageSessions = new Set();
   swAttachErrors = [];
   executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
   onAttach = null; // (sessionId, targetInfo, waitingForDebugger) => void
@@ -188,6 +190,11 @@ class Cdp {
   }
   swErrors() {
     return this.consoleErrors.filter((e) => this.swSessions.has(e.sessionId));
+  }
+  pageErrors() {
+    // Console errors from the extension PAGE surfaces (NTP / Settings) — the
+    // surfaces whose runtime exceptions must also fail the gate, not just the SW.
+    return this.consoleErrors.filter((e) => this.pageSessions.has(e.sessionId));
   }
 }
 
@@ -375,10 +382,13 @@ function check(name, cond) {
 
 /** The exact, ordered set of assertions this suite must run. */
 const EXPECTED = [
-  "extension loaded",
   "SW auto-attach configured (waitForDebuggerOnStart)",
+  "extension loaded",
   "SW attach returned a session id",
   "SW Runtime.enable succeeded",
+  "initial SW closed for a pre-attached restart",
+  "SW woken for the pre-attached restart",
+  "initial SW boot observed via pre-attached restart",
   "NTP: task input present",
   "NTP: typed a task via Input events",
   "NTP: textarea reflects the typed text",
@@ -428,6 +438,7 @@ const EXPECTED = [
   "agent.create created a discoverable worker (list includes it)",
   "orchestrator: multi-agent ON + delegation tools present",
   "orchestrator: worker fanned out (workerCount >= 1)",
+  "worker delegated task ran (worker result journaled)",
   "Settings: multi-agent toggle present",
   "Settings: clicked the multi-agent toggle OFF",
   "Settings: multi-agent setting persisted OFF",
@@ -440,19 +451,25 @@ const EXPECTED = [
   "agent.delete removed the worker from the list",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
+  "no NTP/Settings console errors",
   "profile removed (no leak)",
   "cleanup hard-failed on descendants (none survived)",
+  "no leftover temporary evidence dir",
   "assertion set exact (no missing/extra checks)",
+  "assertion order matches EXPECTED",
 ];
 
 const evidenceFiles = [];
 async function writeEvidence(name, bytes) {
-  await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-  const path = `${EVIDENCE_DIR}/${name}`;
-  await Deno.remove(path).catch(() => {}); // delete-first (never overwrite stale)
-  await Deno.writeFile(path, bytes);
-  evidenceFiles.push({ name, sha256: await sha256Hex(bytes), bytes: bytes.length });
-  return path;
+  // Bounded (a hung fs write must not stall the gate indefinitely).
+  await withTimeout((async () => {
+    await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
+    const path = `${EVIDENCE_DIR}/${name}`;
+    await Deno.remove(path).catch(() => {}); // delete-first (never overwrite stale)
+    await Deno.writeFile(path, bytes);
+    evidenceFiles.push({ name, sha256: await sha256Hex(bytes), bytes: bytes.length });
+  })(), 10000, `writeEvidence ${name}`);
+  return `${EVIDENCE_DIR}/${name}`;
 }
 
 async function main() {
@@ -551,6 +568,7 @@ async function main() {
     const ntpPage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
     await sleep(1500);
     const ntpSession = await attachRuntime(cdp, ntpPage.id);
+    cdp.pageSessions.add(ntpSession);
 
     // sendMsg from the NTP (extension page) — backend message probes.
     const sendMsg = (payload) =>
@@ -571,6 +589,32 @@ async function main() {
       if (inner && typeof inner === "object" && "err" in inner) return inner.err;
       return inner;
     };
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 0 — MANDATORY pre-attached restart. The INITIAL SW boot happened
+    // before the CDP connection (its module-eval/recoverOnBoot errors are
+    // unobservable). Close it and re-wake it so the boot runs under auto-attach
+    // + waitForDebuggerOnStart — genuinely pre-attached, so the console audit
+    // (JOURNEY 10) observes the boot that matters.
+    // ─────────────────────────────────────────────────────────────
+    const restart0 = Date.now();
+    const close0 = await cdp.send("Target.closeTarget", { targetId: sw.id });
+    check(
+      "initial SW closed for a pre-attached restart",
+      close0?.result?.success === true,
+    );
+    const wake0 = await msgValue({ type: "agent.list" });
+    check("SW woken for the pre-attached restart", Array.isArray(wake0));
+    let bootObserved = false;
+    for (let i = 0; i < 40 && !bootObserved; i++) {
+      await attachSettled.catch(() => {});
+      bootObserved = cdp.executionContextEvents.some((ev) =>
+        ev.ts >= restart0 && ev.kind === "created" &&
+        cdp.swSessions.has(ev.sessionId)
+      );
+      if (!bootObserved) await sleep(250);
+    }
+    check("initial SW boot observed via pre-attached restart", bootObserved);
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 1 — GENUINE CDP INPUT on the NTP: type a task + click Run.
@@ -623,6 +667,7 @@ async function main() {
     );
     await sleep(2000);
     const optsSession = await attachRuntime(cdp, optsPage.id);
+    cdp.pageSessions.add(optsSession);
     const evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
     let openaiCard = null;
@@ -994,6 +1039,25 @@ async function main() {
         Array.isArray(orchOn?.workerOrigins) &&
         orchOn.workerOrigins.includes("https://worker.example"),
     );
+    // EXECUTE a real delegated worker task (not just verify the map): the worker
+    // agent actually runs and its result is journaled to the worker's OWN
+    // per-origin memory — the honest proof of fan-out.
+    const delegated = await msgValue({
+      type: "agent.delegate",
+      origin: "https://worker.example",
+      task: "greet the worker",
+    });
+    const workerJournal = await msgValue({
+      type: "memory.get", origin: "https://worker.example", key: "journal",
+    }) ?? [];
+    const workerResult = (Array.isArray(workerJournal) ? workerJournal : [])
+      .find((e) => e?.type === "delegated-result" && e?.task === "greet the worker");
+    check(
+      "worker delegated task ran (worker result journaled)",
+      delegated?.ok === true &&
+        typeof delegated?.result === "string" && delegated.result.length > 0 &&
+        Boolean(workerResult) && typeof workerResult.result === "string",
+    );
     // Toggle OFF via a genuine checkbox click → delegation tools disappear + the
     // rebuild generation advances (the observable fan-out boundary).
     check(
@@ -1057,6 +1121,10 @@ async function main() {
     }
     check("no service-worker console errors", cdp.swErrors().length === 0);
     check("no SW Runtime.enable errors (auto-attach)", cdp.swAttachErrors.length === 0);
+    for (const e of cdp.pageErrors()) {
+      console.log(`page console error: ${e.detail}`);
+    }
+    check("no NTP/Settings console errors", cdp.pageErrors().length === 0);
 
     ws.close();
     await fixture.shutdown().catch(() => {});
@@ -1085,12 +1153,26 @@ async function main() {
     check("profile removed (no leak)", removed);
     check("cleanup hard-failed on descendants (none survived)", clean);
 
+    // Temporary (non-retained) evidence is caller-owned temp output and must NOT
+    // be left behind. Retained runs write to test-artifacts/ (kept + committed).
+    let tempEvidenceGone = true;
+    if (!RETAIN) {
+      await runBounded(RM, ["-rf", EVIDENCE_DIR]).catch(() => {});
+      tempEvidenceGone = !(await Deno.stat(EVIDENCE_DIR).then(() => true).catch(
+        () => false,
+      ));
+    }
+    check("no leftover temporary evidence dir", tempEvidenceGone);
+
     // Fixed assertion set: every expected check ran exactly once (no missing,
-    // no extra). This is the invariant that prevents a silent count shrink.
-    // The exactness check itself is excluded from the comparison (it is the
-    // check being evaluated).
+    // no extra) AND in the EXPECTED order. This is the invariant that prevents
+    // a silent count shrink or a reordered gate.
+    const META_CHECKS = new Set([
+      "assertion set exact (no missing/extra checks)",
+      "assertion order matches EXPECTED",
+    ]);
     const FINAL_CHECK = "assertion set exact (no missing/extra checks)";
-    const missing = EXPECTED.filter((n) => n !== FINAL_CHECK && !ran.has(n));
+    const missing = EXPECTED.filter((n) => !META_CHECKS.has(n) && !ran.has(n));
     const extra = [...ran].filter((n) => !EXPECTED.includes(n));
     for (const n of missing) {
       console.log(`FAIL: ${n} (not reached)`);
@@ -1101,42 +1183,69 @@ async function main() {
     }
     check(FINAL_CHECK, missing.length === 0 && extra.length === 0);
 
+    // Order check: the checks that RAN must appear in the exact EXPECTED order
+    // (a reordered suite is a gate failure, not just a different summary).
+    const ranNames = [...ran].filter((n) => !META_CHECKS.has(n));
+    const expectedOrdered = EXPECTED.filter((n) => !META_CHECKS.has(n));
+    const orderOk = ranNames.length === expectedOrdered.length &&
+      ranNames.every((n, i) => n === expectedOrdered[i]);
+    if (!orderOk) {
+      for (let i = 0; i < Math.max(ranNames.length, expectedOrdered.length); i++) {
+        if (ranNames[i] !== expectedOrdered[i]) {
+          console.log(
+            `ORDER mismatch @${i}: ran=${JSON.stringify(ranNames[i])} expected=${JSON.stringify(expectedOrdered[i])}`,
+          );
+          break;
+        }
+      }
+    }
+    check("assertion order matches EXPECTED", orderOk);
+
     const failed = results.filter((r) => !r.pass).length;
     console.log(
       `\nchrome journeys: ${results.length - failed}/${results.length} passed`,
     );
 
-    // Evidence manifest: commit + run id + named checks + file hashes.
-    try {
-      let commit = "unknown";
+    // Evidence manifest (RETAIN only, fatal): commit + run id + named checks +
+    // file hashes. A FAILED manifest write is FATAL — the retained evidence has
+    // no provenance without it. The default (non-retained) run writes no
+    // manifest (its temp evidence is discarded above).
+    let manifestOk = true;
+    if (RETAIN) {
       try {
-        const g = new Deno.Command(GIT, {
-          args: ["rev-parse", "HEAD"],
-          stdout: "piped",
-          clearEnv: true,
-        }).outputSync();
-        commit = new TextDecoder().decode(g.stdout).trim();
-      } catch { /* not a git checkout */ }
-      const manifest = {
-        commit,
-        runId: RUN_ID,
-        retain: RETAIN,
-        ts: new Date().toISOString(),
-        evidenceDir: EVIDENCE_DIR,
-        passed: results.length - failed,
-        failed,
-        checks: results.map((r) => ({ name: r.name, pass: r.pass })),
-        files: evidenceFiles,
-      };
-      await Deno.writeFile(
-        `${EVIDENCE_DIR}/manifest.json`,
-        new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
-      );
-    } catch (e) {
-      console.error("manifest write failed:", String(e?.message ?? e));
+        let commit = "unknown";
+        try {
+          const g = new Deno.Command(GIT, {
+            args: ["rev-parse", "HEAD"],
+            stdout: "piped",
+            clearEnv: true,
+          }).outputSync();
+          commit = new TextDecoder().decode(g.stdout).trim();
+        } catch { /* not a git checkout */ }
+        const manifest = {
+          commit,
+          runId: RUN_ID,
+          retain: RETAIN,
+          ts: new Date().toISOString(),
+          evidenceDir: EVIDENCE_DIR,
+          passed: results.length - failed,
+          failed,
+          checks: results.map((r) => ({ name: r.name, pass: r.pass })),
+          files: evidenceFiles,
+        };
+        await Deno.writeFile(
+          `${EVIDENCE_DIR}/manifest.json`,
+          new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
+        );
+      } catch (e) {
+        manifestOk = false;
+        console.error("manifest write failed (fatal):", String(e?.message ?? e));
+      }
     }
 
-    Deno.exit(failed > 0 || !removed || !clean ? 1 : 0);
+    Deno.exit(
+      failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ? 1 : 0,
+    );
   }
 }
 
@@ -1149,12 +1258,31 @@ async function main() {
 async function killChromiumTree(proc, profile) {
   try { proc.kill("SIGKILL"); } catch { /* already gone */ }
   try { await withTimeout(proc.status, 5000, "proc status"); } catch { /* gone */ }
-  const match = `--user-data-dir=${profile}`;
+  // NOTE: the match pattern must NOT start with "-" (pgrep/pkill would parse
+  // a leading "--user-data-dir=…" as an OPTION and exit 2 — a syntax error that
+  // the old code silently treated as "no process remains"). Matching the
+  // substring without the leading dashes is equivalent (the chromium argv still
+  // contains the full "--user-data-dir=…" token).
+  const match = `user-data-dir=${profile}`;
   await runBounded(PKILL, ["-9", "-f", match]).catch(() => {});
   // Bounded wait for the full tree to disappear — HARD FAIL if any remain.
+  // Distinguish a REAL "no process found" (pgrep exit code 1) from a pgrep
+  // FAILURE (spawn/permission/timeout error): a failed pgrep must NOT be read
+  // as "clean" (that was the fail-open path where a broken pgrep meant "no
+  // descendants survived").
   for (let i = 0; i < 20; i++) {
-    const out = await runBounded(PGREP, ["-f", match]).catch(() => ({ code: 1 }));
-    if (out.code !== 0) return; // no matching process remains
+    let out;
+    try {
+      out = await runBounded(PGREP, ["-f", match]);
+    } catch (e) {
+      throw new Error(
+        `pgrep failed (${e?.message ?? e}) — cannot confirm cleanup`,
+      );
+    }
+    if (out.code === 1) return; // pgrep found nothing → no matching process
+    if (out.code !== 0) {
+      throw new Error(`pgrep exited ${out.code} — cannot confirm cleanup`);
+    }
     await sleep(250);
   }
   throw new Error("chromium descendants survived cleanup");
