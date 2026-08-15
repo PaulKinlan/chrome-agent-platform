@@ -266,3 +266,20 @@ input:focus, select:focus, textarea:focus {
 .fields { border: 0; padding: 0; margin: 0.5rem 0 0; display: grid; gap: 0.5rem; }
 .field { display: grid; gap: 0.25rem; }
 .field-label { font-size: 0.8rem; color: var(--muted, #888); }
+/* Screen-reader-only text (fieldset legends etc.). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* Visible labels for the browser-control allowed-origins textarea. */
+.grant-origins label {
+  display: block;
+  margin: 0.5rem 0 0.35rem;
+}

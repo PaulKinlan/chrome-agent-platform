@@ -182,6 +182,7 @@ async function listOrigins() {
 }
 
 // extension/lib/scheduler.js
+var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
 var mutex = Promise.resolve();
 var BOOT_AT = Date.now();
 
@@ -319,6 +320,7 @@ async function renderProviders() {
       </div>
       ${p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" ? `
       <fieldset class="fields">
+        <legend class="sr-only">${p.name} credentials</legend>
         ${p.needsKey || p.needsModel || p.baseURL || p.needsModel ? `<label class="field"><span class="field-label">Base URL</span><input class="base-url" type="text" placeholder="https://\u2026" value="${// The ACTIVE card shows the STORED endpoint (not the preset) so an
     // Update never silently resets a custom base URL.
     escapeAttr(cfg.provider === p.id ? cfg.baseURL || p.baseURL : p.baseURL)}"></label>` : ""}

@@ -10,8 +10,9 @@
    origin before the agent may call them, or be auto-available? (Design assumes approval.)
 4. **Memory persistence**: OPFS is per-extension-origin; fine for now, or do you want a
    sync/export path (cloud backup) in scope?
-5. **co-do integration**: import the existing co-do WASM tool set, or start with a minimal
-   set + upload mechanism?
+5. **WASM tool integration**: import a minimal WASM tool set with an upload
+   mechanism for the owner to add more, or start with the existing WebMCP
+   (window.*) tool inference + approval flow?
 6. **MHTML vs screenshots**: both? Screenshots for the chat strip, MHTML for full-page
    archives. Confirm storage budget/retention.
 7. **Extension name/packaging**: "Chrome Agent Platform" placeholder — rename later.

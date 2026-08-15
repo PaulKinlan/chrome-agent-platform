@@ -92,12 +92,36 @@ async function activeTab() {
 }
 
 /**
+ * An activation-generation counter. Every tab-activation or navigation event
+ * increments it, so a switch-away-and-back (an ABA active-tab swap) DURING the
+ * capture interval is observable even if the requested tab is restored before
+ * the post-capture active-tab query. captureVisibleTab captures whichever tab
+ * is visible when the API executes, so the counter closes the gap that a
+ * before/after query pair cannot.
+ */
+let activationGen = 0;
+let genListenerInstalled = false;
+function ensureActivationGenListener() {
+  if (genListenerInstalled) return;
+  genListenerInstalled = true;
+  chrome.tabs.onActivated?.addListener(() => {
+    activationGen++;
+  });
+  chrome.tabs.onUpdated?.addListener((_tabId, changeInfo) => {
+    // A navigation (or a load) during the capture interval invalidates the
+    // captured bytes; it must be observed, not merely re-read after the fact.
+    if (changeInfo.status === "loading" || changeInfo.url) activationGen++;
+  });
+}
+
+/**
  * Capture a PNG screenshot of the requested tab (or the active tab), gated by
  * the browser-control grant FOR THAT TAB'S ORIGIN. This is the ONE gated
  * implementation shared by the agent tool AND the chat runtime route — a
  * post-revoke or wrong-origin capture must fail here.
  */
 export async function captureTabScreenshot(tabId) {
+  ensureActivationGenListener();
   // Resolve the tab first so we can derive its origin for the grant check.
   const tab = tabId
     ? await chrome.tabs.get(tabId).catch(() => null)
@@ -146,13 +170,20 @@ export async function captureTabScreenshot(tabId) {
           "browser control not granted for this tab's origin — ask the user to approve it in Settings",
       };
     }
+    // Sample the activation generation IMMEDIATELY before capture.
+    const genBefore = activationGen;
     const url = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
     });
-    // Post-capture re-check: another tab may have become active (or the target
-    // tab navigated) between the pre-capture check and captureVisibleTab. If
-    // the requested tab is no longer the active one OR its origin changed, the
-    // captured bytes may be a different tab's — discard them (fail closed).
+    // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
+    // 1. no activation/navigation happened during the capture interval (closes
+    //    the switch-away-and-back ABA race);
+    // 2. the requested tab is STILL the active one;
+    // 3. its origin is unchanged;
+    // 4. the grant is STILL valid (closes the mid-capture revoke/expiry race).
+    if (activationGen !== genBefore) {
+      return { error: "active tab changed during capture — screenshot discarded" };
+    }
     const afterActive = await chrome.tabs.query({
       active: true,
       windowId: tab.windowId,
@@ -164,6 +195,12 @@ export async function captureTabScreenshot(tabId) {
     const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : undefined;
     if (!afterOrigin || afterOrigin !== origin) {
       return { error: "tab navigated during capture — screenshot discarded" };
+    }
+    if (!(await isBrowserControlGranted(afterOrigin))) {
+      return {
+        error:
+          "browser control grant changed during capture — screenshot discarded",
+      };
     }
     return { screenshot: url };
   } catch (e) {

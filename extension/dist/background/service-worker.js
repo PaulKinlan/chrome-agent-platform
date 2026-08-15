@@ -66623,6 +66623,7 @@ init_browser_shim_process();
 init_browser_shim_process();
 var TASK_KEY = "cap:scheduledTasks";
 var INFLIGHT_KEY = "cap:scheduledInflight";
+var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
 var mutex = Promise.resolve();
 function withLock(fn) {
   const run = mutex.then(fn, fn);
@@ -66676,8 +66677,16 @@ async function tryAcquireInflight(name25) {
   return withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
-    if (inflight[name25]) return false;
-    inflight[name25] = Date.now();
+    const now2 = Date.now();
+    const existing = inflight[name25];
+    if (existing !== void 0) {
+      if (typeof existing === "number" && Number.isFinite(existing) && now2 - existing > INFLIGHT_LEASE_MS) {
+        delete inflight[name25];
+      } else {
+        return false;
+      }
+    }
+    inflight[name25] = now2;
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
     return true;
   });
@@ -66696,7 +66705,8 @@ async function clearStaleInflight() {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...store[INFLIGHT_KEY] ?? {} };
     for (const name25 of Object.keys(inflight)) {
-      if (typeof inflight[name25] === "number" && inflight[name25] < BOOT_AT) {
+      const v = inflight[name25];
+      if (typeof v !== "number" || !Number.isFinite(v) || v < BOOT_AT) {
         delete inflight[name25];
       }
     }
@@ -66811,7 +66821,20 @@ async function activeTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0] ?? null;
 }
+var activationGen = 0;
+var genListenerInstalled = false;
+function ensureActivationGenListener() {
+  if (genListenerInstalled) return;
+  genListenerInstalled = true;
+  chrome.tabs.onActivated?.addListener(() => {
+    activationGen++;
+  });
+  chrome.tabs.onUpdated?.addListener((_tabId, changeInfo) => {
+    if (changeInfo.status === "loading" || changeInfo.url) activationGen++;
+  });
+}
 async function captureTabScreenshot(tabId) {
+  ensureActivationGenListener();
   const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await activeTab();
   if (!tab?.id) return { error: "no tab" };
   const origin = tab.url ? (() => {
@@ -66846,9 +66869,13 @@ async function captureTabScreenshot(tabId) {
         error: "browser control not granted for this tab's origin \u2014 ask the user to approve it in Settings"
       };
     }
+    const genBefore = activationGen;
     const url3 = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png"
     });
+    if (activationGen !== genBefore) {
+      return { error: "active tab changed during capture \u2014 screenshot discarded" };
+    }
     const afterActive = await chrome.tabs.query({
       active: true,
       windowId: tab.windowId
@@ -66860,6 +66887,11 @@ async function captureTabScreenshot(tabId) {
     const afterOrigin = afterTab?.url ? canonicalOrigin(afterTab.url) : void 0;
     if (!afterOrigin || afterOrigin !== origin) {
       return { error: "tab navigated during capture \u2014 screenshot discarded" };
+    }
+    if (!await isBrowserControlGranted(afterOrigin)) {
+      return {
+        error: "browser control grant changed during capture \u2014 screenshot discarded"
+      };
     }
     return { screenshot: url3 };
   } catch (e) {
@@ -67109,10 +67141,29 @@ function deepEqual(a, b, depth = 0) {
   if (typeof a === "object") {
     const ka = Object.keys(a), kb = Object.keys(b);
     if (ka.length !== kb.length) return false;
-    for (const k of ka) if (!deepEqual(a[k], b[k], depth + 1)) return false;
+    for (const k of ka) {
+      if (!Object.hasOwn(b, k)) return false;
+      if (!deepEqual(a[k], b[k], depth + 1)) return false;
+    }
     return true;
   }
   return false;
+}
+function literalWithinBounds(value, depth = 0) {
+  if (depth > SCHEMA_BOUNDS.maxLiteralDepth) return false;
+  if (typeof value === "string") {
+    return value.length <= SCHEMA_BOUNDS.maxStringLength;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > SCHEMA_BOUNDS.maxArrayItems) return false;
+    return value.every((v) => literalWithinBounds(v, depth + 1));
+  }
+  if (value !== null && typeof value === "object") {
+    const keys = Object.keys(value);
+    if (keys.length > SCHEMA_BOUNDS.maxProperties) return false;
+    return keys.every((k) => literalWithinBounds(value[k], depth + 1));
+  }
+  return true;
 }
 function validateSchemaAST(schema4, depth) {
   if (depth > SCHEMA_BOUNDS.maxDepth) return false;
@@ -67174,6 +67225,8 @@ function validateSchemaAST(schema4, depth) {
   if (schema4.const !== void 0 && schema4.enum !== void 0) {
     if (!schema4.enum.some((v) => deepEqual(v, schema4.const))) return false;
   }
+  if (schema4.const !== void 0 && !literalWithinBounds(schema4.const)) return false;
+  if (schema4.enum !== void 0 && !schema4.enum.every((v) => literalWithinBounds(v))) return false;
   if (schema4.items !== void 0 && !validateSchemaAST(schema4.items, depth + 1)) return false;
   if (schema4.properties !== void 0) {
     for (const key of Object.keys(schema4.properties)) {
@@ -67227,27 +67280,19 @@ function valueSatisfiesSchema(schema4, value, depth) {
   if (schema4.anyOf !== void 0 && !schema4.anyOf.some((b) => valueSatisfiesSchema(b, value, depth + 1))) return false;
   return true;
 }
-var CONFLICT = Symbol("type-conflict");
-function inferTypeFromSiblings(schema4) {
-  let inferred = null;
-  const claim = (t) => {
-    if (inferred !== null && inferred !== t) return CONFLICT;
-    inferred = t;
-    return inferred;
-  };
-  if (schema4.minLength !== void 0 || schema4.maxLength !== void 0) {
-    if (claim("string") === CONFLICT) return CONFLICT;
-  }
-  if (schema4.minimum !== void 0 || schema4.maximum !== void 0) {
-    if (claim("number") === CONFLICT) return CONFLICT;
-  }
-  if (schema4.items !== void 0 || schema4.minItems !== void 0 || schema4.maxItems !== void 0) {
-    if (claim("array") === CONFLICT) return CONFLICT;
-  }
-  if (schema4.properties !== void 0 || schema4.required !== void 0 || schema4.additionalProperties !== void 0) {
-    if (claim("object") === CONFLICT) return CONFLICT;
-  }
-  return inferred;
+function hasConstrainingSibling(schema4) {
+  return [
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "items",
+    "minItems",
+    "maxItems",
+    "properties",
+    "required",
+    "additionalProperties"
+  ].some((k) => schema4[k] !== void 0);
 }
 function literalSchema(z4, value) {
   if (value !== null && typeof value === "object") {
@@ -67268,12 +67313,17 @@ function schemaToZod(z4, schema4, depth = 0) {
     if (valid.length === 0) return z4.never();
     return z4.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => literalSchema(z4, v)));
   }
-  const base = schema4.type === void 0 && schema4.anyOf !== void 0 ? (() => {
-    const inferred = inferTypeFromSiblings(schema4);
-    if (inferred === CONFLICT) return z4.never();
-    if (inferred === null) return z4.unknown();
-    return buildBaseZod(z4, { ...schema4, type: inferred });
-  })() : buildBaseZod(z4, schema4);
+  const baseWithoutAnyOf = { ...schema4 };
+  delete baseWithoutAnyOf.anyOf;
+  const base = (() => {
+    if (schema4.type !== void 0) return buildBaseZod(z4, schema4);
+    if (hasConstrainingSibling(baseWithoutAnyOf)) {
+      return z4.any().refine((value) => valueSatisfiesSchema(baseWithoutAnyOf, value, depth), {
+        message: "value must satisfy all schema constraints"
+      });
+    }
+    return schema4.anyOf !== void 0 ? z4.unknown() : z4.never();
+  })();
   if (schema4.anyOf !== void 0) {
     const branches = schema4.anyOf.map((b) => schemaToZod(z4, b, depth + 1));
     return z4.intersection(base, z4.union(branches));
@@ -67411,43 +67461,61 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 var orchestrator = null;
-var MODEL_CACHE = { model: null, key: null };
+var orchestratorGen = -1;
+var MODEL_CACHE = { model: null, key: null, gen: -1 };
+var generation = 0;
 function invalidateAgent() {
+  generation++;
   MODEL_CACHE.model = null;
   MODEL_CACHE.key = null;
   orchestrator = null;
 }
 async function ensureModel(_agentId) {
-  const cfg = await getProviderConfig();
-  const credVersion = cfg.apiKey ? "k1" : "k0";
-  const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
-  if (MODEL_CACHE.key !== cacheKey || !MODEL_CACHE.model) {
-    MODEL_CACHE.key = cacheKey;
-    MODEL_CACHE.model = await getModel();
+  while (true) {
+    const gen = generation;
+    const cfg = await getProviderConfig();
+    const credVersion = cfg.apiKey ? "k1" : "k0";
+    const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
+    if (MODEL_CACHE.model && MODEL_CACHE.key === cacheKey && MODEL_CACHE.gen === gen) {
+      return MODEL_CACHE.model;
+    }
+    const model = await getModel();
+    if (generation === gen) {
+      MODEL_CACHE.key = cacheKey;
+      MODEL_CACHE.model = model;
+      MODEL_CACHE.gen = gen;
+      return model;
+    }
   }
-  return MODEL_CACHE.model;
 }
 async function ensureOrchestrator() {
-  if (orchestrator) return orchestrator;
-  const model = await ensureModel();
-  const mem = masterMemory();
-  const origins = await listOrigins();
-  const workers = await Promise.all(origins.map(async (origin) => ({
-    origin,
-    memory: siteMemory(origin),
-    skills: await getSkills(origin),
-    tools: await siteToolset(origin)
-  })));
-  const prefs = await chrome.storage.local.get("cap:multiAgent") ?? {};
-  const multiAgent = prefs["cap:multiAgent"] !== false;
-  orchestrator = await createOrchestrator2({
-    model,
-    masterMemory: mem,
-    workers,
-    multiAgent,
-    extraTools: browserToolset()
-  });
-  return orchestrator;
+  while (true) {
+    const gen = generation;
+    if (orchestrator && orchestratorGen === gen) return orchestrator;
+    const model = await ensureModel();
+    const mem = masterMemory();
+    const origins = await listOrigins();
+    const workers = await Promise.all(origins.map(async (origin) => ({
+      origin,
+      memory: siteMemory(origin),
+      skills: await getSkills(origin),
+      tools: await siteToolset(origin)
+    })));
+    const prefs = await chrome.storage.local.get("cap:multiAgent") ?? {};
+    const multiAgent = prefs["cap:multiAgent"] !== false;
+    const orch = await createOrchestrator2({
+      model,
+      masterMemory: mem,
+      workers,
+      multiAgent,
+      extraTools: browserToolset()
+    });
+    if (generation === gen) {
+      orchestrator = orch;
+      orchestratorGen = gen;
+      return orch;
+    }
+  }
 }
 async function siteToolset(origin) {
   const tools = await listTools(origin);

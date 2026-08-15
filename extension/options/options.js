@@ -107,6 +107,7 @@ async function renderProviders() {
       p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama"
         ? `
       <fieldset class="fields">
+        <legend class="sr-only">${p.name} credentials</legend>
         ${
           p.needsKey || p.needsModel || p.baseURL || p.needsModel
             ? `<label class="field"><span class="field-label">Base URL</span><input class="base-url" type="text" placeholder="https://…" value="${

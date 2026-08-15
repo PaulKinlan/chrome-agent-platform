@@ -382,15 +382,19 @@ Deno.test("untyped anyOf composes object siblings (required applies)", () => {
   assertEquals(s.safeParse({ x: "ok" }).success, true);
 });
 
-Deno.test("untyped anyOf with conflicting siblings fails closed", () => {
-  // minLength (string) + properties (object) is contradictory — reject all.
+Deno.test("untyped conjunction applies only type-applicable siblings (no false negative)", () => {
+  // minLength (string-only) + properties (object-only) + anyOf union: a string
+  // satisfies minLength + the string branch; an object satisfies properties +
+  // the object branch. Neither sibling is treated as a global type declaration.
   const s = schemaToZod(z, {
     minLength: 2,
     properties: { x: { type: "string" } },
     anyOf: [{ type: "string" }, { type: "object" }],
   });
-  assertEquals(s.safeParse("abcd").success, false);
-  assertEquals(s.safeParse({ x: "ok" }).success, false);
+  assertEquals(s.safeParse("abcd").success, true);
+  assertEquals(s.safeParse({ x: "ok" }).success, true);
+  // The applicable bound is still enforced for the matching kind:
+  assertEquals(s.safeParse("a").success, false); // length 1 < minLength 2
 });
 
 Deno.test("bare untyped anyOf (no siblings) still accepts union members", () => {
@@ -405,6 +409,8 @@ Deno.test("structural const accepts an equal object clone", () => {
   // A separately-parsed but structurally-equal object must PASS (not identity).
   assertEquals(s.safeParse({ x: 1 }).success, true);
   assertEquals(s.safeParse({ x: 2 }).success, false);
+  // A same-length but different-key object must NOT pass (own-key check).
+  assertEquals(s.safeParse({ y: 1 }).success, false);
 });
 
 Deno.test("structural const accepts an equal array clone", () => {
@@ -417,6 +423,23 @@ Deno.test("structural enum accepts an equal object clone", () => {
   const s = schemaToZod(z, { type: "object", enum: [{ a: 1 }, { b: 2 }] });
   assertEquals(s.safeParse({ a: 1 }).success, true);
   assertEquals(s.safeParse({ c: 3 }).success, false);
+});
+
+Deno.test("schemaToZod bounds const/enum literals (no size-cap bypass)", () => {
+  // A 101-item array const and a 10,001-char string const exceed SCHEMA_BOUNDS
+  // and must fail closed (not compile into a z.literal that bypasses bounds).
+  const bigArr = schemaToZod(z, {
+    type: "array",
+    const: Array.from({ length: 101 }, (_, i) => i),
+  });
+  assertEquals(bigArr.safeParse(Array.from({ length: 101 }, (_, i) => i)).success, false);
+
+  const bigStr = schemaToZod(z, { type: "string", const: "x".repeat(10001) });
+  assertEquals(bigStr.safeParse("x".repeat(10001)).success, false);
+
+  // A huge enum literal is likewise rejected.
+  const bigEnum = schemaToZod(z, { type: "array", enum: [Array.from({ length: 101 }, (_, i) => i)] });
+  assertEquals(bigEnum.safeParse(Array.from({ length: 101 }, (_, i) => i)).success, false);
 });
 
 Deno.test("Ollama-compatible model allows an optional key (no key required)", async () => {

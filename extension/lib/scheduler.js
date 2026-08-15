@@ -5,6 +5,11 @@
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
 
+// A bounded in-flight lease. A hung task (e.g. a provider call that never
+// settles) must not block its alarm FOREVER — after this window the lock is
+// considered stale and a later firing can re-acquire it.
+const INFLIGHT_LEASE_MS = 5 * 60 * 1000;
+
 // A per-module promise mutex serializes the read-modify-write on the task store
 // and the in-flight map, so concurrent schedules/acquisitions cannot lose an
 // update or both acquire the same one-shot.
@@ -76,8 +81,22 @@ export async function tryAcquireInflight(name) {
   return withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
-    if (inflight[name]) return false;
-    inflight[name] = Date.now();
+    const now = Date.now();
+    const existing = inflight[name];
+    if (existing !== undefined) {
+      // A numeric lock older than the lease is stale → re-acquire. A fresh
+      // numeric lock (still within the lease) OR a malformed non-numeric lock
+      // (which can never be released) blocks acquisition — fail closed.
+      if (
+        typeof existing === "number" && Number.isFinite(existing) &&
+        now - existing > INFLIGHT_LEASE_MS
+      ) {
+        delete inflight[name];
+      } else {
+        return false;
+      }
+    }
+    inflight[name] = now;
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
     return true;
   });
@@ -104,7 +123,12 @@ export async function clearStaleInflight() {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
     const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
     for (const name of Object.keys(inflight)) {
-      if (typeof inflight[name] === "number" && inflight[name] < BOOT_AT) {
+      const v = inflight[name];
+      // Clear entries acquired BEFORE this boot (numeric, older than BOOT_AT)
+      // AND malformed entries (non-numeric / non-finite) that can never be
+      // released by a releaseInflight call. A live lock acquired AFTER boot
+      // (numeric, >= BOOT_AT) must never be cleared (else a slow run double-fires).
+      if (typeof v !== "number" || !Number.isFinite(v) || v < BOOT_AT) {
         delete inflight[name];
       }
     }

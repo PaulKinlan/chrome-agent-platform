@@ -101,13 +101,23 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 // ---- lazy agent bootstrap (invalidated on provider change) ----
+// A generation counter guards the async bootstrap against stale publication:
+// ensureModel/ensureOrchestrator await storage/provider/OPFS reads; if an
+// invalidation happens DURING those awaits, the older operation must NOT
+// overwrite the freshly-rebuilt cache with a model/orchestrator built from
+// stale configuration. Each build commits its result only if the generation
+// captured at its start is still current; otherwise it loops and rebuilds.
 let orchestrator = null;
-const MODEL_CACHE = { model: null, key: null };
+let orchestratorGen = -1;
+const MODEL_CACHE = { model: null, key: null, gen: -1 };
+let generation = 0;
 
 function invalidateAgent() {
-  // Clear BOTH the cached model AND its cache key: re-saving the same provider
-  // (or rotating credentials for the same base URL/model) must rebuild the
-  // model, not leave MODEL_CACHE.model=null with a still-matching key.
+  // Bump the generation FIRST (so any in-flight build sees a changed
+  // generation and discards its result), then clear the caches. Re-saving the
+  // same provider (or rotating credentials for the same base URL/model) must
+  // rebuild the model, not leave MODEL_CACHE.model=null with a matching key.
+  generation++;
   MODEL_CACHE.model = null;
   MODEL_CACHE.key = null;
   orchestrator = null;
@@ -119,42 +129,66 @@ async function ensureModel(_agentId) {
   // global {baseURL,apiKey,model} that can mix one provider's credential with
   // another's endpoint). The cache key carries a credential-version signal (a
   // NON-secret presence flag) so credential rotation rebuilds the model.
-  const cfg = await getProviderConfig();
-  const credVersion = cfg.apiKey ? "k1" : "k0";
-  const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
-  // Rebuild whenever the key changed OR the cached model is null.
-  if (MODEL_CACHE.key !== cacheKey || !MODEL_CACHE.model) {
-    MODEL_CACHE.key = cacheKey;
-    MODEL_CACHE.model = await getModel();
+  while (true) {
+    const gen = generation;
+    const cfg = await getProviderConfig();
+    const credVersion = cfg.apiKey ? "k1" : "k0";
+    const cacheKey = `${cfg.provider}:${cfg.baseURL}:${cfg.model}:${credVersion}`;
+    // Rebuild whenever the key changed OR the cached model is null OR the
+    // cached model predates the current generation.
+    if (
+      MODEL_CACHE.model && MODEL_CACHE.key === cacheKey &&
+      MODEL_CACHE.gen === gen
+    ) {
+      return MODEL_CACHE.model;
+    }
+    const model = await getModel();
+    // Commit only if no invalidation happened while we awaited getModel().
+    if (generation === gen) {
+      MODEL_CACHE.key = cacheKey;
+      MODEL_CACHE.model = model;
+      MODEL_CACHE.gen = gen;
+      return model;
+    }
+    // Stale build — loop and rebuild under the new generation.
   }
-  return MODEL_CACHE.model;
 }
 
 async function ensureOrchestrator() {
-  if (orchestrator) return orchestrator;
-  const model = await ensureModel();
-  const mem = masterMemory();
-  // Workers = enrolled site origins, each with its own memory + skills.
-  const origins = await listOrigins();
-  const workers = await Promise.all(origins.map(async (origin) => ({
-    origin,
-    memory: siteMemory(origin),
-    skills: await getSkills(origin),
-    tools: await siteToolset(origin),
-  })));
-  // multiAgent toggles fan-out (hub + per-site sub-agents) vs a solo hub agent.
-  // Read it at orchestration time; the options page changes it via
-  // provider.set-style invalidation so a saved change rebuilds the orchestrator.
-  const prefs = (await chrome.storage.local.get("cap:multiAgent")) ?? {};
-  const multiAgent = prefs["cap:multiAgent"] !== false;
-  orchestrator = await createOrchestrator({
-    model,
-    masterMemory: mem,
-    workers,
-    multiAgent,
-    extraTools: browserToolset(),
-  });
-  return orchestrator;
+  while (true) {
+    const gen = generation;
+    if (orchestrator && orchestratorGen === gen) return orchestrator;
+    const model = await ensureModel();
+    const mem = masterMemory();
+    // Workers = enrolled site origins, each with its own memory + skills.
+    const origins = await listOrigins();
+    const workers = await Promise.all(origins.map(async (origin) => ({
+      origin,
+      memory: siteMemory(origin),
+      skills: await getSkills(origin),
+      tools: await siteToolset(origin),
+    })));
+    // multiAgent toggles fan-out (hub + per-site sub-agents) vs a solo hub agent.
+    // Read it at orchestration time; the options page changes it via
+    // provider.set-style invalidation so a saved change rebuilds the orchestrator.
+    const prefs = (await chrome.storage.local.get("cap:multiAgent")) ?? {};
+    const multiAgent = prefs["cap:multiAgent"] !== false;
+    const orch = await createOrchestrator({
+      model,
+      masterMemory: mem,
+      workers,
+      multiAgent,
+      extraTools: browserToolset(),
+    });
+    // Commit only if the generation is still current (an invalidation during
+    // the awaits above means this orchestrator used stale config).
+    if (generation === gen) {
+      orchestrator = orch;
+      orchestratorGen = gen;
+      return orch;
+    }
+    // Stale build — loop and rebuild under the new generation.
+  }
 }
 
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.

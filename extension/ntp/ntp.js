@@ -58,17 +58,19 @@ async function refreshAgents() {
   }
   for (const origin of list) {
     const tools = await send("tools.list", { origin });
-    const chip = document.createElement("div");
+    const chip = document.createElement("button");
+    chip.type = "button";
     chip.className = "agent";
+    chip.setAttribute("aria-label", `Use site agent ${origin}`);
     chip.innerHTML = `<span class="name">@${
       origin.replace(/^https?:\/\//, "").replace(/\/.*/, "")
     }</span><span class="tools">${(Array.isArray(tools)
       ? tools.length
       : 0)} tools</span>`;
-    chip.onclick = () => {
+    chip.addEventListener("click", () => {
       taskInput.value = `@${origin} `;
       taskInput.focus();
-    };
+    });
     agentsEl.append(chip);
   }
 }
@@ -157,16 +159,6 @@ runBtn.addEventListener("click", async () => {
   }
 });
 
-const modelSelect = document.getElementById("model-select");
-const baseUrlInput = document.getElementById("base-url");
-const apiKeyInput = document.getElementById("api-key");
-function syncProviderInputs() {
-  const isOpenAI = modelSelect.value === "openai";
-  baseUrlInput.style.display = isOpenAI ? "" : "none";
-  apiKeyInput.style.display = isOpenAI ? "" : "none";
-}
-modelSelect.addEventListener("change", syncProviderInputs);
-
 // Browser-control grant: a user-facing toggle that scopes destructive browser tools.
 async function refreshGrantUI() {
   const r = await chrome.runtime.sendMessage({ type: "browser-control.get" })
@@ -184,24 +176,6 @@ document.getElementById("browser-control-grant")?.addEventListener(
   },
 );
 refreshGrantUI();
-
-document.getElementById("save-provider").addEventListener("click", async () => {
-  const provider = modelSelect.value;
-  const config = { provider };
-  if (provider === "openai") {
-    config.baseURL = baseUrlInput.value.trim();
-    // PRESERVE the stored key when the field is left blank (a blank field must
-    // not silently clear the credential — clearing is an explicit action in the
-    // dedicated Settings page, not an accident of saving from the hub).
-    const existing = (await send("provider.get")) ?? {};
-    const enteredKey = apiKeyInput.value.trim();
-    config.apiKey = enteredKey !== "" ? enteredKey : (existing.apiKey ?? "");
-    config.model = document.getElementById("model-name")?.value?.trim() ||
-      "gpt-4o-mini";
-  }
-  await send("provider.set", { config });
-  setStatus("provider saved");
-});
 
 document.getElementById("open-settings")?.addEventListener(
   "click",
@@ -656,12 +630,15 @@ capAction.addEventListener("click", async () => {
 });
 
 (async () => {
+  // Show the active provider NAME only (non-secret). The hub has NO credential
+  // editor — the API key / base URL are never read into the hub DOM (which
+  // previously could cross-wire one provider's stored secret into another
+  // provider's fields). Configuring credentials happens exclusively in the
+  // dedicated Settings page.
   const cfg = await send("provider.get");
-  if (cfg && cfg.provider) {
-    modelSelect.value = cfg.provider;
-    if (cfg.baseURL) baseUrlInput.value = cfg.baseURL;
-    if (cfg.apiKey) apiKeyInput.value = cfg.apiKey;
-    syncProviderInputs();
+  const nameEl = document.getElementById("provider-name");
+  if (nameEl && cfg && cfg.provider) {
+    nameEl.textContent = cfg.provider;
   }
   refreshAgents();
   refreshTasks();

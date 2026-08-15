@@ -77,17 +77,17 @@
       <section id="browser" class="panel">
         <h2>Browser control</h2>
         <p
-          class="muted">Destructive actions (open / navigate / close tabs) need your explicit, scoped permission. Reading, listing, and screenshots of the active page are always allowed.</p>
+          class="muted">Open, navigate, and close tabs, and capture screenshots need your explicit, scoped permission. Reading page text and listing tabs are always available.</p>
         <label class="switch">
           <input type="checkbox" id="browser-grant">
           <span>Allow the agent to control the browser</span>
         </label>
         <div id="grant-origins" class="grant-origins" hidden>
           <h3>Allowed origins</h3>
-          <p
-            class="muted">Restrict control to these origins (one per line; empty = all).</p>
+          <label for="grant-origin-list" class="muted">Restrict control to these origins (one per line):</label>
           <textarea id="grant-origin-list" rows="4"
             placeholder="https://github.com"></textarea>
+          <p class="muted">Empty = a global (all-origins) grant.</p>
         </div>
       </section>
 
