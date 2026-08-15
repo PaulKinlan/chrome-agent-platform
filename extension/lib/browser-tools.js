@@ -8,6 +8,7 @@ import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
+import { runAborted } from "./run-fence.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
@@ -102,7 +103,17 @@ export async function setOriginBrowserControlGrant(
 }
 
 export async function revokeBrowserControlGrant() {
+  // A removal that FAILS on a live backend now REJECTS (kvRemove fails closed),
+  // so we never report {revoked:true} against a backend error. Re-read and
+  // CONFIRM absence before claiming revocation (a false `remove` resolution for
+  // an already-absent key is a no-op, but a backend that silently kept the
+  // value must surface as revoked:false, never as success).
   await kvRemove(GRANT_KEY);
+  const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
+  const gone = remaining === undefined || remaining === null;
+  if (!gone) {
+    return { revoked: false, error: "grant still present after removal" };
+  }
   return { revoked: true };
 }
 
@@ -147,6 +158,13 @@ async function hasScriptingPermission() {
     return false;
   }
 }
+
+// ---- run-scoped execution fence ----
+// The service worker threads the current run's abort signal into every
+// side-effecting browser tool so an aborted run (heartbeat failure / ownership
+// loss) cannot commit an irreversible tab mutation. The SW sets the fence
+// around orch.run() and clears it afterward; destructive tools check it at the
+// mutation boundary (check-then-act must be fenced).
 
 /** A per-tab capture mutex: two concurrent captures of the SAME tab must not
  * interleave (activate + capture + post-check is not atomic across calls), and
@@ -375,6 +393,9 @@ export function browserToolset() {
               "browser control not granted for this origin — ask the user to approve it in Settings",
           };
         }
+        if (runAborted()) {
+          return { error: "run aborted — tab not opened" };
+        }
         const tab = await chrome.tabs.create({ url });
         return { ok: true, tabId: tab.id, url };
       },
@@ -409,6 +430,28 @@ export function browserToolset() {
         }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
+        // Source origin must ALSO be authorized (not just the destination): a
+        // grant for A must not be able to destroy an unapproved B tab by
+        // navigating it to A (the round-15 over-broad-navigation finding).
+        const srcTab = await chrome.tabs.get(id).catch(() => null);
+        const srcOrigin = srcTab?.url
+          ? (() => {
+            try {
+              return canonicalOrigin(srcTab.url);
+            } catch {
+              return undefined;
+            }
+          })()
+          : undefined;
+        if (!(await isBrowserControlGranted(srcOrigin))) {
+          return {
+            error:
+              "browser control not granted for the source tab's origin — ask the user to approve it in Settings",
+          };
+        }
+        if (runAborted()) {
+          return { error: "run aborted — tab not navigated" };
+        }
         await chrome.tabs.update(id, { url });
         return { ok: true, tabId: id, url };
       },
@@ -467,6 +510,9 @@ export function browserToolset() {
             error:
               "browser control not granted for this origin — ask the user to approve it in Settings",
           };
+        }
+        if (runAborted()) {
+          return { error: "run aborted — tab not closed" };
         }
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };

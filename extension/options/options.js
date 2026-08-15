@@ -3,14 +3,7 @@
 import { getProviderConfig, setProviderConfig } from "../lib/provider.js";
 import { clearUsage, getUsage } from "../lib/usage.js";
 import { listOrigins, siteMemory } from "../lib/memory.js";
-import {
-  isBrowserControlGranted,
-  revokeBrowserControlGrant,
-  setGlobalBrowserControlGrant,
-  setOriginBrowserControlGrant,
-} from "../lib/browser-tools.js";
 import { RECIPES } from "../lib/recipes.js";
-import { kvGet, kvRemove, kvSet } from "../lib/kv.js";
 import {
   CAPABILITIES,
   capabilityStatus,
@@ -90,10 +83,23 @@ const THEMES = [
 ];
 
 const $ = (sel) => document.querySelector(sel);
-// The guarded key-value shim: chrome.storage.local is OPTIONAL, so all storage
-// access routes through kv.js (which falls back to session memory when the
-// storage permission is not yet granted).
-const storage = { get: kvGet, set: kvSet, remove: kvRemove };
+// Shared key-value access routes through the SERVICE WORKER (the single
+// authority for shared state). When the optional storage permission is absent,
+// kv.js's session fallback is realm-local, so a page writing to its OWN fallback
+// map would contradict the worker's (the round-15 split-authority finding).
+// Routing every read/write through the SW makes the SW's session Map the one
+// shared store. Pages must NEVER call kv* directly in their own realm.
+const storage = {
+  async get(keys) {
+    return await chrome.runtime.sendMessage({ type: "kv.get", keys });
+  },
+  async set(values) {
+    return await chrome.runtime.sendMessage({ type: "kv.set", values });
+  },
+  async remove(keys) {
+    return await chrome.runtime.sendMessage({ type: "kv.remove", keys });
+  },
+};
 
 // ── Providers ──
 async function renderProviders(restoreFocus = false) {
@@ -331,7 +337,12 @@ async function renderBrowser() {
           permissions: ["activeTab"],
         });
       } catch { /* unsupported — activeTab stays absent */ }
-      await setGlobalBrowserControlGrant();
+      // Route the grant through the SERVICE WORKER (single authority) — never
+      // write it in this page's own realm (split-authority).
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: true,
+      });
       $("#grant-origins").hidden = false;
       saveFlash(
         captureGranted
@@ -340,7 +351,10 @@ async function renderBrowser() {
       );
       renderPermissions();
     } else {
-      await revokeBrowserControlGrant();
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: false,
+      });
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -350,12 +364,19 @@ async function renderBrowser() {
       Boolean,
     );
     if (origins.length > 0) {
-      await setOriginBrowserControlGrant(origins);
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: true,
+        origins,
+      });
       saveFlash(
         "Allowed origins saved (scoped to " + origins.length + " origin(s)).",
       );
     } else {
-      await setGlobalBrowserControlGrant();
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: true,
+      });
       saveFlash("No origins listed — reverted to a global grant.");
     }
   });

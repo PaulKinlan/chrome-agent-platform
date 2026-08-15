@@ -117,8 +117,16 @@ export async function unregisterOriginScripts(origin) {
           ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
         })
         .catch(() => null);
-      scriptsRemoved = remaining === null || remaining.length === 0;
-      if (!scriptsRemoved) error = "content scripts still registered after unregister";
+      // A `null` confirmation read means the CONFIRMATION FAILED (the API threw
+      // or was absent) — it is NOT proof the scripts are gone. Only an empty
+      // array is authoritative absence (the round-15 finding: a failed
+      // confirmation read must not be treated as "removed").
+      scriptsRemoved = Array.isArray(remaining) && remaining.length === 0;
+      if (!scriptsRemoved && !error) {
+        error = remaining === null
+          ? "could not confirm content scripts were removed"
+          : "content scripts still registered after unregister";
+      }
     } catch (e) {
       scriptsRemoved = false;
       error = String(e?.message ?? e);

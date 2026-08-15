@@ -25326,7 +25326,7 @@ function createDemoModel() {
 init_browser_shim_process();
 var session = /* @__PURE__ */ new Map();
 var warned = false;
-function available() {
+function storageAvailable() {
   try {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
   } catch {
@@ -25344,8 +25344,18 @@ function warnOnce() {
     );
   }
 }
+var StorageBackendError = class extends Error {
+  constructor(op, cause) {
+    super(
+      `chrome.storage.local.${op} failed: ${String(cause?.message ?? cause)}`
+    );
+    this.name = "StorageBackendError";
+    this.op = op;
+    this.cause = cause;
+  }
+};
 async function kvGet(keys) {
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     const out = {};
     if (keys == null) {
@@ -25360,16 +25370,11 @@ async function kvGet(keys) {
   try {
     return await chrome.storage.local.get(keys);
   } catch (e) {
-    warnOnce();
-    const out = {};
-    for (const k of Array.isArray(keys) ? keys : [keys]) {
-      if (k != null && session.has(k)) out[k] = clone2(session.get(k));
-    }
-    return out;
+    throw new StorageBackendError("get", e);
   }
 }
 async function kvSet(obj) {
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     for (const [k, v] of Object.entries(obj)) {
       if (v === void 0) session.delete(k);
@@ -25380,16 +25385,12 @@ async function kvSet(obj) {
   try {
     await chrome.storage.local.set(obj);
   } catch (e) {
-    warnOnce();
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === void 0) session.delete(k);
-      else session.set(k, clone2(v));
-    }
+    throw new StorageBackendError("set", e);
   }
 }
-async function kvRemove(keys) {
+async function kvRemove2(keys) {
   const list = Array.isArray(keys) ? keys : [keys];
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     for (const k of list) session.delete(k);
     return;
@@ -25397,8 +25398,7 @@ async function kvRemove(keys) {
   try {
     await chrome.storage.local.remove(list);
   } catch (e) {
-    warnOnce();
-    for (const k of list) session.delete(k);
+    throw new StorageBackendError("remove", e);
   }
 }
 
@@ -25521,6 +25521,15 @@ var MASTER = "master";
 var ENROLL_KEY = "cap:enrollment";
 var MAX_VALUE_BYTES = 256 * 1024;
 var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled"]);
+var SITE_RESERVED_KEYS = /* @__PURE__ */ new Set([
+  "approvals",
+  "toolDirectory",
+  "journal",
+  "enrolled"
+]);
+var MAX_KEYS_PER_ORIGIN = 500;
+var MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024;
+var MAX_BYTES_GLOBAL = 64 * 1024 * 1024;
 function canonicalOrigin(value) {
   try {
     const u = new URL(String(value));
@@ -25558,6 +25567,75 @@ async function writeJson(dir, name25, value) {
   await w.write(JSON.stringify(value));
   await w.close();
 }
+async function storeUsage(dir) {
+  let keys = 0;
+  let bytes = 0;
+  for await (const [name25, handle] of dir.entries()) {
+    if (!name25.endsWith(".json")) continue;
+    keys++;
+    try {
+      const f = await handle.getFile();
+      bytes += f.size;
+    } catch {
+    }
+  }
+  return { keys, bytes };
+}
+async function globalUsage() {
+  let bytes = 0;
+  const root = await rootDir();
+  try {
+    const memDir = await root.getDirectoryHandle(ROOT);
+    async function walk(dir) {
+      for await (const [name25, handle] of dir.entries()) {
+        if (handle.kind === "file" && name25.endsWith(".json")) {
+          try {
+            bytes += (await handle.getFile()).size;
+          } catch {
+          }
+        } else if (handle.kind === "directory") {
+          await walk(handle);
+        }
+      }
+    }
+    await walk(memDir);
+  } catch {
+  }
+  return bytes;
+}
+async function setValue(path, key, value, { isMaster, trusted = false }) {
+  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
+  if (!trusted && reserved.has(String(key))) {
+    throw new Error(`key "${key}" is reserved on this store`);
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error(`value for "${key}" is not JSON-serializable`);
+  }
+  if (serialized.length > MAX_VALUE_BYTES) {
+    throw new Error(
+      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
+    );
+  }
+  const dir = await openDir(path);
+  const usage = await storeUsage(dir);
+  const oldRaw = await readJson(dir, `${key}.json`);
+  const isNew = oldRaw === null;
+  const oldBytes = isNew ? 0 : JSON.stringify(oldRaw).length;
+  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
+    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
+  }
+  const delta = serialized.length - oldBytes;
+  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
+    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
+  }
+  if (isNew && await globalUsage() + serialized.length > MAX_BYTES_GLOBAL) {
+    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+  }
+  await writeJson(dir, `${key}.json`, value);
+}
 function memoryStore(origin) {
   const isMaster = origin === MASTER;
   const path = isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(origin)];
@@ -25569,22 +25647,13 @@ function memoryStore(origin) {
       return await readJson(dir, `${key}.json`);
     },
     async set(key, value) {
-      if (isMaster && MASTER_RESERVED_KEYS.has(String(key))) {
-        throw new Error(`key "${key}" is reserved on the master store`);
-      }
-      let serialized;
-      try {
-        serialized = JSON.stringify(value);
-      } catch {
-        throw new Error(`value for "${key}" is not JSON-serializable`);
-      }
-      if (serialized.length > MAX_VALUE_BYTES) {
-        throw new Error(
-          `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
-        );
-      }
-      const dir = await openDir(path);
-      await writeJson(dir, `${key}.json`, value);
+      return await setValue(path, key, value, { isMaster });
+    },
+    /** Internal trusted write (approveTool/upsertTools/journalAppend/
+     * enrollOrigin): same bounds + quotas, but reserved authority keys are
+     * writable ONLY here — never via the model's `memory_set`/`set`. */
+    async setTrusted(key, value) {
+      return await setValue(path, key, value, { isMaster, trusted: true });
     },
     async keys() {
       const dir = await openDir(path);
@@ -25630,6 +25699,9 @@ function siteMemory(origin) {
       },
       async set() {
         throw new Error(`invalid origin: ${origin}`);
+      },
+      async setTrusted() {
+        throw new Error(`invalid origin: ${origin}`);
       }
     };
   }
@@ -25655,7 +25727,7 @@ async function journalAppend(store, entry) {
   while (entries.length > 1 && JSON.stringify(entries).length > MAX_JOURNAL_BYTES) {
     entries = entries.slice(1);
   }
-  await store.set("journal", entries);
+  await store.setTrusted("journal", entries);
   return entries;
 }
 
@@ -65388,8 +65460,8 @@ function markHasSlashCommands(agent) {
 }
 function unknownSlashCommandMessage(name25, commands) {
   const names = commands ? Object.keys(commands).sort() : [];
-  const available2 = names.length > 0 ? names.map((n) => `/${n}`).join(", ") : "(none configured)";
-  return `Unknown slash command "/${name25}". Available commands: ${available2}.`;
+  const available = names.length > 0 ? names.map((n) => `/${n}`).join(", ") : "(none configured)";
+  return `Unknown slash command "/${name25}". Available commands: ${available}.`;
 }
 
 // node_modules/agent-do/dist/src/loop.js
@@ -66513,7 +66585,7 @@ async function getUsage() {
   };
 }
 async function clearUsage() {
-  await kvRemove(STORAGE_KEY);
+  await kvRemove2(STORAGE_KEY);
 }
 
 // extension/lib/skills.js
@@ -66543,6 +66615,19 @@ async function allSkills() {
     if (s.length) out[o] = s;
   }
   return out;
+}
+
+// extension/lib/run-fence.js
+init_browser_shim_process();
+var fence = null;
+function setRunFence(f) {
+  fence = f ?? null;
+}
+function clearRunFence() {
+  fence = null;
+}
+function runAborted() {
+  return Boolean(fence?.signal?.aborted);
 }
 
 // extension/lib/agent.js
@@ -66626,8 +66711,11 @@ function createOrchestrator2({
   // [{ origin, memory, skills, tools }]
   multiAgent = true,
   taskId = "adhoc",
-  extraTools = {}
+  extraTools = {},
   // browser-control + management tools (chrome.* — SW context)
+  delegateGuard = null
+  // async (origin) => { ok, error } — revalidates live
+  // enrollment/generation before a delegated worker runs
 }) {
   const workerAgents = /* @__PURE__ */ new Map();
   for (const w of workers) {
@@ -66653,8 +66741,19 @@ function createOrchestrator2({
       description: "Delegate a task to a site sub-agent and return its result.",
       inputSchema: external_exports3.object({ agentId: external_exports3.string(), task: external_exports3.string() }),
       execute: async ({ agentId, task }) => {
+        if (runAborted()) {
+          return { error: "run aborted \u2014 delegation not started" };
+        }
         const a = workerAgents.get(agentId);
         if (!a) return { error: `no agent for ${agentId}` };
+        if (delegateGuard) {
+          const g = await delegateGuard(agentId);
+          if (!g?.ok) {
+            return {
+              error: g?.error ?? `agent ${agentId} is not enrolled`
+            };
+          }
+        }
         return { agentId, result: await a.run(task) };
       }
     })
@@ -66772,7 +66871,7 @@ async function upsertTools(origin, tools) {
     total += b;
     return total <= TOOL_BOUNDS.maxTotalBytes;
   });
-  await store.set(DIR_KEY, next);
+  await store.setTrusted(DIR_KEY, next);
   return next;
 }
 async function listTools(origin) {
@@ -66794,7 +66893,7 @@ async function enrollOrigin(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) throw new Error(`invalid origin: ${origin}`);
   return withEnrollmentLock(async () => {
-    await siteMemory(canonical).set("enrolled", { at: Date.now() });
+    await siteMemory(canonical).setTrusted("enrolled", { at: Date.now() });
     const map4 = await enrolledMap();
     map4[canonical] = {
       enrolled: true,
@@ -66829,7 +66928,7 @@ async function approveTool(origin, toolName, decision = true) {
   const approved = await store.get("approvals") ?? {};
   if (decision) approved[toolName] = Date.now();
   else delete approved[toolName];
-  await store.set("approvals", approved);
+  await store.setTrusted("approvals", approved);
   return approved;
 }
 async function pendingApprovals(origin) {
@@ -67124,7 +67223,12 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
   return grant;
 }
 async function revokeBrowserControlGrant() {
-  await kvRemove(GRANT_KEY);
+  await kvRemove2(GRANT_KEY);
+  const remaining = (await kvGet(GRANT_KEY))[GRANT_KEY];
+  const gone = remaining === void 0 || remaining === null;
+  if (!gone) {
+    return { revoked: false, error: "grant still present after removal" };
+  }
   return { revoked: true };
 }
 async function activeTab() {
@@ -67308,6 +67412,9 @@ function browserToolset() {
             error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
           };
         }
+        if (runAborted()) {
+          return { error: "run aborted \u2014 tab not opened" };
+        }
         const tab = await chrome.tabs.create({ url: url3 });
         return { ok: true, tabId: tab.id, url: url3 };
       }
@@ -67337,6 +67444,22 @@ function browserToolset() {
         }
         const id = tabId ?? (await activeTab())?.id;
         if (!id) return { error: "no tab" };
+        const srcTab = await chrome.tabs.get(id).catch(() => null);
+        const srcOrigin = srcTab?.url ? (() => {
+          try {
+            return canonicalOrigin(srcTab.url);
+          } catch {
+            return void 0;
+          }
+        })() : void 0;
+        if (!await isBrowserControlGranted(srcOrigin)) {
+          return {
+            error: "browser control not granted for the source tab's origin \u2014 ask the user to approve it in Settings"
+          };
+        }
+        if (runAborted()) {
+          return { error: "run aborted \u2014 tab not navigated" };
+        }
         await chrome.tabs.update(id, { url: url3 });
         return { ok: true, tabId: id, url: url3 };
       }
@@ -67387,6 +67510,9 @@ function browserToolset() {
           return {
             error: "browser control not granted for this origin \u2014 ask the user to approve it in Settings"
           };
+        }
+        if (runAborted()) {
+          return { error: "run aborted \u2014 tab not closed" };
         }
         await chrome.tabs.remove(tabId);
         return { ok: true, tabId };
@@ -67536,8 +67662,10 @@ async function unregisterOriginScripts(origin) {
       const remaining = await chrome.scripting.getRegisteredContentScripts({
         ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
       }).catch(() => null);
-      scriptsRemoved = remaining === null || remaining.length === 0;
-      if (!scriptsRemoved) error90 = "content scripts still registered after unregister";
+      scriptsRemoved = Array.isArray(remaining) && remaining.length === 0;
+      if (!scriptsRemoved && !error90) {
+        error90 = remaining === null ? "could not confirm content scripts were removed" : "content scripts still registered after unregister";
+      }
     } catch (e) {
       scriptsRemoved = false;
       error90 = String(e?.message ?? e);
@@ -67921,6 +68049,14 @@ var PAGE_ALLOWED_ROUTES = /* @__PURE__ */ new Set([
 ]);
 
 // extension/background/service-worker.js
+var runMutex = Promise.resolve();
+function withRunLock(fn) {
+  const run = runMutex.then(fn, fn);
+  runMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
 var TASK_KEY2 = "cap:scheduledTasks";
 async function registerAlarm(task) {
   return await scheduleTask({
@@ -67945,7 +68081,7 @@ async function handleAlarm(alarm) {
       lock.controller?.abort();
     });
   }, INFLIGHT_HEARTBEAT_MS);
-  const fence = {
+  const fence2 = {
     signal: lock.signal,
     async assertOwned() {
       if (heartbeatFailed || lock.signal?.aborted) {
@@ -67968,10 +68104,10 @@ async function handleAlarm(alarm) {
       task: task.task ?? alarm.name,
       scheduled: true,
       attachments: task.attachments ?? [],
-      fence
+      fence: fence2
     });
     if (!task.periodInMinutes) {
-      await fence.assertOwned();
+      await fence2.assertOwned();
       await markScheduledDone(alarm.name, token);
     }
   } catch (e) {
@@ -68040,7 +68176,13 @@ async function ensureOrchestrator() {
       masterMemory: mem,
       workers,
       multiAgent,
-      extraTools: browserToolset()
+      extraTools: browserToolset(),
+      delegateGuard: async (origin) => {
+        if (!await isEnrolled(origin)) {
+          return { ok: false, error: `origin ${origin} is not enrolled` };
+        }
+        return { ok: true };
+      }
     });
     if (generation === gen) {
       orchestrator = orch;
@@ -68126,52 +68268,82 @@ function attachmentContext(attachments) {
   }
   return "Attachments:\n" + parts.join("\n");
 }
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null }) {
-  const orch = await ensureOrchestrator();
-  const taskId = id ?? String(Date.now());
-  const mem = masterMemory();
-  if (fence?.signal) {
-    const abortNow = () => {
-      try {
-        orch.abort?.();
-      } catch {
-      }
-    };
-    fence.signal.addEventListener("abort", abortNow);
-    if (fence.signal.aborted) abortNow();
-  }
-  await fence?.assertOwned?.();
-  await journalAppend(mem, {
-    type: "task",
-    id: taskId,
-    task,
-    scheduled,
-    attachmentCount: attachments?.length ?? 0
-  });
-  const context = attachmentContext(attachments);
-  const result = await orch.run(task, context, []);
-  await fence?.assertOwned?.();
-  await journalAppend(mem, { type: "result", id: taskId, result });
-  if (scheduled) {
-    await fence?.assertOwned?.();
-    if (chrome.notifications?.create) {
-      try {
-        await chrome.notifications.create(`cap:${taskId}`, {
-          type: "basic",
-          iconUrl: chrome.runtime.getURL("icon128.png"),
-          title: "Scheduled task complete",
-          message: String(result ?? "").slice(0, 160)
-        });
-      } catch (e) {
-        console.error("notification failed", e);
-      }
+async function runTask({ id, task, scheduled = false, attachments = [], fence: fence2 = null }) {
+  return await withRunLock(async () => {
+    const orch = await ensureOrchestrator();
+    const taskId = id ?? String(Date.now());
+    const mem = masterMemory();
+    if (fence2?.signal) {
+      setRunFence(fence2);
+      const abortNow = () => {
+        try {
+          orch.abort?.();
+        } catch {
+        }
+      };
+      fence2.signal.addEventListener("abort", abortNow);
+      if (fence2.signal.aborted) abortNow();
     }
-  }
-  return { ok: true, result };
+    try {
+      await fence2?.assertOwned?.();
+      await journalAppend(mem, {
+        type: "task",
+        id: taskId,
+        task,
+        scheduled,
+        attachmentCount: attachments?.length ?? 0
+      });
+      const context = attachmentContext(attachments);
+      const result = await orch.run(task, context, []);
+      await fence2?.assertOwned?.();
+      await journalAppend(mem, { type: "result", id: taskId, result });
+      if (scheduled) {
+        await fence2?.assertOwned?.();
+        if (chrome.notifications?.create) {
+          try {
+            await chrome.notifications.create(`cap:${taskId}`, {
+              type: "basic",
+              iconUrl: chrome.runtime.getURL("icon128.png"),
+              title: "Scheduled task complete",
+              message: String(result ?? "").slice(0, 160)
+            });
+          } catch (e) {
+            console.error("notification failed", e);
+          }
+        }
+      }
+      return { ok: true, result };
+    } finally {
+      clearRunFence();
+    }
+  });
 }
 var handlers = {
   async "capabilities.status"() {
     return await capabilityStatus();
+  },
+  // Shared key-value access, EXTENSION-ONLY. Page surfaces route their key-value
+  // reads/writes through these routes so the service worker is the SINGLE
+  // authority for shared state (provider, theme, browser-control grant, multi-
+  // agent). When storage is absent, the SW's session Map is the one shared store
+  // — pages must never call kv* directly in their own realm (the round-15
+  // split-authority finding: Settings said granted while the worker said no).
+  async "kv.get"(m) {
+    const keys = m?.keys;
+    if (keys == null) return await kvGet(null);
+    return await kvGet(Array.isArray(keys) ? keys : [keys]);
+  },
+  async "kv.set"(m) {
+    if (!m?.values || typeof m.values !== "object") {
+      return { ok: false, error: "kv.set needs a values object" };
+    }
+    await kvSet(m.values);
+    return { ok: true };
+  },
+  async "kv.remove"(m) {
+    if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };
+    await kvRemove(Array.isArray(m.keys) ? m.keys : [m.keys]);
+    return { ok: true };
   },
   async "provider.get"() {
     return await getProviderConfig();
@@ -68397,11 +68569,12 @@ var handlers = {
       if (registered?.ok !== true) {
         await disenrollOrigin(canonical);
         await siteMemory(canonical).clear();
-        await removeOriginHostPermission(canonical);
+        const permissionRemoved = await removeOriginHostPermission(canonical);
         return {
           ok: false,
           origin: canonical,
-          error: registered?.error ?? "script registration failed"
+          error: registered?.error ?? "script registration failed",
+          permissionRemoved
         };
       }
       invalidateAgent();
@@ -68412,8 +68585,8 @@ var handlers = {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
-      const unreg = await unregisterOriginScripts(canonical);
       await disenrollOrigin(canonical);
+      const unreg = await unregisterOriginScripts(canonical);
       await siteMemory(canonical).clear();
       invalidateAgent();
       if (!unreg.ok) {

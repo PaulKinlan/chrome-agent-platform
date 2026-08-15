@@ -1,7 +1,7 @@
 // extension/lib/kv.js
 var session = /* @__PURE__ */ new Map();
 var warned = false;
-function available() {
+function storageAvailable() {
   try {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
   } catch {
@@ -19,8 +19,18 @@ function warnOnce() {
     );
   }
 }
+var StorageBackendError = class extends Error {
+  constructor(op, cause) {
+    super(
+      `chrome.storage.local.${op} failed: ${String(cause?.message ?? cause)}`
+    );
+    this.name = "StorageBackendError";
+    this.op = op;
+    this.cause = cause;
+  }
+};
 async function kvGet(keys) {
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     const out = {};
     if (keys == null) {
@@ -35,45 +45,7 @@ async function kvGet(keys) {
   try {
     return await chrome.storage.local.get(keys);
   } catch (e) {
-    warnOnce();
-    const out = {};
-    for (const k of Array.isArray(keys) ? keys : [keys]) {
-      if (k != null && session.has(k)) out[k] = clone(session.get(k));
-    }
-    return out;
-  }
-}
-async function kvSet(obj) {
-  if (!available()) {
-    warnOnce();
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === void 0) session.delete(k);
-      else session.set(k, clone(v));
-    }
-    return;
-  }
-  try {
-    await chrome.storage.local.set(obj);
-  } catch (e) {
-    warnOnce();
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === void 0) session.delete(k);
-      else session.set(k, clone(v));
-    }
-  }
-}
-async function kvRemove(keys) {
-  const list = Array.isArray(keys) ? keys : [keys];
-  if (!available()) {
-    warnOnce();
-    for (const k of list) session.delete(k);
-    return;
-  }
-  try {
-    await chrome.storage.local.remove(list);
-  } catch (e) {
-    warnOnce();
-    for (const k of list) session.delete(k);
+    throw new StorageBackendError("get", e);
   }
 }
 
@@ -148,6 +120,15 @@ var MASTER = "master";
 var ENROLL_KEY = "cap:enrollment";
 var MAX_VALUE_BYTES = 256 * 1024;
 var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled"]);
+var SITE_RESERVED_KEYS = /* @__PURE__ */ new Set([
+  "approvals",
+  "toolDirectory",
+  "journal",
+  "enrolled"
+]);
+var MAX_KEYS_PER_ORIGIN = 500;
+var MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024;
+var MAX_BYTES_GLOBAL = 64 * 1024 * 1024;
 function canonicalOrigin(value) {
   try {
     const u = new URL(String(value));
@@ -185,6 +166,75 @@ async function writeJson(dir, name, value) {
   await w.write(JSON.stringify(value));
   await w.close();
 }
+async function storeUsage(dir) {
+  let keys = 0;
+  let bytes = 0;
+  for await (const [name, handle] of dir.entries()) {
+    if (!name.endsWith(".json")) continue;
+    keys++;
+    try {
+      const f = await handle.getFile();
+      bytes += f.size;
+    } catch {
+    }
+  }
+  return { keys, bytes };
+}
+async function globalUsage() {
+  let bytes = 0;
+  const root = await rootDir();
+  try {
+    const memDir = await root.getDirectoryHandle(ROOT);
+    async function walk(dir) {
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind === "file" && name.endsWith(".json")) {
+          try {
+            bytes += (await handle.getFile()).size;
+          } catch {
+          }
+        } else if (handle.kind === "directory") {
+          await walk(handle);
+        }
+      }
+    }
+    await walk(memDir);
+  } catch {
+  }
+  return bytes;
+}
+async function setValue(path, key, value, { isMaster, trusted = false }) {
+  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
+  if (!trusted && reserved.has(String(key))) {
+    throw new Error(`key "${key}" is reserved on this store`);
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error(`value for "${key}" is not JSON-serializable`);
+  }
+  if (serialized.length > MAX_VALUE_BYTES) {
+    throw new Error(
+      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
+    );
+  }
+  const dir = await openDir(path);
+  const usage = await storeUsage(dir);
+  const oldRaw = await readJson(dir, `${key}.json`);
+  const isNew = oldRaw === null;
+  const oldBytes = isNew ? 0 : JSON.stringify(oldRaw).length;
+  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
+    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
+  }
+  const delta = serialized.length - oldBytes;
+  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
+    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
+  }
+  if (isNew && await globalUsage() + serialized.length > MAX_BYTES_GLOBAL) {
+    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+  }
+  await writeJson(dir, `${key}.json`, value);
+}
 function memoryStore(origin) {
   const isMaster = origin === MASTER;
   const path = isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(origin)];
@@ -196,22 +246,13 @@ function memoryStore(origin) {
       return await readJson(dir, `${key}.json`);
     },
     async set(key, value) {
-      if (isMaster && MASTER_RESERVED_KEYS.has(String(key))) {
-        throw new Error(`key "${key}" is reserved on the master store`);
-      }
-      let serialized;
-      try {
-        serialized = JSON.stringify(value);
-      } catch {
-        throw new Error(`value for "${key}" is not JSON-serializable`);
-      }
-      if (serialized.length > MAX_VALUE_BYTES) {
-        throw new Error(
-          `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`
-        );
-      }
-      const dir = await openDir(path);
-      await writeJson(dir, `${key}.json`, value);
+      return await setValue(path, key, value, { isMaster });
+    },
+    /** Internal trusted write (approveTool/upsertTools/journalAppend/
+     * enrollOrigin): same bounds + quotas, but reserved authority keys are
+     * writable ONLY here — never via the model's `memory_set`/`set`. */
+    async setTrusted(key, value) {
+      return await setValue(path, key, value, { isMaster, trusted: true });
     },
     async keys() {
       const dir = await openDir(path);
@@ -256,6 +297,9 @@ function siteMemory(origin) {
       },
       async set() {
         throw new Error(`invalid origin: ${origin}`);
+      },
+      async setTrusted() {
+        throw new Error(`invalid origin: ${origin}`);
       }
     };
   }
@@ -265,65 +309,6 @@ async function listOrigins() {
   const s = await kvGet(ENROLL_KEY);
   const map = s[ENROLL_KEY] ?? {};
   return Object.keys(map).filter((o) => map[o]?.enrolled === true).sort();
-}
-
-// extension/lib/scheduler.js
-var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
-var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
-var BOOT_AT = Date.now();
-var mutex = Promise.resolve();
-
-// extension/lib/browser-tools.js
-var GRANT_KEY = "cap:browserControlGrant";
-var DEFAULT_GRANT_MS = 15 * 60 * 1e3;
-var grantSeq = 0;
-function newGrantId() {
-  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  return `grant_${Date.now()}_${Math.random().toString(36).slice(2)}_${grantSeq++}`;
-}
-function clampExpiryMs(expiryMs) {
-  const ms = Number(expiryMs);
-  if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_GRANT_MS;
-  return Math.min(ms, 60 * 60 * 1e3);
-}
-async function setGlobalBrowserControlGrant(expiryMs = DEFAULT_GRANT_MS) {
-  const grant = {
-    id: newGrantId(),
-    scope: "global",
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now()
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
-}
-async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
-  const canonical = [
-    ...new Set(
-      (origins ?? []).map((o) => {
-        try {
-          return canonicalOrigin(String(o));
-        } catch {
-          return null;
-        }
-      }).filter(Boolean)
-    )
-  ].slice(0, 50);
-  if (canonical.length === 0) {
-    throw new Error("origin grant needs at least one valid origin");
-  }
-  const grant = {
-    id: newGrantId(),
-    scope: "origins",
-    origins: canonical,
-    expiresAt: Date.now() + clampExpiryMs(expiryMs),
-    grantedAt: Date.now()
-  };
-  await kvSet({ [GRANT_KEY]: grant });
-  return grant;
-}
-async function revokeBrowserControlGrant() {
-  await kvRemove(GRANT_KEY);
-  return { revoked: true };
 }
 
 // extension/lib/capabilities.js
@@ -478,7 +463,17 @@ var THEMES = [
   { id: "terminal", label: "Terminal", swatch: "#0c0c0c,#4ec9b0" }
 ];
 var $ = (sel) => document.querySelector(sel);
-var storage = { get: kvGet, set: kvSet, remove: kvRemove };
+var storage = {
+  async get(keys) {
+    return await chrome.runtime.sendMessage({ type: "kv.get", keys });
+  },
+  async set(values) {
+    return await chrome.runtime.sendMessage({ type: "kv.set", values });
+  },
+  async remove(keys) {
+    return await chrome.runtime.sendMessage({ type: "kv.remove", keys });
+  }
+};
 async function renderProviders(restoreFocus = false) {
   const cfg = await getProviderConfig();
   const list = $("#provider-list");
@@ -651,14 +646,20 @@ async function renderBrowser() {
         });
       } catch {
       }
-      await setGlobalBrowserControlGrant();
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: true
+      });
       $("#grant-origins").hidden = false;
       saveFlash(
         captureGranted ? "Browser control granted (global, 15 min \u2014 set origins below to scope it)." : "Browser control granted (screenshots unavailable \u2014 activeTab permission not granted)."
       );
       renderPermissions();
     } else {
-      await revokeBrowserControlGrant();
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: false
+      });
       $("#grant-origins").hidden = true;
       saveFlash("Browser control revoked.");
     }
@@ -668,12 +669,19 @@ async function renderBrowser() {
       Boolean
     );
     if (origins.length > 0) {
-      await setOriginBrowserControlGrant(origins);
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: true,
+        origins
+      });
       saveFlash(
         "Allowed origins saved (scoped to " + origins.length + " origin(s))."
       );
     } else {
-      await setGlobalBrowserControlGrant();
+      await chrome.runtime.sendMessage({
+        type: "browser-control.set",
+        granted: true
+      });
       saveFlash("No origins listed \u2014 reverted to a global grant.");
     }
   });

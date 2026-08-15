@@ -2,18 +2,37 @@
 //
 // ALL permissions are OPTIONAL (Paul's hard requirement). chrome.storage.local
 // requires the optional "storage" permission, so until the owner grants it the
-// extension must still boot and run. This shim therefore falls back to an
-// in-memory session store when the permission is absent (nothing persists
-// across worker restarts until storage is enabled). `storageAvailable()` lets
-// the Settings capability panel surface the "session-only" state honestly.
+// extension must still boot and run. Two DISTINCT situations must never be
+// conflated (the round-15 blocker):
 //
-// Availability is checked at CALL time (never cached at module load) so a
-// freshly-granted permission is picked up without a worker reload.
+//   1. storage PERMISSION ABSENT  → `chrome.storage.local` is undefined. The
+//      extension degrades to an in-memory session store (nothing persists).
+//   2. storage PERMISSION PRESENT but a WRITE/READ FAILS (quota exceeded, I/O
+//      error) → this is a REAL backend failure and must REJECT (fail closed),
+//      never silently fall back to a session value that contradicts what the
+//      persistent backend actually holds.
+//
+// A destructive revocation or a heartbeat that silently "succeeds" against a
+// failed backend is a security failure: the caller would report {revoked:true}
+// while the grant persists, or keep committing side effects without durable
+// heartbeat proof. So when the backend is AVAILABLE, `kvSet`/`kvRemove`/`kvGet`
+// THROW on failure instead of swallowing it.
+//
+// SESSION FALLBACK + REALM AUTHORITY: the in-memory `session` Map is
+// module/realm-local — the service worker, Settings, NTP and other extension
+// pages each get their OWN copy. Shared state (provider, theme, browser-control
+// grant, enrollment) must therefore have ONE authority. All page surfaces route
+// their key-value access through the service worker (the `kv.get`/`kv.set`/
+// `kv.remove` message routes), so the SW's session Map is the single authority
+// when storage is absent. Pages must NEVER call kv* directly for shared state.
 
 const session = new Map();
 let warned = false;
 
-function available() {
+/** Is the persistent chrome.storage.local backend currently available?
+ * Availability is checked at CALL time (never cached at module load) so a
+ * freshly-granted permission is picked up without a worker reload. */
+export function storageAvailable() {
   try {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
   } catch {
@@ -34,14 +53,22 @@ function warnOnce() {
   }
 }
 
-/** Whether the persistent chrome.storage backend is currently available. */
-export function storageAvailable() {
-  return available();
+/** The error thrown when the backend is AVAILABLE but the operation FAILS.
+ * Callers (revocation, heartbeat) treat this as a real failure and fail closed. */
+export class StorageBackendError extends Error {
+  constructor(op, cause) {
+    super(
+      `chrome.storage.local.${op} failed: ${String(cause?.message ?? cause)}`,
+    );
+    this.name = "StorageBackendError";
+    this.op = op;
+    this.cause = cause;
+  }
 }
 
 /** Mirror chrome.storage.local.get(key|array|null). */
 export async function kvGet(keys) {
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     const out = {};
     if (keys == null) {
@@ -53,22 +80,18 @@ export async function kvGet(keys) {
     }
     return out;
   }
+  // Backend available: a read failure is a REAL failure — never return a
+  // stale session value that contradicts the persistent backend.
   try {
     return await chrome.storage.local.get(keys);
   } catch (e) {
-    warnOnce();
-    // Mirror the in-memory fallback on read failure too (storage can fail).
-    const out = {};
-    for (const k of (Array.isArray(keys) ? keys : [keys])) {
-      if (k != null && session.has(k)) out[k] = clone(session.get(k));
-    }
-    return out;
+    throw new StorageBackendError("get", e);
   }
 }
 
-/** Mirror chrome.storage.local.set(obj). */
+/** Mirror chrome.storage.local.set(obj). Fails closed on backend failure. */
 export async function kvSet(obj) {
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     for (const [k, v] of Object.entries(obj)) {
       if (v === undefined) session.delete(k);
@@ -79,18 +102,14 @@ export async function kvSet(obj) {
   try {
     await chrome.storage.local.set(obj);
   } catch (e) {
-    warnOnce();
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === undefined) session.delete(k);
-      else session.set(k, clone(v));
-    }
+    throw new StorageBackendError("set", e);
   }
 }
 
-/** Mirror chrome.storage.local.remove(key|array). */
+/** Mirror chrome.storage.local.remove(key|array). Fails closed on failure. */
 export async function kvRemove(keys) {
   const list = Array.isArray(keys) ? keys : [keys];
-  if (!available()) {
+  if (!storageAvailable()) {
     warnOnce();
     for (const k of list) session.delete(k);
     return;
@@ -98,8 +117,7 @@ export async function kvRemove(keys) {
   try {
     await chrome.storage.local.remove(list);
   } catch (e) {
-    warnOnce();
-    for (const k of list) session.delete(k);
+    throw new StorageBackendError("remove", e);
   }
 }
 

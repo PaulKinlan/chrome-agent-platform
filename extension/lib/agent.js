@@ -10,6 +10,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
+import { runAborted } from "./run-fence.js";
 
 const DEFAULT_SYSTEM =
   `You are the Chrome Agent Platform hub agent. You help the
@@ -109,6 +110,8 @@ export function createOrchestrator({
   multiAgent = true,
   taskId = "adhoc",
   extraTools = {}, // browser-control + management tools (chrome.* — SW context)
+  delegateGuard = null, // async (origin) => { ok, error } — revalidates live
+                        // enrollment/generation before a delegated worker runs
 }) {
   const workerAgents = new Map();
   for (const w of workers) {
@@ -137,8 +140,26 @@ export function createOrchestrator({
           "Delegate a task to a site sub-agent and return its result.",
         inputSchema: z.object({ agentId: z.string(), task: z.string() }),
         execute: async ({ agentId, task }) => {
+          // The model-facing delegate path must be fenced like every other
+          // side-effecting tool (the round-15 finding: a cached deleted worker
+          // could still run via delegate_task). An aborted run must not start a
+          // delegated worker's side effects.
+          if (runAborted()) {
+            return { error: "run aborted — delegation not started" };
+          }
           const a = workerAgents.get(agentId);
           if (!a) return { error: `no agent for ${agentId}` };
+          // Revalidate LIVE enrollment/generation before the worker runs: a
+          // worker deleted AFTER the orchestrator was built must not run (the
+          // internal delegate path previously bypassed the lifecycle gate).
+          if (delegateGuard) {
+            const g = await delegateGuard(agentId);
+            if (!g?.ok) {
+              return {
+                error: g?.error ?? `agent ${agentId} is not enrolled`,
+              };
+            }
+          }
           return { agentId, result: await a.run(task) };
         },
       }),

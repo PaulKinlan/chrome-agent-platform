@@ -24,6 +24,26 @@ const ENROLL_KEY = "cap:enrollment";
 // cannot crowd another; the journal is separately capped in journalAppend.
 const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
 const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled"]);
+// Authority/registry keys that the MODEL's `memory_set` must never write on a
+// SITE store: a worker that could write `approvals` or `toolDirectory` would
+// bypass the owner's first-run approval or forge its own tool directory, and
+// one that wrote `journal` could fabricate results. Internal TRUSTED code
+// (approveTool/upsertTools/journalAppend/enrollOrigin) uses `setTrusted`, which
+// bypasses this reservation; the model + page surfaces only reach `set`.
+const SITE_RESERVED_KEYS = new Set([
+  "approvals",
+  "toolDirectory",
+  "journal",
+  "enrolled",
+]);
+
+// OPFS aggregate quotas (Constitution §4): stores — not just individual values
+// — must be bounded. A site may hold at most this many keys and this many total
+// serialized bytes; beyond that, `set`/`setTrusted` fail closed rather than
+// growing without bound (the round-15 aggregate-unbounded finding).
+const MAX_KEYS_PER_ORIGIN = 500;
+const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024; // 8 MiB per origin
+const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
 
 /** Canonicalize an origin string (https://example.com:443 → https://example.com). */
 export function canonicalOrigin(value) {
@@ -82,6 +102,85 @@ async function writeJson(dir, name, value) {
   await w.close();
 }
 
+/** Enumerate a store's existing .json keys + total serialized bytes (bounded
+ * by the per-origin key cap). Used to enforce aggregate quotas on every write. */
+async function storeUsage(dir) {
+  let keys = 0;
+  let bytes = 0;
+  for await (const [name, handle] of dir.entries()) {
+    if (!name.endsWith(".json")) continue;
+    keys++;
+    try {
+      const f = await handle.getFile();
+      bytes += f.size;
+    } catch { /* unreadable — count the key, skip the size */ }
+  }
+  return { keys, bytes };
+}
+
+/** Total bytes across ALL per-site stores + master (the global budget). */
+async function globalUsage() {
+  let bytes = 0;
+  const root = await rootDir();
+  try {
+    const memDir = await root.getDirectoryHandle(ROOT);
+    async function walk(dir) {
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind === "file" && name.endsWith(".json")) {
+          try {
+            bytes += (await handle.getFile()).size;
+          } catch { /* skip */ }
+        } else if (handle.kind === "directory") {
+          await walk(handle);
+        }
+      }
+    }
+    await walk(memDir);
+  } catch { /* memory tree absent — 0 bytes */ }
+  return bytes;
+}
+
+/** The shared write path: bounds + reserved-key protection + aggregate quotas.
+ * `trusted` bypasses the reserved-key protection (internal authority writes)
+ * but NOT the byte/key quotas. */
+async function setValue(path, key, value, { isMaster, trusted = false }) {
+  const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
+  if (!trusted && reserved.has(String(key))) {
+    throw new Error(`key "${key}" is reserved on this store`);
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error(`value for "${key}" is not JSON-serializable`);
+  }
+  if (serialized.length > MAX_VALUE_BYTES) {
+    throw new Error(
+      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
+    );
+  }
+  const dir = await openDir(path);
+  const usage = await storeUsage(dir);
+  const oldRaw = await readJson(dir, `${key}.json`);
+  const isNew = oldRaw === null;
+  const oldBytes = isNew ? 0 : JSON.stringify(oldRaw).length;
+  // Aggregate quotas: a store may not grow past MAX_KEYS_PER_ORIGIN keys or
+  // MAX_BYTES_PER_ORIGIN bytes (and the global tree past MAX_BYTES_GLOBAL).
+  // Existing values can always be REPLACED (shrinking/rewriting is allowed);
+  // growth beyond a quota fails closed.
+  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
+    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
+  }
+  const delta = serialized.length - oldBytes;
+  if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
+    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
+  }
+  if (isNew && (await globalUsage()) + serialized.length > MAX_BYTES_GLOBAL) {
+    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+  }
+  await writeJson(dir, `${key}.json`, value);
+}
+
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */
 export function memoryStore(origin) {
   const isMaster = origin === MASTER;
@@ -97,25 +196,13 @@ export function memoryStore(origin) {
       return await readJson(dir, `${key}.json`);
     },
     async set(key, value) {
-      // Bound the value by its SERIALIZED size (fail closed against a model or
-      // page writing an unbounded value). Reject reserved registry keys on the
-      // master store (the enrollment authority must never be model-writable).
-      if (isMaster && MASTER_RESERVED_KEYS.has(String(key))) {
-        throw new Error(`key "${key}" is reserved on the master store`);
-      }
-      let serialized;
-      try {
-        serialized = JSON.stringify(value);
-      } catch {
-        throw new Error(`value for "${key}" is not JSON-serializable`);
-      }
-      if (serialized.length > MAX_VALUE_BYTES) {
-        throw new Error(
-          `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
-        );
-      }
-      const dir = await openDir(path);
-      await writeJson(dir, `${key}.json`, value);
+      return await setValue(path, key, value, { isMaster });
+    },
+    /** Internal trusted write (approveTool/upsertTools/journalAppend/
+     * enrollOrigin): same bounds + quotas, but reserved authority keys are
+     * writable ONLY here — never via the model's `memory_set`/`set`. */
+    async setTrusted(key, value) {
+      return await setValue(path, key, value, { isMaster, trusted: true });
     },
     async keys() {
       const dir = await openDir(path);
@@ -164,6 +251,9 @@ export function siteMemory(origin) {
       async set() {
         throw new Error(`invalid origin: ${origin}`);
       },
+      async setTrusted() {
+        throw new Error(`invalid origin: ${origin}`);
+      },
     };
   }
   return memoryStore(canonical);
@@ -205,6 +295,6 @@ export async function journalAppend(store, entry) {
   ) {
     entries = entries.slice(1); // cap bytes
   }
-  await store.set("journal", entries);
+  await store.setTrusted("journal", entries);
   return entries;
 }

@@ -60,12 +60,26 @@ import {
 } from "../lib/enrollment.js";
 import { tool } from "ai";
 import { z } from "zod";
+import { setRunFence, clearRunFence } from "../lib/run-fence.js";
 import {
   authorizeToolReport,
   PAGE_ALLOWED_ROUTES,
   sanitizeToolName as safeToolName,
   schemaToZod as buildSchema,
 } from "../lib/pure.js";
+
+// ---- run serialization ----
+// The cached orchestrator (and its single agent-do abort controller) is SHARED
+// across runs. Two concurrent runs would overwrite/abort each other's controller
+// (the round-15 blocker). Serialize master execution: at most one agent run at
+// a time, so an abort always targets the one active run. Delegated worker runs
+// inside a serialized master are also serialized by this gate.
+let runMutex = Promise.resolve();
+function withRunLock(fn) {
+  const run = runMutex.then(fn, fn);
+  runMutex = run.then(() => {}, () => {});
+  return run;
+}
 
 // ---- alarm scheduler (persists the full task payload) ----
 const TASK_KEY = "cap:scheduledTasks";
@@ -250,6 +264,15 @@ async function ensureOrchestrator() {
       workers,
       multiAgent,
       extraTools: browserToolset(),
+      delegateGuard: async (origin) => {
+        // The model-facing delegate_task must revalidate LIVE enrollment before
+        // running a cached worker (the internal path previously bypassed the
+        // lifecycle gate — the round-15 finding).
+        if (!(await isEnrolled(origin))) {
+          return { ok: false, error: `origin ${origin} is not enrolled` };
+        }
+        return { ok: true };
+      },
     });
     // Commit only if the generation is still current (an invalidation during
     // the awaits above means this orchestrator used stale config).
@@ -368,56 +391,66 @@ function attachmentContext(attachments) {
 }
 
 async function runTask({ id, task, scheduled = false, attachments = [], fence = null }) {
-  const orch = await ensureOrchestrator();
-  const taskId = id ?? String(Date.now());
-  const mem = masterMemory();
-  // Thread the fence's abort signal into the RUNNING agent: if ownership or
-  // heartbeat renewal fails mid-run, abort the in-flight model/tool loop so it
-  // cannot commit stale side effects (the round-13 execution fence).
-  if (fence?.signal) {
-    const abortNow = () => {
-      try {
-        orch.abort?.();
-      } catch { /* already aborted */ }
-    };
-    fence.signal.addEventListener("abort", abortNow);
-    if (fence.signal.aborted) abortNow();
-  }
-  // Every durable/destructive boundary is FENCED when a scheduled run owns an
-  // in-flight lock: a stale owner aborts before committing the task journal,
-  // the result journal, or the completion notification.
-  await fence?.assertOwned?.();
-  await journalAppend(mem, {
-    type: "task",
-    id: taskId,
-    task,
-    scheduled,
-    attachmentCount: attachments?.length ?? 0,
-  });
-  const context = attachmentContext(attachments);
-  // agent-do's run(task, context, history) -> result text; context is a STRING.
-  const result = await orch.run(task, context, []);
-  await fence?.assertOwned?.();
-  await journalAppend(mem, { type: "result", id: taskId, result });
-  if (scheduled) {
-    await fence?.assertOwned?.();
-    // Completion lifecycle: surface the result as a notification. The
-    // `notifications` permission is OPTIONAL — when absent, skip silently (a
-    // missing permission is not a failure worth a console error).
-    if (chrome.notifications?.create) {
-      try {
-        await chrome.notifications.create(`cap:${taskId}`, {
-          type: "basic",
-          iconUrl: chrome.runtime.getURL("icon128.png"),
-          title: "Scheduled task complete",
-          message: String(result ?? "").slice(0, 160),
-        });
-      } catch (e) {
-        console.error("notification failed", e);
-      }
+  // Serialize master execution: the cached orchestrator is shared, so a second
+  // run must queue behind the first rather than clobber its abort controller.
+  return await withRunLock(async () => {
+    const orch = await ensureOrchestrator();
+    const taskId = id ?? String(Date.now());
+    const mem = masterMemory();
+    // Thread the fence's abort signal into the RUNNING agent AND every
+    // side-effecting tool (via the shared run-fence module): if ownership or
+    // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
+    // block open/navigate/close/delegate from committing stale side effects.
+    if (fence?.signal) {
+      setRunFence(fence);
+      const abortNow = () => {
+        try {
+          orch.abort?.();
+        } catch { /* already aborted */ }
+      };
+      fence.signal.addEventListener("abort", abortNow);
+      if (fence.signal.aborted) abortNow();
     }
-  }
-  return { ok: true, result };
+    try {
+      // Every durable/destructive boundary is FENCED when a scheduled run owns an
+      // in-flight lock: a stale owner aborts before committing the task journal,
+      // the result journal, or the completion notification.
+      await fence?.assertOwned?.();
+      await journalAppend(mem, {
+        type: "task",
+        id: taskId,
+        task,
+        scheduled,
+        attachmentCount: attachments?.length ?? 0,
+      });
+      const context = attachmentContext(attachments);
+      // agent-do's run(task, context, history) -> result text; context is a STRING.
+      const result = await orch.run(task, context, []);
+      await fence?.assertOwned?.();
+      await journalAppend(mem, { type: "result", id: taskId, result });
+      if (scheduled) {
+        await fence?.assertOwned?.();
+        // Completion lifecycle: surface the result as a notification. The
+        // `notifications` permission is OPTIONAL — when absent, skip silently (a
+        // missing permission is not a failure worth a console error).
+        if (chrome.notifications?.create) {
+          try {
+            await chrome.notifications.create(`cap:${taskId}`, {
+              type: "basic",
+              iconUrl: chrome.runtime.getURL("icon128.png"),
+              title: "Scheduled task complete",
+              message: String(result ?? "").slice(0, 160),
+            });
+          } catch (e) {
+            console.error("notification failed", e);
+          }
+        }
+      }
+      return { ok: true, result };
+    } finally {
+      clearRunFence();
+    }
+  });
 }
 
 // ---- message router ----
@@ -427,6 +460,29 @@ const handlers = {
     // tabs, scripting, notifications, sidePanel). The Settings panel renders
     // enable buttons from this; the Chrome suite asserts the empty base list.
     return await capabilityStatus();
+  },
+  // Shared key-value access, EXTENSION-ONLY. Page surfaces route their key-value
+  // reads/writes through these routes so the service worker is the SINGLE
+  // authority for shared state (provider, theme, browser-control grant, multi-
+  // agent). When storage is absent, the SW's session Map is the one shared store
+  // — pages must never call kv* directly in their own realm (the round-15
+  // split-authority finding: Settings said granted while the worker said no).
+  async "kv.get"(m) {
+    const keys = m?.keys;
+    if (keys == null) return await kvGet(null);
+    return await kvGet(Array.isArray(keys) ? keys : [keys]);
+  },
+  async "kv.set"(m) {
+    if (!m?.values || typeof m.values !== "object") {
+      return { ok: false, error: "kv.set needs a values object" };
+    }
+    await kvSet(m.values);
+    return { ok: true };
+  },
+  async "kv.remove"(m) {
+    if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };
+    await kvRemove(Array.isArray(m.keys) ? m.keys : [m.keys]);
+    return { ok: true };
   },
   async "provider.get"() {
     return await getProviderConfig();
@@ -719,13 +775,18 @@ const handlers = {
         (e) => ({ ok: false, error: String(e?.message ?? e) }),
       );
       if (registered?.ok !== true) {
+        // TRANSACTIONAL rollback: tombstone the enrollment, clear the OPFS dir,
+        // and REMOVE the just-granted host permission. The rollback result is
+        // captured + surfaced (a failed rollback is never silently claimed as
+        // clean — the round-15 finding).
         await disenrollOrigin(canonical);
         await siteMemory(canonical).clear();
-        await removeOriginHostPermission(canonical);
+        const permissionRemoved = await removeOriginHostPermission(canonical);
         return {
           ok: false,
           origin: canonical,
           error: registered?.error ?? "script registration failed",
+          permissionRemoved,
         };
       }
       invalidateAgent();
@@ -736,19 +797,18 @@ const handlers = {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
-      // Authoritative revocation: remove the dynamic content scripts AND revoke
-      // the optional host permission, then tombstone the enrollment (a running
-      // bridge's reports are rejected via isEnrolled) + clear the OPFS store.
-      // A FAILED unregister is surfaced (ok:false) — revocation is only claimed
-      // as authoritative when the scripts were actually removed.
-      const unreg = await unregisterOriginScripts(canonical);
+      // Authoritative, PREEMPTIVE revocation: tombstone the enrollment FIRST
+      // (a running content-script bridge is rejected by isEnrolled from this
+      // instant), THEN remove the dynamic scripts + host permission + OPFS dir.
+      // Tombstone-first means a slow unregister can never leave a still-authorized
+      // origin (the round-15 finding that delete was not preemptive).
       await disenrollOrigin(canonical);
+      const unreg = await unregisterOriginScripts(canonical);
       await siteMemory(canonical).clear();
       invalidateAgent();
       // Authoritative revocation is claimed ONLY when BOTH the scripts AND the
-      // host permission are confirmed removed (ok is scriptsRemoved &&
-      // permissionRemoved in unregisterOriginScripts). A partial revocation is
-      // surfaced as incomplete, never silently reported as success.
+      // host permission are confirmed removed. A partial revocation is surfaced
+      // as incomplete (ok:false + the specific flags), never reported as success.
       if (!unreg.ok) {
         return {
           ok: false,

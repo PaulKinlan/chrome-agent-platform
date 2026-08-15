@@ -95,7 +95,7 @@ export async function upsertTools(origin, tools) {
     total += b;
     return total <= TOOL_BOUNDS.maxTotalBytes;
   });
-  await store.set(DIR_KEY, next);
+  await store.setTrusted(DIR_KEY, next);
   return next;
 }
 
@@ -134,8 +134,10 @@ export async function enrollOrigin(origin) {
   return withEnrollmentLock(async () => {
     // Create the site's OWN OPFS store directory (so per-site memory works)
     // BEFORE the registry update. The registry is the authority; the OPFS dir
-    // is just data (listOrigins never enumerates OPFS directories).
-    await siteMemory(canonical).set("enrolled", { at: Date.now() });
+    // is just data (listOrigins never enumerates OPFS directories). `enrolled`
+    // is a reserved site key, written via the TRUSTED path (never model-
+    // writable via memory_set).
+    await siteMemory(canonical).setTrusted("enrolled", { at: Date.now() });
     const map = await enrolledMap();
     map[canonical] = {
       enrolled: true,
@@ -180,7 +182,7 @@ export async function approveTool(origin, toolName, decision = true) {
   const approved = (await store.get("approvals")) ?? {};
   if (decision) approved[toolName] = Date.now();
   else delete approved[toolName];
-  await store.set("approvals", approved);
+  await store.setTrusted("approvals", approved);
   return approved;
 }
 
