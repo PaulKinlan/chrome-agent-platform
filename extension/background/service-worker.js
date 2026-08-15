@@ -37,9 +37,8 @@ import {
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES } from "../lib/recipes.js";
 import {
-  clearStaleInflight,
+  recoverOnBoot,
   markScheduledDone,
-  reconcileScheduledTasks,
   releaseInflight,
   scheduleTask,
   tryAcquireInflight,
@@ -593,17 +592,15 @@ chrome.runtime.onInstalled.addListener(async () => {
 // Recover stale in-flight locks on every worker boot so a crashed task doesn't
 // permanently block its alarm. Reconciliation failures are surfaced (logged),
 // not silently discarded.
+// One serialized, idempotent boot recovery (clear pre-boot locks + reconcile
+// missing alarms). Both the module-eval call and the onStartup listener route
+// through recoverOnBoot(); the internal flag makes the second a no-op, so a
+// live lock acquired between the two can never be cleared twice.
 chrome.runtime.onStartup?.addListener(() => {
-  clearStaleInflight().catch((e) =>
-    console.error("clearStaleInflight:", e?.message ?? e)
-  );
-  reconcileScheduledTasks().catch((e) =>
-    console.error("reconcileScheduledTasks:", e?.message ?? e)
+  recoverOnBoot().catch((e) =>
+    console.error("recoverOnBoot:", e?.message ?? e)
   );
 });
-clearStaleInflight().catch((e) =>
-  console.error("clearStaleInflight:", e?.message ?? e)
-);
-reconcileScheduledTasks().catch((e) =>
-  console.error("reconcileScheduledTasks:", e?.message ?? e)
+recoverOnBoot().catch((e) =>
+  console.error("recoverOnBoot:", e?.message ?? e)
 );

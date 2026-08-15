@@ -99,9 +99,9 @@ async function renderProviders() {
       <div class="provider-head">
         <span class="provider-name">${p.name}</span>
         <span class="muted">${p.hint}</span>
-        <button class="btn small set-default" type="button" ${
-      cfg.provider === p.id ? "disabled" : ""
-    }>Use</button>
+        <button class="btn small set-default" type="button">${
+      cfg.provider === p.id ? "Update" : "Use"
+    }</button>
       </div>
       ${
       p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama"
@@ -142,7 +142,7 @@ async function renderProviders() {
         type: "provider.set",
         config: { provider: p.id, ...fields },
       });
-      await saveFlash(`Set ${p.name} as default.`);
+      await saveFlash(cfg.provider === p.id ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
       renderProviders();
     });
     list.appendChild(card);

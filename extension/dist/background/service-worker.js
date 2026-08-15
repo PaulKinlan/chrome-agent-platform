@@ -66692,13 +66692,26 @@ async function releaseInflight(name25) {
     await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
   });
 }
+var BOOT_AT = Date.now();
 async function clearStaleInflight() {
   await withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
-    const inflight = store[INFLIGHT_KEY];
-    if (inflight && Object.keys(inflight).length > 0) {
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: {} });
+    const inflight = { ...store[INFLIGHT_KEY] ?? {} };
+    for (const name25 of Object.keys(inflight)) {
+      if (typeof inflight[name25] === "number" && inflight[name25] < BOOT_AT) {
+        delete inflight[name25];
+      }
     }
+    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+  });
+}
+var bootRecovered = false;
+async function recoverOnBoot() {
+  if (bootRecovered) return;
+  bootRecovered = true;
+  await withLock(async () => {
+    await clearStaleInflight();
+    await reconcileScheduledTasks();
   });
 }
 async function reconcileScheduledTasks() {
@@ -67686,16 +67699,10 @@ chrome.runtime.onInstalled.addListener(async () => {
   console.log("Chrome Agent Platform installed");
 });
 chrome.runtime.onStartup?.addListener(() => {
-  clearStaleInflight().catch(
-    (e) => console.error("clearStaleInflight:", e?.message ?? e)
-  );
-  reconcileScheduledTasks().catch(
-    (e) => console.error("reconcileScheduledTasks:", e?.message ?? e)
+  recoverOnBoot().catch(
+    (e) => console.error("recoverOnBoot:", e?.message ?? e)
   );
 });
-clearStaleInflight().catch(
-  (e) => console.error("clearStaleInflight:", e?.message ?? e)
-);
-reconcileScheduledTasks().catch(
-  (e) => console.error("reconcileScheduledTasks:", e?.message ?? e)
+recoverOnBoot().catch(
+  (e) => console.error("recoverOnBoot:", e?.message ?? e)
 );

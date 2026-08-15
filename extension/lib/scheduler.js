@@ -92,18 +92,35 @@ export async function releaseInflight(name) {
   });
 }
 
+const BOOT_AT = Date.now(); // this worker lifetime's boot instant
+
 /**
- * Recover in-flight locks on worker boot. A fresh worker lifetime means NO
- * prior run is still in flight — every entry is stale. Clear them all (not just
- * entries older than a window), so a quick restart never stays blocked.
+ * Recover in-flight locks on worker boot — but ONLY entries acquired before
+ * this worker's boot. A live lock acquired AFTER boot (by a task that started
+ * this lifetime) must never be cleared, or a slow run could be double-fired.
  */
 export async function clearStaleInflight() {
   await withLock(async () => {
     const store = await chrome.storage.local.get(INFLIGHT_KEY);
-    const inflight = store[INFLIGHT_KEY];
-    if (inflight && Object.keys(inflight).length > 0) {
-      await chrome.storage.local.set({ [INFLIGHT_KEY]: {} });
+    const inflight = { ...(store[INFLIGHT_KEY] ?? {}) };
+    for (const name of Object.keys(inflight)) {
+      if (typeof inflight[name] === "number" && inflight[name] < BOOT_AT) {
+        delete inflight[name];
+      }
     }
+    await chrome.storage.local.set({ [INFLIGHT_KEY]: inflight });
+  });
+}
+
+// One serialized, idempotent boot recovery: clear pre-boot locks + reconcile
+// missing alarms. Multiple call sites (module eval + onStartup) are safe.
+let bootRecovered = false;
+export async function recoverOnBoot() {
+  if (bootRecovered) return;
+  bootRecovered = true;
+  await withLock(async () => {
+    await clearStaleInflight();
+    await reconcileScheduledTasks();
   });
 }
 
