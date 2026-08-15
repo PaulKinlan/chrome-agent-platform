@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "c9a01fcbeda2109d43c0d23d558a6bb7d81f050b",
+  "testedSourceCommit": "2ec2603231073ce9e3dc7fba424015faa80c06af",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1786822776025",
+  "runId": "cap-1786829901374",
   "retain": true,
-  "ts": "2026-08-15T19:40:08.186Z",
+  "ts": "2026-08-15T21:39:01.698Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 84,
+  "passed": 94,
   "failed": 0,
   "checks": [
     {
@@ -27,7 +27,11 @@
       "pass": true
     },
     {
-      "name": "manifest: debugger is optional (not permanent)",
+      "name": "manifest: permissions list is empty (all optional)",
+      "pass": true
+    },
+    {
+      "name": "manifest: debugger absent everywhere",
       "pass": true
     },
     {
@@ -64,6 +68,42 @@
     },
     {
       "name": "NTP: the typed task reached the agent journal",
+      "pass": true
+    },
+    {
+      "name": "Settings: Permissions panel present",
+      "pass": true
+    },
+    {
+      "name": "permissions: all seven capabilities start ungranted",
+      "pass": true
+    },
+    {
+      "name": "permissions: enabled storage (granted)",
+      "pass": true
+    },
+    {
+      "name": "permissions: enabled alarms (granted)",
+      "pass": true
+    },
+    {
+      "name": "permissions: enabled activeTab (granted)",
+      "pass": true
+    },
+    {
+      "name": "permissions: enabled scripting (granted)",
+      "pass": true
+    },
+    {
+      "name": "permissions: enabled sidePanel (granted)",
+      "pass": true
+    },
+    {
+      "name": "permissions: tabs denied in headless (fail closed)",
+      "pass": true
+    },
+    {
+      "name": "permissions: notifications denied in headless (fail closed)",
       "pass": true
     },
     {
@@ -127,7 +167,7 @@
       "pass": true
     },
     {
-      "name": "real red tab resolved via chrome.tabs.query",
+      "name": "real red tab resolved (active tab id)",
       "pass": true
     },
     {
@@ -135,7 +175,7 @@
       "pass": true
     },
     {
-      "name": "screenshot: capture fails closed without the debugger permission",
+      "name": "screenshot: capture denied in headless (fail closed)",
       "pass": true
     },
     {
@@ -167,7 +207,7 @@
       "pass": true
     },
     {
-      "name": "screenshot: UI-granted capture fails closed (debugger absent)",
+      "name": "screenshot: UI-granted capture denied in headless (fail closed)",
       "pass": true
     },
     {
@@ -350,13 +390,13 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "cac6fb455bfc411e5c3eb83c157baa6892714f417e94690316eadcc6db3f02a3",
-      "bytes": 83361
+      "sha256": "d3098fb8e13461f10895be39fa3ff9a660a1c6ec52e995b8cc72971334c3ecdc",
+      "bytes": 81155
     },
     {
       "name": "options-driven.png",
-      "sha256": "c2f8a651b1780fd7fe3775821c3934d2bfd1f5b5b330bc7a81b397dc82ea0da4",
-      "bytes": 180842
+      "sha256": "2eff74faddef0600be34a972654caa40118e122f2ec5e9d26bbb593fe071c94b",
+      "bytes": 220276
     }
   ]
 }
