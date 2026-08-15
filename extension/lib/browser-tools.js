@@ -234,7 +234,12 @@ export async function captureTabScreenshot(tabId) {
         }
       })()
       : undefined;
-    if (!origin) return { error: "no origin" };
+    if (!origin) {
+      return {
+        error:
+          "cannot read the active tab's URL — capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)",
+      };
+    }
     // Read the grant ONCE and validate id + scope + expiry + origin together (an
     // atomic snapshot, not separate reads). The returned id is the fence for the
     // whole capture.

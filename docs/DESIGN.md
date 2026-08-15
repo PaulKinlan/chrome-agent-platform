@@ -104,15 +104,20 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
 - Inferred tools are advisory only until the user approves an origin's tools.
 - OPFS memory is per-origin scoped; master memory is extension-scoped.
 - Alarms run in the background; the agent's capabilities are the user's session's.
-- **Screenshot capture (threat model, honest):** pixel capture of a tab uses
+- **Screenshot capture (threat model, honest):** pixel capture uses
   `chrome.tabs.captureVisibleTab` (the standard extension API — the same one the
   chaos extension uses, NOT the Chrome `debugger` API, which cannot be optional
-  and carries Chrome's all-sites warning). The target tab is activated first, then
-  its window is captured; the capture is gated by (a) the OPTIONAL `tabs`
-  capability (owner-granted in Settings) and (b) the scoped, expiring
-  browser-control grant for that tab's origin. The origin + grant id are
-  re-validated before AND after the capture (atomic snapshot) so a navigation or
-  revoke→regrant during capture discards the bytes (fail closed).
+  and carries Chrome's all-sites warning). It captures the **active tab**; the
+  agent activates a tab first, then captures the now-active tab. The capture is
+  gated by (a) the OPTIONAL `activeTab` (Screenshots) capability and (b) the
+  scoped, expiring browser-control grant for that tab's origin. The origin +
+  grant id are re-validated before AND after the capture (atomic snapshot) so a
+  navigation or revoke→regrant during capture discards the bytes (fail closed).
+  `activeTab` is transient and tied to the tab active at the granting gesture,
+  so **capture success is a headed-browser path**: the user invokes the
+  extension on the page they are viewing and the agent captures that page. In a
+  headless browser there is no grantable permission that authorizes an arbitrary
+  tab, so capture fails closed (asserted as such in the Chrome suite).
 
 - **Permissions (all optional):** the manifest declares an EMPTY `permissions`
   array. `alarms`, `storage`, `sidePanel`, `tabs`, `scripting`, and `notifications`

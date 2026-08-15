@@ -67201,7 +67201,11 @@ async function captureTabScreenshot(tabId) {
         return void 0;
       }
     })() : void 0;
-    if (!origin) return { error: "no origin" };
+    if (!origin) {
+      return {
+        error: "cannot read the active tab's URL \u2014 capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)"
+      };
+    }
     const grantIdBefore = validateGrantFor(
       (await kvGet(GRANT_KEY))[GRANT_KEY],
       origin
