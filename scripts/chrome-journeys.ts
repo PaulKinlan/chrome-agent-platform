@@ -711,7 +711,7 @@ async function main() {
       (await boxOf(cdp, optsSession, "#permission-list")) !== null,
     );
     const capState0 = await evalOpts(
-      `[...document.querySelectorAll('.perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
+      `[...document.querySelectorAll('#permission-list .perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
     );
     check(
       "permissions: all seven capabilities start ungranted",
