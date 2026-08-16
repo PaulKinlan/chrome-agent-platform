@@ -263,6 +263,36 @@ async function main() {
     check("system response renders code + inline code + list", conv.systemCodeBlock === 1 && conv.systemInlineCode === true && conv.systemList === true, conv);
     check("tool call renders a structured card", conv.toolName != null && conv.toolStatus === "done" && conv.toolHasResult === true, conv);
     check("thinking renders as a collapsible trace", conv.thinkingCollapsible === true, conv);
+
+    // HTML output renders in a SANDBOXED iframe; non-HTML stays markdown (no
+    // iframe). The wider-goal item: a tool/agent that returns HTML should show
+    // it as live HTML, not escaped text (the co-do double-iframe pattern).
+    const htmlFrame = await evl(s.sessionId, `(()=>{
+      const mk=(role,content)=>{const b=document.createElement('message-bubble'); b.setAttribute('role',role); b.setAttribute('content',content); document.body.appendChild(b); return b;};
+      const doc=mk('agent','<!doctype html><html><body><h1>Hi</h1><p>rendered</p></body></html>');
+      const frag=mk('agent','<div><section><h2>Fragment</h2></section></div>');
+      const md=mk('agent','Just **markdown** text with a [link](https://example.com).');
+      return new Promise(r=>setTimeout(()=>{
+        const f=(b)=>b.shadowRoot.querySelector('iframe');
+        const df=f(doc), ff=f(frag), mf=f(md);
+        r({
+          docIframe: !!df, docSandbox: df?.getAttribute('sandbox')||'',
+          fragmentIframe: !!ff,
+          markdownIframe: !!mf,
+        });
+      }, 250));
+    })()`);
+    check("full HTML doc renders in a sandboxed iframe", htmlFrame.docIframe === true && htmlFrame.docSandbox.includes("allow-scripts"), htmlFrame);
+    check("block-level HTML fragment renders in an iframe", htmlFrame.fragmentIframe === true, htmlFrame);
+    check("markdown does NOT render an iframe", htmlFrame.markdownIframe === false, htmlFrame);
+
+    // error-console copy-all button (per-line copy is only present with entries;
+    // the showcase degrades to the empty state, but the header control must exist).
+    const consoleCopy = await evl(s.sessionId, `(()=>{
+      const c=document.querySelector('error-console');
+      return !!c?.shadowRoot?.querySelector('[data-copy-all]');
+    })()`);
+    check("error-console has a Copy all button", consoleCopy === true, consoleCopy);
   } finally {
     try { ws.close(); } catch { /* ignore */ }
     try { proc.kill("SIGKILL"); } catch { /* ignore */ }

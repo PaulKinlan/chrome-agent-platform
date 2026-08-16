@@ -4,22 +4,39 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VISUALLY ver
 
 ## Done
 
-1. **Settings: duplicate back buttons** — removed the bottom "Back to hub" (`#open-hub` in `.side-foot`); the settings page no longer has a redundant bottom button. Verified: `openHub === false`, `sideFoot === false` via CDP.
-2. **Agents "Multiple agents" toggle mess** — root cause: the options page used a hand-rolled `<label class="switch">` + native `<input type="checkbox">` whose `.switch` class COLLIDED with theme.css's `.switch` (the label got forced to 36×20 + a `::after` knob, producing the "double toggle" + text overlap). Replaced with the shared `<switch-toggle>` Web Component + a `.toggle-field` grid (switch | stacked name+description). Verified: one `.sw` track (no double), click toggles checked, no horizontal overlap.
-3. **Browser control toggle + origins** — same `<switch-toggle>` + the allowed-origins textarea now `width:100%` (stretches the full panel content width). Verified.
-4. **System hooks must match permissions** — the hooks now render with the SAME `.perm-row` class + grid as the Permissions section (one layout), and the hook id is folded into the hint (no extra column). Verified: hooks + permissions share the same `.perm-row` grid; denying a hook does NOT change the row height (75.27px before == after) — no layout shift.
-5. **One shared toggle everywhere** — extracted the canonical `<switch-toggle>` Web Component (track + knob, `role="switch"`, self-managing `checked`) into `shared/components.js`; refactored `<capability-row action="toggle">` to use it; the settings (multi-agent / browser-control / background-agents) all use it. The stale native-checkbox `.switch`/`.track` CSS + the `.hook-row`/`.hook-id` CSS removed.
+1. **Settings: duplicate back buttons** — removed the bottom "Back to hub" (`#open-hub` in `.side-foot`).
+2. **Agents "Multiple agents" toggle mess** — root cause: a hand-rolled `<label class="switch">` collided with theme.css's `.switch`. Replaced with the shared `<switch-toggle>` Web Component + a `.toggle-field` grid.
+3. **Browser control toggle + origins** — same `<switch-toggle>` + the allowed-origins textarea `width:100%`.
+4. **System hooks must match permissions** — hooks render with the SAME `.perm-row` grid as permissions; denying a hook no longer changes row height.
+5. **One shared toggle everywhere** — the canonical `<switch-toggle>` Web Component extracted; all settings use it.
+6. **Task sidebar expand/collapse** — a `.side-toggle` collapses the sidebar to a 60px icon rail (text hidden) + expands back; the `aria-expanded` state is kept.
+7. **Empty task list "+" button** — a `#new-task` "+" button in the sidebar header focuses the composer (fixes "start above" with nothing above).
+8. **View Transitions** — `withViewTransition()` wraps the thread open/close, the in-context view open/close, and the sidebar collapse (a named `overlay-view` transition element); no-op when the API is absent or `prefers-reduced-motion` is on.
+9. **Render HTML output as HTML** — `isHtmlDocument()` detects full documents + block-level fragments; `renderHtmlFrame()` renders them in a SANDBOXED `<iframe sandbox="allow-scripts allow-popups">` (the co-do double-iframe pattern). Non-HTML stays markdown.
+10. **Provider "Test connection" button** (separate commit) — a real minimal round-trip + specific error mapping.
+11. **A unified "Agents" area on the NTP** — one "Agents" panel with two groupings: "Background agents" (from `background-agent.list`, toggle to enable/disable + "every N min") and "Site agents" (enrolled origins); a combined `agent-count`.
+12. **+ menu options work + in-bounds** — removed the duplicate "Add other file" + the stale "media not sent" note; the menu uses `popover="manual"` + CSS anchor positioning (`position-area` + `position-try-fallbacks`) with a `placeFloating()` JS fallback.
+13. **@mention / command popup anchor-positioning** — the composer `.popup` anchors to the composer + flips above/below via `position-try-fallbacks: flip-block` (JS fallback `placeFloating`).
+14. **Error console copy buttons + surface errors** — a per-line Copy button + a header "Copy all"; entries sorted errors-first (newest within level) + a `source` column + errors tinted with the danger color.
 
 ## Open
-- (none outstanding for this batch)
+- 15. **Notification permission gesture error** — a background agent tried to request the notifications permission WITHOUT a user gesture. Permission must be granted at ENABLE time (a gesture), or the notification skipped gracefully.
+- 16. **Agent run log / visibility** — an agents view (all agents — background + site) + a per-agent run log (journaled tool calls/results/errors, viewable).
+- 17. **Delete tasks** — a delete affordance on the task-list sidebar items.
+- 18. **+ button more options** — add tab, add window, grab a screenshot.
+- 19. **+ menu: grab a screen recording** — tabCapture/getDisplayMedia → MediaRecorder → a video artifact.
 
-## Evidence
-- `npm test` — 151 passed.
-- `npm run test:components` — 16/16 (updated the capability-row assertion for the switch-toggle).
-- `npm run test:chrome` — 118/118 (scoped the permissions capability check to `#permission-list`).
-- CDP-driven: single switch track, no toggle/desc overlap, hooks height stable on deny, back button removed, origins full-width.
-14. **Error console: copy buttons not working + errors not surfaced** — each log line needs a WORKING copy button + a "Copy all" at the top (asked before, not landing). AND the console shows warnings but NOT the actual error text (the SW API errors, console.error, AI errors) — capture + surface the real errors prominently (a distinct error level, the full error message + stack).
-15. **Notification permission gesture error** — a background agent tried to request the notifications permission WITHOUT a user gesture (the browser rejected it). Background agents must NOT request permissions at run time; the permission must be granted at ENABLE time (a gesture) or the notification skipped gracefully.
-16. **HARD CONSTRAINT: agent run log / visibility** — Paul cannot see the background agents he created (not in the directory, not in the site-agent panel) AND cannot see the agent run LOG/TRACE (what the agent did — the tool calls, the errors). If an agent runs in the background, the user MUST be able to SEE it + its run log. Build: an agents view (all agents — background + site) + a per-agent run log (the journaled tool calls/results/errors, viewable).
-17. **Delete tasks** — a delete affordance on the task-list (sidebar) items (remove a one-shot/errored task).
-18. **+ button more options** — add tab, add window (target a specific window), grab a screenshot (plus the existing file/audio/camera).
+## Evidence (this batch)
+- `npm test` — 156 passed.
+- `npm run test:components` — 20/20 (added HTML-iframes + copy-all checks).
+- `npm run test:chrome` — 118/118.
+- CDP-driven: collapse button + new-task button present, collapse toggles, `background-agents` + `site-agents` sections render, `@mention` popup opens, `[data-copy-all]` present.
+
+## DeepSeek-v4-pro vision review (HEAD 4819314) — 5 LOW defects (no blockers)
+Verified working: the threads feature end-to-end, the toggles (the blank-toggle bug fixed), the conversation (code blocks, tool cards, thinking), the diagnostics, the palette (clean paper/teal, zero slop). Defects:
+20. Favicon 404s on every extension page (no <link rel="icon">).
+21. renderArtifacts no fallback (a malformed asset renders "undefined · undefined B" — use ?? 'Untitled').
+22. The diagnostics panels (error-console + security-shield) overlap when both open (no close-others logic).
+23. agent-composer + agent-conversation use light-DOM with document-scope CSS (the same mechanism as the blank-toggle bug — use adoptedStyleSheets so they are light-DOM but self-styled).
+24. Docs drift: DESIGN.md lists the wrong theme names; docs/index.html uses the old slop palette.
+(Recommend: fold a keyboard Tab-order sweep + a prefers-reduced-motion check into the smoke test — constitution §2.)
