@@ -113,8 +113,10 @@ async function renderProviders(restoreFocus = false) {
     card.dataset.provider = p.id;
     card.innerHTML = `
       <div class="provider-head">
-        <span class="provider-name">${p.name}</span>
-        <span class="muted">${p.hint}</span>
+        <div class="provider-id">
+          <span class="provider-name">${p.name}</span>
+          <span class="muted">${p.hint}</span>
+        </div>
         <button class="btn small set-default" type="button" aria-label="${
       cfg.provider === p.id ? `Update ${p.name}` : `Use ${p.name}`
     }">${
