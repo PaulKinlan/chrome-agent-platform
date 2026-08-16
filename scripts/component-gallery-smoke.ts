@@ -188,6 +188,29 @@ async function main() {
       return {on1,on2,on3};
     })()`);
     check("mic on→off→on", mic.on1 === true && mic.on2 === false && mic.on3 === true, mic);
+
+    // capability-row toggle renders a visible switch (the blank-toggle bug: the
+    // pill styling lived in document-scope theme.css, unreachable from the Shadow
+    // DOM — now in the component's own scoped style).
+    const sw = await evl(s.sessionId, `(()=>{
+      const row = document.querySelector('capability-row[action="toggle"]');
+      if (!row) return { found: false };
+      const sw = row.shadowRoot.querySelector('.switch');
+      const cs = getComputedStyle(sw);
+      return { found: true, w: cs.width, h: cs.height, pressed: sw.getAttribute('aria-pressed') };
+    })()`);
+    check("capability-row toggle is a visible switch (36×20)", sw.found && sw.w === "36px" && sw.h === "20px", sw);
+
+    // composer / command palette opens (the static namespace registry; the
+    // data-driven sub-items need chrome.runtime, which the showcase lacks).
+    const pal = await evl(s.sessionId, `(()=>{
+      const c = document.querySelector('#composer');
+      const ta = c.querySelector('#task-input');
+      const pop = c.querySelector('#popup');
+      ta.focus(); ta.value = "/"; ta.dispatchEvent(new Event('input', { bubbles: true }));
+      return new Promise(r => setTimeout(() => r({ hidden: pop.hidden, count: pop.querySelectorAll('.item').length }), 100));
+    })()`);
+    check("composer / palette opens", pal.hidden === false && pal.count > 0, pal);
   } finally {
     try { ws.close(); } catch { /* ignore */ }
     try { proc.kill("SIGKILL"); } catch { /* ignore */ }
