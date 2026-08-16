@@ -69281,9 +69281,19 @@ var handlers = {
       );
       const snapAfter = await enrollmentSnapshot(canonical);
       const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
+      const reEnrolled = snapAfter.enrolled && snapAfter.gen !== snapBefore.gen;
       if (registered?.ok !== true || transitionLost) {
         if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
           await disenrollOrigin(canonical);
+        }
+        if (reEnrolled) {
+          invalidateAgent();
+          return {
+            ok: false,
+            origin: canonical,
+            error: "origin re-enrolled during enrollment \u2014 retry",
+            retryable: true
+          };
         }
         const [unregRes, clearRes] = await Promise.allSettled([
           unregisterOriginScripts(canonical),

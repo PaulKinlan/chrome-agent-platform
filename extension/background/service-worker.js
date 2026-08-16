@@ -1040,17 +1040,34 @@ const handlers = {
       // enroll registered.
       const snapAfter = await enrollmentSnapshot(canonical);
       const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
+      // A re-enroll DURING this enroll's transition means the origin is freshly
+      // enrolled under a NEW generation — cleaning up scripts/OPFS would destroy
+      // the new enrollment's authority. Distinguish it from a TOMBSTONE (which
+      // must be cleaned up).
+      const reEnrolled = snapAfter.enrolled && snapAfter.gen !== snapBefore.gen;
       if (registered?.ok !== true || transitionLost) {
-        // TRANSACTIONAL rollback: tombstone the enrollment, then attempt scripts
-        // + host-permission + OPFS cleanup INDEPENDENTLY (allSettled) and record
-        // any incomplete step as RETRYABLE pending-cleanup — never a sequential
-        // rollback that silently skips later cleanup on an earlier failure (the
-        // round-18 finding: failed enrollment rollback was sequential/non-pending).
         if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
           // Registration itself failed while the enrollment is still current —
           // tombstone it so the UI never reports "Enrolled" with scripts absent.
           await disenrollOrigin(canonical);
         }
+        if (reEnrolled) {
+          // Concurrent re-enrollment — do NOT touch the new enrollment's scripts
+          // or OPFS. Report honest failure; the owner retries against the fresh
+          // enrollment.
+          invalidateAgent();
+          return {
+            ok: false,
+            origin: canonical,
+            error: "origin re-enrolled during enrollment — retry",
+            retryable: true,
+          };
+        }
+        // TRANSACTIONAL rollback: tombstone the enrollment, then attempt scripts
+        // + host-permission + OPFS cleanup INDEPENDENTLY (allSettled) and record
+        // any incomplete step as RETRYABLE pending-cleanup — never a sequential
+        // rollback that silently skips later cleanup on an earlier failure (the
+        // round-18 finding: failed enrollment rollback was sequential/non-pending).
         const [unregRes, clearRes] = await Promise.allSettled([
           unregisterOriginScripts(canonical),
           siteMemory(canonical).clear(),
