@@ -40,3 +40,5 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 23. agent-composer + agent-conversation use light-DOM with document-scope CSS (the same mechanism as the blank-toggle bug — use adoptedStyleSheets so they are light-DOM but self-styled).
 24. Docs drift: DESIGN.md lists the wrong theme names; docs/index.html uses the old slop palette.
 (Recommend: fold a keyboard Tab-order sweep + a prefers-reduced-motion check into the smoke test — constitution §2.)
+25. **Agents panel: only ACTIVE background agents** — the NTP agents panel shows ONLY the enabled/running background agents (with a disable option) + a "configure in Settings" link (to add more/the presets). NOT a list of every disabled agent.
+26. **The task sidebar persists inside a task + the collapse chevron position** — when inside a single task, the sidebar stays visible (all tasks listed, the current one clearly selected); the + button takes you back to the NTP to start a new task. AND the collapse chevron should be near the BOTTOM of the sidebar (it's at the top overlapping the heading — messy).

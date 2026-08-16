@@ -63,6 +63,7 @@ import { allSkills, getSkills, setSkills } from "../lib/skills.js";
 import {
   appendThreadMessage,
   createThread,
+  deleteThread,
   generateThreadName,
   getThread,
   historyFromThread,
@@ -1104,6 +1105,10 @@ const handlers = {
       ? { ok: true, thread }
       : { ok: false, error: "thread not found" };
   },
+  async "thread.delete"(m) {
+    const removed = await deleteThread(m?.id);
+    return removed ? { ok: true } : { ok: false, error: "thread not found" };
+  },
   async "thread.name"(m) {
     // Generate a title for a task (the model when available, else truncated).
     const name = await generateThreadName(m.task);
@@ -1997,7 +2002,13 @@ function wireHookListeners() {
     const ns = chrome?.[api];
     if (!ns?.[event]) return;
     ns[event].addListener((...args) => {
-      dispatchHook(hookId, map ? map(args) : args[0] ?? {}).catch(() => {});
+      const mapped = map ? map(args) : (args[0] ?? {});
+      // A map returning `null` means "skip — do not dispatch" (storage.onChanged
+      // returns null when EVERY changed key is internal, so the extension's own
+      // subscription/usage/journal writes never self-trigger the recursive
+      // paid-run loop). Terminate, not throttle: no dispatch happens at all.
+      if (mapped === null) return;
+      dispatchHook(hookId, mapped).catch(() => {});
     });
   };
   bind("tabs", "onCreated", "tabs.onCreated", ([tab]) => tab ?? {});
@@ -2036,7 +2047,12 @@ function wireHookListeners() {
     const keys = Object.keys(changes ?? {}).filter(
       (k) => !INTERNAL_PREFIXES.some((p) => k.startsWith(p)),
     );
-    return { areaName, changedKeys: keys };
+    // When NO changed key survives the internal filter, the storage write was
+    // entirely the extension's own (subscription/usage/journal/...). Return null
+    // so bind() SKIPS the dispatch — dispatching an empty change would still
+    // invoke the subscribed agent on every internal write, the unbounded
+    // recursive paid-run loop the review identified.
+    return keys.length === 0 ? null : { areaName, changedKeys: keys };
   });
   bind("notifications", "onClicked", "notifications.onClicked", ([notificationId]) => ({ notificationId }));
   bind("action", "onClicked", "action.onClicked", ([tab]) => tab ?? {});

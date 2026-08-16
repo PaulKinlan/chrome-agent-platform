@@ -917,7 +917,7 @@ var AttachButton = class extends Component {
         } catch {
         }
       }
-      this.setAttribute("open", TRUE);
+      this._isOpen = true;
       this._menu.querySelector("button[role=menuitem]")?.focus();
     } else {
       if (typeof this._menu.hidePopover === "function") {
@@ -927,7 +927,7 @@ var AttachButton = class extends Component {
         }
       }
       this._menu.hidden = true;
-      this.removeAttribute("open");
+      this._isOpen = false;
     }
   }
   _pickFile(kind) {

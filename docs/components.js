@@ -645,14 +645,18 @@ class AttachButton extends Component {
       if (typeof this._menu.showPopover === "function") {
         try { this._menu.showPopover(); } catch { /* already shown */ }
       }
-      this.setAttribute("open", TRUE);
+      // NOTE: do NOT setAttribute("open") — it triggers the base
+      // attributeChangedCallback re-render, which destroys the just-shown menu
+      // (the popover show is lost). Track the state on an internal property;
+      // the popover + hidden handle the display.
+      this._isOpen = true;
       this._menu.querySelector("button[role=menuitem]")?.focus();
     } else {
       if (typeof this._menu.hidePopover === "function") {
         try { this._menu.hidePopover(); } catch { /* already hidden */ }
       }
       this._menu.hidden = true;
-      this.removeAttribute("open");
+      this._isOpen = false;
     }
   }
   _pickFile(kind) {

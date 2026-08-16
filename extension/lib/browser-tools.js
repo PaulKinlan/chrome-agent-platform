@@ -584,8 +584,12 @@ export async function readPage(tabId) {
 }
 
 /** The browser-control toolset, passed into the agent. */
-export function browserToolset() {
-  return {
+export function browserToolset(readOnly = false) {
+  // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
+  // never drive a browser mutation (open/navigate/close a tab) or a durable
+  // schedule. When readOnly, expose only the READ tools (read_page,
+  // capture_screenshot, list_tabs, recent_browser_events).
+  const all = {
     open_tab: tool({
       description:
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
@@ -887,6 +891,19 @@ export function browserToolset() {
       },
     }),
   };
+  // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
+  // list_tabs / recent_browser_events are the only tools exposed. open_tab /
+  // navigate_tab / close_tab / schedule_task are DURABLE/DESTRUCTIVE and must
+  // never be driven by untrusted event data.
+  if (readOnly) {
+    return {
+      read_page: all.read_page,
+      capture_screenshot: all.capture_screenshot,
+      list_tabs: all.list_tabs,
+      recent_browser_events: all.recent_browser_events,
+    };
+  }
+  return all;
 }
 
 /** Record a browser event into the rolling event log (kept in chrome.storage). */

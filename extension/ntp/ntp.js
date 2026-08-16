@@ -139,8 +139,8 @@ async function renderArtifacts() {
   }
   for (const a of assets.slice(-6).reverse()) {
     const row = document.createElement("capability-row");
-    row.setAttribute("name", a.name);
-    row.setAttribute("description", a.type + " · " + a.size + " B");
+    row.setAttribute("name", a.name ?? "Untitled");
+    row.setAttribute("description", (a.type ?? "unknown") + " · " + (a.size ?? 0) + " B");
     row.setAttribute("icon", "");
     row.setAttribute("action", "run");
     row.addEventListener("run", () => openView("options/options.html", "Settings"));

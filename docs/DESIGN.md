@@ -9,15 +9,15 @@ measured, exact. Restrained palette, hairline borders, one confident accent,
 workhorse sans, deliberate grid. Earned familiarity over novelty.
 
 ## Palette
-- **Light (default "Paper")**: warm-neutral paper `#f7f6f3`, panels `#ffffff`,
+- **Light (default "Sunlit")**: warm-neutral paper `#f7f6f3`, panels `#ffffff`,
   secondary layer `#efede8`, hairline border `#e3e0d9`, ink `#1d1b18`, muted
   `#6e6a62`.
 - **Accent (petrol teal)**: `#0e6e63` (light) / `#3ec3b0` (dark). Used for primary
   actions, current selection, and state indicators only — never decoration.
 - **Secondary (amber)**: `#b45309`. Positive/attention indicators.
 - **Semantic**: danger `#b3261e`, success `#1a7f37`, warning `#9a6700`.
-- **Themes**: Paper (default light), Charcoal (dark), Violet, Terminal. All
-  restyle the same tokens.
+- **Themes**: Sunlit (default light), Midnight (dark), Neon, Terminal. All
+  restyle the same tokens (matching `extension/shared/theme.css`).
 
 ## Typography
 - Workhorse system sans (SF/Segoe/Roboto), antialiased, `cv02/cv03/cv04/cv11`.

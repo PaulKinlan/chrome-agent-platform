@@ -17,7 +17,7 @@ const DEFAULT_SYSTEM =
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
-function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
+function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
   if (!memory) return {};
   // Reads must be ENROLLMENT-scoped too (the round-24/25 finding: memory_get/
   // memory_list were completely unfenced, so a stale deleted worker could read a

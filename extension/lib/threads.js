@@ -250,3 +250,26 @@ export function historyFromThread(thread) {
   }
   return out;
 }
+
+/**
+ * Delete a thread (the owner-facing task-list delete). Removes the index row AND
+ * the thread body atomically under the thread lock (never an index-row-only
+ * truncation that orphans the `thread:<id>` body). Returns true if it existed.
+ */
+export async function deleteThread(id) {
+  if (!id) return false;
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const next = index.filter((r) => r.id !== id);
+    if (thread === null && next.length === index.length) return false;
+    if (thread !== null) {
+      try { await mem.delete(`thread:${id}`); } catch { /* absent */ }
+    }
+    if (next.length !== index.length) {
+      await mem.setTrusted(INDEX_KEY, next.slice(0, MAX_THREADS));
+    }
+    return true;
+  });
+}
