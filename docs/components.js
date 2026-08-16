@@ -81,8 +81,33 @@ class Component extends HTMLElement {
     this._render();
     this._wire();
   }
-  attributeChangedCallback() {
-    if (this._rendered) this._render();
+  attributeChangedCallback(name, oldValue, newValue) {
+    // An attribute change re-renders the shadow DOM, so we must re-wire the
+    // fresh elements too (otherwise the old listeners are lost and stateful
+    // components like attach-button / mic-button / the dialog stop responding
+    // after their first state change).
+    if (this._rendered && oldValue !== newValue) {
+      this._render();
+      this._wire();
+    }
+  }
+  // Bind a document-level listener exactly once (survives re-render).
+  _bindDocument(type, handler) {
+    if (!this._docListeners) this._docListeners = [];
+    if (this._docListeners.some((l) => l.type === type)) return;
+    const wrapped = (e) => handler.call(this, e);
+    this._docListeners.push({ type, wrapped });
+    document.addEventListener(type, wrapped);
+  }
+  disconnectedCallback() {
+    // Remove any once-only document listeners so re-adding the element to the
+    // DOM doesn't leak listeners, and allow a clean re-render on reconnect.
+    if (this._docListeners) {
+      this._docListeners.forEach(({ type, wrapped }) =>
+        document.removeEventListener(type, wrapped));
+      this._docListeners = [];
+    }
+    this._rendered = false;
   }
   // subclasses override _render/_wire
   _render() {}
@@ -291,7 +316,7 @@ class AttachButton extends Component {
       const file = await this._pickFile(kind);
       if (file) this._emit("attach", { name: file.name, size: file.size, type: file.type, kind, file });
     });
-    document.addEventListener("click", (e) => {
+    this._bindDocument("click", (e) => {
       if (this._menu && !this._menu.hidden && !this._menu.contains(e.target) && e.target !== this._btn) {
         this._toggle(false);
       }
@@ -570,41 +595,51 @@ class AgentComposer extends Component {
 }
 customElements.define("agent-composer", AgentComposer);
 
-/* <agent-dialog open title> — consistent modal dialog (slotted content) */
+/* <agent-dialog title> — consistent modal dialog (slotted content), built on the
+ * native <dialog> element so close (X), light-dismiss (backdrop click), Escape,
+ * focus trap, and focus-return are native behaviors. */
 class AgentDialog extends Component {
-  static get observedAttributes() { return ["open", "title"]; }
+  static get observedAttributes() { return ["title"]; }
+  constructor() { super(); this._open = false; }
   _render() {
-    const open = this.hasAttribute("open");
     const title = this.getAttribute("title") || "";
     mountTemplate(this, `
       :host { display:contents; }
-      .backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:100; }
-      .backdrop[hidden] { display:none; }
-      .dialog { background:var(--panel,#1e1e2e); border:1px solid var(--border,#333); border-radius:14px; padding:20px; min-width:320px; max-width:90vw; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.4); }
+      .dialog { background:var(--panel,#1e1e2e); border:1px solid var(--border,#333); border-radius:14px; padding:20px; min-width:320px; max-width:90vw; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.4); color:var(--text,#eee); }
+      .dialog::backdrop { background:rgba(0,0,0,.5); }
       .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
       .title { font-weight:700; font-size:16px; }
       .x { background:transparent; border:0; color:var(--text,#eee); cursor:pointer; padding:4px; }
       .x:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
       .body { color:var(--text,#eee); }
-    `, `<div class="backdrop"${open ? "" : " hidden"} role="presentation">
-      <div class="dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+    `, `<dialog part="dialog" class="dialog" aria-label="${escapeHtml(title)}">
         <div class="head"><span class="title">${escapeHtml(title)}</span>
           <button type="button" class="x" aria-label="Close">${ICONS.close}</button></div>
         <div class="body"><slot></slot></div>
-      </div></div>`);
-    this._backdrop = this._root.querySelector(".backdrop");
+      </dialog>`);
+    this._dialog = this._root.querySelector(".dialog");
   }
   _wire() {
     this._root.querySelector(".x")?.addEventListener("click", () => this.close());
-    this._backdrop?.addEventListener("click", (e) => {
-      if (e.target === this._backdrop) this.close();
+    // Light dismiss: with showModal(), a click outside the content lands on the
+    // <dialog> element itself (the backdrop).
+    this._dialog?.addEventListener("click", (e) => {
+      if (e.target === this._dialog) this.close();
     });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this.hasAttribute("open")) this.close();
+    // Native close (Escape, the X button, or dialog.close()) → emit our event.
+    this._dialog?.addEventListener("close", () => {
+      if (this._open) { this._open = false; this._emit("close"); }
     });
   }
-  open() { this.setAttribute("open", TRUE); }
-  close() { this.removeAttribute("open"); this._emit("close"); }
+  get open() { return this._dialog?.open ?? false; }
+  show() {
+    if (!this._dialog || this._dialog.open) return;
+    this._open = true;
+    this._dialog.showModal();
+    this._emit("open");
+  }
+  open() { this.show(); }
+  close() { this._dialog?.close(); }
 }
 customElements.define("agent-dialog", AgentDialog);
 
