@@ -28,6 +28,9 @@ export const ICONS = {
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="14" height="14" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1099,6 +1102,213 @@ class AgentNav extends Component {
   }
 }
 customElements.define("agent-nav", AgentNav);
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Transparency surfaces: <error-console> + <security-shield>
+ * ────────────────────────────────────────────────────────────────────────── */
+
+// Fetch from the extension backend when present; degrade to empty in the docs
+// showcase (no extension). Mirrors RUNTIME_SEND above.
+function backend(type, payload = {}) {
+  return RUNTIME_SEND ? RUNTIME_SEND(type, payload) : Promise.resolve({});
+}
+
+function fmtTime(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString([], { hour12: false });
+  } catch {
+    return "";
+  }
+}
+
+// A shared floating-panel base: a trigger button (icon + badge) that toggles a
+// fixed-position panel. Subclasses set this.triggerIcon / this.triggerLabel +
+// override _panelMarkup() + _refreshPanel().
+class PanelButton extends Component {
+  static get observedAttributes() { return ["count", "label", "attention"]; }
+  constructor() {
+    super();
+    this._open = false;
+  }
+  attributeChangedCallback(name, oldV, newV) {
+    if (this._rendered && oldV !== newV) {
+      this._render();
+      this._wire();
+      if (this._open) this._refreshPanel();
+    }
+  }
+  _render() {
+    const count = Number(this.getAttribute("count") || 0);
+    const label = this.getAttribute("label") || "";
+    const attention = this.hasAttribute("attention");
+    const badge = count > 0
+      ? `<span class="badge" aria-hidden="true">${count > 99 ? "99+" : count}</span>`
+      : "";
+    mountTemplate(this, `
+      :host { display:inline-flex; position:relative; }
+      .trigger { position:relative; display:inline-flex; align-items:center; justify-content:center;
+        width:36px; height:36px; border:1px solid var(--border,#e3e0d9); border-radius:8px;
+        background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:0; }
+      .trigger:hover { color:var(--text,#1d1b18); border-color:var(--accent,#0e6e63); }
+      .trigger[data-attention="true"] { color:${attention ? "var(--warning,#9a6700)" : "var(--muted,#635e56)"}; border-color:${attention ? "var(--warning,#9a6700)" : "var(--border,#e3e0d9)"}; }
+      .trigger:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .badge { position:absolute; top:-6px; right:-6px; min-width:17px; height:17px; padding:0 4px;
+        border-radius:999px; background:var(--danger,#b3261e); color:#fff; font-size:10px; font-weight:700;
+        display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+      .panel { position:fixed; z-index:200; width:min(560px, calc(100vw - 24px));
+        background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px;
+        box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08)); overflow:hidden; }
+      .panel[hidden] { display:none; }
+      .phead { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
+      .phead .t { font-weight:600; font-size:13px; margin:0; flex:1; }
+      .phead button { display:inline-flex; align-items:center; gap:4px; background:transparent; border:0;
+        color:var(--muted,#635e56); cursor:pointer; font-size:12px; padding:4px 6px; border-radius:6px; }
+      .phead button:hover { background:var(--panel-2,#efede8); color:var(--text,#1d1b18); }
+      .pbody { max-height:340px; overflow:auto; }
+      .console { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; padding:4px 0; }
+      .console .empty, .shield-body .empty { padding:16px 14px; color:var(--muted,#635e56); font-size:12px; }
+      .console .line { display:flex; gap:8px; padding:3px 14px; align-items:baseline; border-left:2px solid transparent; }
+      .console .line:hover { background:var(--panel-2,#efede8); }
+      .console .ts { flex:0 0 auto; color:var(--muted,#635e56); }
+      .console .lv { flex:0 0 auto; width:44px; text-transform:uppercase; font-size:10px; font-weight:700; letter-spacing:.04em; }
+      .console .lvl-error { border-left-color:var(--danger,#b3261e); } .console .lvl-error .lv { color:var(--danger,#b3261e); }
+      .console .lvl-warn { border-left-color:var(--warning,#9a6700); } .console .lvl-warn .lv { color:var(--warning,#9a6700); }
+      .console .msg { flex:1; word-break:break-word; white-space:pre-wrap; }
+      .shield-body .sect { padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
+      .shield-body .sect:last-child { border-bottom:0; }
+      .shield-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:8px; }
+      .shield-body .chips { display:flex; flex-wrap:wrap; gap:6px; }
+      .shield-body .chip { font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--border,#e3e0d9); }
+      .shield-body .chip.ok { background:var(--on-accent-muted,#d7f0ea); border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .shield-body .chip.muted { color:var(--muted,#635e56); }
+      .shield-body .viol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+      .shield-body .viol li { display:flex; gap:8px; align-items:baseline; font-size:12px; }
+      .shield-body .vkind { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--warning,#9a6700); }
+      .shield-body .vmsg { flex:1; word-break:break-word; }
+      .shield-body .vts { flex:0 0 auto; color:var(--muted,#635e56); }
+      @media (prefers-reduced-motion: reduce) { .panel { transition:none; } }
+    `, `
+      <button class="trigger" type="button" aria-label="${escapeHtml(label)}" data-attention="${attention}" aria-expanded="${this._open}">${this.triggerIcon}${badge}</button>
+      <div class="panel" role="dialog" aria-label="${escapeHtml(label)}" hidden>${this._panelMarkup()}</div>
+    `);
+  }
+  _wire() {
+    this._trigger = this._root.querySelector(".trigger");
+    this._panel = this._root.querySelector(".panel");
+    this._trigger?.addEventListener("click", () => this._toggle());
+    this._panel?.querySelector("[data-close]")?.addEventListener("click", () => this._close());
+    this._panel?.querySelector("[data-clear]")?.addEventListener("click", () => this._clear());
+    // Close on Escape + outside click (light-dismiss, like a native dialog).
+    this._bindDocument("keydown", (e) => { if (e.key === "Escape") this._close(); });
+    this._bindDocument("pointerdown", (e) => {
+      if (this._open && !this.contains(e.composedPath()[0])) this._close();
+    });
+  }
+  _toggle() { this._open ? this._close() : this._openPanel(); }
+  async _openPanel() {
+    this._open = true;
+    this._panel.hidden = false;
+    this._position();
+    this._trigger?.setAttribute("aria-expanded", "true");
+    await this._refreshPanel();
+  }
+  _close() {
+    this._open = false;
+    this._panel.hidden = true;
+    this._trigger?.setAttribute("aria-expanded", "false");
+  }
+  _position() {
+    const r = this._trigger?.getBoundingClientRect?.();
+    if (!r) return;
+    const panel = this._panel;
+    panel.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 360)}px`;
+    // Right-align the panel to the trigger; clamp into the viewport.
+    const w = panel.offsetWidth || 560;
+    panel.style.left = `${Math.max(12, Math.min(r.right - w, window.innerWidth - w - 12))}px`;
+  }
+  // Subclasses:
+  get triggerIcon() { return ""; }
+  _panelMarkup() { return ""; }
+  async _refreshPanel() {}
+  async _clear() {}
+}
+class ErrorConsole extends PanelButton {
+  get triggerIcon() { return ICONS.terminal; }
+  _panelMarkup() {
+    return `
+      <div class="phead">
+        <span class="t">Console</span>
+        <button type="button" data-clear>Clear</button>
+        <button type="button" data-close aria-label="Close">${ICONS.close}</button>
+      </div>
+      <div class="pbody console" role="log" aria-live="polite"></div>`;
+  }
+  async _refreshPanel() {
+    const body = this._panel.querySelector(".console");
+    if (!body) return;
+    const res = await backend("diagnostics.list");
+    const entries = res.entries || [];
+    if (!entries.length) {
+      body.innerHTML = `<div class="empty">No errors captured. The console shows extension errors, warnings, and unhandled rejections as they happen.</div>`;
+      return;
+    }
+    body.innerHTML = entries.map((e) =>
+      `<div class="line lvl-${escapeHtml(e.level)}">` +
+      `<span class="ts">${escapeHtml(fmtTime(e.ts))}</span>` +
+      `<span class="lv">${escapeHtml(e.level)}</span>` +
+      `<span class="msg">${escapeHtml(e.message)}</span></div>`
+    ).join("");
+    body.scrollTop = 0;
+  }
+  async _clear() {
+    await backend("diagnostics.clear");
+    this.setAttribute("count", "0");
+    await this._refreshPanel();
+    this._emit("cleared");
+  }
+}
+customElements.define("error-console", ErrorConsole);
+
+/* <security-shield count label> — the transparency surface: CSP/security
+ * violations + the granted optional permissions (the user SEES the authority). */
+class SecurityShield extends PanelButton {
+  get triggerIcon() { return ICONS.shield; }
+  _panelMarkup() {
+    return `
+      <div class="phead">
+        <span class="t">Security</span>
+        <button type="button" data-clear>Clear</button>
+        <button type="button" data-close aria-label="Close">${ICONS.close}</button>
+      </div>
+      <div class="pbody shield-body"></div>`;
+  }
+  async _refreshPanel() {
+    const body = this._panel.querySelector(".shield-body");
+    if (!body) return;
+    const res = await backend("security.state");
+    const granted = res.granted || [];
+    const violations = res.violations || [];
+    const permRows = granted.length
+      ? granted.map((p) => `<span class="chip ok" title="granted">${escapeHtml(p)}</span>`).join("")
+      : `<span class="chip muted">none — running with zero permissions</span>`;
+    const viol = violations.length
+      ? `<ul class="viol">${violations.map((v) =>
+        `<li><span class="vkind">${escapeHtml(v.kind)}</span><span class="vmsg">${escapeHtml(v.message)}</span><span class="vts">${escapeHtml(fmtTime(v.ts))}</span></li>`
+      ).join("")}</ul>`
+      : `<div class="empty">No security violations. Content-Security-Policy violations, denied hooks, blocked actions, and cross-origin attempts would appear here.</div>`;
+    body.innerHTML = `
+      <div class="sect"><div class="sect-h">Granted permissions</div><div class="chips">${permRows}</div></div>
+      <div class="sect"><div class="sect-h">Security events</div>${viol}</div>`;
+  }
+  async _clear() {
+    await backend("security.clear");
+    this.setAttribute("count", "0");
+    this.removeAttribute("attention");
+    await this._refreshPanel();
+    this._emit("cleared");
+  }
+}
+customElements.define("security-shield", SecurityShield);
 
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs

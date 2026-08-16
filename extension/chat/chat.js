@@ -11,6 +11,11 @@ import {
   historyFromJournal,
   appendBubble,
 } from "../shared/conversation.js";
+import {
+  installPageDiagnostics,
+  refreshDiagnostics,
+  startDiagnosticPolling,
+} from "../shared/diagnostics-client.js";
 
 const body = document.getElementById("body");
 const shotsEl = document.getElementById("shots");
@@ -86,3 +91,9 @@ document.getElementById("open-side-panel").addEventListener("click", async () =>
     );
   }
 })();
+
+// Transparency surface: capture the page's own errors/CSP violations + keep the
+// shield/console badges live.
+installPageDiagnostics();
+refreshDiagnostics().catch(() => {});
+startDiagnosticPolling();

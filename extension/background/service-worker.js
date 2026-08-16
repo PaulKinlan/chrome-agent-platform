@@ -37,6 +37,15 @@ import {
 import { createAgent, createOrchestrator } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
+  diagnosticClear,
+  diagnosticList,
+  installDiagnosticCapture,
+  push as pushDiagnostic,
+  securityClear,
+  securityEvent,
+  securityState,
+} from "../lib/diagnostics.js";
+import {
   approveTool,
   disenrollOrigin,
   disenrollOriginLocked,
@@ -1697,6 +1706,46 @@ const handlers = {
     // captures. A post-revoke or wrong-origin capture is denied here.
     return await captureTabScreenshot(tabId);
   },
+
+  // ---- diagnostics + security transparency (the error console + shield) ----
+  async "diagnostics.list"() {
+    return diagnosticList();
+  },
+  async "diagnostics.clear"() {
+    return diagnosticClear();
+  },
+  // A page forwards its OWN realm's CSP violations + uncaught errors here (the
+  // extension pages listen for `securitypolicyviolation` / `error` and report
+  // them so the ONE console shows the whole extension, not just the SW).
+  async "diagnostics.report"({ entries = [] }) {
+    if (!Array.isArray(entries)) return { ok: false, error: "entries must be an array" };
+    for (const e of entries.slice(0, 50)) {
+      if (e?.kind === "csp") securityEvent("csp", e.message || "CSP violation");
+      else if (e?.kind === "security") securityEvent("blocked-action", e.message || "blocked");
+      else pushDiagnostic(e?.level || "error", e?.message || "error", e?.source || "page", e?.kind || "runtime");
+    }
+    return { ok: true, recorded: entries.length };
+  },
+  async "security.state"() {
+    // The transparency surface: the security posture = the CSP/security
+    // violations + which optional permissions are granted (so the user SEES the
+    // authority the extension holds, not a hidden grant).
+    const perms = await capabilityStatus();
+    const granted = Object.entries(perms)
+      .filter(([, v]) => v === true)
+      .map(([k]) => k);
+    const sec = securityState();
+    return {
+      granted,
+      allPermissions: perms,
+      violations: sec.violations,
+      count: sec.count,
+      posture: sec.count > 0 ? "attention" : "ok",
+    };
+  },
+  async "security.clear"() {
+    return securityClear();
+  },
 };
 
 // A page's content script may ONLY route tool-report operations. Everything else
@@ -1725,6 +1774,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     if (!PAGE_ALLOWED_ROUTES.has(message.type)) {
+      securityEvent("blocked-action", `page route denied: ${message.type}`);
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }
@@ -1732,6 +1782,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // message-supplied origin (a page must not be able to act on another origin).
     message.origin = auth.origin;
   } else if (auth.kind === "unmatched") {
+    securityEvent("cross-origin", `sender refused: ${auth.error}`);
     sendResponse({ ok: false, error: auth.error });
     return true;
   }
@@ -1789,6 +1840,7 @@ async function dispatchHook(hookId, payload) {
     const allowed = await checkHookAllowed(hookId);
     if (!allowed.ok) {
       console.warn(`hook ${hookId} refused at dispatch: ${allowed.error}`);
+      securityEvent("denied-hook", `hook ${hookId} refused: ${allowed.error}`);
       continue;
     }
     const recipe = sub.recipeId ? getRecipe(sub.recipeId) : null;
@@ -1853,6 +1905,11 @@ function wireHookListeners() {
   bind("runtime", "onSuspend", "runtime.onSuspend", () => ({}));
 }
 wireHookListeners();
+
+// Capture errors + rejections into the diagnostics ring buffer so the
+// <error-console> + <security-shield> can surface them (the transparency
+// surface). Idempotent; installed once at module eval.
+installDiagnosticCapture();
 
 // On install, seed the master memory + notify.
 chrome.runtime.onInstalled.addListener(async () => {

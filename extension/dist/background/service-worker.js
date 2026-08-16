@@ -3315,20 +3315,20 @@ var require_utils = __commonJS({
       return acc;
     }
     var nonSimpleDomain = RegExp.prototype.test.bind(/[^!"$&'()*+,\-.;=_`a-z{}~]/u);
-    function consumeIsZone(buffer) {
-      buffer.length = 0;
+    function consumeIsZone(buffer2) {
+      buffer2.length = 0;
       return true;
     }
-    function consumeHextets(buffer, address, output) {
-      if (buffer.length) {
-        const hex3 = stringArrayToHexStripped(buffer);
+    function consumeHextets(buffer2, address, output) {
+      if (buffer2.length) {
+        const hex3 = stringArrayToHexStripped(buffer2);
         if (hex3 !== "") {
           address.push(hex3);
         } else {
           output.error = true;
           return false;
         }
-        buffer.length = 0;
+        buffer2.length = 0;
       }
       return true;
     }
@@ -3336,7 +3336,7 @@ var require_utils = __commonJS({
       let tokenCount = 0;
       const output = { error: false, address: "", zone: "" };
       const address = [];
-      const buffer = [];
+      const buffer2 = [];
       let endipv6Encountered = false;
       let endIpv6 = false;
       let consume = consumeHextets;
@@ -3349,7 +3349,7 @@ var require_utils = __commonJS({
           if (endipv6Encountered === true) {
             endIpv6 = true;
           }
-          if (!consume(buffer, address, output)) {
+          if (!consume(buffer2, address, output)) {
             break;
           }
           if (++tokenCount > 7) {
@@ -3362,22 +3362,22 @@ var require_utils = __commonJS({
           address.push(":");
           continue;
         } else if (cursor === "%") {
-          if (!consume(buffer, address, output)) {
+          if (!consume(buffer2, address, output)) {
             break;
           }
           consume = consumeIsZone;
         } else {
-          buffer.push(cursor);
+          buffer2.push(cursor);
           continue;
         }
       }
-      if (buffer.length) {
+      if (buffer2.length) {
         if (consume === consumeIsZone) {
-          output.zone = buffer.join("");
+          output.zone = buffer2.join("");
         } else if (endIpv6) {
-          address.push(buffer.join(""));
+          address.push(buffer2.join(""));
         } else {
-          address.push(stringArrayToHexStripped(buffer));
+          address.push(stringArrayToHexStripped(buffer2));
         }
       }
       output.address = address.join("");
@@ -7626,15 +7626,15 @@ var require_readShebang = __commonJS({
     var shebangCommand = require_shebang_command();
     function readShebang(command) {
       const size = 150;
-      const buffer = Buffer.alloc(size);
+      const buffer2 = Buffer.alloc(size);
       let fd;
       try {
         fd = fs.openSync(command, "r");
-        fs.readSync(fd, buffer, 0, size, 0);
+        fs.readSync(fd, buffer2, 0, size, 0);
         fs.closeSync(fd);
       } catch (e) {
       }
-      return shebangCommand(buffer.toString());
+      return shebangCommand(buffer2.toString());
     }
     module2.exports = readShebang;
   }
@@ -25237,6 +25237,10 @@ function createPromptApiModel() {
     return session2;
   };
   return {
+    // v2 is the known-good LanguageModel spec this adapter implements; the AI
+    // SDK logs a benign "v2 compatibility mode" warning and runs it via its
+    // v2→current compat layer (the Prompt API exposes none of the v3/v4
+    // features that would justify the larger migration).
     specificationVersion: "v2",
     provider: "chrome-prompt-api",
     modelId: "gemini-nano",
@@ -28826,9 +28830,9 @@ function createGateway(options = {}) {
   };
   const getAvailableModels = async () => {
     var _a123, _b122, _c;
-    const now2 = (_c = (_b122 = (_a123 = options._internal) == null ? void 0 : _a123.currentDate) == null ? void 0 : _b122.call(_a123).getTime()) != null ? _c : Date.now();
-    if (!pendingMetadata || now2 - lastFetchTime > cacheRefreshMillis) {
-      lastFetchTime = now2;
+    const now3 = (_c = (_b122 = (_a123 = options._internal) == null ? void 0 : _a123.currentDate) == null ? void 0 : _b122.call(_a123).getTime()) != null ? _c : Date.now();
+    if (!pendingMetadata || now3 - lastFetchTime > cacheRefreshMillis) {
+      lastFetchTime = now3;
       pendingMetadata = new GatewayFetchMetadata({
         baseURL,
         headers: getHeaders,
@@ -35497,7 +35501,7 @@ async function streamLanguageModelCall({
   _internal: {
     generateId: generateId3 = originalGenerateId2,
     generateCallId = originalGenerateCallId2,
-    now: now2 = now
+    now: now22 = now
   } = {},
   onStart,
   onLanguageModelCallStart,
@@ -35551,7 +35555,7 @@ async function streamLanguageModelCall({
     event: languageModelCallStartEvent,
     callbacks: onLanguageModelCallStart
   });
-  const callStartTimestampMs = now2();
+  const callStartTimestampMs = now22();
   const {
     stream: languageModelStream,
     response,
@@ -35581,7 +35585,7 @@ async function streamLanguageModelCall({
       provider: resolvedModel.provider,
       modelId: resolvedModel.modelId,
       generateId: generateId3,
-      now: now2,
+      now: now22,
       callStartTimestampMs,
       onLanguageModelCallEnd
     })
@@ -35602,7 +35606,7 @@ function createLanguageModelV4StreamPartToLanguageModelStreamPartTransform({
   provider,
   modelId,
   generateId: generateId3,
-  now: now2,
+  now: now22,
   callStartTimestampMs,
   onLanguageModelCallEnd
 }) {
@@ -35619,7 +35623,7 @@ function createLanguageModelV4StreamPartToLanguageModelStreamPartTransform({
     async transform(chunk, controller) {
       var _a232, _b18, _c;
       if (isOutputChunk(chunk)) {
-        const outputChunkTimestampMs = now2();
+        const outputChunkTimestampMs = now22();
         if (timeToFirstOutputMs == null) {
           timeToFirstOutputMs = outputChunkTimestampMs - callStartTimestampMs;
         } else if (previousOutputChunkTimestampMs != null) {
@@ -35724,7 +35728,7 @@ function createLanguageModelV4StreamPartToLanguageModelStreamPartTransform({
         }
         case "finish": {
           const usage = asLanguageModelUsage(chunk.usage);
-          const responseTimeMs = now2() - callStartTimestampMs;
+          const responseTimeMs = now22() - callStartTimestampMs;
           const performance = {
             responseTimeMs,
             effectiveOutputTokensPerSecond: calculateTokensPerSecond({
@@ -36042,7 +36046,7 @@ function streamText({
   experimental_include,
   include = experimental_include,
   _internal: {
-    now: now2 = now,
+    now: now22 = now,
     generateId: generateId3 = originalGenerateId3,
     generateCallId = originalGenerateCallId3
   } = {},
@@ -36116,7 +36120,7 @@ function streamText({
     onLanguageModelCallEnd: resolvedOnLanguageModelCallEnd,
     onToolExecutionStart: resolvedOnToolExecutionStart,
     onToolExecutionEnd: resolvedOnToolExecutionEnd,
-    now: now2,
+    now: now22,
     generateId: generateId3,
     generateCallId,
     download: download2,
@@ -36234,7 +36238,7 @@ var DefaultStreamTextResult = class {
     experimental_toolApprovalSecret,
     providerOptions,
     prepareStep,
-    now: now2,
+    now: now22,
     generateId: generateId3,
     generateCallId,
     timeout,
@@ -36908,7 +36912,7 @@ var DefaultStreamTextResult = class {
             callSettings,
             stepSettings: prepareStepResult
           });
-          const stepStartTimestampMs = now2();
+          const stepStartTimestampMs = now22();
           const { retry } = prepareRetries({ maxRetries, abortSignal });
           const {
             stream: languageModelStream,
@@ -36973,7 +36977,7 @@ var DefaultStreamTextResult = class {
                     });
                   },
                   _internal: {
-                    now: now2
+                    now: now22
                   },
                   ...stepCallSettings
                 });
@@ -37171,7 +37175,7 @@ var DefaultStreamTextResult = class {
                     self.closeStream();
                     return;
                   }
-                  const stepTimeMs = now2() - stepStartTimestampMs;
+                  const stepTimeMs = now22() - stepStartTimestampMs;
                   const finishStepPart = {
                     type: "finish-step",
                     finishReason: stepFinishReason,
@@ -63574,8 +63578,8 @@ async function generateVerifier(length) {
   return await random(length);
 }
 async function generateChallenge(code_verifier) {
-  const buffer = await (await crypto3).subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
-  return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\//g, "_").replace(/\+/g, "-").replace(/=/g, "");
+  const buffer2 = await (await crypto3).subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
+  return btoa(String.fromCharCode(...new Uint8Array(buffer2))).replace(/\//g, "_").replace(/\+/g, "-").replace(/=/g, "");
 }
 async function pkceChallenge(length) {
   if (!length)
@@ -67432,6 +67436,93 @@ function createOrchestrator2({
   };
 }
 
+// extension/lib/diagnostics.js
+init_browser_shim_process();
+var MAX_ENTRIES = 200;
+var buffer = [];
+var securityBuffer = [];
+var captureInstalled = false;
+function now2() {
+  return Date.now();
+}
+function push(level, message, source = "service-worker", kind = "runtime") {
+  const entry = { ts: now2(), level, message: String(message ?? ""), source, kind };
+  buffer.push(entry);
+  if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
+  return entry;
+}
+function securityEvent(kind, detail = "") {
+  const entry = {
+    ts: now2(),
+    level: kind === "csp" || kind === "blocked-action" ? "error" : "warn",
+    message: String(detail ?? ""),
+    source: "security",
+    kind
+  };
+  securityBuffer.push(entry);
+  if (securityBuffer.length > MAX_ENTRIES) {
+    securityBuffer.splice(0, securityBuffer.length - MAX_ENTRIES);
+  }
+  push(entry.level, `[security:${kind}] ${entry.message}`, "security", kind);
+  return entry;
+}
+function installDiagnosticCapture() {
+  if (captureInstalled) return;
+  captureInstalled = true;
+  const selfRef = globalThis;
+  try {
+    selfRef.addEventListener?.("unhandledrejection", (ev) => {
+      const reason = ev?.reason;
+      const msg = reason?.message || reason?.name || (typeof reason === "string" ? reason : "unhandled rejection");
+      push("error", `unhandled rejection: ${msg}`, "service-worker", "rejection");
+    });
+  } catch {
+  }
+  try {
+    selfRef.addEventListener?.("error", (ev) => {
+      push("error", ev?.message || "uncaught error", "service-worker", "error");
+    });
+  } catch {
+  }
+  const origError = selfRef.console?.error?.bind(selfRef.console);
+  const origWarn = selfRef.console?.warn?.bind(selfRef.console);
+  if (origError) {
+    selfRef.console.error = (...args) => {
+      push("error", args.map((a) => a instanceof Error ? a.message : String(a)).join(" "), "service-worker", "error");
+      try {
+        origError(...args);
+      } catch {
+      }
+    };
+  }
+  if (origWarn) {
+    selfRef.console.warn = (...args) => {
+      push("warn", args.map((a) => a instanceof Error ? a.message : String(a)).join(" "), "service-worker", "warning");
+      try {
+        origWarn(...args);
+      } catch {
+      }
+    };
+  }
+}
+function diagnosticList() {
+  return { entries: buffer.slice().reverse(), count: buffer.length };
+}
+function diagnosticClear() {
+  buffer.length = 0;
+  return { ok: true };
+}
+function securityState() {
+  return {
+    violations: securityBuffer.slice().reverse(),
+    count: securityBuffer.length
+  };
+}
+function securityClear() {
+  securityBuffer.length = 0;
+  return { ok: true };
+}
+
 // extension/lib/tools.js
 init_browser_shim_process();
 var DIR_KEY = "toolDirectory";
@@ -67674,14 +67765,14 @@ async function createAsset(origin, { type, name: name25, content, meta: meta3 })
   const bounded = boundAssetMeta({ type, name: name25, content });
   if (bounded.error) return { ok: false, error: bounded.error };
   const id = newId();
-  const now2 = Date.now();
+  const now3 = Date.now();
   const asset = {
     id,
     type: bounded.type,
     name: bounded.name,
     origin: o,
-    createdAt: now2,
-    updatedAt: now2,
+    createdAt: now3,
+    updatedAt: now3,
     size: bounded.size,
     content,
     meta: meta3 ?? {}
@@ -67696,7 +67787,7 @@ async function createAsset(origin, { type, name: name25, content, meta: meta3 })
     type: bounded.type,
     name: bounded.name,
     origin: o,
-    at: now2,
+    at: now3,
     size: bounded.size
   });
   let idx = index;
@@ -68374,12 +68465,12 @@ async function reconcileScheduledTasks() {
     const existing = new Set((await alarms.getAll()).map((a) => a.name));
     const resumed = [];
     const failed = [];
-    const now2 = Date.now();
+    const now3 = Date.now();
     for (const name25 of names) {
       const task = tasks[name25];
       if (task?.quarantined || task?.cancelling) continue;
       if (!existing.has(name25)) {
-        const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
+        const when = task.periodInMinutes ? Math.max(task.at, now3 + 1e3) : task.at > now3 ? task.at : now3 + 1e3;
         const info = { when };
         if (task.periodInMinutes) info.periodInMinutes = task.periodInMinutes;
         try {
@@ -71378,6 +71469,40 @@ var handlers = {
   },
   async "capture.tab"({ tabId }) {
     return await captureTabScreenshot(tabId);
+  },
+  // ---- diagnostics + security transparency (the error console + shield) ----
+  async "diagnostics.list"() {
+    return diagnosticList();
+  },
+  async "diagnostics.clear"() {
+    return diagnosticClear();
+  },
+  // A page forwards its OWN realm's CSP violations + uncaught errors here (the
+  // extension pages listen for `securitypolicyviolation` / `error` and report
+  // them so the ONE console shows the whole extension, not just the SW).
+  async "diagnostics.report"({ entries = [] }) {
+    if (!Array.isArray(entries)) return { ok: false, error: "entries must be an array" };
+    for (const e of entries.slice(0, 50)) {
+      if (e?.kind === "csp") securityEvent("csp", e.message || "CSP violation");
+      else if (e?.kind === "security") securityEvent("blocked-action", e.message || "blocked");
+      else push(e?.level || "error", e?.message || "error", e?.source || "page", e?.kind || "runtime");
+    }
+    return { ok: true, recorded: entries.length };
+  },
+  async "security.state"() {
+    const perms = await capabilityStatus();
+    const granted = Object.entries(perms).filter(([, v]) => v === true).map(([k]) => k);
+    const sec = securityState();
+    return {
+      granted,
+      allPermissions: perms,
+      violations: sec.violations,
+      count: sec.count,
+      posture: sec.count > 0 ? "attention" : "ok"
+    };
+  },
+  async "security.clear"() {
+    return securityClear();
   }
 };
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -71398,11 +71523,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     if (!PAGE_ALLOWED_ROUTES.has(message.type)) {
+      securityEvent("blocked-action", `page route denied: ${message.type}`);
       sendResponse({ ok: false, error: "not authorized from a page" });
       return true;
     }
     message.origin = auth2.origin;
   } else if (auth2.kind === "unmatched") {
+    securityEvent("cross-origin", `sender refused: ${auth2.error}`);
     sendResponse({ ok: false, error: auth2.error });
     return true;
   }
@@ -71446,6 +71573,7 @@ async function dispatchHook(hookId, payload) {
     const allowed = await checkHookAllowed(hookId);
     if (!allowed.ok) {
       console.warn(`hook ${hookId} refused at dispatch: ${allowed.error}`);
+      securityEvent("denied-hook", `hook ${hookId} refused: ${allowed.error}`);
       continue;
     }
     const recipe = sub.recipeId ? getRecipe(sub.recipeId) : null;
@@ -71508,6 +71636,7 @@ function wireHookListeners() {
   bind("runtime", "onSuspend", "runtime.onSuspend", () => ({}));
 }
 wireHookListeners();
+installDiagnosticCapture();
 chrome.runtime.onInstalled.addListener(async () => {
   const mem = masterMemory();
   if (!await mem.get("preferences")) {

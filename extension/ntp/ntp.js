@@ -13,6 +13,11 @@ import {
 } from "../shared/conversation.js";
 
 import { RECIPE_ICON } from "../shared/recipe-icons.js";
+import {
+  installPageDiagnostics,
+  refreshDiagnostics,
+  startDiagnosticPolling,
+} from "../shared/diagnostics-client.js";
 
 const statusEl = document.getElementById("status");
 
@@ -212,3 +217,9 @@ document.getElementById("open-recipes")?.addEventListener(
 );
 
 setStatus("ready");
+
+// Transparency surface: capture the page's own errors/CSP violations into the
+// shared console + keep the shield/console badges live.
+installPageDiagnostics();
+refreshDiagnostics().catch(() => {});
+startDiagnosticPolling();
