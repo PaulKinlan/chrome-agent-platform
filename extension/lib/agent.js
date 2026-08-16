@@ -75,6 +75,22 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
             : (await memory.get(key)) !== undefined;
           prev = await memory.get(key);
           await assertRunOwned();
+          // Re-validate the IMMUTABLE run-start generation IMMEDIATELY before
+          // the write (adjacent to set): the gen check at the top ran several
+          // awaits ago (memory.has + memory.get), and a delete→re-enroll in that
+          // gap would otherwise let a stale run write under the NEW enrollment
+          // (the round-23 gen-adjacency finding — the gen was checked only before
+          // has/get, not adjacent to set).
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
+            if (!g?.ok) {
+              return { error: g?.error ?? "origin not enrolled — memory not written" };
+            }
+            if (runGen != null && (g.gen ?? 0) !== runGen) {
+              return { error: "origin re-enrolled during run — memory not written" };
+            }
+          }
           await memory.set(key, value);
           committed = true;
           await assertRunOwned();
@@ -135,6 +151,16 @@ export function createAgent({
   // ABA blocker).
   let activeRun = null; // { gen: number|null, controller: AbortController }
   let aborted = false;
+  // A per-worker RUN QUEUE serializes concurrent `a.run` calls. The AI SDK
+  // executes a step's tool calls with Promise.all, so two delegate_task calls
+  // for the SAME worker can invoke the same a.run CONCURRENTLY. The shared
+  // `activeRun` slot + agent-do's single mutable abort controller are unsafe
+  // under concurrency (the second run overwrites the first's identity; the first
+  // `finally` clears the second's; abort() only reaches whichever controller is
+  // currently stored) — the round-23 parallel-tool-call blocker. Queuing each
+  // run behind the prior guarantees at most one run is active at a time, so the
+  // shared slot + controller are always the CURRENT run's.
+  let runQueue = Promise.resolve();
 
   const getRunGen = () => activeRun?.gen ?? null;
 
@@ -188,6 +214,10 @@ export function createAgent({
     // start (the check→start gap where agent-do's own controller is null until
     // run() begins).
     run: async (task, context, history, runGen) => {
+      // Serialize the run behind any prior run of THIS worker (see runQueue above).
+      // `execute` carries the full original body; the queue always advances even
+      // if a run rejects, so a failed run can never poison later runs.
+      const execute = async () => {
       let gen = runGen ?? null;
       if (enrollmentGuard && gen == null) {
         // No caller-supplied generation (a direct worker run) — capture it now.
@@ -222,6 +252,10 @@ export function createAgent({
         controller.signal.removeEventListener("abort", onAbort);
         activeRun = null;
       }
+      };
+      const result = runQueue.then(execute, execute);
+      runQueue = result.then(() => {}, () => {});
+      return result;
     },
     abort: () => {
       if (disposable) aborted = true;

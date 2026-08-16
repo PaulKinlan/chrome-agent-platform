@@ -262,6 +262,95 @@ function validateGrantFor(grant, origin) {
   return grant.id;
 }
 
+/** The POST-activation capture body (active-tab resolution + capture + post-
+ * checks), extracted so the `if (tabId)` path can wrap it in a prior-tab restore
+ * on ANY later failure (round-23 finding 7: a failed capture must never leave
+ * the owner's active tab switched). `tabId` is the RAW requested tab id (or null
+ * when capturing the already-active tab). */
+async function captureActiveTab({ origin, grantIdBefore, tabId }) {
+  // The active tab (its url is visible under activeTab / tabs).
+  const active = (await chrome.tabs.query({ active: true, currentWindow: true }))
+    .find((t) => !tabId || t.id === tabId) ?? null;
+  if (!active?.id) return { error: "no active tab" };
+
+  // Post-activation the tab could have navigated — re-derive + re-check BEFORE
+  // capturing (closes the active-tab ABA: activation itself can race a nav).
+  const cur = (await chrome.tabs.query({ active: true, currentWindow: true }))
+    .find((t) => t.id === active.id) ?? null;
+  const curOrigin = cur?.url
+    ? (() => {
+      try {
+        return canonicalOrigin(cur.url);
+      } catch {
+        return undefined;
+      }
+    })()
+    : undefined;
+  if (!curOrigin || curOrigin !== origin) {
+    return { error: "tab navigated during capture — screenshot discarded" };
+  }
+
+  // DUrable ownership must be re-checked IMMEDIATELY before the capture
+  // mutation (the round-21 finding: capture asserted ownership at function
+  // entry, then performed several permission/tab/grant awaits before the
+  // actual capture — no ownership assertion was adjacent to the mutation).
+  try {
+    await assertRunOwned();
+  } catch {
+    return { error: "run aborted — screenshot not captured" };
+  }
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(
+      cur.windowId ?? undefined,
+      { format: "png" },
+    );
+  } catch (e) {
+    return { error: `capture failed: ${e?.message ?? e}` };
+  }
+
+  // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
+  // 1. the tab is STILL on the same origin (no navigation during capture);
+  // 2. the SAME grant record still authorizes the SAME origin with the SAME
+  //    id (closes the revoke→regrant ABA race atomically).
+  const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true }))
+    .find((t) => t.id === active.id) ?? null;
+  const nowOrigin = nowTab?.url
+    ? (() => {
+      try {
+        return canonicalOrigin(nowTab.url);
+      } catch {
+        return undefined;
+      }
+    })()
+    : undefined;
+  if (!nowOrigin || nowOrigin !== origin) {
+    return { error: "tab navigated during capture — screenshot discarded" };
+  }
+  if (
+    validateGrantFor(
+      (await kvGet(GRANT_KEY))[GRANT_KEY],
+      nowOrigin,
+    ) !== grantIdBefore
+  ) {
+    return {
+      error:
+        "browser control grant changed during capture — screenshot discarded",
+    };
+  }
+  if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+    return { error: "capture returned no image data" };
+  }
+  // Final DUrable ownership check at the post-capture COMMIT boundary: an
+  // abort/ownership loss during the captureVisibleTab await must discard the
+  // bytes rather than return them (the round-18 fence coverage finding).
+  await assertRunOwned();
+  return {
+    screenshot: dataUrl,
+    url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
+  };
+}
+
 /**
  * Capture a PNG screenshot of the active tab, gated by the browser-control
  * grant FOR THAT TAB'S ORIGIN. Uses chrome.tabs.captureVisibleTab (the standard
@@ -375,21 +464,18 @@ export async function captureTabScreenshot(tabId) {
             };
           }
           if (tabId) {
-            // DUrable ownership must be re-checked IMMEDIATELY before the
-            // activation mutation (the round-21 finding: capture asserted at
-            // function entry then performed several awaits before activating —
-            // no ownership assertion was adjacent to the mutation).
+            // Query the PRIOR active tab FIRST (the round-23 blocker: the
+            // prior-tab query was inserted AFTER the ownership assertion, so
+            // ownership could be lost during that query yet the activation still
+            // executed — the assertion was not adjacent to the mutation). Then
+            // assert DUrable ownership IMMEDIATELY before the activation mutation.
+            const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true }))
+              .find((t) => t.id !== tabId) ?? null;
             try {
               await assertRunOwned();
             } catch {
               return { error: "run aborted — tab not activated" };
             }
-            // Remember the prior active tab so an ownership loss DURING activation
-            // can RESTORE the owner's view (a capture must never leave the active
-            // tab switched after abort — the round-22 finding: activation had no
-            // immediate post-check / restore).
-            const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true }))
-              .find((t) => t.id !== tabId) ?? null;
             try {
               await chrome.tabs.update(tabId, { active: true });
             } catch (e) {
@@ -408,88 +494,34 @@ export async function captureTabScreenshot(tabId) {
               }
               return { error: "run aborted — tab activation reverted" };
             }
+            // Restore the prior active tab on ANY later failure (capture,
+            // navigation, grant-change, final-fence) — not only on an abort
+            // during activation — so a failed capture never leaves the owner's
+            // active tab switched (the round-23 finding).
+            const restorePrior = async () => {
+              if (!priorActive?.id) return;
+              try {
+                await chrome.tabs.update(priorActive.id, { active: true });
+              } catch { /* best-effort restore */ }
+            };
+            const withRestore = async (fn) => {
+              try {
+                return await fn();
+              } catch (e) {
+                await restorePrior();
+                throw e;
+              }
+            };
+            const captureRest = await withRestore(async () => {
+              return await captureActiveTab({ origin, grantIdBefore, tabId });
+            });
+            if (captureRest.error) {
+              await restorePrior();
+              return captureRest;
+            }
+            return captureRest;
           }
-      // The active tab (its url is visible under activeTab / tabs).
-      const active = (await chrome.tabs.query({ active: true, currentWindow: true }))
-        .find((t) => !tabId || t.id === tabId) ?? null;
-      if (!active?.id) return { error: "no active tab" };
-
-      // Post-activation the tab could have navigated — re-derive + re-check BEFORE
-      // capturing (closes the active-tab ABA: activation itself can race a nav).
-      const cur = (await chrome.tabs.query({ active: true, currentWindow: true }))
-        .find((t) => t.id === active.id) ?? null;
-      const curOrigin = cur?.url
-        ? (() => {
-          try {
-            return canonicalOrigin(cur.url);
-          } catch {
-            return undefined;
-          }
-        })()
-        : undefined;
-      if (!curOrigin || curOrigin !== origin) {
-        return { error: "tab navigated during capture — screenshot discarded" };
-      }
-
-      // DUrable ownership must be re-checked IMMEDIATELY before the capture
-      // mutation (the round-21 finding: capture asserted ownership at function
-      // entry, then performed several permission/tab/grant awaits before the
-      // actual capture — no ownership assertion was adjacent to the mutation).
-      try {
-        await assertRunOwned();
-      } catch {
-        return { error: "run aborted — screenshot not captured" };
-      }
-      let dataUrl;
-      try {
-        dataUrl = await chrome.tabs.captureVisibleTab(
-          cur.windowId ?? undefined,
-          { format: "png" },
-        );
-      } catch (e) {
-        return { error: `capture failed: ${e?.message ?? e}` };
-      }
-
-      // Post-capture re-checks (fail closed — discard the bytes on ANY doubt):
-      // 1. the tab is STILL on the same origin (no navigation during capture);
-      // 2. the SAME grant record still authorizes the SAME origin with the SAME
-      //    id (closes the revoke→regrant ABA race atomically).
-      const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true }))
-        .find((t) => t.id === active.id) ?? null;
-      const nowOrigin = nowTab?.url
-        ? (() => {
-          try {
-            return canonicalOrigin(nowTab.url);
-          } catch {
-            return undefined;
-          }
-        })()
-        : undefined;
-      if (!nowOrigin || nowOrigin !== origin) {
-        return { error: "tab navigated during capture — screenshot discarded" };
-      }
-      if (
-        validateGrantFor(
-          (await kvGet(GRANT_KEY))[GRANT_KEY],
-          nowOrigin,
-        ) !== grantIdBefore
-      ) {
-        return {
-          error:
-            "browser control grant changed during capture — screenshot discarded",
-        };
-      }
-      if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
-        return { error: "capture returned no image data" };
-      }
-      // Final DUrable ownership check at the post-capture COMMIT boundary: an
-      // abort/ownership loss during the captureVisibleTab await must discard the
-      // bytes rather than return them (the round-18 fence coverage finding).
-      await assertRunOwned();
-      return {
-        screenshot: dataUrl,
-        url: nowTab.url, // the SOURCE page, so the UI re-opens the page (not the data URL)
-      };
+          return await captureActiveTab({ origin, grantIdBefore, tabId: null });
     });
   });
 }

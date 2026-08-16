@@ -21,6 +21,14 @@
   // generation entirely and kept reporting results after a delete.
   const inFlight = new Set();
   const cancelled = new Set();
+  // A cancellation EPOCH flag (round-23 blocker 1): `cancelled` only marks IDs
+  // that were already in `inFlight` at cancel time, so a cancel that arrived
+  // BEFORE a new invoke could not mark that future ID (it was not yet in
+  // `inFlight`), and a cancel that arrived AFTER could not interleave because
+  // the invoke handler called invoke() synchronously. `cancelledAll` is set on
+  // EVERY cancel and blocks any NEW invoke until the bridge re-signals a
+  // re-enrollment (`resume`/`init`).
+  let cancelledAll = false;
 
   function isDomOwned(name) {
     const platform = new Set([
@@ -137,12 +145,13 @@
     // PRE-START cancellation check (the round-22 blocker: cancel only discarded
     // the RESULT, so a page function whose side effect had already executed kept
     // running). This synchronous check runs BEFORE the page function is invoked,
-    // so a request that was already marked cancelled never STARTS its side
-    // effect. It is cooperative: once a page function has begun, its own DOM /
-    // storage / network effects cannot be unwound — the result is discarded and
-    // the invocation is marked cancelled, but the in-flight function itself runs
+    // so a request that was already marked cancelled (or arrived after a cancel
+    // epoch — round-23 blocker 1) never STARTS its side effect. It is
+    // cooperative: once a page function has begun, its own DOM / storage /
+    // network effects cannot be unwound — the result is discarded and the
+    // invocation is marked cancelled, but the in-flight function itself runs
     // to settlement. That limit is documented (not papered over) below.
-    if (cancelled.has(requestId)) {
+    if (cancelledAll || cancelled.has(requestId)) {
       throw new Error("invocation cancelled");
     }
     // 1. a page-defined global function
@@ -169,13 +178,21 @@
     if (!data || typeof data !== "object" || data[CHANNEL] !== true) return;
     if (data.type === "init") {
       nonce = data.nonce;
+      cancelledAll = false; // a fresh bridge/nonce resets the cancel epoch
       post({ type: "tools", origin: location.origin, tools: collectTools() });
     } else if (data.type === "collect") {
       post({ type: "tools", origin: location.origin, tools: collectTools() });
+    } else if (data.type === "resume") {
+      // Re-enrollment: clear the cancel epoch so NEW invokes are allowed again.
+      // In-flight ids cancelled by the prior disenrollment stay cancelled (their
+      // results remain discarded) — only the epoch is cleared.
+      cancelledAll = false;
     } else if (data.type === "cancel") {
-      // Disenrollment cancellation: mark every currently in-flight invoke as
-      // cancelled so its result is discarded. A NEW invoke forwarded after a
-      // re-enrollment uses a fresh requestId and is unaffected.
+      // Disenrollment cancellation: (1) set the cancel EPOCH so any NEW invoke
+      // is rejected before it starts (round-23 blocker 1: a cancel that arrived
+      // before a future invoke could not mark that future ID), and (2) mark every
+      // currently in-flight invoke as cancelled so its result is discarded.
+      cancelledAll = true;
       for (const id of inFlight) cancelled.add(id);
     } else if (data.type === "invoke" && data.nonce === nonce) {
       inFlight.add(data.requestId);
@@ -183,20 +200,32 @@
       // id resident forever (the content-script drops the response at 15s, but
       // this world's promise could otherwise linger).
       setTimeout(() => { inFlight.delete(data.requestId); }, 20000);
-      invoke(data.requestId, data.name, data.args)
-        .then((result) => {
+      // Defer the page-function invocation by ONE macrotask so a `cancel`
+      // delivered in the same turn (a disenrollment that raced this invoke)
+      // can run FIRST and mark the request cancelled BEFORE the page function
+      // starts (the round-23 blocker: invoking synchronously meant a later
+      // cancel could never interleave between inFlight.add and the call).
+      setTimeout(() => {
+        if (cancelledAll || cancelled.has(data.requestId)) {
           inFlight.delete(data.requestId);
-          if (cancelled.delete(data.requestId)) {
-            post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
-            return;
-          }
-          post({ type: "result", nonce, requestId: data.requestId, ok: true, result });
-        })
-        .catch((e) => {
-          inFlight.delete(data.requestId);
-          cancelled.delete(data.requestId);
-          post({ type: "result", nonce, requestId: data.requestId, ok: false, error: String(e?.message ?? e) });
-        });
+          post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
+          return;
+        }
+        invoke(data.requestId, data.name, data.args)
+          .then((result) => {
+            inFlight.delete(data.requestId);
+            if (cancelled.delete(data.requestId)) {
+              post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
+              return;
+            }
+            post({ type: "result", nonce, requestId: data.requestId, ok: true, result });
+          })
+          .catch((e) => {
+            inFlight.delete(data.requestId);
+            cancelled.delete(data.requestId);
+            post({ type: "result", nonce, requestId: data.requestId, ok: false, error: String(e?.message ?? e) });
+          });
+      }, 0);
     }
   });
 

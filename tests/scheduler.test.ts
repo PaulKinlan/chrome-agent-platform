@@ -7,8 +7,10 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   INFLIGHT_LEASE_MS,
   __resetBootForTest,
+  cancelScheduledTask,
   clearStaleInflight,
   heartbeatInflight,
+  listScheduledTasks,
   markScheduledDone,
   ownsInflight,
   reconcileScheduledTasks,
@@ -441,6 +443,61 @@ Deno.test("reconcileScheduledTasks does NOT re-arm a quarantined payload (round-
     chrome.alarms.create = origCreate;
     await chrome.storage.local.set({ "cap:scheduledTasks": {} });
   }
+});
+
+Deno.test("cancelScheduledTask removes a quarantined payload + confirms alarm absence (round-23)", async () => {
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => true;
+  chrome.alarms.get = async () => undefined; // absent
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_cancel_me": {
+        name: "task_cancel_me",
+        task: "should-not-run",
+        at: Date.now() - 1000,
+        quarantined: true,
+      },
+    },
+  });
+  try {
+    const res = await cancelScheduledTask("task_cancel_me");
+    assert(res?.cancelled === true, "cancel must remove the task");
+    assert(res?.alarmAbsent === true, "alarm absence must be confirmed");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    assert(
+      !(store["cap:scheduledTasks"]?.["task_cancel_me"]),
+      "the quarantined payload must be removed",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("listScheduledTasks surfaces quarantined tasks so the owner can cancel them (round-23)", async () => {
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_active": {
+        name: "task_active",
+        task: "ok",
+        at: Date.now() + 60000,
+      },
+      "task_quar": {
+        name: "task_quar",
+        task: "bad",
+        at: Date.now() - 1000,
+        quarantined: true,
+      },
+    },
+  });
+  const list = await listScheduledTasks();
+  const q = list.find((t) => t.name === "task_quar");
+  assert(q?.quarantined === true, "a quarantined task must be visible");
+  const a = list.find((t) => t.name === "task_active");
+  assert(a && a.quarantined === false, "an active task must be visible + not quarantined");
+  await chrome.storage.local.set({ "cap:scheduledTasks": {} });
 });
 
 Deno.test("an abort during the first storage await prevents scheduleTask persisting (round-17)", async () => {

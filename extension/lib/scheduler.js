@@ -201,6 +201,58 @@ export async function scheduleTask(
   });
 }
 
+/** List every persisted scheduled task (active AND quarantined) so the owner
+ * can SEE a quarantined/failed schedule and retry or cancel it. The round-23
+ * blocker required an owner-visible quarantine list — a quarantined task is
+ * otherwise invisible and can never be cancelled. */
+export async function listScheduledTasks() {
+  await withLock(async () => {}); // serialize the read against concurrent writes
+  const store = await kvGet(TASK_KEY);
+  const tasks = store[TASK_KEY] ?? {};
+  return Object.values(tasks).map((t) => ({
+    name: t.name,
+    task: t.task,
+    at: t.at,
+    periodInMinutes: t.periodInMinutes,
+    quarantined: Boolean(t.quarantined),
+    quarantinedAt: t.quarantinedAt ?? null,
+  }));
+}
+
+/** Authoritatively CANCEL a scheduled task (an owner-visible route for a
+ * quarantined or unwanted task). The round-23 blocker required "authoritative
+ * cancel" for quarantined records: the alarm is cleared, absence is CONFIRMED
+ * via alarms.get (a `clear` false is ambiguous), and the payload is removed
+ * atomically under the scheduling lock. Returns whether the task is now gone. */
+export async function cancelScheduledTask(name) {
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...(store[TASK_KEY] ?? {}) };
+    const existing = tasks[name];
+    if (!existing) {
+      return { ok: true, name, cancelled: false, error: "no such task" };
+    }
+    // Clear the alarm (best-effort — a one-shot may already be consumed), then
+    // CONFIRM absence via alarms.get so a periodic alarm whose clear FAILED is
+    // not silently left armed (the round-19/20 alarm-clear ambiguity).
+    const alarms = alarmsApi();
+    let alarmAbsent = true;
+    if (alarms) {
+      try {
+        await alarms.clear(name);
+      } catch { /* clear may throw if already gone; get() decides */ }
+      try {
+        alarmAbsent = (await alarms.get(name)) == null;
+      } catch {
+        alarmAbsent = false; // fail closed — cannot confirm absence
+      }
+    }
+    delete tasks[name];
+    await kvSet({ [TASK_KEY]: tasks });
+    return { ok: true, name, cancelled: true, alarmAbsent };
+  });
+}
+
 /** Remove a one-shot task only AFTER its result is committed (durable).
  * When a `token` is supplied, the removal is FENCED: it proceeds only if the
  * caller still owns the in-flight lock. A stale owner (whose lock was

@@ -6,7 +6,7 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { masterMemory, saveScreenshot, listScreenshots } from "../extension/lib/memory.js";
+import { masterMemory, saveScreenshot, listScreenshots, journalAppend } from "../extension/lib/memory.js";
 
 // ---- minimal in-memory OPFS fake ----
 // A directory tree: { kind, children: Map<name, node>, content?: string }
@@ -130,4 +130,30 @@ Deno.test("memory.has distinguishes a stored null from an absent key (round-22 n
   // two cases distinct so compensation restores null rather than deleting the key.
   await mem.delete(key);
   assertEquals(await mem.has(key), false, "deleted key must report has=false");
+});
+
+Deno.test("journalAppend compensation restores the EXACT pre-append state at the 500-entry cap (round-23)", async () => {
+  const mem = masterMemory();
+  // Seed a FULL 500-entry journal so the append would evict old-0 via the ring cap.
+  const seed = Array.from({ length: 500 }, (_, i) => ({ ts: i, result: `old-${i}` }));
+  await mem.setTrusted("journal", seed);
+
+  let calls = 0;
+  const guard = async () => {
+    calls++;
+    // First call (pre-commit) succeeds; second call (post-commit) throws so
+    // compensation is exercised.
+    if (calls >= 2) throw new Error("ownership lost during commit");
+  };
+  let threw = false;
+  try {
+    await journalAppend(mem, { result: "new-entry" }, guard);
+  } catch {
+    threw = true;
+  }
+  assert(threw, "journalAppend must rethrow the post-commit guard failure");
+  const after = (await mem.get("journal")) ?? [];
+  assertEquals(after.length, 500, "compensation must restore the full 500-entry pre-state (not 499)");
+  assertEquals(after[0]?.result, "old-0", "old-0 must be restored — not lost to ring-buffer eviction (the round-23 blocker)");
+  assert(!after.some((e) => e?.result === "new-entry"), "the appended row must be removed by compensation");
 });

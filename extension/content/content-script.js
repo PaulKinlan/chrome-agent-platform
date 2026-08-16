@@ -63,6 +63,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // enroll/re-enroll). Record it so a stale-generation invoke can be rejected.
     currentGen = typeof message.gen === "number" ? message.gen : null;
     disenrolled = false;
+    // Re-enrollment clears the MAIN world's cancel epoch so NEW invokes are
+    // allowed again (a delete→re-enroll must not leave the page bridge
+    // permanently cancelled — the round-23 blocker 1 fix).
+    window.postMessage({ [CHANNEL]: true, type: "resume", nonce }, "*");
     sendResponse({ ok: true });
     return true;
   }

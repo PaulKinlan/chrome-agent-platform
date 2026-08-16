@@ -327,10 +327,30 @@ export async function listOrigins() {
 // `setTrusted` commit — a scheduled run passes its fence so an ownership loss
 // during the preceding `store.get("journal")` await cannot stale-commit a row
 // (the round-21 finding: journals detected ownership loss only after the commit).
+//
+// A per-journal mutex serializes the WHOLE read-modify-write (read → push → trim
+// → commit → compensation). The old code did an unlocked `get`→`setTrusted`, so
+// two concurrent appends each read the same journal and the last write won, and
+// a compensation read could see a concurrent append and overwrite it (the
+// round-23 concurrency finding).
+let journalMutex = Promise.resolve();
+function withJournalLock(fn) {
+  const run = journalMutex.then(fn, fn);
+  journalMutex = run.then(() => {}, () => {});
+  return run;
+}
+
 export async function journalAppend(store, entry, guard = null) {
+  return withJournalLock(async () => {
   const MAX_ENTRY_TEXT = 16 * 1024;
   const MAX_JOURNAL_BYTES = 200 * 1024;
-  const journal = (await store.get("journal")) ?? [];
+  // Capture the EXACT pre-append state so compensation can RESTORE it (the
+  // round-23 blocker: compensation did `entries.slice(0, -1)`, which removed the
+  // new row but did NOT restore the oldest row evicted by the 500-entry cap or
+  // the byte-budget trim — a 500-row journal came back 499 rows with `old-0`
+  // permanently lost).
+  const original = (await store.get("journal")) ?? [];
+  const journal = original.slice();
   const bounded = { ...entry };
   for (const k of ["result", "task"]) {
     if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
@@ -351,23 +371,23 @@ export async function journalAppend(store, entry, guard = null) {
   if (guard) await guard();
   await store.setTrusted("journal", entries);
   // POST-commit guard: ownership lost DURING the setTrusted commit must be
-  // COMPENSATED (remove the just-appended entry), not merely detected after the
-  // fact (the round-22 finding: journal post-check detected ownership loss but
-  // left the committed task/result row in place, so a retry produced a stale/
-  // duplicate entry). Compensation is best-effort — the primary invariant is that
-  // the caller aborts, but the forbidden row must not survive.
+  // COMPENSATED by restoring the EXACT pre-append state (`original`), not merely
+  // removing the just-appended entry — otherwise a ring-buffer eviction is not
+  // undone and valid older rows are lost (the round-23 finding). Compensation is
+  // best-effort — the primary invariant is that the caller aborts, but the
+  // forbidden row (and any eviction it caused) must not survive.
   if (guard) {
     try {
       await guard();
     } catch (e) {
       try {
-        const restored = entries.slice(0, -1);
-        await store.setTrusted("journal", restored);
+        await store.setTrusted("journal", original);
       } catch { /* best-effort compensation */ }
       throw e;
     }
   }
   return entries;
+  });
 }
 
 // Screenshots are LARGE media (a single base64 PNG is ~300 KiB) that cannot fit

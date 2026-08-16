@@ -25810,36 +25810,46 @@ async function listOrigins() {
   const map4 = s[ENROLL_KEY] ?? {};
   return Object.keys(map4).filter((o) => map4[o]?.enrolled === true).sort();
 }
+var journalMutex = Promise.resolve();
+function withJournalLock(fn) {
+  const run = journalMutex.then(fn, fn);
+  journalMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
 async function journalAppend(store, entry, guard = null) {
-  const MAX_ENTRY_TEXT = 16 * 1024;
-  const MAX_JOURNAL_BYTES = 200 * 1024;
-  const journal = await store.get("journal") ?? [];
-  const bounded = { ...entry };
-  for (const k of ["result", "task"]) {
-    if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
-      bounded[k] = bounded[k].slice(0, MAX_ENTRY_TEXT);
-    }
-  }
-  journal.push({ ts: Date.now(), ...bounded });
-  let entries = journal.slice(-500);
-  while (entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_JOURNAL_BYTES) {
-    entries = entries.slice(1);
-  }
-  if (guard) await guard();
-  await store.setTrusted("journal", entries);
-  if (guard) {
-    try {
-      await guard();
-    } catch (e) {
-      try {
-        const restored = entries.slice(0, -1);
-        await store.setTrusted("journal", restored);
-      } catch {
+  return withJournalLock(async () => {
+    const MAX_ENTRY_TEXT = 16 * 1024;
+    const MAX_JOURNAL_BYTES = 200 * 1024;
+    const original = await store.get("journal") ?? [];
+    const journal = original.slice();
+    const bounded = { ...entry };
+    for (const k of ["result", "task"]) {
+      if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
+        bounded[k] = bounded[k].slice(0, MAX_ENTRY_TEXT);
       }
-      throw e;
     }
-  }
-  return entries;
+    journal.push({ ts: Date.now(), ...bounded });
+    let entries = journal.slice(-500);
+    while (entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_JOURNAL_BYTES) {
+      entries = entries.slice(1);
+    }
+    if (guard) await guard();
+    await store.setTrusted("journal", entries);
+    if (guard) {
+      try {
+        await guard();
+      } catch (e) {
+        try {
+          await store.setTrusted("journal", original);
+        } catch {
+        }
+        throw e;
+      }
+    }
+    return entries;
+  });
 }
 var MAX_SCREENSHOTS = 5;
 var MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
@@ -66880,6 +66890,16 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
           existed = typeof memory.has === "function" ? await memory.has(key) : await memory.get(key) !== void 0;
           prev = await memory.get(key);
           await assertRunOwned();
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
+            if (!g?.ok) {
+              return { error: g?.error ?? "origin not enrolled \u2014 memory not written" };
+            }
+            if (runGen != null && (g.gen ?? 0) !== runGen) {
+              return { error: "origin re-enrolled during run \u2014 memory not written" };
+            }
+          }
           await memory.set(key, value);
           committed = true;
           await assertRunOwned();
@@ -66923,6 +66943,7 @@ function createAgent2({
 }) {
   let activeRun = null;
   let aborted3 = false;
+  let runQueue = Promise.resolve();
   const getRunGen = () => activeRun?.gen ?? null;
   const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen), ...tools };
   const systemPrompt = system + buildSkillsPrompt2(skills);
@@ -66968,32 +66989,39 @@ function createAgent2({
     // start (the check→start gap where agent-do's own controller is null until
     // run() begins).
     run: async (task, context, history, runGen) => {
-      let gen = runGen ?? null;
-      if (enrollmentGuard && gen == null) {
-        const g = await enrollmentGuard();
-        if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
-        gen = g.gen ?? 0;
-      }
-      if (aborted3) return { error: "run aborted before start" };
-      const controller = new AbortController();
-      activeRun = { gen, controller };
-      if (aborted3 || controller.signal.aborted) {
-        activeRun = null;
-        return { error: "run aborted before start" };
-      }
-      const onAbort = () => {
+      const execute = async () => {
+        let gen = runGen ?? null;
+        if (enrollmentGuard && gen == null) {
+          const g = await enrollmentGuard();
+          if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+          gen = g.gen ?? 0;
+        }
+        if (aborted3) return { error: "run aborted before start" };
+        const controller = new AbortController();
+        activeRun = { gen, controller };
+        if (aborted3 || controller.signal.aborted) {
+          activeRun = null;
+          return { error: "run aborted before start" };
+        }
+        const onAbort = () => {
+          try {
+            agent.abort();
+          } catch {
+          }
+        };
+        controller.signal.addEventListener("abort", onAbort);
         try {
-          agent.abort();
-        } catch {
+          return await agent.run(task, context, history);
+        } finally {
+          controller.signal.removeEventListener("abort", onAbort);
+          activeRun = null;
         }
       };
-      controller.signal.addEventListener("abort", onAbort);
-      try {
-        return await agent.run(task, context, history);
-      } finally {
-        controller.signal.removeEventListener("abort", onAbort);
-        activeRun = null;
-      }
+      const result = runQueue.then(execute, execute);
+      runQueue = result.then(() => {
+      }, () => {
+      });
+      return result;
     },
     abort: () => {
       if (disposable) aborted3 = true;
@@ -67386,6 +67414,46 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
     return { name: name25, when };
   });
 }
+async function listScheduledTasks() {
+  await withLock(async () => {
+  });
+  const store = await kvGet(TASK_KEY);
+  const tasks = store[TASK_KEY] ?? {};
+  return Object.values(tasks).map((t) => ({
+    name: t.name,
+    task: t.task,
+    at: t.at,
+    periodInMinutes: t.periodInMinutes,
+    quarantined: Boolean(t.quarantined),
+    quarantinedAt: t.quarantinedAt ?? null
+  }));
+}
+async function cancelScheduledTask(name25) {
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...store[TASK_KEY] ?? {} };
+    const existing = tasks[name25];
+    if (!existing) {
+      return { ok: true, name: name25, cancelled: false, error: "no such task" };
+    }
+    const alarms = alarmsApi();
+    let alarmAbsent = true;
+    if (alarms) {
+      try {
+        await alarms.clear(name25);
+      } catch {
+      }
+      try {
+        alarmAbsent = await alarms.get(name25) == null;
+      } catch {
+        alarmAbsent = false;
+      }
+    }
+    delete tasks[name25];
+    await kvSet({ [TASK_KEY]: tasks });
+    return { ok: true, name: name25, cancelled: true, alarmAbsent };
+  });
+}
 async function markScheduledDone(name25, token) {
   await withLock(async () => {
     if (token) {
@@ -67694,6 +67762,63 @@ function validateGrantFor(grant, origin) {
   if (typeof grant.id !== "string" || grant.id.length === 0) return null;
   return grant.id;
 }
+async function captureActiveTab({ origin, grantIdBefore, tabId }) {
+  const active = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => !tabId || t.id === tabId) ?? null;
+  if (!active?.id) return { error: "no active tab" };
+  const cur = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
+  const curOrigin = cur?.url ? (() => {
+    try {
+      return canonicalOrigin(cur.url);
+    } catch {
+      return void 0;
+    }
+  })() : void 0;
+  if (!curOrigin || curOrigin !== origin) {
+    return { error: "tab navigated during capture \u2014 screenshot discarded" };
+  }
+  try {
+    await assertRunOwned();
+  } catch {
+    return { error: "run aborted \u2014 screenshot not captured" };
+  }
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(
+      cur.windowId ?? void 0,
+      { format: "png" }
+    );
+  } catch (e) {
+    return { error: `capture failed: ${e?.message ?? e}` };
+  }
+  const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
+  const nowOrigin = nowTab?.url ? (() => {
+    try {
+      return canonicalOrigin(nowTab.url);
+    } catch {
+      return void 0;
+    }
+  })() : void 0;
+  if (!nowOrigin || nowOrigin !== origin) {
+    return { error: "tab navigated during capture \u2014 screenshot discarded" };
+  }
+  if (validateGrantFor(
+    (await kvGet(GRANT_KEY))[GRANT_KEY],
+    nowOrigin
+  ) !== grantIdBefore) {
+    return {
+      error: "browser control grant changed during capture \u2014 screenshot discarded"
+    };
+  }
+  if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
+    return { error: "capture returned no image data" };
+  }
+  await assertRunOwned();
+  return {
+    screenshot: dataUrl,
+    url: nowTab.url
+    // the SOURCE page, so the UI re-opens the page (not the data URL)
+  };
+}
 async function captureTabScreenshot(tabId) {
   try {
     await assertRunOwned();
@@ -67750,12 +67875,12 @@ async function captureTabScreenshot(tabId) {
         };
       }
       if (tabId) {
+        const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id !== tabId) ?? null;
         try {
           await assertRunOwned();
         } catch {
           return { error: "run aborted \u2014 tab not activated" };
         }
-        const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id !== tabId) ?? null;
         try {
           await chrome.tabs.update(tabId, { active: true });
         } catch (e) {
@@ -67772,62 +67897,31 @@ async function captureTabScreenshot(tabId) {
           }
           return { error: "run aborted \u2014 tab activation reverted" };
         }
-      }
-      const active = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => !tabId || t.id === tabId) ?? null;
-      if (!active?.id) return { error: "no active tab" };
-      const cur = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
-      const curOrigin = cur?.url ? (() => {
-        try {
-          return canonicalOrigin(cur.url);
-        } catch {
-          return void 0;
-        }
-      })() : void 0;
-      if (!curOrigin || curOrigin !== origin) {
-        return { error: "tab navigated during capture \u2014 screenshot discarded" };
-      }
-      try {
-        await assertRunOwned();
-      } catch {
-        return { error: "run aborted \u2014 screenshot not captured" };
-      }
-      let dataUrl;
-      try {
-        dataUrl = await chrome.tabs.captureVisibleTab(
-          cur.windowId ?? void 0,
-          { format: "png" }
-        );
-      } catch (e) {
-        return { error: `capture failed: ${e?.message ?? e}` };
-      }
-      const nowTab = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id === active.id) ?? null;
-      const nowOrigin = nowTab?.url ? (() => {
-        try {
-          return canonicalOrigin(nowTab.url);
-        } catch {
-          return void 0;
-        }
-      })() : void 0;
-      if (!nowOrigin || nowOrigin !== origin) {
-        return { error: "tab navigated during capture \u2014 screenshot discarded" };
-      }
-      if (validateGrantFor(
-        (await kvGet(GRANT_KEY))[GRANT_KEY],
-        nowOrigin
-      ) !== grantIdBefore) {
-        return {
-          error: "browser control grant changed during capture \u2014 screenshot discarded"
+        const restorePrior = async () => {
+          if (!priorActive?.id) return;
+          try {
+            await chrome.tabs.update(priorActive.id, { active: true });
+          } catch {
+          }
         };
+        const withRestore = async (fn) => {
+          try {
+            return await fn();
+          } catch (e) {
+            await restorePrior();
+            throw e;
+          }
+        };
+        const captureRest = await withRestore(async () => {
+          return await captureActiveTab({ origin, grantIdBefore, tabId });
+        });
+        if (captureRest.error) {
+          await restorePrior();
+          return captureRest;
+        }
+        return captureRest;
       }
-      if (!dataUrl || !String(dataUrl).startsWith("data:image/")) {
-        return { error: "capture returned no image data" };
-      }
-      await assertRunOwned();
-      return {
-        screenshot: dataUrl,
-        url: nowTab.url
-        // the SOURCE page, so the UI re-opens the page (not the data URL)
-      };
+      return await captureActiveTab({ origin, grantIdBefore, tabId: null });
     });
   });
 }
@@ -68664,6 +68758,10 @@ async function handleAlarm(alarm) {
       console.error("scheduled task payload missing", alarm.name);
       return;
     }
+    if (task.quarantined) {
+      console.warn("scheduled task is quarantined \u2014 not running", alarm.name);
+      return;
+    }
     await runTask({
       id: alarm.name,
       task: task.task ?? alarm.name,
@@ -69218,6 +69316,14 @@ var handlers = {
   async "run-task"(m) {
     return await runTask({ id: m.id, task: m.task });
   },
+  async "task.list"() {
+    return { tasks: await listScheduledTasks() };
+  },
+  async "task.cancel"(m) {
+    const name25 = String(m?.name ?? "");
+    if (!name25) return { ok: false, error: "task name is required" };
+    return await cancelScheduledTask(name25);
+  },
   async "recipe.list"() {
     return { recipes: RECIPES };
   },
@@ -69323,6 +69429,16 @@ var handlers = {
         type: "enrollment-sync",
         gen: snapAfter.gen
       });
+      const finalSnap = await enrollmentSnapshot(canonical);
+      if (!finalSnap.enrolled || finalSnap.gen !== snapAfter.gen) {
+        invalidateAgent();
+        return {
+          ok: false,
+          origin: canonical,
+          error: "scripting was disabled during enrollment \u2014 retry",
+          retryable: true
+        };
+      }
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },

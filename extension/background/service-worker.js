@@ -62,7 +62,9 @@ import {
 import { getRecipe, RECIPES } from "../lib/recipes.js";
 import {
   INFLIGHT_HEARTBEAT_MS,
+  cancelScheduledTask,
   heartbeatInflight,
+  listScheduledTasks,
   recoverOnBoot,
   markScheduledDone,
   ownsInflight,
@@ -162,6 +164,17 @@ async function handleAlarm(alarm) {
     const task = store[TASK_KEY]?.[alarm.name];
     if (!task) {
       console.error("scheduled task payload missing", alarm.name);
+      return;
+    }
+    // A QUARANTINED task (a schedule that failed with UNKNOWN alarm state — its
+    // alarm may already be armed but we could not confirm create/clear/get) must
+    // NEVER run, even if its alarm fires. The round-23 blocker: handleAlarm
+    // loaded the payload and ran it WITHOUT checking `quarantined`, so an
+    // already-armed ambiguous alarm executed the supposedly non-runnable
+    // scheduling request. Fail closed: release the lock and leave it quarantined
+    // (only an explicit owner retry — a fresh scheduleTask — or cancel clears it).
+    if (task.quarantined) {
+      console.warn("scheduled task is quarantined — not running", alarm.name);
       return;
     }
     // Run FIRST, delete only on success (durable across worker interruption).
@@ -938,6 +951,21 @@ const handlers = {
   async "run-task"(m) {
     return await runTask({ id: m.id, task: m.task });
   },
+  async "task.list"() {
+    // Owner-visible scheduled-task list (active + quarantined) so a quarantined
+    // or failed schedule can be inspected + cancelled (the round-23 quarantine
+    // delivery blocker: a quarantined task must not run, but it must be VISIBLE
+    // and CANCELLABLE).
+    return { tasks: await listScheduledTasks() };
+  },
+  async "task.cancel"(m) {
+    // Authoritative owner cancellation of a scheduled (or quarantined) task:
+    // clears the alarm + removes the payload atomically (the round-23 blocker
+    // required an authoritative cancel route, not just a reconcile-side skip).
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    return await cancelScheduledTask(name);
+  },
 
   async "recipe.list"() {
     return { recipes: RECIPES };
@@ -1100,6 +1128,24 @@ const handlers = {
         type: "enrollment-sync",
         gen: snapAfter.gen,
       });
+      // FINAL authoritative re-validation as the LAST await before the success
+      // return (the round-23 blocker 4): `snapAfter` + `notifyOriginBridge` both
+      // awaited and released the lock, so a Scripting Disable can tombstone +
+      // revoke in that gap, leaving this enroll to report {ok:true} after the
+      // Disable. Re-read the ATOMIC snapshot (enrolled + generation) under the
+      // global lock; there is NO further await between this check and the ok
+      // return, so a Disable that lands after this point genuinely happens AFTER
+      // this enroll completed.
+      const finalSnap = await enrollmentSnapshot(canonical);
+      if (!finalSnap.enrolled || finalSnap.gen !== snapAfter.gen) {
+        invalidateAgent();
+        return {
+          ok: false,
+          origin: canonical,
+          error: "scripting was disabled during enrollment — retry",
+          retryable: true,
+        };
+      }
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },
