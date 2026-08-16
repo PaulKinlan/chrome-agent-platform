@@ -40,3 +40,12 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 - Hooks (system-level events).
 - Richer sub-agent picker UI.
 - UI refinement (anti-slop).
+
+## Round 27 (sol, f3d5fdb) — CAS version edge-cases
+- Versions stored only in the value file reset after delete/clear → a stale v1→delete→fresh v1→stale CAS deletes the fresh write. The version must be stored separately (not reset on delete/clear).
+- A late stale write can overwrite B, then the CAS delete removes A but cannot restore B; a crash after the commit persists A. The CAS needs a durable version log.
+- The journal has the same CAS issue.
+- The page sideEffect is still true (the cooperative-cancellation limit).
+- The envelope quota undercounts the wrapper (a 262164-byte file accepted against the 262144 bound).
+- Legacy raw {__v,__value} gets corrupted; unsafe finite versions stop advancing.
+(Tracked for a background fix worker; not blocking the wider goals per Paul's directive.)
