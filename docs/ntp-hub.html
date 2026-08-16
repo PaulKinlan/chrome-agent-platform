@@ -2,76 +2,78 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Hub — new tab</title>
-<link rel="stylesheet" href="mock.css">
+<title>Agent Hub — new tab (mock)</title>
+<link rel="stylesheet" href="theme.css">
+<script type="module" src="components.js"></script>
 <style>
-  .wrap { max-width: 960px; margin: 0 auto; padding: 28px; }
-  .top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
-  .logo { font-size: 20px; font-weight: 700; }
+  .wrap { max-width: 680px; margin: 0 auto; padding: 40px 24px 64px; }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .logo { font-size: 18px; font-weight: 700; }
   .logo span { color: var(--accent); }
-  .composer {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 16px; margin-bottom: 20px;
-  }
-  .composer textarea {
-    width: 100%; background: transparent; border: 0; color: var(--text);
-    font: inherit; resize: vertical; min-height: 60px; outline: none;
-  }
-  .composer .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-  .composer .row .spacer { flex: 1; }
-  .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .panel h2 { margin: 0 0 12px; font-size: 15px; }
-  .agents { display: flex; flex-wrap: wrap; gap: 8px; }
-  .agent { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
-  .agent .name { font-weight: 600; }
-  .agent .tools { color: var(--muted); font-size: 12px; }
-  .task { border-top: 1px solid var(--border); padding: 10px 0; }
-  .task .t { font-weight: 600; }
-  .task .meta { color: var(--muted); font-size: 12px; }
+  .top-actions { display: flex; align-items: center; gap: 8px; }
+  .status { font-size: 13px; color: var(--muted); margin-right: 4px; }
+  .status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); margin-right: 6px; vertical-align: 1px; }
+  .composer { margin-bottom: 32px; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+  .section-head h2 { margin: 0; font-size: 15px; }
+  .cap-hint { font-size: 12px; color: var(--muted); }
+  .intent-group { margin-top: 20px; }
+  .intent-head { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+  .cap-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  .cap { display: flex; align-items: center; gap: 12px; padding: 0 14px 0 0; border-bottom: 1px solid var(--border); }
+  .cap:last-child { border-bottom: 0; }
+  .cap-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 0 10px 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .cap-main:hover, .cap-main:focus-visible { background: var(--bg); outline: none; }
+  .cap-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--muted); flex: 0 0 auto; }
+  .cap-body { flex: 1; min-width: 0; }
+  .cap-name { font-weight: 600; font-size: 13px; }
+  .cap-desc { font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cap-run { flex: 0 0 auto; font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; background: transparent; cursor: pointer; font: inherit; }
+  .switch { position: relative; width: 34px; height: 20px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; padding: 0; flex: 0 0 auto; margin-right: 14px; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); }
+  .switch[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+  .switch[aria-pressed="true"]::after { transform: translateX(14px); background: var(--btn-fg, #fff); }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="top">
+  <header class="top">
     <div class="logo">Chrome <span>Agent</span> Platform</div>
-    <div class="chip"><span class="dot"></span> agent ready · 14 sites enrolled</div>
-  </div>
-
-  <div class="composer">
-    <div class="tag">Start a task</div>
-    <textarea placeholder="Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …"></textarea>
-    <div class="row">
-      <button class="btn">Run task</button>
-      <button class="btn ghost" title="image">📷</button>
-      <button class="btn ghost" title="audio">🎙️</button>
-      <button class="btn ghost" title="video">🎥</button>
-      <div class="spacer"></div>
-      <span class="tag">text · image · audio · video</span>
+    <div class="top-actions">
+      <span class="status"><span class="dot"></span>ready</span>
     </div>
-  </div>
+  </header>
 
-  <div class="grid">
-    <div class="panel">
-      <h2>Active conversation</h2>
-      <div class="task"><div class="t">Summarise this week's HN front page</div><div class="meta">in progress · 2 pages visited · 3 tools called</div></div>
-      <div class="task"><div class="t">Watch this product page and alert me on price change</div><div class="meta">scheduled · daily 09:00</div></div>
-      <div class="task"><div class="t">Draft a reply to the thread about WebMCP</div><div class="meta">done · yesterday</div></div>
+  <agent-composer placeholder="Ask anything, or @mention a site agent…" send-label="Run task"></agent-composer>
+
+  <section>
+    <div class="section-head">
+      <h2>Capabilities</h2>
+      <span class="cap-hint">Run once, or enable to run in the background</span>
     </div>
-    <div class="panel">
-      <h2>Site agents</h2>
-      <div class="agents">
-        <div class="agent"><span class="name">@github</span><span class="tools">6 tools</span></div>
-        <div class="agent"><span class="name">@aifoc</span><span class="tools">3 tools</span></div>
-        <div class="agent"><span class="name">@figma</span><span class="tools">9 tools</span></div>
-        <div class="agent"><span class="name">@notion</span><span class="tools">5 tools</span></div>
-        <div class="agent"><span class="name">@twitter</span><span class="tools">2 tools</span></div>
-        <div class="agent"><span class="name">+ discover</span><span class="tools">inferred</span></div>
+
+    <div class="intent-group">
+      <div class="intent-head">Organize</div>
+      <div class="cap-list">
+        <div class="cap"><button class="cap-main"><span class="cap-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21 3l-9 9-3-3 9-9z"/><path d="M9 12l-6 6a2.5 2.5 0 0 0 3 3l6-6"/><path d="M12 9l3 3"/></svg></span><span class="cap-body"><span class="cap-name">Tab hygiene</span><span class="cap-desc">Find duplicate/stale tabs and close or group them.</span></span></button><button class="cap-run">Run</button></div>
+        <div class="cap"><button class="cap-main"><span class="cap-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span><span class="cap-body"><span class="cap-name">Sorting Hat</span><span class="cap-desc">Group open tabs by domain into colour-coded collapsed groups.</span></span></button><button class="switch" role="switch" aria-pressed="true" aria-label="Disable Sorting Hat"></button></div>
+        <div class="cap"><button class="cap-main"><span class="cap-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.89A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.89A2 2 0 0 0 5 15.24z"/></svg></span><span class="cap-body"><span class="cap-name">Auto-pin favourites</span><span class="cap-desc">Pin tabs that reappear 5+ times a week.</span></span></button><button class="switch" role="switch" aria-pressed="false" aria-label="Enable Auto-pin favourites"></button></div>
       </div>
-      <p style="color:var(--muted); font-size:12px; margin-top:12px;">Sites with WebMCP tools are callable agents. Sites without them get an inferred tool profile.</p>
     </div>
-  </div>
+
+    <div class="intent-group">
+      <div class="intent-head">Digest</div>
+      <div class="cap-list">
+        <div class="cap"><button class="cap-main"><span class="cap-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span class="cap-body"><span class="cap-name">Summarise this page</span><span class="cap-desc">Read the active tab and give a tight summary.</span></span></button><button class="cap-run">Run</button></div>
+        <div class="cap"><button class="cap-main"><span class="cap-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span class="cap-body"><span class="cap-name">Daily summary</span><span class="cap-desc">Evening journal of the day's browsing.</span></span></button><button class="switch" role="switch" aria-pressed="false" aria-label="Enable Daily summary"></button></div>
+      </div>
+    </div>
+  </section>
+
+  <section style="margin-top:32px">
+    <div class="section-head"><h2>Conversation</h2></div>
+    <p style="color:var(--muted);font-size:13px">No conversation yet — start one above.</p>
+  </section>
 </div>
-<div class="mock-note">mock · ntp-hub.html</div>
 </body>
 </html>
