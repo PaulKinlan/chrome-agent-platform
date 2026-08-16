@@ -78,3 +78,7 @@ The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
 - **HIGH correctness: concurrent follow-ups take thread history before run serialization (diverge); nameThreadAsync holds the global thread mutex while awaiting the Prompt API title.**
 - Medium: hook-required bookmarks/history/downloads/webNavigation/contextMenus/idle absent from optional_permissions; the media UI claims bytes sent but the SW doesn't pass them; the attach popover show lost on re-render.
 (Positive: manifest permissions=[], no debugger, no key literal, redactSecrets blocks the value leak, the deny-list rechecked, the suite green.)
+
+## Security testing (Paul, 2026-08-16) — a standing suite
+- **A repeatable security test suite** (an agent/automated tests) reviewing the security of the site: **network exfiltration** (network traces/info must not escape), **sandbox escapes** (HTML/scripts in the double-iframe must not escape + influence the page). chaos + co-do were robust here; match that.
+- **MCP-apps-style preference percolation** — user preferences should flow down through the layers (the double-iframe) properly (how? design + implement).

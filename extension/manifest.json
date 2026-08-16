@@ -11,7 +11,9 @@
     "tabs",
     "activeTab",
     "scripting",
-    "notifications"
+    "notifications",
+    "audioCapture",
+    "videoCapture"
   ],
   "optional_host_permissions": [
     "http://*/*",

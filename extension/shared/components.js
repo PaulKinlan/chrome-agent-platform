@@ -206,13 +206,47 @@ export function isHtmlDocument(text) {
 }
 
 /**
+ * The child Content-Security-Policy injected into every rendered-HTML frame.
+ * It blocks ALL network egress (connect-src 'none' kills fetch/XHR/beacon/
+ * WebSocket/EventSource; default-src 'none' + img-src data: blob: kills remote
+ * image/font/object/media/frame loads; form-action + base-uri are closed) while
+ * still allowing inline scripts + styles so a generated UI can be interactive.
+ * A script inside the frame therefore cannot exfiltrate data over the network
+ * or load remote content — the double-iframe sandbox holds.
+ */
+export const HTML_FRAME_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; " +
+  "object-src 'none'; frame-src 'none'; media-src data: blob:; font-src data:;";
+
+/**
+ * Inject the CSP <meta> as early as possible into an untrusted HTML document
+ * (after <head>, or prepended to a fragment) so no remote load can precede it.
+ */
+export function injectCspMeta(html) {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${HTML_FRAME_CSP}">`;
+  const s = String(html ?? "");
+  const m = s.match(/<head[^>]*>/i);
+  if (m) {
+    return s.replace(m[0], m[0] + meta);
+  }
+  return meta + s;
+}
+
+/**
  * Render untrusted HTML output in a SANDBOXED iframe (the co-do double-iframe
  * pattern: this trusted extension surface is the OUTER frame; the model's HTML
  * runs in an INNER opaque-sandbox iframe with no access to the extension origin
- * and no top-navigation/forms).
+ * and no top-navigation/forms/popups).
+ *
+ * sandbox="allow-scripts" keeps the frame an opaque origin: it cannot read
+ * parent.document, navigate top, or open popups. The injected CSP (above) then
+ * closes the network egress that a prompt-injected script would otherwise use
+ * to exfiltrate. Scripts may run (the UI can be interactive) but they are
+ * confined to the frame + cannot reach the network or the extension.
  */
 export function renderHtmlFrame(html) {
-  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts allow-popups" srcdoc="${escapeHtml(html)}"></iframe></div>`;
+  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectCspMeta(html))}"></iframe></div>`;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1348,6 +1382,17 @@ class AgentComposer extends Component {
   // model like any file).
   async _captureMedia(kind) {
     try {
+      // getUserMedia in an extension page needs the audioCapture/videoCapture
+      // permission (optional). Request it on this user gesture (the menu click)
+      // before calling getUserMedia, so the capture does not silently fail.
+      const perm = kind === "record-audio" ? "audioCapture" : "videoCapture";
+      if (kind === "record-audio" || kind === "capture-camera") {
+        const has = await chrome.permissions?.contains?.({ permissions: [perm] }).catch(() => false);
+        if (!has) {
+          const granted = await chrome.permissions?.request?.({ permissions: [perm] }).catch(() => false);
+          if (!granted) { this.setStatus(`${perm} permission denied — enable it to capture.`, false); return; }
+        }
+      }
       if (kind === "record-audio") {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         try {
