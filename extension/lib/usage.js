@@ -192,5 +192,12 @@ export async function getUsage() {
 }
 
 export async function clearUsage() {
-  await kvRemove(STORAGE_KEY);
+  // clearUsage must run INSIDE the SAME usage mutex as append/compensation (the
+  // round-25 blocker 7): an unlocked clear could interleave with an in-flight
+  // append/compensation, letting a still-writing append resurrect rows the owner
+  // just cleared. Route append, compensation, clear, and consistent reads through
+  // the same transaction.
+  return await withUsageLock(async () => {
+    await kvRemove(STORAGE_KEY);
+  });
 }

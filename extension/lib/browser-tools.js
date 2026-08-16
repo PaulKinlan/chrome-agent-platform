@@ -464,24 +464,14 @@ export async function captureTabScreenshot(tabId) {
             };
           }
           if (tabId) {
-            // Query the PRIOR active tab FIRST (the round-23 blocker: the
-            // prior-tab query was inserted AFTER the ownership assertion, so
-            // ownership could be lost during that query yet the activation still
-            // executed — the assertion was not adjacent to the mutation). Then
-            // assert DUrable ownership IMMEDIATELY before the activation mutation.
+            // Query the PRIOR active tab FIRST (for restore on ANY later failure —
+            // a failed capture must never leave the owner's active tab switched).
             const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true }))
               .find((t) => t.id !== tabId) ?? null;
-            try {
-              await assertRunOwned();
-            } catch {
-              return { error: "run aborted — tab not activated" };
-            }
             // Re-read + REVALIDATE the target identity IMMEDIATELY before
             // activation (AFTER the prior-tab query await): the `fresh` read above
             // happened several awaits ago, and a navigation during the prior-tab
-            // query could move the target to an unauthorized origin (the round-24
-            // capture-identity blocker — the target could navigate then be
-            // activated). Re-derive + compare the origin NOW, bound to the mutation.
+            // query could move the target to an unauthorized origin.
             const preActivate = await chrome.tabs.get(target.id).catch(() => null);
             const preOrigin = preActivate?.url
               ? (() => {
@@ -497,6 +487,16 @@ export async function captureTabScreenshot(tabId) {
                 error:
                   "tab navigated before capture — screenshot discarded (identity changed)",
               };
+            }
+            // DUrable ownership asserted IMMEDIATELY before the activation mutation
+            // — NO await between this check and tabs.update (the round-25 blocker:
+            // ownership was checked BEFORE the awaited preActivate identity get, so
+            // ownership could be lost during that await yet the activation still
+            // executed with ownedAtMutation:false).
+            try {
+              await assertRunOwned();
+            } catch {
+              return { error: "run aborted — tab not activated" };
             }
             try {
               await chrome.tabs.update(tabId, { active: true });

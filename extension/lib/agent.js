@@ -19,11 +19,30 @@ delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
 function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
   if (!memory) return {};
+  // Reads must be ENROLLMENT-scoped too (the round-24/25 finding: memory_get/
+  // memory_list were completely unfenced, so a stale deleted worker could read a
+  // re-enrolled origin's memory through the reused origin path). Return an error
+  // instead of the value when the run-start generation no longer matches the
+  // current enrollment.
+  const enrolledGuard = async () => {
+    if (!enrollmentGuard) return null;
+    const g = await enrollmentGuard();
+    const runGen = getRunGen?.() ?? null;
+    if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+    if (runGen != null && (g.gen ?? 0) !== runGen) {
+      return { error: "origin re-enrolled during run — memory read rejected" };
+    }
+    return null;
+  };
   return {
     memory_get: tool({
       description: "Read a value from the agent's memory.",
       inputSchema: z.object({ key: z.string() }),
-      execute: async ({ key }) => ({ key, value: await memory.get(key) }),
+      execute: async ({ key }) => {
+        const err = await enrolledGuard();
+        if (err) return err;
+        return { key, value: await memory.get(key) };
+      },
     }),
     memory_set: tool({
       description:
@@ -116,10 +135,26 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
           // (durable owner gone while the signal is still live) is compensated here
           // too — `committed` is set on ANY post-write fence failure, not just a
           // signal abort (the round-20 finding).
+          //
+          // Compensation must be ENROLLMENT-GENERATION-scoped (the round-25
+          // blocker): only restore the previous value when the origin is STILL the
+          // SAME enrollment (same run-start generation). A delete→re-enroll during
+          // the awaited write means the NEW enrollment owns the store, and a stale
+          // run must NOT overwrite/delete the new value.
           if (committed && typeof memory.set === "function") {
             try {
-              if (existed) await memory.set(key, prev);
-              else await memory.delete(key);
+              let sameEnrollment = true;
+              if (enrollmentGuard) {
+                const g = await enrollmentGuard();
+                const runGen = getRunGen?.() ?? null;
+                if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+                  sameEnrollment = false;
+                }
+              }
+              if (sameEnrollment) {
+                if (existed) await memory.set(key, prev);
+                else await memory.delete(key);
+              }
             } catch { /* best-effort */ }
           }
           return { error: String(e?.message ?? e) };
@@ -129,7 +164,11 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
     memory_list: tool({
       description: "List memory keys.",
       inputSchema: z.object({}),
-      execute: async () => ({ keys: await memory.keys() }),
+      execute: async () => {
+        const err = await enrolledGuard();
+        if (err) return err;
+        return { keys: await memory.keys() };
+      },
     }),
   };
 }

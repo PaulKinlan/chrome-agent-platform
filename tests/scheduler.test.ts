@@ -680,3 +680,69 @@ Deno.test("reconcileScheduledTasks does NOT re-arm a cancelling payload (round-2
     await chrome.storage.local.set({ "cap:scheduledTasks": {} });
   }
 });
+
+Deno.test("cancelScheduledTask persists cancelling BEFORE touching the alarm (round-25 crash-safety blocker)", async () => {
+  let payloadAtClear = null;
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => {
+    // At the instant clear runs, the payload must ALREADY be cancelling (inert),
+    // so a crash between this point and the final delete leaves a non-runnable
+    // payload — never a normal runnable one that reconcile would re-arm.
+    const s = await chrome.storage.local.get("cap:scheduledTasks");
+    payloadAtClear = s["cap:scheduledTasks"]?.["task_crash"];
+    return true;
+  };
+  chrome.alarms.get = async () => undefined; // absent → the normal delete path
+  try {
+    await chrome.storage.local.set({
+      "cap:scheduledTasks": {
+        "task_crash": {
+          name: "task_crash",
+          task: "should-not-rerun",
+          at: Date.now() + 60000,
+        },
+      },
+    });
+    await cancelScheduledTask("task_crash");
+    assert(
+      payloadAtClear?.cancelling === true,
+      "the payload must be marked cancelling BEFORE the alarm is cleared",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("cancelScheduledTask aborts a live same-boot run (round-25 blocker)", async () => {
+  const lock = await tryAcquireInflight("task_running");
+  assert(lock.acquired === true, "precondition: the run must be acquired");
+
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => true;
+  chrome.alarms.get = async () => undefined;
+  try {
+    await chrome.storage.local.set({
+      "cap:scheduledTasks": {
+        "task_running": {
+          name: "task_running",
+          task: "should-not-rerun",
+          at: Date.now() + 60000,
+        },
+      },
+    });
+    await cancelScheduledTask("task_running");
+    assert(
+      lock.signal.aborted === true,
+      "cancel must abort the already-acquired run's controller (fence the running agent/tools)",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await releaseInflight("task_running", lock.token);
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});

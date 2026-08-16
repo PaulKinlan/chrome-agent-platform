@@ -66861,7 +66861,9 @@ async function getUsage() {
   };
 }
 async function clearUsage() {
-  await kvRemove(STORAGE_KEY);
+  return await withUsageLock(async () => {
+    await kvRemove(STORAGE_KEY);
+  });
 }
 
 // extension/lib/skills.js
@@ -66899,11 +66901,25 @@ user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
   if (!memory) return {};
+  const enrolledGuard = async () => {
+    if (!enrollmentGuard) return null;
+    const g = await enrollmentGuard();
+    const runGen = getRunGen?.() ?? null;
+    if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+    if (runGen != null && (g.gen ?? 0) !== runGen) {
+      return { error: "origin re-enrolled during run \u2014 memory read rejected" };
+    }
+    return null;
+  };
   return {
     memory_get: tool({
       description: "Read a value from the agent's memory.",
       inputSchema: external_exports3.object({ key: external_exports3.string() }),
-      execute: async ({ key }) => ({ key, value: await memory.get(key) })
+      execute: async ({ key }) => {
+        const err = await enrolledGuard();
+        if (err) return err;
+        return { key, value: await memory.get(key) };
+      }
     }),
     memory_set: tool({
       description: "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
@@ -66955,8 +66971,18 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
         } catch (e) {
           if (committed && typeof memory.set === "function") {
             try {
-              if (existed) await memory.set(key, prev);
-              else await memory.delete(key);
+              let sameEnrollment = true;
+              if (enrollmentGuard) {
+                const g = await enrollmentGuard();
+                const runGen = getRunGen?.() ?? null;
+                if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) {
+                  sameEnrollment = false;
+                }
+              }
+              if (sameEnrollment) {
+                if (existed) await memory.set(key, prev);
+                else await memory.delete(key);
+              }
             } catch {
             }
           }
@@ -66967,7 +66993,11 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
     memory_list: tool({
       description: "List memory keys.",
       inputSchema: external_exports3.object({}),
-      execute: async () => ({ keys: await memory.keys() })
+      execute: async () => {
+        const err = await enrolledGuard();
+        if (err) return err;
+        return { keys: await memory.keys() };
+      }
     })
   };
 }
@@ -67499,6 +67529,15 @@ async function cancelScheduledTask(name25) {
     if (!existing) {
       return { ok: true, name: name25, cancelled: false, error: "no such task" };
     }
+    tasks[name25] = { ...existing, cancelling: true, cancellingAt: Date.now() };
+    await kvSet({ [TASK_KEY]: tasks });
+    const live = activeRuns.get(name25);
+    if (live) {
+      try {
+        live.controller.abort();
+      } catch {
+      }
+    }
     const alarms = alarmsApi();
     let alarmAbsent = true;
     if (alarms) {
@@ -67513,12 +67552,6 @@ async function cancelScheduledTask(name25) {
       }
     }
     if (!alarmAbsent) {
-      tasks[name25] = {
-        ...existing,
-        cancelling: true,
-        cancellingAt: Date.now()
-      };
-      await kvSet({ [TASK_KEY]: tasks });
       return {
         ok: false,
         name: name25,
@@ -67955,11 +67988,6 @@ async function captureTabScreenshot(tabId) {
       }
       if (tabId) {
         const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id !== tabId) ?? null;
-        try {
-          await assertRunOwned();
-        } catch {
-          return { error: "run aborted \u2014 tab not activated" };
-        }
         const preActivate = await chrome.tabs.get(target.id).catch(() => null);
         const preOrigin = preActivate?.url ? (() => {
           try {
@@ -67972,6 +68000,11 @@ async function captureTabScreenshot(tabId) {
           return {
             error: "tab navigated before capture \u2014 screenshot discarded (identity changed)"
           };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted \u2014 tab not activated" };
         }
         try {
           await chrome.tabs.update(tabId, { active: true });
@@ -68966,12 +68999,12 @@ async function ensureOrchestrator() {
         return { ok: true, gen: snap.gen };
       }
     });
-    for (const [origin, agent] of orch.workers) {
-      workerRunGenGetters.set(origin, agent.getRunGen);
-    }
     if (generation === gen) {
       orchestrator = orch;
       orchestratorGen = gen;
+      for (const [origin, agent] of orch.workers) {
+        workerRunGenGetters.set(origin, agent.getRunGen);
+      }
       return orch;
     }
   }
@@ -69027,7 +69060,12 @@ async function invokeSiteTool(origin, name25, args, expectedGen = null) {
   if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
   }
-  const gen = expectedGen != null ? expectedGen : snap.gen;
+  if (expectedGen == null) {
+    return {
+      error: `no active run generation for ${canonical} \u2014 site invocation rejected`
+    };
+  }
+  const gen = expectedGen;
   if (snap.gen !== gen) {
     return {
       error: `origin ${canonical} was re-enrolled during run \u2014 site invocation rejected`
@@ -69677,6 +69715,13 @@ var handlers = {
         id: `delegate:${canonical}:${Date.now()}`,
         task,
         result
+      }, async () => {
+        const g = await enrollmentSnapshot(canonical);
+        if (!g.enrolled || g.gen !== gen) {
+          throw new Error(
+            `origin ${canonical} was disenrolled during delegation \u2014 journal discarded`
+          );
+        }
       });
       return { ok: true, origin: canonical, result };
     });

@@ -98,6 +98,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // result is never surfaced). The disenrollment's generation is recorded
     // monotonically so a later stale sync cannot resurrect the bridge (round-24).
     const gen = typeof message.gen === "number" ? message.gen : null;
+    // MONOTONIC in BOTH directions (the round-25 blocker 8): reject a STALE
+    // disenrollment (older gen than a sync we already applied) — the old code
+    // unconditionally set `disenrolled = true`, so an older tombstone could cancel
+    // a NEWER enrollment. Only the LATEST generation wins, for sync AND disenroll.
+    if (gen != null && gen < maxGen) {
+      sendResponse({ ok: false, error: "stale disenrollment rejected" });
+      return true;
+    }
     if (gen != null) maxGen = Math.max(maxGen, gen);
     disenrolled = true;
     currentGen = null;

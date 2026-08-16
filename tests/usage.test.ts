@@ -62,3 +62,48 @@ Deno.test("concurrent recordUsage appends do not lose rows (round-24 usage-RMW b
     await clearUsage();
   }
 });
+
+Deno.test("clearUsage serializes against a concurrent append (round-25 blocker)", async () => {
+  __resetSessionForTest();
+  store.clear();
+  // A controllable gate: once armed, the next storage READ blocks until released,
+  // so we can deterministically hold the append inside the usage mutex while a
+  // clear arrives (without any timing-dependent setTimeout).
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let blockReads = false;
+  let signalBlocked = null;
+  const blockedP = new Promise((r) => { signalBlocked = r; });
+  const origGet = chrome.storage.local.get;
+  chrome.storage.local.get = async (key) => {
+    if (blockReads) {
+      signalBlocked?.();
+      await gate;
+    }
+    return origGet(key);
+  };
+  try {
+    await recordUsage({ agentId: "seed", inputTokens: 1, outputTokens: 0 });
+    blockReads = true;
+    // Start an append; it enters the usage mutex and blocks on its storage read.
+    const append = recordUsage({ agentId: "late", inputTokens: 2, outputTokens: 0 });
+    await blockedP; // the append now HOLDS the usage mutex (mid read-modify-write)
+    // The clear must QUEUE behind the append, not interleave with it. With clear
+    // OUTSIDE the mutex, its kvRemove would run now and the append's later write
+    // would resurrect the rows (the round-25 blocker).
+    const cleared = clearUsage();
+    release();
+    await Promise.all([append, cleared]);
+    const rows = (await getUsage()).rows;
+    assert(
+      rows.length === 0,
+      "clear must not be resurrected by a concurrent append (clear is serialized)",
+    );
+  } finally {
+    blockReads = false;
+    release?.();
+    chrome.storage.local.get = origGet;
+    delayMs = 0;
+    await clearUsage();
+  }
+});

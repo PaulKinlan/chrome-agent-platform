@@ -348,17 +348,21 @@ async function ensureOrchestrator() {
         return { ok: true, gen: snap.gen };
       },
     });
-    // Register each worker's run-generation getter so the site-tool execute
-    // closures can read the IMMUTABLE run gen (not a re-snapshot of the current
-    // enrollment) — see workerRunGenGetters + invokeSiteTool (round-24 blocker 3).
-    for (const [origin, agent] of orch.workers) {
-      workerRunGenGetters.set(origin, agent.getRunGen);
-    }
     // Commit only if the generation is still current (an invalidation during
     // the awaits above means this orchestrator used stale config).
     if (generation === gen) {
       orchestrator = orch;
       orchestratorGen = gen;
+      // Register each worker's run-generation getter ONLY AFTER the commit —
+      // publishing getters BEFORE the commit check let an UNCOMMITTED worker (from
+      // a stale build that then looped) overwrite a live worker's getter with one
+      // whose activeRun is null, which invokeSiteTool then fell back on (the
+      // round-25 blocker 4: a global mutable getter published before validation/
+      // commit). The site-tool invocation reads the immutable run gen through this
+      // committed getter.
+      for (const [origin, agent] of orch.workers) {
+        workerRunGenGetters.set(origin, agent.getRunGen);
+      }
       return orch;
     }
     // Stale build — loop and rebuild under the new generation.
@@ -457,10 +461,17 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
   // The IMMUTABLE run-start generation (threaded from the worker's run) takes
   // precedence over the current snapshot's generation. A stale run whose origin
   // was re-enrolled mid-run must NOT operate under the NEW enrollment — reject
-  // when the current generation no longer matches the run's captured generation
-  // (the round-24 gen-threading blocker: invokeSiteTool snapshotted the CURRENT
-  // generation, not the immutable run generation).
-  const gen = expectedGen != null ? expectedGen : snap.gen;
+  // when the current generation no longer matches the run's captured generation.
+  // Reject a MISSING expected generation too (the round-25 blocker 4): the site
+  // tool must operate under the IMMUTABLE run-start gen, never FALL BACK to the
+  // current snapshot's generation — a stale run without a bound gen would
+  // otherwise operate under a re-enrolled origin's generation (fail open).
+  if (expectedGen == null) {
+    return {
+      error: `no active run generation for ${canonical} — site invocation rejected`,
+    };
+  }
+  const gen = expectedGen;
   if (snap.gen !== gen) {
     return {
       error: `origin ${canonical} was re-enrolled during run — site invocation rejected`,
@@ -1369,11 +1380,25 @@ const handlers = {
             `origin ${canonical} was disenrolled during delegation — result discarded`,
         };
       }
+      // The journal commit must be GENERATION-FENCED (the round-25 blocker 5):
+      // Scripting Disable tombstones under the GLOBAL enrollment lock WITHOUT
+      // taking the per-origin lock, so it can land during the journalAppend's
+      // awaits. A generation guard revalidates the enrollment immediately BEFORE
+      // and AFTER the commit (journalAppend compensates on a post-commit mismatch),
+      // so a stale delegated result is never journaled into a re-enrolled origin's
+      // store.
       await journalAppend(siteMemory(canonical), {
         type: "delegated-result",
         id: `delegate:${canonical}:${Date.now()}`,
         task,
         result,
+      }, async () => {
+        const g = await enrollmentSnapshot(canonical);
+        if (!g.enrolled || g.gen !== gen) {
+          throw new Error(
+            `origin ${canonical} was disenrolled during delegation — journal discarded`,
+          );
+        }
       });
       return { ok: true, origin: canonical, result };
     });

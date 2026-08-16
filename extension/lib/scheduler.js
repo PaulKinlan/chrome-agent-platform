@@ -245,6 +245,30 @@ export async function cancelScheduledTask(name) {
     if (!existing) {
       return { ok: true, name, cancelled: false, error: "no such task" };
     }
+    // CRASH-SAFE TWO-PHASE TRANSITION (the round-25 blocker): persist the
+    // `cancelling` intent FIRST — BEFORE touching the alarm — so EVERY crash
+    // point leaves a NON-RUNNABLE payload. The old order cleared + confirmed the
+    // alarm first and only persisted `cancelling` AFTERWARD, so a crash between
+    // clear-confirm and the payload write left a normal runnable payload that
+    // boot reconcile re-armed + reran. `cancelling` is skipped by BOTH
+    // reconcileScheduledTasks and handleAlarm, so the payload is inert from the
+    // instant this write lands.
+    tasks[name] = { ...existing, cancelling: true, cancellingAt: Date.now() };
+    await kvSet({ [TASK_KEY]: tasks });
+
+    // Abort any LIVE same-boot run of this task (the round-25 blocker: cancel
+    // only touched persisted state and never stopped an already-acquired
+    // handleAlarm run). The run's fence re-checks ownership/abort at every
+    // durable boundary, so aborting its controller stops the running agent/tools
+    // at the next commit boundary rather than letting it commit side effects
+    // after the owner cancelled.
+    const live = activeRuns.get(name);
+    if (live) {
+      try {
+        live.controller.abort();
+      } catch { /* already aborted */ }
+    }
+
     // Clear the alarm (best-effort — a one-shot may already be consumed), then
     // CONFIRM absence via alarms.get so a periodic alarm whose clear FAILED is
     // not silently left armed (the round-19/20 alarm-clear ambiguity).
@@ -262,16 +286,10 @@ export async function cancelScheduledTask(name) {
     }
     if (!alarmAbsent) {
       // The alarm is STILL armed (clear failed or the state could not be
-      // confirmed) — FAIL CLOSED. Mark the payload non-runnable + cancel-pending
-      // so reconciliation never re-arms it AND alarm delivery skips it, and
-      // return a retryable failure. The payload is ONLY deleted once alarms.get
+      // confirmed) — FAIL CLOSED. The payload is ALREADY `cancelling` (inert),
+      // so it stays retryable until alarms.get confirms absence (reconciliation
+      // + alarm delivery both skip it). The payload is ONLY deleted once alarms.get
       // confirms the alarm is absent.
-      tasks[name] = {
-        ...existing,
-        cancelling: true,
-        cancellingAt: Date.now(),
-      };
-      await kvSet({ [TASK_KEY]: tasks });
       return {
         ok: false,
         name,
@@ -281,6 +299,7 @@ export async function cancelScheduledTask(name) {
         error: "alarm still armed — cancel is pending (retry to confirm removal)",
       };
     }
+    // Confirmed absent → terminal: delete the (already-inert) payload.
     delete tasks[name];
     await kvSet({ [TASK_KEY]: tasks });
     return { ok: true, name, cancelled: true, alarmAbsent: true };
