@@ -83,12 +83,22 @@
       <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;message-bubble&gt;</code> — conversation turns</h3>
         <div class="stage column" style="max-width:560px">
-          <message-bubble role="user"><span>Summarise the key points of the current page.</span></message-bubble>
-          <message-bubble role="agent"><span>This page argues three things: a, b, and c…</span></message-bubble>
-          <message-bubble role="tool"><span>→ tab_list · ✓ tab_list — 12 tabs</span></message-bubble>
-          <message-bubble role="error"><span>provider unreachable — retry?</span></message-bubble>
+          <message-bubble role="user" content="Summarise the key points of the current page."></message-bubble>
+          <message-bubble role="agent" content="This page argues three things: a, b, and c…"></message-bubble>
+          <message-bubble role="thinking" content="I should list the tabs first, then group by domain, then name each group." step="1" total-steps="3"></message-bubble>
+          <message-bubble role="tool" tool-name="tab_list" tool-status="success" tool-args='{"windowId": 3}' tool-result="12 tabs"></message-bubble>
+          <message-bubble role="tool" tool-name="tab_group" tool-status="error" tool-args='{"title":"github.com"}' tool-result="tab already grouped"></message-bubble>
+          <message-bubble role="error" content="provider unreachable — retry?"></message-bubble>
         </div>
-        <p class="caption">role carried by alignment + surface — user right, agent/tool/error left; no text label.</p>
+        <p class="caption">role carried by alignment + surface — user right, agent/thinking/tool/error left; markdown + code + tool cards render inside <code>agent</code>/<code>system</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-conversation&gt;</code> — the unified surface</h3>
+        <div class="stage column" style="max-width:640px">
+          <agent-conversation id="conv-example"></agent-conversation>
+        </div>
+        <p class="caption">renders a full turn: user message (with a fenced code block), a collapsible thinking trace, structured tool cards (done + error), and a system response with a code block + inline code + a list.</p>
       </div>
 
       <div class="specimen">
@@ -230,6 +240,17 @@
       document.querySelectorAll("mic-button").forEach((m) =>
         m.addEventListener("mic-toggle", (e) => log("#hub-log", `mic ${e.detail.listening ? "on" : "off"}`))
       );
+
+      // <agent-conversation> example — a realistic full turn (user + thinking
+      // trace + tool cards + a system response with code / inline code / list).
+      const conv = document.getElementById("conv-example");
+      conv?.setMessages([
+        { role: "user", content: "Hello — generate a Python greeting function and run a small example.\n```tool_code\nprint(\"# Task Received: 7817 chars\")\nprint(\"Hello from the demo\")\n```" },
+        { role: "thinking", step: 1, totalSteps: 3, content: "The user wants a greeting function. I'll generate a small runnable example with an f-string, then verify it via a tool call." },
+        { role: "tool", "tool-name": "generate_code", "tool-status": "success", "tool-args": "{\"lang\":\"python\"}", "tool-result": "generated 2 lines" },
+        { role: "tool", "tool-name": "verify_syntax", "tool-status": "error", "tool-args": "{\"lang\":\"python\"}", "tool-result": "python3 not installed on this machine" },
+        { role: "system", content: "Here is the function:\n\n```python\ndef greet(name=\"world\"):\n    return f\"Hello, {name}!\"\n```\n\nUse it with `greet(\"Paul\")`. A few notes:\n- it defaults to \"world\"\n- it is an f-string\n- see [the docs](https://docs.python.org/3/tutorial/inputoutput.html)" },
+      ]);
     </script>
   </body>
 </html>

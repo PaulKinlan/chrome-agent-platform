@@ -51,6 +51,15 @@ export function prefersReducedMotion() {
   }
 }
 
+/** Inject a <style> once (idempotent, id-keyed) — used by light-DOM components. */
+function ensureStyle(styleId, css) {
+  if (document.getElementById(styleId)) return;
+  const st = document.createElement("style");
+  st.id = styleId;
+  st.textContent = css;
+  document.head.appendChild(st);
+}
+
 export function parseJSONAttr(v, fallback) {
   if (v == null || v === "") return fallback;
   try {
@@ -62,6 +71,81 @@ export function parseJSONAttr(v, fallback) {
 
 export function fire(el, type, detail = {}) {
   el.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Safe markdown renderer (no eval / new Function). Escapes everything FIRST,
+ * then transforms a small, safe subset: fenced code blocks, inline code,
+ * bold/italic, links, headings, and lists. Anything unrecognized stays literal
+ * text. Used by the conversation surface to render agent/system output.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+function renderInline(text) {
+  let s = escapeHtml(text);
+  // inline code `...`
+  s = s.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>');
+  // links [text](url) — http(s) only, opens in a new tab
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // bold **text**
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  // italic *text* (not part of a bold pair)
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  return s;
+}
+
+function renderBlockText(text) {
+  const lines = String(text ?? "").split("\n");
+  let html = "";
+  let list = null;
+  let para = [];
+  const flushPara = () => {
+    if (para.length) { html += `<p>${renderInline(para.join(" "))}</p>`; para = []; }
+  };
+  const flushList = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, "");
+    const ul = line.match(/^\s*[-*+]\s+(.+)$/);
+    const ol = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    const h = line.match(/^(#{1,4})\s+(.+)$/);
+    if (ul) {
+      flushPara();
+      if (list !== "ul") { flushList(); html += "<ul>"; list = "ul"; }
+      html += `<li>${renderInline(ul[1])}</li>`;
+    } else if (ol) {
+      flushPara();
+      if (list !== "ol") { flushList(); html += "<ol>"; list = "ol"; }
+      html += `<li>${renderInline(ol[1])}</li>`;
+    } else if (h) {
+      flushPara(); flushList();
+      const level = Math.min(h[1].length, 4);
+      html += `<h${level}>${renderInline(h[2])}</h${level}>`;
+    } else if (!line.trim()) {
+      flushPara(); flushList();
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushPara(); flushList();
+  return html;
+}
+
+/** Render a small, safe markdown subset to HTML (fenced blocks → <code-block>). */
+export function renderMarkdown(text) {
+  const src = String(text ?? "");
+  const out = [];
+  const fence = /^```([^\n`]*)\n?([\s\S]*?)(?:^```\s*$)/gm;
+  let last = 0;
+  let m;
+  while ((m = fence.exec(src))) {
+    if (m.index > last) out.push(renderBlockText(src.slice(last, m.index)));
+    const lang = (m[1] || "").trim();
+    out.push(`<code-block lang="${escapeHtml(lang)}">${escapeHtml(m[2])}</code-block>`);
+    last = m.index + m[0].length;
+  }
+  if (last < src.length) out.push(renderBlockText(src.slice(last)));
+  return out.join("");
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -656,39 +740,228 @@ class CapabilityRow extends Component {
 }
 customElements.define("capability-row", CapabilityRow);
 
-/* <message-bubble role="user|agent|error|thinking|tool">content</message-bubble>
+/* <code-block lang="python">code text</code-block>
+ * A fenced code block: monospace, a subtle panel surface, a language label,
+ * horizontal scroll + a copy button. Content is its light-DOM text (already
+ * HTML-escaped by the markdown renderer). */
+class CodeBlock extends Component {
+  static get observedAttributes() { return ["lang"]; }
+  _render() {
+    const lang = this.getAttribute("lang") || "";
+    const code = (this.textContent || "").replace(/\n$/, "");
+    mountTemplate(this, `
+      :host { display:block; margin:10px 0; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); background:var(--panel-2,#efede8); overflow:hidden; }
+      .head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 10px; background:var(--panel,#ffffff); border-bottom:1px solid var(--border,#e3e0d9); }
+      .lang { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; letter-spacing:.02em; color:var(--muted,#635e56); }
+      .copy { border:0; background:transparent; color:var(--muted,#635e56); font-size:11px; cursor:pointer; padding:2px 6px; border-radius:4px; }
+      .copy:hover { background:var(--panel-2,#efede8); color:var(--text,#1d1b18); }
+      .copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      pre { margin:0; padding:10px 12px; overflow-x:auto; }
+      code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.5; white-space:pre; color:var(--text,#1d1b18); }
+    `, `<div class="head"><span class="lang">${escapeHtml(lang) || "code"}</span><button type="button" class="copy">Copy</button></div><pre><code>${escapeHtml(code)}</code></pre>`);
+  }
+  _wire() {
+    const btn = this._root.querySelector(".copy");
+    btn?.addEventListener("click", async () => {
+      const code = this.textContent || "";
+      try {
+        await navigator.clipboard?.writeText(code);
+        btn.textContent = "Copied";
+      } catch {
+        // clipboard unavailable (e.g. file:// showcase) — still give feedback.
+        const ta = document.createElement("textarea");
+        ta.value = code;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); btn.textContent = "Copied"; } catch { btn.textContent = "Copy"; }
+        ta.remove();
+      }
+      setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+    });
+  }
+}
+customElements.define("code-block", CodeBlock);
+
+/* <message-bubble role="user|agent|system|thinking|tool|error" content="…">
  * A single conversation turn. The ROLE is carried by the bubble's styling
- * (alignment + surface), never by a literal text label — a user turn sits
- * right on a tinted surface, an agent turn sits left on a hairline card, a
- * tool call is a quiet monospace line, thinking is a live spinner. */
+ * (alignment + surface), never by a literal text label:
+ *   - user: right-aligned, tinted surface
+ *   - agent/system: left, hairline card, content rendered as markdown
+ *     (code blocks → <code-block>, inline code, bold, lists, links, headings)
+ *   - thinking: a collapsible, muted reasoning trace (a <details>)
+ *   - tool: a structured card (name + status + args + result)
+ *   - error: a left card with a danger border
+ * Content comes from the `content` attribute (or the light-DOM text as a
+ * fallback), so the gallery can populate it declaratively. */
 class MessageBubble extends Component {
-  static get observedAttributes() { return ["role"]; }
+  static get observedAttributes() {
+    return ["role", "content", "tool-name", "tool-status", "tool-args", "tool-result", "step", "total-steps"];
+  }
+  _content() {
+    return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
+  }
   _render() {
     const role = this.getAttribute("role") || "agent";
-    const thinking = role === "thinking";
-    mountTemplate(this, `
+    const content = this._content();
+    const style = `
       :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
       :host(:last-child) { margin-bottom:0; }
       :host([role="user"]) { justify-content:flex-end; }
-      .msg { max-width:76%; border-radius:12px; padding:10px 14px; }
-      .body { white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
+      .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
+      .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
       :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
-      :host([role="agent"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
-      :host([role="error"]) .msg { border:1px solid var(--danger,#b3261e); }
+      :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
+      :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
       :host([role="error"]) .body { color:var(--danger,#b3261e); }
-      :host([role="tool"]) .msg { padding:2px 0; border-radius:0; }
-      :host([role="tool"]) .body { color:var(--muted,#6e6a62); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5; }
-      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#6e6a62); font-size:14px; padding:2px 0; }
-      .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; }
+      /* markdown content inside agent/system */
+      .body p { margin:0 0 8px; }
+      .body p:last-child { margin-bottom:0; }
+      .body ul, .body ol { margin:0 0 8px; padding-left:20px; }
+      .body li { margin:2px 0; }
+      .body h1, .body h2, .body h3, .body h4 { margin:12px 0 6px; font-size:1.05em; font-weight:600; line-height:1.3; }
+      .body h1:first-child, .body h2:first-child { margin-top:0; }
+      .body a { color:var(--accent,#0e6e63); text-decoration:underline; text-underline-offset:2px; }
+      .body code.inline-code, .body :not(pre) > code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:1px 5px; }
+      .body strong { font-weight:600; }
+      .body em { font-style:italic; }
+      /* thinking trace — collapsible, muted, clearly not a wall of text */
+      .think { width:100%; }
+      .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
+      .think summary::-webkit-details-marker { display:none; }
+      .think summary:hover { color:var(--text,#1d1b18); }
+      .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; flex:0 0 auto; }
+      .think .caret { transition:transform .15s ease; flex:0 0 auto; }
+      .think[open] .caret { transform:rotate(90deg); }
+      .think .trace { margin-top:8px; padding:8px 12px; border-left:2px solid var(--border,#e3e0d9); color:var(--muted,#635e56); font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.5; }
       @keyframes sc-think { to { transform: rotate(360deg); } }
-      @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } }
-    `, thinking
-      ? `<div class="think" role="status"><span class="spin" aria-hidden="true"></span><span class="body"><slot></slot></span></div>`
-      : `<div class="msg"><div class="body"><slot></slot></div></div>`
-    );
+      @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } .think .caret { transition: none; } }
+      /* tool card */
+      .tool { display:flex; flex-direction:column; width:100%; max-width:640px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); overflow:hidden; }
+      .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
+      .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); }
+      .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
+      .tool .tool-status::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+      .tool .tool-status.running { color:var(--muted,#635e56); background:var(--panel,#ffffff); }
+      .tool .tool-status.done { color:var(--success,#1a7f37); background:var(--panel,#ffffff); }
+      .tool .tool-status.error { color:var(--danger,#b3261e); background:var(--panel,#ffffff); }
+      .tool .tool-args { padding:6px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; }
+      .tool .tool-result { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
+    `;
+    let markup;
+    if (role === "tool") {
+      const name = this.getAttribute("tool-name") || "tool";
+      const statusRaw = this.getAttribute("tool-status") || "running";
+      const status = statusRaw === "success" ? "done" : statusRaw === "error" ? "error" : "running";
+      const args = this.getAttribute("tool-args");
+      const result = this.getAttribute("tool-result");
+      markup = `<div class="tool" role="status">
+        <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
+        ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
+        ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
+      </div>`;
+    } else if (role === "thinking") {
+      const step = this.getAttribute("step");
+      const total = this.getAttribute("total-steps");
+      const hasTrace = content && !/^thinking\.\.\.$/i.test(content.trim()) && !/^thinking…$/i.test(content.trim());
+      const label = step != null ? `thinking · step ${step}${total ? ` of ${total}` : ""}` : "thinking";
+      if (!hasTrace) {
+        markup = `<div class="think" role="status"><summary style="list-style:none;display:flex;align-items:center;gap:8px;color:var(--muted,#635e56);font-size:13px;padding:2px 0;"><span class="spin" aria-hidden="true"></span><span>${escapeHtml(label)}</span></summary></div>`;
+      } else {
+        markup = `<details class="think"><summary><svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg><span>${escapeHtml(label)}</span></summary><div class="trace">${escapeHtml(content)}</div></details>`;
+      }
+    } else {
+      const body = (role === "agent" || role === "system" || role === "user") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
+      markup = `<div class="msg ${role}"><div class="body">${body}</div></div>`;
+    }
+    mountTemplate(this, style, markup);
   }
 }
 customElements.define("message-bubble", MessageBubble);
+
+/* <agent-conversation messages='[{role,content,…}]'>
+ * The unified conversational surface (the "Now" section + the chat). A
+ * light-DOM flex column that hosts <message-bubble> children. Imperative API:
+ *   appendUser(text) / appendAgent(text) / appendSystem(text)
+ *   appendThinking(text, {step,totalSteps}) / appendTool({name,args,status,result})
+ *   appendError(text) / clear() / setMessages(messages)
+ * The `messages` attribute populates it declaratively for the showcase. */
+class AgentConversation extends Component {
+  static shadow() { return false; }
+  static get observedAttributes() { return ["messages"]; }
+  _render() {
+    ensureStyle("sc-agent-conversation-style", `
+      agent-conversation { display:flex; flex-direction:column; min-height:0; }
+      agent-conversation .empty { color:var(--muted,#635e56); font-size:var(--text-sm,13px); padding:2px 0; }
+    `);
+    const msgs = this.getAttribute("messages");
+    if (msgs != null) this.setMessages(parseJSONAttr(msgs, []));
+  }
+  attributeChangedCallback(name, ov, nv) {
+    if (name === "messages" && ov !== nv && this._rendered) {
+      this.setMessages(parseJSONAttr(nv, []));
+    }
+  }
+  _bubble(role, content, extra) {
+    const b = document.createElement("message-bubble");
+    b.setAttribute("role", role);
+    if (content != null) b.setAttribute("content", String(content));
+    if (extra) for (const [k, v] of Object.entries(extra)) {
+      if (v == null) continue;
+      if (v === "") b.setAttribute(k, "");
+      else b.setAttribute(k, String(v));
+    }
+    this.appendChild(b);
+    this.scrollTop = this.scrollHeight;
+    return b;
+  }
+  appendUser(text) { return this._bubble("user", text); }
+  appendAgent(text) { return this._bubble("agent", text); }
+  appendSystem(text) { return this._bubble("system", text); }
+  appendError(text) { return this._bubble("error", text); }
+  appendThinking(text, { step, totalSteps } = {}) {
+    return this._bubble("thinking", text, { step, "total-steps": totalSteps });
+  }
+  appendTool(m = {}) {
+    // Accept both the imperative {name,args,status,result} and the message
+    // object {tool-name,tool-status,tool-args,tool-result} conventions.
+    const name = m.name ?? m["tool-name"];
+    const status = m.status ?? m["tool-status"];
+    const args = m.args ?? m["tool-args"];
+    const result = m.result ?? m["tool-result"];
+    return this._bubble("tool", null, {
+      "tool-name": name,
+      "tool-status": status || "running",
+      "tool-args": args != null ? (typeof args === "string" ? args : JSON.stringify(args)) : null,
+      "tool-result": result != null ? String(result) : null,
+    });
+  }
+  clear() { this.replaceChildren(); }
+  setMessages(messages) {
+    this.replaceChildren();
+    const list = Array.isArray(messages) ? messages : [];
+    if (!list.length) {
+      const p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = "No conversation yet — start one above.";
+      this.appendChild(p);
+      return;
+    }
+    for (const m of list) {
+      if (!m || typeof m !== "object") continue;
+      switch (m.role) {
+        case "user": this.appendUser(m.content); break;
+        case "agent": this.appendAgent(m.content); break;
+        case "system": this.appendSystem(m.content); break;
+        case "thinking": this.appendThinking(m.content, m); break;
+        case "tool": this.appendTool(m); break;
+        case "error": this.appendError(m.content); break;
+        default: this.appendAgent(m.content); break;
+      }
+    }
+    this.scrollTop = this.scrollHeight;
+  }
+}
+customElements.define("agent-conversation", AgentConversation);
 
 /* <screenshot-strip shots="[url,label]"> — screenshot history */
 class ScreenshotStrip extends Component {

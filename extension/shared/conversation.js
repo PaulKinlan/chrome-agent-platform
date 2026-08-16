@@ -8,7 +8,11 @@
 //   - rendering the persisted journal as a conversation (task → user bubble,
 //     result → agent bubble) so reopening shows the history,
 //   - the run flow: append the user turn → show a thinking indicator → render
-//     the live progress → append the final result.
+//     the live progress (structured tool cards + a collapsible thinking trace)
+//     → append the final result.
+//
+// The container is an <agent-conversation> element (the Web Component that owns
+// the message rendering: markdown, code blocks, tool cards, thinking traces).
 
 import { send } from "../lib/messages.js";
 
@@ -65,19 +69,38 @@ export function historyFromJournal(journal) {
 }
 
 // ── rendering ──────────────────────────────────────────────────────────────
+// appendBubble routes a role to the container's rich methods when it is an
+// <agent-conversation>, with a plain <message-bubble> fallback for any other
+// element (so callers never need to know which surface they're driving).
 export function appendBubble(container, role, text) {
-  const bubble = document.createElement("message-bubble");
-  bubble.setAttribute("role", role);
-  bubble.textContent = text;
-  container.append(bubble);
-  container.scrollTop = container.scrollHeight;
-  return bubble;
+  const c = container;
+  if (role === "user" && typeof c.appendUser === "function") return c.appendUser(text);
+  if (role === "agent" && typeof c.appendAgent === "function") return c.appendAgent(text);
+  if (role === "system" && typeof c.appendSystem === "function") return c.appendSystem(text);
+  if (role === "error" && typeof c.appendError === "function") return c.appendError(text);
+  if (role === "thinking" && typeof c.appendThinking === "function") return c.appendThinking(text);
+  const b = document.createElement("message-bubble");
+  b.setAttribute("role", role);
+  if (text != null) b.setAttribute("content", String(text));
+  c.append(b);
+  if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+  return b;
 }
 
 /** Render a persisted journal as a conversation (reopening shows the history). */
 export function renderJournal(container, journal) {
-  container.replaceChildren();
   const rows = Array.isArray(journal) ? journal : [];
+  if (typeof container.setMessages === "function") {
+    container.setMessages(rows
+      .filter((r) =>
+        (r?.type === "task" && typeof r.task === "string" && r.task.trim()) ||
+        (r?.type === "result" && typeof r.result === "string" && r.result.trim()))
+      .map((r) => r.type === "task"
+        ? { role: "user", content: r.task }
+        : { role: "agent", content: r.result }));
+    return;
+  }
+  container.replaceChildren();
   if (!rows.length) {
     const p = document.createElement("p");
     p.style.color = "var(--muted)";
@@ -107,19 +130,25 @@ export async function loadJournal() {
 //
 //   runConversationTurn(container, { text, attachments, history })
 //     1. appends the user turn,
-//     2. shows a thinking indicator,
-//     3. streams live progress (tool calls / step text) below it,
+//     2. shows a thinking indicator (upgraded to a collapsible trace),
+//     3. streams live progress (structured tool cards below it),
 //     4. returns the final { ok, result } and appends the result bubble.
 //
 // A mid-run nudge is simply ANOTHER turn: the composer stays live, and a
 // follow-up message appends to the same conversation + runs after the current
 // turn (the SW serializes master runs), carrying the prior history.
 export async function runConversationTurn(container, { text, attachments = [], history = [] }) {
-  // 1. the user's turn appears immediately — the surface becomes a conversation.
-  appendBubble(container, "user", text);
+  const c = container;
 
-  // 2. a thinking indicator (replaced/removed as live progress arrives).
-  let thinking = appendBubble(container, "thinking", "Thinking…");
+  // 1. the user's turn appears immediately — the surface becomes a conversation.
+  appendBubble(c, "user", text);
+
+  // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
+  //    trace when reasoning arrives).
+  let thinking = typeof c.appendThinking === "function"
+    ? c.appendThinking("thinking…")
+    : appendBubble(c, "thinking", "thinking…");
+  let lastTool = null;
   const clearThinking = () => {
     thinking?.remove();
     thinking = null;
@@ -131,37 +160,52 @@ export async function runConversationTurn(container, { text, attachments = [], h
   const unsubscribe = subscribeProgress((ev) => {
     if (!ev || typeof ev !== "object") return;
     switch (ev.type) {
-      case "thinking":
-        if (!thinking) thinking = appendBubble(container, "thinking", "Thinking…");
-        thinking.textContent = `Thinking… (step ${
-          (ev.step ?? 0) + 1
-        }${ev.totalSteps ? ` of ${ev.totalSteps}` : ""})`;
+      case "thinking": {
+        // Update the spinner label with step progress. When real reasoning
+        // tokens arrive (tokensSoFar), they become the collapsible trace.
+        const step = ev.step != null ? ev.step + 1 : null;
+        if (thinking) {
+          const trace = ev.tokensSoFar ? String(ev.tokensSoFar) : "";
+          thinking.setAttribute("step", step ?? "");
+          if (ev.totalSteps != null) thinking.setAttribute("total-steps", String(ev.totalSteps));
+          if (trace) thinking.setAttribute("content", trace);
+        }
         break;
+      }
       case "tool-call":
         clearThinking();
-        appendBubble(container, "tool", `→ ${ev.toolName}`);
+        lastTool = typeof c.appendTool === "function"
+          ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
+          : appendBubble(c, "tool", `→ ${ev.toolName}`);
         break;
-      case "tool-result":
-        appendBubble(
-          container,
-          "tool",
-          `✓ ${ev.toolName}${ev.result ? ` — ${ev.result}` : ""}`,
-        );
+      case "tool-result": {
+        // Update the matching in-flight tool card to done (or keep it as a
+        // separate done card if the card is no longer present).
+        if (lastTool && lastTool.getAttribute?.("tool-name") === ev.toolName) {
+          lastTool.setAttribute("tool-status", "success");
+          if (ev.result != null) lastTool.setAttribute("tool-result", String(ev.result));
+          lastTool = null;
+        } else if (typeof c.appendTool === "function") {
+          c.appendTool({ name: ev.toolName, status: "success", result: ev.result });
+        } else {
+          appendBubble(c, "tool", `✓ ${ev.toolName}${ev.result ? ` — ${ev.result}` : ""}`);
+        }
         break;
+      }
       case "text":
         // A completed step's text. Only render INTERMEDIATE step text (a step
         // that made tool calls and will continue) — the FINAL text (hasToolCalls
         // false) is the run's result, rendered once by `done`/the final result
         // below, so a single-step run never double-renders.
         clearThinking();
-        if (ev.text && ev.hasToolCalls) appendBubble(container, "agent", ev.text);
+        if (ev.text && ev.hasToolCalls) appendBubble(c, "agent", ev.text);
         break;
       case "done":
         clearThinking();
         break;
       case "error":
         clearThinking();
-        appendBubble(container, "error", ev.message ?? "error");
+        appendBubble(c, "error", ev.message ?? "error");
         break;
     }
   });
@@ -186,10 +230,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   clearThinking();
   if (res?.ok) {
     if (typeof res.result === "string" && res.result) {
-      appendBubble(container, "agent", res.result);
+      appendBubble(c, "agent", res.result);
     }
   } else {
-    appendBubble(container, "error", "Error: " + (res?.error ?? "unknown"));
+    appendBubble(c, "error", "Error: " + (res?.error ?? "unknown"));
   }
   return res;
 }

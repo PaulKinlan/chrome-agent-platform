@@ -82,6 +82,8 @@
       color: var(--muted);
     }
     .panel-body { padding: 4px 0; }
+    /* conversation (the <agent-conversation> now view) */
+    #conversation { padding: 14px; }
     .panel-foot {
       padding: 10px 14px;
       border-top: 1px solid var(--border);
@@ -171,7 +173,7 @@
             <h2 class="t">Now</h2>
             <span class="hint">the active conversation</span>
           </div>
-          <div id="conversation" role="log" aria-live="polite" aria-relevant="additions"></div>
+          <agent-conversation id="conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
         </div>
       </section>
 
