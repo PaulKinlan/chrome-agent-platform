@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "ed3a5d09dff6ce8b7cb6f1e8d67eb01b4d6385b0",
+  "testedSourceCommit": "b4c15d4cc9cf6e1c721f12a56559753447edf5b6",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1786840989472",
+  "runId": "cap-1786843389136",
   "retain": true,
-  "ts": "2026-08-16T00:43:51.398Z",
+  "ts": "2026-08-16T01:23:51.099Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 100,
+  "passed": 104,
   "failed": 0,
   "checks": [
     {
@@ -280,6 +280,22 @@
     },
     {
       "name": "restarted worker reconciled + ran the persisted task",
+      "pass": true
+    },
+    {
+      "name": "cancel: task registered",
+      "pass": true
+    },
+    {
+      "name": "cancel: task listed for the owner",
+      "pass": true
+    },
+    {
+      "name": "cancel: cancelled the task (alarm absent)",
+      "pass": true
+    },
+    {
+      "name": "cancel: task gone after cancel",
       "pass": true
     },
     {
