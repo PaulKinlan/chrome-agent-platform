@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#147d70"/>
+      <stop offset="1" stop-color="#0a5a51"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded-square background -->
+  <rect x="2" y="2" width="124" height="124" rx="30" fill="url(#bg)"/>
+  <!-- the agent-hub mark: a paper four-point spark (spokes) with a teal node (ring) at its heart -->
+  <g>
+    <!-- four-point spark, filled paper -->
+    <path fill="#f7f6f3" d="M64 12 L75.5 49.5 C77.8 54.4 81.6 58.2 86.5 60.5 L116 64 L86.5 67.5 C81.6 69.8 77.8 73.6 75.5 78.5 L64 116 L52.5 78.5 C50.2 73.6 46.4 69.8 41.5 67.5 L12 64 L41.5 60.5 C46.4 58.2 50.2 54.4 52.5 49.5 Z"/>
+    <!-- central node (ring) — the hub at the spark's heart -->
+    <circle cx="64" cy="64" r="13" fill="#0e6e63"/>
+    <circle cx="64" cy="64" r="5" fill="#f7f6f3"/>
+  </g>
+</svg>
