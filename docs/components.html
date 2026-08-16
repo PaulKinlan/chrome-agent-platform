@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" data-theme="sunlit">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chrome Agent Platform — Component Gallery</title>
+    <link rel="stylesheet" href="./theme.css">
+    <link rel="stylesheet" href="./showcase.css">
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <h1>Chrome <span class="accent">Agent</span> Platform — Component Gallery</h1>
+        <p class="sub">Every UI element as a native Web Component, testable in isolation (mocked backend, no extension). The extension pages use these same components.</p>
+        <div class="meta-row">
+          <theme-picker id="themer" theme="sunlit"></theme-picker>
+          <agent-nav id="nav" active="hub"></agent-nav>
+        </div>
+      </header>
+
+      <!-- ── Atomic ─────────────────────────────────────────────── -->
+      <h2 class="section">Atomic components</h2>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;run-task-button&gt;</code> — states</h3>
+        <div class="stage">
+          <run-task-button label="Run task"></run-task-button>
+          <run-task-button label="Running…" loading></run-task-button>
+          <run-task-button label="Disabled" disabled></run-task-button>
+          <run-task-button label="Collect links"></run-task-button>
+        </div>
+        <p class="caption">default · loading · disabled · custom label. Emits <code>run-task</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;mic-button&gt;</code> — speech toggle + waveform</h3>
+        <div class="stage">
+          <mic-button label="Start listening"></mic-button>
+          <mic-button listening label="Stop listening"></mic-button>
+        </div>
+        <p class="caption">idle · listening. Emits <code>transcript</code> and <code>mic-toggle</code>. (Web Speech runs in-browser; headless has no mic — the toggle still works.)</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;attach-button&gt;</code> — the + menu</h3>
+        <div class="stage">
+          <attach-button label="Add attachment"></attach-button>
+        </div>
+        <p class="caption">opens the file / record-audio / capture-camera menu. Emits <code>attach</code> and <code>attach-media</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;theme-picker&gt;</code> — swatches</h3>
+        <div class="stage"><theme-picker theme="sunlit"></theme-picker></div>
+        <p class="caption">clicking a swatch re-themes this whole page + emits <code>theme-change</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;permission-row&gt;</code> — the all-optional capability rows</h3>
+        <div class="stage column" id="perm-rows"></div>
+        <p class="caption">each capability is optional; Enable/Disable emits <code>enable</code>/<code>disable</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;site-agent-card&gt;</code> — a per-site sub-agent</h3>
+        <div class="stage column" style="max-width:420px">
+          <site-agent-card origin="https://github.com" tools="[{},{}]"></site-agent-card>
+          <site-agent-card origin="https://aifoc.us" tools="[{}]" status="3 tools inferred"></site-agent-card>
+        </div>
+        <p class="caption">emits <code>select</code> on click/keyboard.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;message-bubble&gt;</code> — conversation rows</h3>
+        <div class="stage column" style="max-width:560px">
+          <message-bubble role="task" label="task"><span>Summarise the key points of the current page.</span></message-bubble>
+          <message-bubble role="result" label="result"><span>This page argues three things: a, b, and c…</span></message-bubble>
+          <message-bubble role="error" label="error"><span>provider unreachable — retry?</span></message-bubble>
+        </div>
+        <p class="caption">slotted content; role styles task/result/error/user.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;screenshot-strip&gt;</code> — screenshot history</h3>
+        <div class="stage column">
+          <screenshot-strip shots='[]'></screenshot-strip>
+        </div>
+        <p class="caption">empty state; pass a JSON array of <code>{url,label}</code> to populate. Emits <code>open</code>.</p>
+      </div>
+
+      <!-- ── Composite ───────────────────────────────────────────── -->
+      <h2 class="section">Composite components</h2>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-composer&gt;</code> — mic + attach + input + send, one component</h3>
+        <div class="stage column" style="max-width:640px">
+          <agent-composer id="composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
+        </div>
+        <p class="caption">the SAME component the NTP hub + chat use. Emits <code>send</code> (text + attachments).</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-dialog&gt;</code> — consistent modal</h3>
+        <div class="stage">
+          <button class="btn" id="open-dialog">Open dialog</button>
+          <agent-dialog id="dialog" title="Configure agent">
+            <agent-config-form id="config-form"></agent-config-form>
+          </agent-dialog>
+        </div>
+        <p class="caption">slotted content + Esc/backdrop close. Emits <code>close</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — choose an agent</h3>
+        <div class="stage column" style="max-width:420px">
+          <agent-picker id="picker" agents='[{"origin":"https://github.com","tools":[{},{}]},{"origin":"https://aifoc.us","tools":[{}]}]' selected="https://github.com"></agent-picker>
+        </div>
+        <p class="caption">emits <code>select</code>.</p>
+      </div>
+
+      <!-- ── Composed ───────────────────────────────────────────── -->
+      <h2 class="section">Composed — a mini hub</h2>
+      <div class="grid-2">
+        <div class="specimen">
+          <h3 class="spec">hub surface (composer + recipes + conversation + agents)</h3>
+          <div class="stage column">
+            <agent-composer id="hub-composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
+            <agent-picker agents='[{"origin":"https://github.com","tools":[{},{}]},{"origin":"https://aifoc.us","tools":[{}]}]'></agent-picker>
+            <div id="hub-log" class="demo-log">events appear here…</div>
+          </div>
+        </div>
+        <div class="specimen">
+          <h3 class="spec">events + states</h3>
+          <div class="stage column">
+            <agent-nav id="nav2" active="chat"></agent-nav>
+            <run-task-button label="Run" loading></run-task-button>
+            <theme-picker theme="midnight"></theme-picker>
+            <screenshot-strip shots='[{"url":"data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"96\" height=\"64\"><rect width=\"96\" height=\"64\" fill=\"%234f46e5\"/></svg>","label":"a"}]'></screenshot-strip>
+          </div>
+        </div>
+      </div>
+
+      <footer>
+        The extension pages (<code>ntp</code>, <code>chat</code>, <code>directory</code>, <code>options</code>) import
+        <code>extension/shared/components.js</code> — the same file this gallery loads (synced copy in <code>docs/components.js</code>).
+        Visual + behavioral consistency is structural: one component, everywhere.
+      </footer>
+    </div>
+
+    <script type="module">
+      import { PERMISSIONS, THEMES } from "./components.js";
+
+      const log = (sel, msg) => {
+        const el = document.querySelector(sel);
+        if (el) el.textContent = "→ " + msg + "\n" + (el.textContent || "");
+      };
+
+      // theme picker → re-theme the whole page
+      const themer = document.getElementById("themer");
+      themer?.addEventListener("theme-change", (e) => {
+        document.documentElement.dataset.theme = e.detail.theme;
+        log("#hub-log", `theme-change: ${e.detail.theme}`);
+      });
+
+      // nav
+      document.querySelectorAll("agent-nav").forEach((nav) =>
+        nav.addEventListener("navigate", (e) => log("#hub-log", `navigate: ${e.detail.view}`))
+      );
+
+      // permission rows (all seven capabilities, each optional)
+      const permRoot = document.getElementById("perm-rows");
+      if (permRoot) {
+        PERMISSIONS.forEach((p) => {
+          const row = document.createElement("permission-row");
+          row.setAttribute("capability", p.id);
+          row.setAttribute("label", p.label);
+          row.setAttribute("description", p.note);
+          row.setAttribute("warned", p.id === "tabs" ? "" : null);
+          row.addEventListener("enable", () => { row.setAttribute("granted", ""); log("#hub-log", `enable: ${p.id}`); });
+          row.addEventListener("disable", () => { row.removeAttribute("granted"); log("#hub-log", `disable: ${p.id}`); });
+          permRoot.appendChild(row);
+        });
+      }
+
+      // composer sends
+      document.querySelectorAll("agent-composer").forEach((c) =>
+        c.addEventListener("send", (e) => log("#hub-log", `send: "${e.detail.text}" (${e.detail.attachments.length} attachments)`))
+      );
+
+      // dialog
+      document.getElementById("open-dialog")?.addEventListener("click", () => document.getElementById("dialog").open());
+      document.getElementById("dialog")?.addEventListener("close", () => log("#hub-log", "dialog closed"));
+      document.getElementById("config-form")?.addEventListener("save", (e) => log("#hub-log", `agent saved: ${JSON.stringify(e.detail)}`));
+
+      // pickers
+      document.querySelectorAll("agent-picker").forEach((p) =>
+        p.addEventListener("select", (e) => log("#hub-log", `agent selected: ${e.detail.origin}`))
+      );
+
+      // mic
+      document.querySelectorAll("mic-button").forEach((m) =>
+        m.addEventListener("mic-toggle", (e) => log("#hub-log", `mic ${e.detail.listening ? "on" : "off"}`))
+      );
+    </script>
+  </body>
+</html>

@@ -2,7 +2,6 @@
 // is the shared component (../shared/composer.js), identical to the chat.
 
 import { send } from "../lib/messages.js";
-import { mountComposer } from "../shared/composer.js";
 
 const RECIPE_ICON = {
   broom:
@@ -127,39 +126,35 @@ function escapeHtml(s) {
   );
 }
 
-// The shared composer: identical (mic + attach + input + send) to the chat.
-const composer = mountComposer(document.getElementById("composer-root"), {
-  label: "Start a task",
-  placeholder:
-    "Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …",
-  sendLabel: "Run task",
-  onStatus: (text) => {
-    // Route composer-level errors to the hub status chip only when non-ready;
-    // the "agent ready" state is managed by the run flow below.
-    if (text) setStatus(text, false);
-  },
-  onSend: async (task, attachments) => {
-    setStatus("running task…", false);
-    const res = await send("agent.run", {
-      task,
-      id: String(Date.now()),
-      attachments,
-    });
-    if (res.ok) {
-      if (
-        Array.isArray(res.droppedAttachments) && res.droppedAttachments.length
-      ) {
-        setStatus(
-          `agent ready — ${res.droppedAttachments.length} attachment(s) dropped (over limit)`,
-        );
-      } else {
-        setStatus("agent ready");
-      }
-      await refreshTasks();
+// The shared composer Web Component: identical (mic + attach + input + send)
+// to the chat surface. The element is declared in ntp.html as <agent-composer>.
+const composer = document.getElementById("composer");
+
+composer.addEventListener("send", async (ev) => {
+  const { text: task, attachments } = ev.detail;
+  setStatus("running task…", false);
+  const res = await send("agent.run", {
+    task,
+    id: String(Date.now()),
+    attachments,
+  });
+  if (res.ok) {
+    if (
+      Array.isArray(res.droppedAttachments) && res.droppedAttachments.length
+    ) {
+      setStatus(
+        `agent ready — ${res.droppedAttachments.length} attachment(s) dropped (over limit)`,
+      );
     } else {
-      setStatus("error: " + (res.error ?? "unknown"), false);
+      setStatus("agent ready");
     }
-  },
+    await refreshTasks();
+  } else {
+    setStatus("error: " + (res.error ?? "unknown"), false);
+  }
+});
+composer.addEventListener("status", (ev) => {
+  if (ev.detail?.text) setStatus(ev.detail.text, false);
 });
 
 refreshRecipes();

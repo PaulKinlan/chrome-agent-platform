@@ -1,9 +1,8 @@
 // chat/chat.js — the conversation surface: messages, screenshot history, run.
-// The composer is the shared component (../shared/composer.js), identical to
+// The composer is the shared Web Component (<agent-composer>), identical to
 // the NTP hub (mic + attach + input + send).
 
 import { send } from "../lib/messages.js";
-import { mountComposer } from "../shared/composer.js";
 
 const body = document.getElementById("body");
 const shotsEl = document.getElementById("shots");
@@ -63,18 +62,14 @@ async function captureShot(label) {
   while (shotsEl.children.length > MAX_SHOTS) shotsEl.firstElementChild.remove();
 }
 
-// The shared composer — identical (mic + attach + input + send) to the NTP.
-const composer = mountComposer(document.getElementById("composer-root"), {
-  placeholder: "Reply, or @mention a site agent…",
-  sendLabel: "Send",
-  onStatus: (text) => {
-    // Surface composer-level errors (mic/attach/capture) as a transient agent
-    // message rather than leaving them invisible.
-    if (text) addMessage("agent", text);
-  },
-  onSend: async (text, attachments) => {
-    await runTask(text, attachments);
-  },
+// The shared composer Web Component — identical (mic + attach + input + send)
+// to the NTP hub.
+const composer = document.getElementById("composer");
+composer.addEventListener("send", async (ev) => {
+  await runTask(ev.detail.text, ev.detail.attachments);
+});
+composer.addEventListener("status", (ev) => {
+  if (ev.detail?.text) addMessage("agent", ev.detail.text);
 });
 
 // Open the REAL Chrome side panel (the driven-page surface), not a fake in-page

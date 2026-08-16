@@ -1,0 +1,170 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --accent2: #7ee787;
+  --danger: #ff7b72;
+  --btn-fg: #001;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+.btn {
+  background: var(--accent);
+  color: var(--btn-fg, #001);
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+/* Consistent icon-button scale (mic, +, and any icon action across surfaces). */
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 13px;
+  /* <button> defaults to near-black buttontext on dark themes — set the text
+     color explicitly so recipe/status chips stay legible in every theme. */
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent2);
+}
+.tag {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+/* The "thinking" glow — a multicolor animated halo around the composer while
+   the agent is responding. Respects prefers-reduced-motion (static glow). */
+.glow {
+  position: relative;
+}
+.glow::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    #58a6ff, #7ee787, #ff7b72, #d2a8ff, #f0b72f, #58a6ff
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0
+    0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: -1;
+  filter: blur(1px);
+  animation: glow-rotate 3s linear infinite;
+}
+@keyframes glow-rotate {
+  to {
+    filter: blur(1px) hue-rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow::before {
+    animation: none;
+    filter: none;
+  }
+}
+
+/* ── Theme variants (data-theme on <html> or <body>) ──
+   The default is the current dark "midnight" palette; the others restyle the
+   same CSS custom properties so every surface themes consistently. */
+[data-theme="midnight"] {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --accent2: #7ee787;
+  --danger: #ff7b72;
+  --btn-fg: #001;
+}
+
+[data-theme="sunlit"] {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #57606a;
+  --accent: #0969da;
+  --accent2: #1a7f37;
+  --danger: #cf222e;
+  --btn-fg: #ffffff;
+}
+
+[data-theme="neon"] {
+  --bg: #0a0a12;
+  --panel: #12121f;
+  --border: #3d2f6e;
+  --text: #eef0ff;
+  --muted: #9aa0c3;
+  --accent: #ff3ea5;
+  --accent2: #00e0ff;
+  --danger: #ff5c5c;
+  --btn-fg: #001;
+}
+
+[data-theme="terminal"] {
+  --bg: #0c0c0c;
+  --panel: #141414;
+  --border: #3a3a3a;
+  --text: #d4d4d4;
+  --muted: #8b949e;
+  --accent: #4ec9b0;
+  --accent2: #dcdcaa;
+  --danger: #f48771;
+  --btn-fg: #001;
+}

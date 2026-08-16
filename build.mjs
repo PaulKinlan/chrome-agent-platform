@@ -74,3 +74,12 @@ if (remaining > 0) {
   throw new Error(`bundle still contains ${remaining} eval/new-Function sites after cleaning`);
 }
 console.log(`built ${OUT} (removed ${occurrences} new-Function site(s); ${remaining} remaining)`);
+
+// Sync the design-system source into the docs/ component gallery so the
+// GitHub Pages showcase (docs/) always matches the canonical Web Components
+// in extension/shared/components.js. (The docs/ copies are committed too, so
+// the gallery works standalone; this keeps them from drifting on every build.)
+import { copyFile } from "node:fs/promises";
+await copyFile(new URL("./extension/shared/components.js", import.meta.url), new URL("./docs/components.js", import.meta.url));
+await copyFile(new URL("./extension/shared/theme.css", import.meta.url), new URL("./docs/theme.css", import.meta.url));
+console.log("synced docs/components.js + docs/theme.css");

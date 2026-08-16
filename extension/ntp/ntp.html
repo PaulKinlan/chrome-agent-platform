@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="../shared/composer.css">
     <script type="module" src="../shared/apply-theme.js"></script>
+    <script type="module" src="../shared/components.js"></script>
     <style>
     .wrap {
       max-width: 960px;
@@ -116,7 +117,7 @@
         <button class="btn ghost" id="open-directory">Directory</button>
       </div>
 
-      <div id="composer-root"></div>
+      <agent-composer id="composer" send-label="Run task"></agent-composer>
 
       <div class="grid">
         <div class="panel">

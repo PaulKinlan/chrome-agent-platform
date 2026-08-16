@@ -1,0 +1,48 @@
+/* docs/showcase.css — the component gallery layout (specimens + composed demo).
+   The components themselves style via their shadow roots + the theme vars. */
+
+:root { --chrome-accent: #0969da; }
+html[data-theme="sunlit"] { background: #ffffff; color: #1f2328; }
+body {
+  margin: 0;
+  font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg, #fff);
+  color: var(--text, #1f2328);
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+header.masthead { border-bottom: 1px solid var(--border, #d0d7de); padding-bottom: 20px; margin-bottom: 28px; }
+h1 { font-size: 26px; margin: 0 0 4px; }
+h1 .accent { color: var(--accent, #0969da); }
+.sub { color: var(--muted, #57606a); margin: 0 0 16px; }
+.meta-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+
+h2.section { font-size: 18px; margin: 40px 0 16px; border-top: 1px solid var(--border, #d0d7de); padding-top: 24px; }
+h3.spec { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted, #57606a); margin: 0 0 12px; }
+.specimen {
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+  background: var(--panel, #f6f8fa);
+}
+.specimen .stage { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; min-height: 40px; }
+.specimen .stage.column { flex-direction: column; align-items: flex-start; }
+.specimen .caption { margin-top: 12px; font-size: 12px; color: var(--muted, #57606a); }
+code.tag { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; background: var(--panel, #f6f8fa); border: 1px solid var(--border, #d0d7de); border-radius: 5px; padding: 1px 6px; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
+
+.demo-log {
+  margin-top: 16px;
+  background: var(--panel, #f6f8fa);
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+  min-height: 24px;
+  color: var(--muted, #57606a);
+  white-space: pre-wrap;
+}
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border, #d0d7de); color: var(--muted, #57606a); font-size: 12px; }
