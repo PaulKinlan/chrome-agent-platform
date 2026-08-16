@@ -66723,7 +66723,15 @@ async function assertRunOwned() {
 var STORAGE_KEY = "cairn:usage";
 var MAX_RECORDS = 5e3;
 var RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
-async function recordUsage(p) {
+var usageMutex = Promise.resolve();
+function withUsageLock(fn) {
+  const run = usageMutex.then(fn, fn);
+  usageMutex = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
+async function recordUsage(p, guard = null) {
   try {
     await assertRunOwned();
   } catch {
@@ -66744,32 +66752,65 @@ async function recordUsage(p) {
     totalTokens: inputTokens + outputTokens,
     estimatedCost: p.estimatedCost ?? 0
   };
-  const store = await kvGet(STORAGE_KEY);
-  const rows = (store[STORAGE_KEY] ?? []).filter(
-    (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
-  );
-  rows.push(record3);
-  const trimmed = rows.slice(-MAX_RECORDS);
-  try {
-    await assertRunOwned();
-  } catch {
-    return;
-  }
-  await kvSet({ [STORAGE_KEY]: trimmed });
-  try {
-    await assertRunOwned();
-  } catch {
-    try {
-      const cur = await kvGet(STORAGE_KEY);
-      const compensated = (cur[STORAGE_KEY] ?? []).filter(
-        (r) => r.id !== record3.id
-      );
-      await kvSet({ [STORAGE_KEY]: compensated });
-    } catch {
+  return await withUsageLock(async () => {
+    if (guard?.genGuard) {
+      try {
+        const g = await guard.genGuard();
+        const runGen = guard.getRunGen?.() ?? null;
+        if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) return;
+      } catch {
+        return;
+      }
     }
-    return;
-  }
-  return record3;
+    const store = await kvGet(STORAGE_KEY);
+    const rows = (store[STORAGE_KEY] ?? []).filter(
+      (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS
+    );
+    rows.push(record3);
+    const trimmed = rows.slice(-MAX_RECORDS);
+    try {
+      await assertRunOwned();
+    } catch {
+      return;
+    }
+    if (guard?.genGuard) {
+      try {
+        const g = await guard.genGuard();
+        const runGen = guard.getRunGen?.() ?? null;
+        if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) return;
+      } catch {
+        return;
+      }
+    }
+    await kvSet({ [STORAGE_KEY]: trimmed });
+    let stale = false;
+    try {
+      await assertRunOwned();
+    } catch {
+      stale = true;
+    }
+    if (!stale && guard?.genGuard) {
+      try {
+        const g = await guard.genGuard();
+        const runGen = guard.getRunGen?.() ?? null;
+        if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) stale = true;
+      } catch {
+        stale = true;
+      }
+    }
+    if (stale) {
+      try {
+        const cur = await kvGet(STORAGE_KEY);
+        const compensated = (cur[STORAGE_KEY] ?? []).filter(
+          (r) => r.id !== record3.id
+        );
+        await kvSet({ [STORAGE_KEY]: compensated });
+      } catch {
+      }
+      return;
+    }
+    return record3;
+  });
 }
 async function getUsage() {
   const store = await kvGet(STORAGE_KEY);
@@ -66903,6 +66944,13 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
           await memory.set(key, value);
           committed = true;
           await assertRunOwned();
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
+            if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) {
+              throw new Error("origin re-enrolled during run \u2014 memory write compensated");
+            }
+          }
           return { ok: true, key };
         } catch (e) {
           if (committed && typeof memory.set === "function") {
@@ -66956,17 +67004,6 @@ function createAgent2({
     maxIterations,
     hooks: {
       onUsage: async (record3) => {
-        if (enrollmentGuard) {
-          try {
-            const g = await enrollmentGuard();
-            const runGen = getRunGen();
-            if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) {
-              return;
-            }
-          } catch {
-            return;
-          }
-        }
         await recordUsage({
           agentId: id,
           taskId,
@@ -66975,13 +67012,18 @@ function createAgent2({
           inputTokens: record3.inputTokens ?? 0,
           outputTokens: record3.outputTokens ?? 0,
           estimatedCost: record3.estimatedCost ?? 0
-        });
+        }, enrollmentGuard ? { genGuard: enrollmentGuard, getRunGen } : null);
       }
     }
   });
   return {
     id,
     name: name25,
+    // Expose the worker's CURRENT run generation (the immutable run-start gen,
+    // or null when no run is active). The SW threads this into the site-tool
+    // invocation + the provider/usage boundaries so a stale run can never operate
+    // under a re-enrolled origin's generation (the round-24 gen-threading blocker).
+    getRunGen: () => activeRun?.gen ?? null,
     // agent-do's run(task, context, history) -> string. Our wrapper accepts a
     // FOURTH `runGen` argument: the immutable enrollment generation the caller
     // captured at delegation start. The run + its worker commits revalidate THAT
@@ -67011,7 +67053,20 @@ function createAgent2({
         };
         controller.signal.addEventListener("abort", onAbort);
         try {
-          return await agent.run(task, context, history);
+          if (enrollmentGuard && gen != null) {
+            const g = await enrollmentGuard();
+            if (!g?.ok || (g.gen ?? 0) !== gen) {
+              return { error: "origin re-enrolled before run \u2014 task not started" };
+            }
+          }
+          const result2 = await agent.run(task, context, history);
+          if (enrollmentGuard && gen != null) {
+            const g = await enrollmentGuard();
+            if (!g?.ok || (g.gen ?? 0) !== gen) {
+              return { error: "origin re-enrolled during run \u2014 result discarded" };
+            }
+          }
+          return result2;
         } finally {
           controller.signal.removeEventListener("abort", onAbort);
           activeRun = null;
@@ -67247,6 +67302,12 @@ async function isEnrolled(origin) {
   const map4 = await enrolledMap();
   return Boolean(map4[canonical] && map4[canonical].enrolled === true);
 }
+async function enrollmentGeneration(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return 0;
+  const map4 = await enrolledMap();
+  return map4[canonical]?.gen ?? 0;
+}
 async function enrollmentSnapshot(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { enrolled: false, gen: 0 };
@@ -67424,7 +67485,9 @@ async function listScheduledTasks() {
       at: t.at,
       periodInMinutes: t.periodInMinutes,
       quarantined: Boolean(t.quarantined),
-      quarantinedAt: t.quarantinedAt ?? null
+      quarantinedAt: t.quarantinedAt ?? null,
+      cancelling: Boolean(t.cancelling),
+      cancellingAt: t.cancellingAt ?? null
     }));
   });
 }
@@ -67449,9 +67512,25 @@ async function cancelScheduledTask(name25) {
         alarmAbsent = false;
       }
     }
+    if (!alarmAbsent) {
+      tasks[name25] = {
+        ...existing,
+        cancelling: true,
+        cancellingAt: Date.now()
+      };
+      await kvSet({ [TASK_KEY]: tasks });
+      return {
+        ok: false,
+        name: name25,
+        cancelled: false,
+        retryable: true,
+        alarmAbsent: false,
+        error: "alarm still armed \u2014 cancel is pending (retry to confirm removal)"
+      };
+    }
     delete tasks[name25];
     await kvSet({ [TASK_KEY]: tasks });
-    return { ok: true, name: name25, cancelled: true, alarmAbsent };
+    return { ok: true, name: name25, cancelled: true, alarmAbsent: true };
   });
 }
 async function markScheduledDone(name25, token) {
@@ -67601,7 +67680,7 @@ async function reconcileScheduledTasks() {
     const now2 = Date.now();
     for (const name25 of names) {
       const task = tasks[name25];
-      if (task?.quarantined) continue;
+      if (task?.quarantined || task?.cancelling) continue;
       if (!existing.has(name25)) {
         const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
         const info = { when };
@@ -67881,9 +67960,28 @@ async function captureTabScreenshot(tabId) {
         } catch {
           return { error: "run aborted \u2014 tab not activated" };
         }
+        const preActivate = await chrome.tabs.get(target.id).catch(() => null);
+        const preOrigin = preActivate?.url ? (() => {
+          try {
+            return canonicalOrigin(preActivate.url);
+          } catch {
+            return void 0;
+          }
+        })() : void 0;
+        if (!preOrigin || preOrigin !== origin) {
+          return {
+            error: "tab navigated before capture \u2014 screenshot discarded (identity changed)"
+          };
+        }
         try {
           await chrome.tabs.update(tabId, { active: true });
         } catch (e) {
+          if (priorActive?.id) {
+            try {
+              await chrome.tabs.update(priorActive.id, { active: true });
+            } catch {
+            }
+          }
           return { error: `could not activate tab: ${e?.message ?? e}` };
         }
         try {
@@ -68758,8 +68856,8 @@ async function handleAlarm(alarm) {
       console.error("scheduled task payload missing", alarm.name);
       return;
     }
-    if (task.quarantined) {
-      console.warn("scheduled task is quarantined \u2014 not running", alarm.name);
+    if (task.quarantined || task.cancelling) {
+      console.warn("scheduled task is quarantined/cancelling \u2014 not running", alarm.name);
       return;
     }
     await runTask({
@@ -68868,6 +68966,9 @@ async function ensureOrchestrator() {
         return { ok: true, gen: snap.gen };
       }
     });
+    for (const [origin, agent] of orch.workers) {
+      workerRunGenGetters.set(origin, agent.getRunGen);
+    }
     if (generation === gen) {
       orchestrator = orch;
       orchestratorGen = gen;
@@ -68875,6 +68976,7 @@ async function ensureOrchestrator() {
     }
   }
 }
+var workerRunGenGetters = /* @__PURE__ */ new Map();
 async function siteToolset(origin) {
   const tools = await listTools(origin);
   const set4 = {};
@@ -68893,7 +68995,8 @@ async function siteToolset(origin) {
         if (!await isApproved(origin, t.name)) {
           return { error: `tool ${t.name} on ${origin} not approved` };
         }
-        return await invokeSiteTool(origin, t.name, args);
+        const runGen = workerRunGenGetters.get(origin)?.() ?? null;
+        return await invokeSiteTool(origin, t.name, args, runGen);
       }
     });
   }
@@ -68917,14 +69020,19 @@ async function notifyOriginBridge(canonical, message) {
   } catch {
   }
 }
-async function invokeSiteTool(origin, name25, args) {
+async function invokeSiteTool(origin, name25, args, expectedGen = null) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
   const snap = await enrollmentSnapshot(canonical);
   if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
   }
-  const gen = snap.gen;
+  const gen = expectedGen != null ? expectedGen : snap.gen;
+  if (snap.gen !== gen) {
+    return {
+      error: `origin ${canonical} was re-enrolled during run \u2014 site invocation rejected`
+    };
+  }
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -69081,7 +69189,8 @@ var handlers = {
           try {
             abortWorker(o);
             await disenrollOriginLocked(o);
-            await notifyOriginBridge(o, { type: "disenrollment" });
+            const tombGen = await enrollmentGeneration(o);
+            await notifyOriginBridge(o, { type: "disenrollment", gen: tombGen });
             const res3 = await unregisterOriginScripts(o);
             if (!res3.ok) {
               await markCleanupPending(o);
@@ -69448,7 +69557,8 @@ var handlers = {
     return await withOriginLock(canonical, async () => {
       abortWorker(canonical);
       await disenrollOrigin(canonical);
-      await notifyOriginBridge(canonical, { type: "disenrollment" });
+      const tomb = await enrollmentSnapshot(canonical);
+      await notifyOriginBridge(canonical, { type: "disenrollment", gen: tomb.gen });
       const [unregRes, clearRes] = await Promise.allSettled([
         unregisterOriginScripts(canonical),
         siteMemory(canonical).clear()

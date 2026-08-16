@@ -159,14 +159,29 @@
     if (typeof fn === "function") {
       const params = paramNames(fn);
       const ordered = params.map((p) => args?.[p]);
+      // Re-check IMMEDIATELY before the actual function call — the `paramNames`
+      // reflection above is synchronous but the check must sit as close to the
+      // side effect as possible so a cancel that landed in the same synchronous
+      // turn (via the cancel EPOCH) is still honored right up to the call edge.
+      // This is the MINIMUM window; once fn.apply runs, its effects are
+      // unwindable (cooperative cancellation can only discard the result).
+      if (cancelledAll || cancelled.has(requestId)) {
+        throw new Error("invocation cancelled");
+      }
       return await fn.apply(window, ordered);
     }
     // 2. a WebMCP registered tool
     const mc = document.modelContext;
     if (typeof mc?.callTool === "function") {
+      if (cancelledAll || cancelled.has(requestId)) {
+        throw new Error("invocation cancelled");
+      }
       return await mc.callTool(name, args ?? {});
     }
     if (typeof mc?.invoke === "function") {
+      if (cancelledAll || cancelled.has(requestId)) {
+        throw new Error("invocation cancelled");
+      }
       return await mc.invoke(name, args ?? {});
     }
     throw new Error(`no such function/tool: ${name}`);

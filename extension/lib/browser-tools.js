@@ -476,9 +476,39 @@ export async function captureTabScreenshot(tabId) {
             } catch {
               return { error: "run aborted — tab not activated" };
             }
+            // Re-read + REVALIDATE the target identity IMMEDIATELY before
+            // activation (AFTER the prior-tab query await): the `fresh` read above
+            // happened several awaits ago, and a navigation during the prior-tab
+            // query could move the target to an unauthorized origin (the round-24
+            // capture-identity blocker — the target could navigate then be
+            // activated). Re-derive + compare the origin NOW, bound to the mutation.
+            const preActivate = await chrome.tabs.get(target.id).catch(() => null);
+            const preOrigin = preActivate?.url
+              ? (() => {
+                try {
+                  return canonicalOrigin(preActivate.url);
+                } catch {
+                  return undefined;
+                }
+              })()
+              : undefined;
+            if (!preOrigin || preOrigin !== origin) {
+              return {
+                error:
+                  "tab navigated before capture — screenshot discarded (identity changed)",
+              };
+            }
             try {
               await chrome.tabs.update(tabId, { active: true });
             } catch (e) {
+              // The activation may have COMMITTED and then rejected (a race) —
+              // restore the prior active tab so the owner's active tab is never
+              // left switched (the round-24 commit-then-error finding).
+              if (priorActive?.id) {
+                try {
+                  await chrome.tabs.update(priorActive.id, { active: true });
+                } catch { /* best-effort restore */ }
+              }
               return { error: `could not activate tab: ${e?.message ?? e}` };
             }
             // Immediate post-activation ownership check + restore on failure: an

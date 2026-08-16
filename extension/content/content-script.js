@@ -25,6 +25,14 @@ let disenrolled = false; // a disenrollment was seen — reject ANY stale invoke
                          // (distinct from "never synced": the two must not be
                          // conflated, or a post-delete stale invoke would be
                          // accepted and re-record its old generation)
+// The HIGHEST lifecycle generation ever seen (monotonic across sync + disenroll).
+// `enrollment-sync` and `disenrollment` both carry the monotonic global enrollment
+// generation; a STALE sync (its gen lower than a disenrollment we already saw)
+// must be REJECTED rather than clearing `disenrolled` + resuming MAIN (the
+// round-24 stale-lifecycle-ordering blocker: a Disable could send `disenrollment`
+// first and an older in-flight `enrollment-sync` would land later and re-authorize
+// the bridge with a stale generation).
+let maxGen = -Infinity;
 
 function ensureMainWorld() {
   if (initialized) return;
@@ -61,7 +69,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "enrollment-sync") {
     // The SW confirms the origin's CURRENT enrollment generation (sent on
     // enroll/re-enroll). Record it so a stale-generation invoke can be rejected.
-    currentGen = typeof message.gen === "number" ? message.gen : null;
+    // MONOTONIC: reject a sync whose generation is OLDER than a disenrollment we
+    // already applied — a stale sync must never clear `disenrolled` + resume MAIN
+    // after a newer Disable (the round-24 stale-lifecycle-ordering blocker).
+    const gen = typeof message.gen === "number" ? message.gen : null;
+    if (gen != null && gen < maxGen) {
+      sendResponse({ ok: false, error: "stale enrollment-sync rejected" });
+      return true;
+    }
+    if (gen != null) maxGen = Math.max(maxGen, gen);
+    currentGen = gen;
     disenrolled = false;
     // Re-enrollment clears the MAIN world's cancel epoch so NEW invokes are
     // allowed again (a delete→re-enroll must not leave the page bridge
@@ -78,7 +95,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // sendResponse is rejected so its result is never reported to the SW, and
     // (2) the MAIN world is signalled to DISCARD any in-flight page function's
     // result (the page function's own side effect cannot be unwound, but its
-    // result is never surfaced).
+    // result is never surfaced). The disenrollment's generation is recorded
+    // monotonically so a later stale sync cannot resurrect the bridge (round-24).
+    const gen = typeof message.gen === "number" ? message.gen : null;
+    if (gen != null) maxGen = Math.max(maxGen, gen);
     disenrolled = true;
     currentGen = null;
     for (const [requestId, send] of pending) {

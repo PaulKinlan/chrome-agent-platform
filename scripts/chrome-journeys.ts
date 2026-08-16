@@ -397,6 +397,10 @@ const EXPECTED = [
   "worker restarted (execution context recreated)",
   "recreated alarm observed before fire",
   "restarted worker reconciled + ran the persisted task",
+  "cancel: task registered",
+  "cancel: task listed for the owner",
+  "cancel: cancelled the task (alarm absent)",
+  "cancel: task gone after cancel",
   "agent.create returns ok",
   "agent.create created a discoverable worker (list includes it)",
   "orchestrator: multi-agent ON + delegation tools present",
@@ -1143,6 +1147,37 @@ async function main() {
       check(
         "restarted worker reconciled + ran the persisted task",
         Boolean(recTaskEntry) && Boolean(recResultEntry),
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 8b — owner task list + cancel (the fail-closed cancel path — an
+    // alarm still armed — is unit-tested; this exercises the owner-visible list
+    // + the success-path cancel E2E, the round-24 cancel-fail-open blocker).
+    // ─────────────────────────────────────────────────────────────
+    const cancelTask = "cancel-me";
+    const ct = await msgValue({
+      type: "register-task",
+      task: { task: cancelTask, delayMs: 120000 },
+    });
+    check("cancel: task registered", typeof ct?.name === "string");
+    if (ct?.name) {
+      const listed = await msgValue({ type: "task.list" });
+      check(
+        "cancel: task listed for the owner",
+        Array.isArray(listed?.tasks) &&
+          listed.tasks.some((t) => t.name === ct.name),
+      );
+      const cancelRes = await msgValue({ type: "task.cancel", name: ct.name });
+      check(
+        "cancel: cancelled the task (alarm absent)",
+        cancelRes?.ok === true && cancelRes?.cancelled === true,
+      );
+      const after = await msgValue({ type: "task.list" });
+      check(
+        "cancel: task gone after cancel",
+        Array.isArray(after?.tasks) &&
+          !after.tasks.some((t) => t.name === ct.name),
       );
     }
 

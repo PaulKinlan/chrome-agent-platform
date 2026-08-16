@@ -51,6 +51,18 @@ the agent needs — memory, alarms, skills, and a chat surface — lives in the 
   `window.*` functions (via the webmcp-lib discovery) and calls them as tools.
 - The double-iframe morph surface renders a merged view of 2–3 sites.
 
+**Page-tool cancellation (honest cooperative limit):** a site tool invocation is
+preemptively cancelled at the isolated-world bridge BEFORE the page function starts
+(the enrollment generation is checked + the MAIN world re-checks its cancel epoch
+immediately before the call). But once a page function's body has started, its own
+DOM / storage / network side effects **cannot be unwound** — this is a fundamental
+browser constraint (an extension cannot preempt or roll back arbitrary page code).
+Cancellation after the fact discards the RESULT (never surfaced to the SW) but does
+not rewind an already-started side effect. The window is minimized (the cancel
+epoch is re-checked synchronously right up to the call edge) but a zero-delay timer
+vs. a message dispatch cannot be guaranteed to order a delete before an invoke; the
+residual limit is documented here rather than claimed away.
+
 ### 2.3 Tool directory
 - Aggregates tools three ways, ranked:
   1. **Declared** — WebMCP/MCP tools the site exposes (document.modelContext).

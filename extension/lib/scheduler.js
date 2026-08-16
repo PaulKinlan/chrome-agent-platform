@@ -218,6 +218,8 @@ export async function listScheduledTasks() {
       periodInMinutes: t.periodInMinutes,
       quarantined: Boolean(t.quarantined),
       quarantinedAt: t.quarantinedAt ?? null,
+      cancelling: Boolean(t.cancelling),
+      cancellingAt: t.cancellingAt ?? null,
     }));
   });
 }
@@ -226,7 +228,15 @@ export async function listScheduledTasks() {
  * quarantined or unwanted task). The round-23 blocker required "authoritative
  * cancel" for quarantined records: the alarm is cleared, absence is CONFIRMED
  * via alarms.get (a `clear` false is ambiguous), and the payload is removed
- * atomically under the scheduling lock. Returns whether the task is now gone. */
+ * atomically under the scheduling lock.
+ *
+ * FAIL CLOSED (the round-24 blocker): when the alarm is STILL ARMED after the
+ * clear attempt, the old code deleted the payload + returned ok:true anyway —
+ * leaving a periodic alarm firing forever on a deleted payload. Now: if absence
+ * cannot be confirmed, the payload is retained as a NON-RUNNABLE cancel-pending
+ * record (reconciliation + alarm delivery both skip it) and the call returns
+ * ok:false + retryable:true. Re-invoking this same route RETRIES until alarms.get
+ * confirms absence, at which point the record is finally deleted. */
 export async function cancelScheduledTask(name) {
   return withLock(async () => {
     const store = await kvGet(TASK_KEY);
@@ -250,9 +260,30 @@ export async function cancelScheduledTask(name) {
         alarmAbsent = false; // fail closed — cannot confirm absence
       }
     }
+    if (!alarmAbsent) {
+      // The alarm is STILL armed (clear failed or the state could not be
+      // confirmed) — FAIL CLOSED. Mark the payload non-runnable + cancel-pending
+      // so reconciliation never re-arms it AND alarm delivery skips it, and
+      // return a retryable failure. The payload is ONLY deleted once alarms.get
+      // confirms the alarm is absent.
+      tasks[name] = {
+        ...existing,
+        cancelling: true,
+        cancellingAt: Date.now(),
+      };
+      await kvSet({ [TASK_KEY]: tasks });
+      return {
+        ok: false,
+        name,
+        cancelled: false,
+        retryable: true,
+        alarmAbsent: false,
+        error: "alarm still armed — cancel is pending (retry to confirm removal)",
+      };
+    }
     delete tasks[name];
     await kvSet({ [TASK_KEY]: tasks });
-    return { ok: true, name, cancelled: true, alarmAbsent };
+    return { ok: true, name, cancelled: true, alarmAbsent: true };
   });
 }
 
@@ -504,7 +535,10 @@ export async function reconcileScheduledTasks() {
     // NEVER be re-armed by reconciliation — it is non-runnable until the owner
     // explicitly retries (a fresh scheduleTask) or cancels (the round-22
     // unknown-state replay blocker: reconcile recreated + ran a failed schedule).
-    if (task?.quarantined) continue;
+    // A CANCELLING task (a cancel that failed closed because the alarm was still
+    // armed) must also never be re-armed — it is cancel-pending, retryable via the
+    // owner's cancel route (the round-24 fail-closed cancel blocker).
+    if (task?.quarantined || task?.cancelling) continue;
     if (!existing.has(name)) {
       // The alarm is missing (fired + consumed, or the worker restarted). Recreate
       // it if the task is still in the future; a past one-shot is resumable.

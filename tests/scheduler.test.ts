@@ -577,3 +577,106 @@ Deno.test("an abort DURING alarms.create rolls back the alarm + payload (round-1
     chrome.alarms.clear = origClear;
   }
 });
+
+Deno.test("cancelScheduledTask FAILS CLOSED when the alarm is STILL armed (round-24 blocker)", async () => {
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => false; // clear FAILED (alarm still armed)
+  chrome.alarms.get = async () => ({ name: "still-armed" }); // alarm PRESENT
+  try {
+    await chrome.storage.local.set({
+      "cap:scheduledTasks": {
+        "task_cancel_armed": {
+          name: "task_cancel_armed",
+          task: "periodic",
+          at: Date.now() + 60000,
+          periodInMinutes: 1,
+        },
+      },
+    });
+    const res = await cancelScheduledTask("task_cancel_armed");
+    assert(res?.ok === false, "cancel must FAIL CLOSED when the alarm is still armed");
+    assert(res?.retryable === true, "cancel must be retryable");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    const t = store["cap:scheduledTasks"]?.["task_cancel_armed"];
+    assert(t !== undefined, "the payload must be RETAINED (cancel-pending, not deleted)");
+    assert(t?.cancelling === true, "the payload must be marked cancelling (non-runnable)");
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("cancelScheduledTask RETRY confirms removal once the alarm is absent (round-24 blocker)", async () => {
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  let armed = true;
+  let clearCalls = 0;
+  chrome.alarms.clear = async () => {
+    clearCalls++;
+    if (clearCalls === 1) return false; // first clear FAILS (alarm still armed)
+    armed = false;
+    return true;
+  };
+  chrome.alarms.get = async () => (armed ? { name: "still-armed" } : undefined);
+  try {
+    await chrome.storage.local.set({
+      "cap:scheduledTasks": {
+        "task_cancel_retry": {
+          name: "task_cancel_retry",
+          task: "periodic",
+          at: Date.now() + 60000,
+          periodInMinutes: 1,
+        },
+      },
+    });
+    // First attempt: clear fails (armed remains true) → fail closed + pending.
+    const first = await cancelScheduledTask("task_cancel_retry");
+    assert(first?.ok === false && first?.retryable === true, "first attempt must fail closed");
+    // Retry (clear now succeeds → alarm absent) → the record is finally deleted.
+    const second = await cancelScheduledTask("task_cancel_retry");
+    assert(second?.ok === true && second?.cancelled === true, "retry must confirm removal");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    assert(
+      store["cap:scheduledTasks"]?.["task_cancel_retry"] === undefined,
+      "the record is deleted only after confirmed absence",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("reconcileScheduledTasks does NOT re-arm a cancelling payload (round-24 blocker)", async () => {
+  const origGetAll = chrome.alarms.getAll;
+  const origCreate = chrome.alarms.create;
+  const created = [];
+  chrome.alarms.getAll = async () => []; // no alarms exist
+  chrome.alarms.create = async (name) => {
+    created.push(name);
+    return true;
+  };
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_cancelling": {
+        name: "task_cancelling",
+        task: "should-not-rerun",
+        at: Date.now() - 1000,
+        cancelling: true,
+      },
+    },
+  });
+  try {
+    await reconcileScheduledTasks();
+    assert(
+      !created.includes("task_cancelling"),
+      "a cancelling payload must NOT be re-armed by reconciliation",
+    );
+  } finally {
+    chrome.alarms.getAll = origGetAll;
+    chrome.alarms.create = origCreate;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});

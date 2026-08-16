@@ -94,6 +94,19 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
           await memory.set(key, value);
           committed = true;
           await assertRunOwned();
+          // Re-validate the IMMUTABLE run-start generation AFTER the awaited set:
+          // the gen check above ran BEFORE the OPFS write, so a delete→re-enroll
+          // DURING the write would otherwise leave stale data committed under the
+          // NEW enrollment (the round-24 gen-threading blocker — the gen was
+          // checked adjacent to `set`, never AFTER it). A mismatch here throws so
+          // the catch below compensates (restores prev / deletes the new key).
+          if (enrollmentGuard) {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
+            if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+              throw new Error("origin re-enrolled during run — memory write compensated");
+            }
+          }
           return { ok: true, key };
         } catch (e) {
           // A bounded/reserved-key rejection is surfaced honestly, never thrown
@@ -177,20 +190,11 @@ export function createAgent({
     hooks: {
       onUsage: async (record) => {
         // Worker usage is ENROLLMENT-scoped: a stale run must not append a usage
-        // row under a re-enrolled origin (the round-22 finding: onUsage called
-        // recordUsage without the worker's expected generation). Revalidate the
-        // IMMUTABLE run-start generation before recording.
-        if (enrollmentGuard) {
-          try {
-            const g = await enrollmentGuard();
-            const runGen = getRunGen();
-            if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
-              return; // disenrolled or re-enrolled mid-run — do not record usage
-            }
-          } catch {
-            return; // guard failure — fail closed, no stale usage row
-          }
-        }
+        // row under a re-enrolled origin. The IMMUTABLE run-start generation is
+        // threaded INTO recordUsage (as the `guard`), which re-validates it
+        // BEFORE and AFTER its commit + compensates on mismatch — not merely a
+        // single pre-check that a re-enroll during recordUsage's awaits could
+        // bypass (the round-22 + round-24 gen-threading findings).
         await recordUsage({
           agentId: id,
           taskId,
@@ -199,7 +203,9 @@ export function createAgent({
           inputTokens: record.inputTokens ?? 0,
           outputTokens: record.outputTokens ?? 0,
           estimatedCost: record.estimatedCost ?? 0,
-        });
+        }, enrollmentGuard
+          ? { genGuard: enrollmentGuard, getRunGen }
+          : null);
       },
     },
   });
@@ -207,6 +213,11 @@ export function createAgent({
   return {
     id,
     name,
+    // Expose the worker's CURRENT run generation (the immutable run-start gen,
+    // or null when no run is active). The SW threads this into the site-tool
+    // invocation + the provider/usage boundaries so a stale run can never operate
+    // under a re-enrolled origin's generation (the round-24 gen-threading blocker).
+    getRunGen: () => activeRun?.gen ?? null,
     // agent-do's run(task, context, history) -> string. Our wrapper accepts a
     // FOURTH `runGen` argument: the immutable enrollment generation the caller
     // captured at delegation start. The run + its worker commits revalidate THAT
@@ -247,7 +258,29 @@ export function createAgent({
       };
       controller.signal.addEventListener("abort", onAbort);
       try {
-        return await agent.run(task, context, history);
+        // Provider execution boundary: re-validate the IMMUTABLE run-start
+        // generation IMMEDIATELY before the model loop starts (a re-enroll during
+        // the queue await or the guard await above must not start a stale run —
+        // the round-24 gen-threading blocker: the provider received no gen check
+        // before agent.run).
+        if (enrollmentGuard && gen != null) {
+          const g = await enrollmentGuard();
+          if (!g?.ok || (g.gen ?? 0) !== gen) {
+            return { error: "origin re-enrolled before run — task not started" };
+          }
+        }
+        const result = await agent.run(task, context, history);
+        // Post-run generation revalidation: a re-enroll DURING the model loop
+        // must discard the result rather than return it to the caller under a
+        // stale enrollment (the round-24 finding — the provider path had no
+        // post-run gen check).
+        if (enrollmentGuard && gen != null) {
+          const g = await enrollmentGuard();
+          if (!g?.ok || (g.gen ?? 0) !== gen) {
+            return { error: "origin re-enrolled during run — result discarded" };
+          }
+        }
+        return result;
       } finally {
         controller.signal.removeEventListener("abort", onAbort);
         activeRun = null;

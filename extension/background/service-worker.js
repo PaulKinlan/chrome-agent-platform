@@ -40,6 +40,7 @@ import {
   approveTool,
   disenrollOrigin,
   disenrollOriginLocked,
+  enrollmentGeneration,
   enrollmentSnapshot,
   enrollOrigin,
   isApproved,
@@ -173,8 +174,11 @@ async function handleAlarm(alarm) {
     // already-armed ambiguous alarm executed the supposedly non-runnable
     // scheduling request. Fail closed: release the lock and leave it quarantined
     // (only an explicit owner retry — a fresh scheduleTask — or cancel clears it).
-    if (task.quarantined) {
-      console.warn("scheduled task is quarantined — not running", alarm.name);
+    // A CANCELLING task (a cancel that failed closed because the alarm was still
+    // armed) must likewise NEVER run — it is cancel-pending and only the owner's
+    // cancel route resolves it (the round-24 fail-closed cancel blocker).
+    if (task.quarantined || task.cancelling) {
+      console.warn("scheduled task is quarantined/cancelling — not running", alarm.name);
       return;
     }
     // Run FIRST, delete only on success (durable across worker interruption).
@@ -344,6 +348,12 @@ async function ensureOrchestrator() {
         return { ok: true, gen: snap.gen };
       },
     });
+    // Register each worker's run-generation getter so the site-tool execute
+    // closures can read the IMMUTABLE run gen (not a re-snapshot of the current
+    // enrollment) — see workerRunGenGetters + invokeSiteTool (round-24 blocker 3).
+    for (const [origin, agent] of orch.workers) {
+      workerRunGenGetters.set(origin, agent.getRunGen);
+    }
     // Commit only if the generation is still current (an invalidation during
     // the awaits above means this orchestrator used stale config).
     if (generation === gen) {
@@ -354,6 +364,15 @@ async function ensureOrchestrator() {
     // Stale build — loop and rebuild under the new generation.
   }
 }
+
+// Per-origin getter for the WORKER's current run generation (the immutable
+// run-start gen, or null when no run is active), registered by ensureOrchestrator
+// after createOrchestrator builds each worker agent. The site-tool execute
+// closure reads THIS — the immutable run generation — rather than re-snapshotting
+// the CURRENT enrollment (which a re-enroll could have bumped mid-run), so a stale
+// worker run can never operate under a newly re-enrolled origin's generation (the
+// round-24 gen-threading blocker).
+const workerRunGenGetters = new Map(); // canonical origin -> () => number|null
 
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
 async function siteToolset(origin) {
@@ -382,7 +401,10 @@ async function siteToolset(origin) {
         if (!(await isApproved(origin, t.name))) {
           return { error: `tool ${t.name} on ${origin} not approved` };
         }
-        return await invokeSiteTool(origin, t.name, args);
+        // Thread the worker's IMMUTABLE run-start generation into the site
+        // invocation so a re-enrolled origin is rejected (see workerRunGenGetters).
+        const runGen = workerRunGenGetters.get(origin)?.() ?? null;
+        return await invokeSiteTool(origin, t.name, args, runGen);
       },
     });
   }
@@ -397,9 +419,11 @@ async function siteToolset(origin) {
 // generation, so the result is discarded rather than journaled.
 /** Send a lifecycle message to every open tab of an origin's content script.
  * `enrollment-sync` carries the CURRENT generation (so the bridge accepts invokes
- * with that gen); `disenrollment` clears it (so a stale in-flight invoke is
- * rejected before reaching the MAIN world). Best-effort: a tab that closed or a
- * bridge that failed to respond must not fail the enroll/delete operation. */
+ * with that gen); `disenrollment` carries the TOMBSTONE generation and clears the
+ * bridge's current gen (so a stale in-flight invoke is rejected before reaching
+ * the MAIN world, and a stale sync can never re-authorize it — the monotonic
+ * bridge ordering). Best-effort: a tab that closed or a bridge that failed to
+ * respond must not fail the enroll/delete operation. */
 async function notifyOriginBridge(canonical, message) {
   try {
     const tabs = await chrome.tabs.query({});
@@ -421,7 +445,7 @@ async function notifyOriginBridge(canonical, message) {
   } catch { /* best-effort */ }
 }
 
-async function invokeSiteTool(origin, name, args) {
+async function invokeSiteTool(origin, name, args, expectedGen = null) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
   // Atomic snapshot (enrolled + generation read under the enrollment lock) — a
@@ -430,7 +454,18 @@ async function invokeSiteTool(origin, name, args) {
   if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
   }
-  const gen = snap.gen;
+  // The IMMUTABLE run-start generation (threaded from the worker's run) takes
+  // precedence over the current snapshot's generation. A stale run whose origin
+  // was re-enrolled mid-run must NOT operate under the NEW enrollment — reject
+  // when the current generation no longer matches the run's captured generation
+  // (the round-24 gen-threading blocker: invokeSiteTool snapshotted the CURRENT
+  // generation, not the immutable run generation).
+  const gen = expectedGen != null ? expectedGen : snap.gen;
+  if (snap.gen !== gen) {
+    return {
+      error: `origin ${canonical} was re-enrolled during run — site invocation rejected`,
+    };
+  }
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -666,7 +701,14 @@ const handlers = {
           try {
             abortWorker(o);
             await disenrollOriginLocked(o); // already under the global lock
-            await notifyOriginBridge(o, { type: "disenrollment" });
+            // Thread the TOMBSTONE generation into the disenrollment message so
+            // the content bridge can apply monotonic lifecycle ordering — a stale
+            // enrollment-sync (older gen) can never re-authorize this bridge after
+            // this newer Disable (the round-24 stale-lifecycle-ordering blocker).
+            // enrollmentGeneration reads WITHOUT re-acquiring the global lock (we
+            // already hold it — re-acquiring would deadlock).
+            const tombGen = await enrollmentGeneration(o);
+            await notifyOriginBridge(o, { type: "disenrollment", gen: tombGen });
             const res = await unregisterOriginScripts(o);
             if (!res.ok) {
               await markCleanupPending(o);
@@ -1164,7 +1206,11 @@ const handlers = {
       // Tell the origin's live content scripts the origin was DISENROLLED so a
       // stale in-flight invoke is rejected at the bridge before the MAIN world
       // runs (preemptive revocation — the round-20 enrollment-signal finding).
-      await notifyOriginBridge(canonical, { type: "disenrollment" });
+      // The TOMBSTONE generation is threaded into the message so the bridge can
+      // reject a stale enrollment-sync that would otherwise re-authorize it (the
+      // round-24 stale-lifecycle-ordering blocker).
+      const tomb = await enrollmentSnapshot(canonical);
+      await notifyOriginBridge(canonical, { type: "disenrollment", gen: tomb.gen });
       // allSettled: attempt scripts/host-permission + OPFS cleanup INDEPENDENTLY,
       // never short-circuit on the first failure (the round-17 non-retryable
       // finding: a sequential rollback skipped later host cleanup on an earlier
