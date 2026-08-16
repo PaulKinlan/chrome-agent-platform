@@ -15,6 +15,7 @@ import {
   listScreenshots,
   loadScreenshot,
   masterMemory,
+  namedAgentMemory,
   saveScreenshot,
   siteMemory,
 } from "../lib/memory.js";
@@ -60,6 +61,16 @@ import {
   withEnrollmentLock,
 } from "../lib/tools.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
+import {
+  createNamedAgent,
+  deleteNamedAgent,
+  generateAgentAvatar,
+  getNamedAgent,
+  grepAgentMemory,
+  listNamedAgents,
+  slugifyAgentId,
+  updateNamedAgent,
+} from "../lib/named-agents.js";
 import {
   appendThreadMessage,
   continueThread,
@@ -1169,6 +1180,52 @@ const handlers = {
     // Generate a title for a task (the model when available, else truncated).
     const name = await generateThreadName(m.task);
     return { ok: true, name };
+  },
+
+  // ── named agents (the persistent teammates) ────────────────────────────
+  // Each named agent has its OWN OPFS sandbox (memory + history + skills +
+  // agents.md), a name + avatar, and can be delegated tasks. The AUTHORITATIVE
+  // registry lives in chrome.storage (cap:namedAgents); the master + the user
+  // create/manage agents through these routes (the management tool suite calls
+  // them, so a natural-language "create an agent" works too).
+  async "named-agent.list"() {
+    return { agents: await listNamedAgents() };
+  },
+  async "named-agent.get"({ id }) {
+    const agent = await getNamedAgent(id);
+    return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
+  },
+  async "named-agent.create"({ id, name, role, avatar, skills }) {
+    return await createNamedAgent({ id, name, role, avatar, skills });
+  },
+  async "named-agent.update"({ id, name, role, avatar, skills }) {
+    return await updateNamedAgent(id, { name, role, avatar, skills });
+  },
+  async "named-agent.delete"({ id }) {
+    return await deleteNamedAgent(id);
+  },
+  async "named-agent.grep"({ id, query }) {
+    // Search a named agent's OWN memory + history (the user-facing path). The
+    // agent itself gets the same search through its `memory_grep` tool.
+    if (!(await getNamedAgent(id))) return { ok: false, error: `no agent ${id}` };
+    const mem = namedAgentMemory(slugifyAgentId(id));
+    return await grepAgentMemory(mem, query);
+  },
+  async "named-agent.avatar"({ id, name, role }) {
+    // Generate an avatar via the Gemini image model (nano banana) using the
+    // user's configured Gemini key. Falls back to a deterministic initial when
+    // the key/model is unavailable. Never returns the key.
+    const agent = id ? await getNamedAgent(id) : null;
+    const label = agent?.name ?? name;
+    const roleText = agent?.role ?? role ?? "";
+    const cfg = await getProviderConfig("gemini");
+    const apiKey = typeof cfg?.apiKey === "string" ? cfg.apiKey : "";
+    const avatar = await generateAgentAvatar({ name: label, role: roleText, apiKey });
+    if (avatar && agent) {
+      const updated = await updateNamedAgent(agent.id, { avatar });
+      return { ok: true, avatar, agent: updated.agent };
+    }
+    return { ok: true, avatar: avatar ?? null };
   },
 
   // The agent run log (item 16): every journaled task/result/tool-call/screenshot

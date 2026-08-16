@@ -1,0 +1,302 @@
+// lib/named-agents.js — the named-agent layer (the persistent teammates).
+//
+// A named agent is a persistent, NAMED identity (the docs/AGENT-MODEL.md model):
+//   - a name + an avatar,
+//   - a role ("my PR reviewer", "my reader"),
+//   - its OWN OPFS sandbox (memory + run history + skills + agents.md),
+//     keyed separately from the site-origin stores (memory/agents/<slug>/*),
+//   - callable/delegatable (/agent:name or "ask <name> to <task>").
+//
+// The AUTHORITATIVE registry is `cap:namedAgents` in chrome.storage (like
+// `cap:enrollment`): it is NOT writable by the model's `memory_set` (a forged
+// registry must never create/impersonate an agent). Every mutation goes through
+// the registry lock so concurrent create/update/delete read-modify-writes are
+// serialized (the same discipline as the enrollment registry).
+
+import { kvGet, kvSet } from "./kv.js";
+import { namedAgentMemory } from "./memory.js";
+
+const AGENTS_KEY = "cap:namedAgents";
+
+// Bounds (Constitution §4 + §2): names/roles are short, and an agent registry
+// is bounded so a hostile prompt cannot grow it without limit.
+const MAX_AGENTS = 50;
+const MAX_NAME_LEN = 48;
+const MAX_ROLE_LEN = 200;
+const MAX_SKILLS = 32;
+
+let agentsMutex = Promise.resolve();
+function withAgentsLock(fn) {
+  const run = agentsMutex.then(fn, fn);
+  agentsMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Normalize an agent id to a kebab-case slug. */
+export function slugifyAgentId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
+async function agentsMap() {
+  const s = await kvGet(AGENTS_KEY);
+  return s[AGENTS_KEY] ?? {};
+}
+
+async function writeAgents(map) {
+  await kvSet({ [AGENTS_KEY]: map });
+}
+
+/** List all named agents, most-recently-created first. */
+export async function listNamedAgents() {
+  const map = await agentsMap();
+  return Object.values(map).sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+}
+
+/** Fetch one named agent by id (or name). Returns null when absent. */
+export async function getNamedAgent(id) {
+  const map = await agentsMap();
+  const slug = slugifyAgentId(id);
+  return map[slug] ?? null;
+}
+
+/**
+ * Create (or replace) a named agent. `id` is optional — when omitted a slug is
+ * derived from the name. Returns `{ ok, agent }` or `{ ok:false, error }`.
+ * This is the AUTHORITATIVE create path (the UI + the master's tool + the
+ * natural-language path all land here); it also provisions the agent's own OPFS
+ * sandbox (its `agents.md` operating instructions).
+ */
+export async function createNamedAgent({ id, name, role = "", avatar = null, skills = [], agentsMd = null }) {
+  const cleanName = String(name ?? "").trim();
+  if (!cleanName) return { ok: false, error: "an agent needs a name" };
+  if (cleanName.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
+  const roleText = String(role ?? "").trim().slice(0, MAX_ROLE_LEN);
+  const skillList = Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : [];
+  return await withAgentsLock(async () => {
+    const map = await agentsMap();
+    const slug = slugifyAgentId(id) || slugifyAgentId(cleanName) || `agent-${Date.now()}`;
+    const existing = map[slug];
+    if (!existing && Object.keys(map).length >= MAX_AGENTS) {
+      return { ok: false, error: `too many agents (${MAX_AGENTS})` };
+    }
+    const agent = {
+      id: slug,
+      name: cleanName,
+      role: roleText,
+      avatar: avatar ? String(avatar) : (existing?.avatar ?? null),
+      skills: skillList,
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    };
+    map[slug] = agent;
+    await writeAgents(map);
+    // Provision the agent's OWN sandbox: its operating instructions (agents.md)
+    // live in its store, distinct from every other agent.
+    const mem = namedAgentMemory(slug);
+    await mem.setTrusted("agents.md", agentsMd ?? defaultAgentsMd(agent));
+    return { ok: true, agent };
+  });
+}
+
+/** Update a named agent's name/role/avatar/skills. Returns the updated agent. */
+export async function updateNamedAgent(id, patch = {}) {
+  const slug = slugifyAgentId(id);
+  return await withAgentsLock(async () => {
+    const map = await agentsMap();
+    const existing = map[slug];
+    if (!existing) return { ok: false, error: `no agent ${slug}` };
+    const next = { ...existing };
+    if (patch.name !== undefined) {
+      const n = String(patch.name).trim();
+      if (!n) return { ok: false, error: "an agent needs a name" };
+      if (n.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
+      next.name = n;
+    }
+    if (patch.role !== undefined) next.role = String(patch.role).trim().slice(0, MAX_ROLE_LEN);
+    if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
+    if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
+    next.updatedAt = Date.now();
+    map[slug] = next;
+    await writeAgents(map);
+    return { ok: true, agent: next };
+  });
+}
+
+/** Delete a named agent + its OPFS sandbox. Returns { ok } (idempotent). */
+export async function deleteNamedAgent(id) {
+  const slug = slugifyAgentId(id);
+  return await withAgentsLock(async () => {
+    const map = await agentsMap();
+    const existing = map[slug];
+    delete map[slug];
+    await writeAgents(map);
+    if (existing) {
+      const mem = namedAgentMemory(slug);
+      await mem.clear().catch(() => {});
+    }
+    return { ok: true };
+  });
+}
+
+/** The agent's own OPFS store (memory + history + skills + agents.md). */
+export function agentMemory(id) {
+  return namedAgentMemory(slugifyAgentId(id));
+}
+
+/** Default `agents.md` — the agent's operating instructions. */
+function defaultAgentsMd(agent) {
+  return [
+    `# ${agent.name}`,
+    "",
+    agent.role ? `**Role:** ${agent.role}` : "**Role:** (none set)",
+    "",
+    "You are a persistent agent. You have your own memory (key-value) and your",
+    "own run history. Use `memory_grep` to search them. Use `memory_set`/",
+    "`memory_get` to store/recall what you learn. You can install skills and",
+    "receive delegated tasks.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The PURE grep scan (no `ai`/`zod` — the `memory_grep` TOOL wraps this in
+ * agent.js where those are already imported). Search an agent's own memory AND
+ * run history (the journal) for a substring (case-insensitive). Returns a
+ * bounded excerpt of each match, never the full store.
+ */
+export async function grepAgentMemory(memory, query) {
+  const mem = memory ?? namedAgentMemory("unnamed");
+  const needle = String(query).toLowerCase();
+  if (!needle) return { query, count: 0, matches: [] };
+  const matches = [];
+  const keys = await mem.keys().catch(() => []);
+  for (const key of keys.slice(0, 200)) {
+    const value = await mem.get(key).catch(() => null);
+    let haystack = "";
+    try { haystack = JSON.stringify(value ?? null); } catch { haystack = String(value); }
+    if (haystack.toLowerCase().includes(needle)) {
+      matches.push({ source: "memory", key, excerpt: excerpt(haystack, needle, 160) });
+    }
+  }
+  const journal = await mem.get("journal").catch(() => null);
+  if (Array.isArray(journal)) {
+    for (const entry of journal.slice(-200)) {
+      let hs = "";
+      try { hs = JSON.stringify(entry ?? null); } catch { hs = String(entry); }
+      if (hs.toLowerCase().includes(needle)) {
+        matches.push({ source: "history", excerpt: excerpt(hs, needle, 160) });
+      }
+    }
+  }
+  return { query, count: matches.length, matches: matches.slice(0, 30) };
+}
+
+function excerpt(text, needle, around = 160) {
+  const idx = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (idx < 0) return text.slice(0, around);
+  const start = Math.max(0, idx - Math.floor(around / 2));
+  return (start > 0 ? "…" : "") + text.slice(start, start + around) + (start + around < text.length ? "…" : "");
+}
+
+// ── name + avatar generation ──────────────────────────────────────────────
+
+const NAME_ADJECTIVES = [
+  "tab", "crisp", "quiet", "bright", "swift", "calm", "keen", "merry",
+  "wary", "sly", "bold", "tidy", "nimble", "steady", "curious", "dapper",
+];
+const NAME_NOUNS = [
+  "tidy", "penguin", "owl", "ferret", "fox", "rook", "otter", "heron",
+  "badger", "wren", "sparrow", "lynx", "puffin", "marten", "hedgehog", "skink",
+];
+
+/** A deterministic-but-quirky name for an agent, seeded by its id/role so the
+ * SAME agent always gets the SAME name. Returns an alliterative-ish name. */
+export function generateAgentName(seed) {
+  const s = String(seed ?? "");
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  const adj = NAME_ADJECTIVES[hash % NAME_ADJECTIVES.length];
+  const noun = NAME_NOUNS[(hash >>> 5) % NAME_NOUNS.length];
+  const cap = (w) => w[0].toUpperCase() + w.slice(1);
+  return `${cap(adj)} ${cap(noun)}`;
+}
+
+/**
+ * Generate an avatar for an agent using the Gemini image model (nano banana).
+ * `apiKey` is the user's configured Gemini key (never committed). On success
+ * returns a data:image/png URL; on any failure returns null (the caller falls
+ * back to a deterministic initial/icon). This is async + network-bound, so it
+ * runs only on an explicit request (named-agent.avatar), not on every list.
+ */
+export async function generateAgentAvatar({ name, role, apiKey }) {
+  if (!apiKey) return null;
+  const prompt =
+    `A tiny, distinctive, flat avatar icon for an AI agent named "${name}"` +
+    (role ? ` whose role is "${role}"` : "") +
+    `. Minimal geometric mascot, friendly but not childish, petrol-teal (#0e6e63) on a warm paper (#f7f6f3) circular badge. No text, no letters, no gradients. Simple + bold, reads at 32px.`;
+  try {
+    const url =
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ["IMAGE"] },
+      }),
+    });
+    const data = await res.json();
+    const parts = data?.candidates?.[0]?.content?.parts ?? [];
+    const inline = parts.find((p) => p?.inlineData?.data)?.inlineData;
+    if (!inline) return null;
+    const full = `data:${inline.mimeType || "image/png"};base64,${inline.data}`;
+    // Downscale to a bounded avatar (128px) so a generated image can't blow the
+    // chrome.storage quota (the Gemini image API returns a large PNG). OffscreenCanvas
+    // is available in the SW; when it's not, fall back to the full image.
+    return await downscaleAvatar(full, 128);
+  } catch {
+    return null;
+  }
+}
+
+/** Downscale a data-URL image to `size` px (JPEG) via OffscreenCanvas. Best-effort:
+ * returns the input unchanged when canvas/image decoding is unavailable. */
+async function downscaleAvatar(dataURL, size = 128) {
+  try {
+    if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") {
+      return dataURL;
+    }
+    const blob = await (await fetch(dataURL)).blob();
+    const bmp = await createImageBitmap(blob);
+    const scale = Math.min(1, size / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const out = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+    const buf = new Uint8Array(await out.arrayBuffer());
+    let bin = "";
+    for (const b of buf) bin += String.fromCharCode(b);
+    bmp.close();
+    return `data:image/jpeg;base64,${btoa(bin)}`;
+  } catch {
+    return dataURL;
+  }
+}
+
+/** A deterministic fallback avatar (an SVG data URL with the agent's initial). */
+export function initialAvatar(name) {
+  const initial = (String(name ?? "?").trim()[0] || "?").toUpperCase();
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">` +
+    `<circle cx="32" cy="32" r="30" fill="#f7f6f3" stroke="#0e6e63" stroke-width="3"/>` +
+    `<text x="32" y="42" font-family="system-ui,sans-serif" font-size="28" font-weight="600" fill="#0e6e63" text-anchor="middle">${initial}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}

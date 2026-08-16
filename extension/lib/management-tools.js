@@ -32,6 +32,11 @@ export const MANAGEMENT_TOOL_NAMES = [
   "revoke_capability",
   "get_usage",
   "get_memory_overview",
+  "create_named_agent",
+  "update_named_agent",
+  "delete_named_agent",
+  "get_named_agent",
+  "list_named_agents",
   "list_hooks",
   "subscribe_hook",
   "unsubscribe_hook",
@@ -149,6 +154,41 @@ export function managementToolset({ callRoute }) {
       description: "Revoke an optional permission.",
       inputSchema: z.object({ id: z.string() }),
       execute: ({ id }) => call("capability.revoke", { id }),
+    }),
+
+    // ---- named agents (the persistent teammates) ----
+    create_named_agent: tool({
+      description:
+        "Create a persistent NAMED agent (a teammate with its own memory + history + skills, like a 'PR reviewer' or 'my reader'). You give it a name + role; it gets its own sandbox. The user can then delegate tasks to it.",
+      inputSchema: z.object({
+        name: z.string().describe("a name for the agent"),
+        role: z.string().optional().describe("what the agent does, e.g. 'reviews my GitHub PRs'"),
+      }),
+      execute: ({ name, role }) => call("named-agent.create", { name, role }),
+    }),
+    update_named_agent: tool({
+      description: "Rename a named agent or change its role.",
+      inputSchema: z.object({
+        id: z.string().describe("the agent id (slug)"),
+        name: z.string().optional(),
+        role: z.string().optional(),
+      }),
+      execute: ({ id, name, role }) => call("named-agent.update", { id, name, role }),
+    }),
+    delete_named_agent: tool({
+      description: "Delete a named agent + its sandbox (the master + the user may do this).",
+      inputSchema: z.object({ id: z.string().describe("the agent id (slug)") }),
+      execute: ({ id }) => call("named-agent.delete", { id }),
+    }),
+    get_named_agent: tool({
+      description: "Fetch one named agent's details (name, role, avatar, skills).",
+      inputSchema: z.object({ id: z.string().describe("the agent id (slug)") }),
+      execute: ({ id }) => call("named-agent.get", { id }),
+    }),
+    list_named_agents: tool({
+      description: "List every named agent.",
+      inputSchema: z.object({}),
+      execute: () => call("named-agent.list", {}),
     }),
 
     // ---- introspection ----

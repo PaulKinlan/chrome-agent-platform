@@ -10,6 +10,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
+import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 
 const DEFAULT_SYSTEM =
@@ -209,6 +210,18 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnl
         const err2 = await enrolledGuard();
         if (err2) return err2;
         return { keys };
+      },
+    }),
+    memory_grep: tool({
+      description:
+        "Search this agent's own memory (key-value store) AND run history (journal) for a substring. Returns matching keys + a bounded excerpt of each match, never the full store.",
+      inputSchema: z.object({
+        query: z.string().min(1).max(200).describe("the substring to search for"),
+      }),
+      execute: async ({ query }) => {
+        const err = await enrolledGuard();
+        if (err) return err;
+        return await grepAgentMemory(memory, query);
       },
     }),
   };

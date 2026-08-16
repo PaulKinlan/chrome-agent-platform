@@ -335,12 +335,11 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
 }
 
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */
-export function memoryStore(origin) {
-  const isMaster = origin === MASTER;
-  // Guard: a site origin can never collide with the reserved master sentinel.
-  const path = isMaster
-    ? [ROOT, MASTER]
-    : [ROOT, "origins", encodeOrigin(origin)];
+/** The shared store body: a path + a label, with the origin/master reserved-key
+ * semantics. `memoryStore` (master + site origins) and `namedAgentMemory`
+ * (named agents) both build their store through here so every store gets the
+ * same bounds, version tokens, and CAS semantics. */
+function memoryStoreAt(path, { isMaster, origin }) {
   return {
     isMaster,
     origin,
@@ -425,6 +424,51 @@ export function memoryStore(origin) {
       } catch { /* absent */ }
     },
   };
+}
+
+export function memoryStore(origin) {
+  const isMaster = origin === MASTER;
+  // Guard: a site origin can never collide with the reserved master sentinel.
+  const path = isMaster
+    ? [ROOT, MASTER]
+    : [ROOT, "origins", encodeOrigin(origin)];
+  return memoryStoreAt(path, { isMaster, origin });
+}
+
+/** The OPFS sandbox for a NAMED agent (a persistent teammate — not an origin).
+ * Lives at `memory/agents/<slug>/*`, distinct from the site-origin stores and
+ * the master store, so a named agent has its own memory, history, and skills
+ * (the chaos-extension-style per-agent sandbox). `id` is the agent's slug; the
+ * `origin` label is `agent:<slug>` so journal/usage tagging never collides with
+ * a real origin. */
+export function namedAgentMemory(id) {
+  const slug = String(id || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed";
+  const path = [ROOT, "agents", encodeURIComponent(slug)];
+  return memoryStoreAt(path, { isMaster: false, origin: `agent:${slug}` });
+}
+
+/** Enumerate the named-agent ids that have an OPFS sandbox directory. (Read-only
+ * introspection; the AUTHORITATIVE registry is in chrome.storage, see
+ * lib/named-agents.js.) */
+export async function listNamedAgentIds() {
+  const root = await rootDir();
+  let memDir;
+  try {
+    memDir = await root.getDirectoryHandle(ROOT);
+  } catch {
+    return [];
+  }
+  let agentsDir;
+  try {
+    agentsDir = await memDir.getDirectoryHandle("agents");
+  } catch {
+    return [];
+  }
+  const out = [];
+  for await (const [name, handle] of agentsDir.entries()) {
+    if (handle.kind === "directory") out.push(decodeURIComponent(name));
+  }
+  return out.sort();
 }
 
 export const masterMemory = () => memoryStore(MASTER);

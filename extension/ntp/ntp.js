@@ -87,6 +87,48 @@ async function renderSiteAgents() {
   refreshAgentCount();
 }
 
+// ── named agents (the persistent teammates) ──────────────────────────────
+async function renderNamedAgents() {
+  const el = document.getElementById("named-agents");
+  if (!el) return;
+  const res = await send("named-agent.list").catch(() => ({ agents: [] }));
+  const agents = Array.isArray(res.agents) ? res.agents : [];
+  el.replaceChildren();
+  if (!agents.length) {
+    el.innerHTML = `<div class="empty">No named agents yet. Create one in a task ("create an agent…") or with /agent:create.</div>`;
+  } else {
+    for (const a of agents.slice(0, 6)) {
+      const row = document.createElement("capability-row");
+      row.setAttribute("name", a.name || a.id);
+      row.setAttribute("description", a.role || "a named agent");
+      row.setAttribute(
+        "icon",
+        `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`,
+      );
+      row.setAttribute("action", "run");
+      row.addEventListener("run", () => openView("directory/directory.html", "Agents"));
+      el.append(row);
+    }
+    if (agents.length > 6) {
+      const more = document.createElement("div");
+      more.className = "empty";
+      more.textContent = `+ ${agents.length - 6} more`;
+      el.append(more);
+    }
+  }
+  refreshAgentCount();
+}
+
+function initialAvatar(name) {
+  const initial = (String(name ?? "?").trim()[0] || "?").toUpperCase();
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">` +
+    `<circle cx="32" cy="32" r="30" fill="#f7f6f3" stroke="#0e6e63" stroke-width="3"/>` +
+    `<text x="32" y="42" font-family="system-ui,sans-serif" font-size="28" font-weight="600" fill="#0e6e63" text-anchor="middle">${initial}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}
+
 // ── background agents (scheduled recipes, enabled/disabled) ──────────────
 async function renderBackgroundAgents() {
   const el = document.getElementById("background-agents");
@@ -136,13 +178,15 @@ async function renderBackgroundAgents() {
 async function refreshAgentCount() {
   const el = document.getElementById("agent-count");
   if (!el) return;
-  const [dir, bg] = await Promise.all([
+  const [dir, bg, named] = await Promise.all([
     send("agent.directory").catch(() => ({ agents: [] })),
     send("background-agent.list").catch(() => ({ agents: [] })),
+    send("named-agent.list").catch(() => ({ agents: [] })),
   ]);
   const siteN = Array.isArray(dir.agents) ? dir.agents.length : 0;
   const bgN = (Array.isArray(bg.agents) ? bg.agents : []).filter((a) => a.enabled).length;
-  el.textContent = `${bgN} background · ${siteN} site`;
+  const namedN = Array.isArray(named.agents) ? named.agents.length : 0;
+  el.textContent = `${namedN} named · ${bgN} background · ${siteN} site`;
 }
 
 // ── recent artifacts ──────────────────────────────────────────────────────
@@ -357,6 +401,7 @@ threadComposer.addEventListener("send", async (ev) => {
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
 
 renderSiteAgents();
+renderNamedAgents();
 renderBackgroundAgents();
 renderArtifacts();
 renderTasks();
