@@ -99,13 +99,7 @@ async function renderSiteAgents() {
     );
     row.setAttribute("icon", "");
     row.setAttribute("action", "run");
-    row.addEventListener("run", () => {
-      try {
-        chrome.tabs.create({ url: chrome.runtime.getURL("directory/directory.html") });
-      } catch {
-        window.open(chrome.runtime.getURL("directory/directory.html"), "_blank");
-      }
-    });
+    row.addEventListener("run", () => openView("directory/directory.html", "Directory"));
     el.append(row);
   }
   if (agents.length > 6) {
@@ -133,9 +127,7 @@ async function renderArtifacts() {
     row.setAttribute("description", a.type + " · " + a.size + " B");
     row.setAttribute("icon", "");
     row.setAttribute("action", "run");
-    row.addEventListener("run", () => {
-      chrome.runtime.openOptionsPage();
-    });
+    row.addEventListener("run", () => openView("options/options.html", "Settings"));
     el.append(row);
   }
 }
@@ -188,27 +180,35 @@ renderSiteAgents();
 renderArtifacts();
 refreshTasks();
 
+// ── in-context navigation (no new tabs) ─────────────────────────────────
+const viewOverlay = document.getElementById("view");
+const viewFrame = document.getElementById("view-frame");
+const viewTitle = document.getElementById("view-title");
+
+function openView(path, title) {
+  viewFrame.src = chrome.runtime.getURL(path);
+  viewTitle.textContent = title;
+  viewOverlay.hidden = false;
+  viewFrame.focus();
+}
+function closeView() {
+  viewOverlay.hidden = true;
+  viewFrame.src = "about:blank";
+}
+
+document.getElementById("view-back")?.addEventListener("click", closeView);
+
 document.getElementById("open-settings")?.addEventListener(
   "click",
-  () => chrome.runtime.openOptionsPage(),
+  () => openView("options/options.html", "Settings"),
 );
-document.getElementById("open-directory")?.addEventListener("click", () => {
-  try {
-    chrome.tabs.create({
-      url: chrome.runtime.getURL("directory/directory.html"),
-    });
-  } catch {
-    window.open(chrome.runtime.getURL("directory/directory.html"), "_blank");
-  }
-});
-document.getElementById("open-recipes")?.addEventListener("click", () => {
-  try {
-    chrome.tabs.create({
-      url: chrome.runtime.getURL("recipes/index.html"),
-    });
-  } catch {
-    window.open(chrome.runtime.getURL("recipes/index.html"), "_blank");
-  }
-});
+document.getElementById("open-directory")?.addEventListener(
+  "click",
+  () => openView("directory/directory.html", "Directory"),
+);
+document.getElementById("open-recipes")?.addEventListener(
+  "click",
+  () => openView("recipes/index.html", "Recipes"),
+);
 
 setStatus("ready");

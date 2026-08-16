@@ -9431,7 +9431,7 @@ var allowsEval = cached(() => {
   }
   try {
     const F = Function;
-    new F("");
+    (() => { throw new Error("eval disabled (MV3 CSP)"); })();
     return true;
   } catch (_) {
     return false;
@@ -25216,10 +25216,24 @@ function createPromptApiModel() {
   let session2 = null;
   const ensureSession = async () => {
     if (session2) return session2;
-    session2 = await api.create({
-      systemPrompt: "You are the Chrome Agent Platform hub agent. Be concise and helpful.",
-      temperature: 0.4
-    });
+    try {
+      session2 = await api.create({
+        systemPrompt: "You are the Chrome Agent Platform hub agent. Be concise and helpful.",
+        topK: 40,
+        temperature: 0.4
+      });
+    } catch (err) {
+      const msg = err?.message ?? String(err);
+      if (/topK|temperature/i.test(msg)) {
+        throw new Error(`Chrome Prompt API session failed: ${msg}`);
+      }
+      if (/download|not available|not supported/i.test(msg)) {
+        throw new Error(
+          "Chrome Prompt API (Gemini nano) model is not ready \u2014 download it via chrome://flags or wait for it to finish downloading."
+        );
+      }
+      throw new Error(`Chrome Prompt API session failed: ${msg}`);
+    }
     return session2;
   };
   return {
@@ -38979,7 +38993,7 @@ var allowsEval2 = /* @__PURE__ */ cached2(() => {
   }
   try {
     const F = Function;
-    new F("");
+    (() => { throw new Error("eval disabled (MV3 CSP)"); })();
     return true;
   } catch (_) {
     return false;

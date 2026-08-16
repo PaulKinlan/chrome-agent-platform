@@ -66,14 +66,27 @@ console.log(`built ${OPTIONS_OUT}`);
 // is CSP-clean — that path is dead in this extension, so the throw never runs.
 const bundle = await readFile(OUT, "utf8");
 const occurrences = (bundle.match(/new Function\s*\(/g) ?? []).length;
-const cleaned = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
+let cleaned = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
+
+// zod v4 probes eval availability with `const F = Function; new F("")` to decide
+// its JIT fast-path. `new F("")` constructs the Function constructor via a
+// variable, so the `new Function(` rule above does NOT match it — and under MV3
+// CSP the probe both throws AND logs a "Hash of blocked script: eval-sha256-..."
+// warning on every evaluation. Replace it with a throw so the probe short-
+// circuits to false without ever invoking the Function constructor (the JIT
+// path it gates is dead in this extension anyway).
+const zodProbes = (cleaned.match(/new F\(""\)/g) ?? []).length;
+cleaned = cleaned.replace(
+  /new F\(""\)/g,
+  '(() => { throw new Error("eval disabled (MV3 CSP)"); })()',
+);
 await writeFile(OUT, cleaned);
 
-const remaining = (cleaned.match(/new Function\s*\(|eval\s*\(/g) ?? []).length;
+const remaining = (cleaned.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
 if (remaining > 0) {
   throw new Error(`bundle still contains ${remaining} eval/new-Function sites after cleaning`);
 }
-console.log(`built ${OUT} (removed ${occurrences} new-Function site(s); ${remaining} remaining)`);
+console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Function-constructor probe site(s); ${remaining} remaining)`);
 
 // Sync the design-system source into the docs/ component gallery so the
 // GitHub Pages showcase (docs/) always matches the canonical Web Components

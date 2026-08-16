@@ -99,6 +99,50 @@
       font-size: var(--text-sm);
       padding: 14px;
     }
+
+    /* ── in-context view (settings / directory / recipes, no new tab) ── */
+    .view-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+    }
+    .view-overlay[hidden] { display: none; }
+    .view-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    .view-head .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 6px 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .view-head .back:hover, .view-head .back:focus-visible {
+      border-color: var(--accent);
+      color: var(--accent);
+      outline: none;
+    }
+    .view-head .back svg { display: block; }
+    .view-title { font-weight: 650; }
+    .view-overlay iframe {
+      flex: 1;
+      border: 0;
+      width: 100%;
+      background: var(--bg);
+    }
     </style>
   </head>
   <body>
@@ -164,6 +208,16 @@
           <div class="panel-body" id="artifacts"></div>
         </div>
       </section>
+    </div>
+    <div id="view" class="view-overlay" hidden>
+      <div class="view-head">
+        <button class="back" id="view-back" type="button" aria-label="Back to hub">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+          Back
+        </button>
+        <span class="view-title" id="view-title">Settings</span>
+      </div>
+      <iframe id="view-frame" title="view"></iframe>
     </div>
     <script type="module" src="ntp.js"></script>
   </body>

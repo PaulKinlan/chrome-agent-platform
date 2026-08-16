@@ -61,6 +61,126 @@ export function fire(el, type, detail = {}) {
   el.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Command + mention registry (the / palette + @ mentions in the composer).
+ * Self-contained (no imports) so the docs showcase loads the same file.
+ * The data-driven sources go through chrome.runtime when present and degrade
+ * to empty lists in the plain showcase (no extension backend).
+ * ────────────────────────────────────────────────────────────────────────── */
+const RUNTIME_SEND = (() => {
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      return (type, payload = {}) => new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type, ...payload }, (res) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message });
+          } else resolve(res ?? { ok: true });
+        });
+      });
+    }
+  } catch { /* no chrome */ }
+  return null;
+})();
+
+function shortOrigin(o) {
+  return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
+}
+
+// Command namespaces (the / palette). Selecting one either opens its sub-items
+// or inserts the prefix for free-text commands (remember).
+export const COMMAND_NAMESPACES = [
+  { id: "task", label: "task", description: "run a recipe", kind: "recipe" },
+  { id: "schedule", label: "schedule", description: "run a recipe in the background", kind: "background" },
+  { id: "agent", label: "agent", description: "direct the message to a site agent", kind: "agent" },
+  { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
+  { id: "model", label: "model", description: "switch the provider/model", kind: "model" },
+  { id: "theme", label: "theme", description: "switch the theme", kind: "theme" },
+  { id: "remember", label: "remember", description: "write something to memory", kind: "free" },
+  { id: "focus", label: "focus", description: "protect attention", kind: "recipe" },
+];
+
+// Sub-items for a selected command namespace, filtered by the typed argument.
+async function commandItems(ns, arg = "") {
+  const q = (arg || "").toLowerCase();
+  const matches = (s) => !q || s.toLowerCase().includes(q);
+  switch (ns) {
+    case "task": {
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("recipe.list").catch(() => ({})) : {};
+      return (res.recipes || [])
+        .filter((r) => r.mode !== "background")
+        .filter((r) => matches(r.name) || matches(r.id))
+        .map((r) => ({ id: `task:${r.id}`, label: r.name, description: r.description || "", kind: "recipe" }));
+    }
+    case "schedule": {
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("recipe.list").catch(() => ({})) : {};
+      return (res.recipes || [])
+        .filter((r) => r.mode === "background")
+        .filter((r) => matches(r.name) || matches(r.id))
+        .map((r) => ({ id: `schedule:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
+    }
+    case "agent": {
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("agent.directory").catch(() => ({})) : {};
+      return (res.agents || [])
+        .filter((a) => a.enrolled)
+        .filter((a) => matches(a.origin) || matches(a.name || ""))
+        .map((a) => ({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools`, kind: "agent" }));
+    }
+    case "skill": {
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("skills.all").catch(() => ({})) : {};
+      const out = [];
+      for (const [origin, skills] of Object.entries(res || {})) {
+        for (const s of skills) {
+          if (matches(s) || matches(shortOrigin(origin))) {
+            out.push({ id: `skill:${origin}:${s}`, label: s, description: shortOrigin(origin), kind: "skill" });
+          }
+        }
+      }
+      return out;
+    }
+    case "model": {
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("provider.models").catch(() => ({})) : {};
+      return (res.choices || [])
+        .filter((c) => matches(c.label || "") || matches(c.id || ""))
+        .map((c) => ({ id: `model:${c.id}`, label: c.label || c.id, description: "", kind: "model" }));
+    }
+    case "theme":
+      return THEMES.filter((t) => matches(t.label) || matches(t.id))
+        .map((t) => ({ id: `theme:${t.id}`, label: t.label, description: "theme", kind: "theme" }));
+    case "focus": {
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("recipe.list").catch(() => ({})) : {};
+      return (res.recipes || [])
+        .filter((r) => r.mode === "background" && (r.category === "focus" || (r.id || "").includes("focus")))
+        .filter((r) => matches(r.name) || matches(r.id))
+        .map((r) => ({ id: `task:${r.id}`, label: r.name, description: r.description || "", kind: "recipe" }));
+    }
+    default:
+      return [];
+  }
+}
+
+// @ mention candidates: site agents, recipes, recent artifacts.
+async function mentionCandidates(q = "") {
+  const ql = (q || "").toLowerCase();
+  const items = [];
+  if (RUNTIME_SEND) {
+    const [agents, recipes, assets] = await Promise.all([
+      RUNTIME_SEND("agent.directory").catch(() => ({ agents: [] })),
+      RUNTIME_SEND("recipe.list").catch(() => ({ recipes: [] })),
+      RUNTIME_SEND("asset.list", { origin: "master" }).catch(() => ({ assets: [] })),
+    ]);
+    for (const a of (agents.agents || []).filter((x) => x.enrolled)) {
+      items.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · site agent`, kind: "agent" });
+    }
+    for (const r of recipes.recipes || []) {
+      items.push({ id: `recipe:${r.id}`, label: r.name, description: r.description || "", kind: "recipe" });
+    }
+    for (const a of assets.assets || []) {
+      items.push({ id: `asset:${a.id ?? a.name}`, label: a.name, description: a.type || "artifact", kind: "artifact" });
+    }
+  }
+  return items.filter((i) => (i.label || "").toLowerCase().includes(ql) || (i.id || "").toLowerCase().includes(ql));
+}
+
 // A shared base that renders a Shadow-DOM template + a scoped <style> once.
 class Component extends HTMLElement {
   static shadow() {
@@ -189,7 +309,9 @@ class MicButton extends Component {
       .mic { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
         border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:8px;
-        padding:0; cursor:pointer; font:inherit; }
+        padding:0; cursor:pointer; font:inherit; line-height:1; }
+      .mic .icon { display:inline-flex; align-items:center; justify-content:center; }
+      .mic svg { display:block; }
       .mic[data-listening] { color:var(--accent, #0e6e63); border-color:var(--accent, #0e6e63); }
       .mic:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
       .wave { display:none; align-items:center; gap:2px; height:16px; }
@@ -269,7 +391,8 @@ class AttachButton extends Component {
       .plus { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
         border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:8px;
-        padding:0; cursor:pointer; font:inherit; }
+        padding:0; cursor:pointer; font:inherit; line-height:1; }
+      .plus svg { display:block; }
       .plus:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .menu { position:absolute; bottom:calc(100% + 6px); left:0; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
@@ -501,7 +624,14 @@ class CapabilityRow extends Component {
         padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
         white-space:nowrap; }
       .run:hover, .run:focus-visible { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); outline:none; }
-      .switch { justify-self:end; }
+      .switch { justify-self:end; position:relative; width:36px; height:20px; border-radius:999px;
+        border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); cursor:pointer;
+        padding:0; flex:0 0 auto; transition:background 150ms ease, border-color 150ms ease; }
+      .switch::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
+        border-radius:50%; background:var(--muted,#635e56); transition:transform 150ms ease, background 150ms ease; }
+      .switch[aria-pressed="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+      .switch[aria-pressed="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
+      .switch:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .meta { display:flex; align-items:center; gap:6px; }
     `, `<div part="row" class="row">
       <span class="icon" aria-hidden="true">${icon}</span>
@@ -605,6 +735,7 @@ class AgentComposer extends Component {
     const html = `
       <div class="composer" part="composer">
         <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}" rows="2"></textarea>
+        <div class="popup" id="popup" role="listbox" aria-label="Suggestions" hidden></div>
         <div class="row">
           <mic-button id="mic"></mic-button>
           <attach-button id="attach"></attach-button>
@@ -615,8 +746,17 @@ class AgentComposer extends Component {
       <div class="composer-status" role="status" aria-live="polite"></div>`;
     mountTemplate(this, `
       :host { display:block; }
-      .composer { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
+      .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
       .composer:focus-within { border-color:var(--accent,#0e6e63); }
+      .popup { position:absolute; top:calc(100% + 4px); left:0; right:0; background:var(--panel,#ffffff);
+        border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08));
+        max-height:260px; overflow-y:auto; padding:4px; z-index:40; }
+      .popup[hidden] { display:none; }
+      .popup .item { display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:7px; cursor:pointer; }
+      .popup .item:hover, .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
+      .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
       .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
       .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       .composer .spacer { flex:1; }
@@ -632,10 +772,23 @@ class AgentComposer extends Component {
     this._attach = this._root.querySelector("#attach");
     this._run = this._root.querySelector("#run-task");
     this._status = this._root.querySelector(".composer-status");
+    this._popup = this._root.querySelector("#popup");
+    this._popupItems = [];
+    this._popupActive = -1;
+    this._popupToken = null;
   }
   _wire() {
     this._run?.addEventListener("click", () => this._send());
+    this._input?.addEventListener("input", () => this._onComposerInput());
     this._input?.addEventListener("keydown", (e) => {
+      if (this._popupOpen) {
+        if (e.key === "ArrowDown") { e.preventDefault(); this._moveSelection(1); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); this._moveSelection(-1); return; }
+        if (e.key === "Enter") { e.preventDefault(); this._selectActive(); return; }
+        if (e.key === "Tab") { e.preventDefault(); this._selectActive(); return; }
+        if (e.key === "Escape") { e.preventDefault(); this._hidePopup(); return; }
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._send(); }
     });
     this._mic?.addEventListener("transcript", (e) => {
@@ -662,6 +815,131 @@ class AgentComposer extends Component {
     else this._run?.removeAttribute("loading");
   }
   focus() { this._input?.focus(); }
+
+  // ── / command + @ mention popup ─────────────────────────────────────────
+  get _popupOpen() { return !!(this._popup && !this._popup.hidden); }
+
+  async _onComposerInput() {
+    const input = this._input;
+    if (!input) return;
+    const text = input.value;
+    const caret = input.selectionStart ?? text.length;
+    const before = text.slice(0, caret);
+
+    // / command — a slash beginning the current token.
+    const slash = before.match(/(?:^|\s)\/([a-z]*)(?::([a-z0-9._ -]*))?$/i);
+    if (slash) {
+      const slashPos = text[slash.index] === "/" ? slash.index : slash.index + 1;
+      const ns = (slash[1] || "").toLowerCase();
+      const arg = (slash[2] || "").trim();
+      if (!ns) {
+        const items = COMMAND_NAMESPACES.map((n) => ({
+          id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id,
+        }));
+        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
+        return;
+      }
+      const items = await commandItems(ns, arg);
+      if (!items.length && ns === "remember") {
+        this._showPopup([{ id: "free:remember", label: "/remember ", description: "write to memory", kind: "free", ns: "remember", free: true }],
+          { type: "command", start: slashPos, end: caret, ns, arg });
+        return;
+      }
+      this._showPopup(items.map((i) => ({ ...i, ns })), { type: "command", start: slashPos, end: caret, ns, arg });
+      return;
+    }
+
+    // @ mention.
+    const at = before.match(/(?:^|\s)@([^\s@]*)$/);
+    if (at) {
+      const atPos = text[at.index] === "@" ? at.index : at.index + 1;
+      const items = await mentionCandidates(at[1] || "");
+      this._showPopup(items, { type: "mention", start: atPos, end: caret });
+      return;
+    }
+
+    this._hidePopup();
+  }
+
+  _showPopup(items, token) {
+    this._popupItems = items || [];
+    this._popupToken = token || null;
+    this._popupActive = this._popupItems.length ? 0 : -1;
+    if (!this._popupItems.length) { this._hidePopup(); return; }
+    this._renderPopupItems();
+    if (this._popup) this._popup.hidden = false;
+  }
+
+  _renderPopupItems() {
+    if (!this._popup) return;
+    const html = this._popupItems.map((it, i) =>
+      `<div class="item" role="option" data-index="${i}" data-active="${i === this._popupActive}" aria-selected="${i === this._popupActive}">
+        <span class="lbl">${escapeHtml(it.label)}</span>${
+          it.description ? `<span class="dsc">${escapeHtml(it.description)}</span>` : ""
+        }</div>`
+    ).join("");
+    this._popup.innerHTML = html;
+    this._popup.querySelectorAll(".item").forEach((el) => {
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        this._select(Number(el.dataset.index));
+      });
+    });
+  }
+
+  _moveSelection(delta) {
+    if (!this._popupItems.length) return;
+    this._popupActive = (this._popupActive + delta + this._popupItems.length) % this._popupItems.length;
+    this._renderPopupItems();
+    this._popup.querySelector(`[data-index="${this._popupActive}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+
+  _selectActive() { this._select(this._popupActive); }
+
+  _select(index) {
+    const item = this._popupItems[index];
+    const token = this._popupToken;
+    const input = this._input;
+    if (!item || !token || !input) { this._hidePopup(); return; }
+
+    if (token.type === "command") {
+      if (item.free) {
+        input.setRangeText(`/${item.ns} `, token.start, token.end, "end");
+        this._hidePopup();
+        this._emit("command", { namespace: item.ns, item });
+        input.focus();
+        return;
+      }
+      if (!token.ns) {
+        // A namespace was picked → insert the prefix + reopen with its sub-items.
+        input.setRangeText(`/${item.ns}:`, token.start, token.end, "end");
+        this._hidePopup();
+        this._onComposerInput();
+        input.focus();
+        return;
+      }
+      // A concrete command item → insert its full reference.
+      input.setRangeText(item.id, token.start, token.end, "end");
+      this._hidePopup();
+      this._emit("command", { namespace: item.ns, item });
+      input.focus();
+      return;
+    }
+
+    // mention
+    input.setRangeText(item.id, token.start, token.end, "end");
+    this._hidePopup();
+    this._emit("mention", { item });
+    input.focus();
+  }
+
+  _hidePopup() {
+    if (this._popup) this._popup.hidden = true;
+    this._popupItems = [];
+    this._popupActive = -1;
+    this._popupToken = null;
+  }
+
   _send() {
     const text = this._input?.value.trim();
     if (!text) return;
