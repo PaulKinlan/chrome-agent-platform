@@ -1,18 +1,20 @@
 # Open questions for Paul
 
-1. **Agent model**: one hub agent that fans out to site sub-agents, or a single agent that
-   loads per-site context on demand? (The design assumes a hub agent + lightweight per-site
-   context; confirm.)
-2. **Consumer view**: you asked for ideas. Proposal — a "next steps" tray on every
-   navigation: the agent offers 2-3 useful actions ("summarise this", "add to a watch
-   alarm", "compare with X") without taking over browsing. Confirm or reshape.
-3. **Tool approval**: should inferred (window.*) tools require one-time user approval per
-   origin before the agent may call them, or be auto-available? (Design assumes approval.)
-4. **Memory persistence**: OPFS is per-extension-origin; fine for now, or do you want a
-   sync/export path (cloud backup) in scope?
-5. **WASM tool integration**: import a minimal WASM tool set with an upload
-   mechanism for the owner to add more, or start with the existing WebMCP
-   (window.*) tool inference + approval flow?
-6. **MHTML vs screenshots**: both? Screenshots for the chat strip, MHTML for full-page
-   archives. Confirm storage budget/retention.
-7. **Extension name/packaging**: "Chrome Agent Platform" placeholder — rename later.
+Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom.
+
+## Resolved
+
+1. **Agent model** — RESOLVED: a multi-agent hub that fans out to per-site sub-agents. The "Multiple agents" toggle controls 1-vs-N; the hub is modular. (Paul confirmed.)
+2. **Consumer view / next-steps tray** — RESOLVED: an inferred "next steps" tray (2-3 useful actions offered after a task, without taking over browsing). (Paul approved; built into the hub.)
+3. **Tool approval** — RESOLVED: inferred (window.*) tools require first-run user approval per origin before the agent may call them. (Paul approved; built.)
+4. **Memory persistence** — RESOLVED: origin-keyed OPFS (per-origin, one site can never read another). A sync/export (cloud backup) path is a FUTURE option, not in scope now.
+5. **MHTML vs screenshots** — RESOLVED: both. Screenshots for the chat strip; MHTML for full-page archives, kept until the user deletes. (Paul decided.)
+6. **WASM tool integration** — RESOLVED (direction): start with the WebMCP (window.*) tool inference + approval flow. A minimal WASM tool set with an owner upload mechanism is a FUTURE option (the wasm-vs-js work informs it).
+
+## Open
+
+7. **Extension name/packaging** — "Chrome Agent Platform" is a placeholder. Rename + package for distribution later (low priority; decide before any public release).
+
+## New open questions (from the wider-goal work)
+8. **co-do double-iframe generative UI** — the full generative-UI surface (the agent generates HTML artifacts rendered in a sandboxed double-iframe) is queued. Scope + priority?
+9. **The model for the hub** — Gemini Nano is weak for tool-calling; which provider should be the recommended default for the best experience?

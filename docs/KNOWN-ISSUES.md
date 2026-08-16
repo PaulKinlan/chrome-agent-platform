@@ -55,3 +55,17 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 - HIGH: untrusted hook payloads feed a hub with destructive management tools (no operation-specific owner grant); sidepanel onMessage navigate opens tabs with no sender/grant check; thread authority keys model-writable (forged threads index); unlocked thread/index RMW; global progress broadcast leaks/misattributes tool data; chat never keeps threadId (mixes the global journal); artifact body/index split writes race/orphan; model cross-origin admin lacks a scoped grant; tool cards use one lastTool + String(object); record audio/camera advertised but unwired; mic can survive disconnect.
 - Medium: hooks unbounded + catalog permissions undeclared/unrequestable; UTF-8 attachments mojibake; a11y gaps (focus/combobox/speaker/menu/contrast); skills unchecked; diagnostics length unbounded.
 (The apiKey leak + the recursive-run risk are the priority fixes.)
+
+---
+
+# Paul's UI/UX issues (2026-08-16) — tracked in docs/UI-FIXES-TRACKER.md
+
+The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
+- DONE: the 5 settings issues (the switch-collision double-toggle, hooks=permissions, the duplicate back button, the origins stretch), the notification icon path, the provider Test-connection buttons, the base-select background-agent picker, the thread navigation (fullscreen + sidebar + background-agents off the NTP), the security fixes (apiKey leak + highs), semver.
+- IN PROGRESS (the tracker-remaining worker): the sidebar collapse, the new-task + button, View Transitions, HTML-output rendering, the unified Agents area, the + menu options + anchor-positioning, the @mention positioning, the error-console copy buttons + error surfacing.
+
+## Paul meta-directives (2026-08-16)
+- Every ask → tracked (UI-FIXES-TRACKER.md / KNOWN-ISSUES.md) + worked in a subagent + visually verified. Nothing dropped.
+- Use the impeccable skill for ALL design work + modern-web-guidance for modern-web features.
+- Resolve open questions; prioritize known issues; work the plan actively.
+- Full-suite-green gate; visual verification (no "it serves" as "it works").

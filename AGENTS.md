@@ -32,9 +32,28 @@ there. The reviewer agents check against it.
 - Untrusted data renders with textContent/escaping, never innerHTML.
 
 ## The skills
-skills/web-resilience-audit + skills/web-resilience-fix are the project's
-resilience checks (the failure-matrix audit + the fix mapping). Run them on the
-surfaces where applicable.
+- **impeccable** (.agents/skills/impeccable) — the design skill. Use it for EVERY
+  UI/design task (the craft-floor, PRODUCT.md, DESIGN.md). Always loaded for design work.
+- **modern-web-guidance** (.agents/skills/modern-web-guidance) — modern web APIs
+  (base-select, Popover API, CSS anchor-positioning, View Transitions). Use it for
+  any modern-web feature.
+- skills/web-resilience-audit + skills/web-resilience-fix — the project's
+  resilience checks. Run them on the surfaces where applicable.
+
+## Working conventions (Paul, 2026-08-16)
+- **Track every ask.** Every Paul issue/request goes into docs/UI-FIXES-TRACKER.md
+  (UI) or docs/KNOWN-ISSUES.md (review/system) with a status. Nothing is dropped.
+  Work through them in subagents; move each to Done with evidence.
+- **Resolve open questions.** Read docs/OPEN-QUESTIONS.md; mark the questions Paul
+  has answered (with the answer) + surface the genuinely-open ones.
+- **Prioritize known issues.** Work the known-issues + tracker backlog actively,
+  not just new features.
+- **Work the plan.** PLAN.md is the active roadmap — keep it moving; update it as
+  pieces land.
+- **Full-suite-green gate.** Never report work done (or push) without the full
+  Chrome journey suite + unit tests green. A regression is a stop.
+- **Visual verification.** UI work is verified by driving the real UI in headless
+  Chrome (CDP) with screenshots, before + after. "It serves" is not "it works".
 
 ## Testing
 - deno test tests/ — the pure/unit suite.
