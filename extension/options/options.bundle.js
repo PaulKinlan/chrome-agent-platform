@@ -518,8 +518,18 @@ function isHtmlDocument(text) {
   }
   return false;
 }
+var HTML_FRAME_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; media-src data: blob:; font-src data:;";
+function injectCspMeta(html) {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${HTML_FRAME_CSP}">`;
+  const s = String(html ?? "");
+  const m = s.match(/<head[^>]*>/i);
+  if (m) {
+    return s.replace(m[0], m[0] + meta);
+  }
+  return meta + s;
+}
 function renderHtmlFrame(html) {
-  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts allow-popups" srcdoc="${escapeHtml(html)}"></iframe></div>`;
+  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectCspMeta(html))}"></iframe></div>`;
 }
 var RUNTIME_SEND = (() => {
   try {
@@ -906,7 +916,12 @@ var AttachButton = class extends Component {
         return;
       }
       const file = await this._pickFile(kind);
-      if (file) this._emit("attach", file);
+      if (!file) return;
+      if (file.overLimit) {
+        this._emit("attach-error", { message: `${file.name} is over the 8 MiB limit` });
+        return;
+      }
+      this._emit("attach", file);
     });
     this._bindDocument("click", (e) => {
       if (this._menu && !this._menu.hidden && !this._menu.contains(e.target) && e.target !== this._btn) {
@@ -947,6 +962,11 @@ var AttachButton = class extends Component {
       input.onchange = async () => {
         const file = input.files?.[0] ?? null;
         if (!file) return resolve(null);
+        const MAX_RAW_BYTES = 8 * 1024 * 1024;
+        if (file.size > MAX_RAW_BYTES) {
+          resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL: "", overLimit: true });
+          return;
+        }
         let dataURL = "";
         try {
           dataURL = await new Promise((res, rej) => {
@@ -1558,6 +1578,7 @@ var AgentComposer = class extends Component {
     });
     this._attach?.addEventListener("attach-media", (e) => this._captureMedia(e.detail?.kind));
     this._attach?.addEventListener("attach-context", (e) => this._contextAction(e.detail?.kind));
+    this._attach?.addEventListener("attach-error", (e) => this.setStatus(e.detail?.message || "attachment rejected", false));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
   }
   // ── the + menu's browser-context actions (record-screen / grab-screenshot /
@@ -1625,6 +1646,17 @@ var AgentComposer = class extends Component {
   // model like any file).
   async _captureMedia(kind) {
     try {
+      const perm = kind === "record-audio" ? "audioCapture" : "videoCapture";
+      if (kind === "record-audio" || kind === "capture-camera") {
+        const has = await chrome.permissions?.contains?.({ permissions: [perm] }).catch(() => false);
+        if (!has) {
+          const granted = await chrome.permissions?.request?.({ permissions: [perm] }).catch(() => false);
+          if (!granted) {
+            this.setStatus(`${perm} permission denied \u2014 enable it to capture.`, false);
+            return;
+          }
+        }
+      }
       if (kind === "record-audio") {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         try {
@@ -2314,7 +2346,8 @@ var PROVIDERS = [
     baseURL: "https://api.openai.com/v1",
     needsKey: true,
     needsModel: true,
-    onDevice: false
+    onDevice: false,
+    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini", "o3-mini"]
   },
   {
     id: "anthropic",
@@ -2323,7 +2356,8 @@ var PROVIDERS = [
     baseURL: "https://api.anthropic.com/v1",
     needsKey: true,
     needsModel: true,
-    onDevice: false
+    onDevice: false,
+    models: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
   },
   {
     id: "gemini",
@@ -2332,7 +2366,8 @@ var PROVIDERS = [
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsKey: true,
     needsModel: true,
-    onDevice: false
+    onDevice: false,
+    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash"]
   },
   {
     id: "deepseek",
@@ -2341,7 +2376,18 @@ var PROVIDERS = [
     baseURL: "https://api.deepseek.com/v1",
     needsKey: true,
     needsModel: true,
-    onDevice: false
+    onDevice: false,
+    models: ["deepseek-chat", "deepseek-reasoner"]
+  },
+  {
+    id: "openai-compatible",
+    name: "OpenAI-compatible",
+    hint: "Any OpenAI-compatible endpoint (Bedrock, Kimi, Groq, Together\u2026) \u2014 set your own base URL + model.",
+    baseURL: "",
+    needsKey: true,
+    needsModel: true,
+    onDevice: false,
+    models: ["gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "kimi-k2", "moonshot-v1-8k", "qwen-plus", "claude-sonnet-4-5", "llama-3.3-70b"]
   },
   {
     id: "ollama",
@@ -2350,7 +2396,9 @@ var PROVIDERS = [
     baseURL: "http://localhost:11434/v1",
     needsKey: false,
     needsModel: true,
-    onDevice: false
+    onDevice: false,
+    models: []
+    // free-text — local model names
   }
 ];
 var THEMES2 = [
@@ -2371,6 +2419,32 @@ var storage = {
     return await chrome.runtime.sendMessage({ type: "kv.remove", keys });
   }
 };
+function modelFieldHtml(p, cfg) {
+  const current = cfg.provider === p.id ? cfg.model || "" : "";
+  const models = Array.isArray(p.models) ? p.models : [];
+  if (!models.length) {
+    const ph = p.id === "ollama" ? "e.g. llama3.1" : "model id";
+    return `<label class="field"><span class="field-label">Model id</span><input class="model" type="text" placeholder="${ph}" value="${escapeAttr(current)}"></label>`;
+  }
+  const opts = models.map((m) => `<option value="${escapeAttr(m)}"${m === current ? " selected" : ""}>${escapeHtml2(m)}</option>`).join("");
+  const isCustom = current !== "" && !models.includes(current);
+  return `
+    <label class="field"><span class="field-label">Model</span>
+      <select class="model-select" aria-label="Model for ${escapeAttr(p.name)}">
+        <option value=""${current === "" ? " selected" : ""}>Select a model\u2026</option>
+        ${opts}
+        <option value="__custom__"${isCustom ? " selected" : ""}>Custom\u2026</option>
+      </select>
+      <input class="model model-custom" type="text" placeholder="model id" value="${escapeAttr(isCustom ? current : "")}"${isCustom ? "" : " hidden"}>
+    </label>`;
+}
+function effectiveModel(card) {
+  const select = card.querySelector(".model-select");
+  if (select) {
+    return select.value === "__custom__" ? card.querySelector(".model-custom")?.value || "" : select.value;
+  }
+  return card.querySelector(".model")?.value || "";
+}
 async function renderProviders(restoreFocus = false) {
   const cfg = await chrome.runtime.sendMessage({ type: "provider.get" });
   const list = $("#provider-list");
@@ -2397,7 +2471,7 @@ async function renderProviders(restoreFocus = false) {
     // Update never silently resets a custom base URL.
     escapeAttr(cfg.provider === p.id ? cfg.baseURL || p.baseURL : p.baseURL)}"></label>` : ""}
         ${p.needsKey || p.needsModel ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="\u2026" autocomplete="off"></label>` : ""}
-        ${p.needsKey || p.needsModel ? `<label class="field"><span class="field-label">Model id</span><input class="model" type="text" placeholder="e.g. gpt-4o-mini" value="${escapeAttr(cfg.provider === p.id ? cfg.model : "")}"></label>` : ""}
+        ${p.needsKey || p.needsModel ? modelFieldHtml(p, cfg) : ""}
       </fieldset>` : ""}
       <div class="test-status" role="status" hidden></div>
     `;
@@ -2409,8 +2483,15 @@ async function renderProviders(restoreFocus = false) {
       const fields = {
         baseURL: card.querySelector(".base-url")?.value ?? (isActive ? cfg.baseURL || p.baseURL : p.baseURL),
         apiKey,
-        model: card.querySelector(".model")?.value ?? (isActive ? cfg.model || "" : "")
+        model: effectiveModel(card)
       };
+      card.querySelector(".model-select")?.addEventListener("change", (e) => {
+        const custom = card.querySelector(".model-custom");
+        if (e.target.value === "__custom__") {
+          custom.hidden = false;
+          custom.focus();
+        } else custom.hidden = true;
+      });
       await chrome.runtime.sendMessage({
         type: "provider.set",
         config: { provider: p.id, ...fields }
@@ -2427,7 +2508,7 @@ async function renderProviders(restoreFocus = false) {
       const fields = {
         baseURL: card.querySelector(".base-url")?.value ?? (isActive ? cfg.baseURL || p.baseURL : p.baseURL),
         apiKey: enteredKey || (isActive && cfg.apiKey ? cfg.apiKey : ""),
-        model: card.querySelector(".model")?.value ?? (isActive ? cfg.model || "" : "")
+        model: effectiveModel(card)
       };
       testStatus.hidden = false;
       testStatus.className = "test-status testing";
@@ -2948,6 +3029,9 @@ async function renderData() {
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
+function escapeHtml2(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
 var flashTimer;
 function saveFlash(msg) {
   const el = $("#save-status");
@@ -2975,3 +3059,9 @@ await renderPermissions();
 await renderHooks();
 await renderUsage();
 await renderData();
+try {
+  const v = chrome.runtime.getManifest().version;
+  const el = $("#app-version");
+  if (el && v) el.textContent = "v" + v;
+} catch {
+}

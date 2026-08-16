@@ -15,6 +15,7 @@ import {
 } from "../shared/diagnostics-client.js";
 
 const statusEl = document.getElementById("status");
+let statusTimer;
 
 function setStatus(text, ready = true) {
   statusEl.innerHTML =
@@ -23,6 +24,15 @@ function setStatus(text, ready = true) {
     ? "var(--accent2)"
     : "var(--danger)";
   document.querySelector(".composer")?.classList.toggle("glow", !ready);
+  // The idle "ready" state is redundant with the clean header + the
+  // diagnostics badges — hide it; show only transient states (running / error /
+  // enabled), and auto-revert success feedback to the idle state.
+  const idle = !text || text === "ready";
+  statusEl.hidden = idle;
+  clearTimeout(statusTimer);
+  if (!idle && ready) {
+    statusTimer = setTimeout(() => setStatus("ready"), 3000);
+  }
 }
 
 function escapeHtml(s) {
@@ -228,9 +238,15 @@ async function renderTasks(activeId = null) {
     item.className = "thread-item";
     item.setAttribute("role", "button");
     item.tabIndex = 0;
+    // A hover tooltip for the collapsed icon-rail (and the full name on hover).
+    item.title = (t.name || "Task") + (t.preview ? " — " + t.preview : "");
     if (activeId && t.id === activeId) item.setAttribute("aria-current", "true");
     const dotState =
       t.status === "running" ? "running" : t.status === "error" ? "error" : "";
+    // A standalone status dot that stays visible when the sidebar collapses
+    // (the .t-name dot is hidden with the label).
+    const railDot = document.createElement("span");
+    railDot.className = "t-dot" + (dotState ? " " + dotState : "");
     const name = document.createElement("span");
     name.className = "t-name";
     const dot = document.createElement("span");
@@ -247,7 +263,7 @@ async function renderTasks(activeId = null) {
     del.className = "t-delete";
     del.setAttribute("aria-label", `Delete task ${t.name || "Task"}`);
     del.textContent = "×";
-    item.append(name, preview, meta, del);
+    item.append(railDot, name, preview, meta, del);
     item.addEventListener("click", () => openThread(t.id));
     item.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openThread(t.id); }

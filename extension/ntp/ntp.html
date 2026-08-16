@@ -50,10 +50,20 @@
     /* hide the text labels when collapsed (icon rail) */
     .side.collapsed .brand, .side.collapsed .side-label,
     .side.collapsed .thread-item .t-name, .side.collapsed .thread-item .t-preview,
-    .side.collapsed .thread-item .t-meta, .side.collapsed .side-foot button { display: none; }
-    .side.collapsed .thread-item { padding: 8px; align-items: center; }
+    .side.collapsed .thread-item .t-meta,
+    .side.collapsed .foot-btn .btn-label { display: none; }
+    .side.collapsed .thread-item { padding: 8px; align-items: center; justify-content: center; min-height: 34px; }
     .side.collapsed .side-foot { align-items: center; }
-    .side.collapsed .side-foot button { width: 32px; height: 32px; padding: 0; justify-content: center; }
+    .side.collapsed .side-foot .foot-btn { width: 34px; height: 34px; padding: 0; justify-content: center; }
+    .side.collapsed .side-foot .foot-btn svg { width: 17px; height: 17px; }
+    /* the collapsed thread item is a centred status dot with a hover tooltip */
+    .thread-item .t-dot { display: none; }
+    .side.collapsed .thread-item .t-dot {
+      display: block; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); flex: 0 0 auto;
+    }
+    .side.collapsed .thread-item .t-dot.running { background: var(--accent2); }
+    .side.collapsed .thread-item .t-dot.error { background: var(--danger); }
     .brand {
       font-weight: 700;
       font-size: 16px;
@@ -151,6 +161,14 @@
       flex-direction: column;
       gap: 6px;
     }
+    .foot-btn {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      justify-content: flex-start;
+      width: 100%;
+    }
+    .foot-btn svg { flex: 0 0 auto; display: block; }
 
     .content {
       flex: 1;
@@ -337,9 +355,18 @@
       </div>
       <nav class="thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
       <div class="side-foot">
-        <button class="btn ghost" id="open-recipes" type="button">Recipes</button>
-        <button class="btn ghost" id="open-directory" type="button">Directory</button>
-        <button class="btn" id="open-settings" type="button">Settings</button>
+        <button class="btn ghost foot-btn" id="open-recipes" type="button" title="Recipes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span class="btn-label">Recipes</span>
+        </button>
+        <button class="btn ghost foot-btn" id="open-directory" type="button" title="Directory">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span class="btn-label">Directory</span>
+        </button>
+        <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="btn-label">Settings</span>
+        </button>
       </div>
     </aside>
 
@@ -347,7 +374,7 @@
       <div class="main-wrap">
         <header class="top">
           <div class="top-actions">
-            <span class="status" id="status" role="status" aria-live="polite"><span class="dot"></span>ready</span>
+            <span class="status" id="status" role="status" aria-live="polite" hidden></span>
             <security-shield count="0" label="Security + permissions"></security-shield>
             <error-console count="0" label="Console (errors + warnings)"></error-console>
           </div>

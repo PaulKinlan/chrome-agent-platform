@@ -25,6 +25,19 @@ import { getRecipe } from "./recipes.js";
 const SUBSCRIPTIONS_KEY = "cap:hooks";
 const DENY_KEY = "cap:hooksDeny";
 
+// A single mutex serializes EVERY deny-list + subscription read-modify-write.
+// The unlocked sequences (read list → mutate → write list) let two concurrent
+// owner denies (or two concurrent subscribes) both read the same old value,
+// then last-write-wins one of them — silently un-denying one hook or dropping
+// one subscription (the wider-goal review's deny-list authority race). All
+// hook registry mutations run under this lock.
+let hookMutex = Promise.resolve();
+function withHookLock(fn) {
+  const run = hookMutex.then(fn, fn);
+  hookMutex = run.then(() => {}, () => {});
+  return run;
+}
+
 // Fan-out bounds (the wider-goal review's unbounded-fan-out finding): a model
 // must not be able to register an unbounded number of subscriptions, an
 // unbounded template, or arbitrary recipeIds — each would let a single event
@@ -355,19 +368,29 @@ async function writeDenyList(list) {
   await kvSet({ [DENY_KEY]: list });
 }
 
+// The deny-list read-modify-write, SERIALIZED under the hook mutex (the
+// wider-goal review's finding: setHookDeny was an unlocked RMW — two concurrent
+// denies of A and B could both read [], then last-write-wins one singleton,
+// un-denying the other).
+function setHookDenyLocked(hookId, deny) {
+  return withHookLock(async () => {
+    const list = await getHookDenyList();
+    const has = list.includes(hookId);
+    if (deny && !has) list.push(hookId);
+    if (!deny && has) {
+      const i = list.indexOf(hookId);
+      list.splice(i, 1);
+    }
+    await writeDenyList(list);
+    return { ok: true, hookId, denied: Boolean(deny) };
+  });
+}
+
 /** Deny (or un-deny) a hook. OWNER-ONLY (called from the Settings UI route,
  * never exposed to the agent toolset). */
 export async function setHookDeny(hookId, deny) {
   if (!getHook(hookId)) return { ok: false, error: `unknown hook ${hookId}` };
-  const list = await getHookDenyList();
-  const has = list.includes(hookId);
-  if (deny && !has) list.push(hookId);
-  if (!deny && has) {
-    const i = list.indexOf(hookId);
-    list.splice(i, 1);
-  }
-  await writeDenyList(list);
-  return { ok: true, hookId, denied: Boolean(deny) };
+  return setHookDenyLocked(hookId, deny);
 }
 
 /**
@@ -433,37 +456,44 @@ export async function subscribeHook({ hookId, recipeId = null, promptTemplate = 
   if (new TextEncoder().encode(template).length > MAX_TEMPLATE_BYTES) {
     return { ok: false, error: "prompt template too large" };
   }
-  const list = await getHookSubscriptions();
-  // Idempotent: re-subscribing the same (hook, recipe) replaces the entry.
-  const existing = list.find(
-    (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
-  );
-  if (!existing && list.length >= MAX_SUBSCRIPTIONS) {
-    return { ok: false, error: "subscription limit reached" };
-  }
-  const entry = {
-    hookId,
-    recipeId: recipeId ?? null,
-    promptTemplate: template,
-    enabled: true,
-    at: new Date().toISOString(),
-  };
-  if (existing) {
-    Object.assign(existing, entry);
-  } else {
-    list.push(entry);
-  }
-  await writeSubscriptions(list);
-  return { ok: true, hookId, recipeId: recipeId ?? null };
+  // The read-modify-write is SERIALIZED under the hook mutex (the wider-goal
+  // review's finding: subscription RMW was unlocked, so concurrent subscribes
+  // could last-write-wins one of them out).
+  return withHookLock(async () => {
+    const list = await getHookSubscriptions();
+    // Idempotent: re-subscribing the same (hook, recipe) replaces the entry.
+    const existing = list.find(
+      (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
+    );
+    if (!existing && list.length >= MAX_SUBSCRIPTIONS) {
+      return { ok: false, error: "subscription limit reached" };
+    }
+    const entry = {
+      hookId,
+      recipeId: recipeId ?? null,
+      promptTemplate: template,
+      enabled: true,
+      at: new Date().toISOString(),
+    };
+    if (existing) {
+      Object.assign(existing, entry);
+    } else {
+      list.push(entry);
+    }
+    await writeSubscriptions(list);
+    return { ok: true, hookId, recipeId: recipeId ?? null };
+  });
 }
 
 export async function unsubscribeHook({ hookId, recipeId = null }) {
-  const list = await getHookSubscriptions();
-  const next = list.filter(
-    (s) => !(s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null)),
-  );
-  await writeSubscriptions(next);
-  return { ok: true, hookId, recipeId: recipeId ?? null };
+  return withHookLock(async () => {
+    const list = await getHookSubscriptions();
+    const next = list.filter(
+      (s) => !(s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null)),
+    );
+    await writeSubscriptions(next);
+    return { ok: true, hookId, recipeId: recipeId ?? null };
+  });
 }
 
 /** The granted/denied status of every hook, for the Settings Hooks panel. */

@@ -1105,29 +1105,40 @@ const handlers = {
       if (threadId) nameThreadAsync(threadId, m.task).catch(() => {});
     }
 
-    const result = await runTask({
-      id: m.id,
-      task: m.task,
-      attachments: bounded,
-      // The live progress stream: every run (interactive or a follow-up nudge)
-      // broadcasts its thinking/tool/text/done events to the connected UI ports.
-      // Events are TAGGED with a per-run runId + the threadId so each listener
-      // renders ONLY its own run — the wider-goal review found the untagged
-      // global broadcast leaked/misattributed tool data across threads/pages.
-      onProgress: (event) => broadcastProgress({
-        ...event,
-        runId: m.runId ?? threadId ?? m.id,
-        threadId: threadId ?? null,
-      }),
-      // The prior conversation turns (the unified conversational surface): a
-      // follow-up message is a new turn in the same thread, so the agent sees
-      // the task/result history that came before.
-      history: threadHistory,
-    });
-    // Persist the result into the thread + mark it done (best-effort — a thread
-    // write must never turn a successful run into a failure).
+    let result;
+    try {
+      result = await runTask({
+        id: m.id,
+        task: m.task,
+        attachments: bounded,
+        // The live progress stream: every run (interactive or a follow-up nudge)
+        // broadcasts its thinking/tool/text/done events to the connected UI ports.
+        // Events are TAGGED with a per-run runId + the threadId so each listener
+        // renders ONLY its own run — the wider-goal review found the untagged
+        // global broadcast leaked/misattributed tool data across threads/pages.
+        onProgress: (event) => broadcastProgress({
+          ...event,
+          runId: m.runId ?? threadId ?? m.id,
+          threadId: threadId ?? null,
+        }),
+        // The prior conversation turns (the unified conversational surface): a
+        // follow-up message is a new turn in the same thread, so the agent sees
+        // the task/result history that came before.
+        history: threadHistory,
+      });
+    } catch (e) {
+      // A provider/tool exception must NOT leave the thread permanently
+      // "running" (the wider-goal review's failure-lifecycle finding: the outer
+      // router only returned {ok:false} and the finalization below was skipped).
+      // Convert the throw to a result so the finalizer below always runs.
+      result = { ok: false, error: String(e?.message ?? e) };
+    }
+    // Persist the result into the thread + mark it done/error (best-effort — a
+    // thread write must never turn a successful run into a failure). Runs on
+    // BOTH the success + failure paths, including the throw path above, so a
+    // failed run is never stuck "running".
     if (threadId) {
-      if (typeof result?.result === "string" && result.result) {
+      if (result && typeof result.result === "string" && result.result) {
         await appendThreadMessage(threadId, { role: "assistant", content: result.result }).catch(() => {});
       }
       await setThreadStatus(threadId, result?.ok ? "done" : "error").catch(() => {});

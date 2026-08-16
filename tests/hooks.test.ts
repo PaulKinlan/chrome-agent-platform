@@ -200,6 +200,32 @@ Deno.test("an oversized prompt template refuses subscription", async () => {
   assert((r.error ?? "").includes("too large"), "oversized template must be rejected");
 });
 
+Deno.test("concurrent denies of DIFFERENT hooks do not last-write-wins (the deny-list RMW is serialized)", async () => {
+  reset();
+  // The round-fresh-review finding: setHookDeny was an unlocked read-modify-write.
+  // Two concurrent denies of A and B could both read [], then last-write-wins one
+  // singleton, silently un-denying the other. Fire both at once + assert BOTH land.
+  await Promise.all([
+    setHookDeny("tabs.onCreated", true),
+    setHookDeny("bookmarks.onCreated", true),
+  ]);
+  const deny = await getHookDenyList();
+  assert(deny.includes("tabs.onCreated"), "tabs.onCreated must remain denied");
+  assert(deny.includes("bookmarks.onCreated"), "bookmarks.onCreated must remain denied");
+});
+
+Deno.test("concurrent subscribes of DISTINCT recipes do not last-write-wins (the subscription RMW is serialized)", async () => {
+  reset();
+  await Promise.all([
+    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene" }),
+    subscribeHook({ hookId: "runtime.onStartup", recipeId: "page-summary" }),
+  ]);
+  const subs = await getHookSubscriptions();
+  const ids = subs.map((s) => s.recipeId);
+  assert(ids.includes("tab-hygiene"), "tab-hygiene subscription must survive");
+  assert(ids.includes("page-summary"), "page-summary subscription must survive");
+});
+
 Deno.test("the subscription registry is count-bounded", async () => {
   reset();
   // Fill the registry to the cap with DISTINCT known recipe ids.

@@ -40,6 +40,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
+    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini", "o3-mini"],
   },
   {
     id: "anthropic",
@@ -49,6 +50,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
+    models: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
   },
   {
     id: "gemini",
@@ -58,6 +60,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
+    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash"],
   },
   {
     id: "deepseek",
@@ -67,6 +70,17 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
+    models: ["deepseek-chat", "deepseek-reasoner"],
+  },
+  {
+    id: "openai-compatible",
+    name: "OpenAI-compatible",
+    hint: "Any OpenAI-compatible endpoint (Bedrock, Kimi, Groq, Together…) — set your own base URL + model.",
+    baseURL: "",
+    needsKey: true,
+    needsModel: true,
+    onDevice: false,
+    models: ["gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "kimi-k2", "moonshot-v1-8k", "qwen-plus", "claude-sonnet-4-5", "llama-3.3-70b"],
   },
   {
     id: "ollama",
@@ -76,6 +90,7 @@ const PROVIDERS = [
     needsKey: false,
     needsModel: true,
     onDevice: false,
+    models: [], // free-text — local model names
   },
 ];
 
@@ -106,6 +121,43 @@ const storage = {
 };
 
 // ── Providers ──
+// Render the model field as a per-provider dropdown (known models + a "Custom…"
+// option that reveals a free-text input) so the placeholder is never a wrong
+// cross-provider example like "gpt-4o-mini" on Anthropic/Gemini/DeepSeek.
+function modelFieldHtml(p, cfg) {
+  const current = cfg.provider === p.id ? (cfg.model || "") : "";
+  const models = Array.isArray(p.models) ? p.models : [];
+  if (!models.length) {
+    const ph = p.id === "ollama" ? "e.g. llama3.1" : "model id";
+    return `<label class="field"><span class="field-label">Model id</span><input class="model" type="text" placeholder="${ph}" value="${escapeAttr(current)}"></label>`;
+  }
+  const opts = models
+    .map((m) => `<option value="${escapeAttr(m)}"${m === current ? " selected" : ""}>${escapeHtml(m)}</option>`)
+    .join("");
+  const isCustom = current !== "" && !models.includes(current);
+  return `
+    <label class="field"><span class="field-label">Model</span>
+      <select class="model-select" aria-label="Model for ${escapeAttr(p.name)}">
+        <option value=""${current === "" ? " selected" : ""}>Select a model…</option>
+        ${opts}
+        <option value="__custom__"${isCustom ? " selected" : ""}>Custom…</option>
+      </select>
+      <input class="model model-custom" type="text" placeholder="model id" value="${escapeAttr(isCustom ? current : "")}"${isCustom ? "" : " hidden"}>
+    </label>`;
+}
+
+// The effective model: the select's value unless "Custom…" is chosen (then the
+// custom text input).
+function effectiveModel(card) {
+  const select = card.querySelector(".model-select");
+  if (select) {
+    return select.value === "__custom__"
+      ? (card.querySelector(".model-custom")?.value || "")
+      : select.value;
+  }
+  return card.querySelector(".model")?.value || "";
+}
+
 async function renderProviders(restoreFocus = false) {
   // Route the provider read through the SERVICE WORKER (single authority) — never
   // call lib/provider.js's kv* directly in this page realm (the round-16 split-
@@ -154,9 +206,7 @@ async function renderProviders(restoreFocus = false) {
         }
         ${
           p.needsKey || p.needsModel
-            ? `<label class="field"><span class="field-label">Model id</span><input class="model" type="text" placeholder="e.g. gpt-4o-mini" value="${
-              escapeAttr(cfg.provider === p.id ? cfg.model : "")
-            }"></label>`
+            ? modelFieldHtml(p, cfg)
             : ""
         }
       </fieldset>`
@@ -177,8 +227,14 @@ async function renderProviders(restoreFocus = false) {
       const fields = {
         baseURL: card.querySelector(".base-url")?.value ?? (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
         apiKey,
-        model: card.querySelector(".model")?.value ?? (isActive ? (cfg.model || "") : ""),
+        model: effectiveModel(card),
       };
+      // The model dropdown's "Custom…" option reveals the free-text input.
+      card.querySelector(".model-select")?.addEventListener("change", (e) => {
+        const custom = card.querySelector(".model-custom");
+        if (e.target.value === "__custom__") { custom.hidden = false; custom.focus(); }
+        else custom.hidden = true;
+      });
       // Route through the worker's provider.set so the running agent's cached
       // model/orchestrator is invalidated immediately (no stale provider).
       await chrome.runtime.sendMessage({
@@ -202,9 +258,7 @@ async function renderProviders(restoreFocus = false) {
           card.querySelector(".base-url")?.value ??
           (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
         apiKey: enteredKey || (isActive && cfg.apiKey ? cfg.apiKey : ""),
-        model:
-          card.querySelector(".model")?.value ??
-          (isActive ? (cfg.model || "") : ""),
+        model: effectiveModel(card),
       };
       // Loading state (the button is disabled + a live region announces it).
       testStatus.hidden = false;
@@ -888,6 +942,9 @@ async function renderData() {
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
 let flashTimer;
 function saveFlash(msg) {
   const el = $("#save-status");
@@ -929,3 +986,11 @@ await renderPermissions();
 await renderHooks();
 await renderUsage();
 await renderData();
+
+// The version in the footer (chaos-style semantic versioning — read from the
+// manifest so it always matches the installed build).
+try {
+  const v = chrome.runtime.getManifest().version;
+  const el = $("#app-version");
+  if (el && v) el.textContent = "v" + v;
+} catch { /* non-extension (browser test) — leave the placeholder */ }

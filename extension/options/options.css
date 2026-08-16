@@ -167,6 +167,9 @@ code {
 .provider-card .fields input {
   width: 100%;
 }
+.provider-card .fields select {
+  width: 100%;
+}
 input, select, textarea {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -561,3 +564,17 @@ input:focus, select:focus, textarea:focus {
   grid-area: btn;
 }
 .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+/* footer — the semantic version, muted at the bottom of the settings */
+.foot {
+  margin-top: 24px;
+  padding: 16px 4px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.foot #app-version { font-variant-numeric: tabular-nums; }
