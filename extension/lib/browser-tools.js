@@ -384,10 +384,29 @@ export async function captureTabScreenshot(tabId) {
             } catch {
               return { error: "run aborted — tab not activated" };
             }
+            // Remember the prior active tab so an ownership loss DURING activation
+            // can RESTORE the owner's view (a capture must never leave the active
+            // tab switched after abort — the round-22 finding: activation had no
+            // immediate post-check / restore).
+            const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true }))
+              .find((t) => t.id !== tabId) ?? null;
             try {
               await chrome.tabs.update(tabId, { active: true });
             } catch (e) {
               return { error: `could not activate tab: ${e?.message ?? e}` };
+            }
+            // Immediate post-activation ownership check + restore on failure: an
+            // abort during the tabs.update await must revert the activation, not
+            // leave the owner's active tab switched.
+            try {
+              await assertRunOwned();
+            } catch {
+              if (priorActive?.id) {
+                try {
+                  await chrome.tabs.update(priorActive.id, { active: true });
+                } catch { /* best-effort restore */ }
+              }
+              return { error: "run aborted — tab activation reverted" };
             }
           }
       // The active tab (its url is visible under activeTab / tabs).

@@ -228,6 +228,18 @@ export function memoryStore(origin) {
       const dir = await openDir(path);
       return await readJson(dir, `${key}.json`);
     },
+    /** Whether `key` EXISTS (a stored `null` value is still present, distinct
+     * from an absent key — `get` returns `null` for both, so compensation logic
+     * must not conflate them). */
+    async has(key) {
+      const dir = await openDir(path);
+      try {
+        await dir.getFileHandle(`${key}.json`);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
     },
@@ -338,6 +350,23 @@ export async function journalAppend(store, entry, guard = null) {
   // between this check and setTrusted).
   if (guard) await guard();
   await store.setTrusted("journal", entries);
+  // POST-commit guard: ownership lost DURING the setTrusted commit must be
+  // COMPENSATED (remove the just-appended entry), not merely detected after the
+  // fact (the round-22 finding: journal post-check detected ownership loss but
+  // left the committed task/result row in place, so a retry produced a stale/
+  // duplicate entry). Compensation is best-effort — the primary invariant is that
+  // the caller aborts, but the forbidden row must not survive.
+  if (guard) {
+    try {
+      await guard();
+    } catch (e) {
+      try {
+        const restored = entries.slice(0, -1);
+        await store.setTrusted("journal", restored);
+      } catch { /* best-effort compensation */ }
+      throw e;
+    }
+  }
   return entries;
 }
 

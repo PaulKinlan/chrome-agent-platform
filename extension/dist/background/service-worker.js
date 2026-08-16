@@ -25732,6 +25732,18 @@ function memoryStore(origin) {
       const dir = await openDir(path);
       return await readJson(dir, `${key}.json`);
     },
+    /** Whether `key` EXISTS (a stored `null` value is still present, distinct
+     * from an absent key — `get` returns `null` for both, so compensation logic
+     * must not conflate them). */
+    async has(key) {
+      const dir = await openDir(path);
+      try {
+        await dir.getFileHandle(`${key}.json`);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
     },
@@ -25815,6 +25827,18 @@ async function journalAppend(store, entry, guard = null) {
   }
   if (guard) await guard();
   await store.setTrusted("journal", entries);
+  if (guard) {
+    try {
+      await guard();
+    } catch (e) {
+      try {
+        const restored = entries.slice(0, -1);
+        await store.setTrusted("journal", restored);
+      } catch {
+      }
+      throw e;
+    }
+  }
   return entries;
 }
 var MAX_SCREENSHOTS = 5;
@@ -66725,6 +66749,14 @@ async function recordUsage(p) {
   try {
     await assertRunOwned();
   } catch {
+    try {
+      const cur = await kvGet(STORAGE_KEY);
+      const compensated = (cur[STORAGE_KEY] ?? []).filter(
+        (r) => r.id !== record3.id
+      );
+      await kvSet({ [STORAGE_KEY]: compensated });
+    } catch {
+    }
     return;
   }
   return record3;
@@ -66814,7 +66846,7 @@ async function allSkills() {
 var DEFAULT_SYSTEM = `You are the Chrome Agent Platform hub agent. You help the
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
-function memoryToolset(memory, enrollmentGuard = null) {
+function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
   if (!memory) return {};
   return {
     memory_get: tool({
@@ -66830,8 +66862,12 @@ function memoryToolset(memory, enrollmentGuard = null) {
           await assertRunOwned();
           if (enrollmentGuard) {
             const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
             if (!g?.ok) {
               return { error: g?.error ?? "origin not enrolled \u2014 memory not written" };
+            }
+            if (runGen != null && (g.gen ?? 0) !== runGen) {
+              return { error: "origin re-enrolled during run \u2014 memory not written" };
             }
           }
         } catch {
@@ -66841,8 +66877,8 @@ function memoryToolset(memory, enrollmentGuard = null) {
         let existed = false;
         let committed = false;
         try {
+          existed = typeof memory.has === "function" ? await memory.has(key) : await memory.get(key) !== void 0;
           prev = await memory.get(key);
-          existed = prev !== void 0 && prev !== null;
           await assertRunOwned();
           await memory.set(key, value);
           committed = true;
@@ -66877,9 +66913,18 @@ function createAgent2({
   skills = [],
   taskId = "adhoc",
   maxIterations = 12,
-  enrollmentGuard = null
+  enrollmentGuard = null,
+  // `disposable` marks a per-origin WORKER agent: abort() (agent.delete →
+  // abortWorker) permanently disables it so a stale in-flight delegation can
+  // never start a new run (the round-22 check→start blocker). The hub/master is
+  // NOT disposable — its abort() cancels the current run only, and it is reused
+  // across subsequent runs.
+  disposable = false
 }) {
-  const allTools = { ...memoryToolset(memory, enrollmentGuard), ...tools };
+  let activeRun = null;
+  let aborted3 = false;
+  const getRunGen = () => activeRun?.gen ?? null;
+  const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen), ...tools };
   const systemPrompt = system + buildSkillsPrompt2(skills);
   const agent = createAgent({
     id,
@@ -66890,6 +66935,17 @@ function createAgent2({
     maxIterations,
     hooks: {
       onUsage: async (record3) => {
+        if (enrollmentGuard) {
+          try {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen();
+            if (!g?.ok || runGen != null && (g.gen ?? 0) !== runGen) {
+              return;
+            }
+          } catch {
+            return;
+          }
+        }
         await recordUsage({
           agentId: id,
           taskId,
@@ -66905,9 +66961,48 @@ function createAgent2({
   return {
     id,
     name: name25,
-    // agent-do's run(task, context, history) -> string
-    run: (task, context, history) => agent.run(task, context, history),
-    abort: () => agent.abort()
+    // agent-do's run(task, context, history) -> string. Our wrapper accepts a
+    // FOURTH `runGen` argument: the immutable enrollment generation the caller
+    // captured at delegation start. The run + its worker commits revalidate THAT
+    // generation (delete→re-enroll ABA), and abort() before the run prevents the
+    // start (the check→start gap where agent-do's own controller is null until
+    // run() begins).
+    run: async (task, context, history, runGen) => {
+      let gen = runGen ?? null;
+      if (enrollmentGuard && gen == null) {
+        const g = await enrollmentGuard();
+        if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+        gen = g.gen ?? 0;
+      }
+      if (aborted3) return { error: "run aborted before start" };
+      const controller = new AbortController();
+      activeRun = { gen, controller };
+      if (aborted3 || controller.signal.aborted) {
+        activeRun = null;
+        return { error: "run aborted before start" };
+      }
+      const onAbort = () => {
+        try {
+          agent.abort();
+        } catch {
+        }
+      };
+      controller.signal.addEventListener("abort", onAbort);
+      try {
+        return await agent.run(task, context, history);
+      } finally {
+        controller.signal.removeEventListener("abort", onAbort);
+        activeRun = null;
+      }
+    },
+    abort: () => {
+      if (disposable) aborted3 = true;
+      activeRun?.controller.abort();
+      try {
+        agent.abort();
+      } catch {
+      }
+    }
   };
 }
 function createOrchestrator2({
@@ -66936,10 +67031,16 @@ function createOrchestrator2({
       tools: w.tools ?? {},
       taskId,
       // Thread the delegateGuard into each worker's memory tools so a worker's
-      // memory_set revalidates LIVE enrollment before committing (the round-21
-      // blocker: worker tools got no enrollment token). The guard already
-      // revalidates enrollment + generation; reuse it per-origin.
-      enrollmentGuard: delegateGuard ? async () => delegateGuard(w.origin) : null
+      // memory_set revalidates its IMMUTABLE run-start generation before
+      // committing (the round-21 blocker: worker tools got no enrollment token;
+      // the round-22 ABA: revalidating "currently enrolled" instead of the
+      // run-start generation let a delete→re-enroll stale write pass). The guard
+      // already revalidates enrollment + generation; reuse it per-origin.
+      enrollmentGuard: delegateGuard ? async () => delegateGuard(w.origin) : null,
+      // Workers are DISPOSABLE: agent.delete → abortWorker permanently disables
+      // the agent so a stale in-flight delegation cannot start a new run in the
+      // check→start gap.
+      disposable: true
     });
     workerAgents.set(w.origin, a);
   }
@@ -66971,7 +67072,7 @@ function createOrchestrator2({
           gen = g.gen ?? 0;
         }
         await assertRunOwned();
-        const result = await a.run(task);
+        const result = await a.run(task, void 0, void 0, gen);
         if (delegateGuard && gen) {
           const after = await delegateGuard(agentId);
           if (!after?.ok || (after.gen ?? 0) !== gen) {
@@ -67010,7 +67111,8 @@ function createOrchestrator2({
         skills: config3.skills ?? [],
         tools: config3.tools ?? {},
         taskId,
-        enrollmentGuard: delegateGuard ? async () => delegateGuard(config3.origin) : null
+        enrollmentGuard: delegateGuard ? async () => delegateGuard(config3.origin) : null,
+        disposable: true
       });
       workerAgents.set(config3.origin, a);
       return a;
@@ -67259,18 +67361,25 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
       await alarms.create(name25, info);
       await assertRunOwned();
     } catch (e) {
-      let stillArmed = true;
+      let state = "unknown";
       try {
         await alarmsApi()?.clear(name25);
-        stillArmed = await alarmsApi()?.get(name25) != null;
+        state = await alarmsApi()?.get(name25) != null ? "present" : "absent";
       } catch {
-        stillArmed = true;
+        state = "unknown";
       }
-      if (!stillArmed) {
+      if (state === "absent") {
         const cur = await kvGet(TASK_KEY);
         const rollback = { ...cur[TASK_KEY] ?? {} };
         delete rollback[name25];
         await kvSet({ [TASK_KEY]: rollback });
+      } else if (state === "unknown") {
+        const cur = await kvGet(TASK_KEY);
+        const tasks2 = { ...cur[TASK_KEY] ?? {} };
+        if (tasks2[name25]) {
+          tasks2[name25] = { ...tasks2[name25], quarantined: true, quarantinedAt: Date.now() };
+          await kvSet({ [TASK_KEY]: tasks2 });
+        }
       }
       throw e;
     }
@@ -67424,6 +67533,7 @@ async function reconcileScheduledTasks() {
     const now2 = Date.now();
     for (const name25 of names) {
       const task = tasks[name25];
+      if (task?.quarantined) continue;
       if (!existing.has(name25)) {
         const when = task.periodInMinutes ? Math.max(task.at, now2 + 1e3) : task.at > now2 ? task.at : now2 + 1e3;
         const info = { when };
@@ -67645,10 +67755,22 @@ async function captureTabScreenshot(tabId) {
         } catch {
           return { error: "run aborted \u2014 tab not activated" };
         }
+        const priorActive = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => t.id !== tabId) ?? null;
         try {
           await chrome.tabs.update(tabId, { active: true });
         } catch (e) {
           return { error: `could not activate tab: ${e?.message ?? e}` };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          if (priorActive?.id) {
+            try {
+              await chrome.tabs.update(priorActive.id, { active: true });
+            } catch {
+            }
+          }
+          return { error: "run aborted \u2014 tab activation reverted" };
         }
       }
       const active = (await chrome.tabs.query({ active: true, currentWindow: true })).find((t) => !tabId || t.id === tabId) ?? null;
@@ -68103,25 +68225,30 @@ async function unregisterOriginScripts(origin) {
   let scriptsRemoved = true;
   let error90 = null;
   if (typeof chrome !== "undefined" && chrome.scripting?.unregisterContentScripts) {
+    const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
+    const confirmAbsent = async () => {
+      const remaining = await chrome.scripting.getRegisteredContentScripts({ ids }).catch(() => null);
+      return Array.isArray(remaining) && remaining.length === 0;
+    };
     try {
-      await chrome.scripting.unregisterContentScripts({
-        ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
-      });
-      const remaining = await chrome.scripting.getRegisteredContentScripts({
-        ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")]
-      }).catch(() => null);
-      scriptsRemoved = Array.isArray(remaining) && remaining.length === 0;
+      await chrome.scripting.unregisterContentScripts({ ids });
+      scriptsRemoved = await confirmAbsent();
       if (!scriptsRemoved && !error90) {
-        error90 = remaining === null ? "could not confirm content scripts were removed" : "content scripts still registered after unregister";
+        error90 = "content scripts still registered after unregister";
       }
     } catch (e) {
-      scriptsRemoved = false;
-      error90 = String(e?.message ?? e);
+      scriptsRemoved = await confirmAbsent();
+      if (!scriptsRemoved) {
+        error90 = String(e?.message ?? e);
+      }
     }
   }
   let permissionRemoved = true;
   try {
     await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+  } catch {
+  }
+  try {
     permissionRemoved = !await chrome.permissions.contains({
       origins: [`${canonical}/*`]
     });
@@ -68873,7 +69000,14 @@ var handlers = {
         const res2 = await revokeCapability(id);
         const failures = results.filter((r) => r.error).map((r) => r.error);
         if (failures.length > 0) {
-          res2.cleanupPending = failures.length;
+          return {
+            ok: false,
+            capability: id,
+            revoked: res2.revoked,
+            cleanupPending: failures.length,
+            retryable: true,
+            error: `${failures.length} origin(s) have retryable cleanup pending: ${failures.join("; ")}`
+          };
         }
         return res2;
       });
@@ -69141,11 +69275,16 @@ var handlers = {
     if (!canonical) return { ok: false, error: "invalid origin" };
     return await withOriginLock(canonical, async () => {
       await enrollOrigin(canonical);
+      const snapBefore = await enrollmentSnapshot(canonical);
       const registered = await ensureOriginScriptsRegistered(canonical).catch(
         (e) => ({ ok: false, error: String(e?.message ?? e) })
       );
-      if (registered?.ok !== true) {
-        await disenrollOrigin(canonical);
+      const snapAfter = await enrollmentSnapshot(canonical);
+      const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
+      if (registered?.ok !== true || transitionLost) {
+        if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
+          await disenrollOrigin(canonical);
+        }
         const [unregRes, clearRes] = await Promise.allSettled([
           unregisterOriginScripts(canonical),
           siteMemory(canonical).clear()
@@ -69162,7 +69301,7 @@ var handlers = {
         return {
           ok: false,
           origin: canonical,
-          error: registered?.error ?? "script registration failed",
+          error: transitionLost ? "scripting was disabled during enrollment" : registered?.error ?? "script registration failed",
           retryable: true,
           scriptsRemoved,
           permissionRemoved,
@@ -69170,10 +69309,9 @@ var handlers = {
         };
       }
       invalidateAgent();
-      const snap = await enrollmentSnapshot(canonical);
       await notifyOriginBridge(canonical, {
         type: "enrollment-sync",
-        gen: snap.gen
+        gen: snapAfter.gen
       });
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
@@ -69288,7 +69426,7 @@ var handlers = {
           `origin ${canonical} was disenrolled before delegation`
         );
       }
-      return await a.run(task, "", []);
+      return await a.run(task, "", [], gen);
     });
     return await withOriginLock(canonical, async () => {
       const after = await enrollmentSnapshot(canonical);

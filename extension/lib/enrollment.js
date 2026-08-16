@@ -157,36 +157,44 @@ export async function unregisterOriginScripts(origin) {
   let scriptsRemoved = true;
   let error = null;
   if (typeof chrome !== "undefined" && chrome.scripting?.unregisterContentScripts) {
-    try {
-      await chrome.scripting.unregisterContentScripts({
-        ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
-      });
+    const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
+    const confirmAbsent = async () => {
       const remaining = await chrome.scripting
-        .getRegisteredContentScripts({
-          ids: [scriptId(canonical, "main"), scriptId(canonical, "bridge")],
-        })
+        .getRegisteredContentScripts({ ids })
         .catch(() => null);
       // A `null` confirmation read means the CONFIRMATION FAILED (the API threw
       // or was absent) — it is NOT proof the scripts are gone. Only an empty
       // array is authoritative absence (the round-15 finding: a failed
       // confirmation read must not be treated as "removed").
-      scriptsRemoved = Array.isArray(remaining) && remaining.length === 0;
+      return Array.isArray(remaining) && remaining.length === 0;
+    };
+    try {
+      await chrome.scripting.unregisterContentScripts({ ids });
+      scriptsRemoved = await confirmAbsent();
       if (!scriptsRemoved && !error) {
-        error = remaining === null
-          ? "could not confirm content scripts were removed"
-          : "content scripts still registered after unregister";
+        error = "content scripts still registered after unregister";
       }
     } catch (e) {
-      scriptsRemoved = false;
-      error = String(e?.message ?? e);
+      // A "no such script" throw can mean the scripts were ALREADY absent (an
+      // origin enrolled via agent.create registers no scripts, or a prior partial
+      // cleanup removed them). Absence is the GOAL, not a failure — confirm it
+      // before declaring failure (the round-22 scripting-Disable honesty fix must
+      // not report a cleanup failure for scripts that genuinely do not exist).
+      scriptsRemoved = await confirmAbsent();
+      if (!scriptsRemoved) {
+        error = String(e?.message ?? e);
+      }
     }
   }
 
   // Host permission: remove, then CONFIRM absence (a `false` remove result is
-  // "already absent", which is the goal — not a failure).
+  // "already absent", which is the goal — not a failure). A `remove` throw for a
+  // never-granted origin is also fine — absence is re-confirmed via contains.
   let permissionRemoved = true;
   try {
     await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+  } catch { /* remove may throw when the origin was never granted — confirm below */ }
+  try {
     permissionRemoved = !(await chrome.permissions.contains({
       origins: [`${canonical}/*`],
     }));

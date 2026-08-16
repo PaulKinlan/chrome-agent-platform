@@ -11,6 +11,7 @@ import {
   heartbeatInflight,
   markScheduledDone,
   ownsInflight,
+  reconcileScheduledTasks,
   releaseInflight,
   scheduleTask,
   tryAcquireInflight,
@@ -364,6 +365,81 @@ Deno.test("scheduleTask deletes the payload when create fails and the alarm is a
     chrome.alarms.create = origCreate;
     chrome.alarms.clear = origClear;
     chrome.alarms.get = origGet;
+  }
+});
+
+Deno.test("scheduleTask QUARANTINES the payload when create throws AND get throws (round-22 unknown-state blocker)", async () => {
+  const origCreate = chrome.alarms.create;
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  // Both alarms.create AND the alarms.get confirmation throw: the alarm's state
+  // is UNKNOWN. The old code left an ordinary runnable payload here, which a
+  // later reconcileScheduledTasks recreated + ran. The fix must QUARANTINE the
+  // payload (non-runnable) so reconciliation never re-arms it.
+  chrome.alarms.create = async () => {
+    throw new Error("create failed");
+  };
+  chrome.alarms.clear = async () => {
+    throw new Error("clear failed");
+  };
+  chrome.alarms.get = async () => {
+    throw new Error("get failed (unknown state)");
+  };
+  try {
+    let threw = false;
+    try {
+      await scheduleTask({ task: "create-failed-unknown", delayMs: 1000 });
+    } catch {
+      threw = true;
+    }
+    assert(threw, "scheduleTask must reject when alarms.create fails");
+    const store = await chrome.storage.local.get("cap:scheduledTasks");
+    const tasks = store["cap:scheduledTasks"] ?? {};
+    const entry = Object.values(tasks).find((t) =>
+      t?.task === "create-failed-unknown"
+    );
+    assert(entry, "the payload must be retained (its alarm state is unknown)");
+    assert(
+      entry?.quarantined === true,
+      "an unknown-state payload must be QUARANTINED (non-runnable)",
+    );
+  } finally {
+    chrome.alarms.create = origCreate;
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+  }
+});
+
+Deno.test("reconcileScheduledTasks does NOT re-arm a quarantined payload (round-22)", async () => {
+  const origGetAll = chrome.alarms.getAll;
+  const origCreate = chrome.alarms.create;
+  const created = [];
+  chrome.alarms.getAll = async () => []; // no alarms exist
+  chrome.alarms.create = async (name) => {
+    created.push(name);
+    return true;
+  };
+  // Seed a QUARANTINED payload (as the unknown-state schedule rollback would).
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "task_quarantined": {
+        name: "task_quarantined",
+        task: "should-not-rerun",
+        at: Date.now() - 1000,
+        quarantined: true,
+      },
+    },
+  });
+  try {
+    await reconcileScheduledTasks();
+    assert(
+      !created.includes("task_quarantined"),
+      "a quarantined payload must NOT be re-armed by reconciliation",
+    );
+  } finally {
+    chrome.alarms.getAll = origGetAll;
+    chrome.alarms.create = origCreate;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
   }
 });
 

@@ -671,8 +671,19 @@ const handlers = {
         const failures = results
           .filter((r) => r.error)
           .map((r) => r.error);
+        // Disable must NOT report clean success while any origin's host permission
+        // or dynamic scripts are unconfirmed-absent — a failure needs an explicit
+        // RETRYABLE terminal state (the round-22 finding: cleanup failure merely
+        // added cleanupPending to an otherwise-successful revoke response).
         if (failures.length > 0) {
-          res.cleanupPending = failures.length;
+          return {
+            ok: false,
+            capability: id,
+            revoked: res.revoked,
+            cleanupPending: failures.length,
+            retryable: true,
+            error: `${failures.length} origin(s) have retryable cleanup pending: ${failures.join("; ")}`,
+          };
         }
         return res;
       });
@@ -1014,16 +1025,32 @@ const handlers = {
       // false and never leaves a dangling host permission behind (the round-14
       // transactional finding).
       await enrollOrigin(canonical);
+      const snapBefore = await enrollmentSnapshot(canonical);
       const registered = await ensureOriginScriptsRegistered(canonical).catch(
         (e) => ({ ok: false, error: String(e?.message ?? e) }),
       );
-      if (registered?.ok !== true) {
+      // A concurrent Scripting Disable holds the GLOBAL enrollment lock across its
+      // whole tombstone→unregister→revoke transition, but it does NOT take the
+      // per-origin lock — so it can land BETWEEN enrollOrigin (which releases the
+      // global lock) and ensureOriginScriptsRegistered above. Revalidate the
+      // snapshot AFTER registration: a changed/absent generation means the origin
+      // was tombstoned (and possibly re-enrolled) mid-transition, so this enroll
+      // must NOT report success against authority it no longer holds (the round-22
+      // scripting-Disable/enroll race). Compensate by removing whatever this
+      // enroll registered.
+      const snapAfter = await enrollmentSnapshot(canonical);
+      const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
+      if (registered?.ok !== true || transitionLost) {
         // TRANSACTIONAL rollback: tombstone the enrollment, then attempt scripts
         // + host-permission + OPFS cleanup INDEPENDENTLY (allSettled) and record
         // any incomplete step as RETRYABLE pending-cleanup — never a sequential
         // rollback that silently skips later cleanup on an earlier failure (the
         // round-18 finding: failed enrollment rollback was sequential/non-pending).
-        await disenrollOrigin(canonical);
+        if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
+          // Registration itself failed while the enrollment is still current —
+          // tombstone it so the UI never reports "Enrolled" with scripts absent.
+          await disenrollOrigin(canonical);
+        }
         const [unregRes, clearRes] = await Promise.allSettled([
           unregisterOriginScripts(canonical),
           siteMemory(canonical).clear(),
@@ -1042,7 +1069,9 @@ const handlers = {
         return {
           ok: false,
           origin: canonical,
-          error: registered?.error ?? "script registration failed",
+          error: transitionLost
+            ? "scripting was disabled during enrollment"
+            : (registered?.error ?? "script registration failed"),
           retryable: true,
           scriptsRemoved,
           permissionRemoved,
@@ -1050,12 +1079,9 @@ const handlers = {
         };
       }
       invalidateAgent();
-      // Tell the origin's live content scripts the CURRENT enrollment generation
-      // so their bridge enforces it (a stale invoke is rejected at the bridge).
-      const snap = await enrollmentSnapshot(canonical);
       await notifyOriginBridge(canonical, {
         type: "enrollment-sync",
-        gen: snap.gen,
+        gen: snapAfter.gen,
       });
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
@@ -1216,7 +1242,10 @@ const handlers = {
           `origin ${canonical} was disenrolled before delegation`,
         );
       }
-      return await a.run(task, "", []);
+      // Thread the captured generation into a.run so the worker's memory/usage
+      // commits revalidate THAT immutable identity (the round-22 ABA blocker: a
+      // delete→re-enroll lets a stale run write into the new enrollment).
+      return await a.run(task, "", [], gen);
     });
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the

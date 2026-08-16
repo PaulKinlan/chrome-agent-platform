@@ -133,7 +133,18 @@
     window.postMessage({ [CHANNEL]: true, ...msg }, "*");
   }
 
-  async function invoke(name, args) {
+  async function invoke(requestId, name, args) {
+    // PRE-START cancellation check (the round-22 blocker: cancel only discarded
+    // the RESULT, so a page function whose side effect had already executed kept
+    // running). This synchronous check runs BEFORE the page function is invoked,
+    // so a request that was already marked cancelled never STARTS its side
+    // effect. It is cooperative: once a page function has begun, its own DOM /
+    // storage / network effects cannot be unwound — the result is discarded and
+    // the invocation is marked cancelled, but the in-flight function itself runs
+    // to settlement. That limit is documented (not papered over) below.
+    if (cancelled.has(requestId)) {
+      throw new Error("invocation cancelled");
+    }
     // 1. a page-defined global function
     const fn = window[name];
     if (typeof fn === "function") {
@@ -168,7 +179,11 @@
       for (const id of inFlight) cancelled.add(id);
     } else if (data.type === "invoke" && data.nonce === nonce) {
       inFlight.add(data.requestId);
-      invoke(data.name, data.args)
+      // Bound the in-flight set: a hung page function must not leave its request
+      // id resident forever (the content-script drops the response at 15s, but
+      // this world's promise could otherwise linger).
+      setTimeout(() => { inFlight.delete(data.requestId); }, 20000);
+      invoke(data.requestId, data.name, data.args)
         .then((result) => {
           inFlight.delete(data.requestId);
           if (cancelled.delete(data.requestId)) {

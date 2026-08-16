@@ -115,3 +115,19 @@ Deno.test("saveScreenshot commits the index and evicts beyond MAX_SCREENSHOTS", 
   assert(index.length <= 5, "the screenshot index must be bounded to MAX_SCREENSHOTS");
   assert(index.length === 5, "the oldest two must be evicted");
 });
+
+Deno.test("memory.has distinguishes a stored null from an absent key (round-22 null-compensation)", async () => {
+  const mem = masterMemory();
+  const key = "null-compensation-key";
+  // Absent key: has() is false AND get() is null (they coincide only here).
+  assertEquals(await mem.has(key), false, "absent key must report has=false");
+  // Store a LEGITIMATE null value: has() is true while get() is still null.
+  await mem.set(key, null);
+  assertEquals(await mem.has(key), true, "a stored null must report has=true");
+  assertEquals(await mem.get(key), null, "get() returns null for a stored null");
+  // The round-22 bug: `existed = prev !== undefined && prev !== null` classified
+  // this stored null as absent and DELETED it on compensation. `has` keeps the
+  // two cases distinct so compensation restores null rather than deleting the key.
+  await mem.delete(key);
+  assertEquals(await mem.has(key), false, "deleted key must report has=false");
+});

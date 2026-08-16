@@ -62,10 +62,23 @@ export async function recordUsage(p) {
   }
   await kvSet({ [STORAGE_KEY]: trimmed });
   // Post-commit re-check: ownership lost DURING the kvSet await must not report
-  // a successfully recorded row.
+  // a successfully recorded row — AND must COMPENSATE by removing the just-
+  // committed row, so a stale owner's usage row does not survive as a forbidden
+  // durable effect (the round-22 finding: the post-check only returned, leaving
+  // the `deleted-worker` row committed).
   try {
     await assertRunOwned();
   } catch {
+    // Compensate: remove the row we just appended (by its unique id). Best-effort
+    // — if the compensation write also fails, the row remains but is not REPORTED
+    // as recorded.
+    try {
+      const cur = await kvGet(STORAGE_KEY);
+      const compensated = (cur[STORAGE_KEY] ?? []).filter(
+        (r) => r.id !== record.id,
+      );
+      await kvSet({ [STORAGE_KEY]: compensated });
+    } catch { /* best-effort compensation */ }
     return; // ownership lost during the commit — the row is not reported
   }
   return record;

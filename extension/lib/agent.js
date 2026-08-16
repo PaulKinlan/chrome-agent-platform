@@ -17,7 +17,7 @@ const DEFAULT_SYSTEM =
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
-function memoryToolset(memory, enrollmentGuard = null) {
+function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
   if (!memory) return {};
   return {
     memory_get: tool({
@@ -41,16 +41,21 @@ function memoryToolset(memory, enrollmentGuard = null) {
         // threw while the signal was still live and the catch did NOT compensate.
         try {
           await assertRunOwned();
-          // A WORKER's memory write must also revalidate LIVE enrollment: a
-          // worker deleted mid-run must not recreate its tombstoned OPFS store
-          // through a lingering memory_set (the round-21 blocker: worker tools
-          // got no enrollment token, so already-running worker side effects
-          // continued after delete). The guard returns {ok, gen}; a stale/
-          // missing generation aborts the write.
+          // A WORKER's memory write must revalidate the IMMUTABLE run-start
+          // generation — NOT merely "currently enrolled" (the round-22 ABA
+          // blocker: delete→re-enroll bumps the generation, so a stale run whose
+          // guard re-reads "currently enrolled" would pass and write into the
+          // NEW enrollment). The guard returns {ok, gen}; the run captured its
+          // generation at START (getRunGen), so a re-enrolled origin's fresh gen
+          // mismatches and the write is rejected.
           if (enrollmentGuard) {
             const g = await enrollmentGuard();
+            const runGen = getRunGen?.() ?? null;
             if (!g?.ok) {
               return { error: g?.error ?? "origin not enrolled — memory not written" };
+            }
+            if (runGen != null && (g.gen ?? 0) !== runGen) {
+              return { error: "origin re-enrolled during run — memory not written" };
             }
           }
         } catch {
@@ -60,8 +65,15 @@ function memoryToolset(memory, enrollmentGuard = null) {
         let existed = false;
         let committed = false;
         try {
+          // Existence must be checked via `has`, NOT via `get` returning
+          // non-null: a legitimate stored `null` value is indistinguishable from
+          // an absent key through `get` alone, so the old `existed = prev !==
+          // undefined && prev !== null` classified a stored null as absent and
+          // DELETED it on compensation (the round-22 null-compensation bug).
+          existed = typeof memory.has === "function"
+            ? await memory.has(key)
+            : (await memory.get(key)) !== undefined;
           prev = await memory.get(key);
-          existed = prev !== undefined && prev !== null;
           await assertRunOwned();
           await memory.set(key, value);
           committed = true;
@@ -108,8 +120,25 @@ export function createAgent({
   taskId = "adhoc",
   maxIterations = 12,
   enrollmentGuard = null,
+  // `disposable` marks a per-origin WORKER agent: abort() (agent.delete →
+  // abortWorker) permanently disables it so a stale in-flight delegation can
+  // never start a new run (the round-22 check→start blocker). The hub/master is
+  // NOT disposable — its abort() cancels the current run only, and it is reused
+  // across subsequent runs.
+  disposable = false,
 }) {
-  const allTools = { ...memoryToolset(memory, enrollmentGuard), ...tools };
+  // The worker's immutable run identity, captured at run START. Because master
+  // runs are serialized (withRunLock), at most one run is active per agent, so a
+  // single slot is safe. `gen` is the enrollment generation the CALLER captured
+  // at delegation start (or, for a direct run, captured here) — every worker
+  // commit revalidates THAT generation, never "currently enrolled" (the round-22
+  // ABA blocker).
+  let activeRun = null; // { gen: number|null, controller: AbortController }
+  let aborted = false;
+
+  const getRunGen = () => activeRun?.gen ?? null;
+
+  const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen), ...tools };
   const systemPrompt = system + buildSkillsPrompt(skills);
 
   const agent = agentDoCreateAgent({
@@ -121,6 +150,21 @@ export function createAgent({
     maxIterations,
     hooks: {
       onUsage: async (record) => {
+        // Worker usage is ENROLLMENT-scoped: a stale run must not append a usage
+        // row under a re-enrolled origin (the round-22 finding: onUsage called
+        // recordUsage without the worker's expected generation). Revalidate the
+        // IMMUTABLE run-start generation before recording.
+        if (enrollmentGuard) {
+          try {
+            const g = await enrollmentGuard();
+            const runGen = getRunGen();
+            if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+              return; // disenrolled or re-enrolled mid-run — do not record usage
+            }
+          } catch {
+            return; // guard failure — fail closed, no stale usage row
+          }
+        }
         await recordUsage({
           agentId: id,
           taskId,
@@ -137,9 +181,55 @@ export function createAgent({
   return {
     id,
     name,
-    // agent-do's run(task, context, history) -> string
-    run: (task, context, history) => agent.run(task, context, history),
-    abort: () => agent.abort(),
+    // agent-do's run(task, context, history) -> string. Our wrapper accepts a
+    // FOURTH `runGen` argument: the immutable enrollment generation the caller
+    // captured at delegation start. The run + its worker commits revalidate THAT
+    // generation (delete→re-enroll ABA), and abort() before the run prevents the
+    // start (the check→start gap where agent-do's own controller is null until
+    // run() begins).
+    run: async (task, context, history, runGen) => {
+      let gen = runGen ?? null;
+      if (enrollmentGuard && gen == null) {
+        // No caller-supplied generation (a direct worker run) — capture it now.
+        const g = await enrollmentGuard();
+        if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+        gen = g.gen ?? 0;
+      }
+      // PRE-START abort check: abort() may have been called while the guard await
+      // above was in flight (agent.delete → abortWorker), and agent-do's own
+      // abort() before run() is a no-op (its controller is null until run starts).
+      // A disposable worker that was aborted must never begin a new run.
+      if (aborted) return { error: "run aborted before start" };
+      const controller = new AbortController();
+      activeRun = { gen, controller };
+      if (aborted || controller.signal.aborted) {
+        activeRun = null;
+        return { error: "run aborted before start" };
+      }
+      // Wire the run-scoped controller to agent-do so abort() during the run
+      // cancels the model loop (agent-do's own abort() only works after its run()
+      // started). The listener is removed in finally so a post-run abort can
+      // never leak into a queued next run (the round-16 cross-run abort blocker).
+      const onAbort = () => {
+        try {
+          agent.abort();
+        } catch { /* no active run */ }
+      };
+      controller.signal.addEventListener("abort", onAbort);
+      try {
+        return await agent.run(task, context, history);
+      } finally {
+        controller.signal.removeEventListener("abort", onAbort);
+        activeRun = null;
+      }
+    },
+    abort: () => {
+      if (disposable) aborted = true;
+      activeRun?.controller.abort();
+      try {
+        agent.abort();
+      } catch { /* no active run */ }
+    },
   };
 }
 
@@ -171,12 +261,18 @@ export function createOrchestrator({
       tools: w.tools ?? {},
       taskId,
       // Thread the delegateGuard into each worker's memory tools so a worker's
-      // memory_set revalidates LIVE enrollment before committing (the round-21
-      // blocker: worker tools got no enrollment token). The guard already
-      // revalidates enrollment + generation; reuse it per-origin.
+      // memory_set revalidates its IMMUTABLE run-start generation before
+      // committing (the round-21 blocker: worker tools got no enrollment token;
+      // the round-22 ABA: revalidating "currently enrolled" instead of the
+      // run-start generation let a delete→re-enroll stale write pass). The guard
+      // already revalidates enrollment + generation; reuse it per-origin.
       enrollmentGuard: delegateGuard
         ? async () => delegateGuard(w.origin)
         : null,
+      // Workers are DISPOSABLE: agent.delete → abortWorker permanently disables
+      // the agent so a stale in-flight delegation cannot start a new run in the
+      // check→start gap.
+      disposable: true,
     });
     workerAgents.set(w.origin, a);
   }
@@ -224,7 +320,10 @@ export function createOrchestrator({
           // (the round-16 blocker: delegate_task could abort during the guard
           // then still start the worker).
           await assertRunOwned();
-          const result = await a.run(task);
+          // Thread the captured generation into a.run so the worker's memory/
+          // usage commits revalidate THAT immutable identity, not the current
+          // enrollment (the round-22 ABA blocker).
+          const result = await a.run(task, undefined, undefined, gen);
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded
           // rather than returned to the model (the round-17 blocker: delegateGuard
@@ -276,6 +375,7 @@ export function createOrchestrator({
         enrollmentGuard: delegateGuard
           ? async () => delegateGuard(config.origin)
           : null,
+        disposable: true,
       });
       workerAgents.set(config.origin, a);
       return a;

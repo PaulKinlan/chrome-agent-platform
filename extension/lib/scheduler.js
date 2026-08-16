@@ -163,21 +163,37 @@ export async function scheduleTask(
       // rerun by reconcileScheduledTasks (the round-21 schedule-create-failure
       // replay blocker). For a periodic alarm whose clear FAILED, the alarm is
       // STILL present, so the payload must be KEPT for it to fire on (the
-      // round-19 alarm-clear blocker). alarms.get disambiguates:
-      //   absent  → delete the payload (nothing is armed to fire on it);
-      //   present → keep the payload (a still-armed periodic alarm needs it).
-      let stillArmed = true;
+      // round-19 alarm-clear blocker). alarms.get disambiguates the two, but it
+      // has a THIRD outcome — it can THROW (unknown state). Unknown must not be
+      // treated as "absent" (that would keep a runnable payload that reconcile
+      // later re-arms) nor as "present" blindly (that would also leave a runnable
+      // payload). The round-22 blocker: create-throw + get-throw left a runnable
+      // payload that a later boot recreated + ran. Unknown state must be
+      // QUARANTINED (non-runnable) until the owner retries or cancels.
+      let state = "unknown";
       try {
         await alarmsApi()?.clear(name);
-        stillArmed = (await alarmsApi()?.get(name)) != null;
+        state = (await alarmsApi()?.get(name)) != null ? "present" : "absent";
       } catch {
-        stillArmed = true; // fail closed — cannot confirm absence → keep the payload
+        state = "unknown"; // cannot determine the alarm's state — fail closed
       }
-      if (!stillArmed) {
+      if (state === "absent") {
+        // The alarm is confirmed gone → delete the payload (nothing to fire on).
         const cur = await kvGet(TASK_KEY);
         const rollback = { ...(cur[TASK_KEY] ?? {}) };
         delete rollback[name];
         await kvSet({ [TASK_KEY]: rollback });
+      } else if (state === "unknown") {
+        // QUARANTINE: mark the payload non-runnable so reconcileScheduledTasks
+        // never re-arms a scheduling request that failed with unknown alarm state.
+        // It is only ever re-runnable via an explicit owner retry (a fresh
+        // scheduleTask creates a new name).
+        const cur = await kvGet(TASK_KEY);
+        const tasks = { ...(cur[TASK_KEY] ?? {}) };
+        if (tasks[name]) {
+          tasks[name] = { ...tasks[name], quarantined: true, quarantinedAt: Date.now() };
+          await kvSet({ [TASK_KEY]: tasks });
+        }
       }
       throw e;
     }
@@ -429,6 +445,11 @@ export async function reconcileScheduledTasks() {
   const now = Date.now();
   for (const name of names) {
     const task = tasks[name];
+    // A QUARANTINED task (a schedule that failed with UNKNOWN alarm state) must
+    // NEVER be re-armed by reconciliation — it is non-runnable until the owner
+    // explicitly retries (a fresh scheduleTask) or cancels (the round-22
+    // unknown-state replay blocker: reconcile recreated + ran a failed schedule).
+    if (task?.quarantined) continue;
     if (!existing.has(name)) {
       // The alarm is missing (fired + consumed, or the worker restarted). Recreate
       // it if the task is still in the future; a past one-shot is resumable.
