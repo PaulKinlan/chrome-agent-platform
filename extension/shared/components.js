@@ -523,32 +523,36 @@ class CapabilityRow extends Component {
 }
 customElements.define("capability-row", CapabilityRow);
 
-/* <message-bubble role="user|agent|task|result|error|thinking|tool" label>content</message-bubble> */
+/* <message-bubble role="user|agent|error|thinking|tool">content</message-bubble>
+ * A single conversation turn. The ROLE is carried by the bubble's styling
+ * (alignment + surface), never by a literal text label — a user turn sits
+ * right on a tinted surface, an agent turn sits left on a hairline card, a
+ * tool call is a quiet monospace line, thinking is a live spinner. */
 class MessageBubble extends Component {
-  static get observedAttributes() { return ["role", "label"]; }
+  static get observedAttributes() { return ["role"]; }
   _render() {
     const role = this.getAttribute("role") || "agent";
-    const label = this.getAttribute("label") || "";
     const thinking = role === "thinking";
     mountTemplate(this, `
-      :host { display:block; }
-      .bubble { border-top:1px solid var(--border,#e3e0d9); padding:10px 0; }
-      .bubble:first-child { border-top:0; }
-      .label { font-size:12px; color:var(--muted,#635e56); margin-bottom:4px; font-weight:600; }
-      .body { white-space:pre-wrap; overflow-wrap:anywhere; }
-      :host([role="error"]) .body { color:var(--danger,#f87171); }
-      :host([role="result"]) .body { color:var(--accent2,#34d399); }
-      :host([role="user"]) .body { font-weight:500; }
-      :host([role="tool"]) .body { color:var(--muted,#635e56); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
-      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); }
+      :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
+      :host(:last-child) { margin-bottom:0; }
+      :host([role="user"]) { justify-content:flex-end; }
+      .msg { max-width:76%; border-radius:12px; padding:10px 14px; }
+      .body { white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
+      :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
+      :host([role="agent"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
+      :host([role="error"]) .msg { border:1px solid var(--danger,#b3261e); }
+      :host([role="error"]) .body { color:var(--danger,#b3261e); }
+      :host([role="tool"]) .msg { padding:2px 0; border-radius:0; }
+      :host([role="tool"]) .body { color:var(--muted,#6e6a62); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5; }
+      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#6e6a62); font-size:14px; padding:2px 0; }
       .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; }
       @keyframes sc-think { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } }
-    `, `${label ? `<div class="label">${escapeHtml(label)}</div>` : ""}${
-      thinking
-        ? `<div class="think" role="status"><span class="spin" aria-hidden="true"></span><div class="body"><slot></slot></div></div>`
-        : `<div class="body"><slot></slot></div>`
-    }`);
+    `, thinking
+      ? `<div class="think" role="status"><span class="spin" aria-hidden="true"></span><span class="body"><slot></slot></span></div>`
+      : `<div class="msg"><div class="body"><slot></slot></div></div>`
+    );
   }
 }
 customElements.define("message-bubble", MessageBubble);

@@ -65,10 +65,9 @@ export function historyFromJournal(journal) {
 }
 
 // ── rendering ──────────────────────────────────────────────────────────────
-export function appendBubble(container, role, text, label = "") {
+export function appendBubble(container, role, text) {
   const bubble = document.createElement("message-bubble");
   bubble.setAttribute("role", role);
-  if (label) bubble.setAttribute("label", label);
   bubble.textContent = text;
   container.append(bubble);
   container.scrollTop = container.scrollHeight;
@@ -88,9 +87,9 @@ export function renderJournal(container, journal) {
   }
   for (const r of rows.slice(-20)) {
     if (r?.type === "task" && typeof r.task === "string") {
-      appendBubble(container, "user", r.task, "task");
+      appendBubble(container, "user", r.task);
     } else if (r?.type === "result" && typeof r.result === "string") {
-      appendBubble(container, "agent", r.result, "result");
+      appendBubble(container, "agent", r.result);
     }
   }
   container.scrollTop = container.scrollHeight;
@@ -117,10 +116,10 @@ export async function loadJournal() {
 // turn (the SW serializes master runs), carrying the prior history.
 export async function runConversationTurn(container, { text, attachments = [], history = [] }) {
   // 1. the user's turn appears immediately — the surface becomes a conversation.
-  appendBubble(container, "user", text, "task");
+  appendBubble(container, "user", text);
 
   // 2. a thinking indicator (replaced/removed as live progress arrives).
-  let thinking = appendBubble(container, "thinking", "Thinking…", "thinking");
+  let thinking = appendBubble(container, "thinking", "Thinking…");
   const clearThinking = () => {
     thinking?.remove();
     thinking = null;
@@ -133,21 +132,20 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (!ev || typeof ev !== "object") return;
     switch (ev.type) {
       case "thinking":
-        if (!thinking) thinking = appendBubble(container, "thinking", "Thinking…", "thinking");
+        if (!thinking) thinking = appendBubble(container, "thinking", "Thinking…");
         thinking.textContent = `Thinking… (step ${
           (ev.step ?? 0) + 1
         }${ev.totalSteps ? ` of ${ev.totalSteps}` : ""})`;
         break;
       case "tool-call":
         clearThinking();
-        appendBubble(container, "tool", `→ ${ev.toolName}`, "tool");
+        appendBubble(container, "tool", `→ ${ev.toolName}`);
         break;
       case "tool-result":
         appendBubble(
           container,
           "tool",
           `✓ ${ev.toolName}${ev.result ? ` — ${ev.result}` : ""}`,
-          "tool",
         );
         break;
       case "text":
@@ -156,14 +154,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // false) is the run's result, rendered once by `done`/the final result
         // below, so a single-step run never double-renders.
         clearThinking();
-        if (ev.text && ev.hasToolCalls) appendBubble(container, "agent", ev.text, "agent");
+        if (ev.text && ev.hasToolCalls) appendBubble(container, "agent", ev.text);
         break;
       case "done":
         clearThinking();
         break;
       case "error":
         clearThinking();
-        appendBubble(container, "error", ev.message ?? "error", "error");
+        appendBubble(container, "error", ev.message ?? "error");
         break;
     }
   });
@@ -188,10 +186,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   clearThinking();
   if (res?.ok) {
     if (typeof res.result === "string" && res.result) {
-      appendBubble(container, "agent", res.result, "result");
+      appendBubble(container, "agent", res.result);
     }
   } else {
-    appendBubble(container, "error", "Error: " + (res?.error ?? "unknown"), "error");
+    appendBubble(container, "error", "Error: " + (res?.error ?? "unknown"));
   }
   return res;
 }

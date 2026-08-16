@@ -81,13 +81,14 @@
       </div>
 
       <div class="specimen">
-        <h3 class="spec"><code class="tag">&lt;message-bubble&gt;</code> — conversation rows</h3>
+        <h3 class="spec"><code class="tag">&lt;message-bubble&gt;</code> — conversation turns</h3>
         <div class="stage column" style="max-width:560px">
-          <message-bubble role="task" label="task"><span>Summarise the key points of the current page.</span></message-bubble>
-          <message-bubble role="result" label="result"><span>This page argues three things: a, b, and c…</span></message-bubble>
-          <message-bubble role="error" label="error"><span>provider unreachable — retry?</span></message-bubble>
+          <message-bubble role="user"><span>Summarise the key points of the current page.</span></message-bubble>
+          <message-bubble role="agent"><span>This page argues three things: a, b, and c…</span></message-bubble>
+          <message-bubble role="tool"><span>→ tab_list · ✓ tab_list — 12 tabs</span></message-bubble>
+          <message-bubble role="error"><span>provider unreachable — retry?</span></message-bubble>
         </div>
-        <p class="caption">slotted content; role styles task/result/error/user.</p>
+        <p class="caption">role carried by alignment + surface — user right, agent/tool/error left; no text label.</p>
       </div>
 
       <div class="specimen">
