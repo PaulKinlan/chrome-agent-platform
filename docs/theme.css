@@ -1,70 +1,111 @@
 :root {
-  /* ── Color tokens (per theme, overridden by the [data-theme] blocks below) ── */
-  --bg: #0d1117;
-  --panel: #161b22;
-  --border: #30363d;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #58a6ff;
-  --accent2: #7ee787;
-  --danger: #ff7b72;
-  --btn-fg: #001;
+  /* ── Color tokens (per theme; overridden by [data-theme] below) ──
+     The identity is a calm technical instrument: a warm-neutral paper (light)
+     with hairline borders and ONE confident petrol-teal accent; a warm charcoal
+     for dark. No AI beige, no default purple/blue, no rainbow glow. */
+  --bg: #f7f6f3;
+  --panel: #ffffff;
+  --panel-2: #efede8;
+  --border: #e3e0d9;
+  --text: #1d1b18;
+  --muted: #6e6a62;
+  --accent: #0e6e63;
+  --accent-hover: #0a5c53;
+  --accent2: #b45309;
+  --danger: #b3261e;
+  --success: #1a7f37;
+  --warning: #9a6700;
+  --btn-fg: #ffffff;
+  --on-accent-muted: #d7f0ea;
+  --shadow-1: 0 1px 2px rgba(29, 27, 24, 0.05);
+  --shadow-2: 0 1px 2px rgba(29, 27, 24, 0.05), 0 12px 32px rgba(29, 27, 24, 0.07);
 
-  /* ── Spacing scale (design tokens) ── */
+  /* ── Spacing scale (8px grid) ── */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-8: 48px;
 
   /* ── Radius scale ── */
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
 
   /* ── Control sizing (consistent hit targets) ── */
-  --control: 36px; /* icon buttons: mic, +, send, gear — all the same */
-  --control-icon: 18px; /* stroke icons inside --control buttons */
-  --input-h: 36px; /* text inputs + buttons match */
+  --control: 36px;
+  --control-icon: 18px;
+  --input-h: 36px;
 
-  /* ── Type scale ── */
+  /* ── Type scale (tighter ratio, workhorse sans) ── */
   --text-xs: 12px;
   --text-sm: 13px;
-  --text-base: 15px;
-  --text-lg: 18px;
-  --text-xl: 22px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
 }
-* {
-  box-sizing: border-box;
-}
+
+* { box-sizing: border-box; }
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: var(--text-base)/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  accent-color: var(--accent);
+  caret-color: var(--accent);
 }
-a {
-  color: var(--accent);
-  text-decoration: none;
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── Browser surfaces carry the design too ── */
+::selection { background: var(--accent); color: var(--btn-fg); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 2px solid var(--bg);
+  border-radius: 999px;
 }
-a:hover {
-  text-decoration: underline;
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
+
+/* ── Buttons ── */
 .btn {
   background: var(--accent);
-  color: var(--btn-fg, #001);
+  color: var(--btn-fg);
   border: 0;
-  border-radius: 6px;
-  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  padding: 0 14px;
+  height: var(--input-h);
   font-weight: 600;
+  font: inherit;
   cursor: pointer;
+  transition: background 150ms ease;
 }
+.btn:hover { background: var(--accent-hover); }
+.btn:active { background: var(--accent-hover); }
+.btn:disabled { opacity: 0.5; cursor: default; }
 .btn.ghost {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
 }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+
 /* Consistent icon-button scale (mic, +, and any icon action across surfaces). */
 .icon-btn {
   width: var(--control);
@@ -74,13 +115,16 @@ a:hover {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
   flex: 0 0 auto;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
 }
-.icon-btn svg {
-  width: var(--control-icon);
-  height: var(--control-icon);
-  display: block;
-}
+.icon-btn:hover { color: var(--text); border-color: var(--accent); }
+.icon-btn svg { width: var(--control-icon); height: var(--control-icon); display: block; }
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -88,38 +132,30 @@ a:hover {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 13px;
-  /* <button> defaults to near-black buttontext on dark themes — set the text
-     color explicitly so recipe/status chips stay legible in every theme. */
+  padding: 4px 12px;
+  font-size: var(--text-sm);
   color: var(--text);
   font: inherit;
   cursor: pointer;
+  transition: border-color 150ms ease;
 }
-.chip .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent2);
-}
+.chip:hover { border-color: var(--accent); }
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); }
+
 .tag {
   font-size: 11px;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: .06em;
+  font-weight: 500;
 }
 
-/* ── Shared layout/utility tokens (the hub + chat + settings use these) ── */
+/* ── Shared layout/utility tokens ── */
 .section-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: var(--space-3);
 }
-.section-head h2 {
-  margin: 0;
-  font-size: var(--text-base);
-}
+.section-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
 .link {
   font-size: var(--text-sm);
   color: var(--muted);
@@ -129,26 +165,21 @@ a:hover {
   padding: 0;
   font: inherit;
 }
-.link:hover {
-  color: var(--accent);
-  text-decoration: underline;
-}
-.muted {
-  color: var(--muted);
-}
+.link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.muted { color: var(--muted); }
 
-/* A compact switch (used for the background-agent enable/disable toggle). */
+/* A compact switch (background-agent enable/disable toggle). */
 .switch {
   position: relative;
-  width: 34px;
+  width: 36px;
   height: 20px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--panel);
   cursor: pointer;
   padding: 0;
   flex: 0 0 auto;
-  transition: background .15s ease;
+  transition: background 150ms ease, border-color 150ms ease;
 }
 .switch::after {
   content: "";
@@ -159,108 +190,96 @@ a:hover {
   height: 14px;
   border-radius: 50%;
   background: var(--muted);
-  transition: transform .15s ease, background .15s ease;
+  transition: transform 150ms ease, background 150ms ease;
 }
-.switch[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.switch[aria-pressed="true"]::after {
-  transform: translateX(14px);
-  background: var(--btn-fg, #fff);
-}
-.switch:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-@media (prefers-reduced-motion: reduce) {
-  .switch, .switch::after {
-    transition: none;
-  }
-}
+.switch[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+.switch[aria-pressed="true"]::after { transform: translateX(16px); background: var(--btn-fg); }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* The "thinking" glow — a multicolor animated halo around the composer while
-   the agent is responding. Respects prefers-reduced-motion (static glow). */
-.glow {
-  position: relative;
-}
+/* The "thinking" state: a calm single-accent ring (replaces the rainbow glow). */
+.glow { position: relative; }
 .glow::before {
   content: "";
   position: absolute;
-  inset: -2px;
+  inset: -1px;
   border-radius: inherit;
-  padding: 2px;
-  background: conic-gradient(
-    from 0deg,
-    #58a6ff, #7ee787, #ff7b72, #d2a8ff, #f0b72f, #58a6ff
-  );
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0
-    0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--on-accent-muted);
+  animation: glow-pulse 1.6s ease-in-out infinite;
   z-index: -1;
-  filter: blur(1px);
-  animation: glow-rotate 3s linear infinite;
 }
-@keyframes glow-rotate {
-  to {
-    filter: blur(1px) hue-rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .glow::before {
-    animation: none;
-    filter: none;
-  }
+@keyframes glow-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
-/* ── Theme variants (data-theme on <html> or <body>) ──
-   The default is the current dark "midnight" palette; the others restyle the
-   same CSS custom properties so every surface themes consistently. */
-[data-theme="midnight"] {
-  --bg: #0d1117;
-  --panel: #161b22;
-  --border: #30363d;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #58a6ff;
-  --accent2: #7ee787;
-  --danger: #ff7b72;
-  --btn-fg: #001;
+@media (prefers-reduced-motion: reduce) {
+  .glow::before { animation: none; }
+  .switch, .switch::after { transition: none; }
+  .btn, .icon-btn, .chip { transition: none; }
 }
+
+/* ── Theme variants ──
+   The default (above) is "paper": a warm-neutral light with a petrol-teal
+   accent. Each theme restyles the same custom properties. */
 
 [data-theme="sunlit"] {
-  --bg: #ffffff;
-  --panel: #f6f8fa;
-  --border: #d0d7de;
-  --text: #1f2328;
-  --muted: #57606a;
-  --accent: #0969da;
-  --accent2: #1a7f37;
-  --danger: #cf222e;
+  --bg: #f7f6f3;
+  --panel: #ffffff;
+  --panel-2: #efede8;
+  --border: #e3e0d9;
+  --text: #1d1b18;
+  --muted: #6e6a62;
+  --accent: #0e6e63;
+  --accent-hover: #0a5c53;
+  --accent2: #b45309;
+  --danger: #b3261e;
   --btn-fg: #ffffff;
+  --on-accent-muted: #d7f0ea;
+}
+
+[data-theme="midnight"] {
+  --bg: #181614;
+  --panel: #211e1b;
+  --panel-2: #2a2622;
+  --border: #38332d;
+  --text: #ece8e2;
+  --muted: #9c9489;
+  --accent: #3ec3b0;
+  --accent-hover: #5ad4c1;
+  --accent2: #f0a04b;
+  --danger: #f27d6a;
+  --btn-fg: #0d1f1c;
+  --on-accent-muted: rgba(62, 195, 176, 0.18);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
 [data-theme="neon"] {
-  --bg: #0a0a12;
-  --panel: #12121f;
-  --border: #3d2f6e;
-  --text: #eef0ff;
-  --muted: #9aa0c3;
-  --accent: #ff3ea5;
-  --accent2: #00e0ff;
-  --danger: #ff5c5c;
-  --btn-fg: #001;
+  --bg: #0e0e14;
+  --panel: #15151f;
+  --panel-2: #1d1d2b;
+  --border: #2e2b45;
+  --text: #ece9f7;
+  --muted: #9791b5;
+  --accent: #7c5cff;
+  --accent-hover: #9377ff;
+  --accent2: #22d3ee;
+  --danger: #fb7185;
+  --btn-fg: #ffffff;
+  --on-accent-muted: rgba(124, 92, 255, 0.18);
 }
 
 [data-theme="terminal"] {
-  --bg: #0c0c0c;
-  --panel: #141414;
-  --border: #3a3a3a;
-  --text: #d4d4d4;
-  --muted: #8b949e;
-  --accent: #4ec9b0;
-  --accent2: #dcdcaa;
-  --danger: #f48771;
-  --btn-fg: #001;
+  --bg: #0b0f0d;
+  --panel: #111613;
+  --panel-2: #171e1a;
+  --border: #2a352d;
+  --text: #d5e0d8;
+  --muted: #7f8f86;
+  --accent: #4ade80;
+  --accent-hover: #6ee7a0;
+  --accent2: #a3e635;
+  --danger: #f87171;
+  --btn-fg: #052e12;
+  --on-accent-muted: rgba(74, 222, 128, 0.18);
 }

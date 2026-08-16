@@ -144,10 +144,10 @@ var PROVIDERS = [
   }
 ];
 var THEMES = [
-  { id: "midnight", label: "Midnight", swatch: "#0d1117,#58a6ff" },
-  { id: "sunlit", label: "Sunlit", swatch: "#ffffff,#0969da" },
-  { id: "neon", label: "Neon", swatch: "#0a0a12,#ff3ea5" },
-  { id: "terminal", label: "Terminal", swatch: "#0c0c0c,#4ec9b0" }
+  { id: "sunlit", label: "Paper", swatch: "#f7f6f3,#0e6e63" },
+  { id: "midnight", label: "Charcoal", swatch: "#181614,#3ec3b0" },
+  { id: "neon", label: "Violet", swatch: "#0e0e14,#7c5cff" },
+  { id: "terminal", label: "Terminal", swatch: "#0b0f0d,#4ade80" }
 ];
 var $ = (sel) => document.querySelector(sel);
 var storage = {

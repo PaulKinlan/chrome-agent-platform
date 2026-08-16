@@ -156,9 +156,9 @@ class RunTaskButton extends Component {
       :host { display: inline-flex; }
       .run { display:inline-flex; gap:8px; align-items:center; border:0;
         border-radius:8px; padding:9px 16px; font:inherit; font-weight:600;
-        cursor:pointer; background:var(--accent, #4f46e5); color:var(--accent-contrast, #fff); }
+        cursor:pointer; background:var(--accent, #0e6e63); color:var(--accent-contrast, #fff); }
       .run:disabled { opacity:.55; cursor:not-allowed; }
-      .run:focus-visible { outline:2px solid var(--accent, #4f46e5); outline-offset:2px; }
+      .run:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
       .spin { width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation: sc-spin 1s linear infinite; }
       @keyframes sc-spin { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
@@ -190,8 +190,8 @@ class MicButton extends Component {
         height:var(--control,36px); background:transparent;
         border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:8px;
         padding:0; cursor:pointer; font:inherit; }
-      .mic[data-listening] { color:var(--accent, #4f46e5); border-color:var(--accent, #4f46e5); }
-      .mic:focus-visible { outline:2px solid var(--accent, #4f46e5); outline-offset:2px; }
+      .mic[data-listening] { color:var(--accent, #0e6e63); border-color:var(--accent, #0e6e63); }
+      .mic:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
       .wave { display:none; align-items:center; gap:2px; height:16px; }
       .mic[data-listening] .icon { display:none; }
       .mic[data-listening] .wave { display:inline-flex; }
@@ -268,17 +268,17 @@ class AttachButton extends Component {
       :host { position:relative; display:inline-flex; }
       .plus { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
-        border:1px solid var(--border,#333); color:var(--text,#eee); border-radius:8px;
+        border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:8px;
         padding:0; cursor:pointer; font:inherit; }
-      .plus:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
-      .menu { position:absolute; bottom:calc(100% + 6px); left:0; background:var(--panel,#1e1e2e);
-        border:1px solid var(--border,#333); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
+      .plus:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .menu { position:absolute; bottom:calc(100% + 6px); left:0; background:var(--panel,#ffffff);
+        border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
         padding:4px; min-width:180px; z-index:20; }
       .menu[hidden] { display:none; }
       .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
-        color:var(--text,#eee); padding:8px 10px; border-radius:7px; cursor:pointer; font:inherit; }
+        color:var(--text,#1d1b18); padding:8px 10px; border-radius:7px; cursor:pointer; font:inherit; }
       .menu button:hover, .menu button:focus-visible { background:var(--bg,#12121c); outline:none; }
-      .note { font-size:11px; color:var(--muted,#888); margin:6px 0 2px; max-width:220px; }
+      .note { font-size:11px; color:var(--muted,#6e6a62); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
       <div class="menu" role="menu" aria-label="${escapeHtml(label)}"${open ? "" : " hidden"}>
@@ -368,8 +368,8 @@ class ThemePicker extends Component {
     mountTemplate(this, `
       :host { display:inline-flex; gap:10px; }
       .swatch { position:relative; width:44px; height:44px; border-radius:10px; border:2px solid transparent; cursor:pointer; }
-      .swatch[aria-pressed="true"] { border-color:var(--text,#eee); }
-      .swatch:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
+      .swatch[aria-pressed="true"] { border-color:var(--text,#1d1b18); }
+      .swatch:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .swatch .label { position:absolute; inset:auto 0 2px; font-size:9px; text-align:center; color:inherit; }
       .theme-midnight { background:#12121c; color:#cdd6f4; }
       .theme-sunlit { background:#f4f1e8; color:#2b2b2b; }
@@ -406,16 +406,16 @@ class PermissionRow extends Component {
     const disabled = this.hasAttribute("disabled");
     mountTemplate(this, `
       :host { display:block; }
-      .perm { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--border,#333); border-radius:10px; background:var(--panel,#1e1e2e); }
+      .perm { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); }
       .info { flex:1; min-width:0; }
       .name { font-weight:600; }
-      .desc { font-size:12px; color:var(--muted,#888); }
-      .state { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted,#888); }
+      .desc { font-size:12px; color:var(--muted,#6e6a62); }
+      .state { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted,#6e6a62); }
       .state.granted { color:var(--accent2,#34d399); }
       .state.warned { color:var(--warn,#f59e0b); }
-      .btn { border:1px solid var(--border,#333); background:transparent; color:var(--text,#eee); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; }
+      .btn { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; }
       .btn:disabled { opacity:.5; cursor:not-allowed; }
-      .btn:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
+      .btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
     `, `<div class="perm">
       <div class="info"><div class="name">${escapeHtml(label)}</div><div class="desc">${escapeHtml(desc)}</div></div>
       <span class="state ${granted ? "granted" : ""}${warned ? " warned" : ""}">${granted ? "Granted" : "Not granted"}${warned ? " · warns" : ""}</span>
@@ -441,13 +441,13 @@ class SiteAgentCard extends Component {
     const short = origin.replace(/^https?:\/\//, "").replace(/\/.*/, "");
     mountTemplate(this, `
       :host { display:block; }
-      .card { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#333); border-radius:10px; background:var(--panel,#1e1e2e); cursor:pointer; }
-      .card:hover, .card:focus-visible { border-color:var(--accent,#4f46e5); outline:none; }
-      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#4f46e5); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+      .card { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); cursor:pointer; }
+      .card:hover, .card:focus-visible { border-color:var(--accent,#0e6e63); outline:none; }
+      .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
       .who { flex:1; min-width:0; }
       .name { font-weight:600; }
-      .tools { font-size:12px; color:var(--muted,#888); }
-      .status { font-size:11px; color:var(--muted,#888); }
+      .tools { font-size:12px; color:var(--muted,#6e6a62); }
+      .status { font-size:11px; color:var(--muted,#6e6a62); }
     `, `<div class="card" role="button" tabindex="0" aria-label="Use site agent ${escapeHtml(short)}">
       <span class="badge" aria-hidden="true">@</span>
       <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${tools.length} tools</span></span>
@@ -500,7 +500,7 @@ class CapabilityRow extends Component {
         border:1px solid var(--border,#30363d); border-radius:var(--radius-sm,6px);
         padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
         white-space:nowrap; }
-      .run:hover, .run:focus-visible { color:var(--accent,#58a6ff); border-color:var(--accent,#58a6ff); outline:none; }
+      .run:hover, .run:focus-visible { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); outline:none; }
       .switch { justify-self:end; }
       .meta { display:flex; align-items:center; gap:6px; }
     `, `<div part="row" class="row">
@@ -532,15 +532,15 @@ class MessageBubble extends Component {
     const thinking = role === "thinking";
     mountTemplate(this, `
       :host { display:block; }
-      .bubble { border-top:1px solid var(--border,#333); padding:10px 0; }
+      .bubble { border-top:1px solid var(--border,#e3e0d9); padding:10px 0; }
       .bubble:first-child { border-top:0; }
-      .label { font-size:12px; color:var(--muted,#888); margin-bottom:4px; font-weight:600; }
+      .label { font-size:12px; color:var(--muted,#6e6a62); margin-bottom:4px; font-weight:600; }
       .body { white-space:pre-wrap; overflow-wrap:anywhere; }
       :host([role="error"]) .body { color:var(--danger,#f87171); }
       :host([role="result"]) .body { color:var(--accent2,#34d399); }
       :host([role="user"]) .body { font-weight:500; }
-      :host([role="tool"]) .body { color:var(--muted,#888); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
-      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#888); }
+      :host([role="tool"]) .body { color:var(--muted,#6e6a62); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#6e6a62); }
       .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; }
       @keyframes sc-think { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } }
@@ -568,11 +568,11 @@ class ScreenshotStrip extends Component {
     mountTemplate(this, `
       :host { display:block; }
       .strip { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
-      .shot { position:relative; flex:0 0 auto; width:96px; height:64px; border:1px solid var(--border,#333); border-radius:8px; overflow:hidden; padding:0; cursor:pointer; background:var(--bg,#12121c); }
+      .shot { position:relative; flex:0 0 auto; width:96px; height:64px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; padding:0; cursor:pointer; background:var(--bg,#12121c); }
       .shot img { width:100%; height:100%; object-fit:cover; display:block; }
-      .shot:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
+      .shot:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .lbl { position:absolute; inset:auto 0 0 0; font-size:9px; background:rgba(0,0,0,.6); color:#fff; padding:1px 3px; }
-      .empty { font-size:12px; color:var(--muted,#888); }
+      .empty { font-size:12px; color:var(--muted,#6e6a62); }
     `, shots.length ? `<div class="strip">${items}</div>` : `<span class="empty">No screenshots yet.</span>`);
   }
   _wire() {
@@ -611,16 +611,16 @@ class AgentComposer extends Component {
       <div class="composer-status" role="status" aria-live="polite"></div>`;
     mountTemplate(this, `
       :host { display:block; }
-      .composer { background:var(--panel,#1e1e2e); border:1px solid var(--border,#333); border-radius:12px; padding:16px; }
-      .composer:focus-within { border-color:var(--accent,#4f46e5); }
-      .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#eee); font:inherit; resize:vertical; min-height:60px; outline:none; }
+      .composer { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:16px; }
+      .composer:focus-within { border-color:var(--accent,#0e6e63); }
+      .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:60px; outline:none; }
       .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       .composer .spacer { flex:1; }
       .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
-        background:var(--accent,#4f46e5); color:var(--btn-fg,#fff); border:0; border-radius:8px;
+        background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
         font:inherit; font-weight:600; cursor:pointer; }
-      .composer .send:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
-      .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#888); }
+      .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#6e6a62); }
       .composer-status:empty { display:none; }
     `, html);
     this._input = this._root.querySelector("#task-input");
@@ -678,13 +678,13 @@ class AgentDialog extends Component {
     const title = this.getAttribute("title") || "";
     mountTemplate(this, `
       :host { display:contents; }
-      .dialog { background:var(--panel,#1e1e2e); border:1px solid var(--border,#333); border-radius:14px; padding:20px; min-width:320px; max-width:90vw; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.4); color:var(--text,#eee); }
+      .dialog { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:14px; padding:20px; min-width:320px; max-width:90vw; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.4); color:var(--text,#1d1b18); }
       .dialog::backdrop { background:rgba(0,0,0,.5); }
       .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
       .title { font-weight:700; font-size:16px; }
-      .x { background:transparent; border:0; color:var(--text,#eee); cursor:pointer; padding:4px; }
-      .x:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
-      .body { color:var(--text,#eee); }
+      .x { background:transparent; border:0; color:var(--text,#1d1b18); cursor:pointer; padding:4px; }
+      .x:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .body { color:var(--text,#1d1b18); }
     `, `<dialog part="dialog" class="dialog" aria-label="${escapeHtml(title)}">
         <div class="head"><span class="title">${escapeHtml(title)}</span>
           <button type="button" class="x" aria-label="Close">${ICONS.close}</button></div>
@@ -734,13 +734,13 @@ class AgentPicker extends Component {
     mountTemplate(this, `
       :host { display:block; }
       .list { display:flex; flex-direction:column; gap:8px; }
-      .agent { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#333); border-radius:10px; background:var(--panel,#1e1e2e); cursor:pointer; font:inherit; color:var(--text,#eee); text-align:left; }
-      .agent[aria-pressed="true"] { border-color:var(--accent,#4f46e5); }
-      .agent:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
-      .badge { width:28px; height:28px; border-radius:7px; background:var(--accent,#4f46e5); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
+      .agent { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); cursor:pointer; font:inherit; color:var(--text,#1d1b18); text-align:left; }
+      .agent[aria-pressed="true"] { border-color:var(--accent,#0e6e63); }
+      .agent:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .badge { width:28px; height:28px; border-radius:7px; background:var(--accent,#0e6e63); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
       .name { font-weight:600; }
-      .tools { display:block; font-size:12px; color:var(--muted,#888); }
-      .empty { color:var(--muted,#888); font-size:13px; }
+      .tools { display:block; font-size:12px; color:var(--muted,#6e6a62); }
+      .empty { color:var(--muted,#6e6a62); font-size:13px; }
     `, agents.length ? `<div class="list">${items}</div>` : `<span class="empty">No agents.</span>`);
   }
   _wire() {
@@ -762,11 +762,11 @@ class AgentConfigForm extends Component {
     mountTemplate(this, `
       :host { display:block; }
       .form { display:flex; flex-direction:column; gap:12px; }
-      label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted,#888); }
-      input, textarea { background:var(--bg,#12121c); border:1px solid var(--border,#333); color:var(--text,#eee); border-radius:7px; padding:8px 10px; font:inherit; }
-      input:focus-visible, textarea:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:1px; }
-      .save { align-self:flex-start; border:0; border-radius:8px; padding:8px 16px; background:var(--accent,#4f46e5); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
-      .save:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
+      label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted,#6e6a62); }
+      input, textarea { background:var(--bg,#12121c); border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:7px; padding:8px 10px; font:inherit; }
+      input:focus-visible, textarea:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      .save { align-self:flex-start; border:0; border-radius:8px; padding:8px 16px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
+      .save:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
     `, `<div class="form">
       <label>Name<input id="f-name" value="${escapeHtml(name)}"></label>
       <label>Instructions<textarea id="f-instr" rows="4">${escapeHtml(instructions)}</textarea></label>
@@ -804,10 +804,10 @@ class AgentNav extends Component {
         aria-selected="${v.id === active}">${escapeHtml(v.label)}</button>`
     ).join("");
     mountTemplate(this, `
-      :host { display:inline-flex; gap:4px; border:1px solid var(--border,#333); border-radius:10px; padding:4px; background:var(--panel,#1e1e2e); }
-      .tab { border:0; background:transparent; color:var(--text,#eee); border-radius:7px; padding:7px 14px; cursor:pointer; font:inherit; }
-      .tab[aria-selected="true"] { background:var(--accent,#4f46e5); color:var(--accent-contrast,#fff); }
-      .tab:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:1px; }
+      :host { display:inline-flex; gap:4px; border:1px solid var(--border,#e3e0d9); border-radius:10px; padding:4px; background:var(--panel,#ffffff); }
+      .tab { border:0; background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:7px 14px; cursor:pointer; font:inherit; }
+      .tab[aria-selected="true"] { background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); }
+      .tab:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
     `, tabs);
   }
   _wire() {
