@@ -51,6 +51,49 @@ export function prefersReducedMotion() {
   }
 }
 
+/** Does this browser support CSS anchor positioning (position-area)? */
+function supportsAnchorPositioning() {
+  try {
+    return typeof CSS !== "undefined" &&
+      typeof CSS.supports === "function" &&
+      CSS.supports("position-area", "top span-left");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Position a floating element (a menu / popup) next to an anchor so it never
+ * leaves the viewport. Prefers BELOW the anchor, flips ABOVE when there is no
+ * room, and clamps horizontally. This is the JS fallback that runs only when
+ * native CSS anchor positioning (position-area + position-try-fallbacks) is
+ * unavailable; in supporting browsers the CSS wins and this is a no-op.
+ */
+function placeFloating(anchor, floatEl, { fullWidth = false, minWidth = 0 } = {}) {
+  if (!anchor || !floatEl) return;
+  const a = anchor.getBoundingClientRect();
+  if (!a.width && !a.height) return;
+  const margin = 8;
+  const w = fullWidth
+    ? Math.min(a.width, window.innerWidth - 2 * margin)
+    : Math.max(floatEl.offsetWidth || 0, minWidth);
+  const h = floatEl.offsetHeight || 160;
+  const below = a.bottom + 4;
+  const above = a.top - h - 4;
+  const fitsBelow = below + h <= window.innerHeight - margin;
+  const fitsAbove = above >= margin;
+  let top = fitsBelow || !fitsAbove ? below : above;
+  top = Math.max(margin, Math.min(top, window.innerHeight - h - margin));
+  let left = fullWidth ? a.left : Math.min(a.left, window.innerWidth - w - margin);
+  left = Math.max(margin, left);
+  floatEl.style.position = "fixed";
+  floatEl.style.top = `${top}px`;
+  floatEl.style.left = `${left}px`;
+  floatEl.style.right = "auto";
+  floatEl.style.bottom = "auto";
+  if (fullWidth) floatEl.style.width = `${w}px`;
+}
+
 /** Inject a <style> once (idempotent, id-keyed) — used by light-DOM components. */
 function ensureStyle(styleId, css) {
   if (document.getElementById(styleId)) return;
@@ -146,6 +189,20 @@ export function renderMarkdown(text) {
   }
   if (last < src.length) out.push(renderBlockText(src.slice(last)));
   return out.join("");
+}
+
+/** Does the text look like a standalone HTML document (renderable in an iframe)? */
+export function isHtmlDocument(text) {
+  const s = String(text ?? "").trim();
+  if (!s) return false;
+  if (/^<!doctype\s+html/i.test(s)) return true;
+  if (/^<html(\s|>)/i.test(s)) return true;
+  // A bare fragment of block-level HTML (not inline markdown like a single
+  // <b> word). Require a closing tag of a structural element.
+  if (s[0] === "<" && /<(div|section|article|main|header|footer|table|ul|ol|form|h1|h2|h3|p)\b/i.test(s) && /<\/(div|section|article|main|header|footer|table|ul|ol|form|h1|h2|h3|p)>/i.test(s)) {
+    return true;
+  }
+  return false;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1451,7 +1508,7 @@ class AgentDialog extends Component {
     this._dialog.showModal();
     this._emit("open");
   }
-  open() { this.show(); }
+  // (the open() method was removed — it duplicated the get open() getter; use show())
   close() { this._dialog?.close(); }
 }
 customElements.define("agent-dialog", AgentDialog);

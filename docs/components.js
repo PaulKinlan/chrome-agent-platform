@@ -1451,7 +1451,7 @@ class AgentDialog extends Component {
     this._dialog.showModal();
     this._emit("open");
   }
-  open() { this.show(); }
+  // (the open() method was removed — it duplicated the get open() getter; use show())
   close() { this._dialog?.close(); }
 }
 customElements.define("agent-dialog", AgentDialog);
