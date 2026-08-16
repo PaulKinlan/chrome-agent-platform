@@ -343,6 +343,7 @@ input:focus, select:focus, textarea:focus {
 }
 .perm-state.granted { color: var(--accent2, #1a7f37); }
 .perm-state.missing { color: var(--danger, #cf222e); }
+.perm-state.denied { color: var(--danger, #cf222e); font-weight: 700; }
 .perm-row .muted {
   grid-area: hint;
   font-size: 0.8rem;
@@ -350,3 +351,27 @@ input:focus, select:focus, textarea:focus {
 .perm-row .btn {
   grid-area: btn;
 }
+.hook-id {
+  font-size: 0.72rem;
+  color: var(--muted, #666);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.hook-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  grid-template-areas:
+    "name id state btn"
+    "hint hint hint hint";
+  gap: 0.15rem 0.75rem;
+  align-items: center;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.hook-row .perm-name { grid-area: name; font-weight: 600; }
+.hook-row .hook-id { grid-area: id; }
+.hook-row .perm-state { grid-area: state; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.hook-row .muted { grid-area: hint; font-size: 0.8rem; }
+.hook-row .btn { grid-area: btn; }
+.btn.danger { background: var(--danger, #cf222e); color: #fff; border-color: var(--danger, #cf222e); }

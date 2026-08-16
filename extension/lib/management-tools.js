@@ -32,6 +32,9 @@ export const MANAGEMENT_TOOL_NAMES = [
   "revoke_capability",
   "get_usage",
   "get_memory_overview",
+  "list_hooks",
+  "subscribe_hook",
+  "unsubscribe_hook",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -160,6 +163,33 @@ export function managementToolset({ callRoute }) {
       description: "Per-origin memory overview (keys + approximate sizes).",
       inputSchema: z.object({}),
       execute: () => call("memory.overview", {}),
+    }),
+
+    // ---- system hooks (subscribe agents/recipes to chrome.* events) ----
+    list_hooks: tool({
+      description:
+        "List every system hook (chrome.* event) an agent can listen to, with its required permission, denied state, and current subscribers. Denied hooks can never be used (the owner's deny-list is authoritative).",
+      inputSchema: z.object({}),
+      execute: () => call("hooks.status", {}),
+    }),
+    subscribe_hook: tool({
+      description:
+        "Subscribe a background recipe (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its optional permission is absent. recipeId may be omitted to subscribe the master agent.",
+      inputSchema: z.object({
+        hookId: z.string().describe("the hook id, e.g. tabs.onCreated"),
+        recipeId: z.string().optional().describe("a background recipe id, or omit for the master agent"),
+        promptTemplate: z.string().optional().describe("a prompt template; {{payload}} is replaced with the event payload"),
+      }),
+      execute: ({ hookId, recipeId, promptTemplate }) =>
+        call("hooks.subscribe", { hookId, recipeId, promptTemplate }),
+    }),
+    unsubscribe_hook: tool({
+      description: "Unsubscribe an agent/recipe from a system event.",
+      inputSchema: z.object({
+        hookId: z.string(),
+        recipeId: z.string().optional(),
+      }),
+      execute: ({ hookId, recipeId }) => call("hooks.unsubscribe", { hookId, recipeId }),
     }),
   };
 }

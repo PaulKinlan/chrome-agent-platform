@@ -462,12 +462,13 @@ class SiteAgentCard extends Component {
 }
 customElements.define("site-agent-card", SiteAgentCard);
 
-/* <message-bubble role="user|agent|task|result|error" label>content</message-bubble> */
+/* <message-bubble role="user|agent|task|result|error|thinking|tool" label>content</message-bubble> */
 class MessageBubble extends Component {
   static get observedAttributes() { return ["role", "label"]; }
   _render() {
     const role = this.getAttribute("role") || "agent";
     const label = this.getAttribute("label") || "";
+    const thinking = role === "thinking";
     mountTemplate(this, `
       :host { display:block; }
       .bubble { border-top:1px solid var(--border,#333); padding:10px 0; }
@@ -477,7 +478,16 @@ class MessageBubble extends Component {
       :host([role="error"]) .body { color:var(--danger,#f87171); }
       :host([role="result"]) .body { color:var(--accent2,#34d399); }
       :host([role="user"]) .body { font-weight:500; }
-    `, `${label ? `<div class="label">${escapeHtml(label)}</div>` : ""}<div class="body"><slot></slot></div>`);
+      :host([role="tool"]) .body { color:var(--muted,#888); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#888); }
+      .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; }
+      @keyframes sc-think { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } }
+    `, `${label ? `<div class="label">${escapeHtml(label)}</div>` : ""}${
+      thinking
+        ? `<div class="think" role="status"><span class="spin" aria-hidden="true"></span><div class="body"><slot></slot></div></div>`
+        : `<div class="body"><slot></slot></div>`
+    }`);
   }
 }
 customElements.define("message-bubble", MessageBubble);

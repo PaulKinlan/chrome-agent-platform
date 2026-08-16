@@ -26,6 +26,9 @@
         <a href="#permissions" class="nav-item" data-section="permissions">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Permissions</a>
+        <a href="#hooks" class="nav-item" data-section="hooks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        Hooks</a>
         <a href="#usage" class="nav-item" data-section="usage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Usage</a>
@@ -110,6 +113,13 @@
         <p
           class="muted">Every permission is optional. The hub runs with none of these; enable each capability when you need it. Each Enable button asks Chrome for just that permission.</p>
         <div id="permission-list" class="permission-list"></div>
+      </section>
+
+      <section id="hooks" class="panel">
+        <h2>System hooks</h2>
+        <p
+          class="muted">Every chrome.* event an agent can listen to + respond to. <strong>Deny</strong> a hook to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook also needs its optional permission before it can run.</p>
+        <div id="hook-list" class="hook-list"></div>
       </section>
 
       <section id="usage" class="panel">

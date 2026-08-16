@@ -69,7 +69,16 @@ import {
   setDenyAllBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES } from "../lib/recipes.js";
+import { getRecipe, RECIPES, backgroundRecipes } from "../lib/recipes.js";
+import {
+  checkHookAllowed,
+  getHook,
+  getHookSubscriptions,
+  hookStatus,
+  setHookDeny,
+  subscribeHook,
+  unsubscribeHook,
+} from "../lib/hooks.js";
 import {
   INFLIGHT_HEARTBEAT_MS,
   cancelScheduledTask,
@@ -113,6 +122,26 @@ function withRunLock(fn) {
   runMutex = run.then(() => {}, () => {});
   return run;
 }
+
+// ---- live progress streaming (the unified conversational surface) ----
+// UI pages connect a long-lived runtime port named "agent-progress"; the SW
+// broadcasts normalized progress events (thinking / tool-call / tool-result /
+// text / done) to every connected port during a run. The port keeps the SW
+// alive while a page is listening, and the events are fire-and-forget (a
+// closed port never throws into the run).
+const progressPorts = new Set();
+function broadcastProgress(event) {
+  for (const port of progressPorts) {
+    try {
+      port.postMessage({ type: "progress", event });
+    } catch { /* port closing — ignore */ }
+  }
+}
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "agent-progress") return;
+  progressPorts.add(port);
+  port.onDisconnect.addListener(() => progressPorts.delete(port));
+});
 
 // ---- alarm scheduler (persists the full task payload) ----
 const TASK_KEY = "cap:scheduledTasks";
@@ -319,10 +348,18 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator() {
+async function ensureOrchestrator(onProgress = null) {
   while (true) {
     const gen = generation;
-    if (orchestrator && orchestratorGen === gen) return orchestrator;
+    if (orchestrator && orchestratorGen === gen) {
+      // The cached orchestrator was built for an earlier onProgress (or none).
+      // Re-bind the live callback so the CURRENT run's progress flows to the
+      // CURRENT caller — the callback is per-run, not baked into the cached
+      // agent (which is reused across runs). Rebuilding is avoided; the shared
+      // master's hooks consult this binding.
+      orchestrator.setProgress?.(onProgress);
+      return orchestrator;
+    }
     const model = await ensureModel();
     const mem = masterMemory();
     // Workers = enrolled site origins, each with its own memory + skills.
@@ -372,6 +409,7 @@ async function ensureOrchestrator() {
         }
         return { ok: true, gen: snap.gen };
       },
+      onProgress,
     });
     // Commit only if the generation is still current (an invalidation during
     // the awaits above means this orchestrator used stale config).
@@ -574,11 +612,11 @@ function attachmentContext(attachments) {
   return "Attachments:\n" + parts.join("\n");
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [] }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
-    const orch = await ensureOrchestrator();
+    const orch = await ensureOrchestrator(onProgress);
     const taskId = id ?? String(Date.now());
     const mem = masterMemory();
     // Thread the fence's abort signal into the RUNNING agent AND every
@@ -622,7 +660,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       await fence?.assertOwned?.();
       const context = attachmentContext(attachments);
       // agent-do's run(task, context, history) -> result text; context is a STRING.
-      const result = await orch.run(task, context, []);
+      // `history` carries the prior conversation turns (the unified surface: a
+      // follow-up / nudge is a new turn in the SAME persistent thread, so the
+      // agent sees what came before).
+      const result = await orch.run(task, context, Array.isArray(history) ? history : []);
       await fence?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
       await fence?.assertOwned?.();
@@ -957,6 +998,13 @@ const handlers = {
       id: m.id,
       task: m.task,
       attachments: bounded,
+      // The live progress stream: every run (interactive or a follow-up nudge)
+      // broadcasts its thinking/tool/text/done events to the connected UI ports.
+      onProgress: broadcastProgress,
+      // The prior conversation turns (the unified conversational surface): a
+      // follow-up message is a new turn in the same thread, so the agent sees
+      // the task/result history that came before.
+      history: m.history,
     });
     if (dropped.length > 0) result.droppedAttachments = dropped;
     return result;
@@ -1178,6 +1226,84 @@ const handlers = {
       id: `recipe:${recipe.id}:${Date.now()}`,
       task: recipe.prompt,
     });
+  },
+  async "background-agent.list"() {
+    // The background-agent manager: each background recipe + its enabled state
+    // (derived from the scheduled-task store, so it reflects reality, not a
+    // stale in-memory flag).
+    const tasks = await listScheduledTasks();
+    const enabled = new Set(
+      (tasks ?? [])
+        .map((t) => t.name)
+        .filter((n) => n.startsWith("recipe:")),
+    );
+    return {
+      agents: backgroundRecipes().map((r) => ({
+        ...r,
+        enabled: enabled.has(`recipe:${r.id}`),
+      })),
+    };
+  },
+  async "background-agent.set"(m) {
+    // Enable/disable a background agent. Enable schedules the recipe's prompt
+    // as a recurring task (deterministic name `recipe:<id>`) with the recipe's
+    // periodInMinutes. Disable authoritatively cancels it. This routes through
+    // the SAME atomic scheduleTask/cancelScheduledTask paths as schedule_task /
+    // task.cancel (fenced, crash-safe, quarantined-on-unknown-state).
+    const recipe = getRecipe(m?.id);
+    if (!recipe || recipe.mode !== "background") {
+      return { ok: false, error: `no background recipe ${m?.id}` };
+    }
+    const name = `recipe:${recipe.id}`;
+    const enabled = m?.enabled !== false;
+    if (!enabled) {
+      const r = await cancelScheduledTask(name);
+      // Unsubscribe the recipe's event triggers (the hooks registry) on disable.
+      for (const hookId of recipe.hooks ?? []) {
+        await unsubscribeHook({ hookId, recipeId: recipe.id }).catch(() => {});
+      }
+      return { ok: true, enabled: false, id: recipe.id, ...r };
+    }
+    const periodInMinutes = recipe.schedule?.periodInMinutes;
+    if (!periodInMinutes) {
+      return { ok: false, error: `recipe ${recipe.id} has no schedule` };
+    }
+    // Subscribe the recipe's event triggers (fail-closed: a denied hook, or a
+    // hook whose optional permission is absent, is refused — the recipe still
+    // runs on its schedule, just not on the event).
+    for (const hookId of recipe.hooks ?? []) {
+      await subscribeHook({ hookId, recipeId: recipe.id }).catch(() => {});
+    }
+    // Re-enabling replaces any prior schedule for this recipe (same name →
+    // alarms.create replaces the old alarm; the payload is overwritten).
+    // First fire is one full period out (the natural reading of "every N
+    // minutes"); the alarm then recurs every periodInMinutes.
+    const { when } = await scheduleTask({
+      task: recipe.prompt,
+      delayMs: periodInMinutes * 60 * 1000,
+      periodInMinutes,
+      name,
+    });
+    return { ok: true, enabled: true, id: recipe.id, name, nextRunAt: when };
+  },
+
+  // ---- system hooks (routes) ----
+  async "hooks.status"() {
+    // The Settings Hooks panel: every hook + denied state + subscribers.
+    return { hooks: await hookStatus() };
+  },
+  // OWNER-ONLY: the deny-list is authoritative and can only be changed from the
+  // Settings UI. It is deliberately NOT exposed to the agent toolset (no
+  // `deny_hook` tool) — the agent can never un-deny a hook it was refused.
+  async "hooks.deny"({ hookId, denied }) {
+    if (!getHook(hookId)) return { ok: false, error: `unknown hook ${hookId}` };
+    return await setHookDeny(hookId, denied !== false);
+  },
+  async "hooks.subscribe"({ hookId, recipeId, promptTemplate }) {
+    return await subscribeHook({ hookId, recipeId, promptTemplate });
+  },
+  async "hooks.unsubscribe"({ hookId, recipeId }) {
+    return await unsubscribeHook({ hookId, recipeId });
   },
 
   async "browser-control.get"() {
@@ -1644,6 +1770,87 @@ chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
 chrome.runtime.onInstalled?.addListener(() => {
   recordBrowserEvent("extension-installed", {}).catch(() => {});
 });
+
+// ---- system hooks (agents respond to chrome.* events) ----
+// `dispatchHook` is the single invocation path: when a subscribed event fires,
+// resolve the subscription, RE-CHECK the deny-list/permission (fail-closed at
+// dispatch time — a deny after subscription still refuses), build the prompt
+// (template `{{payload}}` → serialized event, else the recipe prompt + payload
+// appended), and run the agent through the SAME fenced runTask path as every
+// other run. The subscription is DATA (never eval).
+async function dispatchHook(hookId, payload) {
+  if (runAborted()) return;
+  const subs = await getHookSubscriptions();
+  const matching = subs.filter((s) => s.hookId === hookId && s.enabled !== false);
+  for (const sub of matching) {
+    // Fail-closed re-check at dispatch time (the deny-list is authoritative).
+    const allowed = await checkHookAllowed(hookId);
+    if (!allowed.ok) {
+      console.warn(`hook ${hookId} refused at dispatch: ${allowed.error}`);
+      continue;
+    }
+    const recipe = sub.recipeId ? getRecipe(sub.recipeId) : null;
+    let task;
+    if (sub.promptTemplate) {
+      task = sub.promptTemplate.replaceAll("{{payload}}", JSON.stringify(payload));
+    } else if (recipe) {
+      task = `${recipe.prompt}\n\nEvent ${hookId} fired with payload: ${JSON.stringify(payload)}`;
+    } else {
+      task = `System event ${hookId} fired. Respond appropriately. Payload: ${JSON.stringify(payload)}`;
+    }
+    runTask({
+      id: `hook:${hookId}:${sub.recipeId ?? "master"}:${Date.now()}`,
+      task,
+    }).catch((e) => console.error(`hook ${hookId} run failed:`, e?.message ?? e));
+  }
+}
+
+// Wire each catalogued event to dispatchHook. Every listener is guarded with
+// optional-chaining so a boot with ZERO permissions attaches nothing and throws
+// nothing; when the owner grants the capability later, the next boot attaches
+// the listener (the SW re-evaluates this module on each wake).
+function wireHookListeners() {
+  const bind = (api, event, hookId, map) => {
+    const ns = chrome?.[api];
+    if (!ns?.[event]) return;
+    ns[event].addListener((...args) => {
+      dispatchHook(hookId, map ? map(args) : args[0] ?? {}).catch(() => {});
+    });
+  };
+  bind("tabs", "onCreated", "tabs.onCreated", ([tab]) => tab ?? {});
+  bind("tabs", "onUpdated", "tabs.onUpdated", ([tabId, changeInfo, tab]) => ({ tabId, changeInfo, tab }));
+  bind("tabs", "onRemoved", "tabs.onRemoved", ([tabId, removeInfo]) => ({ tabId, removeInfo }));
+  bind("tabs", "onActivated", "tabs.onActivated", ([activeInfo]) => activeInfo ?? {});
+  bind("tabs", "onAttached", "tabs.onAttached", ([tabId, attachInfo]) => ({ tabId, attachInfo }));
+  bind("tabs", "onZoomChange", "tabs.onZoomChange", ([info]) => info ?? {});
+  bind("windows", "onCreated", "windows.onCreated", ([win]) => win ?? {});
+  bind("windows", "onRemoved", "windows.onRemoved", ([windowId]) => ({ windowId }));
+  bind("windows", "onFocusChanged", "windows.onFocusChanged", ([windowId]) => ({ windowId }));
+  bind("bookmarks", "onCreated", "bookmarks.onCreated", ([id, bookmark]) => ({ id, bookmark }));
+  bind("bookmarks", "onRemoved", "bookmarks.onRemoved", ([id, removeInfo]) => ({ id, removeInfo }));
+  bind("bookmarks", "onChanged", "bookmarks.onChanged", ([id, changeInfo]) => ({ id, changeInfo }));
+  bind("bookmarks", "onMoved", "bookmarks.onMoved", ([id, moveInfo]) => ({ id, moveInfo }));
+  bind("bookmarks", "onChildrenReordered", "bookmarks.onChildrenReordered", ([id, reorderInfo]) => ({ id, reorderInfo }));
+  bind("history", "onVisited", "history.onVisited", ([item]) => item ?? {});
+  bind("history", "onVisitRemoved", "history.onVisitRemoved", ([removed]) => removed ?? {});
+  bind("downloads", "onCreated", "downloads.onCreated", ([item]) => item ?? {});
+  bind("downloads", "onChanged", "downloads.onChanged", ([delta]) => delta ?? {});
+  bind("downloads", "onErased", "downloads.onErased", ([downloadId]) => ({ downloadId }));
+  bind("webNavigation", "onCompleted", "webNavigation.onCompleted", ([details]) => details ?? {});
+  bind("webNavigation", "onBeforeNavigate", "webNavigation.onBeforeNavigate", ([details]) => details ?? {});
+  bind("webNavigation", "onCommitted", "webNavigation.onCommitted", ([details]) => details ?? {});
+  bind("contextMenus", "onClicked", "contextMenus.onClicked", ([info, tab]) => ({ info, tab }));
+  bind("commands", "onCommand", "commands.onCommand", ([command]) => ({ command }));
+  bind("idle", "onStateChanged", "idle.onStateChanged", ([newState]) => ({ newState }));
+  bind("alarms", "onAlarm", "alarms.onAlarm", ([alarm]) => alarm ?? {});
+  bind("storage", "onChanged", "storage.onChanged", ([changes, areaName]) => ({ changes, areaName }));
+  bind("notifications", "onClicked", "notifications.onClicked", ([notificationId]) => ({ notificationId }));
+  bind("action", "onClicked", "action.onClicked", ([tab]) => tab ?? {});
+  bind("runtime", "onStartup", "runtime.onStartup", () => ({}));
+  bind("runtime", "onInstalled", "runtime.onInstalled", ([details]) => details ?? {});
+  bind("runtime", "onSuspend", "runtime.onSuspend", () => ({}));
+}
+wireHookListeners();
 
 // On install, seed the master memory + notify.
 chrome.runtime.onInstalled.addListener(async () => {

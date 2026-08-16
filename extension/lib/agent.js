@@ -218,6 +218,21 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
  * Wrap agent-do's createAgent with our conventions.
  * `model` is the resolved { model: LanguageModel, modelId, providerName } from provider.js.
  */
+// A safe, bounded summary of a tool result for the LIVE progress stream. Full
+// tool results can be huge (file contents, page HTML); the progress events must
+// never leak large bodies into logs/ports. Truncate strings, stringify + cap
+// objects, and never surface secrets.
+function summarizeToolResult(result) {
+  try {
+    if (result == null) return "";
+    if (typeof result === "string") return result.slice(0, 300);
+    const s = JSON.stringify(result);
+    return s.length > 300 ? s.slice(0, 300) + "…" : s;
+  } catch {
+    return "(unserializable result)";
+  }
+}
+
 export function createAgent({
   model,
   id = "hub",
@@ -229,6 +244,11 @@ export function createAgent({
   taskId = "adhoc",
   maxIterations = 12,
   enrollmentGuard = null,
+  // `onProgress` receives normalized progress events (thinking / tool-call /
+  // tool-result / text / done) from the agent-do loop, so the UI can show LIVE
+  // progress as the agent works. Optional (the SW threads its broadcast through
+  // it); null means no progress stream (the legacy request/response path).
+  onProgress = null,
   // `disposable` marks a per-origin WORKER agent: abort() (agent.delete →
   // abortWorker) permanently disables it so a stale in-flight delegation can
   // never start a new run (the round-22 check→start blocker). The hub/master is
@@ -254,6 +274,12 @@ export function createAgent({
   // run behind the prior guarantees at most one run is active at a time, so the
   // shared slot + controller are always the CURRENT run's.
   let runQueue = Promise.resolve();
+  // The progress callback is MUTABLE: the orchestrator (and its cached agents)
+  // are REUSED across runs, but the callback is per-run (each run's caller is
+  // the page that started it). The hooks below read this binding at emit time,
+  // so a later run's setProgress() rebinds the LIVE stream without rebuilding
+  // the cached agent.
+  let progressCb = onProgress;
 
   const getRunGen = () => activeRun?.gen ?? null;
 
@@ -268,6 +294,25 @@ export function createAgent({
     tools: allTools,
     maxIterations,
     hooks: {
+      // LIVE progress hooks — forward the agent-do step/tool lifecycle to the
+      // UI as normalized events. onProgress may be async (the SW broadcast is a
+      // fire-and-forget postMessage), but the hooks are awaited by agent-do, so
+      // they must never throw (a progress-emit failure must not kill the run).
+      onStepStart: async (e) => {
+        try { progressCb?.({ type: "thinking", step: e.step, totalSteps: e.totalSteps, tokensSoFar: e.tokensSoFar, costSoFar: e.costSoFar }); } catch { /* ignore */ }
+      },
+      onStepComplete: async (e) => {
+        try { progressCb?.({ type: "text", text: e.text, step: e.step, hasToolCalls: e.hasToolCalls }); } catch { /* ignore */ }
+      },
+      onPreToolUse: async (e) => {
+        try { progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step }); } catch { /* ignore */ }
+      },
+      onPostToolUse: async (e) => {
+        try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result) }); } catch { /* ignore */ }
+      },
+      onComplete: async (e) => {
+        try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }
+      },
       onUsage: async (record) => {
         // Worker usage is ENROLLMENT-scoped: a stale run must not append a usage
         // row under a re-enrolled origin. The IMMUTABLE run-start generation is
@@ -377,6 +422,9 @@ export function createAgent({
         agent.abort();
       } catch { /* no active run */ }
     },
+    // Rebind the live progress callback without rebuilding the cached agent.
+    // The SW calls this per-run (the orchestrator is reused across runs).
+    setProgress: (cb) => { progressCb = cb; },
   };
 }
 
@@ -396,6 +444,8 @@ export function createOrchestrator({
   extraTools = {}, // browser-control + management tools (chrome.* — SW context)
   delegateGuard = null, // async (origin) => { ok, error } — revalidates live
                         // enrollment/generation before a delegated worker runs
+  onProgress = null, // async (event) => void — the live progress stream, threaded
+                     // into BOTH the master agent and every delegated worker.
 }) {
   const workerAgents = new Map();
   for (const w of workers) {
@@ -421,6 +471,7 @@ export function createOrchestrator({
       // the agent so a stale in-flight delegation cannot start a new run in the
       // check→start gap.
       disposable: true,
+      onProgress,
     });
     workerAgents.set(w.origin, a);
   }
@@ -496,6 +547,7 @@ export function createOrchestrator({
     memory: masterMemory,
     tools: { ...delegate, ...extraTools },
     taskId,
+    onProgress,
   });
 
   return {
@@ -509,6 +561,12 @@ export function createOrchestrator({
     },
     abort() {
       master.abort();
+    },
+    // Rebind the live progress callback on the master + every worker. The SW
+    // calls this per-run; the cached orchestrator's agents are reused.
+    setProgress(cb) {
+      master.setProgress?.(cb);
+      for (const a of workerAgents.values()) a.setProgress?.(cb);
     },
     addWorker(config) {
       const a = createAgent({
@@ -524,6 +582,7 @@ export function createOrchestrator({
           ? async () => delegateGuard(config.origin)
           : null,
         disposable: true,
+        onProgress,
       });
       workerAgents.set(config.origin, a);
       return a;

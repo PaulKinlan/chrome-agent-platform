@@ -442,6 +442,43 @@ async function renderPermissions() {
     list.appendChild(row);
   }
 }
+async function renderHooks() {
+  const res = await chrome.runtime.sendMessage({ type: "hooks.status" }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  const hooks = res?.hooks ?? [];
+  const list = $("#hook-list");
+  list.replaceChildren();
+  for (const h of hooks) {
+    const row = document.createElement("div");
+    row.className = "hook-row";
+    const name = document.createElement("span");
+    name.className = "perm-name";
+    name.textContent = h.label;
+    const id = document.createElement("code");
+    id.className = "hook-id";
+    id.textContent = h.id;
+    const state = document.createElement("span");
+    const denied = Boolean(h.denied);
+    state.className = "perm-state" + (denied ? " denied" : " missing");
+    state.textContent = denied ? "Denied" : "Allowed";
+    const sub = document.createElement("span");
+    sub.className = "muted";
+    sub.textContent = h.subscribers?.length ? `subscribed: ${h.subscribers.join(", ")}` : h.permission ? `needs "${h.permission}"` : "no extra permission";
+    row.append(name, id, state, sub);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn small " + (denied ? "ghost" : "danger");
+    btn.dataset.hook = h.id;
+    btn.textContent = denied ? "Allow" : "Deny";
+    btn.setAttribute("aria-label", `${denied ? "Allow" : "Deny"} ${h.label}`);
+    btn.addEventListener("click", async () => {
+      const r = await chrome.runtime.sendMessage({ type: "hooks.deny", hookId: h.id, denied: !denied }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      saveFlash(r?.ok ? `${h.label} ${r.denied ? "denied" : "allowed"}.` : `Could not update ${h.label}: ${r?.error ?? "failed"}.`);
+      renderHooks();
+    });
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+}
 async function renderUsage() {
   const u = await chrome.runtime.sendMessage({ type: "usage.get" });
   const sum = $("#usage-summary");
@@ -585,5 +622,6 @@ await renderEnroll();
 await renderAppearance();
 await renderBrowser();
 await renderPermissions();
+await renderHooks();
 await renderUsage();
 await renderData();

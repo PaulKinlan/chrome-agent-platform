@@ -85,7 +85,7 @@ export const SCHEDULED_TASK_KEY = TASK_KEY;
 
 /** Validate timing FIRST, then persist, then create the alarm (atomic order). */
 export async function scheduleTask(
-  { task, at, delayMs, periodInMinutes, attachments = [] },
+  { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName },
 ) {
   return withLock(async () => {
     // Resolve `when` before any persistence so a bad time can't orphan a stored task.
@@ -101,7 +101,8 @@ export async function scheduleTask(
         "task needs a future `at` (absolute ms) or a positive `delayMs`",
       );
     }
-    const name = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const name = explicitName ??
+      `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     // The abort must be re-checked at EVERY commit boundary, not just once at
     // the tool's start: an abort arriving DURING an await must prevent the

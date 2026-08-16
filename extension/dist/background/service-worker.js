@@ -67118,6 +67118,16 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
     })
   };
 }
+function summarizeToolResult(result) {
+  try {
+    if (result == null) return "";
+    if (typeof result === "string") return result.slice(0, 300);
+    const s = JSON.stringify(result);
+    return s.length > 300 ? s.slice(0, 300) + "\u2026" : s;
+  } catch {
+    return "(unserializable result)";
+  }
+}
 function createAgent2({
   model,
   id = "hub",
@@ -67129,6 +67139,11 @@ function createAgent2({
   taskId = "adhoc",
   maxIterations = 12,
   enrollmentGuard = null,
+  // `onProgress` receives normalized progress events (thinking / tool-call /
+  // tool-result / text / done) from the agent-do loop, so the UI can show LIVE
+  // progress as the agent works. Optional (the SW threads its broadcast through
+  // it); null means no progress stream (the legacy request/response path).
+  onProgress = null,
   // `disposable` marks a per-origin WORKER agent: abort() (agent.delete →
   // abortWorker) permanently disables it so a stale in-flight delegation can
   // never start a new run (the round-22 check→start blocker). The hub/master is
@@ -67139,6 +67154,7 @@ function createAgent2({
   let activeRun = null;
   let aborted3 = false;
   let runQueue = Promise.resolve();
+  let progressCb = onProgress;
   const getRunGen = () => activeRun?.gen ?? null;
   const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen), ...tools };
   const systemPrompt = system + buildSkillsPrompt2(skills);
@@ -67150,6 +67166,40 @@ function createAgent2({
     tools: allTools,
     maxIterations,
     hooks: {
+      // LIVE progress hooks — forward the agent-do step/tool lifecycle to the
+      // UI as normalized events. onProgress may be async (the SW broadcast is a
+      // fire-and-forget postMessage), but the hooks are awaited by agent-do, so
+      // they must never throw (a progress-emit failure must not kill the run).
+      onStepStart: async (e) => {
+        try {
+          progressCb?.({ type: "thinking", step: e.step, totalSteps: e.totalSteps, tokensSoFar: e.tokensSoFar, costSoFar: e.costSoFar });
+        } catch {
+        }
+      },
+      onStepComplete: async (e) => {
+        try {
+          progressCb?.({ type: "text", text: e.text, step: e.step, hasToolCalls: e.hasToolCalls });
+        } catch {
+        }
+      },
+      onPreToolUse: async (e) => {
+        try {
+          progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step });
+        } catch {
+        }
+      },
+      onPostToolUse: async (e) => {
+        try {
+          progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result) });
+        } catch {
+        }
+      },
+      onComplete: async (e) => {
+        try {
+          progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted });
+        } catch {
+        }
+      },
       onUsage: async (record3) => {
         await recordUsage({
           agentId: id,
@@ -67232,6 +67282,11 @@ function createAgent2({
         agent.abort();
       } catch {
       }
+    },
+    // Rebind the live progress callback without rebuilding the cached agent.
+    // The SW calls this per-run (the orchestrator is reused across runs).
+    setProgress: (cb) => {
+      progressCb = cb;
     }
   };
 }
@@ -67246,9 +67301,12 @@ function createOrchestrator2({
   taskId = "adhoc",
   extraTools = {},
   // browser-control + management tools (chrome.* — SW context)
-  delegateGuard = null
+  delegateGuard = null,
   // async (origin) => { ok, error } — revalidates live
   // enrollment/generation before a delegated worker runs
+  onProgress = null
+  // async (event) => void — the live progress stream, threaded
+  // into BOTH the master agent and every delegated worker.
 }) {
   const workerAgents = /* @__PURE__ */ new Map();
   for (const w of workers) {
@@ -67271,7 +67329,8 @@ function createOrchestrator2({
       // Workers are DISPOSABLE: agent.delete → abortWorker permanently disables
       // the agent so a stale in-flight delegation cannot start a new run in the
       // check→start gap.
-      disposable: true
+      disposable: true,
+      onProgress
     });
     workerAgents.set(w.origin, a);
   }
@@ -67321,7 +67380,8 @@ function createOrchestrator2({
     system: masterSystem ?? system,
     memory: masterMemory2,
     tools: { ...delegate, ...extraTools },
-    taskId
+    taskId,
+    onProgress
   });
   return {
     master,
@@ -67331,6 +67391,12 @@ function createOrchestrator2({
     },
     abort() {
       master.abort();
+    },
+    // Rebind the live progress callback on the master + every worker. The SW
+    // calls this per-run; the cached orchestrator's agents are reused.
+    setProgress(cb) {
+      master.setProgress?.(cb);
+      for (const a of workerAgents.values()) a.setProgress?.(cb);
     },
     addWorker(config3) {
       const a = createAgent2({
@@ -67343,7 +67409,8 @@ function createOrchestrator2({
         tools: config3.tools ?? {},
         taskId,
         enrollmentGuard: delegateGuard ? async () => delegateGuard(config3.origin) : null,
-        disposable: true
+        disposable: true,
+        onProgress
       });
       workerAgents.set(config3.origin, a);
       return a;
@@ -67697,7 +67764,10 @@ var MANAGEMENT_TOOL_NAMES = [
   "grant_capability",
   "revoke_capability",
   "get_usage",
-  "get_memory_overview"
+  "get_memory_overview",
+  "list_hooks",
+  "subscribe_hook",
+  "unsubscribe_hook"
 ];
 function managementToolset({ callRoute }) {
   const call = (type, args) => Promise.resolve(callRoute(type, args ?? {}));
@@ -67814,6 +67884,29 @@ function managementToolset({ callRoute }) {
       description: "Per-origin memory overview (keys + approximate sizes).",
       inputSchema: external_exports3.object({}),
       execute: () => call("memory.overview", {})
+    }),
+    // ---- system hooks (subscribe agents/recipes to chrome.* events) ----
+    list_hooks: tool({
+      description: "List every system hook (chrome.* event) an agent can listen to, with its required permission, denied state, and current subscribers. Denied hooks can never be used (the owner's deny-list is authoritative).",
+      inputSchema: external_exports3.object({}),
+      execute: () => call("hooks.status", {})
+    }),
+    subscribe_hook: tool({
+      description: "Subscribe a background recipe (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its optional permission is absent. recipeId may be omitted to subscribe the master agent.",
+      inputSchema: external_exports3.object({
+        hookId: external_exports3.string().describe("the hook id, e.g. tabs.onCreated"),
+        recipeId: external_exports3.string().optional().describe("a background recipe id, or omit for the master agent"),
+        promptTemplate: external_exports3.string().optional().describe("a prompt template; {{payload}} is replaced with the event payload")
+      }),
+      execute: ({ hookId, recipeId, promptTemplate }) => call("hooks.subscribe", { hookId, recipeId, promptTemplate })
+    }),
+    unsubscribe_hook: tool({
+      description: "Unsubscribe an agent/recipe from a system event.",
+      inputSchema: external_exports3.object({
+        hookId: external_exports3.string(),
+        recipeId: external_exports3.string().optional()
+      }),
+      execute: ({ hookId, recipeId }) => call("hooks.unsubscribe", { hookId, recipeId })
     })
   };
 }
@@ -67882,6 +67975,17 @@ a data file, a UI fragment. Create them; let the owner view + reuse them.
   permission).
 - get_usage() \u2014 usage/cost summary.
 - get_memory_overview() \u2014 per-origin memory keys + sizes.
+
+### Recipes
+- Recipes are pre-baked utility behaviours (a prompt + the tool steps), ported
+  from the prompt-in-a-box pattern. On-demand recipes are chips the owner taps;
+  background recipes are agents that live in the background on a schedule.
+- The Sorting Hat (recipe id auto-group-by-domain) groups open tabs by domain
+  into colour-coded collapsed groups \u2014 the canonical background agent.
+- The owner can also address recipes as /task:<id> or @-mention a recipe name
+  when the editor supports it; the stable id is the reference.
+- When a recipe's behaviour is what the owner asked for, run that recipe rather
+  than re-describing it from scratch.
 
 ## 2. How to work
 
@@ -67958,7 +68062,7 @@ function withLock(fn) {
   });
   return run;
 }
-async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = [] }) {
+async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = [], name: explicitName }) {
   return withLock(async () => {
     let when;
     if (typeof at === "number" && Number.isFinite(at) && at > Date.now()) {
@@ -67970,7 +68074,7 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
         "task needs a future `at` (absolute ms) or a positive `delayMs`"
       );
     }
-    const name25 = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const name25 = explicitName ?? `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     assertRunAlive();
     const store = await kvGet(TASK_KEY);
     await assertRunOwned();
@@ -68863,38 +68967,786 @@ async function recordBrowserEvent(kind, payload) {
 
 // extension/lib/recipes.js
 init_browser_shim_process();
+var ON_DEMAND = "on-demand";
+var BACKGROUND = "background";
 var RECIPES = [
+  // ── On-demand (chips) ────────────────────────────────────────────────────
   {
     id: "tab-hygiene",
     name: "Tab hygiene",
+    category: "tabs",
+    mode: ON_DEMAND,
     icon: "broom",
     description: "Find duplicate/stale tabs and close or group them.",
-    prompt: "List the open tabs. Identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close. Report your findings and close the obvious duplicates. Be conservative \u2014 never close a tab with unsaved form state you can't detect."
+    requiredCapabilities: ["tabs"],
+    prompt: "You are a tab-hygiene assistant. List every open tab across every window (tab_list). If there are fewer than 20 tabs, do nothing and return a one-line summary. Otherwise identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close or group. Group related tabs, close obvious duplicates, and report what you changed. Be conservative \u2014 never close a tab with unsaved form state you can't detect."
   },
   {
     id: "page-summary",
     name: "Summarise this page",
+    category: "summaries",
+    mode: ON_DEMAND,
     icon: "doc",
     description: "Read the active tab and give a tight summary.",
-    prompt: "Read the active tab's content and produce a concise summary: what the page is, the 3 key points, and one recommended next action. Keep it under 120 words."
+    requiredCapabilities: ["tabs"],
+    prompt: "Read the active tab's content (tab_read) and produce a concise summary: what the page is, the 3 key points, and one recommended next action. Keep it under 120 words."
   },
   {
     id: "link-collector",
     name: "Collect links",
+    category: "summaries",
+    mode: ON_DEMAND,
     icon: "link",
     description: "Gather the outbound links from the active page.",
+    requiredCapabilities: ["tabs"],
     prompt: "Read the active tab and collect its outbound links, grouped by domain, with the link text. Return the list as markdown. Skip navigation/boilerplate links."
   },
   {
     id: "reading-list",
     name: "Save to reading list",
+    category: "reading",
+    mode: ON_DEMAND,
     icon: "books",
     description: "Capture the active tab into memory as a reading-list entry.",
+    requiredCapabilities: ["tabs", "storage"],
     prompt: "Read the active tab and save it to memory under the key 'reading-list' (append: title, url, and a one-line note). Confirm what you saved."
+  },
+  {
+    id: "context-menu-save-quote",
+    name: "Save quote (right-click)",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "quote",
+    description: "Save selected text as a quote with source attribution.",
+    requiredCapabilities: ["contextMenus", "storage"],
+    prompt: "Register a context-menu item for saving quotes. When the user right-clicks selected text and chooses it, save the selection with the page URL + title as source attribution into memory under 'quotes' (append). Confirm each save."
+  },
+  {
+    id: "right-click-extract-topics",
+    name: "Extract topics (right-click)",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "tags",
+    description: "Extract key topics from selection or the whole page.",
+    requiredCapabilities: ["contextMenus", "storage", "notifications"],
+    prompt: "Register context-menu items to extract key topics from either the selected text or the whole active page. On use, derive the top topics, show them in a notification, and append them to memory under 'topics'. Confirm each run."
+  },
+  {
+    id: "right-click-summarize",
+    name: "Summarise (right-click)",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "doc",
+    description: "Summarise the active tab from a right-click menu item.",
+    requiredCapabilities: ["contextMenus", "tabs", "notifications"],
+    prompt: "Register a context-menu item 'Summarise page'. On use, read the active tab and produce a short summary, shown in a notification. Confirm each run."
+  },
+  {
+    id: "right-click-translate-selection",
+    name: "Translate selection (right-click)",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "translate",
+    description: "Translate selected text to English and copy it.",
+    requiredCapabilities: ["contextMenus", "notifications"],
+    prompt: "Register a context-menu item to translate the selected text into English (target language: English). On use, translate the selection, show the result in a notification, and copy it to the clipboard. Confirm each run."
+  },
+  {
+    id: "clipboard-phrase-via-command",
+    name: "Phrase library (command)",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "quote",
+    description: "Canned phrases on a keyboard shortcut.",
+    requiredCapabilities: ["notifications"],
+    prompt: "Maintain a phrase library in memory under 'phrases'. Register keyboard-shortcut commands, one per phrase family; when the user invokes a shortcut, copy the chosen phrase to the clipboard and confirm."
+  },
+  {
+    id: "omnibox-ask",
+    name: "Omnibox ask",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "ask",
+    description: "Type 'ask' in the address bar to get an answer as a notification.",
+    requiredCapabilities: ["notifications"],
+    prompt: "Register an omnibox keyword 'ask'. When the user types 'ask' + a question in the address bar, answer it and show the answer as a desktop notification \u2014 no new tabs, no page loads."
+  },
+  // ── Background agents (scheduled — live in the background) ───────────────
+  {
+    id: "auto-group-by-domain",
+    name: "Sorting Hat",
+    category: "tabs",
+    mode: BACKGROUND,
+    icon: "layers",
+    description: "Group open tabs by domain into colour-coded collapsed groups.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 30 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs"],
+    // Event triggers (the hooks registry): in addition to its 30-min schedule,
+    // the Sorting Hat subscribes to tab-created/tab-updated so a burst of new
+    // tabs is grouped immediately rather than waiting for the next alarm. Enabling
+    // the recipe subscribes these; disabling unsubscribes them.
+    hooks: ["tabs.onCreated", "tabs.onUpdated"],
+    prompt: "Group open tabs into tab groups by registered domain. On each scheduled run: (1) tab_list to get every tab. (2) For each window, group tabs by eTLD+1 (github.com, google.com, news.ycombinator.com). (3) For each domain with 3+ tabs in a window, move stragglers into an existing group with that domain's title, or create a new group via tab_group with title=domain, colour picked deterministically from the domain hash (grey/blue/red/yellow/green/pink/purple/cyan/orange), collapsed=true. (4) Leave 1\u20132-tab domains ungrouped. Dedupe: never create a duplicate group title; never re-group tabs already correctly grouped."
+  },
+  {
+    id: "auto-pin-favorites",
+    name: "Auto-pin favourites",
+    category: "tabs",
+    mode: BACKGROUND,
+    icon: "pin",
+    description: "Pin tabs that reappear 5+ times a week.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 60 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "Track visit counts in memory under 'visits' (a map of URL -> {count, lastSeen}). On each scheduled run, tab_list to see open tabs; for each tab whose URL has count >= 5, pin it if not already pinned. Increment counts and set lastSeen. Only pin tabs that reappear frequently \u2014 never pin one-off tabs."
+  },
+  {
+    id: "auto-reading-list",
+    name: "Auto reading list",
+    category: "reading",
+    mode: BACKGROUND,
+    icon: "books",
+    description: "Add unfinished article tabs to the reading list.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 60 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "Track tabs the user opened but likely didn't finish reading (an article-like URL open at least 30s that was never bookmarked/saved). On each scheduled run, look at the recent tab activity; for article tabs the user closed without finishing, add them to the reading list (memory 'reading-list') so 'I'll read this later' actually lands somewhere. Never duplicate an entry."
+  },
+  {
+    id: "bookmark-auto-categorize",
+    name: "Auto-categorise bookmarks",
+    category: "bookmarks",
+    mode: BACKGROUND,
+    icon: "folder",
+    description: "Sort uncategorised bookmarks into topic folders.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 1440 },
+    defaultEnabled: false,
+    requiredCapabilities: ["bookmarks"],
+    prompt: "On each scheduled run, list every bookmark. Find bookmarks sitting directly in the Bookmarks Bar or Other Bookmarks roots that are not folders. Infer a topic folder for each (create it if missing) and move the bookmark there. Report what you moved. Never move a bookmark you can't confidently categorise."
+  },
+  {
+    id: "bookmark-dedupe",
+    name: "Bookmark dedupe",
+    category: "bookmarks",
+    mode: BACKGROUND,
+    icon: "link",
+    description: "Flag duplicate bookmarks (report only, never delete).",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 1440 },
+    defaultEnabled: false,
+    requiredCapabilities: ["bookmarks"],
+    prompt: "On each scheduled run, list every bookmark and group by normalised URL (lowercase host, strip trailing slashes, fragments, and tracking params utm_*/fbclid/gclid/mc_cid/mc_eid/ref/ref_src). Produce a report of duplicates \u2014 flag them for the user, DO NOT delete anything."
+  },
+  {
+    id: "daily-summary",
+    name: "Daily summary",
+    category: "summaries",
+    mode: BACKGROUND,
+    icon: "doc",
+    description: "Evening journal of the day's browsing.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 1440 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "Once a day, in the evening (only between 21:00 and 23:59 local), summarise the user's browsing into a journal entry under memory 'daily-summary/YYYY-MM-DD'. Skip if today's date already has an entry. Like a browsing-activity diary that writes itself."
+  },
+  {
+    id: "dead-bookmark-cleaner",
+    name: "Dead bookmark checker",
+    category: "bookmarks",
+    mode: BACKGROUND,
+    icon: "link",
+    description: "Check a batch of bookmarks for dead links, flag only.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 1440 },
+    defaultEnabled: false,
+    requiredCapabilities: ["bookmarks"],
+    prompt: "On each scheduled run, check a batch of bookmarks to see if they still resolve (use a cursor in memory under 'deadCheck.cursor' to advance through the list). Flag dead ones in a report \u2014 DO NOT delete. Advance the cursor so each run checks the next batch."
+  },
+  {
+    id: "dedupe-tabs",
+    name: "Dedupe tabs",
+    category: "tabs",
+    mode: BACKGROUND,
+    icon: "layers",
+    description: "Close duplicate tabs (same URL) keeping the oldest/active.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 60 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs"],
+    prompt: "On each scheduled run, tab_list all tabs and group by normalised URL (strip trailing slashes, fragments, tracking params). Where the same URL is open in multiple tabs, close all but the oldest \u2014 or keep the active one if present. Report what you closed."
+  },
+  {
+    id: "download-nightly-summary",
+    name: "Download nightly summary",
+    category: "downloads",
+    mode: BACKGROUND,
+    icon: "download",
+    description: "Daily evening summary of what was downloaded.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 1440 },
+    defaultEnabled: false,
+    requiredCapabilities: ["downloads", "notifications"],
+    prompt: "On each scheduled run (evening), summarise what the user downloaded that day and fire a single desktop notification with the summary. Skip if there were no downloads today."
+  },
+  {
+    id: "download-organizer",
+    name: "Download organiser",
+    category: "downloads",
+    mode: BACKGROUND,
+    icon: "download",
+    description: "Log every download with inferred category + source.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 60 },
+    defaultEnabled: false,
+    requiredCapabilities: ["downloads", "storage"],
+    prompt: "On each scheduled run, look at recent downloads and log each one with an inferred category (Images / Documents / Archives / Media / Other, from mime + filename + referring domain), source context, and timestamp, into memory under 'downloads'. Build a searchable 'where did that file come from?' history."
+  },
+  {
+    id: "focus-mode",
+    name: "Focus mode",
+    category: "focus",
+    mode: BACKGROUND,
+    icon: "target",
+    description: "Speed-bump distraction domains during focus hours.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 15 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "notifications", "storage"],
+    prompt: "Enforce focus hours (memory 'focus' config: focusHours 09:00\u201317:00 Mon\u2013Fri, distractionHosts twitter.com/x.com/reddit.com/news.ycombinator.com/youtube.com/tiktok.com/instagram.com/facebook.com, mode 'warn'). On each scheduled run during focus hours, if the user navigates to a distraction host, fire a gentle notification (a speed bump, not a blocker \u2014 never close the tab without the owner opting in)."
+  },
+  {
+    id: "idle-close-tabs",
+    name: "Idle tab saver",
+    category: "tabs",
+    mode: BACKGROUND,
+    icon: "sleep",
+    description: "Snapshot + close non-pinned tabs after 30 min idle.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 30 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "When the user is idle 30+ minutes: snapshot the session (the list of non-pinned, non-audible, non-active tabs) into memory under 'session-snapshots/YYYY-MM-DD-HH-MM', then close those tabs. Skip if you already ran within the last 2 hours. Never close pinned, audible, or active tabs."
+  },
+  {
+    id: "meeting-prep",
+    name: "Meeting prep",
+    category: "context",
+    mode: BACKGROUND,
+    icon: "calendar",
+    description: "Write a notes template when a Calendar event opens.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 15 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "On each scheduled run, if a tab matching calendar.google.com/calendar/*event is open, read it and extract the meeting title, date/time, and attendees, then write a notes template (attendees, agenda, notes, action items) into memory under 'meetings/<date>-<slug>'. Skip non-event calendar views."
+  },
+  {
+    id: "page-sentiment-log",
+    name: "Page sentiment log",
+    category: "summaries",
+    mode: BACKGROUND,
+    icon: "mood",
+    description: "One-word sentiment + one-line summary per visited page.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 30 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "On each scheduled run, for recently completed page navigations: skip non-article hosts (gmail, slack, asana, linear, jira, notion, docs.google, chrome://, about:, file://, auth/login paths). For the rest, read the page and log a single-word sentiment classification + one-line summary into memory under 'sentiment'. Accumulate an emotional shape of browsing over time."
+  },
+  {
+    id: "reading-time-estimator",
+    name: "Reading-time estimate",
+    category: "reading",
+    mode: BACKGROUND,
+    icon: "clock",
+    description: "Notify when a long article needs 5+ minutes.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 15 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "notifications"],
+    prompt: "On each scheduled run, for recently completed navigations to long-form articles, estimate the reading time and notify the user if it's over 5 minutes. Avoids the 'tab left open for 3 weeks' trap. Skip non-article pages."
+  },
+  {
+    id: "stale-tab-closer",
+    name: "Stale tab closer",
+    category: "tabs",
+    mode: BACKGROUND,
+    icon: "clock",
+    description: "Close tabs untouched for 24h (protects pinned/audible).",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 360 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "Track last-touch timestamps per tab in memory under 'lastTouch:<tabId>'. On each scheduled run, close tabs not touched in 24 hours (configurable), with a 6-hour grace period for newly opened tabs. Never close pinned, audible, or recently-active tabs. Report what you closed."
+  },
+  {
+    id: "summarize-on-navigate",
+    name: "Summarise on navigate",
+    category: "summaries",
+    mode: BACKGROUND,
+    icon: "doc",
+    description: "Auto-summarise pages matching patterns you care about.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 30 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "On each scheduled run, summarise recently navigated pages whose hostname/path matches a configurable list (default: arxiv.org, *.github.com repo readmes, long-form news). Accumulate summaries in memory under 'summaries' so the user can read them later."
+  },
+  {
+    id: "tab-screenshot-diary",
+    name: "Screenshot diary",
+    category: "summaries",
+    mode: BACKGROUND,
+    icon: "camera",
+    description: "Hourly screenshot of the active tab as a photo diary.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 60 },
+    defaultEnabled: false,
+    requiredCapabilities: ["activeTab", "storage"],
+    prompt: "On each scheduled run (hourly, during the day), capture a screenshot of the active tab and store it in memory under 'diary/YYYY-MM-DD/HH'. Creates a photo album of what the user was looking at, for ambient review of the shape of the day."
+  },
+  {
+    id: "weekly-digest",
+    name: "Weekly digest",
+    category: "summaries",
+    mode: BACKGROUND,
+    icon: "doc",
+    description: "Sunday-evening digest of bookmarks + reading list.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 10080 },
+    defaultEnabled: false,
+    requiredCapabilities: ["bookmarks", "storage", "notifications"],
+    prompt: "On each scheduled run, if it is Sunday evening (>= 18:00 local) and you have not already run today, summarise what the user bookmarked and added to their reading list over the past 7 days into a single digest. Show it as a notification."
+  },
+  {
+    id: "weekly-review-prompt",
+    name: "Weekly review prompt",
+    category: "focus",
+    mode: BACKGROUND,
+    icon: "doc",
+    description: "Friday 17:00 \u2014 open a pre-filled weekly review template.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 10080 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "storage"],
+    prompt: "On each scheduled run, if it is Friday at 17:00 local (and not already run today), open a new tab with a pre-filled weekly review template (what went well, what didn't, what to carry forward). Turns 'I should reflect' into something that just appears."
   }
 ];
 function getRecipe(id) {
   return RECIPES.find((r) => r.id === id);
+}
+function recipesByMode(mode) {
+  return RECIPES.filter((r) => r.mode === mode);
+}
+function backgroundRecipes() {
+  return recipesByMode(BACKGROUND);
+}
+
+// extension/lib/hooks.js
+init_browser_shim_process();
+var SUBSCRIPTIONS_KEY = "cap:hooks";
+var DENY_KEY = "cap:hooksDeny";
+var HOOKS = [
+  // ---- tabs (permission: tabs) ----
+  {
+    id: "tabs.onCreated",
+    api: "tabs",
+    event: "onCreated",
+    label: "Tab created",
+    permission: "tabs",
+    payload: "tab (id, windowId, url, title)",
+    use: "Sorting Hat groups the new tab; Auto-pin pins repeat domains; focus-mode closes tabs opened in a distraction session."
+  },
+  {
+    id: "tabs.onUpdated",
+    api: "tabs",
+    event: "onUpdated",
+    label: "Tab updated",
+    permission: "tabs",
+    payload: "tabId, changeInfo (url/status/title), tab",
+    use: "Summarise-on-navigate fires when a page finishes loading; page-sentiment-log records the visited URL."
+  },
+  {
+    id: "tabs.onRemoved",
+    api: "tabs",
+    event: "onRemoved",
+    label: "Tab removed",
+    permission: "tabs",
+    payload: "tabId, removeInfo (windowId, isWindowClosing)",
+    use: "Stale-tab-closer confirms a closed tab; reading-time records an unfinished article tab."
+  },
+  {
+    id: "tabs.onActivated",
+    api: "tabs",
+    event: "onActivated",
+    label: "Tab activated",
+    permission: "tabs",
+    payload: "activeInfo (tabId, windowId)",
+    use: "Focus-mode tracks which tab is foreground; a context agent prepares actions for the focused page."
+  },
+  {
+    id: "tabs.onAttached",
+    api: "tabs",
+    event: "onAttached",
+    label: "Tab attached",
+    permission: "tabs",
+    payload: "tabId, attachInfo (newWindowId, newPosition)",
+    use: "Sorting Hat re-groups tabs moved into a window."
+  },
+  {
+    id: "tabs.onZoomChange",
+    api: "tabs",
+    event: "onZoomChange",
+    label: "Tab zoom changed",
+    permission: "tabs",
+    payload: "ZoomChangeInfo (tabId, oldZoomFactor, newZoomFactor, zoomSettings)",
+    use: "A vision-deficiency agent logs zoom usage to recommend an accessibility baseline."
+  },
+  // ---- windows (permission: none/tabs) ----
+  {
+    id: "windows.onCreated",
+    api: "windows",
+    event: "onCreated",
+    label: "Window created",
+    permission: "tabs",
+    payload: "window",
+    use: "Focus-mode opens a dedicated distraction-free window."
+  },
+  {
+    id: "windows.onRemoved",
+    api: "windows",
+    event: "onRemoved",
+    label: "Window removed",
+    permission: "tabs",
+    payload: "windowId",
+    use: "A workspace agent tears down the session's scratch state."
+  },
+  {
+    id: "windows.onFocusChanged",
+    api: "windows",
+    event: "onFocusChanged",
+    label: "Window focus changed",
+    permission: "tabs",
+    payload: "windowId (WINDOW_ID_NONE when unfocused)",
+    use: "A presence/status agent pauses when the user switches away."
+  },
+  // ---- bookmarks (permission: bookmarks) ----
+  {
+    id: "bookmarks.onCreated",
+    api: "bookmarks",
+    event: "onCreated",
+    label: "Bookmark created",
+    permission: "bookmarks",
+    payload: "id, bookmark",
+    use: "Auto-categorize files the new bookmark; bookmark-dedupe flags a duplicate."
+  },
+  {
+    id: "bookmarks.onRemoved",
+    api: "bookmarks",
+    event: "onRemoved",
+    label: "Bookmark removed",
+    permission: "bookmarks",
+    payload: "id, removeInfo (parentId, index, node)",
+    use: "Dead-bookmark-cleaner updates its index when a bookmark is deleted."
+  },
+  {
+    id: "bookmarks.onChanged",
+    api: "bookmarks",
+    event: "onChanged",
+    label: "Bookmark changed",
+    permission: "bookmarks",
+    payload: "id, changeInfo (title, url)",
+    use: "A link-rot agent re-checks a bookmark whose URL changed."
+  },
+  {
+    id: "bookmarks.onMoved",
+    api: "bookmarks",
+    event: "onMoved",
+    label: "Bookmark moved",
+    permission: "bookmarks",
+    payload: "id, moveInfo (parentId, index, oldParentId, oldIndex)",
+    use: "Bookmark-auto-categorize re-derives the folder when the user moves a bookmark."
+  },
+  {
+    id: "bookmarks.onChildrenReordered",
+    api: "bookmarks",
+    event: "onChildrenReordered",
+    label: "Bookmark folder reordered",
+    permission: "bookmarks",
+    payload: "id, reorderInfo (childIds)",
+    use: "A sort agent respects a manual reorder (don't undo the user's hand-edit)."
+  },
+  // ---- history (permission: history) ----
+  {
+    id: "history.onVisited",
+    api: "history",
+    event: "onVisited",
+    label: "Page visited",
+    permission: "history",
+    payload: "HistoryItem (id, url, title, visitTime)",
+    use: "Page-sentiment-log records the visit; a research agent accumulates a visit trail."
+  },
+  {
+    id: "history.onVisitRemoved",
+    api: "history",
+    event: "onVisitRemoved",
+    label: "History visit removed",
+    permission: "history",
+    payload: "removed (allHistory, urls)",
+    use: "A privacy agent confirms a history clear actually removed the items."
+  },
+  // ---- downloads (permission: downloads) ----
+  {
+    id: "downloads.onCreated",
+    api: "downloads",
+    event: "onCreated",
+    label: "Download started",
+    permission: "downloads",
+    payload: "DownloadItem (id, filename, url, state)",
+    use: "Download-organizer files the new download by type; download-nightly-summary collects the day's downloads."
+  },
+  {
+    id: "downloads.onChanged",
+    api: "downloads",
+    event: "onChanged",
+    label: "Download changed",
+    permission: "downloads",
+    payload: "delta (id, state, filename, error)",
+    use: "A completion agent fires when a download completes (state=complete) or errors."
+  },
+  {
+    id: "downloads.onErased",
+    api: "downloads",
+    event: "onErased",
+    label: "Download erased",
+    permission: "downloads",
+    payload: "downloadId",
+    use: "Download-organizer removes the index entry for an erased download."
+  },
+  // ---- webNavigation (permission: webNavigation) ----
+  {
+    id: "webNavigation.onCompleted",
+    api: "webNavigation",
+    event: "onCompleted",
+    label: "Navigation completed",
+    permission: "webNavigation",
+    payload: "details (tabId, url, frameId, timeStamp)",
+    use: "Summarise-on-navigate runs on the main frame finishing a load."
+  },
+  {
+    id: "webNavigation.onBeforeNavigate",
+    api: "webNavigation",
+    event: "onBeforeNavigate",
+    label: "Navigation starting",
+    permission: "webNavigation",
+    payload: "details (tabId, url, frameId, parentFrameId)",
+    use: "A focus-mode agent blocks navigation to a distraction domain."
+  },
+  {
+    id: "webNavigation.onCommitted",
+    api: "webNavigation",
+    event: "onCommitted",
+    label: "Navigation committed",
+    permission: "webNavigation",
+    payload: "details (tabId, url, transitionType, frameId)",
+    use: "A per-origin sub-agent prepares its WebMCP tools when the origin commits."
+  },
+  // ---- context menus (permission: contextMenus) ----
+  {
+    id: "contextMenus.onClicked",
+    api: "contextMenus",
+    event: "onClicked",
+    label: "Context menu clicked",
+    permission: "contextMenus",
+    payload: "info (menuItemId, selectionText, pageUrl), tab",
+    use: "Save-quote / right-click-summarize / right-click-translate-selection invoke on the selected text."
+  },
+  // ---- commands (permission: none; declared in manifest commands) ----
+  {
+    id: "commands.onCommand",
+    api: "commands",
+    event: "onCommand",
+    label: "Keyboard command",
+    permission: null,
+    payload: "command (the command name)",
+    use: "A global hotkey (e.g. Ctrl+Shift+K) invokes the clipboard-phrase / omnibox-ask agent."
+  },
+  // ---- idle (permission: idle) ----
+  {
+    id: "idle.onStateChanged",
+    api: "idle",
+    event: "onStateChanged",
+    label: "Idle state changed",
+    permission: "idle",
+    payload: "newState (active/idle/locked)",
+    use: "Idle-close-tabs closes stale tabs when the user is away; a cleanup agent runs on idle."
+  },
+  // ---- alarms (permission: alarms) ----
+  {
+    id: "alarms.onAlarm",
+    api: "alarms",
+    event: "onAlarm",
+    label: "Alarm fired",
+    permission: "alarms",
+    payload: "Alarm (name, scheduledTime, periodInMinutes)",
+    use: "The scheduled background agents (sorting hat, daily-summary) run on their alarm."
+  },
+  // ---- storage (permission: storage) ----
+  {
+    id: "storage.onChanged",
+    api: "storage",
+    event: "onChanged",
+    label: "Storage changed",
+    permission: "storage",
+    payload: "changes (key -> {oldValue, newValue}), areaName",
+    use: "A sync agent reacts to an external change to a preference."
+  },
+  // ---- notifications (permission: notifications) ----
+  {
+    id: "notifications.onClicked",
+    api: "notifications",
+    event: "onClicked",
+    label: "Notification clicked",
+    permission: "notifications",
+    payload: "notificationId",
+    use: "Clicking a digest notification opens the full digest; a reminder opens its target."
+  },
+  // ---- action (permission: none) ----
+  {
+    id: "action.onClicked",
+    api: "action",
+    event: "onClicked",
+    label: "Extension action clicked",
+    permission: null,
+    payload: "tab",
+    use: "The OWNER-invoked screenshot path (the headed activeTab capture)."
+  },
+  // ---- runtime (permission: none) ----
+  {
+    id: "runtime.onStartup",
+    api: "runtime",
+    event: "onStartup",
+    label: "Extension startup",
+    permission: null,
+    payload: "none",
+    use: "recoverOnBoot reconciles the scheduler on a fresh worker boot."
+  },
+  {
+    id: "runtime.onInstalled",
+    api: "runtime",
+    event: "onInstalled",
+    label: "Extension installed/updated",
+    permission: null,
+    payload: "details (reason)",
+    use: "First-run onboarding: seed master memory + open the welcome page."
+  },
+  {
+    id: "runtime.onSuspend",
+    api: "runtime",
+    event: "onSuspend",
+    label: "Service worker suspending",
+    permission: null,
+    payload: "none",
+    use: "A persistence agent flushes in-memory state before the SW is torn down."
+  }
+];
+function getHook(id) {
+  return HOOKS.find((h) => h.id === id);
+}
+async function getHookDenyList() {
+  const stored = await kvGet(DENY_KEY);
+  const list = stored[DENY_KEY];
+  return Array.isArray(list) ? list.filter((x) => typeof x === "string") : [];
+}
+async function writeDenyList(list) {
+  await kvSet({ [DENY_KEY]: list });
+}
+async function setHookDeny(hookId, deny) {
+  if (!getHook(hookId)) return { ok: false, error: `unknown hook ${hookId}` };
+  const list = await getHookDenyList();
+  const has = list.includes(hookId);
+  if (deny && !has) list.push(hookId);
+  if (!deny && has) {
+    const i = list.indexOf(hookId);
+    list.splice(i, 1);
+  }
+  await writeDenyList(list);
+  return { ok: true, hookId, denied: Boolean(deny) };
+}
+async function checkHookAllowed(hookId) {
+  const hook = getHook(hookId);
+  if (!hook) return { ok: false, error: `unknown hook ${hookId}` };
+  const deny = await getHookDenyList();
+  if (deny.includes(hookId)) {
+    return { ok: false, error: `hook ${hookId} is denied by the owner` };
+  }
+  if (hook.permission && !await hasPermission(hook.permission)) {
+    return {
+      ok: false,
+      error: `hook ${hookId} requires the optional "${hook.permission}" permission`
+    };
+  }
+  return { ok: true };
+}
+async function getHookSubscriptions() {
+  const stored = await kvGet(SUBSCRIPTIONS_KEY);
+  const list = stored[SUBSCRIPTIONS_KEY];
+  return Array.isArray(list) ? list : [];
+}
+async function writeSubscriptions(list) {
+  await kvSet({ [SUBSCRIPTIONS_KEY]: list });
+}
+async function subscribeHook({ hookId, recipeId = null, promptTemplate = "" }) {
+  const allowed = await checkHookAllowed(hookId);
+  if (!allowed.ok) return allowed;
+  const list = await getHookSubscriptions();
+  const existing = list.find(
+    (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null)
+  );
+  const entry = {
+    hookId,
+    recipeId: recipeId ?? null,
+    promptTemplate: typeof promptTemplate === "string" ? promptTemplate : "",
+    enabled: true,
+    at: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  if (existing) {
+    Object.assign(existing, entry);
+  } else {
+    list.push(entry);
+  }
+  await writeSubscriptions(list);
+  return { ok: true, hookId, recipeId: recipeId ?? null };
+}
+async function unsubscribeHook({ hookId, recipeId = null }) {
+  const list = await getHookSubscriptions();
+  const next = list.filter(
+    (s) => !(s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null))
+  );
+  await writeSubscriptions(next);
+  return { ok: true, hookId, recipeId: recipeId ?? null };
+}
+async function hookStatus() {
+  const deny = await getHookDenyList();
+  const subs = await getHookSubscriptions();
+  const byHook = /* @__PURE__ */ new Map();
+  for (const s of subs) {
+    if (!byHook.has(s.hookId)) byHook.set(s.hookId, []);
+    byHook.get(s.hookId).push(s.recipeId ?? "master");
+  }
+  return HOOKS.map((h) => ({
+    id: h.id,
+    label: h.label,
+    permission: h.permission,
+    denied: deny.includes(h.id),
+    subscribers: byHook.get(h.id) ?? []
+  }));
 }
 
 // extension/lib/enrollment.js
@@ -69399,6 +70251,20 @@ function withRunLock(fn) {
   });
   return run;
 }
+var progressPorts = /* @__PURE__ */ new Set();
+function broadcastProgress(event) {
+  for (const port of progressPorts) {
+    try {
+      port.postMessage({ type: "progress", event });
+    } catch {
+    }
+  }
+}
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "agent-progress") return;
+  progressPorts.add(port);
+  port.onDisconnect.addListener(() => progressPorts.delete(port));
+});
 var TASK_KEY2 = "cap:scheduledTasks";
 async function registerAlarm(task) {
   return await scheduleTask({
@@ -69522,10 +70388,13 @@ function abortWorker(origin) {
     }
   }
 }
-async function ensureOrchestrator() {
+async function ensureOrchestrator(onProgress = null) {
   while (true) {
     const gen = generation;
-    if (orchestrator && orchestratorGen === gen) return orchestrator;
+    if (orchestrator && orchestratorGen === gen) {
+      orchestrator.setProgress?.(onProgress);
+      return orchestrator;
+    }
     const model = await ensureModel();
     const mem = masterMemory();
     const origins = await listOrigins();
@@ -69558,7 +70427,8 @@ async function ensureOrchestrator() {
           return { ok: false, error: `origin ${origin} is not enrolled` };
         }
         return { ok: true, gen: snap.gen };
-      }
+      },
+      onProgress
     });
     if (generation === gen) {
       orchestrator = orch;
@@ -69692,9 +70562,9 @@ function attachmentContext(attachments) {
   }
   return "Attachments:\n" + parts.join("\n");
 }
-async function runTask({ id, task, scheduled = false, attachments = [], fence: fence2 = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence: fence2 = null, onProgress = null, history = [] }) {
   return await withRunLock(async () => {
-    const orch = await ensureOrchestrator();
+    const orch = await ensureOrchestrator(onProgress);
     const taskId = id ?? String(Date.now());
     const mem = masterMemory();
     let abortNow = null;
@@ -69723,7 +70593,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
       }, journalGuard);
       await fence2?.assertOwned?.();
       const context = attachmentContext(attachments);
-      const result = await orch.run(task, context, []);
+      const result = await orch.run(task, context, Array.isArray(history) ? history : []);
       await fence2?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
       await fence2?.assertOwned?.();
@@ -69969,7 +70839,14 @@ var handlers = {
     const result = await runTask({
       id: m.id,
       task: m.task,
-      attachments: bounded
+      attachments: bounded,
+      // The live progress stream: every run (interactive or a follow-up nudge)
+      // broadcasts its thinking/tool/text/done events to the connected UI ports.
+      onProgress: broadcastProgress,
+      // The prior conversation turns (the unified conversational surface): a
+      // follow-up message is a new turn in the same thread, so the agent sees
+      // the task/result history that came before.
+      history: m.history
     });
     if (dropped.length > 0) result.droppedAttachments = dropped;
     return result;
@@ -70152,6 +71029,66 @@ var handlers = {
       id: `recipe:${recipe.id}:${Date.now()}`,
       task: recipe.prompt
     });
+  },
+  async "background-agent.list"() {
+    const tasks = await listScheduledTasks();
+    const enabled = new Set(
+      (tasks ?? []).map((t) => t.name).filter((n) => n.startsWith("recipe:"))
+    );
+    return {
+      agents: backgroundRecipes().map((r) => ({
+        ...r,
+        enabled: enabled.has(`recipe:${r.id}`)
+      }))
+    };
+  },
+  async "background-agent.set"(m) {
+    const recipe = getRecipe(m?.id);
+    if (!recipe || recipe.mode !== "background") {
+      return { ok: false, error: `no background recipe ${m?.id}` };
+    }
+    const name25 = `recipe:${recipe.id}`;
+    const enabled = m?.enabled !== false;
+    if (!enabled) {
+      const r = await cancelScheduledTask(name25);
+      for (const hookId of recipe.hooks ?? []) {
+        await unsubscribeHook({ hookId, recipeId: recipe.id }).catch(() => {
+        });
+      }
+      return { ok: true, enabled: false, id: recipe.id, ...r };
+    }
+    const periodInMinutes = recipe.schedule?.periodInMinutes;
+    if (!periodInMinutes) {
+      return { ok: false, error: `recipe ${recipe.id} has no schedule` };
+    }
+    for (const hookId of recipe.hooks ?? []) {
+      await subscribeHook({ hookId, recipeId: recipe.id }).catch(() => {
+      });
+    }
+    const { when } = await scheduleTask({
+      task: recipe.prompt,
+      delayMs: periodInMinutes * 60 * 1e3,
+      periodInMinutes,
+      name: name25
+    });
+    return { ok: true, enabled: true, id: recipe.id, name: name25, nextRunAt: when };
+  },
+  // ---- system hooks (routes) ----
+  async "hooks.status"() {
+    return { hooks: await hookStatus() };
+  },
+  // OWNER-ONLY: the deny-list is authoritative and can only be changed from the
+  // Settings UI. It is deliberately NOT exposed to the agent toolset (no
+  // `deny_hook` tool) — the agent can never un-deny a hook it was refused.
+  async "hooks.deny"({ hookId, denied }) {
+    if (!getHook(hookId)) return { ok: false, error: `unknown hook ${hookId}` };
+    return await setHookDeny(hookId, denied !== false);
+  },
+  async "hooks.subscribe"({ hookId, recipeId, promptTemplate }) {
+    return await subscribeHook({ hookId, recipeId, promptTemplate });
+  },
+  async "hooks.unsubscribe"({ hookId, recipeId }) {
+    return await unsubscribeHook({ hookId, recipeId });
   },
   async "browser-control.get"() {
     const s = await kvGet("cap:browserControlGrant");
@@ -70466,6 +71403,76 @@ chrome.runtime.onInstalled?.addListener(() => {
   recordBrowserEvent("extension-installed", {}).catch(() => {
   });
 });
+async function dispatchHook(hookId, payload) {
+  if (runAborted()) return;
+  const subs = await getHookSubscriptions();
+  const matching = subs.filter((s) => s.hookId === hookId && s.enabled !== false);
+  for (const sub of matching) {
+    const allowed = await checkHookAllowed(hookId);
+    if (!allowed.ok) {
+      console.warn(`hook ${hookId} refused at dispatch: ${allowed.error}`);
+      continue;
+    }
+    const recipe = sub.recipeId ? getRecipe(sub.recipeId) : null;
+    let task;
+    if (sub.promptTemplate) {
+      task = sub.promptTemplate.replaceAll("{{payload}}", JSON.stringify(payload));
+    } else if (recipe) {
+      task = `${recipe.prompt}
+
+Event ${hookId} fired with payload: ${JSON.stringify(payload)}`;
+    } else {
+      task = `System event ${hookId} fired. Respond appropriately. Payload: ${JSON.stringify(payload)}`;
+    }
+    runTask({
+      id: `hook:${hookId}:${sub.recipeId ?? "master"}:${Date.now()}`,
+      task
+    }).catch((e) => console.error(`hook ${hookId} run failed:`, e?.message ?? e));
+  }
+}
+function wireHookListeners() {
+  const bind = (api, event, hookId, map4) => {
+    const ns = chrome?.[api];
+    if (!ns?.[event]) return;
+    ns[event].addListener((...args) => {
+      dispatchHook(hookId, map4 ? map4(args) : args[0] ?? {}).catch(() => {
+      });
+    });
+  };
+  bind("tabs", "onCreated", "tabs.onCreated", ([tab]) => tab ?? {});
+  bind("tabs", "onUpdated", "tabs.onUpdated", ([tabId, changeInfo, tab]) => ({ tabId, changeInfo, tab }));
+  bind("tabs", "onRemoved", "tabs.onRemoved", ([tabId, removeInfo]) => ({ tabId, removeInfo }));
+  bind("tabs", "onActivated", "tabs.onActivated", ([activeInfo]) => activeInfo ?? {});
+  bind("tabs", "onAttached", "tabs.onAttached", ([tabId, attachInfo]) => ({ tabId, attachInfo }));
+  bind("tabs", "onZoomChange", "tabs.onZoomChange", ([info]) => info ?? {});
+  bind("windows", "onCreated", "windows.onCreated", ([win]) => win ?? {});
+  bind("windows", "onRemoved", "windows.onRemoved", ([windowId]) => ({ windowId }));
+  bind("windows", "onFocusChanged", "windows.onFocusChanged", ([windowId]) => ({ windowId }));
+  bind("bookmarks", "onCreated", "bookmarks.onCreated", ([id, bookmark]) => ({ id, bookmark }));
+  bind("bookmarks", "onRemoved", "bookmarks.onRemoved", ([id, removeInfo]) => ({ id, removeInfo }));
+  bind("bookmarks", "onChanged", "bookmarks.onChanged", ([id, changeInfo]) => ({ id, changeInfo }));
+  bind("bookmarks", "onMoved", "bookmarks.onMoved", ([id, moveInfo]) => ({ id, moveInfo }));
+  bind("bookmarks", "onChildrenReordered", "bookmarks.onChildrenReordered", ([id, reorderInfo]) => ({ id, reorderInfo }));
+  bind("history", "onVisited", "history.onVisited", ([item]) => item ?? {});
+  bind("history", "onVisitRemoved", "history.onVisitRemoved", ([removed]) => removed ?? {});
+  bind("downloads", "onCreated", "downloads.onCreated", ([item]) => item ?? {});
+  bind("downloads", "onChanged", "downloads.onChanged", ([delta]) => delta ?? {});
+  bind("downloads", "onErased", "downloads.onErased", ([downloadId]) => ({ downloadId }));
+  bind("webNavigation", "onCompleted", "webNavigation.onCompleted", ([details]) => details ?? {});
+  bind("webNavigation", "onBeforeNavigate", "webNavigation.onBeforeNavigate", ([details]) => details ?? {});
+  bind("webNavigation", "onCommitted", "webNavigation.onCommitted", ([details]) => details ?? {});
+  bind("contextMenus", "onClicked", "contextMenus.onClicked", ([info, tab]) => ({ info, tab }));
+  bind("commands", "onCommand", "commands.onCommand", ([command]) => ({ command }));
+  bind("idle", "onStateChanged", "idle.onStateChanged", ([newState]) => ({ newState }));
+  bind("alarms", "onAlarm", "alarms.onAlarm", ([alarm]) => alarm ?? {});
+  bind("storage", "onChanged", "storage.onChanged", ([changes, areaName]) => ({ changes, areaName }));
+  bind("notifications", "onClicked", "notifications.onClicked", ([notificationId]) => ({ notificationId }));
+  bind("action", "onClicked", "action.onClicked", ([tab]) => tab ?? {});
+  bind("runtime", "onStartup", "runtime.onStartup", () => ({}));
+  bind("runtime", "onInstalled", "runtime.onInstalled", ([details]) => details ?? {});
+  bind("runtime", "onSuspend", "runtime.onSuspend", () => ({}));
+}
+wireHookListeners();
 chrome.runtime.onInstalled.addListener(async () => {
   const mem = masterMemory();
   if (!await mem.get("preferences")) {

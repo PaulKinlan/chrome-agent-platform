@@ -124,12 +124,12 @@
           <div class="recipes" style="margin-bottom:20px">
             <div class="tag">Recipes</div>
             <div id="recipes"
-              style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
+              style="display:flex;flex-direction:column;gap:10px;margin-top:8px"></div>
           </div>
-          <h2>Active conversation</h2>
-          <div id="tasks" role="status" aria-live="polite">
-            <p style="color:var(--muted)">No tasks yet — start one above.</p>
-          </div>
+          <h2>Conversation</h2>
+          <div id="conversation" role="log" aria-live="polite"
+            aria-relevant="additions"
+            style="max-height:60vh; overflow-y:auto; display:flex; flex-direction:column;"></div>
         </div>
         <div class="panel">
           <h2>Site agents</h2>
@@ -137,6 +137,11 @@
             id="site-agents"><span style="color:var(--muted)">discovering…</span></div>
           <p
             style="color:var(--muted); font-size:12px; margin-top:12px;">Sites with WebMCP tools are callable agents. Sites without them get an inferred tool profile.</p>
+
+          <h2 style="margin-top:24px">Background agents</h2>
+          <p style="color:var(--muted); font-size:12px;">Live-in-the-background agents that run on a schedule. Enable one to let it work quietly (e.g. the Sorting Hat groups tabs by domain).</p>
+          <div id="background-agents"
+            style="display:flex;flex-direction:column;gap:8px;margin-top:8px"></div>
         </div>
       </div>
     </div>
