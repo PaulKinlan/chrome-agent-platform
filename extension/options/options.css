@@ -399,6 +399,131 @@ input:focus, select:focus, textarea:focus {
   grid-area: toggle;
 }
 
+/* "Add background agent" — the NEW customizable HTML select (base-select). */
+.agent-select-wrap {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+}
+.agent-select-wrap .field-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.agent-select,
+.agent-select::picker(select) {
+  appearance: base-select;
+}
+.agent-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.agent-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.agent-select > button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.agent-select selectedcontent {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-select .chevron {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.agent-select::picker(select) {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.35rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35);
+  width: anchor-size(width);
+  color: var(--text);
+}
+.agent-select option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.agent-select option:hover {
+  background: var(--bg);
+}
+.agent-select option::before {
+  display: none;
+}
+.agent-select option:checked {
+  background: var(--accent);
+  color: var(--btn-fg);
+}
+.agent-select option:checked .opt-title {
+  font-weight: 700;
+}
+.agent-select option:checked .opt-desc {
+  color: var(--btn-fg);
+  opacity: 0.85;
+}
+.agent-select .opt-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: inherit;
+  flex: 0 0 auto;
+}
+.agent-select .opt-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.agent-select .opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.agent-select .opt-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.agent-select .opt-desc {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+/* In the closed button, hide the mirrored rich description (keep it compact). */
+.agent-select selectedcontent .opt-desc {
+  display: none;
+}
+
 /* Optional-permission capability panel. */
 .permission-list {
   display: grid;

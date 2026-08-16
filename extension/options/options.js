@@ -1,6 +1,7 @@
 // options.js — the dedicated settings/configuration page.
 
 import { RECIPES } from "../lib/recipes.js";
+import { RECIPE_ICON } from "../shared/recipe-icons.js";
 import {
   CAPABILITIES,
   capabilityStatus,
@@ -293,69 +294,154 @@ async function renderAgents() {
   $("#agent-provider-list").replaceChildren();
 }
 
-// ── Background agents (scheduled recipes, a toggle each) ──
+// ── Background agents (scheduled recipes) ──
+function backgroundAgentRow(a) {
+  const row = document.createElement("div");
+  row.className = "background-agent-row";
+
+  const name = document.createElement("span");
+  name.className = "perm-name";
+  name.textContent = a.name;
+
+  const state = document.createElement("span");
+  state.className = "perm-state" + (a.enabled ? " running" : " stopped");
+  state.textContent = a.enabled ? "Running" : "Stopped";
+
+  const hint = document.createElement("span");
+  hint.className = "muted";
+  hint.textContent =
+    (a.description || "") +
+    (a.schedule?.periodInMinutes
+      ? ` · runs every ${a.schedule.periodInMinutes} min`
+      : "");
+
+  const label = document.createElement("label");
+  label.className = "switch";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = Boolean(a.enabled);
+  const track = document.createElement("span");
+  track.className = "track";
+  track.setAttribute("aria-hidden", "true");
+  const sr = document.createElement("span");
+  sr.className = "sr-only";
+  sr.textContent = `${a.enabled ? "Disable" : "Enable"} ${a.name}`;
+  label.append(input, track, sr);
+
+  input.addEventListener("change", async () => {
+    const enabled = input.checked;
+    const out = await chrome.runtime
+      .sendMessage({ type: "background-agent.set", id: a.id, enabled })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    saveFlash(
+      out?.ok
+        ? `${a.name} ${enabled ? "enabled." : "disabled."}`
+        : `Could not update ${a.name}: ${out?.error ?? "failed"}.`,
+    );
+    renderBackgroundAgents();
+  });
+
+  row.append(name, state, hint, label);
+  return row;
+}
+
+// The "Add background agent" control uses the NEW customizable HTML select
+// (appearance: base-select) with rich icon+name+description options — the
+// modern-web-guidance rich-media-picker pattern. Built with DOM APIs so the
+// rich content survives (innerHTML would be stripped by the select parser).
+function addBackgroundAgentSelect(disabled, onChange) {
+  const wrap = document.createElement("div");
+  wrap.className = "agent-select-wrap";
+
+  const label = document.createElement("label");
+  label.className = "field-label";
+  label.textContent = "Add a background agent";
+
+  const select = document.createElement("select");
+  select.className = "agent-select";
+  select.setAttribute("aria-label", "Add a background agent");
+
+  const button = document.createElement("button");
+  button.type = "button";
+  const selectedcontent = document.createElement("selectedcontent");
+  const chevron = document.createElement("span");
+  chevron.className = "chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.textContent = "▾";
+  button.append(selectedcontent, chevron);
+  select.append(button);
+
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Add a background agent…";
+  empty.selected = true;
+  select.append(empty);
+
+  for (const a of disabled) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.setAttribute("aria-label", a.name);
+    const svg = RECIPE_ICON[a.icon] ?? "";
+    const name = document.createElement("span");
+    name.className = "opt-title";
+    name.textContent = a.name;
+    const desc = document.createElement("span");
+    desc.className = "opt-desc";
+    desc.textContent = a.description ?? "";
+    const text = document.createElement("span");
+    text.className = "opt-text";
+    text.append(name, desc);
+    opt.append(text);
+    if (svg) {
+      const icon = document.createElement("span");
+      icon.className = "opt-icon";
+      icon.innerHTML = svg;
+      opt.prepend(icon);
+    }
+    select.append(opt);
+  }
+
+  select.addEventListener("change", async () => {
+    const id = select.value;
+    if (!id) return;
+    const agent = disabled.find((a) => a.id === id);
+    const out = await chrome.runtime
+      .sendMessage({ type: "background-agent.set", id, enabled: true })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    saveFlash(
+      out?.ok
+        ? `${agent?.name ?? id} enabled.`
+        : `Could not enable ${agent?.name ?? id}: ${out?.error ?? "failed"}.`,
+    );
+    select.value = "";
+    onChange();
+  });
+
+  wrap.append(label, select);
+  return wrap;
+}
+
 async function renderBackgroundAgents() {
   const res = await chrome.runtime
     .sendMessage({ type: "background-agent.list" })
     .catch(() => ({ agents: [] }));
   const agents = Array.isArray(res.agents) ? res.agents : [];
+  const enabled = agents.filter((a) => a.enabled);
+  const disabled = agents.filter((a) => !a.enabled);
+
   const list = $("#background-agent-list");
   list.replaceChildren();
-  if (!agents.length) {
+
+  if (!enabled.length) {
     const p = document.createElement("p");
     p.className = "muted";
-    p.textContent = "No background agents configured.";
+    p.textContent = "No background agents running.";
     list.appendChild(p);
-    return;
   }
-  for (const a of agents) {
-    const row = document.createElement("div");
-    row.className = "background-agent-row";
+  for (const a of enabled) list.appendChild(backgroundAgentRow(a));
 
-    const name = document.createElement("span");
-    name.className = "perm-name";
-    name.textContent = a.name;
-
-    const state = document.createElement("span");
-    state.className = "perm-state" + (a.enabled ? " running" : " stopped");
-    state.textContent = a.enabled ? "Running" : "Stopped";
-
-    const hint = document.createElement("span");
-    hint.className = "muted";
-    hint.textContent =
-      (a.description || "") +
-      (a.schedule?.periodInMinutes
-        ? ` · runs every ${a.schedule.periodInMinutes} min`
-        : "");
-
-    const label = document.createElement("label");
-    label.className = "switch";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = Boolean(a.enabled);
-    const track = document.createElement("span");
-    track.className = "track";
-    track.setAttribute("aria-hidden", "true");
-    const sr = document.createElement("span");
-    sr.className = "sr-only";
-    sr.textContent = `${a.enabled ? "Disable" : "Enable"} ${a.name}`;
-    label.append(input, track, sr);
-
-    input.addEventListener("change", async () => {
-      const enabled = input.checked;
-      const out = await chrome.runtime
-        .sendMessage({ type: "background-agent.set", id: a.id, enabled })
-        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-      if (out?.ok) {
-        saveFlash(enabled ? `${a.name} enabled.` : `${a.name} disabled.`);
-      } else {
-        saveFlash(`Could not update ${a.name}: ${out?.error ?? "failed"}.`);
-      }
-      renderBackgroundAgents();
-    });
-
-    row.append(name, state, hint, label);
-    list.appendChild(row);
+  if (disabled.length) {
+    list.appendChild(addBackgroundAgentSelect(disabled, renderBackgroundAgents));
   }
 }
 

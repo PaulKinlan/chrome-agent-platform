@@ -243,6 +243,10 @@ document.getElementById("open-directory")?.addEventListener(
   "click",
   () => openView("directory/directory.html", "Directory"),
 );
+document.getElementById("open-recipes")?.addEventListener(
+  "click",
+  () => openView("recipes/index.html", "Recipes"),
+);
 
 setStatus("ready");
 

@@ -1,6 +1,8 @@
 // recipes/recipes.js — the documented on-demand recipe page. Each recipe is a
-// card: what it does (name + description), how it works (a short summary), the
-// optional capabilities it needs, and a Run button. Grouped by intent.
+// <capability-row> (the SAME shared row component as the hub's site agents,
+// artifacts, and the settings' permission/hook lists — icon | name+description
+// STACKED | right-aligned action) + a collapsed "how it works" <details> for
+// the documentation. Grouped by intent.
 
 import { send } from "../lib/messages.js";
 import { RECIPE_ICON } from "../shared/recipe-icons.js";
@@ -14,61 +16,45 @@ function escapeHtml(s) {
   );
 }
 
-function setRunLabel(btn, text) {
-  btn.textContent = text;
-}
-
-async function runRecipe(r, btn) {
-  setRunLabel(btn, "Running…");
-  btn.disabled = true;
-  const out = await send("recipe.run", { id: r.id });
-  btn.disabled = false;
-  setRunLabel(btn, out?.ok ? "Done ✓" : "Retry");
-  setTimeout(() => setRunLabel(btn, "Run"), 1800);
-}
-
+/** A recipe = the shared capability-row (consistent layout) + a collapsed
+ * "how it works" details for the documentation. */
 function recipeCard(r) {
-  const card = document.createElement("div");
-  card.className = "card";
+  const wrap = document.createElement("div");
+  wrap.className = "recipe";
 
-  const head = document.createElement("div");
-  head.className = "card-head";
-  head.innerHTML =
-    `<span class="card-icon" aria-hidden="true">${RECIPE_ICON[r.icon] ?? ""}</span>` +
-    `<span class="card-title"><span class="card-name">${escapeHtml(r.name)}</span>` +
-    `<span class="card-desc">${escapeHtml(r.description ?? "")}</span></span>`;
+  const needs = (r.requiredCapabilities ?? []).length
+    ? `needs ${r.requiredCapabilities.join(", ")}`
+    : "no extra permissions";
+  const baseDesc = `${r.description ?? ""} · ${needs}`;
 
-  const body = document.createElement("div");
-  body.className = "card-body";
-  const how = document.createElement("div");
-  how.className = "how";
-  how.textContent = r.prompt?.split(".")[0]?.trim() + "." ?? "";
-  body.append(how);
+  const row = document.createElement("capability-row");
+  row.setAttribute("name", r.name);
+  row.setAttribute("description", baseDesc);
+  row.setAttribute("icon", RECIPE_ICON[r.icon] ?? "");
+  row.setAttribute("action", "run");
+  row.addEventListener("run", async () => {
+    row.setAttribute("description", "Running…");
+    const out = await send("recipe.run", { id: r.id });
+    row.setAttribute(
+      "description",
+      out?.ok ? "Done — ran the recipe." : "Failed — try again.",
+    );
+    setTimeout(() => row.setAttribute("description", baseDesc), 2000);
+  });
 
-  const meta = document.createElement("div");
-  meta.className = "card-meta";
-  for (const c of r.requiredCapabilities ?? []) {
-    const n = document.createElement("span");
-    n.className = "need";
-    n.textContent = c;
-    meta.append(n);
-  }
-  body.append(meta);
-
-  const foot = document.createElement("div");
-  foot.className = "card-foot";
+  const details = document.createElement("details");
+  details.className = "how";
+  const summary = document.createElement("summary");
+  summary.textContent = "How it works";
+  const how = document.createElement("p");
+  how.textContent = r.prompt ?? "";
   const hint = document.createElement("span");
-  hint.className = "need";
+  hint.className = "hint";
   hint.textContent = `/task:${r.id}`;
-  const run = document.createElement("button");
-  run.type = "button";
-  run.className = "run";
-  run.textContent = "Run";
-  run.addEventListener("click", () => runRecipe(r, run));
-  foot.append(hint, run);
+  details.append(summary, how, hint);
 
-  card.append(head, body, foot);
-  return card;
+  wrap.append(row, details);
+  return wrap;
 }
 
 async function render() {
@@ -94,9 +80,5 @@ async function render() {
     root.append(group);
   }
 }
-
-document.getElementById("back")?.addEventListener("click", () => {
-  history.length > 1 ? history.back() : (location.href = "../ntp/ntp.html");
-});
 
 render();

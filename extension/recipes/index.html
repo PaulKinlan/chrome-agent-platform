@@ -8,109 +8,80 @@
     <script type="module" src="../shared/apply-theme.js"></script>
     <script type="module" src="../shared/components.js"></script>
     <style>
+    /* The recipes page is opened IN-CONTEXT from the hub (the view overlay
+       provides the single Back button), so it has NO back button of its own.
+       Layout mirrors the hub: a max-width column of intent-grouped
+       <capability-row> lists — the same shared row component everywhere. */
     .wrap {
       max-width: 720px;
       margin: 0 auto;
-      padding: 40px 24px 64px;
+      padding: 32px 24px 64px;
     }
-    .top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
+    .head {
+      margin-bottom: 6px;
     }
     .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
     .logo span { color: var(--accent); }
     .sub {
       color: var(--muted);
       font-size: var(--text-sm);
-      margin-bottom: 28px;
+      margin-bottom: 24px;
       max-width: 56ch;
     }
-    .intent-group { margin-bottom: 28px; }
+    .sub .muted { color: var(--muted); }
+
+    .intent-group { margin-bottom: 24px; }
     .intent-head {
       font-size: var(--text-xs);
       color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 0.06em;
       margin-bottom: 8px;
+      padding: 0 14px;
     }
-    .card {
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--panel);
-      margin-bottom: 12px;
-      overflow: hidden;
+    .intent-group .recipe {
+      border-bottom: 1px solid var(--border);
     }
-    .card-head {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 14px 14px 10px;
+    .intent-group .recipe:last-child { border-bottom: 0; }
+    .recipe capability-row {
+      display: block;
     }
-    .card-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 32px;
-      height: 32px;
-      border-radius: var(--radius-sm);
+    .recipe capability-row::part(row) {
+      border-bottom: 0;
+    }
+    .recipe .how {
+      padding: 0 14px 12px 54px; /* align with the row's label column (28px icon + 12px gap + 14px) */
+      font-size: var(--text-xs);
       color: var(--muted);
-      border: 1px solid var(--border);
-      flex: 0 0 auto;
     }
-    .card-icon svg { width: 18px; height: 18px; }
-    .card-title { flex: 1; min-width: 0; }
-    .card-name { font-weight: 600; font-size: var(--text-base); }
-    .card-desc { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; }
-    .card-body {
-      padding: 0 14px 14px;
-      font-size: var(--text-sm);
+    .recipe .how summary {
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+      font-size: var(--text-xs);
+      margin-bottom: 6px;
+      user-select: none;
     }
-    .card-body .how { color: var(--text); line-height: 1.5; }
-    .card-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 10px;
+    .recipe .how summary:hover { color: var(--accent); }
+    .recipe .how p {
+      margin: 0 0 8px;
+      line-height: 1.5;
+      max-width: 70ch;
     }
-    .need {
+    .recipe .how .hint {
       font-size: 11px;
-      color: var(--muted);
       border: 1px solid var(--border);
       border-radius: 999px;
       padding: 2px 8px;
-    }
-    .card-foot {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 14px;
-      border-top: 1px solid var(--border);
-    }
-    .run {
-      font-size: var(--text-sm);
       color: var(--muted);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 5px 14px;
-      background: transparent;
-      cursor: pointer;
-      font: inherit;
-    }
-    .run:hover, .run:focus-visible {
-      color: var(--accent);
-      border-color: var(--accent);
-      outline: none;
     }
     .empty { color: var(--muted); font-size: var(--text-sm); padding: 14px; }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <header class="top">
+      <header class="head">
         <div class="logo">Recipes</div>
-        <button class="btn ghost" id="back" type="button">← Hub</button>
       </header>
       <p class="sub">
         On-demand utility agents, each documented below. Run one here, or type
