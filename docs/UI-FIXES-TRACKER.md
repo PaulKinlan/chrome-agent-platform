@@ -18,3 +18,4 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VISUALLY ver
 - `npm run test:components` — 16/16 (updated the capability-row assertion for the switch-toggle).
 - `npm run test:chrome` — 118/118 (scoped the permissions capability check to `#permission-list`).
 - CDP-driven: single switch track, no toggle/desc overlap, hooks height stable on deny, back button removed, origins full-width.
+14. **Error console: copy buttons not working + errors not surfaced** — each log line needs a WORKING copy button + a "Copy all" at the top (asked before, not landing). AND the console shows warnings but NOT the actual error text (the SW API errors, console.error, AI errors) — capture + surface the real errors prominently (a distinct error level, the full error message + stack).

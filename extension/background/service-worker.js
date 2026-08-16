@@ -724,7 +724,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           try {
             await chrome.notifications.create(`cap:${taskId}`, {
               type: "basic",
-              iconUrl: chrome.runtime.getURL("icon128.png"),
+              iconUrl: chrome.runtime.getURL("icons/icon128.png"),
               title: "Scheduled task complete",
               message: String(result ?? "").slice(0, 160),
             });
