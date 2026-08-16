@@ -205,6 +205,16 @@ export function isHtmlDocument(text) {
   return false;
 }
 
+/**
+ * Render untrusted HTML output in a SANDBOXED iframe (the co-do double-iframe
+ * pattern: this trusted extension surface is the OUTER frame; the model's HTML
+ * runs in an INNER opaque-sandbox iframe with no access to the extension origin
+ * and no top-navigation/forms).
+ */
+export function renderHtmlFrame(html) {
+  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts allow-popups" srcdoc="${escapeHtml(html)}"></iframe></div>`;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * Command + mention registry (the / palette + @ mentions in the composer).
  * Self-contained (no imports) so the docs showcase loads the same file.
@@ -567,12 +577,17 @@ class AttachButton extends Component {
       .plus { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
         border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:8px;
-        padding:0; cursor:pointer; font:inherit; line-height:1; }
+        padding:0; cursor:pointer; font:inherit; line-height:1; anchor-name:--attach-anchor; }
       .plus svg { display:block; }
       .plus:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .menu { position:absolute; bottom:calc(100% + 6px); left:0; background:var(--panel,#ffffff);
+      .menu { position:absolute; inset:auto; margin:0; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
-        padding:4px; min-width:180px; z-index:20; }
+        padding:4px; min-width:200px; z-index:20;
+        position-anchor:--attach-anchor; position-area:top span-left;
+        position-try-fallbacks:flip-block, flip-inline; }
+      @supports not (position-area: top) {
+        .menu { position:absolute; bottom:calc(100% + 6px); left:0; }
+      }
       .menu[hidden] { display:none; }
       .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
         color:var(--text,#1d1b18); padding:8px 10px; border-radius:7px; cursor:pointer; font:inherit; }
@@ -580,12 +595,11 @@ class AttachButton extends Component {
       .note { font-size:11px; color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
-      <div class="menu" role="menu" aria-label="${escapeHtml(label)}"${open ? "" : " hidden"}>
+      <div class="menu" role="menu" aria-label="${escapeHtml(label)}" popover="manual"${open ? "" : " hidden"}>
         <button type="button" role="menuitem" data-kind="file">Add file</button>
         <button type="button" role="menuitem" data-kind="record-audio">Record audio</button>
         <button type="button" role="menuitem" data-kind="capture-camera">Capture camera</button>
-        <button type="button" role="menuitem" data-kind="other">Add other file</button>
-        <p class="note">Files are attached; text files are read by the agent. Media bytes are not sent to the model yet.</p>
+        <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
       </div>`);
     this._btn = this._root.querySelector(".plus");
     this._menu = this._root.querySelector(".menu");
@@ -625,11 +639,19 @@ class AttachButton extends Component {
   }
   _toggle(open) {
     if (!this._menu) return;
-    this._menu.hidden = !open;
     if (open) {
+      if (!supportsAnchorPositioning()) placeFloating(this._btn, this._menu, { minWidth: 200 });
+      this._menu.hidden = false;
+      if (typeof this._menu.showPopover === "function") {
+        try { this._menu.showPopover(); } catch { /* already shown */ }
+      }
       this.setAttribute("open", TRUE);
       this._menu.querySelector("button[role=menuitem]")?.focus();
     } else {
+      if (typeof this._menu.hidePopover === "function") {
+        try { this._menu.hidePopover(); } catch { /* already hidden */ }
+      }
+      this._menu.hidden = true;
       this.removeAttribute("open");
     }
   }
@@ -956,6 +978,9 @@ class MessageBubble extends Component {
       .body code.inline-code, .body :not(pre) > code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:1px 5px; }
       .body strong { font-weight:600; }
       .body em { font-style:italic; }
+      /* rendered HTML output — the sandboxed iframe */
+      .html-frame { margin-top:4px; }
+      .html-frame iframe { width:100%; min-height:220px; max-height:480px; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
       /* thinking trace — collapsible, muted, clearly not a wall of text */
       .think { width:100%; }
       .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
@@ -1002,7 +1027,12 @@ class MessageBubble extends Component {
         markup = `<details class="think"><summary><svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg><span>${escapeHtml(label)}</span></summary><div class="trace">${escapeHtml(content)}</div></details>`;
       }
     } else {
-      const body = (role === "agent" || role === "system" || role === "user") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
+      let body;
+      if ((role === "agent" || role === "system") && isHtmlDocument(content)) {
+        body = renderHtmlFrame(content);
+      } else {
+        body = (role === "agent" || role === "system" || role === "user") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
+      }
       markup = `<div class="msg ${role}"><div class="body">${body}</div></div>`;
     }
     mountTemplate(this, style, markup);
@@ -1155,11 +1185,16 @@ class AgentComposer extends Component {
       <div class="composer-status" role="status" aria-live="polite"></div>`;
     mountTemplate(this, `
       :host { display:block; }
-      .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
+      .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
       .composer:focus-within { border-color:var(--accent,#0e6e63); }
-      .popup { position:absolute; top:calc(100% + 4px); left:0; right:0; background:var(--panel,#ffffff);
+      .popup { position:absolute; inset:auto; margin:0; left:0; right:0; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08));
-        max-height:260px; overflow-y:auto; padding:4px; z-index:40; }
+        max-height:260px; overflow-y:auto; padding:4px; z-index:40;
+        position-anchor:--composer-anchor; position-area:bottom span-x-start span-x-end;
+        position-try-fallbacks:flip-block; }
+      @supports not (position-area: top) {
+        .popup { position:absolute; top:calc(100% + 4px); left:0; right:0; }
+      }
       .popup[hidden] { display:none; }
       .popup .item { display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:7px; cursor:pointer; }
       .popup .item:hover, .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
@@ -1357,7 +1392,12 @@ class AgentComposer extends Component {
     this._popupActive = this._popupItems.length ? 0 : -1;
     if (!this._popupItems.length) { this._hidePopup(); return; }
     this._renderPopupItems();
-    if (this._popup) this._popup.hidden = false;
+    if (this._popup) {
+      this._popup.hidden = false;
+      if (!supportsAnchorPositioning()) {
+        placeFloating(this._root.querySelector(".composer"), this._popup, { fullWidth: true });
+      }
+    }
   }
 
   _renderPopupItems() {
@@ -1684,8 +1724,13 @@ class PanelButton extends Component {
       .console .ts { flex:0 0 auto; color:var(--muted,#635e56); }
       .console .lv { flex:0 0 auto; width:44px; text-transform:uppercase; font-size:10px; font-weight:700; letter-spacing:.04em; }
       .console .lvl-error { border-left-color:var(--danger,#b3261e); } .console .lvl-error .lv { color:var(--danger,#b3261e); }
+      .console .lvl-error .msg { color:var(--danger,#b3261e); }
       .console .lvl-warn { border-left-color:var(--warning,#9a6700); } .console .lvl-warn .lv { color:var(--warning,#9a6700); }
+      .console .src { flex:0 0 auto; color:var(--muted,#635e56); font-size:10px; opacity:.8; }
       .console .msg { flex:1; word-break:break-word; white-space:pre-wrap; }
+      .console .line-copy { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; font-size:11px; padding:0 4px; border-radius:4px; opacity:0; }
+      .console .line:hover .line-copy, .console .line-copy:focus-visible { opacity:1; }
+      .console .line-copy:hover { color:var(--text,#1d1b18); background:var(--panel-2,#efede8); }
       .shield-body .sect { padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .shield-body .sect:last-child { border-bottom:0; }
       .shield-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:8px; }
@@ -1710,6 +1755,7 @@ class PanelButton extends Component {
     this._trigger?.addEventListener("click", () => this._toggle());
     this._panel?.querySelector("[data-close]")?.addEventListener("click", () => this._close());
     this._panel?.querySelector("[data-clear]")?.addEventListener("click", () => this._clear());
+    this._panel?.querySelector("[data-copy-all]")?.addEventListener("click", () => this._copyAll());
     // Close on Escape + outside click (light-dismiss, like a native dialog).
     this._bindDocument("keydown", (e) => { if (e.key === "Escape") this._close(); });
     this._bindDocument("pointerdown", (e) => {
@@ -1743,6 +1789,30 @@ class PanelButton extends Component {
   _panelMarkup() { return ""; }
   async _refreshPanel() {}
   async _clear() {}
+  async _copyAll() {}
+
+  /** Copy text to the clipboard with a fallback (headless/file:// safe). */
+  async _writeClipboard(text) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch { /* fall through to the execCommand path */ }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand?.("copy");
+      ta.remove();
+      return ok === true;
+    } catch {
+      return false;
+    }
+  }
 }
 class ErrorConsole extends PanelButton {
   get triggerIcon() { return ICONS.terminal; }
@@ -1750,6 +1820,7 @@ class ErrorConsole extends PanelButton {
     return `
       <div class="phead">
         <span class="t">Console</span>
+        <button type="button" data-copy-all>Copy all</button>
         <button type="button" data-clear>Clear</button>
         <button type="button" data-close aria-label="Close">${ICONS.close}</button>
       </div>
@@ -1760,23 +1831,57 @@ class ErrorConsole extends PanelButton {
     if (!body) return;
     const res = await backend("diagnostics.list");
     const entries = res.entries || [];
+    this._entries = entries;
     if (!entries.length) {
       body.innerHTML = `<div class="empty">No errors captured. The console shows extension errors, warnings, and unhandled rejections as they happen.</div>`;
       return;
     }
-    body.innerHTML = entries.map((e) =>
+    // Surface ERRORS first (they matter more than the warning noise), newest
+    // first within each level, so the real failure text is prominent.
+    const rank = { error: 0, warn: 1, info: 2 };
+    const ordered = entries.slice().sort((a, b) => {
+      const ra = rank[a.level] ?? 3;
+      const rb = rank[b.level] ?? 3;
+      return ra !== rb ? ra - rb : (b.ts - a.ts);
+    });
+    body.innerHTML = ordered.map((e) =>
       `<div class="line lvl-${escapeHtml(e.level)}">` +
       `<span class="ts">${escapeHtml(fmtTime(e.ts))}</span>` +
       `<span class="lv">${escapeHtml(e.level)}</span>` +
-      `<span class="msg">${escapeHtml(e.message)}</span></div>`
+      `<span class="msg">${escapeHtml(e.message)}</span>` +
+      (e.source ? `<span class="src">${escapeHtml(e.source)}</span>` : "") +
+      `<button type="button" class="line-copy" data-copy aria-label="Copy this line">Copy</button></div>`
     ).join("");
     body.scrollTop = 0;
+    // Delegate the per-line copy (the list is re-rendered on refresh).
+    body.onclick = async (ev) => {
+      const btn = ev.target.closest?.("[data-copy]");
+      if (!btn) return;
+      const line = btn.closest(".line");
+      const msg = line?.querySelector(".msg")?.textContent || "";
+      const lv = line?.querySelector(".lv")?.textContent || "";
+      if (await this._writeClipboard(msg)) {
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = "Copy"; }, 1400);
+      }
+    };
   }
   async _clear() {
     await backend("diagnostics.clear");
     this.setAttribute("count", "0");
+    this._entries = [];
     await this._refreshPanel();
     this._emit("cleared");
+  }
+  async _copyAll() {
+    const entries = this._entries || [];
+    const text = entries.map((e) =>
+      `[${fmtTime(e.ts)}] ${e.level}${e.source ? ` (${e.source})` : ""}: ${e.message}`
+    ).join("\n");
+    const btn = this._panel?.querySelector("[data-copy-all]");
+    if (await this._writeClipboard(text || "")) {
+      if (btn) { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy all"; }, 1400); }
+    }
   }
 }
 customElements.define("error-console", ErrorConsole);

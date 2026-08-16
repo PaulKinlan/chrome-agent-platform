@@ -227,7 +227,7 @@
       );
 
       // dialog
-      document.getElementById("open-dialog")?.addEventListener("click", () => document.getElementById("dialog").open());
+      document.getElementById("open-dialog")?.addEventListener("click", () => document.getElementById("dialog").show());
       document.getElementById("dialog")?.addEventListener("close", () => log("#hub-log", "dialog closed"));
       document.getElementById("config-form")?.addEventListener("save", (e) => log("#hub-log", `agent saved: ${JSON.stringify(e.detail)}`));
 
