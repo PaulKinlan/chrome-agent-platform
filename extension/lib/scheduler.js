@@ -206,17 +206,20 @@ export async function scheduleTask(
  * blocker required an owner-visible quarantine list — a quarantined task is
  * otherwise invisible and can never be cancelled. */
 export async function listScheduledTasks() {
-  await withLock(async () => {}); // serialize the read against concurrent writes
-  const store = await kvGet(TASK_KEY);
-  const tasks = store[TASK_KEY] ?? {};
-  return Object.values(tasks).map((t) => ({
-    name: t.name,
-    task: t.task,
-    at: t.at,
-    periodInMinutes: t.periodInMinutes,
-    quarantined: Boolean(t.quarantined),
-    quarantinedAt: t.quarantinedAt ?? null,
-  }));
+  // Serialize the read INSIDE the scheduling lock so a concurrent schedule/cancel
+  // cannot interleave with the snapshot (the list must be atomic w.r.t. writes).
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const tasks = store[TASK_KEY] ?? {};
+    return Object.values(tasks).map((t) => ({
+      name: t.name,
+      task: t.task,
+      at: t.at,
+      periodInMinutes: t.periodInMinutes,
+      quarantined: Boolean(t.quarantined),
+      quarantinedAt: t.quarantinedAt ?? null,
+    }));
+  });
 }
 
 /** Authoritatively CANCEL a scheduled task (an owner-visible route for a

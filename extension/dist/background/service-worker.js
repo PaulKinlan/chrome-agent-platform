@@ -67415,18 +67415,18 @@ async function scheduleTask({ task, at, delayMs, periodInMinutes, attachments = 
   });
 }
 async function listScheduledTasks() {
-  await withLock(async () => {
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const tasks = store[TASK_KEY] ?? {};
+    return Object.values(tasks).map((t) => ({
+      name: t.name,
+      task: t.task,
+      at: t.at,
+      periodInMinutes: t.periodInMinutes,
+      quarantined: Boolean(t.quarantined),
+      quarantinedAt: t.quarantinedAt ?? null
+    }));
   });
-  const store = await kvGet(TASK_KEY);
-  const tasks = store[TASK_KEY] ?? {};
-  return Object.values(tasks).map((t) => ({
-    name: t.name,
-    task: t.task,
-    at: t.at,
-    periodInMinutes: t.periodInMinutes,
-    quarantined: Boolean(t.quarantined),
-    quarantinedAt: t.quarantinedAt ?? null
-  }));
 }
 async function cancelScheduledTask(name25) {
   return withLock(async () => {
