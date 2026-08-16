@@ -676,7 +676,14 @@ class AttachButton extends Component {
         return;
       }
       const file = await this._pickFile(kind);
-      if (file) this._emit("attach", file);
+      if (!file) return;
+      if (file.overLimit) {
+        // Rejected at select time (the client-side bound): surface a clear
+        // status instead of attaching an over-budget file.
+        this._emit("attach-error", { message: `${file.name} is over the 8 MiB limit` });
+        return;
+      }
+      this._emit("attach", file);
     });
     this._bindDocument("click", (e) => {
       if (this._menu && !this._menu.hidden && !this._menu.contains(e.target) && e.target !== this._btn) {
@@ -715,6 +722,16 @@ class AttachButton extends Component {
       input.onchange = async () => {
         const file = input.files?.[0] ?? null;
         if (!file) return resolve(null);
+        // CLIENT-SIDE bound BEFORE the eager FileReader read (the wider-goal
+        // review's transport finding: the dataURL crossed runtime messaging
+        // before the SW bound could protect anything, so a large selected file
+        // could allocate + base64 + exceed the message limit first). Reject an
+        // over-budget file at select time — never materialize it.
+        const MAX_RAW_BYTES = 8 * 1024 * 1024; // 8 MiB raw (~10.7 MiB dataURL)
+        if (file.size > MAX_RAW_BYTES) {
+          resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL: "", overLimit: true });
+          return;
+        }
         // Read the bytes as a dataURL so the service worker can actually send
         // TEXT content to the model (and label media honestly). The SW bounds
         // the payload; we only pass the decoded data through.
@@ -1313,6 +1330,7 @@ class AgentComposer extends Component {
     });
     this._attach?.addEventListener("attach-media", (e) => this._captureMedia(e.detail?.kind));
     this._attach?.addEventListener("attach-context", (e) => this._contextAction(e.detail?.kind));
+    this._attach?.addEventListener("attach-error", (e) => this.setStatus(e.detail?.message || "attachment rejected", false));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
   }
 
