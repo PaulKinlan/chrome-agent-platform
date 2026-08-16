@@ -31,6 +31,23 @@ function check(name: string, cond: boolean, detail?: unknown) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Drift guard: the docs/ component gallery must be byte-identical to the
+// canonical extension/shared/ design-system source (single source of truth).
+// Fails the gate if the deploy copy has drifted from the canonical files.
+const DRIFT_FILES: [string, string][] = [
+  ["extension/shared/components.js", "docs/components.js"],
+  ["extension/shared/theme.css", "docs/theme.css"],
+];
+for (const [src, dst] of DRIFT_FILES) {
+  const [a, b] = await Promise.all([
+    Deno.readFile(`${ROOT}${src}`),
+    Deno.readFile(`${ROOT}${dst}`),
+  ]);
+  const identical = a.length === b.length &&
+    a.every((byte, i) => byte === b[i]);
+  check(`gallery sync: ${dst} matches ${src}`, identical, { srcBytes: a.length, dstBytes: b.length });
+}
+
 // A tiny static file server for the docs/ gallery (ES modules need HTTP).
 function serve(): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {

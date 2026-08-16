@@ -2,6 +2,7 @@
 // (the AI SDK + zod need bundling for the service-worker environment).
 import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
+import { syncGallery } from "./scripts/sync-gallery.mjs";
 
 const OUT = "extension/dist/background/service-worker.js";
 const OPTIONS_OUT = "extension/options/options.bundle.js";
@@ -88,11 +89,7 @@ if (remaining > 0) {
 }
 console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Function-constructor probe site(s); ${remaining} remaining)`);
 
-// Sync the design-system source into the docs/ component gallery so the
-// GitHub Pages showcase (docs/) always matches the canonical Web Components
-// in extension/shared/components.js. (The docs/ copies are committed too, so
-// the gallery works standalone; this keeps them from drifting on every build.)
-import { copyFile } from "node:fs/promises";
-await copyFile(new URL("./extension/shared/components.js", import.meta.url), new URL("./docs/components.js", import.meta.url));
-await copyFile(new URL("./extension/shared/theme.css", import.meta.url), new URL("./docs/theme.css", import.meta.url));
-console.log("synced docs/components.js + docs/theme.css");
+// Sync the design-system source into the docs/ component gallery (single
+// source of truth = extension/shared/; see scripts/sync-gallery.mjs). The
+// docs/ copies are committed too so the GitHub Pages showcase works standalone.
+await syncGallery();
