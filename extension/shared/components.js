@@ -278,7 +278,7 @@ class AttachButton extends Component {
       .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
         color:var(--text,#1d1b18); padding:8px 10px; border-radius:7px; cursor:pointer; font:inherit; }
       .menu button:hover, .menu button:focus-visible { background:var(--bg,#12121c); outline:none; }
-      .note { font-size:11px; color:var(--muted,#6e6a62); margin:6px 0 2px; max-width:220px; }
+      .note { font-size:11px; color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
       <div class="menu" role="menu" aria-label="${escapeHtml(label)}"${open ? "" : " hidden"}>
@@ -409,8 +409,8 @@ class PermissionRow extends Component {
       .perm { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); }
       .info { flex:1; min-width:0; }
       .name { font-weight:600; }
-      .desc { font-size:12px; color:var(--muted,#6e6a62); }
-      .state { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted,#6e6a62); }
+      .desc { font-size:12px; color:var(--muted,#635e56); }
+      .state { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted,#635e56); }
       .state.granted { color:var(--accent2,#34d399); }
       .state.warned { color:var(--warn,#f59e0b); }
       .btn { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; }
@@ -446,8 +446,8 @@ class SiteAgentCard extends Component {
       .badge { width:32px; height:32px; border-radius:8px; background:var(--accent,#0e6e63); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
       .who { flex:1; min-width:0; }
       .name { font-weight:600; }
-      .tools { font-size:12px; color:var(--muted,#6e6a62); }
-      .status { font-size:11px; color:var(--muted,#6e6a62); }
+      .tools { font-size:12px; color:var(--muted,#635e56); }
+      .status { font-size:11px; color:var(--muted,#635e56); }
     `, `<div class="card" role="button" tabindex="0" aria-label="Use site agent ${escapeHtml(short)}">
       <span class="badge" aria-hidden="true">@</span>
       <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${tools.length} tools</span></span>
@@ -534,13 +534,13 @@ class MessageBubble extends Component {
       :host { display:block; }
       .bubble { border-top:1px solid var(--border,#e3e0d9); padding:10px 0; }
       .bubble:first-child { border-top:0; }
-      .label { font-size:12px; color:var(--muted,#6e6a62); margin-bottom:4px; font-weight:600; }
+      .label { font-size:12px; color:var(--muted,#635e56); margin-bottom:4px; font-weight:600; }
       .body { white-space:pre-wrap; overflow-wrap:anywhere; }
       :host([role="error"]) .body { color:var(--danger,#f87171); }
       :host([role="result"]) .body { color:var(--accent2,#34d399); }
       :host([role="user"]) .body { font-weight:500; }
-      :host([role="tool"]) .body { color:var(--muted,#6e6a62); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
-      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#6e6a62); }
+      :host([role="tool"]) .body { color:var(--muted,#635e56); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+      .think { display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); }
       .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; }
       @keyframes sc-think { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } }
@@ -572,7 +572,7 @@ class ScreenshotStrip extends Component {
       .shot img { width:100%; height:100%; object-fit:cover; display:block; }
       .shot:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .lbl { position:absolute; inset:auto 0 0 0; font-size:9px; background:rgba(0,0,0,.6); color:#fff; padding:1px 3px; }
-      .empty { font-size:12px; color:var(--muted,#6e6a62); }
+      .empty { font-size:12px; color:var(--muted,#635e56); }
     `, shots.length ? `<div class="strip">${items}</div>` : `<span class="empty">No screenshots yet.</span>`);
   }
   _wire() {
@@ -611,16 +611,16 @@ class AgentComposer extends Component {
       <div class="composer-status" role="status" aria-live="polite"></div>`;
     mountTemplate(this, `
       :host { display:block; }
-      .composer { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:16px; }
+      .composer { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
       .composer:focus-within { border-color:var(--accent,#0e6e63); }
-      .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:60px; outline:none; }
+      .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
       .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       .composer .spacer { flex:1; }
       .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
         background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
         font:inherit; font-weight:600; cursor:pointer; }
       .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#6e6a62); }
+      .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#635e56); }
       .composer-status:empty { display:none; }
     `, html);
     this._input = this._root.querySelector("#task-input");
@@ -739,8 +739,8 @@ class AgentPicker extends Component {
       .agent:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .badge { width:28px; height:28px; border-radius:7px; background:var(--accent,#0e6e63); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
       .name { font-weight:600; }
-      .tools { display:block; font-size:12px; color:var(--muted,#6e6a62); }
-      .empty { color:var(--muted,#6e6a62); font-size:13px; }
+      .tools { display:block; font-size:12px; color:var(--muted,#635e56); }
+      .empty { color:var(--muted,#635e56); font-size:13px; }
     `, agents.length ? `<div class="list">${items}</div>` : `<span class="empty">No agents.</span>`);
   }
   _wire() {
@@ -762,7 +762,7 @@ class AgentConfigForm extends Component {
     mountTemplate(this, `
       :host { display:block; }
       .form { display:flex; flex-direction:column; gap:12px; }
-      label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted,#6e6a62); }
+      label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted,#635e56); }
       input, textarea { background:var(--bg,#12121c); border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:7px; padding:8px 10px; font:inherit; }
       input:focus-visible, textarea:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       .save { align-self:flex-start; border:0; border-radius:8px; padding:8px 16px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }

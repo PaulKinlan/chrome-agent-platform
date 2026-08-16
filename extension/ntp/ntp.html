@@ -32,18 +32,19 @@
       gap: 8px;
     }
     .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-size: var(--text-sm);
       color: var(--muted);
       margin-right: 4px;
     }
     .status .dot {
-      display: inline-block;
       width: 7px;
       height: 7px;
       border-radius: 50%;
       background: var(--accent2);
-      margin-right: 6px;
-      vertical-align: 1px;
+      flex: 0 0 auto;
     }
     .top-actions .icon-btn { color: var(--muted); }
     .top-actions .icon-btn:hover {
@@ -97,8 +98,6 @@
       color: var(--muted);
       font-size: var(--text-sm);
       padding: 14px;
-      border: 1px dashed var(--border);
-      border-radius: var(--radius-md);
     }
     </style>
   </head>

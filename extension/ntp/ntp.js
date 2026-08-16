@@ -146,8 +146,11 @@ const conversationEl = document.getElementById("conversation");
 async function refreshTasks() {
   const journal = await loadJournal();
   renderJournal(conversationEl, journal);
+  const section = conversationEl.closest("section");
   if (!conversationEl.children.length) {
-    conversationEl.innerHTML = `<div class="empty">Nothing yet — start with the composer above.</div>`;
+    if (section) section.hidden = true;
+  } else {
+    if (section) section.hidden = false;
   }
 }
 
