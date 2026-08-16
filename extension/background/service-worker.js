@@ -1182,7 +1182,7 @@ const handlers = {
     return { ok: true, name };
   },
 
-  // ── named agents (the persistent teammates) ────────────────────────────
+  // ── named agents (the persistent named agents) ────────────────────────────
   // Each named agent has its OWN OPFS sandbox (memory + history + skills +
   // agents.md), a name + avatar, and can be delegated tasks. The AUTHORITATIVE
   // registry lives in chrome.storage (cap:namedAgents); the master + the user

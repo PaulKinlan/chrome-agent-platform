@@ -87,7 +87,7 @@ async function renderSiteAgents() {
   refreshAgentCount();
 }
 
-// ── named agents (the persistent teammates) ──────────────────────────────
+// ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
   const el = document.getElementById("named-agents");
   if (!el) return;
