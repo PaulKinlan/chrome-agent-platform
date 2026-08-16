@@ -34,3 +34,11 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 ## Open questions for Paul
 - The provider default for a real model: Prompt API (on-device) vs a configured endpoint. Which?
 - The side-panel vs background-tab choice for driving pages (worker is evaluating).
+
+## Feature: Artifacts (Paul 2026-08-16)
+Agents create things for the user in the context of a task (generated pages, files, UI, data). We need:
+1. **Per-task artifact view** — see the artifacts a task produced, in the conversation.
+2. **Master artifacts view in the hub** — all artifacts across tasks/agents.
+3. **Use artifacts** — open/preview/use them.
+4. **Attach to a new task** — the + button should offer existing artifacts as attachments (so a task can build on a prior artifact).
+Artifacts are origin-keyed (per-agent) with a master index. Types: generated page (HTML), file, data, screenshot, UI fragment. This connects to the co-do double-iframe generative-UI work (a generated UI IS an artifact).
