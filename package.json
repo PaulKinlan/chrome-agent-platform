@@ -8,7 +8,8 @@
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
     "test": "deno test --allow-read tests/",
-    "test:chrome": "deno run -A scripts/chrome-journeys.ts"
+    "test:chrome": "deno run -A scripts/chrome-journeys.ts",
+    "test:components": "deno run -A scripts/component-gallery-smoke.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",
