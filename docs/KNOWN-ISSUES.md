@@ -49,3 +49,9 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 - The envelope quota undercounts the wrapper (a 262164-byte file accepted against the 262144 bound).
 - Legacy raw {__v,__value} gets corrupted; unsafe finite versions stop advancing.
 (Tracked for a background fix worker; not blocking the wider goals per Paul's directive.)
+
+## Wider-goal review (sol, 98bbc96) — CRITICAL + HIGH
+- **CRITICAL: storage.onChanged hook serializes full changes incl the providerConfig apiKey into the journal + the model prompt (credential leak); subscription/usage storage changes can recursively trigger unbounded paid runs.**
+- HIGH: untrusted hook payloads feed a hub with destructive management tools (no operation-specific owner grant); sidepanel onMessage navigate opens tabs with no sender/grant check; thread authority keys model-writable (forged threads index); unlocked thread/index RMW; global progress broadcast leaks/misattributes tool data; chat never keeps threadId (mixes the global journal); artifact body/index split writes race/orphan; model cross-origin admin lacks a scoped grant; tool cards use one lastTool + String(object); record audio/camera advertised but unwired; mic can survive disconnect.
+- Medium: hooks unbounded + catalog permissions undeclared/unrequestable; UTF-8 attachments mojibake; a11y gaps (focus/combobox/speaker/menu/contrast); skills unchecked; diagnostics length unbounded.
+(The apiKey leak + the recursive-run risk are the priority fixes.)
