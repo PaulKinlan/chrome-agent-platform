@@ -214,6 +214,42 @@ async function setValue(path, key, value, { isMaster, trusted = false }) {
   return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
 }
 
+/** Deep JSON equality for CAS compensation (memory values are JSON-serializable). */
+function jsonEquals(a, b) {
+  if (a === b) return true;
+  let sa;
+  let sb;
+  try {
+    sa = JSON.stringify(a);
+    sb = JSON.stringify(b);
+  } catch {
+    return false;
+  }
+  return sa === sb;
+}
+
+/** Compare-and-swap on a single key, under the global write mutex (atomic with
+ * every other `set`/`setTrusted`). Writes `nextValue` (or DELETES when
+ * `nextValue === undefined`) only if the key's current value JSON-equals
+ * `expectedValue`; returns whether the swap happened. This is the CAS primitive
+ * the compensation paths use so a stale run can NEVER clobber a concurrent
+ * legitimate write (the round-26 CAS-scoped-compensation blocker). */
+async function compareAndSet(path, key, expectedValue, nextValue, { isMaster }) {
+  return withWriteLock(async () => {
+    const dir = await openDir(path);
+    const current = await readJson(dir, `${key}.json`);
+    if (!jsonEquals(current, expectedValue)) return false;
+    if (nextValue === undefined) {
+      try {
+        await dir.removeEntry(`${key}.json`);
+      } catch { /* absent */ }
+      return true;
+    }
+    await writeJson(dir, `${key}.json`, nextValue);
+    return true;
+  });
+}
+
 /** A single origin-scoped store. `origin` is a canonical origin string or "master". */
 export function memoryStore(origin) {
   const isMaster = origin === MASTER;
@@ -242,6 +278,18 @@ export function memoryStore(origin) {
     },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
+    },
+    /** CAS delete: remove `key` ONLY if its current value JSON-equals
+     * `expectedValue` (the write being rolled back). Never deletes a concurrent
+     * legitimate write (the round-26 CAS-scoped-compensation blocker). */
+    async compareAndDelete(key, expectedValue) {
+      return await compareAndSet(path, key, expectedValue, undefined, { isMaster });
+    },
+    /** CAS restore: write `restoreValue` ONLY if the current value JSON-equals
+     * `expectedValue` (the stale run's write). Never clobbers a concurrent
+     * legitimate write. */
+    async compareAndRestore(key, expectedValue, restoreValue) {
+      return await compareAndSet(path, key, expectedValue, restoreValue, { isMaster });
     },
     /** Internal trusted write (approveTool/upsertTools/journalAppend/
      * enrollOrigin): same bounds + quotas, but reserved authority keys are
@@ -380,8 +428,24 @@ export async function journalAppend(store, entry, guard = null) {
     try {
       await guard();
     } catch (e) {
+      // GENERATION-SCOPED + CAS compensation (the round-26 blocker): the old
+      // code blindly restored `original` (the PRE-append journal) on ANY
+      // post-commit guard failure. When the guard failure is a RE-ENROLLMENT
+      // (delete→re-enroll during the awaited setTrusted), restoring `original`
+      // wrote the OLD enrollment's journal (with its secrets) into the NEW
+      // enrollment's reused store. Two distinct cases:
+      //   1. genMismatch (re-enrollment): the stale append landed in a REUSED
+      //      store — REMOVE it via CAS (delete `entries` only if the current
+      //      journal is STILL the array this run wrote). Never restore `original`,
+      //      and never clobber a concurrent new-enrollment write.
+      //   2. abort/ownership loss (same enrollment): restore the EXACT pre-append
+      //      state, CAS-scoped (only if the current journal is still `entries`).
       try {
-        await store.setTrusted("journal", original);
+        if (e?.genMismatch === true) {
+          await store.compareAndDelete("journal", entries);
+        } else {
+          await store.compareAndRestore("journal", entries, original);
+        }
       } catch { /* best-effort compensation */ }
       throw e;
     }

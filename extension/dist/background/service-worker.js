@@ -25722,6 +25722,34 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
 async function setValue(path, key, value, { isMaster, trusted = false }) {
   return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
 }
+function jsonEquals(a, b) {
+  if (a === b) return true;
+  let sa;
+  let sb;
+  try {
+    sa = JSON.stringify(a);
+    sb = JSON.stringify(b);
+  } catch {
+    return false;
+  }
+  return sa === sb;
+}
+async function compareAndSet(path, key, expectedValue, nextValue, { isMaster }) {
+  return withWriteLock(async () => {
+    const dir = await openDir(path);
+    const current = await readJson(dir, `${key}.json`);
+    if (!jsonEquals(current, expectedValue)) return false;
+    if (nextValue === void 0) {
+      try {
+        await dir.removeEntry(`${key}.json`);
+      } catch {
+      }
+      return true;
+    }
+    await writeJson(dir, `${key}.json`, nextValue);
+    return true;
+  });
+}
 function memoryStore(origin) {
   const isMaster = origin === MASTER;
   const path = isMaster ? [ROOT, MASTER] : [ROOT, "origins", encodeOrigin(origin)];
@@ -25746,6 +25774,18 @@ function memoryStore(origin) {
     },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
+    },
+    /** CAS delete: remove `key` ONLY if its current value JSON-equals
+     * `expectedValue` (the write being rolled back). Never deletes a concurrent
+     * legitimate write (the round-26 CAS-scoped-compensation blocker). */
+    async compareAndDelete(key, expectedValue) {
+      return await compareAndSet(path, key, expectedValue, void 0, { isMaster });
+    },
+    /** CAS restore: write `restoreValue` ONLY if the current value JSON-equals
+     * `expectedValue` (the stale run's write). Never clobbers a concurrent
+     * legitimate write. */
+    async compareAndRestore(key, expectedValue, restoreValue) {
+      return await compareAndSet(path, key, expectedValue, restoreValue, { isMaster });
     },
     /** Internal trusted write (approveTool/upsertTools/journalAppend/
      * enrollOrigin): same bounds + quotas, but reserved authority keys are
@@ -25842,7 +25882,11 @@ async function journalAppend(store, entry, guard = null) {
         await guard();
       } catch (e) {
         try {
-          await store.setTrusted("journal", original);
+          if (e?.genMismatch === true) {
+            await store.compareAndDelete("journal", entries);
+          } else {
+            await store.compareAndRestore("journal", entries, original);
+          }
         } catch {
         }
         throw e;
@@ -66918,7 +66962,10 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
       execute: async ({ key }) => {
         const err = await enrolledGuard();
         if (err) return err;
-        return { key, value: await memory.get(key) };
+        const value = await memory.get(key);
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
+        return { key, value };
       }
     }),
     memory_set: tool({
@@ -66979,8 +67026,18 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
                   sameEnrollment = false;
                 }
               }
+              const casDelete = typeof memory.compareAndDelete === "function";
+              const casRestore = typeof memory.compareAndRestore === "function";
               if (sameEnrollment) {
-                if (existed) await memory.set(key, prev);
+                if (existed) {
+                  if (casRestore) await memory.compareAndRestore(key, value, prev);
+                  else await memory.set(key, prev);
+                } else {
+                  if (casDelete) await memory.compareAndDelete(key, value);
+                  else await memory.delete(key);
+                }
+              } else {
+                if (casDelete) await memory.compareAndDelete(key, value);
                 else await memory.delete(key);
               }
             } catch {
@@ -66996,7 +67053,10 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
       execute: async () => {
         const err = await enrolledGuard();
         if (err) return err;
-        return { keys: await memory.keys() };
+        const keys = await memory.keys();
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
+        return { keys };
       }
     })
   };
@@ -67420,6 +67480,7 @@ function alarmsApi() {
 }
 var INFLIGHT_LEASE_MS = 5 * 60 * 1e3;
 var INFLIGHT_HEARTBEAT_MS = 30 * 1e3;
+var CANCEL_TERMINATION_TIMEOUT_MS = 5e3;
 var activeRuns = /* @__PURE__ */ new Map();
 var BOOT_AT = Date.now();
 var lockSeq = 0;
@@ -67521,23 +67582,44 @@ async function listScheduledTasks() {
     }));
   });
 }
-async function cancelScheduledTask(name25) {
-  return withLock(async () => {
+async function cancelScheduledTask(name25, terminationTimeoutMs = CANCEL_TERMINATION_TIMEOUT_MS) {
+  let existingTask = null;
+  let live = null;
+  await withLock(async () => {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...store[TASK_KEY] ?? {} };
     const existing = tasks[name25];
-    if (!existing) {
-      return { ok: true, name: name25, cancelled: false, error: "no such task" };
-    }
+    if (!existing) return;
+    existingTask = existing;
     tasks[name25] = { ...existing, cancelling: true, cancellingAt: Date.now() };
     await kvSet({ [TASK_KEY]: tasks });
-    const live = activeRuns.get(name25);
-    if (live) {
-      try {
-        live.controller.abort();
-      } catch {
-      }
+    live = activeRuns.get(name25) ?? null;
+  });
+  if (!existingTask) {
+    return { ok: true, name: name25, cancelled: false, error: "no such task" };
+  }
+  if (live) {
+    try {
+      live.controller.abort();
+    } catch {
     }
+    const settled = await Promise.race([
+      live.terminated.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), terminationTimeoutMs))
+    ]);
+    if (!settled) {
+      return {
+        ok: false,
+        name: name25,
+        cancelled: false,
+        retryable: true,
+        alarmAbsent: false,
+        pendingTermination: true,
+        error: "task is still terminating \u2014 retry cancel to confirm removal"
+      };
+    }
+  }
+  return withLock(async () => {
     const alarms = alarmsApi();
     let alarmAbsent = true;
     if (alarms) {
@@ -67561,6 +67643,8 @@ async function cancelScheduledTask(name25) {
         error: "alarm still armed \u2014 cancel is pending (retry to confirm removal)"
       };
     }
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...store[TASK_KEY] ?? {} };
     delete tasks[name25];
     await kvSet({ [TASK_KEY]: tasks });
     return { ok: true, name: name25, cancelled: true, alarmAbsent: true };
@@ -67620,7 +67704,11 @@ async function tryAcquireInflight(name25) {
     } catch {
       return { acquired: false, reason: "persist failed" };
     }
-    activeRuns.set(name25, { token, controller });
+    let resolveTerminated;
+    const terminated = new Promise((resolve3) => {
+      resolveTerminated = resolve3;
+    });
+    activeRuns.set(name25, { token, controller, terminated, resolveTerminated });
     return { acquired: true, token, signal: controller.signal, controller };
   });
 }
@@ -67663,6 +67751,7 @@ async function releaseInflight(name25, token) {
         } catch {
         }
         activeRuns.delete(name25);
+        active.resolveTerminated?.();
       }
     }
   });
@@ -68977,12 +69066,16 @@ async function ensureOrchestrator() {
     const model = await ensureModel();
     const mem = masterMemory();
     const origins = await listOrigins();
-    const workers = await Promise.all(origins.map(async (origin) => ({
-      origin,
-      memory: siteMemory(origin),
-      skills: await getSkills(origin),
-      tools: await siteToolset(origin)
-    })));
+    const workers = await Promise.all(origins.map(async (origin) => {
+      const cell = { get: () => null };
+      runGenCells.set(origin, cell);
+      return {
+        origin,
+        memory: siteMemory(origin),
+        skills: await getSkills(origin),
+        tools: await siteToolset(origin, cell)
+      };
+    }));
     const prefs = await kvGet("cap:multiAgent") ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
     const orch = await createOrchestrator2({
@@ -69003,14 +69096,15 @@ async function ensureOrchestrator() {
       orchestrator = orch;
       orchestratorGen = gen;
       for (const [origin, agent] of orch.workers) {
-        workerRunGenGetters.set(origin, agent.getRunGen);
+        const cell = runGenCells.get(origin);
+        if (cell) cell.get = () => agent.getRunGen();
       }
       return orch;
     }
   }
 }
-var workerRunGenGetters = /* @__PURE__ */ new Map();
-async function siteToolset(origin) {
+var runGenCells = /* @__PURE__ */ new Map();
+async function siteToolset(origin, runGenCell) {
   const tools = await listTools(origin);
   const set4 = {};
   const seen = /* @__PURE__ */ new Map();
@@ -69028,7 +69122,7 @@ async function siteToolset(origin) {
         if (!await isApproved(origin, t.name)) {
           return { error: `tool ${t.name} on ${origin} not approved` };
         }
-        const runGen = workerRunGenGetters.get(origin)?.() ?? null;
+        const runGen = runGenCell?.get?.() ?? null;
         return await invokeSiteTool(origin, t.name, args, runGen);
       }
     });
@@ -69718,8 +69812,11 @@ var handlers = {
       }, async () => {
         const g = await enrollmentSnapshot(canonical);
         if (!g.enrolled || g.gen !== gen) {
-          throw new Error(
-            `origin ${canonical} was disenrolled during delegation \u2014 journal discarded`
+          throw Object.assign(
+            new Error(
+              `origin ${canonical} was disenrolled during delegation \u2014 journal discarded`
+            ),
+            { genMismatch: true }
           );
         }
       });

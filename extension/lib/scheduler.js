@@ -34,6 +34,12 @@ export const INFLIGHT_LEASE_MS = 5 * 60 * 1000;
 // (storage error) marks the run for abort at the next fence check.
 export const INFLIGHT_HEARTBEAT_MS = 30 * 1000;
 
+// How long `cancelScheduledTask` waits for an acquired run to acknowledge
+// TERMINATION (releaseInflight) before reporting the cancel as still-pending +
+// retryable. Cancel must not report success while a still-settling agent could
+// commit side effects (the round-26 blocker).
+export const CANCEL_TERMINATION_TIMEOUT_MS = 5000;
+
 // In-memory map of LIVE runs in THIS worker boot: name -> { token, controller }.
 // This is the authoritative same-boot fence — a run present here is alive and
 // can NEVER be overlapped by a later alarm firing. The persisted lock fences
@@ -237,38 +243,60 @@ export async function listScheduledTasks() {
  * record (reconciliation + alarm delivery both skip it) and the call returns
  * ok:false + retryable:true. Re-invoking this same route RETRIES until alarms.get
  * confirms absence, at which point the record is finally deleted. */
-export async function cancelScheduledTask(name) {
-  return withLock(async () => {
+export async function cancelScheduledTask(name, terminationTimeoutMs = CANCEL_TERMINATION_TIMEOUT_MS) {
+  // ---- Phase 1 (under the scheduling lock): mark the payload cancelling -------
+  // This is the crash-safe FIRST durable transition — a crash after this write
+  // leaves a non-runnable payload regardless of the alarm state. The live
+  // same-boot run (if any) is captured here so it can be aborted + awaited
+  // OUTSIDE the lock (awaiting the run's termination while holding the lock
+  // would DEADLOCK: releaseInflight needs the same lock to resolve `terminated`).
+  let existingTask = null;
+  let live = null;
+  await withLock(async () => {
     const store = await kvGet(TASK_KEY);
     const tasks = { ...(store[TASK_KEY] ?? {}) };
     const existing = tasks[name];
-    if (!existing) {
-      return { ok: true, name, cancelled: false, error: "no such task" };
-    }
-    // CRASH-SAFE TWO-PHASE TRANSITION (the round-25 blocker): persist the
-    // `cancelling` intent FIRST — BEFORE touching the alarm — so EVERY crash
-    // point leaves a NON-RUNNABLE payload. The old order cleared + confirmed the
-    // alarm first and only persisted `cancelling` AFTERWARD, so a crash between
-    // clear-confirm and the payload write left a normal runnable payload that
-    // boot reconcile re-armed + reran. `cancelling` is skipped by BOTH
-    // reconcileScheduledTasks and handleAlarm, so the payload is inert from the
-    // instant this write lands.
+    if (!existing) return;
+    existingTask = existing;
     tasks[name] = { ...existing, cancelling: true, cancellingAt: Date.now() };
     await kvSet({ [TASK_KEY]: tasks });
+    live = activeRuns.get(name) ?? null;
+  });
 
-    // Abort any LIVE same-boot run of this task (the round-25 blocker: cancel
-    // only touched persisted state and never stopped an already-acquired
-    // handleAlarm run). The run's fence re-checks ownership/abort at every
-    // durable boundary, so aborting its controller stops the running agent/tools
-    // at the next commit boundary rather than letting it commit side effects
-    // after the owner cancelled.
-    const live = activeRuns.get(name);
-    if (live) {
-      try {
-        live.controller.abort();
-      } catch { /* already aborted */ }
+  if (!existingTask) {
+    return { ok: true, name, cancelled: false, error: "no such task" };
+  }
+
+  // ---- Await termination (OUTSIDE the scheduling lock) -----------------------
+  // Abort the live run's controller, then AWAIT its termination (bounded) so
+  // cancel never reports success while a still-settling agent/tools could commit
+  // side effects (the round-26 blocker: cancel aborted the controller but
+  // returned {ok:true} before handleAlarm/runTask acknowledged termination). If it
+  // does not settle in the bound, the cancel stays PENDING + retryable (the
+  // payload is already `cancelling` — inert — so a retry confirms removal later).
+  if (live) {
+    try {
+      live.controller.abort();
+    } catch { /* already aborted */ }
+    const settled = await Promise.race([
+      live.terminated.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), terminationTimeoutMs)),
+    ]);
+    if (!settled) {
+      return {
+        ok: false,
+        name,
+        cancelled: false,
+        retryable: true,
+        alarmAbsent: false,
+        pendingTermination: true,
+        error: "task is still terminating — retry cancel to confirm removal",
+      };
     }
+  }
 
+  // ---- Phase 2 (under the scheduling lock): clear + confirm + delete ---------
+  return withLock(async () => {
     // Clear the alarm (best-effort — a one-shot may already be consumed), then
     // CONFIRM absence via alarms.get so a periodic alarm whose clear FAILED is
     // not silently left armed (the round-19/20 alarm-clear ambiguity).
@@ -300,6 +328,8 @@ export async function cancelScheduledTask(name) {
       };
     }
     // Confirmed absent → terminal: delete the (already-inert) payload.
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...(store[TASK_KEY] ?? {}) };
     delete tasks[name];
     await kvSet({ [TASK_KEY]: tasks });
     return { ok: true, name, cancelled: true, alarmAbsent: true };
@@ -392,7 +422,13 @@ export async function tryAcquireInflight(name) {
     } catch {
       return { acquired: false, reason: "persist failed" };
     }
-    activeRuns.set(name, { token, controller });
+    // A `terminated` promise per run, resolved by releaseInflight when the run
+    // acknowledges termination (deletes the active-runs entry). cancelScheduledTask
+    // awaits it (bounded) so it never reports success before a still-running agent
+    // settles (the round-26 cancel-await-termination blocker).
+    let resolveTerminated;
+    const terminated = new Promise((resolve) => { resolveTerminated = resolve; });
+    activeRuns.set(name, { token, controller, terminated, resolveTerminated });
     // Expose BOTH the signal (for listening) and the controller (for aborting)
     // — the heartbeat-failure path must call controller.abort() (an AbortSignal
     // has no `abort` method; that was the round-13 TypeError).
@@ -465,6 +501,7 @@ export async function releaseInflight(name, token) {
           active.controller.abort();
         } catch { /* already aborted */ }
         activeRuns.delete(name);
+        active.resolveTerminated?.();
       }
     }
   });

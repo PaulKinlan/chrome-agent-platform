@@ -34,6 +34,27 @@ let disenrolled = false; // a disenrollment was seen — reject ANY stale invoke
 // the bridge with a stale generation).
 let maxGen = -Infinity;
 
+// Normalize a lifecycle message's generation: a finite non-negative integer,
+// else null (missing/invalid). Non-finite (NaN/±Infinity), fractional, and
+// negative generations are malformed and must never be trusted for monotonic
+// ordering (the round-26 missing-gen blocker).
+function normalizeGen(message) {
+  const g = message?.gen;
+  return typeof g === "number" && Number.isFinite(g) && Number.isInteger(g) && g >= 0
+    ? g
+    : null;
+}
+
+// Whether ANY generation-aware lifecycle state has been seen (a sync or
+// disenrollment with a numeric generation, or a disenrollment). Once
+// initialized, a lifecycle message with an ABSENT/invalid generation must FAIL
+// CLOSED — a malformed/legacy message must never re-authorize a tombstoned
+// bridge (the round-26 blocker: a missing-gen sync after a tombstone resumed
+// MAIN and reached the page).
+function lifecycleInitialized() {
+  return maxGen !== -Infinity || currentGen !== null || disenrolled;
+}
+
 function ensureMainWorld() {
   if (initialized) return;
   initialized = true;
@@ -72,12 +93,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // MONOTONIC: reject a sync whose generation is OLDER than a disenrollment we
     // already applied — a stale sync must never clear `disenrolled` + resume MAIN
     // after a newer Disable (the round-24 stale-lifecycle-ordering blocker).
-    const gen = typeof message.gen === "number" ? message.gen : null;
-    if (gen != null && gen < maxGen) {
-      sendResponse({ ok: false, error: "stale enrollment-sync rejected" });
-      return true;
+    const gen = normalizeGen(message);
+    if (gen == null) {
+      // Missing/invalid generation must FAIL CLOSED once lifecycle state is
+      // initialized — never resume a tombstoned bridge from a gen-less sync (the
+      // round-26 blocker). Only the FIRST-ever lifecycle message may carry no
+      // generation (legacy/initial state).
+      if (lifecycleInitialized()) {
+        sendResponse({ ok: false, error: "missing enrollment generation — sync rejected" });
+        return true;
+      }
+    } else {
+      if (gen < maxGen) {
+        sendResponse({ ok: false, error: "stale enrollment-sync rejected" });
+        return true;
+      }
+      maxGen = Math.max(maxGen, gen);
     }
-    if (gen != null) maxGen = Math.max(maxGen, gen);
     currentGen = gen;
     disenrolled = false;
     // Re-enrollment clears the MAIN world's cancel epoch so NEW invokes are
@@ -97,16 +129,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // result (the page function's own side effect cannot be unwound, but its
     // result is never surfaced). The disenrollment's generation is recorded
     // monotonically so a later stale sync cannot resurrect the bridge (round-24).
-    const gen = typeof message.gen === "number" ? message.gen : null;
+    const gen = normalizeGen(message);
     // MONOTONIC in BOTH directions (the round-25 blocker 8): reject a STALE
     // disenrollment (older gen than a sync we already applied) — the old code
     // unconditionally set `disenrolled = true`, so an older tombstone could cancel
     // a NEWER enrollment. Only the LATEST generation wins, for sync AND disenroll.
-    if (gen != null && gen < maxGen) {
-      sendResponse({ ok: false, error: "stale disenrollment rejected" });
-      return true;
+    if (gen == null) {
+      // Missing/invalid generation must FAIL CLOSED once lifecycle state is
+      // initialized (the round-26 blocker — strict monotonic state applies to
+      // disenrollment too; a gen-less tombstone is malformed).
+      if (lifecycleInitialized()) {
+        sendResponse({ ok: false, error: "missing disenrollment generation — rejected" });
+        return true;
+      }
+    } else {
+      if (gen < maxGen) {
+        sendResponse({ ok: false, error: "stale disenrollment rejected" });
+        return true;
+      }
+      maxGen = Math.max(maxGen, gen);
     }
-    if (gen != null) maxGen = Math.max(maxGen, gen);
     disenrolled = true;
     currentGen = null;
     for (const [requestId, send] of pending) {

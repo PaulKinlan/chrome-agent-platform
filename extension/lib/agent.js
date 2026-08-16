@@ -41,7 +41,14 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
       execute: async ({ key }) => {
         const err = await enrolledGuard();
         if (err) return err;
-        return { key, value: await memory.get(key) };
+        const value = await memory.get(key);
+        // POST-read generation revalidation (the round-26 blocker): a re-enroll
+        // DURING the awaited read must not return the NEW enrollment's data to
+        // the stale run. Read into a temp, revalidate the immutable generation,
+        // then return — never surface a value read under a fresh enrollment.
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
+        return { key, value };
       },
     }),
     memory_set: tool({
@@ -151,8 +158,27 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
                   sameEnrollment = false;
                 }
               }
+              const casDelete = typeof memory.compareAndDelete === "function";
+              const casRestore = typeof memory.compareAndRestore === "function";
               if (sameEnrollment) {
-                if (existed) await memory.set(key, prev);
+                // CAS-scoped restore (the round-26 blocker): only restore/delete
+                // if the current value is STILL the value this run wrote — a
+                // concurrent legitimate write by the SAME enrollment (a parallel
+                // tool call in the same run) must never be clobbered.
+                if (existed) {
+                  if (casRestore) await memory.compareAndRestore(key, value, prev);
+                  else await memory.set(key, prev);
+                } else {
+                  if (casDelete) await memory.compareAndDelete(key, value);
+                  else await memory.delete(key);
+                }
+              } else {
+                // Generation mismatch (delete→re-enroll): REMOVE this run's
+                // forbidden write from the NEW reused store via CAS. Never restore
+                // the OLD enrollment's `prev` into the new store, and never delete
+                // a new-enrollment value that already replaced ours (the round-26
+                // stale-write-survives-re-enrollment blocker).
+                if (casDelete) await memory.compareAndDelete(key, value);
                 else await memory.delete(key);
               }
             } catch { /* best-effort */ }
@@ -167,7 +193,13 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
       execute: async () => {
         const err = await enrolledGuard();
         if (err) return err;
-        return { keys: await memory.keys() };
+        const keys = await memory.keys();
+        // POST-read generation revalidation (the round-26 blocker): a re-enroll
+        // DURING the awaited keys() read must not return the NEW enrollment's
+        // keys to the stale run.
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
+        return { keys };
       },
     }),
   };

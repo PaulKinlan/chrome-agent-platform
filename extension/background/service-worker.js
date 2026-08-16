@@ -318,12 +318,16 @@ async function ensureOrchestrator() {
     const mem = masterMemory();
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
-    const workers = await Promise.all(origins.map(async (origin) => ({
-      origin,
-      memory: siteMemory(origin),
-      skills: await getSkills(origin),
-      tools: await siteToolset(origin),
-    })));
+    const workers = await Promise.all(origins.map(async (origin) => {
+      const cell = { get: () => null };
+      runGenCells.set(origin, cell);
+      return {
+        origin,
+        memory: siteMemory(origin),
+        skills: await getSkills(origin),
+        tools: await siteToolset(origin, cell),
+      };
+    }));
     // multiAgent toggles fan-out (hub + per-site sub-agents) vs a solo hub agent.
     // Read it at orchestration time; the options page changes it via
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
@@ -353,15 +357,16 @@ async function ensureOrchestrator() {
     if (generation === gen) {
       orchestrator = orch;
       orchestratorGen = gen;
-      // Register each worker's run-generation getter ONLY AFTER the commit —
-      // publishing getters BEFORE the commit check let an UNCOMMITTED worker (from
-      // a stale build that then looped) overwrite a live worker's getter with one
-      // whose activeRun is null, which invokeSiteTool then fell back on (the
-      // round-25 blocker 4: a global mutable getter published before validation/
-      // commit). The site-tool invocation reads the immutable run gen through this
-      // committed getter.
+      // Bind each worker's run-generation getter into ITS OWN per-build cell
+      // ONLY AFTER the commit. The cells were created alongside the tools in
+      // this build, so a later rebuild (which creates NEW cells + NEW workers)
+      // can never repoint THIS build's tool closures at a different agent — the
+      // round-26 blocker where a module-global getter map let a rebuild replace an
+      // active old worker's getter, failing the old run closed spuriously. Cells
+      // are scoped to this build, so there is no unbounded module-global map.
       for (const [origin, agent] of orch.workers) {
-        workerRunGenGetters.set(origin, agent.getRunGen);
+        const cell = runGenCells.get(origin);
+        if (cell) cell.get = () => agent.getRunGen();
       }
       return orch;
     }
@@ -369,17 +374,19 @@ async function ensureOrchestrator() {
   }
 }
 
-// Per-origin getter for the WORKER's current run generation (the immutable
-// run-start gen, or null when no run is active), registered by ensureOrchestrator
-// after createOrchestrator builds each worker agent. The site-tool execute
-// closure reads THIS — the immutable run generation — rather than re-snapshotting
-// the CURRENT enrollment (which a re-enroll could have bumped mid-run), so a stale
-// worker run can never operate under a newly re-enrolled origin's generation (the
-// round-24 gen-threading blocker).
-const workerRunGenGetters = new Map(); // canonical origin -> () => number|null
+// Per-worker run-generation CELLS for ONE orchestrator build. Each cell is a
+// stable `{ get: () => number|null }` created alongside its worker's tools and
+// bound to that worker agent's `getRunGen` AFTER createOrchestrator builds the
+// agents. The site-tool execute closure captures ITS OWN cell (not a module-
+// global map), so a rebuild can never repoint an old run's tools at a different
+// agent, and cells are garbage-collected with the build (no unbounded growth) —
+// the round-26 global-getter-coupling blocker.
+const runGenCells = new Map(); // canonical origin -> { get: () => number|null }
 
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
-async function siteToolset(origin) {
+// `runGenCell` is the per-worker cell the tool closures capture for the immutable
+// run generation (see ensureOrchestrator).
+async function siteToolset(origin, runGenCell) {
   const tools = await listTools(origin);
   const set = {};
   const seen = new Map(); // tool id → (origin, name) for explicit duplicate rejection
@@ -406,8 +413,8 @@ async function siteToolset(origin) {
           return { error: `tool ${t.name} on ${origin} not approved` };
         }
         // Thread the worker's IMMUTABLE run-start generation into the site
-        // invocation so a re-enrolled origin is rejected (see workerRunGenGetters).
-        const runGen = workerRunGenGetters.get(origin)?.() ?? null;
+        // invocation so a re-enrolled origin is rejected (see runGenCell).
+        const runGen = runGenCell?.get?.() ?? null;
         return await invokeSiteTool(origin, t.name, args, runGen);
       },
     });
@@ -1395,8 +1402,15 @@ const handlers = {
       }, async () => {
         const g = await enrollmentSnapshot(canonical);
         if (!g.enrolled || g.gen !== gen) {
-          throw new Error(
-            `origin ${canonical} was disenrolled during delegation — journal discarded`,
+          // genMismatch distinguishes a RE-ENROLLMENT from a plain abort so the
+          // journalAppend compensation REMOVES the stale append (CAS) instead of
+          // restoring the old enrollment's journal into the new store (the
+          // round-26 journalAppend-compensation blocker).
+          throw Object.assign(
+            new Error(
+              `origin ${canonical} was disenrolled during delegation — journal discarded`,
+            ),
+            { genMismatch: true },
           );
         }
       });

@@ -716,7 +716,7 @@ Deno.test("cancelScheduledTask persists cancelling BEFORE touching the alarm (ro
   }
 });
 
-Deno.test("cancelScheduledTask aborts a live same-boot run (round-25 blocker)", async () => {
+Deno.test("cancelScheduledTask aborts a live same-boot run + reports pending until it terminates (round-25/26 blocker)", async () => {
   const lock = await tryAcquireInflight("task_running");
   assert(lock.acquired === true, "precondition: the run must be acquired");
 
@@ -734,15 +734,60 @@ Deno.test("cancelScheduledTask aborts a live same-boot run (round-25 blocker)", 
         },
       },
     });
-    await cancelScheduledTask("task_running");
+    // Pass a SMALL termination timeout so the test does not wait the full 5s: the
+    // run never terminates during the cancel, so the result is PENDING + retryable
+    // (the round-26 cancel-await-termination behavior).
+    const result = await cancelScheduledTask("task_running", 30);
     assert(
       lock.signal.aborted === true,
       "cancel must abort the already-acquired run's controller (fence the running agent/tools)",
+    );
+    assert(
+      result.ok === false && result.pendingTermination === true && result.retryable === true,
+      "cancel must NOT report success while the run is still terminating (round-26)",
     );
   } finally {
     chrome.alarms.clear = origClear;
     chrome.alarms.get = origGet;
     await releaseInflight("task_running", lock.token);
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("cancelScheduledTask completes once the acquired run terminates (round-26 blocker)", async () => {
+  const lock = await tryAcquireInflight("task_terminate");
+  assert(lock.acquired === true, "precondition: the run must be acquired");
+
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => true;
+  chrome.alarms.get = async () => undefined;
+  try {
+    await chrome.storage.local.set({
+      "cap:scheduledTasks": {
+        "task_terminate": {
+          name: "task_terminate",
+          task: "should-not-rerun",
+          at: Date.now() + 60000,
+        },
+      },
+    });
+    // Release the run shortly after the cancel starts its await-termination so
+    // the cancel observes the termination and completes (not deadlock: the await
+    // happens OUTSIDE the scheduling lock, so releaseInflight can acquire it).
+    const cancelPromise = cancelScheduledTask("task_terminate", 2000);
+    setTimeout(() => {
+      releaseInflight("task_terminate", lock.token).catch(() => {});
+    }, 10);
+    const result = await cancelPromise;
+    assert(
+      result.ok === true && result.cancelled === true,
+      "cancel must complete once the run terminates (round-26)",
+    );
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await releaseInflight("task_terminate", lock.token);
     await chrome.storage.local.set({ "cap:scheduledTasks": {} });
   }
 });

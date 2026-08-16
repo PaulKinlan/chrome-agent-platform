@@ -157,3 +157,52 @@ Deno.test("journalAppend compensation restores the EXACT pre-append state at the
   assertEquals(after[0]?.result, "old-0", "old-0 must be restored — not lost to ring-buffer eviction (the round-23 blocker)");
   assert(!after.some((e) => e?.result === "new-entry"), "the appended row must be removed by compensation");
 });
+
+Deno.test("journalAppend does NOT restore old-enrollment data on a genMismatch compensation (round-26)", async () => {
+  const mem = masterMemory();
+  // Seed the OLD enrollment's journal (what journalAppend reads as `original`).
+  await mem.setTrusted("journal", [{ ts: 1, result: "old-enrollment-secret" }]);
+
+  let calls = 0;
+  const guard = async () => {
+    calls++;
+    if (calls >= 2) {
+      throw Object.assign(new Error("re-enrolled"), { genMismatch: true });
+    }
+  };
+  let threw = false;
+  try {
+    await journalAppend(mem, { result: "new-entry" }, guard);
+  } catch {
+    threw = true;
+  }
+  assert(threw, "journalAppend must rethrow the gen-mismatch guard failure");
+  const after = (await mem.get("journal")) ?? [];
+  assert(
+    !after.some((e) => e?.result === "old-enrollment-secret"),
+    "the OLD enrollment's journal must NOT be restored into the new store (round-26)",
+  );
+  assert(
+    !after.some((e) => e?.result === "new-entry"),
+    "the stale appended row must be removed, not retained (round-26)",
+  );
+});
+
+Deno.test("compareAndDelete/compareAndRestore are CAS-scoped (round-26)", async () => {
+  const mem = masterMemory();
+  await mem.set("cas-key", "a");
+  // CAS delete on a mismatch must NOT fire.
+  assertEquals(await mem.compareAndDelete("cas-key", "b"), false, "CAS delete must not fire on a mismatch");
+  assertEquals(await mem.get("cas-key"), "a", "the value must survive a mismatched CAS delete");
+  // CAS delete on a match deletes.
+  assertEquals(await mem.compareAndDelete("cas-key", "a"), true, "CAS delete must fire on a match");
+  assertEquals(await mem.get("cas-key"), null, "the value must be deleted");
+  // CAS restore on a mismatch must NOT write.
+  await mem.set("cas-key", "x");
+  assertEquals(await mem.compareAndRestore("cas-key", "y", "z"), false, "CAS restore must not fire on a mismatch");
+  assertEquals(await mem.get("cas-key"), "x", "the value must survive a mismatched CAS restore");
+  // CAS restore on a match writes.
+  assertEquals(await mem.compareAndRestore("cas-key", "x", "z"), true, "CAS restore must fire on a match");
+  assertEquals(await mem.get("cas-key"), "z", "the value must be restored");
+  await mem.delete("cas-key");
+});
