@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "1439bdc48ded086966b7e01e682d3b15b90027a4",
+  "testedSourceCommit": "28cf510cc8fdcc7f637f29468f837dbab9ee7efe",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1786844892919",
+  "runId": "cap-1786846367269",
   "retain": true,
-  "ts": "2026-08-16T01:48:54.893Z",
+  "ts": "2026-08-16T02:13:29.222Z",
   "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 104,
+  "passed": 105,
   "failed": 0,
   "checks": [
     {
@@ -235,6 +235,10 @@
       "pass": true
     },
     {
+      "name": "memory: version tokens are monotonic + never reused (round-27 CAS)",
+      "pass": true
+    },
+    {
       "name": "attachment count cap (12 → 4 over-count dropped, journal records 8)",
       "pass": true
     },
@@ -435,8 +439,8 @@
     },
     {
       "name": "options-driven.png",
-      "sha256": "63cfe019d6fed0b941a21f5d1812174cab59038214b521519491423220f82853",
-      "bytes": 224821
+      "sha256": "d1584c565f22afac22b255b2bab3b60b596b12b3bac00e4ea3a7034b985061d7",
+      "bytes": 224823
     }
   ]
 }
