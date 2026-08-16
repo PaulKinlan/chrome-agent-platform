@@ -56,6 +56,8 @@ const COMPONENTS = [
   "agent-picker",
   "agent-config-form",
   "agent-nav",
+  "error-console",
+  "security-shield",
 ];
 
 Deno.test("components: every design-system element registers as a custom element", async () => {

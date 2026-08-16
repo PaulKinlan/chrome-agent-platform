@@ -99,6 +99,22 @@
         <p class="caption">empty state; pass a JSON array of <code>{url,label}</code> to populate. Emits <code>open</code>.</p>
       </div>
 
+      <div class="card">
+        <h3 class="spec"><code class="tag">&lt;error-console&gt;</code> — the terminal-like error log</h3>
+        <div class="stage row">
+          <error-console count="3" label="Console (errors + warnings)"></error-console>
+        </div>
+        <p class="caption">a badge (count) + a floating terminal panel of the captured errors/warnings. Clearable; Escape / outside-click closes. In the extension it reads the live buffer; here it degrades to the empty state.</p>
+      </div>
+
+      <div class="card">
+        <h3 class="spec"><code class="tag">&lt;security-shield&gt;</code> — the security transparency surface</h3>
+        <div class="stage row">
+          <security-shield count="0" label="Security + permissions"></security-shield>
+        </div>
+        <p class="caption">a shield icon + the security posture: granted optional permissions + CSP/denied-hook/blocked-action violations. An <code>attention</code> attribute flags violations.</p>
+      </div>
+
       <!-- ── Composite ───────────────────────────────────────────── -->
       <h2 class="section">Composite components</h2>
 
