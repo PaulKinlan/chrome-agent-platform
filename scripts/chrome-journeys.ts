@@ -385,6 +385,7 @@ const EXPECTED = [
   "screenshot: revoked via a real checkbox click",
   "screenshot: revoked → capture denied",
   "per-origin clear leaves B intact",
+  "memory: version tokens are monotonic + never reused (round-27 CAS)",
   "attachment count cap (12 → 4 over-count dropped, journal records 8)",
   "attachment: declared/image vs text/plain MIME mismatch is dropped",
   "alarm scheduled (name returned)",
@@ -1016,6 +1017,27 @@ async function main() {
     check(
       "per-origin clear leaves B intact",
       (aAfter === undefined || aAfter === null) && bAfter === "B",
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 5b — version-token monotonicity (round-27 CAS blocker).
+    // ─────────────────────────────────────────────────────────────
+    // `memory.set` returns the durable version token for the write (the round-27
+    // fix). Two writes of the SAME value must bump the version — never reuse it —
+    // so an identical-value ABA is distinguishable. Driven through the real SW
+    // message route (not a unit-test fake).
+    const ver1 = await msgValue({
+      type: "memory.set", origin: "master", key: "version-token-probe", value: "same",
+    });
+    const ver2 = await msgValue({
+      type: "memory.set", origin: "master", key: "version-token-probe", value: "same",
+    });
+    check(
+      "memory: version tokens are monotonic + never reused (round-27 CAS)",
+      typeof ver1 === "number" &&
+        typeof ver2 === "number" &&
+        ver1 > 0 &&
+        ver2 > ver1,
     );
 
     // ─────────────────────────────────────────────────────────────

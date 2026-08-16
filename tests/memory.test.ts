@@ -188,21 +188,56 @@ Deno.test("journalAppend does NOT restore old-enrollment data on a genMismatch c
   );
 });
 
-Deno.test("compareAndDelete/compareAndRestore are CAS-scoped (round-26)", async () => {
+Deno.test("compareAndDelete/compareAndRestore are VERSION-scoped (round-27)", async () => {
   const mem = masterMemory();
-  await mem.set("cas-key", "a");
-  // CAS delete on a mismatch must NOT fire.
-  assertEquals(await mem.compareAndDelete("cas-key", "b"), false, "CAS delete must not fire on a mismatch");
-  assertEquals(await mem.get("cas-key"), "a", "the value must survive a mismatched CAS delete");
-  // CAS delete on a match deletes.
-  assertEquals(await mem.compareAndDelete("cas-key", "a"), true, "CAS delete must fire on a match");
+  // `set` returns the durable version token for the write it made.
+  const v1 = await mem.set("cas-key", "a");
+  assert(typeof v1 === "number" && v1 > 0, "set must return a positive version token");
+  // CAS delete on a VERSION mismatch must NOT fire (even though the value matches).
+  assertEquals(await mem.compareAndDelete("cas-key", v1 + 999), false, "CAS delete must not fire on a version mismatch");
+  assertEquals(await mem.get("cas-key"), "a", "the value must survive a version-mismatched CAS delete");
+  // CAS delete on the matching VERSION deletes.
+  assertEquals(await mem.compareAndDelete("cas-key", v1), true, "CAS delete must fire on the matching version");
   assertEquals(await mem.get("cas-key"), null, "the value must be deleted");
-  // CAS restore on a mismatch must NOT write.
-  await mem.set("cas-key", "x");
-  assertEquals(await mem.compareAndRestore("cas-key", "y", "z"), false, "CAS restore must not fire on a mismatch");
-  assertEquals(await mem.get("cas-key"), "x", "the value must survive a mismatched CAS restore");
-  // CAS restore on a match writes.
-  assertEquals(await mem.compareAndRestore("cas-key", "x", "z"), true, "CAS restore must fire on a match");
+  // CAS restore on a version mismatch must NOT write.
+  const v2 = await mem.set("cas-key", "x");
+  assertEquals(await mem.compareAndRestore("cas-key", v2 + 1, "z"), false, "CAS restore must not fire on a version mismatch");
+  assertEquals(await mem.get("cas-key"), "x", "the value must survive a version-mismatched CAS restore");
+  // CAS restore on the matching version writes (bumping the version).
+  assertEquals(await mem.compareAndRestore("cas-key", v2, "z"), true, "CAS restore must fire on the matching version");
   assertEquals(await mem.get("cas-key"), "z", "the value must be restored");
   await mem.delete("cas-key");
+});
+
+Deno.test("identical-value ABA is detected by the version token (round-27 blocker)", async () => {
+  const mem = masterMemory();
+  // A stale run writes value "same" (version N), then a NEW enrollment writes the
+  // IDENTICAL value "same" (version N+1). A value-equality CAS would delete the
+  // legitimate new write; a VERSION-scoped CAS must NOT.
+  const staleVersion = await mem.set("aba-key", "same"); // stale run's write
+  const freshVersion = await mem.set("aba-key", "same"); // new enrollment, same value
+  assert(freshVersion > staleVersion, "each write must bump the version (never reused)");
+  // The stale run's compensation holds the OLD version — it must NOT delete the
+  // new enrollment's identical-value write.
+  assertEquals(
+    await mem.compareAndDelete("aba-key", staleVersion),
+    false,
+    "an identical-value ABA must be detected: the stale version must not match",
+  );
+  assertEquals(await mem.get("aba-key"), "same", "the legitimate new write must survive");
+  // The FRESH version IS the current one — it deletes (sanity).
+  assertEquals(await mem.compareAndDelete("aba-key", freshVersion), true, "the fresh version must match and delete");
+  assertEquals(await mem.get("aba-key"), null, "the key must be gone after the fresh-version delete");
+});
+
+Deno.test("compareAndSet does NOT recreate a directory on a mismatched CAS (round-27 cleanup-recreation)", async () => {
+  const mem = masterMemory();
+  // No store directory was created for a never-written key: a CAS against an
+  // absent key/dir must return false WITHOUT recreating anything.
+  assertEquals(
+    await mem.compareAndDelete("never-written-key", 1),
+    false,
+    "a CAS against an absent store must fail closed without recreating a directory",
+  );
+  assertEquals(await mem.has("never-written-key"), false, "no key must materialize");
 });

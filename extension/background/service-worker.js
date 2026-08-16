@@ -318,9 +318,17 @@ async function ensureOrchestrator() {
     const mem = masterMemory();
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
+    // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
+    // created INSIDE this build and never shared across builds. The old code used
+    // a module-global `runGenCells` Map, so two concurrent same-generation builds
+    // overwrote each other's entries — build A's tools captured cell A, but A's
+    // commit bound cell B, leaving A's cell permanently null (a run returned from
+    // A then failed site tools spuriously). A build-local map means each build
+    // binds EXACTLY the cells it created, and the map is GC'd with the build.
+    const buildCells = new Map(); // canonical origin -> { get: () => number|null }
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
-      runGenCells.set(origin, cell);
+      buildCells.set(origin, cell);
       return {
         origin,
         memory: siteMemory(origin),
@@ -357,15 +365,15 @@ async function ensureOrchestrator() {
     if (generation === gen) {
       orchestrator = orch;
       orchestratorGen = gen;
-      // Bind each worker's run-generation getter into ITS OWN per-build cell
-      // ONLY AFTER the commit. The cells were created alongside the tools in
-      // this build, so a later rebuild (which creates NEW cells + NEW workers)
-      // can never repoint THIS build's tool closures at a different agent — the
-      // round-26 blocker where a module-global getter map let a rebuild replace an
-      // active old worker's getter, failing the old run closed spuriously. Cells
-      // are scoped to this build, so there is no unbounded module-global map.
+      // Bind each worker's run-generation getter into ITS OWN build-local cell
+      // ONLY AFTER the commit. The cells were created alongside the tools in THIS
+      // build, so a later rebuild (which creates NEW cells + NEW workers) can never
+      // repoint this build's tool closures at a different agent — the round-26/27
+      // blocker where a module-global getter map let a rebuild replace an active
+      // old worker's getter (and a concurrent same-gen build overwrote the map),
+      // failing the old run closed spuriously.
       for (const [origin, agent] of orch.workers) {
-        const cell = runGenCells.get(origin);
+        const cell = buildCells.get(origin);
         if (cell) cell.get = () => agent.getRunGen();
       }
       return orch;
@@ -373,15 +381,6 @@ async function ensureOrchestrator() {
     // Stale build — loop and rebuild under the new generation.
   }
 }
-
-// Per-worker run-generation CELLS for ONE orchestrator build. Each cell is a
-// stable `{ get: () => number|null }` created alongside its worker's tools and
-// bound to that worker agent's `getRunGen` AFTER createOrchestrator builds the
-// agents. The site-tool execute closure captures ITS OWN cell (not a module-
-// global map), so a rebuild can never repoint an old run's tools at a different
-// agent, and cells are garbage-collected with the build (no unbounded growth) —
-// the round-26 global-getter-coupling blocker.
-const runGenCells = new Map(); // canonical origin -> { get: () => number|null }
 
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
 // `runGenCell` is the per-worker cell the tool closures capture for the immutable

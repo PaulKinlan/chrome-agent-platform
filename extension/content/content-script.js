@@ -20,7 +20,7 @@ let initialized = false;
 // threading it into invoke-tool + enforcing it here lets a stale in-flight
 // invocation be REJECTED at this bridge boundary (preemptive revocation: a
 // deleted origin's page function must not run).
-let currentGen = null; // null = never synced yet (first invoke accepts + records)
+let currentGen = null; // null = never synced yet (invokes are rejected until a sync arrives)
 let disenrolled = false; // a disenrollment was seen — reject ANY stale invoke
                          // (distinct from "never synced": the two must not be
                          // conflated, or a post-delete stale invoke would be
@@ -45,15 +45,9 @@ function normalizeGen(message) {
     : null;
 }
 
-// Whether ANY generation-aware lifecycle state has been seen (a sync or
-// disenrollment with a numeric generation, or a disenrollment). Once
-// initialized, a lifecycle message with an ABSENT/invalid generation must FAIL
-// CLOSED — a malformed/legacy message must never re-authorize a tombstoned
-// bridge (the round-26 blocker: a missing-gen sync after a tombstone resumed
-// MAIN and reached the page).
-function lifecycleInitialized() {
-  return maxGen !== -Infinity || currentGen !== null || disenrolled;
-}
+// A monotonic fence for lifecycle messages. Missing/invalid generations are now
+// rejected UNCONDITIONALLY (the round-27 blocker 3) — the SW always produces
+// numeric generations, so there is no valid legacy unscoped-first-message path.
 
 function ensureMainWorld() {
   if (initialized) return;
@@ -95,21 +89,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // after a newer Disable (the round-24 stale-lifecycle-ordering blocker).
     const gen = normalizeGen(message);
     if (gen == null) {
-      // Missing/invalid generation must FAIL CLOSED once lifecycle state is
-      // initialized — never resume a tombstoned bridge from a gen-less sync (the
-      // round-26 blocker). Only the FIRST-ever lifecycle message may carry no
-      // generation (legacy/initial state).
-      if (lifecycleInitialized()) {
-        sendResponse({ ok: false, error: "missing enrollment generation — sync rejected" });
-        return true;
-      }
-    } else {
-      if (gen < maxGen) {
-        sendResponse({ ok: false, error: "stale enrollment-sync rejected" });
-        return true;
-      }
-      maxGen = Math.max(maxGen, gen);
+      // Missing/invalid generation must FAIL CLOSED ALWAYS — including the FIRST
+      // message (the round-27 blocker 3: the old code exempted the first-ever
+      // lifecycle message, so a generationless `enrollment-sync` resumed a fresh
+      // bridge and a generationless invoke then reached MAIN). The SW ALWAYS
+      // produces numeric generations, so there is no valid legacy reason to
+      // authorize an unscoped first message.
+      sendResponse({ ok: false, error: "missing enrollment generation — sync rejected" });
+      return true;
     }
+    if (gen < maxGen) {
+      sendResponse({ ok: false, error: "stale enrollment-sync rejected" });
+      return true;
+    }
+    maxGen = Math.max(maxGen, gen);
     currentGen = gen;
     disenrolled = false;
     // Re-enrollment clears the MAIN world's cancel epoch so NEW invokes are
@@ -134,21 +127,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // disenrollment (older gen than a sync we already applied) — the old code
     // unconditionally set `disenrolled = true`, so an older tombstone could cancel
     // a NEWER enrollment. Only the LATEST generation wins, for sync AND disenroll.
+    // Missing/invalid generation FAILS CLOSED ALWAYS, including the first message
+    // (the round-27 blocker 3).
     if (gen == null) {
-      // Missing/invalid generation must FAIL CLOSED once lifecycle state is
-      // initialized (the round-26 blocker — strict monotonic state applies to
-      // disenrollment too; a gen-less tombstone is malformed).
-      if (lifecycleInitialized()) {
-        sendResponse({ ok: false, error: "missing disenrollment generation — rejected" });
-        return true;
-      }
-    } else {
-      if (gen < maxGen) {
-        sendResponse({ ok: false, error: "stale disenrollment rejected" });
-        return true;
-      }
-      maxGen = Math.max(maxGen, gen);
+      sendResponse({ ok: false, error: "missing disenrollment generation — rejected" });
+      return true;
     }
+    if (gen < maxGen) {
+      sendResponse({ ok: false, error: "stale disenrollment rejected" });
+      return true;
+    }
+    maxGen = Math.max(maxGen, gen);
     disenrolled = true;
     currentGen = null;
     for (const [requestId, send] of pending) {
@@ -163,10 +152,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "invoke-tool") {
     // ENROLLMENT-SCOPED cancellation (round-20 blocker): thread the generation
-    // into the invoke and enforce it here. If the origin was disenrolled OR the
-    // message carries a stale generation (mismatches a newer synced gen), reject
-    // WITHOUT forwarding to the MAIN world. A first invoke (never synced, not
-    // disenrolled) accepts + records the gen.
+    // into the invoke and enforce it here. A MISSING/INVALID generation is
+    // rejected UNCONDITIONALLY — including the first invoke (the round-27
+    // blocker 3: the old code accepted a generationless first invoke while
+    // `currentGen === null`, authorizing an unscoped page call before any sync).
     if (disenrolled) {
       sendResponse({
         ok: false,
@@ -174,22 +163,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       return true;
     }
-    if (typeof message.gen === "number") {
-      if (currentGen === null) {
-        currentGen = message.gen; // first sync — accept + record
-      } else if (message.gen !== currentGen) {
-        sendResponse({
-          ok: false,
-          error: "enrollment generation mismatch — invocation rejected",
-        });
-        return true;
-      }
-    } else if (currentGen !== null) {
-      // A synced origin received an invoke WITHOUT a generation: reject
-      // (fail closed) rather than run a page function unvalidated.
+    const gen = normalizeGen(message);
+    if (gen == null) {
       sendResponse({
         ok: false,
         error: "missing enrollment generation — invocation rejected",
+      });
+      return true;
+    }
+    if (currentGen === null) {
+      // Never synced yet — there is no valid generation authority to invoke
+      // under. Reject (fail closed) rather than accepting an unscoped first call.
+      sendResponse({
+        ok: false,
+        error: "origin not synced — invocation rejected",
+      });
+      return true;
+    }
+    if (gen !== currentGen) {
+      sendResponse({
+        ok: false,
+        error: "enrollment generation mismatch — invocation rejected",
       });
       return true;
     }

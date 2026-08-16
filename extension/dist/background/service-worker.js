@@ -25633,6 +25633,36 @@ async function writeJson(dir, name25, value) {
   await w.write(JSON.stringify(value));
   await w.close();
 }
+async function readEntry(dir, name25) {
+  try {
+    const fh = await dir.getFileHandle(name25);
+    const f = await fh.getFile();
+    const parsed = JSON.parse(await f.text());
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.__v === "number" && Number.isFinite(parsed.__v) && "__value" in parsed) {
+      return { v: parsed.__v, value: parsed.__value };
+    }
+    return { v: 0, value: parsed };
+  } catch {
+    return null;
+  }
+}
+async function writeEntry(dir, name25, value, version3) {
+  const fh = await dir.getFileHandle(name25, { create: true });
+  const w = await fh.createWritable();
+  await w.write(JSON.stringify({ __v: version3, __value: value }));
+  await w.close();
+}
+async function openDirOptional(segments) {
+  let dir = await rootDir();
+  for (const seg of segments) {
+    try {
+      dir = await dir.getDirectoryHandle(seg);
+    } catch {
+      return null;
+    }
+  }
+  return dir;
+}
 async function storeUsage(dir) {
   let keys = 0;
   let bytes = 0;
@@ -25701,10 +25731,13 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   const usage = await storeUsage(dir);
   let oldBytes = 0;
   let isNew = true;
+  let prevVersion = 0;
   try {
     const fh = await dir.getFileHandle(`${key}.json`);
     oldBytes = (await fh.getFile()).size;
     isNew = false;
+    const entry = await readEntry(dir, `${key}.json`);
+    prevVersion = entry?.v ?? 0;
   } catch {
   }
   if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
@@ -25717,36 +25750,30 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   if (await globalUsage() + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
     throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
   }
-  await writeJson(dir, `${key}.json`, value);
+  const version3 = prevVersion + 1;
+  await writeEntry(dir, `${key}.json`, value, version3);
+  return version3;
 }
 async function setValue(path, key, value, { isMaster, trusted = false }) {
   return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
 }
-function jsonEquals(a, b) {
-  if (a === b) return true;
-  let sa;
-  let sb;
-  try {
-    sa = JSON.stringify(a);
-    sb = JSON.stringify(b);
-  } catch {
-    return false;
-  }
-  return sa === sb;
-}
-async function compareAndSet(path, key, expectedValue, nextValue, { isMaster }) {
+async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
   return withWriteLock(async () => {
-    const dir = await openDir(path);
-    const current = await readJson(dir, `${key}.json`);
-    if (!jsonEquals(current, expectedValue)) return false;
+    const dir = await openDirOptional(path);
+    const current = dir ? await readEntry(dir, `${key}.json`) : null;
+    const currentVersion = current?.v ?? 0;
+    if (currentVersion !== expectedVersion) return false;
     if (nextValue === void 0) {
-      try {
-        await dir.removeEntry(`${key}.json`);
-      } catch {
+      if (dir) {
+        try {
+          await dir.removeEntry(`${key}.json`);
+        } catch {
+        }
       }
       return true;
     }
-    await writeJson(dir, `${key}.json`, nextValue);
+    const targetDir = dir ?? await openDir(path);
+    await writeEntry(targetDir, `${key}.json`, nextValue, expectedVersion + 1);
     return true;
   });
 }
@@ -25757,14 +25784,18 @@ function memoryStore(origin) {
     isMaster,
     origin,
     async get(key) {
-      const dir = await openDir(path);
-      return await readJson(dir, `${key}.json`);
+      const dir = await openDirOptional(path);
+      if (!dir) return null;
+      const entry = await readEntry(dir, `${key}.json`);
+      return entry?.value ?? null;
     },
     /** Whether `key` EXISTS (a stored `null` value is still present, distinct
      * from an absent key — `get` returns `null` for both, so compensation logic
-     * must not conflate them). */
+     * must not conflate them). Non-creating read (does not recreate a deleted
+     * store). */
     async has(key) {
-      const dir = await openDir(path);
+      const dir = await openDirOptional(path);
+      if (!dir) return false;
       try {
         await dir.getFileHandle(`${key}.json`);
         return true;
@@ -25772,29 +25803,40 @@ function memoryStore(origin) {
         return false;
       }
     },
+    /** The key's CURRENT durable version token (0 when absent). */
+    async getVersion(key) {
+      const dir = await openDirOptional(path);
+      if (!dir) return 0;
+      const entry = await readEntry(dir, `${key}.json`);
+      return entry?.v ?? 0;
+    },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
     },
-    /** CAS delete: remove `key` ONLY if its current value JSON-equals
-     * `expectedValue` (the write being rolled back). Never deletes a concurrent
-     * legitimate write (the round-26 CAS-scoped-compensation blocker). */
-    async compareAndDelete(key, expectedValue) {
-      return await compareAndSet(path, key, expectedValue, void 0, { isMaster });
+    /** CAS delete: remove `key` ONLY if its current VERSION equals `expectedVersion`
+     * (the write being rolled back). Never deletes a concurrent legitimate write
+     * — even one with an identical value, because the version differs (the round-27
+     * value-CAS ABA blocker). `expectedVersion` is the version `set`/`setTrusted`
+     * RETURNED for the write being rolled back. */
+    async compareAndDelete(key, expectedVersion) {
+      return await compareAndSet(path, key, expectedVersion, void 0, { isMaster });
     },
-    /** CAS restore: write `restoreValue` ONLY if the current value JSON-equals
-     * `expectedValue` (the stale run's write). Never clobbers a concurrent
+    /** CAS restore: write `restoreValue` ONLY if the current VERSION equals
+     * `expectedVersion` (the stale run's write). Never clobbers a concurrent
      * legitimate write. */
-    async compareAndRestore(key, expectedValue, restoreValue) {
-      return await compareAndSet(path, key, expectedValue, restoreValue, { isMaster });
+    async compareAndRestore(key, expectedVersion, restoreValue) {
+      return await compareAndSet(path, key, expectedVersion, restoreValue, { isMaster });
     },
     /** Internal trusted write (approveTool/upsertTools/journalAppend/
      * enrollOrigin): same bounds + quotas, but reserved authority keys are
-     * writable ONLY here — never via the model's `memory_set`/`set`. */
+     * writable ONLY here — never via the model's `memory_set`/`set`. Returns the
+     * version token (see `set`). */
     async setTrusted(key, value) {
       return await setValue(path, key, value, { isMaster, trusted: true });
     },
     async keys() {
-      const dir = await openDir(path);
+      const dir = await openDirOptional(path);
+      if (!dir) return [];
       const out = [];
       for await (const [name25] of dir.entries()) {
         if (name25.endsWith(".json")) out.push(name25.slice(0, -5));
@@ -25876,16 +25918,16 @@ async function journalAppend(store, entry, guard = null) {
       entries = entries.slice(1);
     }
     if (guard) await guard();
-    await store.setTrusted("journal", entries);
+    const wroteVersion = await store.setTrusted("journal", entries);
     if (guard) {
       try {
         await guard();
       } catch (e) {
         try {
           if (e?.genMismatch === true) {
-            await store.compareAndDelete("journal", entries);
+            await store.compareAndDelete("journal", wroteVersion);
           } else {
-            await store.compareAndRestore("journal", entries, original);
+            await store.compareAndRestore("journal", wroteVersion, original);
           }
         } catch {
         }
@@ -66990,6 +67032,7 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
         let prev = void 0;
         let existed = false;
         let committed = false;
+        let wroteVersion = null;
         try {
           existed = typeof memory.has === "function" ? await memory.has(key) : await memory.get(key) !== void 0;
           prev = await memory.get(key);
@@ -67004,7 +67047,7 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
               return { error: "origin re-enrolled during run \u2014 memory not written" };
             }
           }
-          await memory.set(key, value);
+          wroteVersion = await memory.set(key, value);
           committed = true;
           await assertRunOwned();
           if (enrollmentGuard) {
@@ -67030,14 +67073,14 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
               const casRestore = typeof memory.compareAndRestore === "function";
               if (sameEnrollment) {
                 if (existed) {
-                  if (casRestore) await memory.compareAndRestore(key, value, prev);
+                  if (casRestore && wroteVersion != null) await memory.compareAndRestore(key, wroteVersion, prev);
                   else await memory.set(key, prev);
                 } else {
-                  if (casDelete) await memory.compareAndDelete(key, value);
+                  if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
                   else await memory.delete(key);
                 }
               } else {
-                if (casDelete) await memory.compareAndDelete(key, value);
+                if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
                 else await memory.delete(key);
               }
             } catch {
@@ -69066,9 +69109,10 @@ async function ensureOrchestrator() {
     const model = await ensureModel();
     const mem = masterMemory();
     const origins = await listOrigins();
+    const buildCells = /* @__PURE__ */ new Map();
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
-      runGenCells.set(origin, cell);
+      buildCells.set(origin, cell);
       return {
         origin,
         memory: siteMemory(origin),
@@ -69096,14 +69140,13 @@ async function ensureOrchestrator() {
       orchestrator = orch;
       orchestratorGen = gen;
       for (const [origin, agent] of orch.workers) {
-        const cell = runGenCells.get(origin);
+        const cell = buildCells.get(origin);
         if (cell) cell.get = () => agent.getRunGen();
       }
       return orch;
     }
   }
 }
-var runGenCells = /* @__PURE__ */ new Map();
 async function siteToolset(origin, runGenCell) {
   const tools = await listTools(origin);
   const set4 = {};

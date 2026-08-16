@@ -102,6 +102,66 @@ async function writeJson(dir, name, value) {
   await w.close();
 }
 
+// ---- DURABLE VERSION TOKENS (the round-27 CAS blocker) ----
+// Every store VALUE is persisted as a version envelope `{ __v, __value }` so the
+// compensation CAS can compare a durable per-key VERSION — not JSON value
+// equality. Value equality is not identity: an identical-value ABA (a new
+// enrollment writing the same JSON value) and a lost-fresh-value overwrite both
+// defeat a value-comparing CAS. A monotonic version that is NEVER reused, bumped
+// on every write, makes the stale run's write uniquely identifiable.
+//
+// Legacy raw values (written before versioning, or non-envelope files like the
+// screenshot blobs) read back as version 0 with the raw value — `readEntry` only
+// unwraps a value whose shape IS an envelope, and it unwraps exactly ONE level
+// (a model value that happens to look like `{ __v, __value }` is stored as the
+// outer envelope's `__value` and round-trips intact).
+
+/** Read a store key's versioned entry: `{ v, value }` or null when absent.
+ * Legacy raw values (no envelope) are version 0. */
+async function readEntry(dir, name) {
+  try {
+    const fh = await dir.getFileHandle(name);
+    const f = await fh.getFile();
+    const parsed = JSON.parse(await f.text());
+    if (
+      parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+      typeof parsed.__v === "number" && Number.isFinite(parsed.__v) &&
+      "__value" in parsed
+    ) {
+      return { v: parsed.__v, value: parsed.__value };
+    }
+    // Legacy raw value (pre-versioning): version 0.
+    return { v: 0, value: parsed };
+  } catch {
+    return null;
+  }
+}
+
+/** Write a store key's versioned entry. */
+async function writeEntry(dir, name, value, version) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(JSON.stringify({ __v: version, __value: value }));
+  await w.close();
+}
+
+/** Open a directory WITHOUT creating missing segments; returns null when the
+ * path does not exist. Read paths (get/has/keys/CAS-compare) use this so a read
+ * or a failed CAS can never RECREATE a directory that cleanup just removed
+ * (the round-27 cleanup-recreation blocker: `openDir(create:true)` inside a CAS
+ * resurrected a deleted origin directory even when the CAS mutated nothing). */
+async function openDirOptional(segments) {
+  let dir = await rootDir();
+  for (const seg of segments) {
+    try {
+      dir = await dir.getDirectoryHandle(seg);
+    } catch {
+      return null;
+    }
+  }
+  return dir;
+}
+
 /** Enumerate a store's existing .json keys + total serialized bytes (bounded
  * by the per-origin key cap). Used to enforce aggregate quotas on every write. */
 async function storeUsage(dir) {
@@ -184,13 +244,19 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   const dir = await openDir(path);
   const usage = await storeUsage(dir);
   // Read the OLD value's ACTUAL file bytes (not a re-stringify) so the delta is
-  // measured in the same unit (UTF-8 file bytes) as storeUsage/globalUsage.
+  // measured in the same unit (UTF-8 file bytes) as storeUsage/globalUsage. Also
+  // read the OLD version (from the envelope) so the new write's version is
+  // monotonic — a per-key version token that is NEVER reused (the round-27 CAS
+  // blocker: value equality is not identity; the version is).
   let oldBytes = 0;
   let isNew = true;
+  let prevVersion = 0;
   try {
     const fh = await dir.getFileHandle(`${key}.json`);
     oldBytes = (await fh.getFile()).size;
     isNew = false;
+    const entry = await readEntry(dir, `${key}.json`);
+    prevVersion = entry?.v ?? 0;
   } catch { /* absent → new key */ }
   // Aggregate quotas: a store may not grow past MAX_KEYS_PER_ORIGIN keys or
   // MAX_BYTES_PER_ORIGIN bytes (and the global tree past MAX_BYTES_GLOBAL).
@@ -207,45 +273,52 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   if ((await globalUsage()) + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
     throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
   }
-  await writeJson(dir, `${key}.json`, value);
+  // Bump the version and write the ENVELOPE. The returned version is the write's
+  // durable identity token — callers capture it and pass it to the version-scoped
+  // compareAndDelete/compareAndRestore so compensation targets THIS write, never
+  // a same-value write made under a different enrollment (the round-27 blocker).
+  const version = prevVersion + 1;
+  await writeEntry(dir, `${key}.json`, value, version);
+  return version;
 }
 
 async function setValue(path, key, value, { isMaster, trusted = false }) {
   return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
 }
 
-/** Deep JSON equality for CAS compensation (memory values are JSON-serializable). */
-function jsonEquals(a, b) {
-  if (a === b) return true;
-  let sa;
-  let sb;
-  try {
-    sa = JSON.stringify(a);
-    sb = JSON.stringify(b);
-  } catch {
-    return false;
-  }
-  return sa === sb;
-}
-
 /** Compare-and-swap on a single key, under the global write mutex (atomic with
- * every other `set`/`setTrusted`). Writes `nextValue` (or DELETES when
- * `nextValue === undefined`) only if the key's current value JSON-equals
- * `expectedValue`; returns whether the swap happened. This is the CAS primitive
- * the compensation paths use so a stale run can NEVER clobber a concurrent
- * legitimate write (the round-26 CAS-scoped-compensation blocker). */
-async function compareAndSet(path, key, expectedValue, nextValue, { isMaster }) {
+ * every other `set`/`setTrusted`). The comparison is on the key's durable VERSION
+ * TOKEN (the per-key monotonic version written into the envelope), NOT JSON value
+ * equality. Writes `nextValue` (or DELETES when `nextValue === undefined`) only if
+ * the key's CURRENT version equals `expectedVersion`; returns whether the swap
+ * happened. This is the CAS primitive the compensation paths use so a stale run
+ * can NEVER clobber a concurrent legitimate write — an identical-value ABA (a new
+ * enrollment writing the SAME JSON value) bumps the version, so a stale
+ * compensation holding the old version does NOT match and leaves the new write
+ * intact (the round-27 value-CAS ABA blocker).
+ *
+ * The READ is non-creating: `openDirOptional` (not `openDir`) so a mismatched CAS
+ * never recreates a directory that cleanup just removed (the round-27 cleanup-
+ * recreation blocker). A write that DOES land creates the directory only for the
+ * actual mutation. */
+async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
   return withWriteLock(async () => {
-    const dir = await openDir(path);
-    const current = await readJson(dir, `${key}.json`);
-    if (!jsonEquals(current, expectedValue)) return false;
+    const dir = await openDirOptional(path);
+    const current = dir ? await readEntry(dir, `${key}.json`) : null;
+    const currentVersion = current?.v ?? 0;
+    if (currentVersion !== expectedVersion) return false;
     if (nextValue === undefined) {
-      try {
-        await dir.removeEntry(`${key}.json`);
-      } catch { /* absent */ }
+      if (dir) {
+        try {
+          await dir.removeEntry(`${key}.json`);
+        } catch { /* absent */ }
+      }
       return true;
     }
-    await writeJson(dir, `${key}.json`, nextValue);
+    // A CAS-restore onto a fresh/absent store legitimately writes: open the
+    // directory (creating it) ONLY for the actual mutation, never for a compare.
+    const targetDir = dir ?? await openDir(path);
+    await writeEntry(targetDir, `${key}.json`, nextValue, expectedVersion + 1);
     return true;
   });
 }
@@ -261,14 +334,18 @@ export function memoryStore(origin) {
     isMaster,
     origin,
     async get(key) {
-      const dir = await openDir(path);
-      return await readJson(dir, `${key}.json`);
+      const dir = await openDirOptional(path);
+      if (!dir) return null;
+      const entry = await readEntry(dir, `${key}.json`);
+      return entry?.value ?? null;
     },
     /** Whether `key` EXISTS (a stored `null` value is still present, distinct
      * from an absent key — `get` returns `null` for both, so compensation logic
-     * must not conflate them). */
+     * must not conflate them). Non-creating read (does not recreate a deleted
+     * store). */
     async has(key) {
-      const dir = await openDir(path);
+      const dir = await openDirOptional(path);
+      if (!dir) return false;
       try {
         await dir.getFileHandle(`${key}.json`);
         return true;
@@ -276,29 +353,40 @@ export function memoryStore(origin) {
         return false;
       }
     },
+    /** The key's CURRENT durable version token (0 when absent). */
+    async getVersion(key) {
+      const dir = await openDirOptional(path);
+      if (!dir) return 0;
+      const entry = await readEntry(dir, `${key}.json`);
+      return entry?.v ?? 0;
+    },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
     },
-    /** CAS delete: remove `key` ONLY if its current value JSON-equals
-     * `expectedValue` (the write being rolled back). Never deletes a concurrent
-     * legitimate write (the round-26 CAS-scoped-compensation blocker). */
-    async compareAndDelete(key, expectedValue) {
-      return await compareAndSet(path, key, expectedValue, undefined, { isMaster });
+    /** CAS delete: remove `key` ONLY if its current VERSION equals `expectedVersion`
+     * (the write being rolled back). Never deletes a concurrent legitimate write
+     * — even one with an identical value, because the version differs (the round-27
+     * value-CAS ABA blocker). `expectedVersion` is the version `set`/`setTrusted`
+     * RETURNED for the write being rolled back. */
+    async compareAndDelete(key, expectedVersion) {
+      return await compareAndSet(path, key, expectedVersion, undefined, { isMaster });
     },
-    /** CAS restore: write `restoreValue` ONLY if the current value JSON-equals
-     * `expectedValue` (the stale run's write). Never clobbers a concurrent
+    /** CAS restore: write `restoreValue` ONLY if the current VERSION equals
+     * `expectedVersion` (the stale run's write). Never clobbers a concurrent
      * legitimate write. */
-    async compareAndRestore(key, expectedValue, restoreValue) {
-      return await compareAndSet(path, key, expectedValue, restoreValue, { isMaster });
+    async compareAndRestore(key, expectedVersion, restoreValue) {
+      return await compareAndSet(path, key, expectedVersion, restoreValue, { isMaster });
     },
     /** Internal trusted write (approveTool/upsertTools/journalAppend/
      * enrollOrigin): same bounds + quotas, but reserved authority keys are
-     * writable ONLY here — never via the model's `memory_set`/`set`. */
+     * writable ONLY here — never via the model's `memory_set`/`set`. Returns the
+     * version token (see `set`). */
     async setTrusted(key, value) {
       return await setValue(path, key, value, { isMaster, trusted: true });
     },
     async keys() {
-      const dir = await openDir(path);
+      const dir = await openDirOptional(path);
+      if (!dir) return [];
       const out = [];
       for await (const [name] of dir.entries()) {
         if (name.endsWith(".json")) out.push(name.slice(0, -5));
@@ -417,7 +505,10 @@ export async function journalAppend(store, entry, guard = null) {
   // Re-check the caller's fence IMMEDIATELY before the commit (no other await
   // between this check and setTrusted).
   if (guard) await guard();
-  await store.setTrusted("journal", entries);
+  // `setTrusted` returns the durable VERSION TOKEN for THIS write (the round-27
+  // value-CAS ABA blocker). Capture it so compensation below targets this exact
+  // write, never a same-value write made under a different enrollment.
+  const wroteVersion = await store.setTrusted("journal", entries);
   // POST-commit guard: ownership lost DURING the setTrusted commit must be
   // COMPENSATED by restoring the EXACT pre-append state (`original`), not merely
   // removing the just-appended entry — otherwise a ring-buffer eviction is not
@@ -428,23 +519,24 @@ export async function journalAppend(store, entry, guard = null) {
     try {
       await guard();
     } catch (e) {
-      // GENERATION-SCOPED + CAS compensation (the round-26 blocker): the old
-      // code blindly restored `original` (the PRE-append journal) on ANY
-      // post-commit guard failure. When the guard failure is a RE-ENROLLMENT
+      // GENERATION-SCOPED + VERSION-SCOPED CAS compensation (the round-26/27
+      // blockers): the old code blindly restored `original` (the PRE-append
+      // journal) on ANY post-commit guard failure, and compared the write by
+      // JSON VALUE equality. When the guard failure is a RE-ENROLLMENT
       // (delete→re-enroll during the awaited setTrusted), restoring `original`
       // wrote the OLD enrollment's journal (with its secrets) into the NEW
-      // enrollment's reused store. Two distinct cases:
+      // enrollment's reused store. Two distinct cases, both version-scoped:
       //   1. genMismatch (re-enrollment): the stale append landed in a REUSED
-      //      store — REMOVE it via CAS (delete `entries` only if the current
-      //      journal is STILL the array this run wrote). Never restore `original`,
-      //      and never clobber a concurrent new-enrollment write.
+      //      store — REMOVE it via CAS (delete only if the journal's VERSION is
+      //      still the version THIS run wrote). Never restore `original`, never
+      //      clobber a concurrent new-enrollment write.
       //   2. abort/ownership loss (same enrollment): restore the EXACT pre-append
-      //      state, CAS-scoped (only if the current journal is still `entries`).
+      //      state, CAS-scoped (only if the version is still `wroteVersion`).
       try {
         if (e?.genMismatch === true) {
-          await store.compareAndDelete("journal", entries);
+          await store.compareAndDelete("journal", wroteVersion);
         } else {
-          await store.compareAndRestore("journal", entries, original);
+          await store.compareAndRestore("journal", wroteVersion, original);
         }
       } catch { /* best-effort compensation */ }
       throw e;

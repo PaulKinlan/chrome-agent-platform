@@ -20,7 +20,38 @@
   // surface its result — the round-21 blocker where the MAIN world ignored the
   // generation entirely and kept reporting results after a delete.
   const inFlight = new Set();
-  const cancelled = new Set();
+  // Cancelled invocation tombstones, BOUNDED (the round-27 blocker 5): the old
+  // code used an unbounded `cancelled` Set — a never-settling page function's id
+  // stayed resident forever, and repeated cancels grew the set without limit
+  // (violating bounded-memory). A Map<id, timestamp> supports a hard cap with
+  // oldest-first eviction (Set insertion order is not exposed) AND a TTL sweep so
+  // a cancel tombstones a result long enough to cover the content-script's 15s
+  // timeout + this world's 20s in-flight timeout, then forgets it.
+  const cancelled = new Map();
+  // Hard cap on the tombstone map (a single page cannot accumulate unbounded
+  // never-settling cancellation tombstones).
+  const CANCELLED_MAX = 512;
+  // A cancelled id suppresses a late result for at most this long (well beyond the
+  // 15s content-script timeout and the 20s in-flight timeout).
+  const CANCELLED_TTL_MS = 60 * 1000;
+  function markCancelled(id) {
+    cancelled.set(id, Date.now());
+    if (cancelled.size > CANCELLED_MAX) {
+      // Evict the OLDEST tombstone (Map preserves insertion order) so the map
+      // stays bounded even under a flood of never-settling cancellations.
+      const oldest = cancelled.keys().next().value;
+      cancelled.delete(oldest);
+    }
+  }
+  function isCancelled(id) {
+    const at = cancelled.get(id);
+    if (at === undefined) return false;
+    if (Date.now() - at > CANCELLED_TTL_MS) {
+      cancelled.delete(id); // expired tombstone — no longer suppress
+      return false;
+    }
+    return true;
+  }
   // A cancellation EPOCH flag (round-23 blocker 1): `cancelled` only marks IDs
   // that were already in `inFlight` at cancel time, so a cancel that arrived
   // BEFORE a new invoke could not mark that future ID (it was not yet in
@@ -151,7 +182,7 @@
     // network effects cannot be unwound — the result is discarded and the
     // invocation is marked cancelled, but the in-flight function itself runs
     // to settlement. That limit is documented (not papered over) below.
-    if (cancelledAll || cancelled.has(requestId)) {
+    if (cancelledAll || isCancelled(requestId)) {
       throw new Error("invocation cancelled");
     }
     // 1. a page-defined global function
@@ -165,7 +196,7 @@
       // turn (via the cancel EPOCH) is still honored right up to the call edge.
       // This is the MINIMUM window; once fn.apply runs, its effects are
       // unwindable (cooperative cancellation can only discard the result).
-      if (cancelledAll || cancelled.has(requestId)) {
+      if (cancelledAll || isCancelled(requestId)) {
         throw new Error("invocation cancelled");
       }
       return await fn.apply(window, ordered);
@@ -173,13 +204,13 @@
     // 2. a WebMCP registered tool
     const mc = document.modelContext;
     if (typeof mc?.callTool === "function") {
-      if (cancelledAll || cancelled.has(requestId)) {
+      if (cancelledAll || isCancelled(requestId)) {
         throw new Error("invocation cancelled");
       }
       return await mc.callTool(name, args ?? {});
     }
     if (typeof mc?.invoke === "function") {
-      if (cancelledAll || cancelled.has(requestId)) {
+      if (cancelledAll || isCancelled(requestId)) {
         throw new Error("invocation cancelled");
       }
       return await mc.invoke(name, args ?? {});
@@ -208,7 +239,7 @@
       // before a future invoke could not mark that future ID), and (2) mark every
       // currently in-flight invoke as cancelled so its result is discarded.
       cancelledAll = true;
-      for (const id of inFlight) cancelled.add(id);
+      for (const id of inFlight) markCancelled(id);
     } else if (data.type === "invoke" && data.nonce === nonce) {
       inFlight.add(data.requestId);
       // Bound the in-flight set: a hung page function must not leave its request
@@ -221,7 +252,7 @@
       // starts (the round-23 blocker: invoking synchronously meant a later
       // cancel could never interleave between inFlight.add and the call).
       setTimeout(() => {
-        if (cancelledAll || cancelled.has(data.requestId)) {
+        if (cancelledAll || isCancelled(data.requestId)) {
           inFlight.delete(data.requestId);
           post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
           return;
@@ -229,7 +260,8 @@
         invoke(data.requestId, data.name, data.args)
           .then((result) => {
             inFlight.delete(data.requestId);
-            if (cancelled.delete(data.requestId)) {
+            if (isCancelled(data.requestId)) {
+              cancelled.delete(data.requestId);
               post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
               return;
             }

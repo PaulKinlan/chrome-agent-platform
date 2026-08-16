@@ -90,6 +90,7 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
         let prev = undefined;
         let existed = false;
         let committed = false;
+        let wroteVersion = null; // the durable version token `set` returns (round-27)
         try {
           // Existence must be checked via `has`, NOT via `get` returning
           // non-null: a legitimate stored `null` value is indistinguishable from
@@ -117,7 +118,11 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
               return { error: "origin re-enrolled during run — memory not written" };
             }
           }
-          await memory.set(key, value);
+          // `set` returns the durable VERSION token for THIS write (the round-27
+          // value-CAS ABA blocker). Capture it directly (not via a separate
+          // getVersion read, which could observe a later concurrent write's
+          // version). Compensation below targets this exact write.
+          wroteVersion = await memory.set(key, value);
           committed = true;
           await assertRunOwned();
           // Re-validate the IMMUTABLE run-start generation AFTER the awaited set:
@@ -161,24 +166,28 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null) {
               const casDelete = typeof memory.compareAndDelete === "function";
               const casRestore = typeof memory.compareAndRestore === "function";
               if (sameEnrollment) {
-                // CAS-scoped restore (the round-26 blocker): only restore/delete
-                // if the current value is STILL the value this run wrote — a
-                // concurrent legitimate write by the SAME enrollment (a parallel
-                // tool call in the same run) must never be clobbered.
+                // VERSION-scoped CAS restore (the round-26/27 blockers): only
+                // restore/delete if the key's CURRENT VERSION is still the version
+                // THIS run wrote — a concurrent legitimate write by the SAME
+                // enrollment (a parallel tool call in the same run) bumps the
+                // version, so it is never clobbered, and an identical-value ABA
+                // (a new write of the same JSON value) is distinguished by its
+                // version. `wroteVersion` is the token `set` returned.
                 if (existed) {
-                  if (casRestore) await memory.compareAndRestore(key, value, prev);
+                  if (casRestore && wroteVersion != null) await memory.compareAndRestore(key, wroteVersion, prev);
                   else await memory.set(key, prev);
                 } else {
-                  if (casDelete) await memory.compareAndDelete(key, value);
+                  if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
                   else await memory.delete(key);
                 }
               } else {
                 // Generation mismatch (delete→re-enroll): REMOVE this run's
-                // forbidden write from the NEW reused store via CAS. Never restore
-                // the OLD enrollment's `prev` into the new store, and never delete
-                // a new-enrollment value that already replaced ours (the round-26
-                // stale-write-survives-re-enrollment blocker).
-                if (casDelete) await memory.compareAndDelete(key, value);
+                // forbidden write from the NEW reused store via VERSION-scoped CAS
+                // (only if the version is still this write's). Never restore the
+                // OLD enrollment's `prev` into the new store, and never delete a
+                // new-enrollment value that already replaced ours (the round-26/27
+                // stale-write-survives-re-enrollment + value-CAS blockers).
+                if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
                 else await memory.delete(key);
               }
             } catch { /* best-effort */ }
