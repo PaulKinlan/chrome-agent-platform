@@ -228,6 +228,39 @@ async function main() {
       return new Promise(r => setTimeout(() => r({ hidden: pop.hidden, count: pop.querySelectorAll('.item').length }), 100));
     })()`);
     check("composer / palette opens", pal.hidden === false && pal.count > 0, pal);
+
+    // <agent-conversation> renders a full turn: a fenced code block in the user
+    // message, a collapsible thinking trace, structured tool cards (done/error),
+    // and a system response with code + inline code + a list (the conversation
+    // regression: code blocks were unstyled raw text + tool calls were text).
+    const conv = await evl(s.sessionId, `(()=>{
+      const c = document.getElementById('conv-example');
+      if (!c) return { found:false };
+      const bubbles = [...c.querySelectorAll('message-bubble')];
+      const codeCount = (b) => b.shadowRoot ? b.shadowRoot.querySelectorAll('code-block').length : 0;
+      const user = bubbles.find(b=>b.getAttribute('role')==='user');
+      const sys = bubbles.find(b=>b.getAttribute('role')==='system');
+      const tool = bubbles.find(b=>b.getAttribute('role')==='tool');
+      const think = bubbles.find(b=>b.getAttribute('role')==='thinking');
+      return {
+        found:true,
+        count: bubbles.length,
+        userCodeBlock: user ? codeCount(user) : 0,
+        userCodeLang: user?.shadowRoot?.querySelector('code-block')?.getAttribute('lang'),
+        systemCodeBlock: sys ? codeCount(sys) : 0,
+        systemInlineCode: !!sys?.shadowRoot?.querySelector('code.inline-code'),
+        systemList: !!sys?.shadowRoot?.querySelector('ul'),
+        toolName: tool?.getAttribute('tool-name'),
+        toolStatus: tool?.shadowRoot?.querySelector('.tool-status')?.textContent?.trim(),
+        toolHasResult: tool?.hasAttribute('tool-result'),
+        thinkingCollapsible: !!think?.shadowRoot?.querySelector('details.think'),
+      };
+    })()`);
+    check("agent-conversation renders 5 messages", conv.found && conv.count === 5, conv);
+    check("user message renders a fenced code block", conv.userCodeBlock === 1 && conv.userCodeLang === "tool_code", conv);
+    check("system response renders code + inline code + list", conv.systemCodeBlock === 1 && conv.systemInlineCode === true && conv.systemList === true, conv);
+    check("tool call renders a structured card", conv.toolName != null && conv.toolStatus === "done" && conv.toolHasResult === true, conv);
+    check("thinking renders as a collapsible trace", conv.thinkingCollapsible === true, conv);
   } finally {
     try { ws.close(); } catch { /* ignore */ }
     try { proc.kill("SIGKILL"); } catch { /* ignore */ }
