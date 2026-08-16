@@ -294,6 +294,56 @@ async function renderAgents() {
   $("#per-agent-provider").hidden = !$("#multi-agent").checked;
   $("#agent-provider-list").replaceChildren();
 }
+async function renderBackgroundAgents() {
+  const res = await chrome.runtime.sendMessage({ type: "background-agent.list" }).catch(() => ({ agents: [] }));
+  const agents = Array.isArray(res.agents) ? res.agents : [];
+  const list = $("#background-agent-list");
+  list.replaceChildren();
+  if (!agents.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No background agents configured.";
+    list.appendChild(p);
+    return;
+  }
+  for (const a of agents) {
+    const row = document.createElement("div");
+    row.className = "background-agent-row";
+    const name = document.createElement("span");
+    name.className = "perm-name";
+    name.textContent = a.name;
+    const state = document.createElement("span");
+    state.className = "perm-state" + (a.enabled ? " running" : " stopped");
+    state.textContent = a.enabled ? "Running" : "Stopped";
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = (a.description || "") + (a.schedule?.periodInMinutes ? ` \xB7 runs every ${a.schedule.periodInMinutes} min` : "");
+    const label = document.createElement("label");
+    label.className = "switch";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(a.enabled);
+    const track = document.createElement("span");
+    track.className = "track";
+    track.setAttribute("aria-hidden", "true");
+    const sr = document.createElement("span");
+    sr.className = "sr-only";
+    sr.textContent = `${a.enabled ? "Disable" : "Enable"} ${a.name}`;
+    label.append(input, track, sr);
+    input.addEventListener("change", async () => {
+      const enabled = input.checked;
+      const out = await chrome.runtime.sendMessage({ type: "background-agent.set", id: a.id, enabled }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (out?.ok) {
+        saveFlash(enabled ? `${a.name} enabled.` : `${a.name} disabled.`);
+      } else {
+        saveFlash(`Could not update ${a.name}: ${out?.error ?? "failed"}.`);
+      }
+      renderBackgroundAgents();
+    });
+    row.append(name, state, hint, label);
+    list.appendChild(row);
+  }
+}
 async function renderAppearance(restoreFocus = false) {
   const s = await storage.get("cap:theme");
   const current = s["cap:theme"] ?? "sunlit";
@@ -620,6 +670,7 @@ document.querySelectorAll(".nav-item").forEach((a) => {
 });
 await renderProviders();
 await renderAgents();
+await renderBackgroundAgents();
 await renderEnroll();
 await renderAppearance();
 await renderBrowser();

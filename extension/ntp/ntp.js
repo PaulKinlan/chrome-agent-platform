@@ -8,7 +8,6 @@
 import { send } from "../lib/messages.js";
 import { runConversationTurn } from "../shared/conversation.js";
 
-import { RECIPE_ICON } from "../shared/recipe-icons.js";
 import {
   installPageDiagnostics,
   refreshDiagnostics,
@@ -35,44 +34,6 @@ function escapeHtml(s) {
 
 function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
-}
-
-// ── background agents (scheduled recipes, a toggle each) ────────────────
-async function renderBackgroundAgents() {
-  const el = document.getElementById("background-agents");
-  if (!el) return;
-  const res = await send("background-agent.list").catch(() => ({ agents: [] }));
-  const agents = Array.isArray(res.agents) ? res.agents : [];
-  el.replaceChildren();
-  if (!agents.length) {
-    el.innerHTML = `<div class="empty">No background agents. Browse recipes to enable one.</div>`;
-    return;
-  }
-  for (const a of agents) {
-    const row = document.createElement("capability-row");
-    row.setAttribute("name", a.name);
-    row.setAttribute("description", a.description || "");
-    row.setAttribute("icon", RECIPE_ICON[a.icon] ?? "");
-    row.setAttribute("action", "toggle");
-    if (a.enabled) row.setAttribute("enabled", "");
-    if (a.schedule?.periodInMinutes) {
-      row.setAttribute(
-        "last-run",
-        `runs every ${a.schedule.periodInMinutes} min`,
-      );
-    }
-    row.addEventListener("toggle", async (e) => {
-      const enabled = e.detail.enabled;
-      const out = await send("background-agent.set", { id: a.id, enabled });
-      if (!out?.ok) {
-        setStatus("error: " + (out?.error ?? "unknown"), false);
-        return;
-      }
-      setStatus(enabled ? `${a.name} enabled` : `${a.name} disabled`);
-      renderBackgroundAgents();
-    });
-    el.append(row);
-  }
 }
 
 // ── site agents (enrolled origins) ────────────────────────────────────────
@@ -144,27 +105,40 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-async function renderTasks() {
-  const el = document.getElementById("tasks");
+async function renderTasks(activeId = null) {
+  const el = document.getElementById("thread-sidebar");
   if (!el) return;
   const res = await send("thread.list").catch(() => ({ threads: [] }));
   const threads = Array.isArray(res.threads) ? res.threads : [];
   el.replaceChildren();
   if (!threads.length) {
-    el.innerHTML = `<div class="empty">No tasks yet — start one above.</div>`;
+    const empty = document.createElement("div");
+    empty.className = "thread-empty";
+    empty.textContent = "No tasks yet — start one above.";
+    el.append(empty);
     return;
   }
-  for (const t of threads.slice(0, 12)) {
-    const row = document.createElement("capability-row");
-    row.setAttribute("name", t.name || "Task");
-    row.setAttribute(
-      "description",
-      `${t.preview || ""} · ${timeAgo(t.updatedAt)}`,
-    );
-    row.setAttribute("icon", "");
-    row.setAttribute("action", "run");
-    row.addEventListener("run", () => openThread(t.id));
-    el.append(row);
+  for (const t of threads.slice(0, 40)) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "thread-item";
+    if (activeId && t.id === activeId) item.setAttribute("aria-current", "true");
+    const dotState =
+      t.status === "running" ? "running" : t.status === "error" ? "error" : "";
+    const name = document.createElement("span");
+    name.className = "t-name";
+    const dot = document.createElement("span");
+    dot.className = "dot" + (dotState ? " " + dotState : "");
+    name.append(dot, document.createTextNode(t.name || "Task"));
+    const preview = document.createElement("span");
+    preview.className = "t-preview";
+    preview.textContent = t.preview || "";
+    const meta = document.createElement("span");
+    meta.className = "t-meta";
+    meta.textContent = timeAgo(t.updatedAt);
+    item.append(name, preview, meta);
+    item.addEventListener("click", () => openThread(t.id));
+    el.append(item);
   }
 }
 
@@ -194,6 +168,7 @@ async function openThread(id) {
     messages.map((m) => ({ role: m.role, content: m.content })),
   );
   showThreadView();
+  renderTasks(id);
 }
 
 /** Run a turn in the thread surface (a new task, or a nudge). */
@@ -214,7 +189,7 @@ async function runThreadTurn(text, attachments = []) {
       if (t.thread?.name) threadTitle.textContent = t.thread.name;
     }
     setStatus("ready");
-    await renderTasks();
+    await renderTasks(currentThreadId);
   } else {
     setStatus("error: " + (res.error ?? "unknown"), false);
   }
@@ -238,7 +213,6 @@ threadComposer.addEventListener("send", async (ev) => {
 });
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
 
-renderBackgroundAgents();
 renderSiteAgents();
 renderArtifacts();
 renderTasks();
@@ -268,10 +242,6 @@ document.getElementById("open-settings")?.addEventListener(
 document.getElementById("open-directory")?.addEventListener(
   "click",
   () => openView("directory/directory.html", "Directory"),
-);
-document.getElementById("open-recipes")?.addEventListener(
-  "click",
-  () => openView("recipes/index.html", "Recipes"),
 );
 
 setStatus("ready");
