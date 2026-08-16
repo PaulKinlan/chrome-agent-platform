@@ -54,6 +54,14 @@ there. The reviewer agents check against it.
   Chrome journey suite + unit tests green. A regression is a stop.
 - **Visual verification.** UI work is verified by driving the real UI in headless
   Chrome (CDP) with screenshots, before + after. "It serves" is not "it works".
+- **Fleet validation (Paul, 2026-08-16).** Every change is validated by a DIFFERENT
+  review agent before it is considered done — the intercom fleet (sol for code/
+  security review, deepseek-v4-pro for vision/UI review, GLM-5.3 for a second
+  opinion / independent review). The coordinator CAN commit + push frequently (Paul
+  tests regularly), but the review agents run on the pushed work continuously:
+  review the latest HEAD, report findings, and the coordinator actions them. Never
+  let a change sit unreviewed. The review agents' feedback is tracked (KNOWN-ISSUES)
+  + worked, not ignored.
 
 ## Testing
 - deno test tests/ — the pure/unit suite.

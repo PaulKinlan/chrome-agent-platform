@@ -2005,8 +2005,13 @@ var PanelButton = class extends Component {
       .console .ts { flex:0 0 auto; color:var(--muted,#635e56); }
       .console .lv { flex:0 0 auto; width:44px; text-transform:uppercase; font-size:10px; font-weight:700; letter-spacing:.04em; }
       .console .lvl-error { border-left-color:var(--danger,#b3261e); } .console .lvl-error .lv { color:var(--danger,#b3261e); }
+      .console .lvl-error .msg { color:var(--danger,#b3261e); }
       .console .lvl-warn { border-left-color:var(--warning,#9a6700); } .console .lvl-warn .lv { color:var(--warning,#9a6700); }
+      .console .src { flex:0 0 auto; color:var(--muted,#635e56); font-size:10px; opacity:.8; }
       .console .msg { flex:1; word-break:break-word; white-space:pre-wrap; }
+      .console .line-copy { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; font-size:11px; padding:0 4px; border-radius:4px; opacity:0; }
+      .console .line:hover .line-copy, .console .line-copy:focus-visible { opacity:1; }
+      .console .line-copy:hover { color:var(--text,#1d1b18); background:var(--panel-2,#efede8); }
       .shield-body .sect { padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .shield-body .sect:last-child { border-bottom:0; }
       .shield-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:8px; }
@@ -2107,6 +2112,7 @@ var ErrorConsole = class extends PanelButton {
     return `
       <div class="phead">
         <span class="t">Console</span>
+        <button type="button" data-copy-all>Copy all</button>
         <button type="button" data-clear>Clear</button>
         <button type="button" data-close aria-label="Close">${ICONS.close}</button>
       </div>
@@ -2117,20 +2123,56 @@ var ErrorConsole = class extends PanelButton {
     if (!body) return;
     const res = await backend("diagnostics.list");
     const entries = res.entries || [];
+    this._entries = entries;
     if (!entries.length) {
       body.innerHTML = `<div class="empty">No errors captured. The console shows extension errors, warnings, and unhandled rejections as they happen.</div>`;
       return;
     }
-    body.innerHTML = entries.map(
-      (e) => `<div class="line lvl-${escapeHtml(e.level)}"><span class="ts">${escapeHtml(fmtTime(e.ts))}</span><span class="lv">${escapeHtml(e.level)}</span><span class="msg">${escapeHtml(e.message)}</span></div>`
+    const rank = { error: 0, warn: 1, info: 2 };
+    const ordered = entries.slice().sort((a, b) => {
+      const ra = rank[a.level] ?? 3;
+      const rb = rank[b.level] ?? 3;
+      return ra !== rb ? ra - rb : b.ts - a.ts;
+    });
+    body.innerHTML = ordered.map(
+      (e) => `<div class="line lvl-${escapeHtml(e.level)}"><span class="ts">${escapeHtml(fmtTime(e.ts))}</span><span class="lv">${escapeHtml(e.level)}</span><span class="msg">${escapeHtml(e.message)}</span>` + (e.source ? `<span class="src">${escapeHtml(e.source)}</span>` : "") + `<button type="button" class="line-copy" data-copy aria-label="Copy this line">Copy</button></div>`
     ).join("");
     body.scrollTop = 0;
+    body.onclick = async (ev) => {
+      const btn = ev.target.closest?.("[data-copy]");
+      if (!btn) return;
+      const line = btn.closest(".line");
+      const msg = line?.querySelector(".msg")?.textContent || "";
+      const lv = line?.querySelector(".lv")?.textContent || "";
+      if (await this._writeClipboard(msg)) {
+        btn.textContent = "Copied";
+        setTimeout(() => {
+          btn.textContent = "Copy";
+        }, 1400);
+      }
+    };
   }
   async _clear() {
     await backend("diagnostics.clear");
     this.setAttribute("count", "0");
+    this._entries = [];
     await this._refreshPanel();
     this._emit("cleared");
+  }
+  async _copyAll() {
+    const entries = this._entries || [];
+    const text = entries.map(
+      (e) => `[${fmtTime(e.ts)}] ${e.level}${e.source ? ` (${e.source})` : ""}: ${e.message}`
+    ).join("\n");
+    const btn = this._panel?.querySelector("[data-copy-all]");
+    if (await this._writeClipboard(text || "")) {
+      if (btn) {
+        btn.textContent = "Copied";
+        setTimeout(() => {
+          btn.textContent = "Copy all";
+        }, 1400);
+      }
+    }
   }
 };
 customElements.define("error-console", ErrorConsole);

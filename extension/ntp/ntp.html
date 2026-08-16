@@ -28,7 +28,31 @@
       top: 0;
       height: 100vh;
       overflow-y: auto;
+      transition: width .18s ease, flex-basis .18s ease;
     }
+    /* collapsed → a narrow icon rail */
+    .side.collapsed { width: 60px; flex-basis: 60px; padding-left: 10px; padding-right: 10px; }
+    .brand-row { display: flex; align-items: center; gap: 6px; }
+    .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+    .side-toggle { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+      border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--muted);
+      cursor: pointer; padding: 0; flex: 0 0 auto; }
+    .side-toggle:hover { color: var(--text); border-color: var(--accent); }
+    .side-toggle svg { display: block; transition: transform .18s ease; }
+    .side.collapsed .side-toggle svg { transform: rotate(180deg); }
+    .side-label-row { display: flex; align-items: center; gap: 4px; }
+    .side-label-row .side-label { flex: 1; min-width: 0; }
+    .new-task { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+      border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--accent);
+      cursor: pointer; padding: 0; font-size: 18px; line-height: 1; flex: 0 0 auto; }
+    .new-task:hover { border-color: var(--accent); background: var(--on-accent-muted, #d7f0ea); }
+    /* hide the text labels when collapsed (icon rail) */
+    .side.collapsed .brand, .side.collapsed .side-label,
+    .side.collapsed .thread-item .t-name, .side.collapsed .thread-item .t-preview,
+    .side.collapsed .thread-item .t-meta, .side.collapsed .side-foot button { display: none; }
+    .side.collapsed .thread-item { padding: 8px; align-items: center; }
+    .side.collapsed .side-foot { align-items: center; }
+    .side.collapsed .side-foot button { width: 32px; height: 32px; padding: 0; justify-content: center; }
     .brand {
       font-weight: 700;
       font-size: 16px;
@@ -179,6 +203,17 @@
       font-size: var(--text-xs);
       color: var(--muted);
     }
+    .panel-subhead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px 4px;
+      font-size: var(--text-xs);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      font-weight: 600;
+    }
     .panel-body { padding: 4px 0; }
     .empty {
       padding: 14px;
@@ -194,6 +229,7 @@
       display: flex;
       flex-direction: column;
       z-index: 100;
+      view-transition-name: overlay-view;
     }
     .view-overlay[hidden] { display: none; }
     .view-head {
@@ -255,9 +291,17 @@
     </style>
   </head>
   <body>
-    <aside class="side" aria-label="Tasks">
-      <div class="brand">Chrome <span>Agent</span> Platform</div>
-      <div class="side-label">Tasks</div>
+    <aside class="side" id="side" aria-label="Tasks">
+      <div class="brand-row">
+        <div class="brand">Chrome <span>Agent</span> Platform</div>
+        <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+      </div>
+      <div class="side-label-row">
+        <span class="side-label">Tasks</span>
+        <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task">+</button>
+      </div>
       <nav class="thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
       <div class="side-foot">
         <button class="btn ghost" id="open-recipes" type="button">Recipes</button>
@@ -278,13 +322,16 @@
 
         <agent-composer id="composer" placeholder="Ask anything, or @mention a site agent…" send-label="Run task"></agent-composer>
 
-        <!-- Site agents: enrolled origins. -->
-        <section aria-label="Site agents">
+        <!-- Agents: the two groupings — background agents (scheduled) + site agents (enrolled origins). -->
+        <section aria-label="Agents">
           <div class="panel">
             <div class="panel-head">
-              <h2 class="t">Site agents</h2>
-              <span class="hint" id="site-agent-count"></span>
+              <h2 class="t">Agents</h2>
+              <span class="hint" id="agent-count"></span>
             </div>
+            <div class="panel-subhead"><span>Background agents</span><span class="hint">run on a schedule</span></div>
+            <div class="panel-body" id="background-agents"></div>
+            <div class="panel-subhead"><span>Site agents</span><span class="hint">enrolled origins</span></div>
             <div class="panel-body" id="site-agents"></div>
           </div>
         </section>

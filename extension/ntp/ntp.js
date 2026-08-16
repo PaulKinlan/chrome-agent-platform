@@ -36,40 +36,94 @@ function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
 
+function prefersReducedMotion() {
+  try {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  } catch {
+    return false;
+  }
+}
+
 // ── site agents (enrolled origins) ────────────────────────────────────────
 async function renderSiteAgents() {
   const el = document.getElementById("site-agents");
-  const count = document.getElementById("site-agent-count");
   if (!el) return;
   const res = await send("agent.directory").catch(() => ({ agents: [] }));
   const agents = Array.isArray(res.agents) ? res.agents : [];
-  if (count) count.textContent = agents.length
-    ? `${agents.length} enrolled`
-    : "";
   el.replaceChildren();
   if (!agents.length) {
     el.innerHTML = `<div class="empty">No sites enrolled yet. Visit a site to give it a sub-agent.</div>`;
-    return;
+  } else {
+    for (const a of agents.slice(0, 6)) {
+      const row = document.createElement("capability-row");
+      row.setAttribute("name", `@${shortOrigin(a.origin)}`);
+      row.setAttribute(
+        "description",
+        `${a.tools?.length ?? 0} tools` +
+          (a.name ? ` · ${a.name}` : ""),
+      );
+      row.setAttribute("icon", "");
+      row.setAttribute("action", "run");
+      row.addEventListener("run", () => openView("directory/directory.html", "Directory"));
+      el.append(row);
+    }
+    if (agents.length > 6) {
+      const more = document.createElement("div");
+      more.className = "empty";
+      more.textContent = `+ ${agents.length - 6} more in the directory`;
+      el.append(more);
+    }
   }
-  for (const a of agents.slice(0, 6)) {
-    const row = document.createElement("capability-row");
-    row.setAttribute("name", `@${shortOrigin(a.origin)}`);
-    row.setAttribute(
-      "description",
-      `${a.tools?.length ?? 0} tools` +
-        (a.name ? ` · ${a.name}` : ""),
-    );
-    row.setAttribute("icon", "");
-    row.setAttribute("action", "run");
-    row.addEventListener("run", () => openView("directory/directory.html", "Directory"));
-    el.append(row);
+  refreshAgentCount();
+}
+
+// ── background agents (scheduled recipes, enabled/disabled) ──────────────
+async function renderBackgroundAgents() {
+  const el = document.getElementById("background-agents");
+  if (!el) return;
+  const res = await send("background-agent.list").catch(() => ({ agents: [] }));
+  const agents = Array.isArray(res.agents) ? res.agents : [];
+  el.replaceChildren();
+  if (!agents.length) {
+    el.innerHTML = `<div class="empty">No background agents available.</div>`;
+  } else {
+    for (const a of agents) {
+      const row = document.createElement("capability-row");
+      row.setAttribute("name", a.name || a.id);
+      row.setAttribute("description", a.description || "");
+      row.setAttribute("icon", "");
+      row.setAttribute("action", "toggle");
+      if (a.enabled) row.setAttribute("enabled", "");
+      if (a.schedule?.periodInMinutes) {
+        row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
+      }
+      row.addEventListener("toggle", async (ev) => {
+        const enabled = ev.detail?.enabled;
+        const r = await send("background-agent.set", { id: a.id, enabled })
+          .catch(() => ({ ok: false, error: "request failed" }));
+        if (r?.ok) {
+          setStatus(`${a.name} ${enabled ? "enabled" : "disabled"}`);
+        } else {
+          setStatus(`couldn't ${enabled ? "enable" : "disable"} ${a.name}: ${r?.error ?? "unknown"}`, false);
+        }
+        await renderBackgroundAgents();
+      });
+      el.append(row);
+    }
   }
-  if (agents.length > 6) {
-    const more = document.createElement("div");
-    more.className = "empty";
-    more.textContent = `+ ${agents.length - 6} more in the directory`;
-    el.append(more);
-  }
+  refreshAgentCount();
+}
+
+async function refreshAgentCount() {
+  const el = document.getElementById("agent-count");
+  if (!el) return;
+  const [dir, bg] = await Promise.all([
+    send("agent.directory").catch(() => ({ agents: [] })),
+    send("background-agent.list").catch(() => ({ agents: [] })),
+  ]);
+  const siteN = Array.isArray(dir.agents) ? dir.agents.length : 0;
+  const bgN = (Array.isArray(bg.agents) ? bg.agents : []).filter((a) => a.enabled).length;
+  el.textContent = `${bgN} background · ${siteN} site`;
 }
 
 // ── recent artifacts ──────────────────────────────────────────────────────
@@ -150,12 +204,14 @@ const threadComposer = document.getElementById("thread-composer");
 let currentThreadId = null;
 
 function showThreadView() {
-  threadView.hidden = false;
+  withViewTransition(() => { threadView.hidden = false; });
 }
 function hideThreadView() {
-  threadView.hidden = true;
-  currentThreadId = null;
-  threadConversation.clear?.();
+  withViewTransition(() => {
+    threadView.hidden = true;
+    currentThreadId = null;
+    threadConversation.clear?.();
+  });
 }
 
 async function openThread(id) {
@@ -214,8 +270,41 @@ threadComposer.addEventListener("send", async (ev) => {
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
 
 renderSiteAgents();
+renderBackgroundAgents();
 renderArtifacts();
 renderTasks();
+
+// ── the task sidebar: collapse/expand + new-task (item 6/7) ──────────────
+const side = document.getElementById("side");
+const sideToggle = document.getElementById("side-toggle");
+let sidebarCollapsed = false;
+function setSidebarCollapsed(collapsed) {
+  sidebarCollapsed = collapsed;
+  side.classList.toggle("collapsed", collapsed);
+  sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+  sideToggle.setAttribute("aria-expanded", String(!collapsed));
+}
+sideToggle?.addEventListener("click", () => {
+  withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
+});
+
+// The "+" new-task button focuses the composer (the empty state says "start one
+// above" — this gives it the affordance above the list).
+document.getElementById("new-task")?.addEventListener("click", () => {
+  composer.focus();
+});
+
+// ── View Transitions (item 8): smooth in-page state changes, reduced-motion aware.
+// Named elements let the thread body + composer morph between the hub and the
+// full-screen thread. No-op when the API is absent or reduced-motion is on.
+function withViewTransition(fn) {
+  if (typeof document.startViewTransition !== "function" || prefersReducedMotion()) {
+    fn();
+    return;
+  }
+  const t = document.startViewTransition(() => fn());
+  t.finished?.catch(() => { /* a transition that never settles must not throw */ });
+}
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");
@@ -225,12 +314,14 @@ const viewTitle = document.getElementById("view-title");
 function openView(path, title) {
   viewFrame.src = chrome.runtime.getURL(path);
   viewTitle.textContent = title;
-  viewOverlay.hidden = false;
+  withViewTransition(() => { viewOverlay.hidden = false; });
   viewFrame.focus();
 }
 function closeView() {
-  viewOverlay.hidden = true;
-  viewFrame.src = "about:blank";
+  withViewTransition(() => {
+    viewOverlay.hidden = true;
+    viewFrame.src = "about:blank";
+  });
 }
 
 document.getElementById("view-back")?.addEventListener("click", closeView);

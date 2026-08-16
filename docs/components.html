@@ -89,8 +89,9 @@
           <message-bubble role="tool" tool-name="tab_list" tool-status="success" tool-args='{"windowId": 3}' tool-result="12 tabs"></message-bubble>
           <message-bubble role="tool" tool-name="tab_group" tool-status="error" tool-args='{"title":"github.com"}' tool-result="tab already grouped"></message-bubble>
           <message-bubble role="error" content="provider unreachable — retry?"></message-bubble>
+          <message-bubble role="agent" content="<div class='card'><h3>Generated dashboard</h3><p>Here is the HTML the agent produced.</p></div>"></message-bubble>
         </div>
-        <p class="caption">role carried by alignment + surface — user right, agent/thinking/tool/error left; markdown + code + tool cards render inside <code>agent</code>/<code>system</code>.</p>
+        <p class="caption">role carried by alignment + surface — user right, agent/thinking/tool/error left; markdown + code + tool cards render inside <code>agent</code>/<code>system</code>. HTML output (a full document or a block-level fragment) renders in a SANDBOXED iframe, not as escaped text.</p>
       </div>
 
       <div class="specimen">
@@ -114,7 +115,7 @@
         <div class="stage row">
           <error-console count="3" label="Console (errors + warnings)"></error-console>
         </div>
-        <p class="caption">a badge (count) + a floating terminal panel of the captured errors/warnings. Clearable; Escape / outside-click closes. In the extension it reads the live buffer; here it degrades to the empty state.</p>
+        <p class="caption">a badge (count) + a floating terminal panel of the captured errors/warnings (errors sorted first, newest first within a level). Clearable; each line has a <code>Copy</code> button + a <code>Copy all</code> in the header; Escape / outside-click closes. In the extension it reads the live buffer; here it degrades to the empty state.</p>
       </div>
 
       <div class="card">
