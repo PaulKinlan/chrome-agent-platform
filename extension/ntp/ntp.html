@@ -25,9 +25,7 @@
       font-weight: 700;
       letter-spacing: -0.01em;
     }
-    .logo span {
-      color: var(--accent);
-    }
+    .logo span { color: var(--accent); }
     .top-actions {
       display: flex;
       align-items: center;
@@ -47,137 +45,60 @@
       margin-right: 6px;
       vertical-align: 1px;
     }
-    .top-actions .icon-btn {
-      color: var(--muted);
-    }
+    .top-actions .icon-btn { color: var(--muted); }
     .top-actions .icon-btn:hover {
       color: var(--text);
       border-color: var(--accent);
     }
 
     /* ── composer is the hero ── */
-    .composer {
-      margin-bottom: 32px;
-    }
+    .composer { margin-bottom: 32px; }
 
-    /* ── capabilities (unified: on-demand + background) ── */
-    .capabilities {
-      margin-bottom: 32px;
-    }
-    .capabilities h2 {
-      margin: 0;
-      font-size: var(--text-base);
-      font-weight: 600;
-    }
-    .cap-hint {
-      font-size: var(--text-xs);
-      color: var(--muted);
-    }
-    .intent-group {
-      margin-top: 20px;
-    }
-    .intent-head {
-      font-size: var(--text-xs);
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin-bottom: 6px;
-    }
-    .cap-list {
-      display: flex;
-      flex-direction: column;
+    /* ── command-center sections ── */
+    section { margin-bottom: 32px; }
+
+    /* The activity overview: a single card list so the column reads calm. */
+    .panel {
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       overflow: hidden;
       background: var(--panel);
     }
-    .cap {
+    .panel-head {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 0 14px 0 0;
+      justify-content: space-between;
+      padding: 12px 14px;
       border-bottom: 1px solid var(--border);
-      background: transparent;
     }
-    .cap:last-child {
-      border-bottom: 0;
-    }
-    .cap-main {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 0 10px 14px;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-    }
-    .cap-main:hover,
-    .cap-main:focus-visible {
-      background: var(--bg);
-      outline: none;
-    }
-    .cap-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 28px;
-      height: 28px;
-      border-radius: var(--radius-sm);
-      color: var(--muted);
-      flex: 0 0 auto;
-    }
-    .cap-body {
-      flex: 1;
-      min-width: 0;
-    }
-    .cap-name {
+    .panel-head .t {
       font-weight: 600;
+      font-size: var(--text-base);
+      margin: 0;
+    }
+    .panel-head .hint {
+      font-size: var(--text-xs);
+      color: var(--muted);
+    }
+    .panel-body { padding: 4px 0; }
+    .panel-foot {
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
       font-size: var(--text-sm);
     }
-    .cap-desc {
-      font-size: var(--text-xs);
+    .empty {
+      padding: 14px;
       color: var(--muted);
-      margin-top: 1px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .cap-run {
-      flex: 0 0 auto;
-      font-size: var(--text-xs);
-      color: var(--muted);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 4px 10px;
-      background: transparent;
-      cursor: pointer;
-      font: inherit;
-    }
-    .cap-run:hover,
-    .cap-run:focus-visible {
-      color: var(--accent);
-      border-color: var(--accent);
-      outline: none;
-    }
-    .cap .switch {
-      flex: 0 0 auto;
-      margin-right: 14px;
+      font-size: var(--text-sm);
     }
 
-    /* ── conversation ── */
-    .conversation h2 {
-      margin: 0 0 8px;
-      font-size: var(--text-base);
-      font-weight: 600;
-    }
+    /* ── conversation (the "now" view) ── */
     .conversation .empty {
       color: var(--muted);
       font-size: var(--text-sm);
+      padding: 14px;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
     }
     </style>
   </head>
@@ -198,20 +119,51 @@
 
       <agent-composer id="composer" placeholder="Ask anything, or @mention a site agent…" send-label="Run task"></agent-composer>
 
-      <section class="capabilities" id="capabilities-section">
-        <div class="section-head">
-          <h2>Capabilities</h2>
-          <span class="cap-hint">Run once, or enable to run in the background</span>
+      <!-- Now: the active conversation (what the agent is doing / did). -->
+      <section class="conversation" aria-label="Now">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="t">Now</h2>
+            <span class="hint">the active conversation</span>
+          </div>
+          <div id="conversation" role="log" aria-live="polite" aria-relevant="additions"></div>
         </div>
-        <div id="capabilities"></div>
       </section>
 
-      <section class="conversation">
-        <div class="section-head">
-          <h2>Conversation</h2>
+      <!-- Background agents: the scheduled recipes + their last run. -->
+      <section aria-label="Background agents">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="t">Background agents</h2>
+            <span class="hint">run quietly on a schedule</span>
+          </div>
+          <div class="panel-body" id="background-agents"></div>
+          <div class="panel-foot">
+            <button class="link" id="open-recipes">Browse all recipes →</button>
+          </div>
         </div>
-        <div id="conversation" role="log" aria-live="polite"
-          aria-relevant="additions"></div>
+      </section>
+
+      <!-- Site agents: enrolled origins. -->
+      <section aria-label="Site agents">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="t">Site agents</h2>
+            <span class="hint" id="site-agent-count"></span>
+          </div>
+          <div class="panel-body" id="site-agents"></div>
+        </div>
+      </section>
+
+      <!-- Recent artifacts: what the agents have made. -->
+      <section aria-label="Recent artifacts">
+        <div class="panel">
+          <div class="panel-head">
+            <h2 class="t">Recent artifacts</h2>
+            <span class="hint">things the agents created</span>
+          </div>
+          <div class="panel-body" id="artifacts"></div>
+        </div>
       </section>
     </div>
     <script type="module" src="ntp.js"></script>

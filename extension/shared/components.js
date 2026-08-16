@@ -464,6 +464,65 @@ class SiteAgentCard extends Component {
 }
 customElements.define("site-agent-card", SiteAgentCard);
 
+/* <capability-row name description icon action="run|toggle" enabled last-run>
+ * The reusable capability/recipe row. A strict grid — icon (fixed) | label
+ * column (name + description STACKED, never run together) | action
+ * (right-aligned) — so every capability list is aligned by construction. */
+class CapabilityRow extends Component {
+  static get observedAttributes() {
+    return ["name", "description", "icon", "action", "enabled", "last-run"];
+  }
+  _render() {
+    const name = this.getAttribute("name") || "";
+    const description = this.getAttribute("description") || "";
+    const icon = this.getAttribute("icon") || "";
+    const action = this.getAttribute("action") || "run";
+    const enabled = this.hasAttribute("enabled");
+    const lastRun = this.getAttribute("last-run") || "";
+    const actionHtml = action === "toggle"
+      ? `<button part="toggle" class="switch" type="button" role="switch"
+          aria-checked="${enabled}" aria-pressed="${enabled}"
+          aria-label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)} in the background"></button>`
+      : `<button part="run" class="run" type="button">Run</button>`;
+    mountTemplate(this, `
+      :host { display:block; }
+      .row { display:grid; grid-template-columns:28px 1fr auto; gap:12px; align-items:center;
+        padding:12px 14px; border-bottom:1px solid var(--border,#30363d); background:transparent; }
+      .row:last-child { border-bottom:0; }
+      .icon { display:inline-flex; align-items:center; justify-content:center;
+        width:28px; height:28px; color:var(--muted,#8b949e); }
+      .icon svg { width:18px; height:18px; display:block; }
+      .label { min-width:0; display:flex; flex-direction:column; gap:2px; }
+      .name { font-weight:600; font-size:var(--text-sm,13px); color:var(--text,#e6edf3); }
+      .desc { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); line-height:1.35; }
+      .lastrun { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); }
+      .run { justify-self:end; font-size:var(--text-xs,12px); color:var(--muted,#8b949e);
+        border:1px solid var(--border,#30363d); border-radius:var(--radius-sm,6px);
+        padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
+        white-space:nowrap; }
+      .run:hover, .run:focus-visible { color:var(--accent,#58a6ff); border-color:var(--accent,#58a6ff); outline:none; }
+      .switch { justify-self:end; }
+      .meta { display:flex; align-items:center; gap:6px; }
+    `, `<div part="row" class="row">
+      <span class="icon" aria-hidden="true">${icon}</span>
+      <span class="label"><span class="name">${escapeHtml(name)}</span>
+        <span class="desc">${escapeHtml(description)}</span>${
+          lastRun ? `<span class="lastrun">${escapeHtml(lastRun)}</span>` : ""
+        }</span>
+      <span class="meta">${actionHtml}</span>
+    </div>`);
+  }
+  _wire() {
+    const run = this._root.querySelector(".run");
+    run?.addEventListener("click", () => this._emit("run"));
+    const toggle = this._root.querySelector(".switch");
+    toggle?.addEventListener("click", () => {
+      this._emit("toggle", { enabled: !this.hasAttribute("enabled") });
+    });
+  }
+}
+customElements.define("capability-row", CapabilityRow);
+
 /* <message-bubble role="user|agent|task|result|error|thinking|tool" label>content</message-bubble> */
 class MessageBubble extends Component {
   static get observedAttributes() { return ["role", "label"]; }

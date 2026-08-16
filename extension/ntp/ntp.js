@@ -1,7 +1,8 @@
-// ntp/ntp.js — the hub page wiring. The composer is the shared Web Component
-// (../shared/components.js <agent-composer>), identical to the chat. The hub is
-// a single calm column: header → composer (the hero) → capabilities (the unified
-// on-demand + background recipe list, grouped by intent) → conversation.
+// ntp/ntp.js — the hub page wiring. The hub is a COMMAND CENTER:
+//   header → composer (the hero) → "Now" (the active conversation) →
+//   background agents (scheduled, toggle) → site agents (enrolled origins) →
+//   recent artifacts. On-demand recipes live on their own documented page
+//   (recipes/) and are reached via the /task:name command, not the hub.
 
 import { send } from "../lib/messages.js";
 import {
@@ -11,55 +12,9 @@ import {
   historyFromJournal,
 } from "../shared/conversation.js";
 
-const RECIPE_ICON = {
-  broom:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21 3l-9 9-3-3 9-9z"/><path d="M9 12l-6 6a2.5 2.5 0 0 0 3 3l6-6"/><path d="M12 9l3 3"/></svg>',
-  doc:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
-  link:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
-  books:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
-  layers:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
-  pin:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.89A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.89A2 2 0 0 0 5 15.24z"/></svg>',
-  folder:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
-  download:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
-  target:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
-  sleep:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
-  calendar:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
-  mood:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
-  clock:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-  camera:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
-  translate:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="M22 22l-5-10-5 10"/><path d="M14 18h6"/></svg>',
-  quote:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>',
-  ask:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-  tags:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
-};
-
-// Intent order mirrors lib/recipes.js INTENTS (organize → digest → capture → focus).
-const INTENTS = [
-  { id: "organize", label: "Organize" },
-  { id: "digest", label: "Digest" },
-  { id: "capture", label: "Capture" },
-  { id: "focus", label: "Focus" },
-];
+import { RECIPE_ICON } from "../shared/recipe-icons.js";
 
 const statusEl = document.getElementById("status");
-const conversationEl = document.getElementById("conversation");
 
 function setStatus(text, ready = true) {
   statusEl.innerHTML =
@@ -67,7 +22,6 @@ function setStatus(text, ready = true) {
   statusEl.querySelector(".dot").style.background = ready
     ? "var(--accent2)"
     : "var(--danger)";
-  // the "thinking" glow — toggle the halo on the composer while the agent runs
   document.querySelector(".composer")?.classList.toggle("glow", !ready);
 }
 
@@ -78,119 +32,126 @@ function escapeHtml(s) {
   );
 }
 
-async function runRecipe(r) {
-  setStatus(`running: ${r.name}`, false);
-  const out = await send("recipe.run", { id: r.id });
-  if (out?.ok) {
-    setStatus("ready");
-    await refreshTasks();
-  } else {
-    setStatus("error: " + (out?.error ?? "unknown"), false);
-  }
+function shortOrigin(o) {
+  return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
 
-// The unified capability list: on-demand + background recipes in ONE list,
-// grouped by intent. A background recipe is just a capability you can also
-// schedule — clicking its row runs it once; its switch toggles the schedule.
-async function renderCapabilities() {
-  const el = document.getElementById("capabilities");
+// ── background agents (scheduled recipes, a toggle each) ────────────────
+async function renderBackgroundAgents() {
+  const el = document.getElementById("background-agents");
   if (!el) return;
-  const [recipesRes, bgRes] = await Promise.all([
-    send("recipe.list"),
-    send("background-agent.list").catch(() => ({ agents: [] })),
-  ]);
-  const recipes = Array.isArray(recipesRes.recipes) ? recipesRes.recipes : [];
-  const enabled = new Set(
-    (Array.isArray(bgRes.agents) ? bgRes.agents : [])
-      .filter((a) => a.enabled)
-      .map((a) => a.id),
-  );
-
+  const res = await send("background-agent.list").catch(() => ({ agents: [] }));
+  const agents = Array.isArray(res.agents) ? res.agents : [];
   el.replaceChildren();
-  const byIntent = {};
-  for (const r of recipes) (byIntent[r.intent] ??= []).push(r);
-
-  for (const intent of INTENTS) {
-    const list = byIntent[intent.id];
-    if (!list || !list.length) continue;
-    const group = document.createElement("div");
-    group.className = "intent-group";
-    const head = document.createElement("div");
-    head.className = "intent-head";
-    head.textContent = intent.label;
-    const listEl = document.createElement("div");
-    listEl.className = "cap-list";
-    for (const r of list) listEl.append(capRow(r, enabled.has(r.id)));
-    group.append(head, listEl);
-    el.append(group);
+  if (!agents.length) {
+    el.innerHTML = `<div class="empty">No background agents. Browse recipes to enable one.</div>`;
+    return;
   }
-}
-
-function capRow(r, enabled) {
-  const row = document.createElement("div");
-  row.className = "cap";
-
-  const main = document.createElement("button");
-  main.type = "button";
-  main.className = "cap-main";
-  main.setAttribute("aria-label", `Run ${r.name}`);
-  main.innerHTML =
-    `<span class="cap-icon" aria-hidden="true">${RECIPE_ICON[r.icon] ?? ""}</span>` +
-    `<span class="cap-body"><span class="cap-name">${escapeHtml(r.name)}</span>` +
-    `<span class="cap-desc">${escapeHtml(r.description ?? "")}</span></span>`;
-  main.addEventListener("click", () => runRecipe(r));
-  row.append(main);
-
-  if (r.mode === "background") {
-    const sw = document.createElement("button");
-    sw.type = "button";
-    sw.className = "switch";
-    sw.setAttribute("role", "switch");
-    sw.setAttribute("aria-checked", String(enabled));
-    sw.setAttribute("aria-pressed", String(enabled));
-    sw.setAttribute(
-      "aria-label",
-      `${enabled ? "Disable" : "Enable"} ${r.name} in the background`,
-    );
-    sw.title = enabled ? "Runs in the background — disable" : "Enable to run in the background";
-    sw.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      sw.disabled = true;
-      const out = await send("background-agent.set", {
-        id: r.id,
-        enabled: !enabled,
-      });
-      sw.disabled = false;
+  for (const a of agents) {
+    const row = document.createElement("capability-row");
+    row.setAttribute("name", a.name);
+    row.setAttribute("description", a.description || "");
+    row.setAttribute("icon", RECIPE_ICON[a.icon] ?? "");
+    row.setAttribute("action", "toggle");
+    if (a.enabled) row.setAttribute("enabled", "");
+    if (a.schedule?.periodInMinutes) {
+      row.setAttribute(
+        "last-run",
+        `runs every ${a.schedule.periodInMinutes} min`,
+      );
+    }
+    row.addEventListener("toggle", async (e) => {
+      const enabled = e.detail.enabled;
+      const out = await send("background-agent.set", { id: a.id, enabled });
       if (!out?.ok) {
         setStatus("error: " + (out?.error ?? "unknown"), false);
         return;
       }
-      setStatus(out.enabled ? `${r.name} enabled` : `${r.name} disabled`);
-      await renderCapabilities();
+      setStatus(enabled ? `${a.name} enabled` : `${a.name} disabled`);
+      renderBackgroundAgents();
     });
-    row.append(sw);
-  } else {
-    const run = document.createElement("button");
-    run.type = "button";
-    run.className = "cap-run";
-    run.textContent = "Run";
-    run.setAttribute("aria-label", `Run ${r.name}`);
-    run.addEventListener("click", () => runRecipe(r));
-    row.append(run);
+    el.append(row);
   }
-  return row;
 }
+
+// ── site agents (enrolled origins) ────────────────────────────────────────
+async function renderSiteAgents() {
+  const el = document.getElementById("site-agents");
+  const count = document.getElementById("site-agent-count");
+  if (!el) return;
+  const res = await send("agent.directory").catch(() => ({ agents: [] }));
+  const agents = Array.isArray(res.agents) ? res.agents : [];
+  if (count) count.textContent = agents.length
+    ? `${agents.length} enrolled`
+    : "";
+  el.replaceChildren();
+  if (!agents.length) {
+    el.innerHTML = `<div class="empty">No sites enrolled yet. Visit a site to give it a sub-agent.</div>`;
+    return;
+  }
+  for (const a of agents.slice(0, 6)) {
+    const row = document.createElement("capability-row");
+    row.setAttribute("name", `@${shortOrigin(a.origin)}`);
+    row.setAttribute(
+      "description",
+      `${a.tools?.length ?? 0} tools` +
+        (a.name ? ` · ${a.name}` : ""),
+    );
+    row.setAttribute("icon", "");
+    row.setAttribute("action", "run");
+    row.addEventListener("run", () => {
+      try {
+        chrome.tabs.create({ url: chrome.runtime.getURL("directory/directory.html") });
+      } catch {
+        window.open(chrome.runtime.getURL("directory/directory.html"), "_blank");
+      }
+    });
+    el.append(row);
+  }
+  if (agents.length > 6) {
+    const more = document.createElement("div");
+    more.className = "empty";
+    more.textContent = `+ ${agents.length - 6} more in the directory`;
+    el.append(more);
+  }
+}
+
+// ── recent artifacts ──────────────────────────────────────────────────────
+async function renderArtifacts() {
+  const el = document.getElementById("artifacts");
+  if (!el) return;
+  const res = await send("asset.list", { origin: "master" }).catch(() => ({ assets: [] }));
+  const assets = Array.isArray(res.assets) ? res.assets : [];
+  el.replaceChildren();
+  if (!assets.length) {
+    el.innerHTML = `<div class="empty">No artifacts yet. Ask an agent to make something.</div>`;
+    return;
+  }
+  for (const a of assets.slice(-6).reverse()) {
+    const row = document.createElement("capability-row");
+    row.setAttribute("name", a.name);
+    row.setAttribute("description", a.type + " · " + a.size + " B");
+    row.setAttribute("icon", "");
+    row.setAttribute("action", "run");
+    row.addEventListener("run", () => {
+      chrome.runtime.openOptionsPage();
+    });
+    el.append(row);
+  }
+}
+
+// ── conversation (the "Now" view) ────────────────────────────────────────
+const conversationEl = document.getElementById("conversation");
 
 async function refreshTasks() {
   const journal = await loadJournal();
   renderJournal(conversationEl, journal);
+  if (!conversationEl.children.length) {
+    conversationEl.innerHTML = `<div class="empty">Nothing yet — start with the composer above.</div>`;
+  }
 }
 
-// The shared composer Web Component. The run flow is the unified conversational
-// surface: a task start appends the user turn + streams the agent's live
-// progress, and the composer stays live for a mid-run nudge / follow-up.
 const composer = document.getElementById("composer");
-
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments } = ev.detail;
   setStatus("running…", false);
@@ -219,7 +180,9 @@ composer.addEventListener("status", (ev) => {
   if (ev.detail?.text) setStatus(ev.detail.text, false);
 });
 
-renderCapabilities();
+renderBackgroundAgents();
+renderSiteAgents();
+renderArtifacts();
 refreshTasks();
 
 document.getElementById("open-settings")?.addEventListener(
@@ -233,6 +196,15 @@ document.getElementById("open-directory")?.addEventListener("click", () => {
     });
   } catch {
     window.open(chrome.runtime.getURL("directory/directory.html"), "_blank");
+  }
+});
+document.getElementById("open-recipes")?.addEventListener("click", () => {
+  try {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL("recipes/index.html"),
+    });
+  } catch {
+    window.open(chrome.runtime.getURL("recipes/index.html"), "_blank");
   }
 });
 

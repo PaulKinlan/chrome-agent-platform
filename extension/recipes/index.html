@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Recipes — Chrome Agent Platform</title>
+    <link rel="stylesheet" href="../shared/theme.css">
+    <script type="module" src="../shared/apply-theme.js"></script>
+    <script type="module" src="../shared/components.js"></script>
+    <style>
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px 24px 64px;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+    .logo span { color: var(--accent); }
+    .sub {
+      color: var(--muted);
+      font-size: var(--text-sm);
+      margin-bottom: 28px;
+      max-width: 56ch;
+    }
+    .intent-group { margin-bottom: 28px; }
+    .intent-head {
+      font-size: var(--text-xs);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--panel);
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .card-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 14px 10px;
+    }
+    .card-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+    .card-icon svg { width: 18px; height: 18px; }
+    .card-title { flex: 1; min-width: 0; }
+    .card-name { font-weight: 600; font-size: var(--text-base); }
+    .card-desc { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; }
+    .card-body {
+      padding: 0 14px 14px;
+      font-size: var(--text-sm);
+    }
+    .card-body .how { color: var(--text); line-height: 1.5; }
+    .card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .need {
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+    .card-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+    }
+    .run {
+      font-size: var(--text-sm);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 5px 14px;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+    }
+    .run:hover, .run:focus-visible {
+      color: var(--accent);
+      border-color: var(--accent);
+      outline: none;
+    }
+    .empty { color: var(--muted); font-size: var(--text-sm); padding: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <div class="logo">Recipes</div>
+        <button class="btn ghost" id="back" type="button">← Hub</button>
+      </header>
+      <p class="sub">
+        On-demand utility agents, each documented below. Run one here, or type
+        <span class="muted">/task:name</span> in the composer on the hub.
+      </p>
+      <div id="recipes"></div>
+    </div>
+    <script type="module" src="recipes.js"></script>
+  </body>
+</html>
