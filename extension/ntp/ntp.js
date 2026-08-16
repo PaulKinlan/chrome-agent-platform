@@ -1,21 +1,8 @@
-const ICONS = {
-  "mic":
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>',
-  "attach":
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
-  "camera":
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
-  "audio":
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
-  "record":
-    '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="6"/></svg>',
-};
-function setActionIcon(el, key, label) {
-  el.innerHTML = (ICONS[key] || "") + " " + label;
-}
-// ntp/ntp.js — the hub page wiring.
+// ntp/ntp.js — the hub page wiring. The composer (mic + attach + input + send)
+// is the shared component (../shared/composer.js), identical to the chat.
 
 import { send } from "../lib/messages.js";
+import { mountComposer } from "../shared/composer.js";
 
 const RECIPE_ICON = {
   broom:
@@ -29,8 +16,6 @@ const RECIPE_ICON = {
 };
 
 const statusEl = document.getElementById("status");
-const taskInput = document.getElementById("task-input");
-const runBtn = document.getElementById("run-task");
 const tasksEl = document.getElementById("tasks");
 const agentsEl = document.getElementById("site-agents");
 
@@ -68,8 +53,8 @@ async function refreshAgents() {
       ? tools.length
       : 0)} tools</span>`;
     chip.addEventListener("click", () => {
-      taskInput.value = `@${origin} `;
-      taskInput.focus();
+      composer.input.value = `@${origin} `;
+      composer.input.focus();
     });
     agentsEl.append(chip);
   }
@@ -101,8 +86,6 @@ async function refreshRecipes() {
 }
 
 async function refreshTasks() {
-  const mem = await send("memory.list", { origin: "master" });
-  // Render the journal as a task list.
   const journal = await send("memory.get", {
     origin: "master",
     key: "journal",
@@ -121,9 +104,6 @@ async function refreshTasks() {
   for (const r of rows.slice(-10).reverse()) {
     const div = document.createElement("div");
     div.className = "task";
-    // Journal entries are objects ({type, task?|result?, ...}); never fall
-    // through to String(r) (which produced a raw "[object Object]" row for
-    // result entries that carry no `task` field).
     const text = (() => {
       if (typeof r !== "object" || r === null) return String(r);
       if (typeof r.task === "string" && r.task) return r.task;
@@ -147,33 +127,44 @@ function escapeHtml(s) {
   );
 }
 
+// The shared composer: identical (mic + attach + input + send) to the chat.
+const composer = mountComposer(document.getElementById("composer-root"), {
+  label: "Start a task",
+  placeholder:
+    "Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …",
+  sendLabel: "Run task",
+  onStatus: (text) => {
+    // Route composer-level errors to the hub status chip only when non-ready;
+    // the "agent ready" state is managed by the run flow below.
+    if (text) setStatus(text, false);
+  },
+  onSend: async (task, attachments) => {
+    setStatus("running task…", false);
+    const res = await send("agent.run", {
+      task,
+      id: String(Date.now()),
+      attachments,
+    });
+    if (res.ok) {
+      if (
+        Array.isArray(res.droppedAttachments) && res.droppedAttachments.length
+      ) {
+        setStatus(
+          `agent ready — ${res.droppedAttachments.length} attachment(s) dropped (over limit)`,
+        );
+      } else {
+        setStatus("agent ready");
+      }
+      await refreshTasks();
+    } else {
+      setStatus("error: " + (res.error ?? "unknown"), false);
+    }
+  },
+});
+
 refreshRecipes();
 refreshAgents();
 refreshTasks();
-
-runBtn.addEventListener("click", async () => {
-  const task = taskInput.value.trim();
-  if (!task) return;
-  setStatus("running task…", false);
-  const res = await send("agent.run", {
-    task,
-    id: String(Date.now()),
-    attachments: attachments.splice(0),
-  });
-  clearAttachTags(); // the composer's tags are consumed by this run
-  if (res.ok) {
-    if (Array.isArray(res.droppedAttachments) && res.droppedAttachments.length) {
-      setStatus(
-        `agent ready — ${res.droppedAttachments.length} attachment(s) dropped (over limit)`,
-      );
-    } else {
-      setStatus("agent ready");
-    }
-    await refreshTasks();
-  } else {
-    setStatus("error: " + (res.error ?? "unknown"), false);
-  }
-});
 
 // Browser-control grant: a user-facing toggle that scopes destructive browser tools.
 async function refreshGrantUI() {
@@ -189,8 +180,6 @@ document.getElementById("browser-control-grant")?.addEventListener(
       type: "browser-control.set",
       granted: e.target.checked,
     }).catch((err) => ({ grant: { revoked: false, error: String(err?.message ?? err) } }));
-    // Reflect the AUTHORITATIVE result back (a failed revoke must not leave the
-    // toggle flipped — the round-16 finding: NTP ignored the route's response).
     if (e.target.checked === false && res?.grant?.revoked !== true) {
       e.target.checked = true; // revoke failed → keep the grant visible
     }
@@ -210,8 +199,6 @@ document.getElementById("open-memory").addEventListener(
 document.getElementById("open-directory").addEventListener(
   "click",
   () => {
-    // chrome.tabs.create needs the OPTIONAL `tabs` permission — degrade to a
-    // window.open (an extension page) when it is absent, never an unhandled throw.
     try {
       chrome.tabs.create({
         url: chrome.runtime.getURL("directory/directory.html"),
@@ -222,540 +209,7 @@ document.getElementById("open-directory").addEventListener(
   },
 );
 
-// ---- attach menu: a single "+" opens Add file / audio / video / other ----
-const plusBtn = document.getElementById("plus-btn");
-const attachMenu = document.getElementById("attach-menu");
-const attachments = []; // { name, kind, size, dataURL? } attached to the next run
-function openAttachMenu() {
-  attachMenu.hidden = false;
-  plusBtn.setAttribute("aria-expanded", "true");
-  // Move focus into the menu (the first item) so keyboard users land there.
-  const first = attachMenu.querySelector("button[role='menuitem']");
-  first?.focus();
-}
-function closeAttachMenu(returnFocus = true) {
-  if (attachMenu.hidden) return;
-  attachMenu.hidden = true;
-  plusBtn.setAttribute("aria-expanded", "false");
-  if (returnFocus) plusBtn.focus();
-}
-plusBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  if (attachMenu.hidden) openAttachMenu();
-  else closeAttachMenu();
-});
-// Escape closes the menu + returns focus; arrow keys navigate the menu items
-// (full keyboard menu semantics). Home/End jump to the first/last item.
-attachMenu.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    closeAttachMenu(true);
-    return;
-  }
-  const items = [...attachMenu.querySelectorAll("button[role='menuitem']")];
-  if (items.length === 0) return;
-  const idx = items.indexOf(document.activeElement);
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-    e.preventDefault();
-    const delta = e.key === "ArrowDown" ? 1 : -1;
-    const next = items[(idx + delta + items.length) % items.length];
-    next.focus();
-  } else if (e.key === "Home") {
-    e.preventDefault();
-    items[0].focus();
-  } else if (e.key === "End") {
-    e.preventDefault();
-    items[items.length - 1].focus();
-  }
-});
-document.addEventListener("click", (e) => {
-  if (!attachMenu.contains(e.target) && e.target !== plusBtn) {
-    closeAttachMenu(false);
-  }
-});
-attachMenu.addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-kind]");
-  if (!btn) return;
-  closeAttachMenu(false);
-  const kind = btn.dataset.kind;
-  if (kind === "record-audio") {
-    await startAudioCapture();
-    return;
-  }
-  if (kind === "capture-camera") {
-    await startCameraCapture();
-    return;
-  }
-  try {
-    const [file] = await new Promise((resolve) => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = kind === "audio"
-        ? "audio/*"
-        : kind === "video"
-        ? "video/*"
-        : "";
-      input.onchange = () => resolve(input.files ?? []);
-      input.oncancel = () => resolve([]);
-      input.click();
-    });
-    if (!file) {
-      plusBtn.focus(); // deterministic focus return on file-picker cancel
-      return;
-    }
-    // Read the bytes up front as a data URL (Blob URLs don't survive runtime
-    // messaging — the background worker must receive the actual bytes).
-    let dataURL = "";
-    try {
-      dataURL = await new Promise((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result));
-        fr.onerror = () => reject(fr.error);
-        fr.readAsDataURL(file);
-      });
-    } catch { /* non-fatal: attach metadata only */ }
-    attachments.push({
-      name: file.name,
-      kind,
-      size: file.size,
-      type: file.type,
-      dataURL,
-    });
-    addAttachTag(file.name, "attach");
-    plusBtn.focus(); // deterministic focus return after selection
-  } catch (err) {
-    setStatus("attach error: " + String(err?.message ?? err), false);
-    plusBtn.focus(); // deterministic focus return after error
-  }
-});
-
-// ---- microphone: Web Speech Recognition + waveform + real-time text (no dup) ----
-const micBtn = document.getElementById("mic-btn");
-let recognition = null;
-let listening = false;
-function initRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return null;
-  const r = new SR();
-  r.continuous = true;
-  r.interimResults = true;
-  r.lang = "en-US";
-  return r;
-}
-micBtn.addEventListener("click", () => {
-  if (!listening) startListening();
-  else stopListening();
-});
-function startListening() {
-  if (!recognition) recognition = initRecognition();
-  if (!recognition) {
-    setStatus("speech recognition not available", false);
-    return;
-  }
-  // the composer text before this listening session — final results append to it
-  // once, using the interim span for live preview so nothing is duplicated.
-  const baseText = taskInput.value;
-  let interimSpan = null;
-  let committed = baseText;
-  const appendInterim = (text) => {
-    if (!interimSpan) {
-      taskInput.value = committed + (committed && text ? " " : "") + text;
-    } else {
-      taskInput.value = committed + (committed && text ? " " : "") + text;
-    }
-    interimSpan = text;
-  };
-  recognition.onresult = (event) => {
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const res = event.results[i];
-      if (res.isFinal) {
-        // final: commit ONCE (replace any trailing interim, append the transcript)
-        const transcript = res[0].transcript.trim();
-        if (transcript) {
-          committed = committed ? committed + " " + transcript : transcript;
-        }
-        interim = "";
-      } else {
-        interim += res[0].transcript;
-      }
-    }
-    taskInput.value = (committed + (committed && interim ? " " : "") + interim)
-      .trim();
-    interimSpan = interim;
-  };
-  recognition.onend = () => {
-    // if the engine stops unexpectedly while we still want to listen, restart once
-    if (listening) {
-      try {
-        recognition.start();
-      } catch { /* ignore */ }
-      return;
-    }
-    stopListening();
-  };
-  recognition.onerror = (event) => {
-    if (event.error === "no-speech" || event.error === "aborted") return;
-    setStatus("speech error: " + event.error, false);
-    stopListening();
-  };
-  listening = true;
-  micBtn.classList.add("listening");
-  micBtn.setAttribute("aria-label", "Stop listening");
-  try {
-    recognition.start();
-  } catch { /* already started */ }
-}
-function stopListening() {
-  listening = false;
-  micBtn.classList.remove("listening");
-  micBtn.setAttribute("aria-label", "Start listening");
-  if (recognition) {
-    try {
-      recognition.stop();
-    } catch { /* ignore */ }
-  }
-}
-
-// ---- media capture (record audio + camera) --------------------------------
-// The "+" attach menu's Record audio / Capture camera options. Real MediaRecorder
-// + getUserMedia, not file pickers. Captured media attaches to the composer like
-// a file; permission denial degrades cleanly (never an unhandled rejection).
-const capPanel = document.getElementById("capture-panel");
-const capTitle = document.getElementById("cap-title");
-const capVideo = document.getElementById("cap-video");
-const capAction = document.getElementById("cap-action");
-const capTimer = document.getElementById("cap-timer");
-const capMeter = document.getElementById("cap-meter");
-const capNote = document.getElementById("cap-note");
-const capClose = document.getElementById("cap-close");
-
-function addAttachTag(label, iconKey) {
-  const tag = document.createElement("span");
-  tag.className = "tag";
-  // The icon is a TRUSTED constant SVG (never user data); render it as markup,
-  // then append the (user-supplied) label as TEXT so a filename can never
-  // inject markup or show literal `<svg …>` tags (the round-13 a11y finding).
-  if (iconKey && ICONS[iconKey]) {
-    const icon = document.createElement("span");
-    icon.className = "tag-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.innerHTML = ICONS[iconKey];
-    tag.appendChild(icon);
-  }
-  tag.appendChild(document.createTextNode(label));
-  plusBtn.insertAdjacentElement("afterend", tag);
-}
-
-/** Remove all visible attachment tags (after the composer submits them). */
-function clearAttachTags() {
-  document.querySelectorAll(".tag").forEach((t) => t.remove());
-}
-
-let capStream = null;
-let capRecorder = null;
-let capChunks = [];
-let capMode = null; // "audio" | "camera"
-let capRecording = false;
-let capTimerId = null;
-let capStartedAt = 0;
-let capAudioCtx = null;
-let capAnalyser = null;
-let capRafId = null;
-
-function capShow(mode) {
-  capMode = mode;
-  capPanel.hidden = false;
-  capTitle.textContent = mode === "audio" ? "Record audio" : "Capture camera";
-  setActionIcon(
-    capAction,
-    mode === "camera" ? "camera" : "record",
-    mode === "camera" ? "Capture photo" : "Record",
-  );
-  capTimer.textContent = "0:00";
-  capNote.textContent = "";
-  capVideo.hidden = mode === "audio";
-  capPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  // Move focus into the panel so keyboard/screen-reader users are not stranded.
-  capAction.focus();
-}
-
-function capClosePanel() {
-  stopCapRecording();
-  if (capStream) {
-    capStream.getTracks().forEach((t) => t.stop());
-    capStream = null;
-  }
-  stopMeter();
-  capPanel.hidden = true;
-  capVideo.srcObject = null;
-  // Restore focus to the attach trigger (focus return after closing the panel).
-  plusBtn.focus();
-}
-
-capClose.addEventListener("click", capClosePanel);
-
-// prefers-reduced-motion: the mic equalizer + recording meter must not animate.
-function reducedMotion() {
-  try {
-    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ===
-      true;
-  } catch {
-    return false;
-  }
-}
-
-function staticMeter() {
-  // A single, static bar height (no rAF loop) for reduced-motion users.
-  const bars = [...capMeter.children];
-  bars.forEach((b) => {
-    b.style.height = "8px";
-  });
-}
-
-function startMeter(stream) {
-  if (reducedMotion()) {
-    staticMeter();
-    return;
-  }
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) {
-      pulseMeter();
-      return;
-    }
-    capAudioCtx = capAudioCtx || new Ctx();
-    if (capAudioCtx.state === "suspended") capAudioCtx.resume();
-    const src = capAudioCtx.createMediaStreamSource(stream);
-    capAnalyser = capAudioCtx.createAnalyser();
-    capAnalyser.fftSize = 256;
-    src.connect(capAnalyser);
-    const data = new Uint8Array(capAnalyser.frequencyBinCount);
-    const bars = [...capMeter.children];
-    const draw = () => {
-      if (!capAnalyser) return;
-      capAnalyser.getByteFrequencyData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i += 4) sum += data[i];
-      const level = sum / (data.length / 4) / 255; // 0..1
-      bars.forEach((b, i) => {
-        const h = 4 +
-          level * 16 * (0.5 + 0.5 * Math.sin(i / 2 + Date.now() / 180));
-        b.style.height = Math.max(4, Math.min(20, h)) + "px";
-      });
-      capRafId = requestAnimationFrame(draw);
-    };
-    draw();
-  } catch {
-    pulseMeter();
-  }
-}
-
-function pulseMeter() {
-  if (reducedMotion()) {
-    staticMeter();
-    return;
-  }
-  // fallback: animate the meter without an AnalyserNode (e.g. no audio API)
-  const bars = [...capMeter.children];
-  const draw = () => {
-    if (!capPanel || capPanel.hidden) return;
-    bars.forEach((b, i) => {
-      b.style.height = (5 + 12 * Math.abs(Math.sin(Date.now() / 220 + i))) +
-        "px";
-    });
-    capRafId = requestAnimationFrame(draw);
-  };
-  draw();
-}
-
-function stopMeter() {
-  if (capRafId) cancelAnimationFrame(capRafId);
-  capRafId = null;
-  if (capAnalyser) capAnalyser = null;
-  if (capAudioCtx) {
-    try {
-      capAudioCtx.close();
-    } catch { /* ignore */ }
-    capAudioCtx = null;
-  }
-}
-
-function capElapsed() {
-  const s = Math.floor((Date.now() - capStartedAt) / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-async function startAudioCapture() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("audio capture not available here", false);
-    return;
-  }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    handleCaptureError("audio", err);
-    return;
-  }
-  capStream = stream;
-  capShow("audio");
-  startMeter(stream);
-}
-
-async function startCameraCapture() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("camera capture not available here", false);
-    return;
-  }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
-    });
-  } catch (err) {
-    handleCaptureError("camera", err);
-    return;
-  }
-  capStream = stream;
-  capShow("camera");
-  capVideo.srcObject = stream;
-  startMeter(stream);
-}
-
-function handleCaptureError(kind, err) {
-  const name = err?.name || "";
-  if (
-    name === "NotAllowedError" || name === "PermissionDeniedError" ||
-    name === "SecurityError"
-  ) {
-    setStatus(
-      `${kind} permission denied — that's fine, attach a file instead`,
-      false,
-    );
-  } else if (name === "NotFoundError") {
-    setStatus(
-      `${kind} not found — no ${
-        kind === "audio" ? "microphone" : "camera"
-      } device available`,
-      false,
-    );
-  } else {
-    setStatus(`${kind} capture error: ${String(err?.message ?? err)}`, false);
-  }
-  // Deterministic focus return after a permission/device denial (the round-14
-  // media-denial focus finding) — the user is back on the attach trigger.
-  plusBtn.focus();
-}
-
-function stopCapRecording() {
-  if (capRecorder && capRecorder.state !== "inactive") {
-    try {
-      capRecorder.stop();
-    } catch { /* ignore */ }
-  }
-  capRecorder = null;
-  capRecording = false;
-  if (capTimerId) clearInterval(capTimerId);
-  capTimerId = null;
-  setActionIcon(
-    capAction,
-    capMode === "camera" ? "camera" : "record",
-    capMode === "camera" ? "Capture photo" : "Record",
-  );
-}
-
-async function finishCapture(blob, kind, name) {
-  let dataURL = "";
-  try {
-    dataURL = await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(String(fr.result));
-      fr.onerror = () => reject(fr.error);
-      fr.readAsDataURL(blob);
-    });
-  } catch { /* non-fatal */ }
-  attachments.push({ name, kind, size: blob.size, type: blob.type, dataURL });
-  addAttachTag(name, kind === "audio" ? "audio" : "camera");
-  setStatus(`attached ${name}`);
-  capClosePanel();
-}
-
-capAction.addEventListener("click", async () => {
-  if (capMode === "camera") {
-    // camera: capture a photo frame (or stop an in-progress recording)
-    if (capRecording) {
-      stopCapRecording();
-      return;
-    }
-    try {
-      const w = capVideo.videoWidth, h = capVideo.videoHeight;
-      if (!w || !h) {
-        setStatus("camera not ready yet", false);
-        return;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext("2d").drawImage(capVideo, 0, 0, w, h);
-      const blob = await new Promise((res) =>
-        canvas.toBlob(res, "image/jpeg", 0.9)
-      );
-      if (!blob) {
-        setStatus("capture failed", false);
-        return;
-      }
-      finishCapture(blob, "image", `photo-${Date.now()}.jpg`);
-    } catch (err) {
-      setStatus("camera capture error: " + String(err?.message ?? err), false);
-    }
-    return;
-  }
-
-  // audio: toggle record / stop
-  if (!capRecording) {
-    if (!capStream) return;
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : "audio/webm";
-    try {
-      capRecorder = new MediaRecorder(capStream, { mimeType: mime });
-    } catch {
-      capRecorder = new MediaRecorder(capStream);
-    }
-    capChunks = [];
-    capRecorder.ondataavailable = (e) => {
-      if (e.data.size) capChunks.push(e.data);
-    };
-    capRecorder.onstop = () => {
-      const mime = capRecorder
-        ? (capRecorder.mimeType || "audio/webm")
-        : "audio/webm";
-      const blob = new Blob(capChunks, { type: mime });
-      finishCapture(blob, "audio", `recording-${Date.now()}.webm`);
-    };
-    capRecorder.start();
-    capRecording = true;
-    capStartedAt = Date.now();
-    capTimerId = setInterval(() => {
-      capTimer.textContent = capElapsed();
-    }, 500);
-    capAction.textContent = "■ Stop";
-    capNote.textContent = "recording…";
-  } else {
-    stopCapRecording();
-    capNote.textContent = "processing…";
-  }
-});
-
 (async () => {
-  // Show the active provider NAME only (non-secret). The hub has NO credential
-  // editor — the API key / base URL are never read into the hub DOM (which
-  // previously could cross-wire one provider's stored secret into another
-  // provider's fields). Configuring credentials happens exclusively in the
-  // dedicated Settings page. Use the REDACTED summary route so the full config
-  // (baseURL/key/model) never crosses into the NTP.
   const cfg = await send("provider.summary");
   const nameEl = document.getElementById("provider-name");
   if (nameEl && cfg && cfg.provider) {

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Hub — new tab</title>
     <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="../shared/composer.css">
     <script type="module" src="../shared/apply-theme.js"></script>
     <style>
     .wrap {
@@ -26,39 +27,7 @@
       color: var(--accent);
     }
     .composer {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
       margin-bottom: 20px;
-    }
-    label.tag { display: block; }
-    .composer textarea {
-      width: 100%;
-      background: transparent;
-      border: 0;
-      color: var(--text);
-      font: inherit;
-      resize: vertical;
-      min-height: 60px;
-      outline: none;
-    }
-    .composer textarea:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-      border-radius: 6px;
-    }
-    .composer:focus-within {
-      border-color: var(--accent);
-    }
-    .composer .row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-top: 8px;
-    }
-    .composer .row .spacer {
-      flex: 1;
     }
     .grid {
       display: grid;
@@ -126,137 +95,6 @@
       padding: 5px 8px;
       margin-left: 6px;
     }
-    .composer .row {
-      position: relative;
-    }
-    .mic {
-      color: var(--text);
-    }
-    .mic.listening {
-      color: var(--accent);
-    }
-    .mic .mic-wave {
-      display: none;
-      align-items: center;
-      gap: 2px;
-      height: 18px;
-    }
-    .mic.listening .mic-icon {
-      display: none;
-    }
-    .mic.listening .mic-wave {
-      display: inline-flex;
-    }
-    .mic .mic-wave span {
-      width: 3px;
-      background: currentColor;
-      border-radius: 2px;
-      animation: wave 1s ease-in-out infinite;
-    }
-    .mic .mic-wave span:nth-child(1) {
-      height: 6px;
-      animation-delay: 0s;
-    }
-    .mic .mic-wave span:nth-child(2) {
-      height: 12px;
-      animation-delay: .15s;
-    }
-    .mic .mic-wave span:nth-child(3) {
-      height: 16px;
-      animation-delay: .3s;
-    }
-    .mic .mic-wave span:nth-child(4) {
-      height: 10px;
-      animation-delay: .45s;
-    }
-    .mic .mic-wave span:nth-child(5) {
-      height: 7px;
-      animation-delay: .6s;
-    }
-    .attach-menu {
-      position: absolute;
-      bottom: calc(100% + 6px);
-      left: 44px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.25);
-      z-index: 20;
-      min-width: 160px;
-      padding: 4px;
-    }
-    .attach-note { font-size: 11px; color: var(--muted, #888); margin: 6px 0 2px; max-width: 220px; }
-    .attach-menu button {
-      display: block;
-      width: 100%;
-      text-align: left;
-      background: transparent;
-      border: 0;
-      color: var(--text);
-      padding: 8px 10px;
-      border-radius: 7px;
-      cursor: pointer;
-      font: inherit;
-    }
-    .attach-menu button:hover {
-      background: var(--bg);
-    }
-    @keyframes wave {
-      0%,
-      100% {
-        transform: scaleY(.5);
-      }
-      50% {
-        transform: scaleY(1);
-      }
-    }
-    .capture {
-      margin-top: 10px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-    }
-    .cap-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      font-weight: 600;
-    }
-    .capture video {
-      width: 100%;
-      max-height: 240px;
-      border-radius: 8px;
-      background: #000;
-      margin-bottom: 8px;
-    }
-    .cap-controls {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .cap-timer {
-      font-variant-numeric: tabular-nums;
-      color: var(--muted);
-      min-width: 42px;
-    }
-    .cap-meter {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      height: 20px;
-    }
-    .cap-meter span {
-      width: 3px;
-      height: 6px;
-      background: var(--accent);
-      border-radius: 2px;
-      transition: height .08s;
-    }
-    .cap-note {
-      margin-top: 8px;
-    }
     </style>
   </head>
   <body>
@@ -278,49 +116,7 @@
         <button class="btn ghost" id="open-directory">Directory</button>
       </div>
 
-      <div class="composer">
-        <label class="tag" for="task-input">Start a task</label>
-        <textarea id="task-input"
-          placeholder="Ask anything — or @mention a site agent. e.g. “@github review my open PRs and summarise” …"></textarea>
-        <div class="row">
-          <button class="btn ghost icon-btn mic" id="mic-btn" type="button"
-            title="Speak"
-            aria-label="Start listening"><span class="mic-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span><span class="mic-wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span></button>
-          <button class="btn ghost icon-btn plus" id="plus-btn" type="button"
-            title="Attach"
-            aria-label="Add attachment"
-            aria-haspopup="menu"
-            aria-expanded="false"
-            aria-controls="attach-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="18" height="18" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-          <div class="spacer"></div>
-          <button class="btn" id="run-task">Run task</button>
-          <div class="attach-menu" id="attach-menu" role="menu" aria-label="Attach" hidden>
-            <button type="button" role="menuitem" data-kind="file">Add file</button>
-            <button type="button" role="menuitem" data-kind="record-audio">Record audio</button>
-            <button type="button" role="menuitem"
-              data-kind="capture-camera">Capture camera</button>
-            <button type="button" role="menuitem" data-kind="other">Add other file</button>
-            <p class="attach-note">Text files are read by the agent. Audio/video/image
-              are attached but NOT read by the model yet (multimodal is coming) —
-              their bytes are not sent to the model or stored with the message.</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="capture" id="capture-panel" hidden>
-        <div
-          class="cap-head"><span id="cap-title">Record audio</span><button type="button" class="btn ghost" id="cap-close" aria-label="Close">✕</button></div>
-        <video id="cap-video" autoplay muted playsinline hidden></video>
-        <div class="cap-controls">
-          <button type="button" class="btn"
-            id="cap-action"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="6"/></svg> Record</button>
-          <span class="cap-timer" id="cap-timer">0:00</span>
-          <div class="cap-meter"
-            id="cap-meter"><span></span><span></span><span></span><span></span><span></span></div>
-        </div>
-        <p class="cap-note" id="cap-note"
-          style="color:var(--muted);font-size:12px"></p>
-      </div>
+      <div id="composer-root"></div>
 
       <div class="grid">
         <div class="panel">

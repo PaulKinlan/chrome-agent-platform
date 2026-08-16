@@ -1,9 +1,11 @@
 // chat/chat.js — the conversation surface: messages, screenshot history, run.
+// The composer is the shared component (../shared/composer.js), identical to
+// the NTP hub (mic + attach + input + send).
 
 import { send } from "../lib/messages.js";
+import { mountComposer } from "../shared/composer.js";
 
 const body = document.getElementById("body");
-const input = document.getElementById("input");
 const shotsEl = document.getElementById("shots");
 
 // Long-lived-surface bounds: the chat is a rolling window, not an unbounded
@@ -21,11 +23,8 @@ function addMessage(role, text) {
   return div;
 }
 
-async function runTask(text) {
+async function runTask(text, attachments = []) {
   addMessage("user", text);
-  // A dedicated status element announces the in-progress + completion state
-  // reliably (the log's aria-relevant="additions" does NOT re-announce a text
-  // mutation of an existing node). The final result is a NEW addition.
   const status = document.createElement("div");
   status.className = "msg agent";
   status.textContent = "Thinking…";
@@ -35,9 +34,8 @@ async function runTask(text) {
   body.scrollTop = body.scrollHeight;
   let res;
   try {
-    res = await send("agent.run", { task: text, id: String(Date.now()) });
+    res = await send("agent.run", { task: text, id: String(Date.now()), attachments });
   } catch (e) {
-    // A rejected send must never leave "Thinking…" stuck (the round-14 medium).
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {
     status.remove();
@@ -47,19 +45,15 @@ async function runTask(text) {
     res.ok ? (res.result ?? "(done)") : "Error: " + (res.error ?? "unknown"),
   );
   body.scrollTop = body.scrollHeight;
-  // Capture a screenshot of the active tab into the history strip.
   captureShot(text);
 }
 
 async function captureShot(label) {
   const res = await send("capture.tab");
-  if (!res?.screenshot) return; // no capture (no grant/permission) → no dead button
+  if (!res?.screenshot) return;
   const s = document.createElement("button");
   s.type = "button";
   s.className = "shot";
-  // A real button (keyboard-operable) with an accessible name, not a clickable
-  // <div> with no focus/keyboard semantics or image description. The button
-  // re-opens the SOURCE page (the tab that was captured), not the raw data URL.
   s.style.background = `url(${res.screenshot}) center/cover`;
   s.setAttribute("aria-label", `Open page: ${label}`);
   s.addEventListener("click", () => {
@@ -69,12 +63,30 @@ async function captureShot(label) {
   while (shotsEl.children.length > MAX_SHOTS) shotsEl.firstElementChild.remove();
 }
 
-document.getElementById("send").addEventListener("click", () => {
-  const t = input.value.trim();
-  if (!t) return;
-  input.value = "";
-  runTask(t);
+// The shared composer — identical (mic + attach + input + send) to the NTP.
+const composer = mountComposer(document.getElementById("composer-root"), {
+  placeholder: "Reply, or @mention a site agent…",
+  sendLabel: "Send",
+  onStatus: (text) => {
+    // Surface composer-level errors (mic/attach/capture) as a transient agent
+    // message rather than leaving them invisible.
+    if (text) addMessage("agent", text);
+  },
+  onSend: async (text, attachments) => {
+    await runTask(text, attachments);
+  },
 });
-input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); document.getElementById("send").click(); } });
+
+// Open the REAL Chrome side panel (the driven-page surface), not a fake in-page
+// pane. chrome.sidePanel.open requires the optional `sidePanel` permission; if
+// it is not granted, the button degrades to a message instead of throwing.
+document.getElementById("open-side-panel").addEventListener("click", async () => {
+  try {
+    // A window-scoped panel (the manifest declares a default_path side panel).
+    await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id });
+  } catch {
+    addMessage("agent", "The side panel permission is not granted — enable it in Settings → Permissions.");
+  }
+});
 
 addMessage("agent", "Chrome Agent Platform chat. Ask a task, @mention a site agent, or attach media. Screenshots of visited pages appear below.");
