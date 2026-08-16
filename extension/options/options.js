@@ -7,6 +7,12 @@ import {
   capabilityStatus,
   requestCapability,
 } from "../lib/capabilities.js";
+import { testProvider } from "../lib/provider-test.js";
+// Side-effect import: registers the shared Web Components (switch-toggle,
+// permission-row, capability-row, …) so the settings page uses the SAME
+// design-system components as the hub + the docs showcase (one component,
+// everywhere — no hand-rolled duplicates).
+import "../shared/components.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 const PROVIDERS = [
@@ -118,11 +124,14 @@ async function renderProviders(restoreFocus = false) {
           <span class="provider-name">${p.name}</span>
           <span class="muted">${p.hint}</span>
         </div>
-        <button class="btn small set-default" type="button" aria-label="${
+        <div class="provider-actions">
+          <button class="btn small set-default" type="button" aria-label="${
       cfg.provider === p.id ? `Update ${p.name}` : `Use ${p.name}`
     }">${
       cfg.provider === p.id ? "Update" : "Use"
     }</button>
+          <button class="btn small ghost test-connection" type="button" aria-label="Test connection for ${p.name}">Test connection</button>
+        </div>
       </div>
       ${
       p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama"
@@ -153,6 +162,7 @@ async function renderProviders(restoreFocus = false) {
       </fieldset>`
         : ""
     }
+      <div class="test-status" role="status" hidden></div>
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
       // Preserve the EXISTING stored key when the field is left blank (an Update
@@ -177,6 +187,36 @@ async function renderProviders(restoreFocus = false) {
       });
       await saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
       renderProviders(true);
+    });
+    card.querySelector(".test-connection")?.addEventListener("click", async () => {
+      const testBtn = card.querySelector(".test-connection");
+      const testStatus = card.querySelector(".test-status");
+      const isActive = cfg.provider === p.id;
+      // Collect the CURRENT field values (including any unsaved typing), falling
+      // back to the stored key/model on the active card when the key field is
+      // blank (the stored key is never echoed into the password input).
+      const keyInput = card.querySelector(".api-key");
+      const enteredKey = keyInput?.value ?? "";
+      const fields = {
+        baseURL:
+          card.querySelector(".base-url")?.value ??
+          (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
+        apiKey: enteredKey || (isActive && cfg.apiKey ? cfg.apiKey : ""),
+        model:
+          card.querySelector(".model")?.value ??
+          (isActive ? (cfg.model || "") : ""),
+      };
+      // Loading state (the button is disabled + a live region announces it).
+      testStatus.hidden = false;
+      testStatus.className = "test-status testing";
+      testStatus.textContent = "Testing…";
+      testBtn.disabled = true;
+      const res = await testProvider(p, fields);
+      testBtn.disabled = false;
+      testStatus.className = "test-status " + (res.ok ? "ok" : "err");
+      testStatus.textContent = res.ok
+        ? `Connected — ${res.detail ?? "ok"} (${res.latencyMs}ms)`
+        : `Failed — ${res.error ?? "unknown error"}`;
     });
     list.appendChild(card);
   }
@@ -271,10 +311,13 @@ async function renderEnroll() {
 // ── Agents ──
 async function renderAgents() {
   const s = await storage.get("cap:multiAgent");
-  $("#multi-agent").checked = s["cap:multiAgent"] !== false;
-  $("#multi-agent").addEventListener("change", async (e) => {
-    await storage.set({ "cap:multiAgent": e.target.checked });
-    $("#per-agent-provider").hidden = !e.target.checked;
+  const toggle = $("#multi-agent");
+  const on = s["cap:multiAgent"] !== false;
+  toggle.checked = on;
+  toggle.addEventListener("toggle", async (e) => {
+    const checked = e.detail.checked;
+    await storage.set({ "cap:multiAgent": checked });
+    $("#per-agent-provider").hidden = !checked;
     // Rebuild the running orchestrator so the fan-out / solo switch takes effect
     // immediately (the worker reads cap:multiAgent at orchestration time).
     try {
@@ -284,7 +327,7 @@ async function renderAgents() {
     }
     saveFlash("Agent mode saved.");
   });
-  $("#per-agent-provider").hidden = !$("#multi-agent").checked;
+  $("#per-agent-provider").hidden = !on;
 
   // Per-agent provider assignment is TODO: it needs COMPLETE provider-specific
   // configs keyed by provider/agent (never one global {baseURL,apiKey,model}
@@ -315,21 +358,12 @@ function backgroundAgentRow(a) {
       ? ` · runs every ${a.schedule.periodInMinutes} min`
       : "");
 
-  const label = document.createElement("label");
-  label.className = "switch";
-  const input = document.createElement("input");
-  input.type = "checkbox";
-  input.checked = Boolean(a.enabled);
-  const track = document.createElement("span");
-  track.className = "track";
-  track.setAttribute("aria-hidden", "true");
-  const sr = document.createElement("span");
-  sr.className = "sr-only";
-  sr.textContent = `${a.enabled ? "Disable" : "Enable"} ${a.name}`;
-  label.append(input, track, sr);
+  const toggle = document.createElement("switch-toggle");
+  toggle.setAttribute("label", `${a.enabled ? "Disable" : "Enable"} ${a.name}`);
+  toggle.checked = Boolean(a.enabled);
 
-  input.addEventListener("change", async () => {
-    const enabled = input.checked;
+  toggle.addEventListener("toggle", async (e) => {
+    const enabled = e.detail.checked;
     const out = await chrome.runtime
       .sendMessage({ type: "background-agent.set", id: a.id, enabled })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
@@ -341,7 +375,7 @@ function backgroundAgentRow(a) {
     renderBackgroundAgents();
   });
 
-  row.append(name, state, hint, label);
+  row.append(name, state, hint, toggle);
   return row;
 }
 
@@ -480,13 +514,15 @@ async function renderBrowser() {
   const s = await storage.get("cap:browserControlGrant");
   const grant = s["cap:browserControlGrant"];
   const granted = Boolean(grant && grant.expiresAt > Date.now());
-  $("#browser-grant").checked = granted;
+  const toggle = $("#browser-grant");
+  toggle.checked = granted;
   $("#grant-origins").hidden = !granted;
   if (grant?.origins?.length) {
     $("#grant-origin-list").value = grant.origins.join("\n");
   }
-  $("#browser-grant").addEventListener("change", async (e) => {
-    if (e.target.checked) {
+  toggle.addEventListener("toggle", async (e) => {
+    const checked = e.detail.checked;
+    if (checked) {
       // Screenshot capture uses chrome.tabs.captureVisibleTab with the SILENT
       // `activeTab` permission (NOT `tabs`, which warns and can't be granted in
       // headless; NOT the Chrome debugger, which can't be optional). Requested
@@ -642,28 +678,27 @@ async function renderHooks() {
   list.replaceChildren();
   for (const h of hooks) {
     const row = document.createElement("div");
-    row.className = "hook-row";
+    row.className = "perm-row"; // SAME row as the Permissions section (one layout)
 
     const name = document.createElement("span");
     name.className = "perm-name";
     name.textContent = h.label;
 
-    const id = document.createElement("code");
-    id.className = "hook-id";
-    id.textContent = h.id;
-
     const state = document.createElement("span");
     const denied = Boolean(h.denied);
-    state.className = "perm-state" + (denied ? " denied" : " missing");
+    state.className = "perm-state" + (denied ? " denied" : "");
     state.textContent = denied ? "Denied" : "Allowed";
 
-    const sub = document.createElement("span");
-    sub.className = "muted";
-    sub.textContent = h.subscribers?.length
-      ? `subscribed: ${h.subscribers.join(", ")}`
-      : (h.permission ? `needs "${h.permission}"` : "no extra permission");
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = [
+      h.id,
+      h.subscribers?.length
+        ? `subscribed: ${h.subscribers.join(", ")}`
+        : (h.permission ? `needs "${h.permission}"` : "no extra permission"),
+    ].join(" · ");
 
-    row.append(name, id, state, sub);
+    row.append(name, state, hint);
 
     // The deny-toggle is OWNER-ONLY + authoritative: denying stops the agent
     // ever using the hook (fail-closed). Un-denying restores it (still gated by
@@ -852,10 +887,6 @@ function saveFlash(msg) {
     el.textContent = "Changes save automatically.";
   }, 2500);
 }
-
-$("#open-hub").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("ntp/ntp.html") });
-});
 
 // nav active state
 const sections = [

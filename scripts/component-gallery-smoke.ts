@@ -212,7 +212,9 @@ async function main() {
     const sw = await evl(s.sessionId, `(()=>{
       const row = document.querySelector('capability-row[action="toggle"]');
       if (!row) return { found: false };
-      const sw = row.shadowRoot.querySelector('.switch');
+      const st = row.shadowRoot.querySelector('switch-toggle');
+      const sw = st ? st.shadowRoot.querySelector('.sw') : null;
+      if (!sw) return { found: false };
       const cs = getComputedStyle(sw);
       return { found: true, w: cs.width, h: cs.height, pressed: sw.getAttribute('aria-pressed') };
     })()`);

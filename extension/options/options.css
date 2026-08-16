@@ -133,6 +133,28 @@ code {
 .provider-id .muted {
   font-size: var(--text-xs);
 }
+.provider-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.test-status {
+  margin-top: 10px;
+  font-size: var(--text-xs);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.test-status.testing {
+  color: var(--muted);
+}
+.test-status.ok {
+  color: var(--success, #0e6e63);
+}
+.test-status.err {
+  color: var(--danger, #b3261e);
+}
 .provider-name {
   font-weight: 600;
 }
@@ -163,62 +185,32 @@ input:focus, select:focus, textarea:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.field-row {
-  display: flex;
+/* Toggle fields — a single <switch-toggle> + a stacked label/description,
+   on a strict grid so the label never overlaps the switch. The switch itself
+   is the shared <switch-toggle> Web Component (one component, everywhere). */
+.toggle-field {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
   align-items: center;
-  gap: 14px;
-}
-/* Switches — a proper track/knob switch. The native checkbox is visually
-   hidden but keeps its accessible + checked state. Matches theme.css's switch
-   geometry (36x20 track, 14px knob, 16px travel) so toggles are consistent
-   with the capability rows everywhere else. */
-.switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  position: relative;
-}
-.switch input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-}
-.switch .track {
-  width: 36px;
-  height: 20px;
-  flex: 0 0 auto;
-  border-radius: 999px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  background: var(--panel-2);
-  position: relative;
-  transition: background 150ms ease, border-color 150ms ease;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  margin-top: 10px;
 }
-.switch .track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--muted);
-  transition: transform 150ms ease, background 150ms ease;
+.toggle-field switch-toggle {
+  grid-row: 1;
+  align-self: center;
 }
-.switch input:checked + .track {
-  background: var(--accent);
-  border-color: var(--accent);
+.toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
-.switch input:checked + .track::after {
-  transform: translateX(16px);
-  background: var(--btn-fg);
-}
-.switch input:focus-visible + .track {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.toggle-name {
+  font-weight: 600;
 }
 /* Theme grid */
 .theme-grid {
@@ -344,6 +336,11 @@ input:focus, select:focus, textarea:focus {
   display: block;
   margin: 0.5rem 0 0.35rem;
 }
+/* The allowed-origins textarea stretches the full panel width. */
+#grant-origin-list {
+  width: 100%;
+  box-sizing: border-box;
+}
 /* Site enrollment row. */
 .enroll {
   margin-top: 14px;
@@ -395,7 +392,7 @@ input:focus, select:focus, textarea:focus {
   grid-area: hint;
   font-size: 0.8rem;
 }
-.background-agent-row .switch {
+.background-agent-row switch-toggle {
   grid-area: toggle;
 }
 
@@ -525,7 +522,8 @@ input:focus, select:focus, textarea:focus {
 }
 
 /* Optional-permission capability panel. */
-.permission-list {
+.permission-list,
+.hook-list {
   display: grid;
   gap: 0.5rem;
   margin-top: 0.75rem;
@@ -562,27 +560,4 @@ input:focus, select:focus, textarea:focus {
 .perm-row .btn {
   grid-area: btn;
 }
-.hook-id {
-  font-size: var(--text-xs);
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.hook-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto auto;
-  grid-template-areas:
-    "name id state btn"
-    "hint hint hint hint";
-  gap: 0.15rem 0.75rem;
-  align-items: center;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--panel);
-}
-.hook-row .perm-name { grid-area: name; font-weight: 600; }
-.hook-row .hook-id { grid-area: id; }
-.hook-row .perm-state { grid-area: state; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-.hook-row .muted { grid-area: hint; font-size: 0.8rem; }
-.hook-row .btn { grid-area: btn; }
 .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }

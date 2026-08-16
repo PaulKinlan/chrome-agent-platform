@@ -39,9 +39,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
         Data & memory</a>
       </nav>
-      <div class="side-foot">
-        <button class="btn" id="open-hub">Back to hub</button>
-      </div>
     </aside>
 
     <main class="content">
@@ -62,14 +59,12 @@
 
       <section id="agents" class="panel">
         <h2>Agents</h2>
-        <div class="field-row">
-          <label class="switch">
-            <input type="checkbox" id="multi-agent">
-            <span class="track" aria-hidden="true"></span>
-            <span>Multiple agents</span>
-          </label>
-          <p
-            class="muted">When off, the hub is a single agent. When on, the hub fans out to per-site sub-agents.</p>
+        <div class="toggle-field">
+          <switch-toggle id="multi-agent" label="Multiple agents"></switch-toggle>
+          <div class="toggle-text">
+            <span class="toggle-name">Multiple agents</span>
+            <span class="muted">When off, the hub is a single agent. When on, the hub fans out to per-site sub-agents.</span>
+          </div>
         </div>
         <div class="enroll">
           <h3>Enroll a site</h3>
@@ -106,11 +101,13 @@
         <h2>Browser control</h2>
         <p
           class="muted">Open, navigate, and close tabs, and capture screenshots need your explicit, scoped permission. Reading page text and listing tabs are always available.</p>
-        <label class="switch">
-          <input type="checkbox" id="browser-grant">
-          <span class="track" aria-hidden="true"></span>
-          <span>Allow the agent to control the browser</span>
-        </label>
+        <div class="toggle-field">
+          <switch-toggle id="browser-grant" label="Allow the agent to control the browser"></switch-toggle>
+          <div class="toggle-text">
+            <span class="toggle-name">Allow the agent to control the browser</span>
+            <span class="muted">Open, navigate, and close tabs, and capture screenshots.</span>
+          </div>
+        </div>
         <div id="grant-origins" class="grant-origins" hidden>
           <h3>Allowed origins</h3>
           <label for="grant-origin-list" class="muted">Restrict control to these origins (one per line):</label>
