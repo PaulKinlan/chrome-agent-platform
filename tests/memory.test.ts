@@ -6,7 +6,7 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { masterMemory, saveScreenshot, listScreenshots, journalAppend } from "../extension/lib/memory.js";
+import { masterMemory, saveScreenshot, listScreenshots, journalAppend, backgroundAgentMemory, namedAgentMemory } from "../extension/lib/memory.js";
 
 // ---- minimal in-memory OPFS fake ----
 // A directory tree: { kind, children: Map<name, node>, content?: string }
@@ -261,4 +261,28 @@ Deno.test("thread authority keys are reserved from the model's memory_set (wider
   const version = await mem.setTrusted("threads", [{ id: "t_ok", name: "ok" }]);
   assert(typeof version === "number" && version > 0, "trusted write must return a version");
   assertEquals((await mem.get("threads"))[0].id, "t_ok");
+});
+
+Deno.test("backgroundAgentMemory + namedAgentMemory are isolated from masterMemory (all agents get their own OPFS)", async () => {
+  const master = masterMemory();
+  const bg = backgroundAgentMemory("recipe:auto-group-by-domain");
+  const bg2 = backgroundAgentMemory("recipe:dedupe-tabs");
+  const named = namedAgentMemory("my-pr-reviewer");
+
+  // Each tier is a distinct store: a write to one must never surface in another.
+  await master.set("k", "master-value");
+  await bg.set("k", "sorting-hat-value");
+  await bg2.set("k", "dedupe-value");
+  await named.set("k", "named-value");
+
+  assertEquals(await master.get("k"), "master-value", "master keeps its own value");
+  assertEquals(await bg.get("k"), "sorting-hat-value", "the background agent keeps its own value");
+  assertEquals(await bg2.get("k"), "dedupe-value", "a second background agent is isolated from the first");
+  assertEquals(await named.get("k"), "named-value", "a named agent is isolated from the background agents + master");
+
+  // A background agent's writes must NOT leak into the master journal (the
+  // scheduled-run isolation Paul asked for: one background agent can never
+  // read/write the master's or another's state).
+  assertEquals((await master.keys()).includes("k"), true);
+  assertEquals((await master.get("k")) === "sorting-hat-value", false, "the background write must not reach the master");
 });

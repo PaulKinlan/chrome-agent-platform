@@ -1105,7 +1105,8 @@ async function main() {
         `chrome.alarms.getAll().then(a => a.map(x => x.name))`,
       );
       const removedFromAlarms = Array.isArray(alarmNames) && !alarmNames.includes(sched.name);
-      const j2 = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
+      // A background/scheduled agent journals to its OWN OPFS (not the master's).
+      const j2 = await msgValue({ type: "memory.get", origin: `background:${sched.name}`, key: "journal" }) ?? [];
       const firedTask = (Array.isArray(j2) ? j2 : []).find(
         (e) => e?.type === "task" && e?.task === "fire-test" && e?.scheduled === true,
       );
@@ -1175,7 +1176,7 @@ async function main() {
       );
       // Wait for the recreated alarm to fire (original at = now + 10000ms).
       await sleep(9000);
-      const j3 = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
+      const j3 = await msgValue({ type: "memory.get", origin: `background:${rec.name}`, key: "journal" }) ?? [];
       const arr3 = Array.isArray(j3) ? j3 : [];
       const recTaskEntry = arr3.find((e) => e?.type === "task" && e?.task === recTask && e?.scheduled === true);
       const recResultEntry = arr3.find((e) => e?.type === "result" && e?.id === rec.name);

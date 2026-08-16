@@ -447,6 +447,20 @@ export function namedAgentMemory(id) {
   return memoryStoreAt(path, { isMaster: false, origin: `agent:${slug}` });
 }
 
+/** The OPFS sandbox for a BACKGROUND/SCHEDULED agent (a recipe like the
+ * Sorting Hat, or a one-off scheduled task). Lives at `memory/background/<slug>/*`,
+ * distinct from the named-agent store (`memory/agents/`) and the master store,
+ * so a background agent has its own memory + run history + journal — one
+ * background agent can never read/write another's or the master's. `id` is the
+ * schedule name (e.g. `recipe:auto-group-by-domain`) or a recipe id; the `origin`
+ * label is `background:<slug>` so journal/usage tagging never collides with a
+ * real origin or a named agent. */
+export function backgroundAgentMemory(id) {
+  const slug = String(id || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed-background";
+  const path = [ROOT, "background", encodeURIComponent(slug)];
+  return memoryStoreAt(path, { isMaster: false, origin: `background:${slug}` });
+}
+
 /** Enumerate the named-agent ids that have an OPFS sandbox directory. (Read-only
  * introspection; the AUTHORITATIVE registry is in chrome.storage, see
  * lib/named-agents.js.) */

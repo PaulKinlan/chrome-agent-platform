@@ -15,6 +15,7 @@ import {
   listScreenshots,
   loadScreenshot,
   masterMemory,
+  backgroundAgentMemory,
   namedAgentMemory,
   saveScreenshot,
   siteMemory,
@@ -260,6 +261,9 @@ async function handleAlarm(alarm) {
       scheduled: true,
       attachments: task.attachments ?? [],
       fence,
+      // A background/scheduled agent gets its OWN OPFS (memory + run log),
+      // keyed by the schedule name — never the master's memory.
+      memory: backgroundAgentMemory(alarm.name),
     });
     if (!task.periodInMinutes) {
       await fence.assertOwned();
@@ -391,7 +395,14 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false) {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null) {
+  // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
+  // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
+  // shared master, whose memory tools would otherwise write to the master's
+  // memory instead of the agent's own tier.
+  if (memoryOverride) {
+    return await buildOrchestrator(onProgress, scoped, memoryOverride);
+  }
   while (true) {
     const gen = generation;
     const cached = scoped ? scopedOrchestrator : orchestrator;
@@ -405,8 +416,27 @@ async function ensureOrchestrator(onProgress = null, scoped = false) {
       cached.setProgress?.(onProgress);
       return cached;
     }
+    const orch = await buildOrchestrator(onProgress, scoped, masterMemory());
+    // Commit only if the generation is still current (an invalidation during
+    // the awaits above means this orchestrator used stale config).
+    if (generation === gen) {
+      if (scoped) {
+        scopedOrchestrator = orch;
+        scopedOrchestratorGen = gen;
+      } else {
+        orchestrator = orch;
+        orchestratorGen = gen;
+      }
+      return orch;
+    }
+    // Stale build — loop and rebuild under the new generation.
+  }
+}
+
+// The orchestrator build (the memory, the workers, the tools). Shared by
+// ensureOrchestrator's cache path AND the fresh per-background-agent path.
+async function buildOrchestrator(onProgress, scoped, mem) {
     const model = await ensureModel();
-    const mem = masterMemory();
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
@@ -465,31 +495,15 @@ async function ensureOrchestrator(onProgress = null, scoped = false) {
       },
       onProgress,
     });
-    // Commit only if the generation is still current (an invalidation during
-    // the awaits above means this orchestrator used stale config).
-    if (generation === gen) {
-      if (scoped) {
-        scopedOrchestrator = orch;
-        scopedOrchestratorGen = gen;
-      } else {
-        orchestrator = orch;
-        orchestratorGen = gen;
-      }
-      // Bind each worker's run-generation getter into ITS OWN build-local cell
-      // ONLY AFTER the commit. The cells were created alongside the tools in THIS
-      // build, so a later rebuild (which creates NEW cells + NEW workers) can never
-      // repoint this build's tool closures at a different agent — the round-26/27
-      // blocker where a module-global getter map let a rebuild replace an active
-      // old worker's getter (and a concurrent same-gen build overwrote the map),
-      // failing the old run closed spuriously.
-      for (const [origin, agent] of orch.workers) {
-        const cell = buildCells.get(origin);
-        if (cell) cell.get = () => agent.getRunGen();
-      }
-      return orch;
+    // Bind each worker's run-generation getter into ITS OWN build-local cell
+    // (the round-26/27 blocker): the cells were created alongside the tools in
+    // THIS build, so a later rebuild (which creates NEW cells + NEW workers) can
+    // never repoint this build's tool closures at a different agent.
+    for (const [origin, agent] of orch.workers) {
+      const cell = buildCells.get(origin);
+      if (cell) cell.get = () => agent.getRunGen();
     }
-    // Stale build — loop and rebuild under the new generation.
-  }
+    return orch;
 }
 
 // Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
@@ -679,12 +693,15 @@ function attachmentContext(attachments) {
   return "Attachments:\n" + parts.join("\n");
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
     const taskId = id ?? String(Date.now());
-    const mem = masterMemory();
+    // A BACKGROUND/SCHEDULED agent passes its OWN memory (Paul: all agents get
+    // their own OPFS). The journal + the orchestrator's memory tools then write
+    // to that agent's own tier, never the master's.
+    const mem = memory ?? masterMemory();
     // Journal the agent's tool activity for the run log (item 16): each
     // tool-call and tool-result is appended to the journal so the owner can SEE
     // what an agent did — even a background agent with no live UI. The journal
@@ -707,7 +724,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         journalAppend(mem, { type: "tool-result", id: taskId, tool: event.toolName ?? "tool", result }).catch(() => {});
       }
     };
-    const orch = await ensureOrchestrator(journalingProgress, scoped);
+    const orch = await ensureOrchestrator(journalingProgress, scoped, memory);
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or
     // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
@@ -822,6 +839,24 @@ async function memoryOverview(store) {
     } catch { /* skip unreadable */ }
   }
   return { keyCount: keys.length, totalBytes, keys };
+}
+
+/** Resolve an `origin` label (the memory route's selector) to its OPFS store.
+ * `master` → the hub's store; `background:<slug>` → a background/scheduled
+ * agent's own store; `agent:<slug>` → a named agent's store; anything else → a
+ * site-origin store. This is the single place the memory.get/set/list/clear
+ * routes map a selector to a store, so every agent tier is addressable + the
+ * background/named agents are isolated from the master (Paul: all agents get
+ * their own OPFS). */
+function resolveMemory(origin) {
+  if (origin === "master") return masterMemory();
+  if (typeof origin === "string" && origin.startsWith("background:")) {
+    return backgroundAgentMemory(origin.slice("background:".length));
+  }
+  if (typeof origin === "string" && origin.startsWith("agent:")) {
+    return namedAgentMemory(origin.slice("agent:".length));
+  }
+  return siteMemory(origin);
 }
 
 /** Inspect one sub-agent: name, tools, memory keys, enrollment state. The
@@ -1323,20 +1358,16 @@ const handlers = {
   },
 
   async "memory.get"({ origin, key }) {
-    return await (origin === "master" ? masterMemory() : siteMemory(origin))
-      .get(key);
+    return await resolveMemory(origin).get(key);
   },
   async "memory.set"({ origin, key, value }) {
-    return await (origin === "master" ? masterMemory() : siteMemory(origin))
-      .set(key, value);
+    return await resolveMemory(origin).set(key, value);
   },
   async "memory.list"({ origin }) {
-    return await (origin === "master" ? masterMemory() : siteMemory(origin))
-      .keys();
+    return await resolveMemory(origin).keys();
   },
   async "memory.clear"({ origin }) {
-    return await (origin === "master" ? masterMemory() : siteMemory(origin))
-      .clear();
+    return await resolveMemory(origin).clear();
   },
   async "memory.origins"() {
     return await listOrigins();
@@ -2132,6 +2163,10 @@ async function dispatchHook(hookId, payload) {
       id: `hook:${hookId}:${sub.recipeId ?? "master"}:${Date.now()}`,
       task,
       scoped: true,
+      // An event-driven (hook) run gets its OWN OPFS keyed by the recipe/hook
+      // (not the per-run timestamp), so its journal + read-only memory are
+      // isolated from the master and from every other hook/recipe.
+      memory: backgroundAgentMemory(sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`),
     }).catch((e) => console.error(`hook ${hookId} run failed:`, e?.message ?? e));
     dispatched += 1;
   }
