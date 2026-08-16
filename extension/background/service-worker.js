@@ -60,6 +60,16 @@ import {
   withEnrollmentLock,
 } from "../lib/tools.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
+import {
+  appendThreadMessage,
+  createThread,
+  generateThreadName,
+  getThread,
+  historyFromThread,
+  listThreads,
+  nameThreadAsync,
+  setThreadStatus,
+} from "../lib/threads.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import { MASTER_SKILL } from "../lib/master-skill.js";
 import {
@@ -603,16 +613,24 @@ function attachmentContext(attachments) {
         a.type ?? "unknown"
       }, ${a.size ?? "?"} bytes)]`,
     );
-    // Text attachments are inlined so the model can read them. Media (image/
-    // audio/video) bytes are NOT supplied to the model in this build — they are
-    // honestly labelled as attached-but-unprocessed until a multimodal provider
-    // path is wired. Never claim the bytes reach the model.
-    if (a.dataURL && a.type?.startsWith("text/")) {
+    // TEXT attachments are inlined so the model can actually read the bytes.
+    // Media (image/audio/video) bytes are NOT supplied to the model in this
+    // build — they are honestly labelled as attached-but-unprocessed until a
+    // multimodal provider path is wired. Never claim the bytes reach the model.
+    const type = String(a.type ?? "").toLowerCase();
+    const name = String(a.name ?? "").toLowerCase();
+    const textish =
+      type.startsWith("text/") ||
+      /json|xml|yaml|yml|toml|csv|markdown|\.md$/.test(type) ||
+      /\.(json|xml|yaml|yml|toml|csv|md|txt|log)$/.test(name);
+    if (a.dataURL && textish) {
       try {
         const body = atob(a.dataURL.split(",")[1] ?? "");
         parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
       } catch { /* not decodable */ }
-    } else if (!a.type?.startsWith("text/")) {
+    } else if (a.dataURL && type.startsWith("image/")) {
+      parts.push("  (image attached — bytes not described in this build)");
+    } else if (!textish) {
       parts.push(
         "  (media attached — not transcribed/described in this build)",
       );
@@ -1003,6 +1021,23 @@ const handlers = {
     for (let i = 0; i < overCount; i++) {
       dropped.push({ reason: "over count limit" });
     }
+
+    // ── the task-thread model ─────────────────────────────────────────────
+    // A task is a DISTINCT THREAD. If the caller passed a threadId, continue
+    // that thread; otherwise create a new thread (named with a fast fallback
+    // now, upgraded by the model async). The thread carries its own message
+    // history, so a nudge in an existing thread sees the prior turns.
+    const existing = m.threadId ? await getThread(m.threadId).catch(() => null) : null;
+    let threadId = existing?.id ?? null;
+    if (!existing) {
+      const thread = await createThread(m.task).catch(() => null);
+      threadId = thread?.id ?? null;
+      if (threadId) nameThreadAsync(threadId, m.task).catch(() => {});
+    } else {
+      await appendThreadMessage(threadId, { role: "user", content: m.task }).catch(() => {});
+    }
+    const threadHistory = existing ? historyFromThread(existing) : (m.history ?? []);
+
     const result = await runTask({
       id: m.id,
       task: m.task,
@@ -1013,13 +1048,38 @@ const handlers = {
       // The prior conversation turns (the unified conversational surface): a
       // follow-up message is a new turn in the same thread, so the agent sees
       // the task/result history that came before.
-      history: m.history,
+      history: threadHistory,
     });
+    // Persist the result into the thread + mark it done (best-effort — a thread
+    // write must never turn a successful run into a failure).
+    if (threadId) {
+      if (typeof result?.result === "string" && result.result) {
+        await appendThreadMessage(threadId, { role: "assistant", content: result.result }).catch(() => {});
+      }
+      await setThreadStatus(threadId, result?.ok ? "done" : "error").catch(() => {});
+    }
+    result.threadId = threadId;
     if (dropped.length > 0) result.droppedAttachments = dropped;
     return result;
   },
   async "agent.list"() {
     return await listOrigins();
+  },
+
+  // ── task threads (the distinct-thread model) ─────────────────────────────
+  async "thread.list"() {
+    return { threads: await listThreads() };
+  },
+  async "thread.get"(m) {
+    const thread = await getThread(m.id);
+    return thread
+      ? { ok: true, thread }
+      : { ok: false, error: "thread not found" };
+  },
+  async "thread.name"(m) {
+    // Generate a title for a task (the model when available, else truncated).
+    const name = await generateThreadName(m.task);
+    return { ok: true, name };
   },
 
   // The hub agent's management surface (list_agents / get_agent / update_agent).

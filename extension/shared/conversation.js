@@ -137,7 +137,7 @@ export async function loadJournal() {
 // A mid-run nudge is simply ANOTHER turn: the composer stays live, and a
 // follow-up message appends to the same conversation + runs after the current
 // turn (the SW serializes master runs), carrying the prior history.
-export async function runConversationTurn(container, { text, attachments = [], history = [] }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null }) {
   const c = container;
 
   // 1. the user's turn appears immediately — the surface becomes a conversation.
@@ -218,6 +218,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       id: String(Date.now()),
       attachments,
       history,
+      threadId,
     });
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };

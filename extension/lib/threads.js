@@ -1,0 +1,218 @@
+// lib/threads.js — the task-thread model.
+//
+// A task is a DISTINCT THREAD (not a single shared journal): each thread is its
+// own conversation surface with its own persisted message history. The hub shows
+// a LIST of threads (auto-named) and a thread opens as a full-screen surface
+// that can be nudged/continued.
+//
+// Storage (master OPFS memory, origin-keyed):
+//   - `threads`       — the index, most-recent-first: [{ id, name, preview,
+//                        createdAt, updatedAt, status, count }]
+//   - `thread:<id>`   — the full thread: { id, name, messages:
+//                        [{ role, content, ts }], createdAt, updatedAt, status }
+//
+// Threads are INTERNAL authority (the model never writes them directly — the
+// `memory_set` reserved-key list doesn't need to cover them because the hub
+// writes them via `setTrusted`, and `threads`/`thread:<id>` are not reachable
+// through the model toolset). Bounds match the journal: capped count + byte
+// budget per thread so a long conversation cannot grow the store unbounded.
+
+import { masterMemory } from "./memory.js";
+import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-model.js";
+
+const INDEX_KEY = "threads";
+const MAX_THREADS = 200; // the index cap
+const MAX_MESSAGES = 500; // per-thread message cap
+const MAX_MESSAGE_CHARS = 16 * 1024; // per-message text cap
+const MAX_THREAD_BYTES = 200 * 1024; // per-thread serialized budget
+const MAX_NAME_CHARS = 80;
+
+function newThreadId() {
+  return `t_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function utf8Bytes(str) {
+  return new TextEncoder().encode(str).byteLength;
+}
+
+/** A short preview for the index (first line, bounded). */
+function previewOf(text) {
+  const first = String(text ?? "").split(/\n+/)[0].trim();
+  const s = first.length > 160 ? first.slice(0, 160) + "…" : first;
+  return s;
+}
+
+function boundText(text, max = MAX_MESSAGE_CHARS) {
+  const s = String(text ?? "");
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+/** Trim a thread's messages to the count + byte budget (drop the OLDEST). */
+function trimMessages(messages) {
+  let entries = messages.slice(-MAX_MESSAGES);
+  while (
+    entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_THREAD_BYTES
+  ) {
+    entries = entries.slice(1);
+  }
+  return entries;
+}
+
+/** The thread index (most-recent-first). */
+export async function listThreads() {
+  const mem = masterMemory();
+  const index = (await mem.get(INDEX_KEY)) ?? [];
+  return Array.isArray(index) ? index.slice(0, MAX_THREADS) : [];
+}
+
+/** A full thread, or null. */
+export async function getThread(id) {
+  if (!id) return null;
+  const mem = masterMemory();
+  return (await mem.get(`thread:${id}`)) ?? null;
+}
+
+async function writeIndex(index) {
+  const mem = masterMemory();
+  await mem.setTrusted(INDEX_KEY, index.slice(0, MAX_THREADS));
+}
+
+/**
+ * Generate a short title for a task. Uses the Chrome Prompt API (Gemini nano)
+ * when available; otherwise falls back to the first line of the prompt
+ * (truncated). Never throws — naming is best-effort.
+ */
+export async function generateThreadName(task) {
+  const text = String(task ?? "").trim();
+  if (!text) return "New task";
+  try {
+    if (await isPromptApiAvailable()) {
+      const model = createPromptApiModel();
+      const res = await model.doGenerate({
+        prompt: [{
+          role: "user",
+          content: [{
+            type: "text",
+            text:
+              `Generate a short title for this task (at most 6 words, no quotes, ` +
+              `no trailing punctuation). Return ONLY the title:\n\n${text.slice(0, 500)}`,
+          }],
+        }],
+      });
+      const title = String(res?.content?.[0]?.text ?? "").trim();
+      if (title && title.length <= MAX_NAME_CHARS) {
+        return title;
+      }
+    }
+  } catch { /* fall through to the truncated fallback */ }
+  const first = text.split(/\n+/)[0].replace(/^```[a-z0-9]*\s*/i, "").trim();
+  const s = first || "New task";
+  return s.length > 48 ? s.slice(0, 48) + "…" : s;
+}
+
+/**
+ * Create a new thread for a task, named with a FAST fallback (the first line)
+ * so the task is never blocked on a model call. Returns the thread. The caller
+ * should then call `nameThreadAsync` to upgrade the name via the model.
+ */
+export async function createThread(task) {
+  const mem = masterMemory();
+  const id = newThreadId();
+  const now = Date.now();
+  const fallbackName = boundText(previewOf(task) || "New task", MAX_NAME_CHARS);
+  const thread = {
+    id,
+    name: fallbackName,
+    messages: [{ role: "user", content: boundText(task), ts: now }],
+    createdAt: now,
+    updatedAt: now,
+    status: "running",
+  };
+  await mem.setTrusted(`thread:${id}`, thread);
+  const index = (await mem.get(INDEX_KEY)) ?? [];
+  index.unshift({
+    id,
+    name: fallbackName,
+    preview: previewOf(task),
+    createdAt: now,
+    updatedAt: now,
+    status: "running",
+    count: 1,
+  });
+  await writeIndex(index);
+  return thread;
+}
+
+/** Fire-and-forget: upgrade a thread's name via the model, then update the
+ * index. Never throws (best-effort). */
+export async function nameThreadAsync(id, task) {
+  try {
+    const name = await generateThreadName(task);
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    if (!thread) return;
+    thread.name = name;
+    await mem.setTrusted(`thread:${id}`, thread);
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const row = index.find((r) => r.id === id);
+    if (row) row.name = name;
+    await writeIndex(index);
+  } catch { /* best-effort naming */ }
+}
+
+/** Append a message to a thread + update the index (preview/time/status). */
+export async function appendThreadMessage(id, message) {
+  if (!id) return null;
+  const mem = masterMemory();
+  const thread = (await mem.get(`thread:${id}`)) ?? null;
+  if (!thread) return null;
+  const { role = "assistant", content = "" } = message ?? {};
+  thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+  thread.messages.push({
+    role,
+    content: boundText(content),
+    ts: Date.now(),
+  });
+  thread.messages = trimMessages(thread.messages);
+  thread.updatedAt = Date.now();
+  thread.status = role === "assistant" ? "done" : "running";
+  await mem.setTrusted(`thread:${id}`, thread);
+  const index = (await mem.get(INDEX_KEY)) ?? [];
+  const row = index.find((r) => r.id === id);
+  if (row) {
+    row.preview = previewOf(thread.messages[thread.messages.length - 1]?.content ?? "");
+    row.updatedAt = thread.updatedAt;
+    row.status = thread.status;
+    row.count = thread.messages.length;
+    await writeIndex(index);
+  }
+  return thread;
+}
+
+/** Mark a thread's final status (done / error). */
+export async function setThreadStatus(id, status) {
+  if (!id) return;
+  const mem = masterMemory();
+  const thread = (await mem.get(`thread:${id}`)) ?? null;
+  if (!thread) return;
+  thread.status = status;
+  thread.updatedAt = Date.now();
+  await mem.setTrusted(`thread:${id}`, thread);
+  const index = (await mem.get(INDEX_KEY)) ?? [];
+  const row = index.find((r) => r.id === id);
+  if (row) {
+    row.status = status;
+    row.updatedAt = thread.updatedAt;
+    await writeIndex(index);
+  }
+}
+
+/** Build the conversation history (agent-do turn shape) from a thread. */
+export function historyFromThread(thread) {
+  const out = [];
+  for (const m of (thread?.messages ?? [])) {
+    if (m?.role === "user" && m.content) out.push({ role: "user", content: m.content });
+    else if (m?.role === "assistant" && m.content) out.push({ role: "assistant", content: m.content });
+  }
+  return out;
+}

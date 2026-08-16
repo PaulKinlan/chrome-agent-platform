@@ -1,16 +1,12 @@
 // ntp/ntp.js — the hub page wiring. The hub is a COMMAND CENTER:
-//   header → composer (the hero) → "Now" (the active conversation) →
+//   header → composer (the hero) → Tasks (the distinct task threads) →
 //   background agents (scheduled, toggle) → site agents (enrolled origins) →
-//   recent artifacts. On-demand recipes live on their own documented page
-//   (recipes/) and are reached via the /task:name command, not the hub.
+//   recent artifacts. A task is a DISTINCT THREAD: starting one opens a
+//   full-screen thread surface (the conversation + a composer to nudge/continue),
+//   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import {
-  runConversationTurn,
-  renderJournal,
-  loadJournal,
-  historyFromJournal,
-} from "../shared/conversation.js";
+import { runConversationTurn } from "../shared/conversation.js";
 
 import { RECIPE_ICON } from "../shared/recipe-icons.js";
 import {
@@ -137,53 +133,115 @@ async function renderArtifacts() {
   }
 }
 
-// ── conversation (the "Now" view) ────────────────────────────────────────
-const conversationEl = document.getElementById("conversation");
+// ── Tasks (the distinct task threads) ────────────────────────────────────
+function timeAgo(ts) {
+  const d = Date.now() - (ts ?? 0);
+  const m = Math.floor(d / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
-async function refreshTasks() {
-  const journal = await loadJournal();
-  renderJournal(conversationEl, journal);
-  const section = conversationEl.closest("section");
-  if (!conversationEl.children.length) {
-    if (section) section.hidden = true;
+async function renderTasks() {
+  const el = document.getElementById("tasks");
+  if (!el) return;
+  const res = await send("thread.list").catch(() => ({ threads: [] }));
+  const threads = Array.isArray(res.threads) ? res.threads : [];
+  el.replaceChildren();
+  if (!threads.length) {
+    el.innerHTML = `<div class="empty">No tasks yet — start one above.</div>`;
+    return;
+  }
+  for (const t of threads.slice(0, 12)) {
+    const row = document.createElement("capability-row");
+    row.setAttribute("name", t.name || "Task");
+    row.setAttribute(
+      "description",
+      `${t.preview || ""} · ${timeAgo(t.updatedAt)}`,
+    );
+    row.setAttribute("icon", "");
+    row.setAttribute("action", "run");
+    row.addEventListener("run", () => openThread(t.id));
+    el.append(row);
+  }
+}
+
+// ── the full-screen thread surface ────────────────────────────────────────
+const threadView = document.getElementById("thread-view");
+const threadTitle = document.getElementById("thread-title");
+const threadConversation = document.getElementById("thread-conversation");
+const threadComposer = document.getElementById("thread-composer");
+let currentThreadId = null;
+
+function showThreadView() {
+  threadView.hidden = false;
+}
+function hideThreadView() {
+  threadView.hidden = true;
+  currentThreadId = null;
+  threadConversation.clear?.();
+}
+
+async function openThread(id) {
+  currentThreadId = id;
+  const res = await send("thread.get", { id }).catch(() => ({ ok: false }));
+  const thread = res.ok ? res.thread : null;
+  threadTitle.textContent = thread?.name || "Task";
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  threadConversation.setMessages?.(
+    messages.map((m) => ({ role: m.role, content: m.content })),
+  );
+  showThreadView();
+}
+
+/** Run a turn in the thread surface (a new task, or a nudge). */
+async function runThreadTurn(text, attachments = []) {
+  showThreadView();
+  setStatus("running…", false);
+  const res = await runConversationTurn(threadConversation, {
+    text,
+    attachments,
+    history: [], // the SW derives the history from the thread when threadId is set
+    threadId: currentThreadId,
+  });
+  if (res.ok) {
+    // The SW created (or reused) the thread; capture its id for continuation.
+    if (res.threadId) currentThreadId = res.threadId;
+    if (res.threadId) {
+      const t = await send("thread.get", { id: res.threadId }).catch(() => ({}));
+      if (t.thread?.name) threadTitle.textContent = t.thread.name;
+    }
+    setStatus("ready");
+    await renderTasks();
   } else {
-    if (section) section.hidden = false;
+    setStatus("error: " + (res.error ?? "unknown"), false);
   }
 }
 
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments } = ev.detail;
-  setStatus("running…", false);
-  const history = historyFromJournal(await loadJournal());
-  const res = await runConversationTurn(conversationEl, {
-    text: task,
-    attachments,
-    history,
-  });
-  if (res.ok) {
-    if (
-      Array.isArray(res.droppedAttachments) && res.droppedAttachments.length
-    ) {
-      setStatus(
-        `ready — ${res.droppedAttachments.length} attachment(s) dropped (over limit)`,
-      );
-    } else {
-      setStatus("ready");
-    }
-    await refreshTasks();
-  } else {
-    setStatus("error: " + (res.error ?? "unknown"), false);
-  }
+  currentThreadId = null; // a new task → a new thread
+  threadConversation.clear?.();
+  threadTitle.textContent = "New task";
+  await runThreadTurn(task, attachments);
 });
 composer.addEventListener("status", (ev) => {
   if (ev.detail?.text) setStatus(ev.detail.text, false);
 });
 
+threadComposer.addEventListener("send", async (ev) => {
+  const { text, attachments } = ev.detail;
+  await runThreadTurn(text, attachments);
+});
+document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
+
 renderBackgroundAgents();
 renderSiteAgents();
 renderArtifacts();
-refreshTasks();
+renderTasks();
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");

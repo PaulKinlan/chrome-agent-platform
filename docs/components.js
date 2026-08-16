@@ -424,7 +424,7 @@ class MicButton extends Component {
   start() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
-      this._emit("mic-error", { message: "speech recognition not available" });
+      this._emit("mic-error", { message: "speech recognition not available in this browser" });
       return;
     }
     if (!this._recognition) {
@@ -433,15 +433,30 @@ class MicButton extends Component {
       this._recognition.interimResults = true;
       this._recognition.lang = "en-US";
       this._recognition.onresult = (e) => {
-        let transcript = "";
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          transcript += e.results[i][0].transcript;
+        // Accumulate the FULL transcript (committed finals + interim) across the
+        // cumulative result list, NOT just the new chunk — otherwise every
+        // event overwrites the input with only the latest word.
+        let finalText = "";
+        let interimText = "";
+        for (let i = 0; i < e.results.length; i++) {
+          const res = e.results[i];
+          if (!res?.[0]) continue;
+          if (res.isFinal) finalText += res[0].transcript;
+          else interimText += res[0].transcript;
         }
-        this._emit("transcript", { text: transcript.trim(), final: e.results[e.results.length - 1].isFinal });
+        const text = (finalText + (finalText && interimText ? " " : "") + interimText).trim();
+        this._emit("transcript", { text, final: !interimText });
       };
       this._recognition.onerror = (e) => {
         if (e.error === "no-speech" || e.error === "aborted") return;
-        this._emit("mic-error", { message: e.error });
+        const msg =
+          e.error === "not-allowed" || e.error === "service-not-allowed"
+            ? "microphone permission denied"
+            : e.error === "network"
+            ? "speech service unavailable (network)"
+            : "speech error: " + e.error;
+        this._emit("mic-error", { message: msg });
+        this.stop();
       };
       this._recognition.onend = () => {
         if (this._listening) {
@@ -526,7 +541,7 @@ class AttachButton extends Component {
         return;
       }
       const file = await this._pickFile(kind);
-      if (file) this._emit("attach", { name: file.name, size: file.size, type: file.type, kind, file });
+      if (file) this._emit("attach", file);
     });
     this._bindDocument("click", (e) => {
       if (this._menu && !this._menu.hidden && !this._menu.contains(e.target) && e.target !== this._btn) {
@@ -550,7 +565,23 @@ class AttachButton extends Component {
       input.type = "file";
       if (kind === "audio") input.accept = "audio/*";
       if (kind === "video") input.accept = "video/*";
-      input.onchange = () => resolve(input.files?.[0] ?? null);
+      input.onchange = async () => {
+        const file = input.files?.[0] ?? null;
+        if (!file) return resolve(null);
+        // Read the bytes as a dataURL so the service worker can actually send
+        // TEXT content to the model (and label media honestly). The SW bounds
+        // the payload; we only pass the decoded data through.
+        let dataURL = "";
+        try {
+          dataURL = await new Promise((res, rej) => {
+            const fr = new FileReader();
+            fr.onload = () => res(String(fr.result));
+            fr.onerror = () => rej(fr.error);
+            fr.readAsDataURL(file);
+          });
+        } catch { /* non-fatal — the SW still labels the attachment */ }
+        resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL });
+      };
       input.oncancel = () => resolve(null);
       input.click();
       this._fileInput = input;
@@ -1012,6 +1043,7 @@ class AgentComposer extends Component {
       <div class="composer" part="composer">
         <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}" rows="2"></textarea>
         <div class="popup" id="popup" role="listbox" aria-label="Suggestions" hidden></div>
+        <div class="chips" id="chips"></div>
         <div class="row">
           <mic-button id="mic"></mic-button>
           <attach-button id="attach"></attach-button>
@@ -1036,6 +1068,14 @@ class AgentComposer extends Component {
       .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
       .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       .composer .spacer { flex:1; }
+      .composer .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+      .composer .chips:empty { display:none; }
+      .composer .chips .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px;
+        color:var(--text,#1d1b18); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9);
+        border-radius:999px; padding:3px 10px; }
+      .composer .chips .chip button { border:0; background:transparent; color:var(--muted,#635e56);
+        cursor:pointer; padding:0; font:inherit; line-height:1; }
+      .composer .chips .chip button:hover { color:var(--text,#1d1b18); }
       .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
         background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
         font:inherit; font-weight:600; cursor:pointer; }
@@ -1049,6 +1089,7 @@ class AgentComposer extends Component {
     this._run = this._root.querySelector("#run-task");
     this._status = this._root.querySelector(".composer-status");
     this._popup = this._root.querySelector("#popup");
+    this._chips = this._root.querySelector("#chips");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
@@ -1073,8 +1114,10 @@ class AgentComposer extends Component {
       if (isFinal) this._emit("transcript", { text });
     });
     this._attach?.addEventListener("attach", (e) => {
-      this.attachments.push(e.detail);
-      this._emit("attach", e.detail);
+      const detail = e.detail ?? {};
+      this.attachments.push(detail);
+      this._addChip(detail);
+      this._emit("attach", detail);
     });
     this._attach?.addEventListener("attach-media", (e) => this._emit("attach-media", e.detail));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
@@ -1216,11 +1259,36 @@ class AgentComposer extends Component {
     this._popupToken = null;
   }
 
+  _addChip(detail) {
+    if (!this._chips) return;
+    const name = detail?.name || "attachment";
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    const label = document.createElement("span");
+    label.textContent = name;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.setAttribute("aria-label", `Remove ${name}`);
+    rm.textContent = "✕";
+    rm.addEventListener("click", () => {
+      const idx = this.attachments.indexOf(detail);
+      if (idx >= 0) this.attachments.splice(idx, 1);
+      chip.remove();
+    });
+    chip.append(label, rm);
+    this._chips.append(chip);
+  }
+
+  _clearChips() {
+    if (this._chips) this._chips.replaceChildren();
+  }
+
   _send() {
     const text = this._input?.value.trim();
     if (!text) return;
     if (this._input) this._input.value = "";
     const pending = this.attachments.splice(0);
+    this._clearChips();
     this._emit("send", { text, attachments: pending });
   }
 }
