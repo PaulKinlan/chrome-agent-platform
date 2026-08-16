@@ -68969,6 +68969,27 @@ async function recordBrowserEvent(kind, payload) {
 init_browser_shim_process();
 var ON_DEMAND = "on-demand";
 var BACKGROUND = "background";
+var CATEGORY_INTENT = {
+  tabs: "organize",
+  bookmarks: "organize",
+  downloads: "organize",
+  reading: "capture",
+  summaries: "digest",
+  context: "capture",
+  focus: "focus"
+};
+var INTENT_OVERRIDES = {
+  "link-collector": "capture",
+  "reading-time-estimator": "digest",
+  "right-click-summarize": "digest",
+  "right-click-extract-topics": "digest",
+  "omnibox-ask": "digest",
+  "download-nightly-summary": "digest",
+  "tab-screenshot-diary": "capture"
+};
+function intentOf(recipe) {
+  return INTENT_OVERRIDES[recipe.id] ?? CATEGORY_INTENT[recipe.category] ?? "organize";
+}
 var RECIPES = [
   // ── On-demand (chips) ────────────────────────────────────────────────────
   {
@@ -71020,7 +71041,7 @@ var handlers = {
     return await cancelScheduledTask(name25);
   },
   async "recipe.list"() {
-    return { recipes: RECIPES };
+    return { recipes: RECIPES.map((r) => ({ ...r, intent: intentOf(r) })) };
   },
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);

@@ -9,8 +9,10 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   RECIPES,
+  INTENTS,
   backgroundRecipes,
   getRecipe,
+  intentOf,
   onDemandRecipes,
   recipesByCategory,
   recipesByMode,
@@ -100,5 +102,21 @@ Deno.test("mode + category accessors are consistent", () => {
       true,
     );
     assertEquals(recipesByMode("background"), bg);
+  }
+});
+
+Deno.test("every recipe resolves to a valid intent", () => {
+  const valid = new Set(INTENTS.map((i) => i.id));
+  for (const r of RECIPES) {
+    const intent = intentOf(r);
+    assert(valid.has(intent), `intent ${intent} invalid for ${r.id}`);
+  }
+});
+
+Deno.test("each intent has at least one recipe", () => {
+  const counts = new Map(INTENTS.map((i) => [i.id, 0]));
+  for (const r of RECIPES) counts.set(intentOf(r), (counts.get(intentOf(r)) ?? 0) + 1);
+  for (const [id, n] of counts) {
+    assert(n > 0, `intent ${id} is empty`);
   }
 });

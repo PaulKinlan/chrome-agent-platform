@@ -186,9 +186,10 @@ class MicButton extends Component {
     const label = this.getAttribute("label") || "Start listening";
     mountTemplate(this, `
       :host { display:inline-flex; }
-      .mic { display:inline-flex; align-items:center; gap:8px; background:transparent;
+      .mic { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
+        height:var(--control,36px); background:transparent;
         border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:8px;
-        padding:8px; cursor:pointer; font:inherit; }
+        padding:0; cursor:pointer; font:inherit; }
       .mic[data-listening] { color:var(--accent, #4f46e5); border-color:var(--accent, #4f46e5); }
       .mic:focus-visible { outline:2px solid var(--accent, #4f46e5); outline-offset:2px; }
       .wave { display:none; align-items:center; gap:2px; height:16px; }
@@ -265,9 +266,10 @@ class AttachButton extends Component {
     const open = this.hasAttribute("open");
     mountTemplate(this, `
       :host { position:relative; display:inline-flex; }
-      .plus { display:inline-flex; align-items:center; gap:8px; background:transparent;
+      .plus { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
+        height:var(--control,36px); background:transparent;
         border:1px solid var(--border,#333); color:var(--text,#eee); border-radius:8px;
-        padding:8px; cursor:pointer; font:inherit; }
+        padding:0; cursor:pointer; font:inherit; }
       .plus:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
       .menu { position:absolute; bottom:calc(100% + 6px); left:0; background:var(--panel,#1e1e2e);
         border:1px solid var(--border,#333); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
@@ -555,7 +557,9 @@ class AgentComposer extends Component {
       .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#eee); font:inherit; resize:vertical; min-height:60px; outline:none; }
       .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       .composer .spacer { flex:1; }
-      .composer .send { background:var(--accent,#4f46e5); color:var(--btn-fg,#fff); border:0; border-radius:8px; padding:9px 16px; font:inherit; font-weight:600; cursor:pointer; }
+      .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
+        background:var(--accent,#4f46e5); color:var(--btn-fg,#fff); border:0; border-radius:8px;
+        font:inherit; font-weight:600; cursor:pointer; }
       .composer .send:focus-visible { outline:2px solid var(--accent,#4f46e5); outline-offset:2px; }
       .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#888); }
       .composer-status:empty { display:none; }

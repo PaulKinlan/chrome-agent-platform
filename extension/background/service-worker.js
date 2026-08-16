@@ -69,7 +69,7 @@ import {
   setDenyAllBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES, backgroundRecipes } from "../lib/recipes.js";
+import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import {
   checkHookAllowed,
   getHook,
@@ -1217,7 +1217,9 @@ const handlers = {
   },
 
   async "recipe.list"() {
-    return { recipes: RECIPES };
+    // Decorate each recipe with its intent so the hub can group the unified
+    // capability list (on-demand + background) by what the user is trying to do.
+    return { recipes: RECIPES.map((r) => ({ ...r, intent: intentOf(r) })) };
   },
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);

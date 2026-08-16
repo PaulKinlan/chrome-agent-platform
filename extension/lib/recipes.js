@@ -26,6 +26,45 @@ export const RECIPE_CATEGORIES = [
   { id: "context", label: "Context actions" },
 ];
 
+// Intent groups — what the user is TRYING to do, not which Chrome resource it
+// touches. The hub groups capabilities by intent (a cleaner mental model than
+// "tabs vs bookmarks vs downloads"), and it is what makes the on-demand and
+// background recipes feel like ONE list instead of two overlapping ones.
+export const INTENTS = [
+  { id: "organize", label: "Organize", hint: "tidy tabs, bookmarks, downloads" },
+  { id: "digest", label: "Digest", hint: "read, summarise, understand" },
+  { id: "capture", label: "Capture", hint: "save quotes, notes, screenshots" },
+  { id: "focus", label: "Focus", hint: "protect attention, reflect" },
+];
+
+// Default intent per recipe category, with explicit per-recipe overrides where
+// a recipe's intent differs from its category default.
+const CATEGORY_INTENT = {
+  tabs: "organize",
+  bookmarks: "organize",
+  downloads: "organize",
+  reading: "capture",
+  summaries: "digest",
+  context: "capture",
+  focus: "focus",
+};
+
+const INTENT_OVERRIDES = {
+  "link-collector": "capture",
+  "reading-time-estimator": "digest",
+  "right-click-summarize": "digest",
+  "right-click-extract-topics": "digest",
+  "omnibox-ask": "digest",
+  "download-nightly-summary": "digest",
+  "tab-screenshot-diary": "capture",
+};
+
+/** Resolve a recipe's intent (with a safe fallback to "organize"). */
+export function intentOf(recipe) {
+  return INTENT_OVERRIDES[recipe.id] ?? CATEGORY_INTENT[recipe.category] ??
+    "organize";
+}
+
 export const RECIPES = [
   // ── On-demand (chips) ────────────────────────────────────────────────────
   {

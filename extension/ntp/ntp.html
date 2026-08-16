@@ -5,145 +5,214 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Hub — new tab</title>
     <link rel="stylesheet" href="../shared/theme.css">
-    <link rel="stylesheet" href="../shared/composer.css">
     <script type="module" src="../shared/apply-theme.js"></script>
     <script type="module" src="../shared/components.js"></script>
     <style>
     .wrap {
-      max-width: 960px;
+      max-width: 680px;
       margin: 0 auto;
-      padding: 28px;
+      padding: 40px 24px 64px;
     }
+    /* ── header ── */
     .top {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
-      margin-bottom: 18px;
+      margin-bottom: 24px;
     }
     .logo {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
+      letter-spacing: -0.01em;
     }
     .logo span {
       color: var(--accent);
     }
-    .composer {
-      margin-bottom: 20px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1.4fr 1fr;
-      gap: 20px;
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-    }
-    .panel h2 {
-      margin: 0 0 12px;
-      font-size: 15px;
-    }
-    .agents {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .agent {
+    .top-actions {
       display: flex;
       align-items: center;
       gap: 8px;
-      background: var(--bg);
+    }
+    .status {
+      font-size: var(--text-sm);
+      color: var(--muted);
+      margin-right: 4px;
+    }
+    .status .dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent2);
+      margin-right: 6px;
+      vertical-align: 1px;
+    }
+    .top-actions .icon-btn {
+      color: var(--muted);
+    }
+    .top-actions .icon-btn:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    /* ── composer is the hero ── */
+    .composer {
+      margin-bottom: 32px;
+    }
+
+    /* ── capabilities (unified: on-demand + background) ── */
+    .capabilities {
+      margin-bottom: 32px;
+    }
+    .capabilities h2 {
+      margin: 0;
+      font-size: var(--text-base);
+      font-weight: 600;
+    }
+    .cap-hint {
+      font-size: var(--text-xs);
+      color: var(--muted);
+    }
+    .intent-group {
+      margin-top: 20px;
+    }
+    .intent-head {
+      font-size: var(--text-xs);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .cap-list {
+      display: flex;
+      flex-direction: column;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .cap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px 0 0;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+    }
+    .cap:last-child {
+      border-bottom: 0;
+    }
+    .cap-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0 10px 14px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .cap-main:hover,
+    .cap-main:focus-visible {
+      background: var(--bg);
+      outline: none;
+    }
+    .cap-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      flex: 0 0 auto;
+    }
+    .cap-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .cap-name {
+      font-weight: 600;
+      font-size: var(--text-sm);
+    }
+    .cap-desc {
+      font-size: var(--text-xs);
+      color: var(--muted);
+      margin-top: 1px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cap-run {
+      flex: 0 0 auto;
+      font-size: var(--text-xs);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 4px 10px;
+      background: transparent;
       cursor: pointer;
       font: inherit;
-      color: var(--text);
-      text-align: left;
     }
-    .agent .name {
+    .cap-run:hover,
+    .cap-run:focus-visible {
+      color: var(--accent);
+      border-color: var(--accent);
+      outline: none;
+    }
+    .cap .switch {
+      flex: 0 0 auto;
+      margin-right: 14px;
+    }
+
+    /* ── conversation ── */
+    .conversation h2 {
+      margin: 0 0 8px;
+      font-size: var(--text-base);
       font-weight: 600;
     }
-    .agent .tools {
+    .conversation .empty {
       color: var(--muted);
-      font-size: 12px;
-    }
-    .task {
-      border-top: 1px solid var(--border);
-      padding: 10px 0;
-    }
-    .task .t {
-      font-weight: 600;
-      overflow-wrap: anywhere;
-      white-space: pre-wrap;
-    }
-    .task .meta {
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .settings {
-      margin-bottom: 16px;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .settings input {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 6px;
-      padding: 5px 8px;
-      margin-left: 6px;
+      font-size: var(--text-sm);
     }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <div class="top">
+      <header class="top">
         <div class="logo">Chrome <span>Agent</span> Platform</div>
-        <div
-          class="chip"><span class="dot"></span> <span id="status" role="status" aria-live="polite">agent ready</span></div>
-      </div>
+        <div class="top-actions">
+          <span class="status" id="status" role="status" aria-live="polite"><span class="dot"></span>ready</span>
+          <button class="btn ghost icon-btn" id="open-directory" aria-label="Directory (site agents)" title="Directory">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          </button>
+          <button class="btn ghost icon-btn" id="open-settings" aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </header>
 
-      <div class="settings" id="settings">
-        <span class="muted">Provider: <span id="provider-name">loading…</span> — configured in Settings.</span>
-        <label class="grant-toggle" id="grant-row">
-          <input type="checkbox" id="browser-control-grant">
-          <span>Allow the agent to control the browser (open/navigate/close tabs)</span>
-        </label>
-        <button class="btn ghost" id="open-settings">Settings</button>
-        <button class="btn ghost" id="open-memory">Memory</button>
-        <button class="btn ghost" id="open-directory">Directory</button>
-      </div>
+      <agent-composer id="composer" placeholder="Ask anything, or @mention a site agent…" send-label="Run task"></agent-composer>
 
-      <agent-composer id="composer" send-label="Run task"></agent-composer>
+      <section class="capabilities" id="capabilities-section">
+        <div class="section-head">
+          <h2>Capabilities</h2>
+          <span class="cap-hint">Run once, or enable to run in the background</span>
+        </div>
+        <div id="capabilities"></div>
+      </section>
 
-      <div class="grid">
-        <div class="panel">
-          <div class="recipes" style="margin-bottom:20px">
-            <div class="tag">Recipes</div>
-            <div id="recipes"
-              style="display:flex;flex-direction:column;gap:10px;margin-top:8px"></div>
-          </div>
+      <section class="conversation">
+        <div class="section-head">
           <h2>Conversation</h2>
-          <div id="conversation" role="log" aria-live="polite"
-            aria-relevant="additions"
-            style="max-height:60vh; overflow-y:auto; display:flex; flex-direction:column;"></div>
         </div>
-        <div class="panel">
-          <h2>Site agents</h2>
-          <div class="agents"
-            id="site-agents"><span style="color:var(--muted)">discovering…</span></div>
-          <p
-            style="color:var(--muted); font-size:12px; margin-top:12px;">Sites with WebMCP tools are callable agents. Sites without them get an inferred tool profile.</p>
-
-          <h2 style="margin-top:24px">Background agents</h2>
-          <p style="color:var(--muted); font-size:12px;">Live-in-the-background agents that run on a schedule. Enable one to let it work quietly (e.g. the Sorting Hat groups tabs by domain).</p>
-          <div id="background-agents"
-            style="display:flex;flex-direction:column;gap:8px;margin-top:8px"></div>
-        </div>
-      </div>
+        <div id="conversation" role="log" aria-live="polite"
+          aria-relevant="additions"></div>
+      </section>
     </div>
     <script type="module" src="ntp.js"></script>
   </body>

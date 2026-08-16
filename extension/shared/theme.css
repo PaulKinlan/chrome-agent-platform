@@ -1,4 +1,5 @@
 :root {
+  /* ── Color tokens (per theme, overridden by the [data-theme] blocks below) ── */
   --bg: #0d1117;
   --panel: #161b22;
   --border: #30363d;
@@ -8,6 +9,31 @@
   --accent2: #7ee787;
   --danger: #ff7b72;
   --btn-fg: #001;
+
+  /* ── Spacing scale (design tokens) ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ── Radius scale ── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* ── Control sizing (consistent hit targets) ── */
+  --control: 36px; /* icon buttons: mic, +, send, gear — all the same */
+  --control-icon: 18px; /* stroke icons inside --control buttons */
+  --input-h: 36px; /* text inputs + buttons match */
+
+  /* ── Type scale ── */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
 }
 * {
   box-sizing: border-box;
@@ -41,18 +67,18 @@ a:hover {
 }
 /* Consistent icon-button scale (mic, +, and any icon action across surfaces). */
 .icon-btn {
-  width: 36px;
-  height: 36px;
+  width: var(--control);
+  height: var(--control);
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   flex: 0 0 auto;
 }
 .icon-btn svg {
-  width: 18px;
-  height: 18px;
+  width: var(--control-icon);
+  height: var(--control-icon);
   display: block;
 }
 .chip {
@@ -81,6 +107,76 @@ a:hover {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: .06em;
+}
+
+/* ── Shared layout/utility tokens (the hub + chat + settings use these) ── */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+.section-head h2 {
+  margin: 0;
+  font-size: var(--text-base);
+}
+.link {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+}
+.link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.muted {
+  color: var(--muted);
+}
+
+/* A compact switch (used for the background-agent enable/disable toggle). */
+.switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  padding: 0;
+  flex: 0 0 auto;
+  transition: background .15s ease;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s ease, background .15s ease;
+}
+.switch[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch[aria-pressed="true"]::after {
+  transform: translateX(14px);
+  background: var(--btn-fg, #fff);
+}
+.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .switch, .switch::after {
+    transition: none;
+  }
 }
 
 /* The "thinking" glow — a multicolor animated halo around the composer while
