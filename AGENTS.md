@@ -54,6 +54,15 @@ there. The reviewer agents check against it.
   Chrome journey suite + unit tests green. A regression is a stop.
 - **Visual verification.** UI work is verified by driving the real UI in headless
   Chrome (CDP) with screenshots, before + after. "It serves" is not "it works".
+- **Heavy componentization (Paul, 2026-08-16).** Every piece of UI is a reusable
+  Web Component in the single-source extension/shared/components.js (custom
+  elements, MV3-CSP-safe, no eval). Reuse is critical for consistency — never
+  hand-roll a one-off version of an existing component (the blank-toggle +
+  + menu bugs came from hand-rolled duplicates). New UI pieces (e.g.
+  <agent-identity>) become components + are added to the gallery
+  (docs/components.html — the playground where components are tested in isolation
+  without running the extension). The gallery imports the SAME components.js
+  (scripts/sync-gallery.mjs; check:gallery fails on drift).
 - **Fleet validation (Paul, 2026-08-16).** Every change is validated by a DIFFERENT
   review agent before it is considered done — the intercom fleet (sol for code/
   security review, deepseek-v4-pro for vision/UI review, GLM-5.3 for a second
