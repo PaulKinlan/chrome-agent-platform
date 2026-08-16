@@ -478,6 +478,23 @@ class MicButton extends Component {
       try { this._recognition.stop(); } catch { /* ignore */ }
     }
   }
+  disconnectedCallback() {
+    // The wider-goal review's finding: the base disconnect handler removed only
+    // document listeners, while `onend` restarted recognition whenever
+    // `_listening` was true — so removing/re-rendering a listening mic kept the
+    // microphone active. Tear down recognition + state on disconnect.
+    this._listening = false;
+    if (this._recognition) {
+      try {
+        this._recognition.onresult = null;
+        this._recognition.onerror = null;
+        this._recognition.onend = null;
+        this._recognition.abort?.();
+      } catch { /* ignore */ }
+      this._recognition = null;
+    }
+    super.disconnectedCallback?.();
+  }
 }
 customElements.define("mic-button", MicButton);
 
@@ -626,6 +643,43 @@ class ThemePicker extends Component {
 }
 customElements.define("theme-picker", ThemePicker);
 
+/* <switch-toggle checked label> — the ONE canonical switch (track + knob).
+ * Every toggle across the app (capability rows, settings multi-agent /
+ * browser-control / background-agents / hooks) uses THIS component so the
+ * geometry + behavior are identical by construction. Self-managing: a click
+ * toggles its own `checked` attribute + emits `toggle { checked }`; a parent
+ * can still drive it by setting/removing `checked`. */
+class SwitchToggle extends Component {
+  static get observedAttributes() { return ["checked", "label"]; }
+  _render() {
+    const checked = this.hasAttribute("checked");
+    const label = this.getAttribute("label") || "Toggle";
+    mountTemplate(this, `
+      :host { display:inline-flex; flex:0 0 auto; }
+      .sw { position:relative; width:36px; height:20px; border-radius:999px;
+        border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); cursor:pointer;
+        padding:0; flex:0 0 auto; transition:background 150ms ease, border-color 150ms ease; }
+      .sw::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
+        border-radius:50%; background:var(--muted,#635e56); transition:transform 150ms ease, background 150ms ease; }
+      .sw[aria-pressed="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+      .sw[aria-pressed="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
+      .sw:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @media (prefers-reduced-motion: reduce) { .sw, .sw::after { transition:none; } }
+    `, `<button part="switch" class="sw" type="button" role="switch"
+        aria-checked="${checked}" aria-pressed="${checked}" aria-label="${escapeHtml(label)}"></button>`);
+    this._btn = this._root.querySelector(".sw");
+  }
+  _wire() {
+    this._btn?.addEventListener("click", () => {
+      this.toggleAttribute("checked");
+      this._emit("toggle", { checked: this.hasAttribute("checked") });
+    });
+  }
+  get checked() { return this.hasAttribute("checked"); }
+  set checked(v) { v ? this.setAttribute("checked", "") : this.removeAttribute("checked"); }
+}
+customElements.define("switch-toggle", SwitchToggle);
+
 /* <permission-row capability="tabs" label description granted warned> */
 export const PERMISSIONS = [
   { id: "storage", label: "Memory & settings", note: "OPFS memory + settings" },
@@ -721,9 +775,8 @@ class CapabilityRow extends Component {
     const enabled = this.hasAttribute("enabled");
     const lastRun = this.getAttribute("last-run") || "";
     const actionHtml = action === "toggle"
-      ? `<button part="toggle" class="switch" type="button" role="switch"
-          aria-checked="${enabled}" aria-pressed="${enabled}"
-          aria-label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)} in the background"></button>`
+      ? `<switch-toggle part="toggle"${enabled ? " checked" : ""}
+          label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)} in the background"></switch-toggle>`
       : `<button part="run" class="run" type="button">Run</button>`;
     mountTemplate(this, `
       :host { display:block; }
@@ -742,14 +795,6 @@ class CapabilityRow extends Component {
         padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
         white-space:nowrap; }
       .run:hover, .run:focus-visible { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); outline:none; }
-      .switch { justify-self:end; position:relative; width:36px; height:20px; border-radius:999px;
-        border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); cursor:pointer;
-        padding:0; flex:0 0 auto; transition:background 150ms ease, border-color 150ms ease; }
-      .switch::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
-        border-radius:50%; background:var(--muted,#635e56); transition:transform 150ms ease, background 150ms ease; }
-      .switch[aria-pressed="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
-      .switch[aria-pressed="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
-      .switch:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .meta { display:flex; align-items:center; gap:6px; }
     `, `<div part="row" class="row">
       <span class="icon" aria-hidden="true">${icon}</span>
@@ -763,9 +808,8 @@ class CapabilityRow extends Component {
   _wire() {
     const run = this._root.querySelector(".run");
     run?.addEventListener("click", () => this._emit("run"));
-    const toggle = this._root.querySelector(".switch");
-    toggle?.addEventListener("click", () => {
-      this._emit("toggle", { enabled: !this.hasAttribute("enabled") });
+    this._root.querySelector("switch-toggle")?.addEventListener("toggle", (e) => {
+      this._emit("toggle", { enabled: e.detail.checked });
     });
   }
 }
@@ -1119,8 +1163,78 @@ class AgentComposer extends Component {
       this._addChip(detail);
       this._emit("attach", detail);
     });
-    this._attach?.addEventListener("attach-media", (e) => this._emit("attach-media", e.detail));
+    this._attach?.addEventListener("attach-media", (e) => this._captureMedia(e.detail?.kind));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
+  }
+
+  // ── media capture (record-audio / capture-camera) ──────────────────────
+  // The wider-goal review found these menu items advertised but UNWIRED (the
+  // attach-button emitted attach-media, the composer re-emitted it, and the
+  // NTP/chat only listened for `send`/`status` — so clicking them silently did
+  // nothing). Wire the real capture here: a short audio recording / a camera
+  // frame becomes a dataURL attachment (the SW bounds it + sends it to the
+  // model like any file).
+  async _captureMedia(kind) {
+    try {
+      if (kind === "record-audio") {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        try {
+          const mime = MediaRecorder.isTypeSupported?.("audio/webm") ? "audio/webm" : "";
+          const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+          const chunks = [];
+          rec.ondataavailable = (ev) => { if (ev.data?.size) chunks.push(ev.data); };
+          const stopped = new Promise((res) => { rec.onstop = () => res(); });
+          rec.start();
+          this.setStatus("Recording audio… (auto-stops after 8s)");
+          await new Promise((resolve) => setTimeout(resolve, 8000));
+          if (rec.state !== "inactive") rec.stop();
+          await stopped;
+          const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+          const dataURL = await new Promise((res, rej) => {
+            const fr = new FileReader();
+            fr.onload = () => res(String(fr.result));
+            fr.onerror = () => rej(fr.error);
+            fr.readAsDataURL(blob);
+          });
+          this._attachMedia({ name: "recording.webm", type: blob.type || "audio/webm", size: blob.size, dataURL, kind });
+          this.setStatus("Audio attached.");
+        } finally {
+          stream.getTracks().forEach((t) => t.stop());
+        }
+        return;
+      }
+      if (kind === "capture-camera") {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        try {
+          const video = document.createElement("video");
+          video.srcObject = stream;
+          video.muted = true;
+          video.playsInline = true;
+          await video.play();
+          await new Promise((resolve) => setTimeout(resolve, 400)); // let the frame settle
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 480;
+          canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataURL = canvas.toDataURL("image/png");
+          this._attachMedia({ name: "camera.png", type: "image/png", size: dataURL.length, dataURL, kind });
+          this.setStatus("Photo attached.");
+        } finally {
+          stream.getTracks().forEach((t) => t.stop());
+        }
+        return;
+      }
+    } catch (e) {
+      const msg = e?.name === "NotAllowedError"
+        ? "media permission denied"
+        : "media capture failed: " + (e?.message ?? e);
+      this.setStatus(msg, false);
+    }
+  }
+  _attachMedia(detail) {
+    this.attachments.push(detail);
+    this._addChip(detail);
+    this._emit("attach", detail);
   }
   get input() { return this._input; }
   get value() { return this._input?.value ?? ""; }

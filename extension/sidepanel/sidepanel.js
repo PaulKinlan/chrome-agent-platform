@@ -45,13 +45,14 @@ document.getElementById("morph").addEventListener("click", () => {
   statusEl.textContent = "Morph (double-iframe meld) is a documented seam — not wired yet.";
 });
 
-// Respond to a "navigate" instruction from the agent (background → sidepanel).
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "navigate") {
-    urlInput.value = message.url;
-    go();
-  }
-});
+// NOTE: there is deliberately NO runtime.onMessage "navigate" listener here.
+// The wider-goal review found an earlier listener that called chrome.tabs.create
+// on any {type:"navigate",url} message with no sender/grant check — a content
+// script or other extension context could open tabs outside the authoritative
+// browser-tool path. Agent-driven navigation must go through the service
+// worker's `open_tab` browser-control route (sender-authenticated + grant/
+// origin/run-fenced). The side panel's own `go` button + URL input (a user
+// gesture on THIS surface) remain the only local open path.
 
 // Set the side panel for the active tab so it can be opened from the hub.
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});

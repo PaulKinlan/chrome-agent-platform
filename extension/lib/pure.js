@@ -498,6 +498,33 @@ export function authorizeToolReport(
   return { kind: "content-script", origin: senderOrigin };
 }
 
+/** SECRET-key pattern for `redactSecrets`: any object key matching this must
+ * never be serialized into a hook task/prompt/journal (the wider-goal review's
+ * CRITICAL — the storage.onChanged hook forwarded providerConfig.apiKey). */
+export const SECRET_KEY_RE = /(api[_-]?key|token|secret|password|authorization|credential|bearer|access[_-]?key)/i;
+
+/**
+ * Deep-redact secret VALUES from an arbitrary payload (pure, dependency-free).
+ * Every object key matching SECRET_KEY_RE is replaced with "[REDACTED]"; arrays
+ * and nested objects are recursed. Strings (which may themselves contain
+ * secrets inside arbitrary text) pass through unchanged — the storage hook
+ * additionally passes only KEY NAMES, never values (see the storage.onChanged
+ * map in the service worker), so a credential string is never serialized.
+ */
+export function redactSecrets(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redactSecrets(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 /** The exact message types a page's content script is allowed to route. */
 // The exact message types a page's content script is allowed to route.
 // NOTE: approval is an OWNER security decision and stays extension-only — a

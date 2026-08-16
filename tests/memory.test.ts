@@ -5,7 +5,7 @@
 // writes the blob + commits the metadata index, and (c) charges the global quota.
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { masterMemory, saveScreenshot, listScreenshots, journalAppend } from "../extension/lib/memory.js";
 
 // ---- minimal in-memory OPFS fake ----
@@ -240,4 +240,25 @@ Deno.test("compareAndSet does NOT recreate a directory on a mismatched CAS (roun
     "a CAS against an absent store must fail closed without recreating a directory",
   );
   assertEquals(await mem.has("never-written-key"), false, "no key must materialize");
+});
+
+Deno.test("thread authority keys are reserved from the model's memory_set (wider-goal)", async () => {
+  const mem = masterMemory();
+  // The model's `set` (not trusted) must reject the thread index AND any
+  // `thread:<id>` body — the wider-goal review forged a `threads` index through
+  // `masterMemory().set` and `listThreads()` returned it.
+  await assertRejects(
+    () => mem.set("threads", [{ id: "t_forged", name: "forged" }]),
+    /reserved/,
+    "a forged threads index must be rejected",
+  );
+  await assertRejects(
+    () => mem.set("thread:t_forged", { id: "t_forged", messages: [] }),
+    /reserved/,
+    "a forged thread body must be rejected",
+  );
+  // Internal TRUSTED writes still work (the thread module uses setTrusted).
+  const version = await mem.setTrusted("threads", [{ id: "t_ok", name: "ok" }]);
+  assert(typeof version === "number" && version > 0, "trusted write must return a version");
+  assertEquals((await mem.get("threads"))[0].id, "t_ok");
 });

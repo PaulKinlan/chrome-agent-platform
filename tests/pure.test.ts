@@ -11,6 +11,7 @@ import {
   authorizeToolReport,
   fnv1a,
   PAGE_ALLOWED_ROUTES,
+  redactSecrets,
   sanitizeToolName,
   schemaToZod,
 } from "../extension/lib/pure.js";
@@ -453,4 +454,30 @@ Deno.test("Ollama-compatible model allows an optional key (no key required)", as
     model: "llama3",
   });
   assertEquals(typeof model?.doGenerate, "function");
+});
+
+Deno.test("redactSecrets strips credential keys but keeps non-secret data", () => {
+  const payload = {
+    providerConfig: {
+      baseURL: "https://api.example.com",
+      apiKey: "sk-secret-123",
+      model: "gpt-4o",
+    },
+    changes: {
+      capHooks: { oldValue: { token: "abc", list: [1, 2] }, newValue: "x" },
+    },
+    plain: "hello",
+    count: 7,
+  };
+  const redacted = redactSecrets(payload);
+  // The apiKey + token values are gone; surrounding non-secret data is kept.
+  assertEquals(redacted.providerConfig.apiKey, "[REDACTED]");
+  assertEquals(redacted.providerConfig.baseURL, "https://api.example.com");
+  assertEquals(redacted.providerConfig.model, "gpt-4o");
+  assertEquals(redacted.changes.capHooks.oldValue.token, "[REDACTED]");
+  assertEquals(redacted.changes.capHooks.oldValue.list, [1, 2]);
+  assertEquals(redacted.plain, "hello");
+  assertEquals(redacted.count, 7);
+  // No credential survives anywhere in the redacted payload.
+  assert(!JSON.stringify(redacted).includes("sk-secret-123"), "apiKey must never survive");
 });

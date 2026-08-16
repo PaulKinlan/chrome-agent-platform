@@ -6,9 +6,6 @@
 import { send } from "../lib/messages.js";
 import {
   runConversationTurn,
-  renderJournal,
-  loadJournal,
-  historyFromJournal,
   appendBubble,
 } from "../shared/conversation.js";
 import {
@@ -19,6 +16,12 @@ import {
 
 const body = document.getElementById("body");
 const shotsEl = document.getElementById("shots");
+
+// The ACTIVE thread this chat continues (the wider-goal review found the chat
+// never kept its threadId and instead mixed the GLOBAL master journal — which
+// also holds NTP/scheduled/recipe/hook runs — into the conversation). The chat
+// now loads ONE thread and continues it.
+let activeThreadId = null;
 
 // Long-lived-surface bounds: the chat is a rolling window, not an unbounded
 // growth (Constitution §4). Trim old bubbles + screenshots past a cap.
@@ -33,8 +36,15 @@ function trim() {
 // progress, append the result. The composer stays live throughout — a follow-up
 // is a nudge in the same thread.
 async function runTask(text, attachments = []) {
-  const history = historyFromJournal(await loadJournal());
-  await runConversationTurn(body, { text, attachments, history });
+  // Continue the ACTIVE thread (a follow-up is a nudge in the SAME thread), not
+  // a fresh global-journal run.
+  await runConversationTurn(body, {
+    text,
+    attachments,
+    threadId: activeThreadId ?? null,
+  }).then((res) => {
+    if (res?.threadId) activeThreadId = res.threadId;
+  });
   trim();
   captureShot(text);
 }
@@ -76,14 +86,30 @@ document.getElementById("open-side-panel").addEventListener("click", async () =>
   }
 });
 
-// Reopen → show the persisted conversation history (the journal is the source of
-// truth), so the thread continues where it left off.
+// Reopen → show the persisted ACTIVE thread (most recent), so the chat
+// continues where it left off. Only THIS thread's messages render — never the
+// global journal's unrelated runs.
 (async () => {
-  const journal = await loadJournal();
-  if (Array.isArray(journal) && journal.length) {
-    renderJournal(body, journal);
-    trim();
-  } else {
+  let loaded = false;
+  try {
+    const list = await send("thread.list");
+    const threads = Array.isArray(list?.threads) ? list.threads : [];
+    const first = threads[0];
+    if (first?.id) {
+      const got = await send("thread.get", { id: first.id });
+      const msgs = Array.isArray(got?.thread?.messages) ? got.thread.messages : [];
+      if (msgs.length) {
+        activeThreadId = first.id;
+        for (const m of msgs) {
+          if (m?.role === "user" && m.content) appendBubble(body, "user", m.content);
+          else if (m?.role === "assistant" && m.content) appendBubble(body, "agent", m.content);
+        }
+        trim();
+        loaded = true;
+      }
+    }
+  } catch { /* a missing thread is not fatal — fall through to the welcome */ }
+  if (!loaded) {
     appendBubble(
       body,
       "agent",

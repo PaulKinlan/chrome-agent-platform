@@ -136,3 +136,18 @@ Deno.test("generateThreadName falls back to the first line without the Prompt AP
   const name = await generateThreadName("Group my tabs by domain\nand colour-code them");
   assertEquals(name, "Group my tabs by domain", "first line is the fallback title");
 });
+
+Deno.test("concurrent createThread calls never lose an index row (wider-goal thread race)", async () => {
+  // The unlocked read-index→unshift→write-index sequence let two concurrent
+  // creates last-write-wins (one thread silently dropped). Fire 25 concurrent
+  // creates; EVERY one must appear in the index (the per-thread mutex
+  // serializes the read-modify-write).
+  const ids = await Promise.all(
+    Array.from({ length: 25 }, (_, i) => createThread(`task ${i}`)),
+  );
+  const index = await listThreads();
+  const indexed = new Set(index.map((r) => r.id));
+  for (const t of ids) {
+    assert(indexed.has(t.id), `thread ${t.id} must be in the index`);
+  }
+});

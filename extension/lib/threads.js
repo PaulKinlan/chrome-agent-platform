@@ -72,9 +72,35 @@ export async function getThread(id) {
   return (await mem.get(`thread:${id}`)) ?? null;
 }
 
+// A per-thread mutex serializes EVERY index/body read-modify-write. The old
+// unlocked sequences (read index → mutate → write index, and read body → mutate
+// → write body) let two concurrent creates/continuations last-write-wins (a
+// persisted thread silently dropped from the index, or one continuation's
+// messages overwritten). All thread mutations run under this lock (the
+// wider-goal review's thread-race finding).
+let threadMutex = Promise.resolve();
+function withThreadLock(fn) {
+  const run = threadMutex.then(fn, fn);
+  threadMutex = run.then(() => {}, () => {});
+  return run;
+}
+
 async function writeIndex(index) {
   const mem = masterMemory();
-  await mem.setTrusted(INDEX_KEY, index.slice(0, MAX_THREADS));
+  const next = index.slice(0, MAX_THREADS);
+  // Eviction must atomically delete the evicted thread BODIES, not only drop
+  // their index rows — an index-row-only truncation orphaned `thread:<id>`
+  // values that then accumulated (the wider-goal review's retention finding).
+  const old = (await mem.get(INDEX_KEY)) ?? [];
+  const kept = new Set(next.map((r) => r.id));
+  for (const row of old) {
+    if (row?.id && !kept.has(row.id)) {
+      try {
+        await mem.delete(`thread:${row.id}`);
+      } catch { /* absent */ }
+    }
+  }
+  await mem.setTrusted(INDEX_KEY, next);
 }
 
 /**
@@ -116,6 +142,7 @@ export async function generateThreadName(task) {
  * should then call `nameThreadAsync` to upgrade the name via the model.
  */
 export async function createThread(task) {
+  return withThreadLock(async () => {
   const mem = masterMemory();
   const id = newThreadId();
   const now = Date.now();
@@ -141,11 +168,13 @@ export async function createThread(task) {
   });
   await writeIndex(index);
   return thread;
+  });
 }
 
 /** Fire-and-forget: upgrade a thread's name via the model, then update the
  * index. Never throws (best-effort). */
 export async function nameThreadAsync(id, task) {
+  return withThreadLock(async () => {
   try {
     const name = await generateThreadName(task);
     const mem = masterMemory();
@@ -158,11 +187,13 @@ export async function nameThreadAsync(id, task) {
     if (row) row.name = name;
     await writeIndex(index);
   } catch { /* best-effort naming */ }
+  });
 }
 
 /** Append a message to a thread + update the index (preview/time/status). */
 export async function appendThreadMessage(id, message) {
   if (!id) return null;
+  return withThreadLock(async () => {
   const mem = masterMemory();
   const thread = (await mem.get(`thread:${id}`)) ?? null;
   if (!thread) return null;
@@ -187,11 +218,13 @@ export async function appendThreadMessage(id, message) {
     await writeIndex(index);
   }
   return thread;
+  });
 }
 
 /** Mark a thread's final status (done / error). */
 export async function setThreadStatus(id, status) {
   if (!id) return;
+  return withThreadLock(async () => {
   const mem = masterMemory();
   const thread = (await mem.get(`thread:${id}`)) ?? null;
   if (!thread) return;
@@ -205,6 +238,7 @@ export async function setThreadStatus(id, status) {
     row.updatedAt = thread.updatedAt;
     await writeIndex(index);
   }
+  });
 }
 
 /** Build the conversation history (agent-do turn shape) from a thread. */

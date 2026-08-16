@@ -23,7 +23,11 @@ const ENROLL_KEY = "cap:enrollment";
 // `memory_set`). Per-origin stores are keyed separately so one site's growth
 // cannot crowd another; the journal is separately capped in journalAppend.
 const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
-const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets"]);
+// The thread authority (`threads` index + every `thread:<id>` body) must be
+// reserved from the MODEL's `memory_set` too: the wider-goal review proved a
+// forged `threads` index could be written through `masterMemory().set` and
+// `listThreads()` returned it. Internal thread code uses `setTrusted`.
+const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets", "threads"]);
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -228,7 +232,12 @@ function utf8Bytes(str) {
  * forever and poisoned all later OPFS writes). */
 async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
-  if (!trusted && reserved.has(String(key))) {
+  const k = String(key);
+  // Reserve both exact keys AND the `thread:` PREFIX on the master store: a
+  // forged `thread:t_...` body must be as unreachable as a forged `threads`
+  // index (the wider-goal review's thread-authority finding).
+  const threadPrefix = isMaster && k.startsWith("thread:");
+  if (!trusted && (reserved.has(k) || threadPrefix)) {
     throw new Error(`key "${key}" is reserved on this store`);
   }
   let serialized;

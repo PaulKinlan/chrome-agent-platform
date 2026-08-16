@@ -137,8 +137,30 @@ export async function loadJournal() {
 // A mid-run nudge is simply ANOTHER turn: the composer stays live, and a
 // follow-up message appends to the same conversation + runs after the current
 // turn (the SW serializes master runs), carrying the prior history.
+/** Format a tool result for the LIVE progress card without ever producing
+ * "[object Object]" (the wider-goal review's finding): objects/arrays become
+ * bounded JSON; strings pass through; anything else is String()'d. Bounded to
+ * keep a huge result from blowing up the DOM. */
+function safeToolResult(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    const s = JSON.stringify(value);
+    if (typeof s === "string") return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
+  } catch { /* fall through */ }
+  return String(value);
+}
+
+/** A per-run client id so the live progress listener renders ONLY its own run
+ * (the SW tags events with it; the global port otherwise leaks other threads'
+ * tool data). */
+function newRunId() {
+  try { return crypto.randomUUID(); } catch { return `r_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
+}
+
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null }) {
   const c = container;
+  const runId = newRunId();
 
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   appendBubble(c, "user", text);
@@ -148,21 +170,30 @@ export async function runConversationTurn(container, { text, attachments = [], h
   let thinking = typeof c.appendThinking === "function"
     ? c.appendThinking("thinking…")
     : appendBubble(c, "thinking", "thinking…");
-  let lastTool = null;
+  // Per-call tool cards: a FIFO queue per tool NAME so parallel same-name calls
+  // are matched in order and a completed card is never duplicated (the
+  // wider-goal review's finding that a single `lastTool` left A's card running
+  // and created a duplicate completed card when calls interleave).
+  const inFlightTools = new Map(); // toolName -> Element[]
   const clearThinking = () => {
     thinking?.remove();
     thinking = null;
   };
+  const takeInFlight = (toolName) => {
+    const q = inFlightTools.get(toolName);
+    if (!q || !q.length) return null;
+    return q.shift();
+  };
 
-  // 3. subscribe to the live progress for THIS turn. Because the port broadcast
-  //    is global + master runs are serialized, the events that arrive while this
-  //    await is pending belong to this turn. We unsubscribe in the finally.
+  // 3. subscribe to the live progress for THIS turn. The port broadcast is
+  //    global, so we FILTER by runId — events for another thread/page are
+  //    ignored (never mis-attributed). We unsubscribe in the finally.
   const unsubscribe = subscribeProgress((ev) => {
     if (!ev || typeof ev !== "object") return;
+    // Only render THIS run's events (the SW tags them with runId).
+    if (ev.runId != null && ev.runId !== runId) return;
     switch (ev.type) {
       case "thinking": {
-        // Update the spinner label with step progress. When real reasoning
-        // tokens arrive (tokensSoFar), they become the collapsible trace.
         const step = ev.step != null ? ev.step + 1 : null;
         if (thinking) {
           const trace = ev.tokensSoFar ? String(ev.tokensSoFar) : "";
@@ -172,31 +203,33 @@ export async function runConversationTurn(container, { text, attachments = [], h
         }
         break;
       }
-      case "tool-call":
+      case "tool-call": {
         clearThinking();
-        lastTool = typeof c.appendTool === "function"
+        const card = typeof c.appendTool === "function"
           ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
+        const q = inFlightTools.get(ev.toolName) ?? [];
+        q.push(card);
+        inFlightTools.set(ev.toolName, q);
         break;
+      }
       case "tool-result": {
-        // Update the matching in-flight tool card to done (or keep it as a
-        // separate done card if the card is no longer present).
-        if (lastTool && lastTool.getAttribute?.("tool-name") === ev.toolName) {
-          lastTool.setAttribute("tool-status", "success");
-          if (ev.result != null) lastTool.setAttribute("tool-result", String(ev.result));
-          lastTool = null;
+        // Match the OLDEST in-flight card for this tool name (FIFO — handles
+        // parallel same-name calls in order), mark it done; fall back to a fresh
+        // done card only when no in-flight card exists.
+        const card = takeInFlight(ev.toolName);
+        if (card) {
+          card.setAttribute?.("tool-status", "success");
+          const r = safeToolResult(ev.result);
+          if (r) card.setAttribute?.("tool-result", r);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status: "success", result: ev.result });
+          c.appendTool({ name: ev.toolName, status: "success", result: safeToolResult(ev.result) });
         } else {
-          appendBubble(c, "tool", `✓ ${ev.toolName}${ev.result ? ` — ${ev.result}` : ""}`);
+          appendBubble(c, "tool", `✓ ${ev.toolName}${ev.result != null ? ` — ${safeToolResult(ev.result)}` : ""}`);
         }
         break;
       }
       case "text":
-        // A completed step's text. Only render INTERMEDIATE step text (a step
-        // that made tool calls and will continue) — the FINAL text (hasToolCalls
-        // false) is the run's result, rendered once by `done`/the final result
-        // below, so a single-step run never double-renders.
         clearThinking();
         if (ev.text && ev.hasToolCalls) appendBubble(c, "agent", ev.text);
         break;
@@ -216,6 +249,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     res = await send("agent.run", {
       task: text,
       id: String(Date.now()),
+      runId,
       attachments,
       history,
       threadId,
