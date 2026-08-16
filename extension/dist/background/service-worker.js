@@ -25586,12 +25586,14 @@ var ROOT = "memory";
 var MASTER = "master";
 var ENROLL_KEY = "cap:enrollment";
 var MAX_VALUE_BYTES = 256 * 1024;
-var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled"]);
+var MASTER_RESERVED_KEYS = /* @__PURE__ */ new Set(["origins", "enrolled", "assets"]);
 var SITE_RESERVED_KEYS = /* @__PURE__ */ new Set([
   "approvals",
   "toolDirectory",
   "journal",
-  "enrolled"
+  "enrolled",
+  "assets",
+  "agentConfig"
 ]);
 var MAX_KEYS_PER_ORIGIN = 500;
 var MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024;
@@ -25869,8 +25871,8 @@ function memoryStore(origin) {
 }
 var masterMemory = () => memoryStore(MASTER);
 function siteMemory(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) {
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) {
     const invalid = memoryStore(`invalid:${origin}`);
     return {
       ...invalid,
@@ -25885,7 +25887,7 @@ function siteMemory(origin) {
       }
     };
   }
-  return memoryStore(canonical);
+  return memoryStore(canonical2);
 }
 async function listOrigins() {
   const s = await kvGet(ENROLL_KEY);
@@ -26058,6 +26060,18 @@ async function capabilityStatus() {
     out[c.id] = await hasCapability(c.id);
   }
   return out;
+}
+async function requestCapability(id) {
+  const cap = CAPABILITIES.find((c) => c.id === id);
+  if (!cap) return { ok: false, error: `unknown capability ${id}` };
+  try {
+    const granted = await chrome.permissions.request({
+      permissions: cap.permissions
+    });
+    return { ok: true, granted: Boolean(granted), capability: id };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e), capability: id };
+  }
 }
 async function revokeCapability(id) {
   const cap = CAPABILITIES.find((c) => c.id === id);
@@ -67224,6 +67238,7 @@ function createAgent2({
 function createOrchestrator2({
   model,
   system = DEFAULT_SYSTEM,
+  masterSystem = null,
   masterMemory: masterMemory2,
   workers = [],
   // [{ origin, memory, skills, tools }]
@@ -67303,7 +67318,7 @@ function createOrchestrator2({
   } : {};
   const master = createAgent2({
     model,
-    system,
+    system: masterSystem ?? system,
     memory: masterMemory2,
     tools: { ...delegate, ...extraTools },
     taskId
@@ -67430,33 +67445,33 @@ async function listTools(origin) {
   return await siteMemory(origin).get(DIR_KEY) ?? [];
 }
 async function isEnrolled(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return false;
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return false;
   const map4 = await enrolledMap();
-  return Boolean(map4[canonical] && map4[canonical].enrolled === true);
+  return Boolean(map4[canonical2] && map4[canonical2].enrolled === true);
 }
 async function enrollmentGeneration(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return 0;
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return 0;
   const map4 = await enrolledMap();
-  return map4[canonical]?.gen ?? 0;
+  return map4[canonical2]?.gen ?? 0;
 }
 async function enrollmentSnapshot(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return { enrolled: false, gen: 0 };
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return { enrolled: false, gen: 0 };
   return withEnrollmentLock(async () => {
     const map4 = await enrolledMap();
-    const e = map4[canonical];
+    const e = map4[canonical2];
     return { enrolled: Boolean(e && e.enrolled === true), gen: e?.gen ?? 0 };
   });
 }
 async function enrollOrigin(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) throw new Error(`invalid origin: ${origin}`);
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) throw new Error(`invalid origin: ${origin}`);
   return withEnrollmentLock(async () => {
-    await siteMemory(canonical).setTrusted("enrolled", { at: Date.now() });
+    await siteMemory(canonical2).setTrusted("enrolled", { at: Date.now() });
     const map4 = await enrolledMap();
-    map4[canonical] = {
+    map4[canonical2] = {
       enrolled: true,
       at: Date.now(),
       gen: await nextGeneration()
@@ -67469,10 +67484,10 @@ async function disenrollOrigin(origin) {
   return withEnrollmentLock(() => disenrollOriginLocked(origin));
 }
 async function disenrollOriginLocked(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return [];
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return [];
   const map4 = await enrolledMap();
-  map4[canonical] = {
+  map4[canonical2] = {
     enrolled: false,
     // tombstone
     at: Date.now(),
@@ -67506,6 +67521,405 @@ async function pendingApprovals(origin) {
   const approved = await siteMemory(origin).get("approvals") ?? {};
   return tools.filter((t) => !approved[t.name]);
 }
+
+// extension/lib/management-tools.js
+init_browser_shim_process();
+
+// extension/lib/artifacts.js
+init_browser_shim_process();
+var INDEX_KEY = "assets";
+var ASSET_BOUNDS = {
+  maxContentBytes: 256 * 1024,
+  // 256 KiB content per asset (matches the value bound)
+  maxNameLength: 200,
+  maxAssetsPerOrigin: 200,
+  maxIndexBytes: 128 * 1024
+  // the index stays small (no content)
+};
+var ASSET_TYPES = /* @__PURE__ */ new Set([
+  "html",
+  // a generated page / UI fragment
+  "text",
+  // plain text / markdown
+  "json",
+  // structured data
+  "image",
+  // a data URL
+  "data"
+  // any other payload
+]);
+var utf8Bytes2 = (s) => new TextEncoder().encode(s).byteLength;
+function assetStore(origin) {
+  return origin === "master" ? masterMemory() : siteMemory(origin);
+}
+function canonical(origin) {
+  return origin === "master" ? "master" : canonicalOrigin(origin) ?? "master";
+}
+function newId() {
+  return `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+async function readIndex(store) {
+  return await store.get(INDEX_KEY) ?? [];
+}
+async function writeIndex(store, index) {
+  await store.setTrusted(INDEX_KEY, index);
+}
+function boundAssetMeta({ type, name: name25, content }) {
+  const at = type == null || type === "" ? "data" : String(type);
+  if (!ASSET_TYPES.has(at)) {
+    return { error: `asset type must be one of ${[...ASSET_TYPES].join(", ")}` };
+  }
+  const nm = String(name25 ?? "").trim();
+  if (nm.length === 0) {
+    return { error: "asset needs a name" };
+  }
+  if (nm.length > ASSET_BOUNDS.maxNameLength) {
+    return { error: `asset name exceeds ${ASSET_BOUNDS.maxNameLength} chars` };
+  }
+  if (typeof content !== "string") {
+    return { error: "asset content must be a string" };
+  }
+  const size = utf8Bytes2(content);
+  if (size > ASSET_BOUNDS.maxContentBytes) {
+    return {
+      error: `asset content exceeds ${ASSET_BOUNDS.maxContentBytes} bytes`
+    };
+  }
+  return { ok: true, type: at, name: nm, size };
+}
+async function createAsset(origin, { type, name: name25, content, meta: meta3 }) {
+  const store = assetStore(origin);
+  const o = canonical(origin);
+  const bounded = boundAssetMeta({ type, name: name25, content });
+  if (bounded.error) return { ok: false, error: bounded.error };
+  const id = newId();
+  const now2 = Date.now();
+  const asset = {
+    id,
+    type: bounded.type,
+    name: bounded.name,
+    origin: o,
+    createdAt: now2,
+    updatedAt: now2,
+    size: bounded.size,
+    content,
+    meta: meta3 ?? {}
+  };
+  const index = await readIndex(store);
+  if (index.length >= ASSET_BOUNDS.maxAssetsPerOrigin) {
+    return { ok: false, error: `asset limit reached (${ASSET_BOUNDS.maxAssetsPerOrigin})` };
+  }
+  await store.set(`asset:${id}`, asset);
+  index.push({
+    id,
+    type: bounded.type,
+    name: bounded.name,
+    origin: o,
+    at: now2,
+    size: bounded.size
+  });
+  let idx = index;
+  while (idx.length > 1 && utf8Bytes2(JSON.stringify(idx)) > ASSET_BOUNDS.maxIndexBytes) {
+    idx = idx.slice(1);
+  }
+  await writeIndex(store, idx);
+  return {
+    ok: true,
+    asset: { ...asset, content: void 0 },
+    index: idx
+  };
+}
+async function getAsset(origin, id) {
+  const store = assetStore(origin);
+  if (!id || typeof id !== "string") return { ok: false, error: "get_asset needs an id" };
+  const asset = await store.get(`asset:${id}`);
+  if (!asset) return { ok: false, error: "asset not found" };
+  return { ok: true, asset };
+}
+async function updateAsset(origin, id, patch) {
+  const store = assetStore(origin);
+  if (!id || typeof id !== "string") return { ok: false, error: "update_asset needs an id" };
+  const existing = await store.get(`asset:${id}`);
+  if (!existing) return { ok: false, error: "asset not found" };
+  const nextType = patch.type ?? existing.type;
+  const nextName = patch.name ?? existing.name;
+  const nextContent = patch.content ?? existing.content;
+  const meta3 = boundAssetMeta({ type: nextType, name: nextName, content: nextContent });
+  if (meta3.error) return { ok: false, error: meta3.error };
+  const updated = {
+    ...existing,
+    type: meta3.type,
+    name: meta3.name,
+    content: nextContent,
+    size: meta3.size,
+    updatedAt: Date.now()
+  };
+  await store.set(`asset:${id}`, updated);
+  const index = await readIndex(store);
+  const i = index.find((e) => e.id === id);
+  if (i) {
+    i.type = meta3.type;
+    i.name = meta3.name;
+    i.size = meta3.size;
+    await writeIndex(store, index);
+  }
+  return { ok: true, asset: { ...updated, content: void 0 } };
+}
+async function deleteAsset(origin, id) {
+  const store = assetStore(origin);
+  if (!id || typeof id !== "string") return { ok: false, error: "delete_asset needs an id" };
+  const index = await readIndex(store);
+  const remaining = index.filter((e) => e.id !== id);
+  await writeIndex(store, remaining);
+  await store.delete(`asset:${id}`);
+  return { ok: true };
+}
+async function listAssets(origin) {
+  const store = assetStore(origin);
+  const index = await readIndex(store);
+  return { ok: true, assets: index };
+}
+
+// extension/lib/management-tools.js
+var MANAGEMENT_TOOL_NAMES = [
+  "create_agent",
+  "update_agent",
+  "delete_agent",
+  "get_agent",
+  "list_agents",
+  "enroll_origin",
+  "disenroll_origin",
+  "create_asset",
+  "update_asset",
+  "delete_asset",
+  "list_assets",
+  "get_asset",
+  "grant_capability",
+  "revoke_capability",
+  "get_usage",
+  "get_memory_overview"
+];
+function managementToolset({ callRoute }) {
+  const call = (type, args) => Promise.resolve(callRoute(type, args ?? {}));
+  return {
+    // ---- sub-agent management ----
+    create_agent: tool({
+      description: "Enroll a new per-site sub-agent for an origin. Registers the origin so its WebMCP/site tools can be discovered. Host access is a separate owner-approved step (enroll_origin).",
+      inputSchema: external_exports3.object({
+        origin: external_exports3.string().describe("the https origin, e.g. https://example.com"),
+        name: external_exports3.string().optional().describe("a display name for the sub-agent")
+      }),
+      execute: ({ origin, name: name25 }) => call("agent.create", { origin, name: name25 })
+    }),
+    update_agent: tool({
+      description: "Update a sub-agent's display name/config.",
+      inputSchema: external_exports3.object({
+        origin: external_exports3.string(),
+        name: external_exports3.string().optional()
+      }),
+      execute: ({ origin, name: name25 }) => call("agent.update", { origin, name: name25 })
+    }),
+    delete_agent: tool({
+      description: "Authoritatively delete a sub-agent (tombstones its enrollment + removes its scripts/permission/OPFS). A running bridge can never resurrect it.",
+      inputSchema: external_exports3.object({ origin: external_exports3.string() }),
+      execute: ({ origin }) => call("agent.delete", { origin })
+    }),
+    get_agent: tool({
+      description: "Inspect one sub-agent: name, tools, memory keys, enrollment state.",
+      inputSchema: external_exports3.object({ origin: external_exports3.string() }),
+      execute: ({ origin }) => call("agent.get", { origin })
+    }),
+    list_agents: tool({
+      description: "List every sub-agent with its enrollment state + name.",
+      inputSchema: external_exports3.object({}),
+      execute: () => call("agent.directory", {})
+    }),
+    enroll_origin: tool({
+      description: "Request host access + script injection for an origin so its site tools run. Needs a user gesture; if it fails closed, tell the owner to click Enroll in Settings.",
+      inputSchema: external_exports3.object({ origin: external_exports3.string() }),
+      execute: ({ origin }) => call("agent.enroll-origin", { origin })
+    }),
+    disenroll_origin: tool({
+      description: "Remove an origin's host access + injected scripts.",
+      inputSchema: external_exports3.object({ origin: external_exports3.string() }),
+      execute: ({ origin }) => call("agent.delete", { origin })
+    }),
+    // ---- artifacts ----
+    create_asset: tool({
+      description: "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: html|text|json|image|data.",
+      inputSchema: external_exports3.object({
+        origin: external_exports3.string().default("master").describe("'master' or an https origin"),
+        type: external_exports3.enum([...ASSET_TYPES]).default("text"),
+        name: external_exports3.string().describe("a short, clear name"),
+        content: external_exports3.string().describe("the artifact content")
+      }),
+      execute: ({ origin, type, name: name25, content }) => call("asset.create", { origin, assetType: type, name: name25, content })
+    }),
+    update_asset: tool({
+      description: "Update an artifact's name/type/content.",
+      inputSchema: external_exports3.object({
+        origin: external_exports3.string().default("master"),
+        id: external_exports3.string(),
+        name: external_exports3.string().optional(),
+        type: external_exports3.enum([...ASSET_TYPES]).optional(),
+        content: external_exports3.string().optional()
+      }),
+      execute: (args) => call("asset.update", {
+        origin: args.origin,
+        id: args.id,
+        assetType: args.type,
+        name: args.name,
+        content: args.content
+      })
+    }),
+    delete_asset: tool({
+      description: "Delete an artifact.",
+      inputSchema: external_exports3.object({
+        origin: external_exports3.string().default("master"),
+        id: external_exports3.string()
+      }),
+      execute: ({ origin, id }) => call("asset.delete", { origin, id })
+    }),
+    list_assets: tool({
+      description: "List an origin's artifacts (use 'master' for all hub artifacts).",
+      inputSchema: external_exports3.object({ origin: external_exports3.string().default("master") }),
+      execute: ({ origin }) => call("asset.list", { origin })
+    }),
+    get_asset: tool({
+      description: "Read one artifact's content.",
+      inputSchema: external_exports3.object({
+        origin: external_exports3.string().default("master"),
+        id: external_exports3.string()
+      }),
+      execute: ({ origin, id }) => call("asset.get", { origin, id })
+    }),
+    // ---- capabilities ----
+    grant_capability: tool({
+      description: "Request an optional permission (storage|alarms|tabs|activeTab|scripting|notifications|sidePanel). Needs a user gesture; if it fails closed, tell the owner to click Enable in Settings.",
+      inputSchema: external_exports3.object({ id: external_exports3.string().describe("the capability id") }),
+      execute: ({ id }) => call("capability.request", { id })
+    }),
+    revoke_capability: tool({
+      description: "Revoke an optional permission.",
+      inputSchema: external_exports3.object({ id: external_exports3.string() }),
+      execute: ({ id }) => call("capability.revoke", { id })
+    }),
+    // ---- introspection ----
+    get_usage: tool({
+      description: "Usage/cost summary (calls, tokens, estimated cost).",
+      inputSchema: external_exports3.object({}),
+      execute: () => call("usage.get", {})
+    }),
+    get_memory_overview: tool({
+      description: "Per-origin memory overview (keys + approximate sizes).",
+      inputSchema: external_exports3.object({}),
+      execute: () => call("memory.overview", {})
+    })
+  };
+}
+
+// extension/lib/master-skill.js
+init_browser_shim_process();
+var MASTER_SKILL = `# Chrome Agent Platform \u2014 Hub Agent Operating Manual
+
+You are the hub agent. You help the owner get things done on the web by
+managing the ENTIRE system: you run tasks yourself, you create and manage
+per-site sub-agents, you create and manage artifacts (things you make for the
+owner), and you delegate work to sub-agents. Prefer action over prose.
+
+## 1. The tool suite
+
+### Management (create + manage the system)
+- create_agent(origin, name) \u2014 enroll a new per-site sub-agent for an origin.
+  This registers the origin so its WebMCP tools can be discovered. Host access
+  is a SEPARATE owner-approved step (enroll_origin).
+- update_agent(origin, name) \u2014 update a sub-agent's display name.
+- delete_agent(origin) \u2014 authoritatively delete a sub-agent (tombstones its
+  enrollment; a running bridge can never resurrect it).
+- get_agent(origin) \u2014 inspect one sub-agent: its name, tools, memory keys,
+  enrollment state.
+- list_agents() \u2014 list every sub-agent with its enrollment state.
+- enroll_origin(origin) \u2014 request host access + script injection for an origin.
+  This needs a user gesture; if it fails closed, tell the owner to click Enroll
+  in Settings (you can request, the owner approves).
+- disenroll_origin(origin) \u2014 remove an origin's host access + scripts.
+- grant_capability(id) \u2014 request an optional permission (storage, alarms, tabs,
+  screenshots, scripting, notifications, side panel). Requires a user gesture;
+  if it fails closed, tell the owner to click Enable in Settings.
+- revoke_capability(id) \u2014 revoke an optional permission.
+
+### Artifacts (create + manage things for the owner)
+- create_asset(origin, type, name, content) \u2014 create an artifact (html, text,
+  json, image, data). Use "master" as the origin for a hub-level artifact.
+- update_asset(origin, id, ...) \u2014 update an artifact's name/type/content.
+- delete_asset(origin, id) \u2014 delete an artifact.
+- list_assets(origin) \u2014 list an origin's artifacts (or "master" for all hub
+  artifacts).
+- get_asset(origin, id) \u2014 read one artifact's content.
+Artifacts are how you hand work back to the owner \u2014 a generated page, a report,
+a data file, a UI fragment. Create them; let the owner view + reuse them.
+
+### Delegation (the multi-agent model)
+- delegate_task(agentId, task) \u2014 hand a task to a per-site sub-agent and get its
+  result back. Use this when the task is site-specific (that origin's tools +
+  skills + memory). Handle it yourself when it's cross-site or hub-level.
+- list_agents() \u2014 see who you can delegate to.
+
+### Memory
+- memory_get(key) / memory_set(key, value) / memory_list() \u2014 read/write YOUR
+  (hub) memory. Per-origin memory is isolated; a sub-agent's memory is separate.
+  Write durable facts you need later; read before deciding. Values are bounded;
+  reserved authority keys are protected (you cannot forge enrollment/approvals).
+
+### Browser control (when granted)
+- open_tab(url), navigate_tab(tabId, url), close_tab(tabId), capture_tab(tabId).
+  These require the browser-control / screenshots permission for the specific
+  origin. If not granted, they fail closed \u2014 ask the owner to approve the origin
+  in Settings, never try to bypass the grant.
+
+### Scheduling + introspection
+- schedule_task(...) \u2014 run the agent later / on a schedule (needs the alarms
+  permission).
+- get_usage() \u2014 usage/cost summary.
+- get_memory_overview() \u2014 per-origin memory keys + sizes.
+
+## 2. How to work
+
+### The multi-agent model
+- One hub, N sub-agents. The hub handles cross-site reasoning; a sub-agent
+  handles a specific site (its tools + skills + memory). Delegate a site-specific
+  task to that site's sub-agent; do NOT do it yourself if a sub-agent owns it.
+- Sub-agents are origin-keyed: one sub-agent per origin, with its own memory
+  (a site can never read another's) + its own discovered tools.
+
+### The artifacts model
+- When a task produces something the owner wants (a page, a report, a list, a
+  file), create an asset. Prefer "master" scope for hub-level artifacts, or the
+  origin for a site-specific artifact. Give it a clear name + type.
+
+### The memory model
+- Write what you'll need later; read before you decide. Keep values small.
+- Never write secrets. Per-origin isolation is a hard guarantee \u2014 never read a
+  sub-agent's memory on behalf of another origin.
+
+### The permission model
+- Every permission is OPTIONAL and owner-granted. The hub runs with none by
+  default. When a tool needs a permission that isn't granted, it fails closed.
+  Then you REQUEST the capability (grant_capability) or tell the owner to enable
+  it in Settings. Never claim a side effect succeeded when a permission was
+  missing.
+
+## 3. Safety constraints (from the constitution)
+- Never exfiltrate cross-origin data: one origin's memory/tools/results never
+  flow to another origin. A site agent's output is scoped to its own origin.
+- Respect grants: a permission or enrollment you don't hold means STOP, not
+  workaround.
+- Fail closed: if a fence, guard, or generation check fails, the operation
+  aborts \u2014 report the honest failure, never fabricate a result.
+- Never write to reserved authority keys (enrollment, approvals, toolDirectory,
+  assets index) through memory_set \u2014 use the management tools instead.
+- Be concise + correct. Prefer a real action over prose. When a tool returns an
+  error, report it plainly and propose the next step.`;
 
 // extension/lib/browser-tools.js
 init_browser_shim_process();
@@ -67906,7 +68320,7 @@ function clampExpiryMs(expiryMs) {
 }
 async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS) {
   return await withGrantLock(async () => {
-    const canonical = [
+    const canonical2 = [
       ...new Set(
         (origins ?? []).map((o) => {
           try {
@@ -67917,13 +68331,13 @@ async function setOriginBrowserControlGrant(origins, expiryMs = DEFAULT_GRANT_MS
         }).filter(Boolean)
       )
     ].slice(0, 50);
-    if (canonical.length === 0) {
+    if (canonical2.length === 0) {
       throw new Error("origin grant needs at least one valid origin");
     }
     const grant = {
       id: newGrantId(),
       scope: "origins",
-      origins: canonical,
+      origins: canonical2,
       expiresAt: Date.now() + clampExpiryMs(expiryMs),
       grantedAt: Date.now()
     };
@@ -68497,22 +68911,22 @@ function withCleanupLock(fn) {
   return run;
 }
 async function markCleanupPending(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return;
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return;
   return withCleanupLock(async () => {
     const s = await kvGet(CLEANUP_KEY);
     const map4 = { ...s[CLEANUP_KEY] ?? {} };
-    map4[canonical] = Date.now();
+    map4[canonical2] = Date.now();
     await kvSet({ [CLEANUP_KEY]: map4 });
   });
 }
 async function clearCleanupPending(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return;
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return;
   return withCleanupLock(async () => {
     const s = await kvGet(CLEANUP_KEY);
     const map4 = { ...s[CLEANUP_KEY] ?? {} };
-    delete map4[canonical];
+    delete map4[canonical2];
     await kvSet({ [CLEANUP_KEY]: map4 });
   });
 }
@@ -68536,24 +68950,24 @@ function withOriginLock(origin, fn) {
   return run;
 }
 async function ensureOriginScriptsRegistered(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return { ok: false, error: "invalid origin" };
-  const matches = [`${canonical}/*`];
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return { ok: false, error: "invalid origin" };
+  const matches = [`${canonical2}/*`];
   const has = await chrome.permissions.contains({ origins: matches });
   if (!has) {
     return {
       ok: false,
       error: "host permission not granted \u2014 enroll this origin from Settings",
-      origin: canonical
+      origin: canonical2
     };
   }
-  const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
+  const ids = [scriptId(canonical2, "main"), scriptId(canonical2, "bridge")];
   const existing = await chrome.scripting.getRegisteredContentScripts({ ids }).catch(() => []);
   const existingIds = new Set(existing.map((s) => s.id));
   const toRegister = [];
-  if (!existingIds.has(scriptId(canonical, "main"))) {
+  if (!existingIds.has(scriptId(canonical2, "main"))) {
     toRegister.push({
-      id: scriptId(canonical, "main"),
+      id: scriptId(canonical2, "main"),
       matches,
       js: [MAIN_WORLD_JS],
       runAt: "document_start",
@@ -68561,9 +68975,9 @@ async function ensureOriginScriptsRegistered(origin) {
       allFrames: false
     });
   }
-  if (!existingIds.has(scriptId(canonical, "bridge"))) {
+  if (!existingIds.has(scriptId(canonical2, "bridge"))) {
     toRegister.push({
-      id: scriptId(canonical, "bridge"),
+      id: scriptId(canonical2, "bridge"),
       matches,
       js: [BRIDGE_JS],
       runAt: "document_idle",
@@ -68574,15 +68988,21 @@ async function ensureOriginScriptsRegistered(origin) {
   if (toRegister.length > 0) {
     await chrome.scripting.registerContentScripts(toRegister);
   }
-  return { ok: true, origin: canonical };
+  return { ok: true, origin: canonical2 };
 }
 async function unregisterOriginScripts(origin) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return { ok: false, error: "invalid origin" };
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return { ok: false, error: "invalid origin" };
   let scriptsRemoved = true;
   let error90 = null;
-  if (typeof chrome !== "undefined" && chrome.scripting?.unregisterContentScripts) {
-    const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
+  let hasScripting = false;
+  try {
+    hasScripting = typeof chrome !== "undefined" && !!await chrome.permissions.contains({ permissions: ["scripting"] });
+  } catch {
+    hasScripting = false;
+  }
+  if (hasScripting) {
+    const ids = [scriptId(canonical2, "main"), scriptId(canonical2, "bridge")];
     const confirmAbsent = async () => {
       const remaining = await chrome.scripting.getRegisteredContentScripts({ ids }).catch(() => null);
       return Array.isArray(remaining) && remaining.length === 0;
@@ -68602,12 +69022,12 @@ async function unregisterOriginScripts(origin) {
   }
   let permissionRemoved = true;
   try {
-    await chrome.permissions.remove({ origins: [`${canonical}/*`] });
+    await chrome.permissions.remove({ origins: [`${canonical2}/*`] });
   } catch {
   }
   try {
     permissionRemoved = !await chrome.permissions.contains({
-      origins: [`${canonical}/*`]
+      origins: [`${canonical2}/*`]
     });
     if (!permissionRemoved && !error90) error90 = "host permission still present after remove";
   } catch {
@@ -68615,7 +69035,7 @@ async function unregisterOriginScripts(origin) {
   }
   return {
     ok: scriptsRemoved && permissionRemoved,
-    origin: canonical,
+    origin: canonical2,
     scriptsRemoved,
     permissionRemoved,
     error: error90
@@ -69093,8 +69513,8 @@ async function ensureModel(_agentId) {
   }
 }
 function abortWorker(origin) {
-  const canonical = canonicalOrigin(origin);
-  const a = orchestrator?.workers?.get(canonical);
+  const canonical2 = canonicalOrigin(origin);
+  const a = orchestrator?.workers?.get(canonical2);
   if (a) {
     try {
       a.abort?.();
@@ -69127,7 +69547,11 @@ async function ensureOrchestrator() {
       masterMemory: mem,
       workers,
       multiAgent,
-      extraTools: browserToolset(),
+      masterSystem: MASTER_SKILL,
+      extraTools: {
+        ...browserToolset(),
+        ...managementToolset({ callRoute: (type, args) => handlers[type](args) })
+      },
       delegateGuard: async (origin) => {
         const snap = await enrollmentSnapshot(origin);
         if (!snap.enrolled) {
@@ -69172,13 +69596,13 @@ async function siteToolset(origin, runGenCell) {
   }
   return set4;
 }
-async function notifyOriginBridge(canonical, message) {
+async function notifyOriginBridge(canonical2, message) {
   try {
     const tabs = await chrome.tabs.query({});
     await Promise.allSettled(
       tabs.filter((t) => {
         try {
-          return t.id != null && t.url ? new URL(t.url).origin === canonical : false;
+          return t.id != null && t.url ? new URL(t.url).origin === canonical2 : false;
         } catch {
           return false;
         }
@@ -69191,40 +69615,40 @@ async function notifyOriginBridge(canonical, message) {
   }
 }
 async function invokeSiteTool(origin, name25, args, expectedGen = null) {
-  const canonical = canonicalOrigin(origin);
-  if (!canonical) return { error: `invalid origin ${origin}` };
-  const snap = await enrollmentSnapshot(canonical);
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return { error: `invalid origin ${origin}` };
+  const snap = await enrollmentSnapshot(canonical2);
   if (!snap.enrolled) {
-    return { error: `origin ${canonical} is not enrolled` };
+    return { error: `origin ${canonical2} is not enrolled` };
   }
   if (expectedGen == null) {
     return {
-      error: `no active run generation for ${canonical} \u2014 site invocation rejected`
+      error: `no active run generation for ${canonical2} \u2014 site invocation rejected`
     };
   }
   const gen = expectedGen;
   if (snap.gen !== gen) {
     return {
-      error: `origin ${canonical} was re-enrolled during run \u2014 site invocation rejected`
+      error: `origin ${canonical2} was re-enrolled during run \u2014 site invocation rejected`
     };
   }
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
-      return t.url ? new URL(t.url).origin === canonical : false;
+      return t.url ? new URL(t.url).origin === canonical2 : false;
     } catch {
       return false;
     }
   });
-  if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  if (!tab?.id) return { error: `no tab open for ${canonical2}` };
   if (runAborted()) {
     return { error: "run aborted \u2014 site invocation not sent" };
   }
   {
-    const recheck = await enrollmentSnapshot(canonical);
+    const recheck = await enrollmentSnapshot(canonical2);
     if (!recheck.enrolled || recheck.gen !== gen) {
       return {
-        error: `origin ${canonical} was disenrolled before the call`
+        error: `origin ${canonical2} was disenrolled before the call`
       };
     }
   }
@@ -69236,10 +69660,10 @@ async function invokeSiteTool(origin, name25, args, expectedGen = null) {
       gen
       // enrollment-scoped identity — the content script enforces it (round-20)
     });
-    const after = await enrollmentSnapshot(canonical);
+    const after = await enrollmentSnapshot(canonical2);
     if (!after.enrolled || after.gen !== gen) {
       return {
-        error: `origin ${canonical} was disenrolled during the call \u2014 result discarded`
+        error: `origin ${canonical2} was disenrolled during the call \u2014 result discarded`
       };
     }
     return res ?? { ok: true };
@@ -69331,6 +69755,40 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence: f
       }
     }
   });
+}
+var OVERVIEW_MAX_KEYS = 100;
+async function memoryOverview(store) {
+  const keys = await store.keys();
+  let totalBytes = 0;
+  for (const k of keys.slice(0, OVERVIEW_MAX_KEYS)) {
+    try {
+      const v = await store.get(k);
+      totalBytes += new TextEncoder().encode(JSON.stringify(v)).byteLength;
+    } catch {
+    }
+  }
+  return { keyCount: keys.length, totalBytes, keys };
+}
+async function agentInfo(origin) {
+  const canonical2 = canonicalOrigin(origin);
+  if (!canonical2) return { origin, enrolled: false };
+  const store = siteMemory(canonical2);
+  const [cfg, tools, memKeys, snap] = await Promise.all([
+    store.get("agentConfig").catch(() => null),
+    listTools(canonical2).catch(() => []),
+    store.keys().catch(() => []),
+    enrollmentSnapshot(canonical2)
+  ]);
+  return {
+    origin: canonical2,
+    name: cfg?.name ?? canonical2,
+    enrolled: snap.enrolled,
+    gen: snap.gen,
+    tools: tools.map((t) => t.name),
+    toolCount: tools.length,
+    memoryKeys: memKeys,
+    memoryKeyCount: memKeys.length
+  };
 }
 var handlers = {
   async "capabilities.status"() {
@@ -69448,6 +69906,7 @@ var handlers = {
       workerCount: orchestrator ? orchestrator.workers.size : 0,
       workerOrigins: orchestrator ? [...orchestrator.workers.keys()] : [],
       delegationTools: multiAgent ? ["list_agents", "delegate_task"] : [],
+      managementTools: MANAGEMENT_TOOL_NAMES,
       generation
     };
   },
@@ -69518,18 +69977,50 @@ var handlers = {
   async "agent.list"() {
     return await listOrigins();
   },
+  // The hub agent's management surface (list_agents / get_agent / update_agent).
+  // `agent.directory` returns the RICH listing (name + tools + memory + enrollment
+  // state) the management `list_agents` tool uses, without breaking `agent.list`
+  // (the bare origin array the fan-out journeys depend on).
+  async "agent.directory"() {
+    const origins = await listOrigins();
+    const out = [];
+    for (const o of origins) {
+      out.push(await agentInfo(o));
+    }
+    return { agents: out };
+  },
+  async "agent.get"({ origin }) {
+    if (!await isEnrolled(origin)) {
+      return { ok: false, error: "origin not enrolled" };
+    }
+    return { ok: true, agent: await agentInfo(origin) };
+  },
+  async "agent.update"({ origin, name: name25 }) {
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical2, async () => {
+      if (!await isEnrolled(canonical2)) {
+        return { ok: false, error: "origin not enrolled" };
+      }
+      if (name25 !== void 0) {
+        await siteMemory(canonical2).setTrusted("agentConfig", { name: String(name25) });
+      }
+      invalidateAgent();
+      return { ok: true, origin: canonical2, agent: await agentInfo(canonical2) };
+    });
+  },
   async "tools.list"({ origin }) {
     if (!await isEnrolled(origin)) return { ok: false, error: "origin not enrolled" };
     return await listTools(origin);
   },
   async "tools.upsert"({ origin, tools }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
-      if (!await isEnrolled(canonical)) {
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical2, async () => {
+      if (!await isEnrolled(canonical2)) {
         return { ok: false, error: "origin not enrolled \u2014 enroll it in Settings" };
       }
-      await upsertTools(canonical, tools);
+      await upsertTools(canonical2, tools);
       invalidateAgent();
       return { ok: true };
     });
@@ -69593,6 +70084,49 @@ var handlers = {
     await clearUsage();
     return { ok: true };
   },
+  // ---- artifacts (asset) management (the hub agent's create_asset / etc.) ----
+  // NOTE: the asset TYPE field is named `assetType` here (not `type`) because the
+  // message router uses `message.type` for ROUTING — a `type` field would collide.
+  async "asset.create"({ origin, assetType, name: name25, content }) {
+    const res = await createAsset(origin ?? "master", { type: assetType, name: name25, content });
+    return res.ok ? { ok: true, asset: res.asset, index: res.index } : res;
+  },
+  async "asset.update"({ origin, id, assetType, name: name25, content }) {
+    const patch = {};
+    if (assetType !== void 0) patch.type = assetType;
+    if (name25 !== void 0) patch.name = name25;
+    if (content !== void 0) patch.content = content;
+    return await updateAsset(origin ?? "master", id, patch);
+  },
+  async "asset.delete"({ origin, id }) {
+    return await deleteAsset(origin ?? "master", id);
+  },
+  async "asset.list"({ origin }) {
+    return await listAssets(origin ?? "master");
+  },
+  async "asset.get"({ origin, id }) {
+    return await getAsset(origin ?? "master", id);
+  },
+  // ---- capability request (the agent can REQUEST; the owner approves) ----
+  async "capability.request"({ id }) {
+    const res = await requestCapability(id);
+    if (res.ok && res.granted) return { ok: true, granted: true, capability: id };
+    return {
+      ok: false,
+      granted: false,
+      capability: id,
+      error: res.ok ? `capability ${id} needs a user gesture \u2014 ask the owner to click Enable in Settings` : res.error ?? `capability ${id} not granted`
+    };
+  },
+  // ---- per-origin memory overview (the hub's get_memory_overview) ----
+  async "memory.overview"() {
+    const origins = await listOrigins();
+    const overview = { master: await memoryOverview(masterMemory()), origins: {} };
+    for (const o of origins) {
+      overview.origins[o] = await memoryOverview(siteMemory(o));
+    }
+    return { ok: true, overview };
+  },
   async "register-task"(m) {
     const { name: name25, when } = await registerAlarm(m.task);
     return { ok: true, name: name25, when };
@@ -69652,55 +70186,55 @@ var handlers = {
   },
   // Management tools — the agent can manage its own site-agents.
   async "agent.create"({ origin, name: name25 }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
-      await enrollOrigin(canonical);
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical2, async () => {
+      await enrollOrigin(canonical2);
       invalidateAgent();
-      return { ok: true, origin: canonical, name: name25 };
+      return { ok: true, origin: canonical2, name: name25 };
     });
   },
   async "agent.enroll-origin"({ origin }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
-      await enrollOrigin(canonical);
-      const snapBefore = await enrollmentSnapshot(canonical);
-      const registered = await ensureOriginScriptsRegistered(canonical).catch(
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical2, async () => {
+      await enrollOrigin(canonical2);
+      const snapBefore = await enrollmentSnapshot(canonical2);
+      const registered = await ensureOriginScriptsRegistered(canonical2).catch(
         (e) => ({ ok: false, error: String(e?.message ?? e) })
       );
-      const snapAfter = await enrollmentSnapshot(canonical);
+      const snapAfter = await enrollmentSnapshot(canonical2);
       const transitionLost = !snapAfter.enrolled || snapAfter.gen !== snapBefore.gen;
       const reEnrolled = snapAfter.enrolled && snapAfter.gen !== snapBefore.gen;
       if (registered?.ok !== true || transitionLost) {
         if (snapAfter.enrolled && snapAfter.gen === snapBefore.gen) {
-          await disenrollOrigin(canonical);
+          await disenrollOrigin(canonical2);
         }
         if (reEnrolled) {
           invalidateAgent();
           return {
             ok: false,
-            origin: canonical,
+            origin: canonical2,
             error: "origin re-enrolled during enrollment \u2014 retry",
             retryable: true
           };
         }
         const [unregRes, clearRes] = await Promise.allSettled([
-          unregisterOriginScripts(canonical),
-          siteMemory(canonical).clear()
+          unregisterOriginScripts(canonical2),
+          siteMemory(canonical2).clear()
         ]);
         const scriptsRemoved = unregRes.status === "fulfilled" && unregRes.value.scriptsRemoved === true;
         const permissionRemoved = unregRes.status === "fulfilled" && unregRes.value.permissionRemoved === true;
         const cleared = clearRes.status === "fulfilled";
         if (!(scriptsRemoved && permissionRemoved && cleared)) {
-          await markCleanupPending(canonical);
+          await markCleanupPending(canonical2);
         } else {
-          await clearCleanupPending(canonical);
+          await clearCleanupPending(canonical2);
         }
         invalidateAgent();
         return {
           ok: false,
-          origin: canonical,
+          origin: canonical2,
           error: transitionLost ? "scripting was disabled during enrollment" : registered?.error ?? "script registration failed",
           retryable: true,
           scriptsRemoved,
@@ -69709,34 +70243,34 @@ var handlers = {
         };
       }
       invalidateAgent();
-      await notifyOriginBridge(canonical, {
+      await notifyOriginBridge(canonical2, {
         type: "enrollment-sync",
         gen: snapAfter.gen
       });
-      const finalSnap = await enrollmentSnapshot(canonical);
+      const finalSnap = await enrollmentSnapshot(canonical2);
       if (!finalSnap.enrolled || finalSnap.gen !== snapAfter.gen) {
         invalidateAgent();
         return {
           ok: false,
-          origin: canonical,
+          origin: canonical2,
           error: "scripting was disabled during enrollment \u2014 retry",
           retryable: true
         };
       }
-      return { ok: true, origin: canonical, scriptsRegistered: true };
+      return { ok: true, origin: canonical2, scriptsRegistered: true };
     });
   },
   async "agent.delete"({ origin }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
-      abortWorker(canonical);
-      await disenrollOrigin(canonical);
-      const tomb = await enrollmentSnapshot(canonical);
-      await notifyOriginBridge(canonical, { type: "disenrollment", gen: tomb.gen });
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical2, async () => {
+      abortWorker(canonical2);
+      await disenrollOrigin(canonical2);
+      const tomb = await enrollmentSnapshot(canonical2);
+      await notifyOriginBridge(canonical2, { type: "disenrollment", gen: tomb.gen });
       const [unregRes, clearRes] = await Promise.allSettled([
-        unregisterOriginScripts(canonical),
-        siteMemory(canonical).clear()
+        unregisterOriginScripts(canonical2),
+        siteMemory(canonical2).clear()
       ]);
       const unreg = unregRes.status === "fulfilled" ? unregRes.value : {
         ok: false,
@@ -69749,18 +70283,18 @@ var handlers = {
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
       if (scriptsRemoved && permissionRemoved && cleared) {
-        await clearCleanupPending(canonical);
+        await clearCleanupPending(canonical2);
         return {
           ok: true,
-          origin: canonical,
+          origin: canonical2,
           scriptsRemoved: true,
           permissionRemoved: true
         };
       }
-      await markCleanupPending(canonical);
+      await markCleanupPending(canonical2);
       return {
         ok: false,
-        origin: canonical,
+        origin: canonical2,
         retryable: true,
         error: unreg.error ?? "OPFS clear failed",
         scriptsRemoved,
@@ -69770,21 +70304,21 @@ var handlers = {
     });
   },
   async "agent.retry-cleanup"({ origin }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    return await withOriginLock(canonical, async () => {
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical2, async () => {
       const pending = await listPendingCleanup();
-      if (!pending.includes(canonical)) {
-        return { ok: true, origin: canonical, alreadyClean: true };
+      if (!pending.includes(canonical2)) {
+        return { ok: true, origin: canonical2, alreadyClean: true };
       }
-      const snap = await enrollmentSnapshot(canonical);
+      const snap = await enrollmentSnapshot(canonical2);
       if (snap.enrolled) {
-        await clearCleanupPending(canonical);
-        return { ok: true, origin: canonical, reenrolled: true };
+        await clearCleanupPending(canonical2);
+        return { ok: true, origin: canonical2, reenrolled: true };
       }
       const [unregRes, clearRes] = await Promise.allSettled([
-        unregisterOriginScripts(canonical),
-        siteMemory(canonical).clear()
+        unregisterOriginScripts(canonical2),
+        siteMemory(canonical2).clear()
       ]);
       const unreg = unregRes.status === "fulfilled" ? unregRes.value : {
         ok: false,
@@ -69796,10 +70330,10 @@ var handlers = {
       const scriptsRemoved = unreg.scriptsRemoved === true;
       const permissionRemoved = unreg.permissionRemoved === true;
       if (scriptsRemoved && permissionRemoved && cleared) {
-        await clearCleanupPending(canonical);
-        return { ok: true, origin: canonical };
+        await clearCleanupPending(canonical2);
+        return { ok: true, origin: canonical2 };
       }
-      await markCleanupPending(canonical);
+      await markCleanupPending(canonical2);
       return {
         ok: false,
         retryable: true,
@@ -69814,15 +70348,15 @@ var handlers = {
     return { origins: await listPendingCleanup() };
   },
   async "agent.delegate"({ origin, task }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    const snap = await enrollmentSnapshot(canonical);
+    const canonical2 = canonicalOrigin(origin);
+    if (!canonical2) return { ok: false, error: "invalid origin" };
+    const snap = await enrollmentSnapshot(canonical2);
     if (!snap.enrolled) {
-      return { ok: false, error: `origin ${canonical} is not enrolled` };
+      return { ok: false, error: `origin ${canonical2} is not enrolled` };
     }
     const gen = snap.gen;
     await ensureOrchestrator();
-    const a = orchestrator?.workers?.get(canonical);
+    const a = orchestrator?.workers?.get(canonical2);
     if (!a) return { ok: false, error: `no agent for ${origin}` };
     if (runAborted()) {
       return { ok: false, error: "run aborted \u2014 delegation not started" };
@@ -69831,39 +70365,39 @@ var handlers = {
       if (runAborted()) {
         throw new Error("run aborted \u2014 delegation not started");
       }
-      const recheck = await enrollmentSnapshot(canonical);
+      const recheck = await enrollmentSnapshot(canonical2);
       if (!recheck.enrolled || recheck.gen !== gen) {
         throw new Error(
-          `origin ${canonical} was disenrolled before delegation`
+          `origin ${canonical2} was disenrolled before delegation`
         );
       }
       return await a.run(task, "", [], gen);
     });
-    return await withOriginLock(canonical, async () => {
-      const after = await enrollmentSnapshot(canonical);
+    return await withOriginLock(canonical2, async () => {
+      const after = await enrollmentSnapshot(canonical2);
       if (!after.enrolled || after.gen !== gen) {
         return {
           ok: false,
-          error: `origin ${canonical} was disenrolled during delegation \u2014 result discarded`
+          error: `origin ${canonical2} was disenrolled during delegation \u2014 result discarded`
         };
       }
-      await journalAppend(siteMemory(canonical), {
+      await journalAppend(siteMemory(canonical2), {
         type: "delegated-result",
-        id: `delegate:${canonical}:${Date.now()}`,
+        id: `delegate:${canonical2}:${Date.now()}`,
         task,
         result
       }, async () => {
-        const g = await enrollmentSnapshot(canonical);
+        const g = await enrollmentSnapshot(canonical2);
         if (!g.enrolled || g.gen !== gen) {
           throw Object.assign(
             new Error(
-              `origin ${canonical} was disenrolled during delegation \u2014 journal discarded`
+              `origin ${canonical2} was disenrolled during delegation \u2014 journal discarded`
             ),
             { genMismatch: true }
           );
         }
       });
-      return { ok: true, origin: canonical, result };
+      return { ok: true, origin: canonical2, result };
     });
   },
   async "agent.listAll"() {

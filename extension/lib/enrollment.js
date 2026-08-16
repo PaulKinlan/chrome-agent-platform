@@ -154,9 +154,21 @@ export async function unregisterOriginScripts(origin) {
 
   // Scripts: without the `scripting` permission no content scripts can be
   // registered, so they are absent by definition. With it, unregister + confirm.
+  // The guard must check the PERMISSION (not just the API object): after a
+  // capability.revoke("scripting") the `chrome.scripting` object still EXISTS but
+  // every method throws "not available in this context", so a naive
+  // `chrome.scripting?.unregisterContentScripts` truthiness check would enter the
+  // block and report a cleanup failure for scripts that are genuinely absent.
   let scriptsRemoved = true;
   let error = null;
-  if (typeof chrome !== "undefined" && chrome.scripting?.unregisterContentScripts) {
+  let hasScripting = false;
+  try {
+    hasScripting = typeof chrome !== "undefined" &&
+      !!(await chrome.permissions.contains({ permissions: ["scripting"] }));
+  } catch {
+    hasScripting = false;
+  }
+  if (hasScripting) {
     const ids = [scriptId(canonical, "main"), scriptId(canonical, "bridge")];
     const confirmAbsent = async () => {
       const remaining = await chrome.scripting

@@ -23,7 +23,7 @@ const ENROLL_KEY = "cap:enrollment";
 // `memory_set`). Per-origin stores are keyed separately so one site's growth
 // cannot crowd another; the journal is separately capped in journalAppend.
 const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
-const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled"]);
+const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets"]);
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -35,6 +35,8 @@ const SITE_RESERVED_KEYS = new Set([
   "toolDirectory",
   "journal",
   "enrolled",
+  "assets",
+  "agentConfig",
 ]);
 
 // OPFS aggregate quotas (Constitution §4): stores — not just individual values

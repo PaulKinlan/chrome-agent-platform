@@ -388,6 +388,7 @@ export function createAgent({
 export function createOrchestrator({
   model,
   system = DEFAULT_SYSTEM,
+  masterSystem = null,
   masterMemory,
   workers = [], // [{ origin, memory, skills, tools }]
   multiAgent = true,
@@ -491,7 +492,7 @@ export function createOrchestrator({
 
   const master = createAgent({
     model,
-    system,
+    system: masterSystem ?? system,
     memory: masterMemory,
     tools: { ...delegate, ...extraTools },
     taskId,

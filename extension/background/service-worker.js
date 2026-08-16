@@ -51,6 +51,15 @@ import {
   withEnrollmentLock,
 } from "../lib/tools.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
+import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
+import { MASTER_SKILL } from "../lib/master-skill.js";
+import {
+  createAsset,
+  deleteAsset,
+  getAsset,
+  listAssets,
+  updateAsset,
+} from "../lib/artifacts.js";
 import {
   browserToolset,
   captureTabScreenshot,
@@ -346,7 +355,11 @@ async function ensureOrchestrator() {
       masterMemory: mem,
       workers,
       multiAgent,
-      extraTools: browserToolset(),
+      masterSystem: MASTER_SKILL,
+      extraTools: {
+        ...browserToolset(),
+        ...managementToolset({ callRoute: (type, args) => handlers[type](args) }),
+      },
       delegateGuard: async (origin) => {
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
@@ -654,6 +667,46 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
 }
 
 // ---- message router ----
+/** A lightweight per-store memory overview (key count + approximate bytes).
+ * Bounded: measures at most OVERVIEW_MAX_KEYS values (a hostile store can hold
+ * up to 500 keys; we don't read them all for an introspection tool). */
+const OVERVIEW_MAX_KEYS = 100;
+async function memoryOverview(store) {
+  const keys = await store.keys();
+  let totalBytes = 0;
+  for (const k of keys.slice(0, OVERVIEW_MAX_KEYS)) {
+    try {
+      const v = await store.get(k);
+      totalBytes += new TextEncoder().encode(JSON.stringify(v)).byteLength;
+    } catch { /* skip unreadable */ }
+  }
+  return { keyCount: keys.length, totalBytes, keys };
+}
+
+/** Inspect one sub-agent: name, tools, memory keys, enrollment state. The
+ * management get_agent / agent.directory routes use this. */
+async function agentInfo(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { origin, enrolled: false };
+  const store = siteMemory(canonical);
+  const [cfg, tools, memKeys, snap] = await Promise.all([
+    store.get("agentConfig").catch(() => null),
+    listTools(canonical).catch(() => []),
+    store.keys().catch(() => []),
+    enrollmentSnapshot(canonical),
+  ]);
+  return {
+    origin: canonical,
+    name: cfg?.name ?? canonical,
+    enrolled: snap.enrolled,
+    gen: snap.gen,
+    tools: tools.map((t) => t.name),
+    toolCount: tools.length,
+    memoryKeys: memKeys,
+    memoryKeyCount: memKeys.length,
+  };
+}
+
 const handlers = {
   async "capabilities.status"() {
     // Granted/absent status of every OPTIONAL capability (storage, alarms,
@@ -823,6 +876,7 @@ const handlers = {
       workerCount: orchestrator ? orchestrator.workers.size : 0,
       workerOrigins: orchestrator ? [...orchestrator.workers.keys()] : [],
       delegationTools: multiAgent ? ["list_agents", "delegate_task"] : [],
+      managementTools: MANAGEMENT_TOOL_NAMES,
       generation,
     };
   },
@@ -909,6 +963,41 @@ const handlers = {
   },
   async "agent.list"() {
     return await listOrigins();
+  },
+
+  // The hub agent's management surface (list_agents / get_agent / update_agent).
+  // `agent.directory` returns the RICH listing (name + tools + memory + enrollment
+  // state) the management `list_agents` tool uses, without breaking `agent.list`
+  // (the bare origin array the fan-out journeys depend on).
+  async "agent.directory"() {
+    const origins = await listOrigins();
+    const out = [];
+    for (const o of origins) {
+      out.push(await agentInfo(o));
+    }
+    return { agents: out };
+  },
+  async "agent.get"({ origin }) {
+    if (!(await isEnrolled(origin))) {
+      return { ok: false, error: "origin not enrolled" };
+    }
+    return { ok: true, agent: await agentInfo(origin) };
+  },
+  async "agent.update"({ origin, name }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    return await withOriginLock(canonical, async () => {
+      if (!(await isEnrolled(canonical))) {
+        return { ok: false, error: "origin not enrolled" };
+      }
+      // The sub-agent name is a reserved site authority key (never model-
+      // writable via memory_set) — written through the TRUSTED path here.
+      if (name !== undefined) {
+        await siteMemory(canonical).setTrusted("agentConfig", { name: String(name) });
+      }
+      invalidateAgent();
+      return { ok: true, origin: canonical, agent: await agentInfo(canonical) };
+    });
   },
 
   async "tools.list"({ origin }) {
@@ -1001,6 +1090,59 @@ const handlers = {
   async "usage.clear"() {
     await clearUsage();
     return { ok: true };
+  },
+
+  // ---- artifacts (asset) management (the hub agent's create_asset / etc.) ----
+  // NOTE: the asset TYPE field is named `assetType` here (not `type`) because the
+  // message router uses `message.type` for ROUTING — a `type` field would collide.
+  async "asset.create"({ origin, assetType, name, content }) {
+    const res = await createAsset(origin ?? "master", { type: assetType, name, content });
+    return res.ok
+      ? { ok: true, asset: res.asset, index: res.index }
+      : res;
+  },
+  async "asset.update"({ origin, id, assetType, name, content }) {
+    const patch = {};
+    if (assetType !== undefined) patch.type = assetType;
+    if (name !== undefined) patch.name = name;
+    if (content !== undefined) patch.content = content;
+    return await updateAsset(origin ?? "master", id, patch);
+  },
+  async "asset.delete"({ origin, id }) {
+    return await deleteAsset(origin ?? "master", id);
+  },
+  async "asset.list"({ origin }) {
+    return await listAssets(origin ?? "master");
+  },
+  async "asset.get"({ origin, id }) {
+    return await getAsset(origin ?? "master", id);
+  },
+
+  // ---- capability request (the agent can REQUEST; the owner approves) ----
+  async "capability.request"({ id }) {
+    // requestCapability MUST be called from a user gesture; from the SW (an
+    // agent tool) there is no gesture, so it fails closed. Return an honest
+    // "needs owner gesture" — the agent tells the owner to click Enable.
+    const res = await requestCapability(id);
+    if (res.ok && res.granted) return { ok: true, granted: true, capability: id };
+    return {
+      ok: false,
+      granted: false,
+      capability: id,
+      error: res.ok
+        ? `capability ${id} needs a user gesture — ask the owner to click Enable in Settings`
+        : (res.error ?? `capability ${id} not granted`),
+    };
+  },
+
+  // ---- per-origin memory overview (the hub's get_memory_overview) ----
+  async "memory.overview"() {
+    const origins = await listOrigins();
+    const overview = { master: await memoryOverview(masterMemory()), origins: {} };
+    for (const o of origins) {
+      overview.origins[o] = await memoryOverview(siteMemory(o));
+    }
+    return { ok: true, overview };
   },
 
   async "register-task"(m) {

@@ -425,6 +425,19 @@ const EXPECTED = [
   "scripting Disable: two origins enrolled before the revoke",
   "scripting Disable: capability revoked",
   "scripting Disable: BOTH origins tombstoned (no lost update)",
+  "mgmt: orchestrator exposes the management tool suite",
+  "mgmt: create_agent returned ok",
+  "mgmt: agent.directory lists it with enrollment state",
+  "mgmt: get_agent inspects it (tools + memory keys)",
+  "mgmt: update_agent changed the name",
+  "mgmt: create_asset succeeded (hub asset)",
+  "mgmt: list_assets lists the asset (no content)",
+  "mgmt: get_asset round-trips content",
+  "mgmt: update_asset patched the asset",
+  "mgmt: delete_asset removed it",
+  "mgmt: asset gone after delete",
+  "mgmt: delete_agent removed the agent",
+  "mgmt: agent gone from the directory after delete",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -661,7 +674,7 @@ async function main() {
       "NTP: clicked Run task via a real click",
       await clickSel(cdp, ntpSession, "#run-task"),
     );
-    await sleep(3000); // let the demo agent stream + journal
+    await sleep(7000); // let the demo agent stream + journal
     const ntpShot = await captureShot(cdp, ntpSession);
     if (ntpShot) {
       await writeEvidence("ntp-driven.png", ntpShot);
@@ -1402,6 +1415,91 @@ async function main() {
       Array.isArray(postDisable) &&
         !postDisable.includes("https://script-disable-a.example") &&
         !postDisable.includes("https://script-disable-b.example"),
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY 9c — the master management tool suite (create_agent → get_agent →
+    // update_agent → assets → delete_agent). The hub agent's management tools
+    // (lib/management-tools.js) are thin wrappers over THESE routes, so proving
+    // the routes work proves the tools are wired. The orchestrator also exposes
+    // the fixed management-tool names via `agent.orchestrator`.
+    // ─────────────────────────────────────────────────────────────
+    const orchMgmt = await msgValue({ type: "agent.orchestrator" });
+    check(
+      "mgmt: orchestrator exposes the management tool suite",
+      Array.isArray(orchMgmt?.managementTools) &&
+        orchMgmt.managementTools.includes("create_agent") &&
+        orchMgmt.managementTools.includes("create_asset") &&
+        orchMgmt.managementTools.includes("list_agents"),
+    );
+    const mgmtCreated = await msgValue({
+      type: "agent.create", origin: "https://mgmt.example", name: "mgmt-worker",
+    });
+    check("mgmt: create_agent returned ok", mgmtCreated?.ok === true);
+    const dir = await msgValue({ type: "agent.directory" });
+    const dirEntry = (Array.isArray(dir?.agents) ? dir.agents : [])
+      .find((a) => a?.origin === "https://mgmt.example");
+    check(
+      "mgmt: agent.directory lists it with enrollment state",
+      dirEntry != null && dirEntry.enrolled === true,
+    );
+    const gotAgent = await msgValue({ type: "agent.get", origin: "https://mgmt.example" });
+    check(
+      "mgmt: get_agent inspects it (tools + memory keys)",
+      gotAgent?.ok === true &&
+        gotAgent.agent?.enrolled === true &&
+        Array.isArray(gotAgent.agent?.memoryKeys),
+    );
+    const updated = await msgValue({
+      type: "agent.update", origin: "https://mgmt.example", name: "renamed-worker",
+    });
+    check(
+      "mgmt: update_agent changed the name",
+      updated?.ok === true && updated.agent?.name === "renamed-worker",
+    );
+    // The artifacts system (create → list → get → update → delete).
+    const asset = await msgValue({
+      type: "asset.create", origin: "master", assetType: "html",
+      name: "generated page", content: "<h1>hello</h1>",
+    });
+    check(
+      "mgmt: create_asset succeeded (hub asset)",
+      asset?.ok === true && typeof asset.asset?.id === "string",
+    );
+    const assetId = asset?.asset?.id;
+    const assetList = await msgValue({ type: "asset.list", origin: "master" });
+    check(
+      "mgmt: list_assets lists the asset (no content)",
+      Array.isArray(assetList?.assets) &&
+        assetList.assets.some((a) => a.id === assetId && !("content" in a)),
+    );
+    const assetGet = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    check(
+      "mgmt: get_asset round-trips content",
+      assetGet?.ok === true && assetGet.asset?.content === "<h1>hello</h1>",
+    );
+    const assetUpdate = await msgValue({
+      type: "asset.update", origin: "master", id: assetId, name: "final page",
+    });
+    check(
+      "mgmt: update_asset patched the asset",
+      assetUpdate?.ok === true && assetUpdate.asset?.name === "final page",
+    );
+    const assetDel = await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    check("mgmt: delete_asset removed it", assetDel?.ok === true);
+    const assetAfter = await msgValue({ type: "asset.list", origin: "master" });
+    check(
+      "mgmt: asset gone after delete",
+      Array.isArray(assetAfter?.assets) &&
+        !assetAfter.assets.some((a) => a.id === assetId),
+    );
+    const mgmtDel = await msgValue({ type: "agent.delete", origin: "https://mgmt.example" });
+    check("mgmt: delete_agent removed the agent", mgmtDel?.ok === true);
+    const dirAfter = await msgValue({ type: "agent.directory" });
+    check(
+      "mgmt: agent gone from the directory after delete",
+      Array.isArray(dirAfter?.agents) &&
+        !dirAfter.agents.some((a) => a?.origin === "https://mgmt.example"),
     );
 
     // ─────────────────────────────────────────────────────────────
