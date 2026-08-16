@@ -11,6 +11,7 @@ import {
   authorizeToolReport,
   fnv1a,
   PAGE_ALLOWED_ROUTES,
+  parseOmniboxContent,
   redactSecrets,
   sanitizeToolName,
   schemaToZod,
@@ -480,4 +481,26 @@ Deno.test("redactSecrets strips credential keys but keeps non-secret data", () =
   assertEquals(redacted.count, 7);
   // No credential survives anywhere in the redacted payload.
   assert(!JSON.stringify(redacted).includes("sk-secret-123"), "apiKey must never survive");
+});
+
+Deno.test("parseOmniboxContent maps recipe/thread/run intents", () => {
+  assertEquals(parseOmniboxContent("recipe:tab-hygiene"), {
+    kind: "recipe",
+    id: "tab-hygiene",
+  });
+  assertEquals(parseOmniboxContent("thread:abc123"), {
+    kind: "thread",
+    id: "abc123",
+  });
+  assertEquals(parseOmniboxContent("summarise this page"), {
+    kind: "run",
+    query: "summarise this page",
+  });
+  // Whitespace + empty fail closed to a no-op, never a wild run.
+  assertEquals(parseOmniboxContent("   "), { kind: "none" });
+  assertEquals(parseOmniboxContent(""), { kind: "none" });
+  assertEquals(parseOmniboxContent(null), { kind: "none" });
+  // A "recipe:" prefix with an empty id is a recipe intent with an empty id
+  // (the caller resolves it; an unknown recipe falls back to running the text).
+  assertEquals(parseOmniboxContent("recipe:"), { kind: "recipe", id: "" });
 });

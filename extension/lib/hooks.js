@@ -20,9 +20,17 @@
 
 import { kvGet, kvSet } from "./kv.js";
 import { hasPermission } from "./capabilities.js";
+import { getRecipe } from "./recipes.js";
 
 const SUBSCRIPTIONS_KEY = "cap:hooks";
 const DENY_KEY = "cap:hooksDeny";
+
+// Fan-out bounds (the wider-goal review's unbounded-fan-out finding): a model
+// must not be able to register an unbounded number of subscriptions, an
+// unbounded template, or arbitrary recipeIds — each would let a single event
+// enqueue unbounded paid runs. These are the registry ceilings.
+const MAX_SUBSCRIPTIONS = 200;
+const MAX_TEMPLATE_BYTES = 64 * 1024; // 64 KiB per prompt template
 
 /** One chrome.* event an agent can listen to + respond to. */
 export const HOOKS = [
@@ -410,15 +418,33 @@ async function writeSubscriptions(list) {
 export async function subscribeHook({ hookId, recipeId = null, promptTemplate = "" }) {
   const allowed = await checkHookAllowed(hookId);
   if (!allowed.ok) return allowed;
+  // VALIDATE the recipeId: null (the master hub agent) or a KNOWN recipe id.
+  // An arbitrary/unknown recipeId must not create a distinct fan-out row that a
+  // single event can enqueue.
+  if (recipeId != null) {
+    if (typeof recipeId !== "string" || !recipeId || recipeId.length > 128) {
+      return { ok: false, error: "invalid recipeId" };
+    }
+    if (!getRecipe(recipeId)) {
+      return { ok: false, error: `unknown recipe: ${recipeId}` };
+    }
+  }
+  const template = typeof promptTemplate === "string" ? promptTemplate : "";
+  if (new TextEncoder().encode(template).length > MAX_TEMPLATE_BYTES) {
+    return { ok: false, error: "prompt template too large" };
+  }
   const list = await getHookSubscriptions();
   // Idempotent: re-subscribing the same (hook, recipe) replaces the entry.
   const existing = list.find(
     (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
   );
+  if (!existing && list.length >= MAX_SUBSCRIPTIONS) {
+    return { ok: false, error: "subscription limit reached" };
+  }
   const entry = {
     hookId,
     recipeId: recipeId ?? null,
-    promptTemplate: typeof promptTemplate === "string" ? promptTemplate : "",
+    promptTemplate: template,
     enabled: true,
     at: new Date().toISOString(),
   };

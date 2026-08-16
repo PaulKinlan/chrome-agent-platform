@@ -8,6 +8,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   appendThreadMessage,
   createThread,
+  deleteThread,
   generateThreadName,
   getThread,
   historyFromThread,
@@ -150,4 +151,21 @@ Deno.test("concurrent createThread calls never lose an index row (wider-goal thr
   for (const t of ids) {
     assert(indexed.has(t.id), `thread ${t.id} must be in the index`);
   }
+});
+
+Deno.test("deleteThread removes the index row AND the body atomically (item 17)", async () => {
+  const a = await createThread("keep me");
+  const b = await createThread("delete me");
+  // Sanity: both present before the delete.
+  let index = await listThreads();
+  assert(index.some((r) => r.id === a.id) && index.some((r) => r.id === b.id));
+  // Delete b: the body is gone AND the index row is gone.
+  const removed = await deleteThread(b.id);
+  assertEquals(removed, true);
+  assertEquals(await getThread(b.id), null);
+  index = await listThreads();
+  assert(!index.some((r) => r.id === b.id), "deleted thread must leave the index");
+  assert(index.some((r) => r.id === a.id), "the other thread must survive");
+  // Deleting an absent id is a clean false (never a throw).
+  assertEquals(await deleteThread("nope"), false);
 });

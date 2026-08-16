@@ -103,7 +103,10 @@ export function mountComposer(container, opts = {}) {
     '<button type="button" role="menuitem" data-kind="file">Add file</button>' +
     '<button type="button" role="menuitem" data-kind="record-audio">Record audio</button>' +
     '<button type="button" role="menuitem" data-kind="capture-camera">Capture camera</button>' +
-    '<button type="button" role="menuitem" data-kind="other">Add other file</button>' +
+    '<button type="button" role="menuitem" data-kind="record-screen">Record screen</button>' +
+    '<button type="button" role="menuitem" data-kind="grab-screenshot">Grab screenshot</button>' +
+    '<button type="button" role="menuitem" data-kind="add-tab">Add tab</button>' +
+    '<button type="button" role="menuitem" data-kind="add-window">Add window</button>' +
     '<p class="attach-note">Text files are read by the agent. Audio/video/image ' +
     'are attached but NOT read by the model yet (multimodal is coming) — ' +
     'their bytes are not sent to the model or stored with the message.</p>';
@@ -224,6 +227,22 @@ export function mountComposer(container, opts = {}) {
     }
     if (kind === "capture-camera") {
       await startCameraCapture();
+      return;
+    }
+    if (kind === "record-screen") {
+      await startScreenCapture();
+      return;
+    }
+    if (kind === "grab-screenshot") {
+      await grabScreenshot();
+      return;
+    }
+    if (kind === "add-tab") {
+      await addTab();
+      return;
+    }
+    if (kind === "add-window") {
+      await addWindow();
       return;
     }
     try {
@@ -519,6 +538,82 @@ export function mountComposer(container, opts = {}) {
       setStatus(`${kind} capture error: ${String(err?.message ?? err)}`, false);
     }
     plusBtn.focus();
+  }
+
+  // ── the + menu: add tab / add window / screenshot / screen recording ────
+  // (items 18 + 19). These use the OPTIONAL browser capabilities; a missing
+  // permission surfaces a clear status instead of a silent no-op.
+  async function addTab() {
+    try {
+      if (!chrome.tabs?.create) throw new Error("tabs API unavailable");
+      await chrome.tabs.create({});
+      setStatus("opened a new tab");
+    } catch (err) {
+      setStatus("couldn't open a tab: " + String(err?.message ?? err), false);
+    }
+  }
+  async function addWindow() {
+    try {
+      if (!chrome.windows?.create) throw new Error("windows API unavailable");
+      await chrome.windows.create({});
+      setStatus("opened a new window");
+    } catch (err) {
+      setStatus("couldn't open a window: " + String(err?.message ?? err), false);
+    }
+  }
+  async function grabScreenshot() {
+    try {
+      if (!chrome.tabs?.captureVisibleTab) throw new Error("captureVisibleTab unavailable");
+      const dataURL = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+      attachments.push({
+        name: `screenshot-${Date.now()}.png`,
+        kind: "image",
+        size: Math.round((dataURL.length * 3) / 4),
+        type: "image/png",
+        dataURL,
+      });
+      addAttachTag("Screenshot", "camera");
+      setStatus("attached a screenshot");
+      plusBtn.focus();
+    } catch (err) {
+      setStatus("couldn't grab a screenshot: " + String(err?.message ?? err), false);
+      plusBtn.focus();
+    }
+  }
+  async function startScreenCapture() {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setStatus("screen recording not available here", false);
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+    } catch (err) {
+      handleCaptureError("screen", err);
+      return;
+    }
+    // Record the screen to a webm video and attach it on stop.
+    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : "video/webm";
+    const recorder = new MediaRecorder(stream, { mimeType: mime });
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+      stream.getTracks().forEach((t) => t.stop());
+      finishCapture(blob, "video", `screen-${Date.now()}.webm`);
+    };
+    // The browser's share UI shows a "Stop sharing" control; the recorder stops
+    // when the user ends the share (the track ends).
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      if (recorder.state !== "inactive") recorder.stop();
+    });
+    recorder.start();
+    setStatus("recording screen — end the share to attach the video");
   }
   function stopCapRecording() {
     if (capRecorder && capRecorder.state !== "inactive") {

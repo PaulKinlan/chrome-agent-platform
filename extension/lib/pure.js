@@ -534,3 +534,16 @@ export const PAGE_ALLOWED_ROUTES = new Set([
   "tools.upsert",
   "tools.pending",
 ]);
+
+/** Parse an omnibox-entered string into an intent.
+ *  - "recipe:<id>"  → { kind: "recipe", id }
+ *  - "thread:<id>"  → { kind: "thread", id }
+ *  - anything else   → { kind: "run", query } (the raw text is a task)
+ *  Empty/whitespace → { kind: "none" }. */
+export function parseOmniboxContent(content) {
+  const c = String(content ?? "").trim();
+  if (!c) return { kind: "none" };
+  if (c.startsWith("recipe:")) return { kind: "recipe", id: c.slice("recipe:".length).trim() };
+  if (c.startsWith("thread:")) return { kind: "thread", id: c.slice("thread:".length).trim() };
+  return { kind: "run", query: c };
+}

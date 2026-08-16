@@ -75,12 +75,10 @@ export function managementToolset({ callRoute }) {
       inputSchema: z.object({}),
       execute: () => call("agent.directory", {}),
     }),
-    enroll_origin: tool({
-      description:
-        "Request host access + script injection for an origin so its site tools run. Needs a user gesture; if it fails closed, tell the owner to click Enroll in Settings.",
-      inputSchema: z.object({ origin: z.string() }),
-      execute: ({ origin }) => call("agent.enroll-origin", { origin }),
-    }),
+    // NOTE: enroll_origin is INTENTIONALLY absent — enrolling an origin (granting
+    // host access + injecting scripts) is OWNER-ONLY (a fresh exact-origin gesture
+    // in Settings). The model manages agents for ALREADY-enrolled origins, but can
+    // never grant host access to a new origin.
     disenroll_origin: tool({
       description: "Remove an origin's host access + injected scripts.",
       inputSchema: z.object({ origin: z.string() }),

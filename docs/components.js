@@ -599,6 +599,10 @@ class AttachButton extends Component {
         <button type="button" role="menuitem" data-kind="file">Add file</button>
         <button type="button" role="menuitem" data-kind="record-audio">Record audio</button>
         <button type="button" role="menuitem" data-kind="capture-camera">Capture camera</button>
+        <button type="button" role="menuitem" data-kind="record-screen">Record screen</button>
+        <button type="button" role="menuitem" data-kind="grab-screenshot">Grab screenshot</button>
+        <button type="button" role="menuitem" data-kind="add-tab">Add tab</button>
+        <button type="button" role="menuitem" data-kind="add-window">Add window</button>
         <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
       </div>`);
     this._btn = this._root.querySelector(".plus");
@@ -626,6 +630,15 @@ class AttachButton extends Component {
       const kind = b.dataset.kind;
       if (kind === "record-audio" || kind === "capture-camera") {
         this._emit("attach-media", { kind });
+        return;
+      }
+      if (kind === "record-screen" || kind === "grab-screenshot" ||
+          kind === "add-tab" || kind === "add-window") {
+        // Browser-context actions (the + menu's screen-recording / screenshot /
+        // new-tab / new-window options) — emitted for the host composer/page to
+        // wire (they need the OPTIONAL browser permissions, which the page
+        // requests/handles with a graceful error).
+        this._emit("attach-context", { kind });
         return;
       }
       const file = await this._pickFile(kind);
@@ -1189,39 +1202,44 @@ class AgentComposer extends Component {
       <div class="composer-status" role="status" aria-live="polite"></div>`;
     mountTemplate(this, `
       :host { display:block; }
-      .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
-      .composer:focus-within { border-color:var(--accent,#0e6e63); }
-      .popup { position:absolute; inset:auto; margin:0; left:0; right:0; background:var(--panel,#ffffff);
+      /* Scoped to the host tag (light DOM, shadow()=false): the bare class
+         selectors would be document-scope CSS — the same collision mechanism
+         as the blank-toggle bug. Tag-scoping keeps the controls in the LIGHT
+         DOM (the CDP journeys hit #task-input/#run-task) while the styles only
+         apply within THIS component's subtree. */
+      agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
+      agent-composer .composer:focus-within { border-color:var(--accent,#0e6e63); }
+      agent-composer .popup { position:absolute; inset:auto; margin:0; left:0; right:0; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08));
         max-height:260px; overflow-y:auto; padding:4px; z-index:40;
         position-anchor:--composer-anchor; position-area:bottom span-x-start span-x-end;
         position-try-fallbacks:flip-block; }
       @supports not (position-area: top) {
-        .popup { position:absolute; top:calc(100% + 4px); left:0; right:0; }
+        agent-composer .popup { position:absolute; top:calc(100% + 4px); left:0; right:0; }
       }
-      .popup[hidden] { display:none; }
-      .popup .item { display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:7px; cursor:pointer; }
-      .popup .item:hover, .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
-      .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
-      .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
-      .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
-      .composer .spacer { flex:1; }
-      .composer .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-      .composer .chips:empty { display:none; }
-      .composer .chips .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px;
+      agent-composer .popup[hidden] { display:none; }
+      agent-composer .popup .item { display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:7px; cursor:pointer; }
+      agent-composer .popup .item:hover, agent-composer .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
+      agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      agent-composer .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
+      agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
+      agent-composer .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+      agent-composer .composer .spacer { flex:1; }
+      agent-composer .composer .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+      agent-composer .composer .chips:empty { display:none; }
+      agent-composer .composer .chips .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px;
         color:var(--text,#1d1b18); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9);
         border-radius:999px; padding:3px 10px; }
-      .composer .chips .chip button { border:0; background:transparent; color:var(--muted,#635e56);
+      agent-composer .composer .chips .chip button { border:0; background:transparent; color:var(--muted,#635e56);
         cursor:pointer; padding:0; font:inherit; line-height:1; }
-      .composer .chips .chip button:hover { color:var(--text,#1d1b18); }
-      .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
+      agent-composer .composer .chips .chip button:hover { color:var(--text,#1d1b18); }
+      agent-composer .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
         background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
         font:inherit; font-weight:600; cursor:pointer; }
-      .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#635e56); }
-      .composer-status:empty { display:none; }
+      agent-composer .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      agent-composer > .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#635e56); }
+      agent-composer > .composer-status:empty { display:none; }
     `, html);
     this._input = this._root.querySelector("#task-input");
     this._mic = this._root.querySelector("#mic");
@@ -1260,7 +1278,65 @@ class AgentComposer extends Component {
       this._emit("attach", detail);
     });
     this._attach?.addEventListener("attach-media", (e) => this._captureMedia(e.detail?.kind));
+    this._attach?.addEventListener("attach-context", (e) => this._contextAction(e.detail?.kind));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
+  }
+
+  // ── the + menu's browser-context actions (record-screen / grab-screenshot /
+  // add-tab / add-window) — items 18 + 19. These use the OPTIONAL browser
+  // capabilities; a missing permission surfaces a clear status (never a silent
+  // no-op).
+  async _contextAction(kind) {
+    try {
+      if (kind === "add-tab") {
+        if (!chrome.tabs?.create) throw new Error("tabs API unavailable");
+        await chrome.tabs.create({});
+        this.setStatus("opened a new tab");
+        return;
+      }
+      if (kind === "add-window") {
+        if (!chrome.windows?.create) throw new Error("windows API unavailable");
+        await chrome.windows.create({});
+        this.setStatus("opened a new window");
+        return;
+      }
+      if (kind === "grab-screenshot") {
+        if (!chrome.tabs?.captureVisibleTab) throw new Error("captureVisibleTab unavailable");
+        const dataURL = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+        this._attachMedia({ name: `screenshot-${Date.now()}.png`, type: "image/png", size: Math.round((dataURL.length * 3) / 4), dataURL, kind: "image" });
+        this.setStatus("attached a screenshot");
+        return;
+      }
+      if (kind === "record-screen") {
+        if (!navigator.mediaDevices?.getDisplayMedia) throw new Error("screen recording not available");
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        const mime = MediaRecorder.isTypeSupported?.("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
+        const rec = new MediaRecorder(stream, { mimeType: mime });
+        const chunks = [];
+        rec.ondataavailable = (ev) => { if (ev.data?.size) chunks.push(ev.data); };
+        rec.onstop = () => {
+          const blob = new Blob(chunks, { type: rec.mimeType || "video/webm" });
+          stream.getTracks().forEach((t) => t.stop());
+          const fr = new FileReader();
+          fr.onload = () => {
+            this._attachMedia({ name: `screen-${Date.now()}.webm`, type: blob.type || "video/webm", size: blob.size, dataURL: String(fr.result), kind: "video" });
+            this.setStatus("screen recording attached.");
+          };
+          fr.readAsDataURL(blob);
+        };
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+          if (rec.state !== "inactive") rec.stop();
+        });
+        rec.start();
+        this.setStatus("recording screen — end the share to attach the video");
+        return;
+      }
+    } catch (e) {
+      const msg = e?.name === "NotAllowedError"
+        ? "screen capture permission denied"
+        : "couldn't " + kind + ": " + (e?.message ?? e);
+      this.setStatus(msg, false);
+    }
   }
 
   // ── media capture (record-audio / capture-camera) ──────────────────────
@@ -1680,6 +1756,10 @@ function fmtTime(ts) {
 // A shared floating-panel base: a trigger button (icon + badge) that toggles a
 // fixed-position panel. Subclasses set this.triggerIcon / this.triggerLabel +
 // override _panelMarkup() + _refreshPanel().
+// Only ONE panel is open at a time (the error-console + security-shield are
+// sibling floating overlays — two open panels stack/overlap the page, so opening
+// one closes the others).
+const openPanels = new Set();
 class PanelButton extends Component {
   static get observedAttributes() { return ["count", "label", "attention"]; }
   constructor() {
@@ -1768,7 +1848,13 @@ class PanelButton extends Component {
   }
   _toggle() { this._open ? this._close() : this._openPanel(); }
   async _openPanel() {
+    // Close every other open panel first (one floating panel at a time — the
+    // close-others logic the vision review requested).
+    for (const p of [...openPanels]) {
+      if (p !== this) p._close();
+    }
     this._open = true;
+    openPanels.add(this);
     this._panel.hidden = false;
     this._position();
     this._trigger?.setAttribute("aria-expanded", "true");
@@ -1776,6 +1862,7 @@ class PanelButton extends Component {
   }
   _close() {
     this._open = false;
+    openPanels.delete(this);
     this._panel.hidden = true;
     this._trigger?.setAttribute("aria-expanded", "false");
   }

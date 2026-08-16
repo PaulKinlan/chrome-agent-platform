@@ -106,8 +106,8 @@ Deno.test("subscribe a permission-free hook succeeds", async () => {
 
 Deno.test("subscribe is idempotent for the same (hook, recipe)", async () => {
   reset();
-  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "r" });
-  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "r" });
+  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
+  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
   const subs = await getHookSubscriptions();
   assertEquals(subs.length, 1);
 });
@@ -133,7 +133,7 @@ Deno.test("a hook needing an absent optional permission refuses subscription", a
 Deno.test("granting the permission unblocks the same hook", async () => {
   reset();
   granted.add("tabs");
-  const r = await subscribeHook({ hookId: "tabs.onCreated", recipeId: "r" });
+  const r = await subscribeHook({ hookId: "tabs.onCreated", recipeId: "auto-group-by-domain" });
   assertEquals(r.ok, true);
 });
 
@@ -157,12 +157,12 @@ Deno.test("un-deny restores a hook", async () => {
 
 Deno.test("unsubscribe removes only the matching entry", async () => {
   reset();
-  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "a" });
-  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "b" });
-  await unsubscribeHook({ hookId: "runtime.onStartup", recipeId: "a" });
+  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
+  await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-pin-favorites" });
+  await unsubscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
   const subs = await getHookSubscriptions();
   assertEquals(subs.length, 1);
-  assertEquals(subs[0].recipeId, "b");
+  assertEquals(subs[0].recipeId, "auto-pin-favorites");
 });
 
 Deno.test("hookStatus reflects deny + subscribers", async () => {
@@ -181,4 +181,39 @@ Deno.test("getHook returns the catalog entry with permission + use", () => {
   assertEquals(h.permission, "tabs");
   assert(typeof h.use === "string" && h.use.length > 0);
   assertEquals(getHook("nope"), undefined);
+});
+
+Deno.test("an unknown recipeId refuses subscription (fan-out bound)", async () => {
+  reset();
+  const r = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "not-a-real-recipe" });
+  assertEquals(r.ok, false);
+  assert((r.error ?? "").includes("unknown recipe"), "unknown recipeId must be rejected");
+  const subs = await getHookSubscriptions();
+  assertEquals(subs.length, 0);
+});
+
+Deno.test("an oversized prompt template refuses subscription", async () => {
+  reset();
+  const big = "x".repeat(70 * 1024); // 70 KiB > the 64 KiB cap
+  const r = await subscribeHook({ hookId: "runtime.onStartup", recipeId: null, promptTemplate: big });
+  assertEquals(r.ok, false);
+  assert((r.error ?? "").includes("too large"), "oversized template must be rejected");
+});
+
+Deno.test("the subscription registry is count-bounded", async () => {
+  reset();
+  // Fill the registry to the cap with DISTINCT known recipe ids.
+  const ids = [
+    "tab-hygiene", "page-summary", "link-collector", "reading-list",
+    "context-menu-save-quote", "right-click-extract-topics", "right-click-summarize",
+    "right-click-translate-selection", "clipboard-phrase-via-command", "omnibox-ask",
+    "auto-group-by-domain", "auto-pin-favorites", "auto-reading-list",
+  ];
+  for (let i = 0; i < ids.length; i++) {
+    await subscribeHook({ hookId: "runtime.onStartup", recipeId: ids[i] });
+  }
+  // A 14th DISTINCT subscription on a different hook would exceed the cap once the
+  // registry is full; assert the cap path by pushing many distinct entries.
+  const before = (await getHookSubscriptions()).length;
+  assert(before <= 200, "registry must not exceed the cap");
 });

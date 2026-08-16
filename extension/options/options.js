@@ -297,6 +297,7 @@ async function renderEnroll() {
     const res = await chrome.runtime.sendMessage({
       type: "agent.enroll-origin",
       origin,
+      ownerGesture: true,
     }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     input.value = "";
     if (res?.ok) {
@@ -364,6 +365,15 @@ function backgroundAgentRow(a) {
 
   toggle.addEventListener("toggle", async (e) => {
     const enabled = e.detail.checked;
+    // ENABLE time (a real user gesture): request the OPTIONAL notifications
+    // permission so the scheduled completions can surface as notifications
+    // (never from the SW — no gesture). Best-effort: a denial means the
+    // run-time path skips the notification silently.
+    if (enabled) {
+      try {
+        await chrome.permissions?.request?.({ permissions: ["notifications"] });
+      } catch { /* not grantable — the run-time path skips */ }
+    }
     const out = await chrome.runtime
       .sendMessage({ type: "background-agent.set", id: a.id, enabled })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));

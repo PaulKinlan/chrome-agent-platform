@@ -27,6 +27,9 @@
   "side_panel": {
     "default_path": "sidepanel/sidepanel.html"
   },
+  "omnibox": {
+    "keyword": "agent"
+  },
   "action": {
     "default_title": "Open Agent Hub",
     "default_icon": {

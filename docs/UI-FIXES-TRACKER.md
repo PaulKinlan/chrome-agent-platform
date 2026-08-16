@@ -20,11 +20,26 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VISUALLY ver
 14. **Error console copy buttons + surface errors** — a per-line Copy button + a header "Copy all"; entries sorted errors-first (newest within level) + a `source` column + errors tinted with the danger color.
 
 ## Open
-- 15. **Notification permission gesture error** — a background agent tried to request the notifications permission WITHOUT a user gesture. Permission must be granted at ENABLE time (a gesture), or the notification skipped gracefully.
-- 16. **Agent run log / visibility** — an agents view (all agents — background + site) + a per-agent run log (journaled tool calls/results/errors, viewable).
-- 17. **Delete tasks** — a delete affordance on the task-list sidebar items.
-- 18. **+ button more options** — add tab, add window, grab a screenshot.
-- 19. **+ menu: grab a screen recording** — tabCapture/getDisplayMedia → MediaRecorder → a video artifact.
+(none — all tracked items are done as of the items-15-24 batch.)
+
+## Done (items 15-24 batch)
+- 15. **Notification permission** — the run-time completion now checks `chrome.permissions.contains({permissions:["notifications"]})` BEFORE `chrome.notifications.create` (the API object is always defined in MV3, so `?.create` being truthy was not proof of the grant — the root cause of Paul's "requires a user gesture" error). ENABLE time (the NTP + Settings toggle gestures) requests the permission so scheduled notifications can work; a denial just skips them.
+- 16. **Agent run log / visibility** — `runTask` now journals each tool-call + tool-result into the journal; a `run-log.list` route returns them; the NTP has a new "Recent activity" section (the agents' task/result/tool/screenshot trace, most-recent-first).
+- 17. **Delete tasks** — `deleteThread(id)` (atomic index-row + body removal under the thread lock) + a `thread.delete` route + a hover × delete button on each task-list item (keyboard-accessible).
+- 18. **+ button more options** — add-tab / add-window / grab-screenshot added to both the `<attach-button>` menu and the legacy composer, wired to `chrome.tabs.create` / `chrome.windows.create` / `chrome.tabs.captureVisibleTab` (graceful permission errors).
+- 19. **+ menu: screen recording** — `getDisplayMedia` → MediaRecorder → a video attachment (both surfaces).
+- 20. **Favicon 404s** — `<link rel="icon">` added to ntp/options/chat/sidepanel.
+- 21. **renderArtifacts fallback** — `?? "Untitled"` / `?? "unknown"` / `?? 0` (no more "undefined · undefined B").
+- 22. **Diagnostics panels overlap** — a module-level `openPanels` set: opening one PanelButton closes the others (one floating panel at a time).
+- 23. **Composer/conversation light-DOM CSS** — the `<agent-composer>` styles are now tag-scoped (`agent-composer .composer { … }`) so they apply only within the component's subtree (the same collision mechanism as the blank-toggle bug, fixed without moving the controls out of the light DOM). `<agent-conversation>` was already tag-scoped.
+- 24. **Docs drift** — DESIGN.md theme names (Sunlit/Midnight/Neon/Terminal) + docs/index.html palette (paper `#f7f6f3` / ink `#1d1b18` / teal `#0e6e63`).
+
+## Evidence (items 15-24 batch)
+- `npm test` — 160 passed (added the `deleteThread` unit test).
+- `npm run test:components` — 20/20.
+- `npm run test:chrome` — 118/118.
+- `npm run build` — clean (0 warnings; the gallery re-synced).
+- CDP: `run-log` section renders, the favicon link is present, the + menu lists all 7 options (file/record-audio/capture-camera/record-screen/grab-screenshot/add-tab/add-window).
 
 ## Evidence (this batch)
 - `npm test` — 156 passed.
@@ -42,3 +57,5 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 (Recommend: fold a keyboard Tab-order sweep + a prefers-reduced-motion check into the smoke test — constitution §2.)
 25. **Agents panel: only ACTIVE background agents** — the NTP agents panel shows ONLY the enabled/running background agents (with a disable option) + a "configure in Settings" link (to add more/the presets). NOT a list of every disabled agent.
 26. **The task sidebar persists inside a task + the collapse chevron position** — when inside a single task, the sidebar stays visible (all tasks listed, the current one clearly selected); the + button takes you back to the NTP to start a new task. AND the collapse chevron should be near the BOTTOM of the sidebar (it's at the top overlapping the heading — messy).
+27. **Omnibox command** — the original plan had an omnibox keyword (chrome.omnibox): type the keyword in the address bar → invoke the agent (suggestions + a default action that opens the hub/a thread with the query). Not implemented.
+28. **All popovers use anchor positioning (a STANDARD)** — the shield/console popups are not anchored to their buttons (they stay on top when scrolling). Anchor EVERY popover to its trigger (CSS anchor-positioning), so it scrolls with the button + stays in-bounds. Standard: any popover uses anchor positioning.

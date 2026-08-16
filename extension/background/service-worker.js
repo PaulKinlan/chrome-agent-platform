@@ -62,6 +62,7 @@ import {
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
 import {
   appendThreadMessage,
+  continueThread,
   createThread,
   deleteThread,
   generateThreadName,
@@ -126,6 +127,7 @@ import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import {
   authorizeToolReport,
   PAGE_ALLOWED_ROUTES,
+  parseOmniboxContent,
   redactSecrets,
   sanitizeToolName as safeToolName,
   schemaToZod as buildSchema,
@@ -425,8 +427,13 @@ async function ensureOrchestrator(onProgress = null, scoped = false) {
       workers,
       multiAgent,
       masterSystem: MASTER_SKILL,
+      // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
+      // + read-only memory — untrusted browser event data must never drive a
+      // browser mutation, a durable schedule, or a memory write (the wider-goal
+      // review's "scoped != side-effect-free" finding).
+      scoped,
       extraTools: {
-        ...browserToolset(),
+        ...browserToolset(scoped),
         // SCOPED (hook) runs do NOT get the destructive management toolset —
         // untrusted browser event data must never drive delete_agent/
         // delete_asset/revoke_capability/disenroll_origin (the wider-goal
@@ -665,9 +672,31 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
-    const orch = await ensureOrchestrator(onProgress, scoped);
     const taskId = id ?? String(Date.now());
     const mem = masterMemory();
+    // Journal the agent's tool activity for the run log (item 16): each
+    // tool-call and tool-result is appended to the journal so the owner can SEE
+    // what an agent did — even a background agent with no live UI. The journal
+    // is bounded (count + bytes); a journal failure never kills the run
+    // (best-effort telemetry), and the live broadcast still flows through.
+    const journalingProgress = (event) => {
+      try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
+      const type = event?.type;
+      if (type === "tool-call") {
+        let args;
+        try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
+        if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
+        journalAppend(mem, { type: "tool-call", id: taskId, tool: event.toolName ?? "tool", args }).catch(() => {});
+      } else if (type === "tool-result") {
+        let result;
+        if (event.result == null) result = "";
+        else if (typeof event.result === "string") result = event.result;
+        else { try { result = JSON.stringify(event.result); } catch { result = String(event.result); } }
+        if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
+        journalAppend(mem, { type: "tool-result", id: taskId, tool: event.toolName ?? "tool", result }).catch(() => {});
+      }
+    };
+    const orch = await ensureOrchestrator(journalingProgress, scoped);
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or
     // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
@@ -719,9 +748,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       if (scheduled) {
         await fence?.assertOwned?.();
         // Completion lifecycle: surface the result as a notification. The
-        // `notifications` permission is OPTIONAL — when absent, skip silently (a
-        // missing permission is not a failure worth a console error).
-        if (chrome.notifications?.create) {
+        // `notifications` permission is OPTIONAL — when absent, skip silently
+        // (a missing permission is not a failure worth a console error). The
+        // check is `chrome.permissions.contains` (the API object `chrome.notifications`
+        // is ALWAYS defined in MV3, so `?.create` being truthy does not mean the
+        // permission is granted — calling create without it throws the
+        // "requires a user gesture" / permission error Paul hit).
+        const canNotify = await (async () => {
+          try {
+            return chrome.permissions?.contains
+              ? await chrome.permissions.contains({ permissions: ["notifications"] })
+              : false;
+          } catch { return false; }
+        })();
+        if (canNotify && chrome.notifications?.create) {
           try {
             await chrome.notifications.create(`cap:${taskId}`, {
               type: "basic",
@@ -1044,21 +1084,26 @@ const handlers = {
       dropped.push({ reason: "over count limit" });
     }
 
-    // ── the task-thread model ─────────────────────────────────────────────
+    // ── the task-thread model ────────────────────────────────────────────
     // A task is a DISTINCT THREAD. If the caller passed a threadId, continue
     // that thread; otherwise create a new thread (named with a fast fallback
     // now, upgraded by the model async). The thread carries its own message
     // history, so a nudge in an existing thread sees the prior turns.
-    const existing = m.threadId ? await getThread(m.threadId).catch(() => null) : null;
-    let threadId = existing?.id ?? null;
-    if (!existing) {
+    // `continueThread` does the read + history-snapshot + user-message append
+    // ATOMICALLY under the thread lock, so two concurrent nudges can no longer
+    // both use the stale pre-append history (the wider-goal review's
+    // concurrency finding).
+    let threadId = null;
+    let threadHistory = m.history ?? [];
+    if (m.threadId) {
+      const cont = await continueThread(m.threadId, m.task).catch(() => ({ thread: null, history: [] }));
+      threadId = cont.thread?.id ?? m.threadId;
+      threadHistory = cont.thread ? cont.history : (m.history ?? []);
+    } else {
       const thread = await createThread(m.task).catch(() => null);
       threadId = thread?.id ?? null;
       if (threadId) nameThreadAsync(threadId, m.task).catch(() => {});
-    } else {
-      await appendThreadMessage(threadId, { role: "user", content: m.task }).catch(() => {});
     }
-    const threadHistory = existing ? historyFromThread(existing) : (m.history ?? []);
 
     const result = await runTask({
       id: m.id,
@@ -1113,6 +1158,18 @@ const handlers = {
     // Generate a title for a task (the model when available, else truncated).
     const name = await generateThreadName(m.task);
     return { ok: true, name };
+  },
+
+  // The agent run log (item 16): every journaled task/result/tool-call/screenshot
+  // entry, most-recent-first, so the owner can SEE what the agents did (a
+  // background agent has no live UI — the run log is its trace). Bounded by the
+  // journal's own caps; no mutation here.
+  async "run-log.list"() {
+    const journal = (await masterMemory().get("journal")) ?? [];
+    const entries = Array.isArray(journal)
+      ? journal.slice(-200).reverse()
+      : [];
+    return { entries, count: entries.length };
   },
 
   // The hub agent's management surface (list_agents / get_agent / update_agent).
@@ -1470,7 +1527,17 @@ const handlers = {
       return { ok: true, origin: canonical, name };
     });
   },
-  async "agent.enroll-origin"({ origin }) {
+  async "agent.enroll-origin"({ origin, ownerGesture = false }) {
+    // ENROLLMENT IS OWNER-ONLY (the wider-goal review's finding: the
+    // model-facing enroll_origin could activate any origin when broad host
+    // access was granted, without a fresh exact-origin gesture). The Settings
+    // Enroll button is the ONLY legitimate path — it requests the exact
+    // origin's host permission via a real user gesture, then calls this route
+    // with ownerGesture: true. Any other caller (e.g. a model tool) is refused.
+    if (ownerGesture !== true) {
+      securityEvent("denied-enroll", `enroll of ${origin} refused — no owner gesture`);
+      return { ok: false, error: "enrollment requires the owner's approval — click Enroll in Settings" };
+    }
     // The OWNER-gesture path: the Settings page already requested the optional
     // host permission via chrome.permissions.request (a real user gesture); this
     // route registers the discovery scripts for the now-granted origin.
@@ -1964,7 +2031,15 @@ async function dispatchHook(hookId, payload) {
   const safePayload = redactSecrets(payload);
   const subs = await getHookSubscriptions();
   const matching = subs.filter((s) => s.hookId === hookId && s.enabled !== false);
+  // Bound the per-event fan-out: a single event must not enqueue an unbounded
+  // number of paid runs even if the registry is near its cap.
+  const MAX_DISPATCH_PER_EVENT = 50;
+  let dispatched = 0;
   for (const sub of matching) {
+    if (dispatched >= MAX_DISPATCH_PER_EVENT) {
+      console.warn(`hook ${hookId} fan-out capped at ${MAX_DISPATCH_PER_EVENT} runs`);
+      break;
+    }
     // Fail-closed re-check at dispatch time (the deny-list is authoritative).
     const allowed = await checkHookAllowed(hookId);
     if (!allowed.ok) {
@@ -1990,6 +2065,7 @@ async function dispatchHook(hookId, payload) {
       task,
       scoped: true,
     }).catch((e) => console.error(`hook ${hookId} run failed:`, e?.message ?? e));
+    dispatched += 1;
   }
 }
 
@@ -2129,3 +2205,94 @@ chrome.runtime.onStartup?.addListener(() => {
 recoverOnBoot().catch((e) =>
   console.error("recoverOnBoot:", e?.message ?? e)
 );
+
+// ---- omnibox (keyword → start a task) --------------------------------
+// The original plan's fast entry point: type "agent <task>" in the address bar
+// → suggestions (recipes + recent threads) → Enter opens the hub and runs the
+// task (or a recipe, or opens a thread). The omnibox keyword needs NO optional
+// permission; the agent's actions go through the existing grant flow.
+const OMNIBOX_HUB = () => chrome.runtime.getURL("ntp/ntp.html");
+
+function omniboxOpen(query, mode) {
+  // mode: "run" (run the query as a task) | "thread" (open a thread) | "recipe"
+  // (run a recipe's prompt). We always open the hub as a new tab + pass the
+  // intent through a URL hash the NTP reads on load (the newtab override can't
+  // take a query param directly, and a hash survives the extension URL).
+  const url = OMNIBOX_HUB() + `#omnibox=${encodeURIComponent(mode)}:${encodeURIComponent(query)}`;
+  chrome.tabs?.create?.({ url }).catch(() => {});
+}
+
+function escapeXml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+async function omniboxInputChanged(text, suggest) {
+  const q = String(text ?? "").trim().toLowerCase();
+  const out = [];
+  // Recent threads (up to 5) matching the query.
+  try {
+    const threads = (await listThreads()).filter(
+      (t) => !q || String(t.name ?? "").toLowerCase().includes(q),
+    );
+    for (const t of threads.slice(0, 5)) {
+      out.push({
+        content: `thread:${t.id}`,
+        description: `<dim>Open thread</dim> <match>${escapeXml(t.name ?? "Task")}</match>`,
+      });
+    }
+  } catch { /* no threads yet */ }
+  // Recipes matching the query (name or description).
+  for (const r of RECIPES) {
+    const hay = `${r.name} ${r.description}`.toLowerCase();
+    if (q && !hay.includes(q)) continue;
+    out.push({
+      content: `recipe:${r.id}`,
+      description:
+        `<dim>Recipe</dim> <match>${escapeXml(r.name)}</match>` +
+        `<dim> — ${escapeXml(r.description)}</dim>`,
+    });
+    if (out.length >= 10) break;
+  }
+  // A direct-ask suggestion so "agent <text>" can always just run the text.
+  if (text?.trim()) {
+    out.unshift({
+      content: text.trim(),
+      description: `<dim>Ask</dim> <match>${escapeXml(text.trim())}</match>`,
+    });
+  }
+  suggest(out.slice(0, 12));
+}
+
+async function omniboxInputEntered(content, disposition) {
+  const intent = parseOmniboxContent(content);
+  if (intent.kind === "recipe") {
+    const recipe = getRecipe(intent.id);
+    if (recipe?.prompt) {
+      omniboxOpen(`[Recipe: ${recipe.name}] ${recipe.prompt}`, "run");
+      return;
+    }
+    omniboxOpen(intent.id, "run"); // unknown recipe → run the text
+    return;
+  }
+  if (intent.kind === "thread") {
+    omniboxOpen(intent.id, "thread");
+    return;
+  }
+  if (intent.kind === "run") omniboxOpen(intent.query, "run");
+}
+
+// The omnibox event registrations are guarded with `chrome.omnibox?.` so a
+// build/load without the omnibox manifest key never throws (the key is always
+// present now, but the guard keeps the SW robust).
+chrome.omnibox?.onInputChanged?.addListener(omniboxInputChanged);
+chrome.omnibox?.onInputEntered?.addListener(omniboxInputEntered);
+chrome.omnibox?.onInputStarted?.addListener(() => {
+  try {
+    chrome.omnibox.setDefaultSuggestion({
+      description: "Ask the agent a task, or run a recipe",
+    });
+  } catch { /* best-effort */ }
+});

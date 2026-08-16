@@ -34,7 +34,7 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnl
     }
     return null;
   };
-  return {
+  const tools = {
     memory_get: tool({
       description: "Read a value from the agent's memory.",
       inputSchema: z.object({ key: z.string() }),
@@ -212,6 +212,10 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnl
       },
     }),
   };
+  // SCOPED (hook) runs are side-effect-free: no memory_set. Untrusted event
+  // data must never persist state to the hub/worker memory.
+  if (readOnly) delete tools.memory_set;
+  return tools;
 }
 
 /**
@@ -255,6 +259,9 @@ export function createAgent({
   // NOT disposable — its abort() cancels the current run only, and it is reused
   // across subsequent runs.
   disposable = false,
+  // `readOnlyMemory` (SCOPED hook runs): memory_set is omitted — untrusted
+  // event data must never persist state.
+  readOnlyMemory = false,
 }) {
   // The worker's immutable run identity, captured at run START. Because master
   // runs are serialized (withRunLock), at most one run is active per agent, so a
@@ -283,7 +290,7 @@ export function createAgent({
 
   const getRunGen = () => activeRun?.gen ?? null;
 
-  const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen), ...tools };
+  const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory), ...tools };
   const systemPrompt = system + buildSkillsPrompt(skills);
 
   const agent = agentDoCreateAgent({
@@ -444,6 +451,9 @@ export function createOrchestrator({
   extraTools = {}, // browser-control + management tools (chrome.* — SW context)
   delegateGuard = null, // async (origin) => { ok, error } — revalidates live
                         // enrollment/generation before a delegated worker runs
+  scoped = false, // SCOPED (hook) runs: the master gets read-only memory (no
+                  // memory_set) — the extraTools caller already supplies the
+                  // read-only browser set, so the master cannot persist state.
   onProgress = null, // async (event) => void — the live progress stream, threaded
                      // into BOTH the master agent and every delegated worker.
 }) {
@@ -548,6 +558,9 @@ export function createOrchestrator({
     tools: { ...delegate, ...extraTools },
     taskId,
     onProgress,
+    // SCOPED (hook) runs: the master's memory is READ-ONLY (no memory_set) —
+    // untrusted event data must never persist hub state.
+    readOnlyMemory: scoped,
   });
 
   return {

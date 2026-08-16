@@ -99,6 +99,15 @@ async function renderBackgroundAgents() {
       }
       row.addEventListener("toggle", async (ev) => {
         const enabled = ev.detail?.enabled;
+        // ENABLE time (a real user gesture): request the OPTIONAL notifications
+        // permission so the scheduled completions can surface as notifications.
+        // Never request from the SW (no gesture — Chrome rejects it). Best-effort:
+        // a denial just means the notification is skipped at run time.
+        if (enabled) {
+          try {
+            await chrome.permissions?.request?.({ permissions: ["notifications"] });
+          } catch { /* not grantable here — the run-time path skips the notification */ }
+        }
         const r = await send("background-agent.set", { id: a.id, enabled })
           .catch(() => ({ ok: false, error: "request failed" }));
         if (r?.ok) {
@@ -148,6 +157,48 @@ async function renderArtifacts() {
   }
 }
 
+// ── Recent activity (the agent run log — item 16) ────────────────────────
+// Shows what the agents DID (task / result / tool-call / tool-result /
+// screenshot entries, most-recent-first) so a background agent's work is
+// visible even without a live UI.
+function runLogText(entry) {
+  switch (entry?.type) {
+    case "task": return entry.task || "";
+    case "result": return entry.result || "";
+    case "tool-call": return (entry.tool || "tool") + (entry.args ? `(${entry.args})` : "");
+    case "tool-result": return (entry.tool || "tool") + (entry.result ? ` → ${entry.result}` : "");
+    case "screenshot": return entry.url || "screenshot";
+    default: return entry?.type || "";
+  }
+}
+async function renderRunLog() {
+  const el = document.getElementById("run-log");
+  if (!el) return;
+  const res = await send("run-log.list").catch(() => ({ entries: [] }));
+  const entries = Array.isArray(res.entries) ? res.entries : [];
+  el.replaceChildren();
+  if (!entries.length) {
+    el.innerHTML = `<div class="empty">No activity yet — agents you run will show up here.</div>`;
+    return;
+  }
+  for (const e of entries.slice(0, 12)) {
+    const row = document.createElement("div");
+    row.className = "rl";
+    const kind = document.createElement("span");
+    kind.className = "rl-kind " + (e.type || "");
+    kind.textContent = e.type || "";
+    const text = document.createElement("span");
+    text.className = "rl-text";
+    text.textContent = runLogText(e);
+    text.title = runLogText(e);
+    const ts = document.createElement("span");
+    ts.className = "rl-ts";
+    ts.textContent = timeAgo(e.ts);
+    row.append(kind, text, ts);
+    el.append(row);
+  }
+}
+
 // ── Tasks (the distinct task threads) ────────────────────────────────────
 function timeAgo(ts) {
   const d = Date.now() - (ts ?? 0);
@@ -173,9 +224,10 @@ async function renderTasks(activeId = null) {
     return;
   }
   for (const t of threads.slice(0, 40)) {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
     item.className = "thread-item";
+    item.setAttribute("role", "button");
+    item.tabIndex = 0;
     if (activeId && t.id === activeId) item.setAttribute("aria-current", "true");
     const dotState =
       t.status === "running" ? "running" : t.status === "error" ? "error" : "";
@@ -190,8 +242,27 @@ async function renderTasks(activeId = null) {
     const meta = document.createElement("span");
     meta.className = "t-meta";
     meta.textContent = timeAgo(t.updatedAt);
-    item.append(name, preview, meta);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "t-delete";
+    del.setAttribute("aria-label", `Delete task ${t.name || "Task"}`);
+    del.textContent = "×";
+    item.append(name, preview, meta, del);
     item.addEventListener("click", () => openThread(t.id));
+    item.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openThread(t.id); }
+    });
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const r = await send("thread.delete", { id: t.id })
+        .catch(() => ({ ok: false }));
+      if (!r?.ok) {
+        setStatus(`couldn't delete ${t.name || "task"}`, false);
+        return;
+      }
+      if (currentThreadId === t.id) hideThreadView();
+      await renderTasks();
+    });
     el.append(item);
   }
 }
@@ -273,6 +344,7 @@ renderSiteAgents();
 renderBackgroundAgents();
 renderArtifacts();
 renderTasks();
+renderRunLog();
 
 // ── the task sidebar: collapse/expand + new-task (item 6/7) ──────────────
 const side = document.getElementById("side");
@@ -346,3 +418,24 @@ setStatus("ready");
 installPageDiagnostics();
 refreshDiagnostics().catch(() => {});
 startDiagnosticPolling();
+
+// ---- omnibox entry (keyword → a task) --------------------------------
+// The SW opens the hub with `#omnibox=<mode>:<query>`; on load we run the task
+// (or open the thread) and clear the hash so a reload doesn't re-run it.
+async function handleOmniboxEntry() {
+  const m = /^#omnibox=([^:]+):(.*)$/s.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search); // clear the hash
+  const [, mode, raw] = m;
+  const query = decodeURIComponent(raw);
+  if (mode === "thread") {
+    await openThread(query);
+  } else if (query) {
+    // A task (or a recipe expanded by the SW into a prompt).
+    currentThreadId = null;
+    threadConversation.clear?.();
+    threadTitle.textContent = "New task";
+    await runThreadTurn(query, []);
+  }
+}
+handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));

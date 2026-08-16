@@ -172,21 +172,29 @@ export async function createThread(task) {
 }
 
 /** Fire-and-forget: upgrade a thread's name via the model, then update the
- * index. Never throws (best-effort). */
+ * index. Never throws (best-effort). The Prompt API await runs OUTSIDE the
+ * global thread mutex (the wider-goal review's finding: holding the mutex
+ * across a model await blocked ALL thread mutations); the lock is taken only
+ * for the read-modify-write of the stored name. */
 export async function nameThreadAsync(id, task) {
-  return withThreadLock(async () => {
+  let name;
   try {
-    const name = await generateThreadName(task);
-    const mem = masterMemory();
-    const thread = (await mem.get(`thread:${id}`)) ?? null;
-    if (!thread) return;
-    thread.name = name;
-    await mem.setTrusted(`thread:${id}`, thread);
-    const index = (await mem.get(INDEX_KEY)) ?? [];
-    const row = index.find((r) => r.id === id);
-    if (row) row.name = name;
-    await writeIndex(index);
-  } catch { /* best-effort naming */ }
+    name = await generateThreadName(task);
+  } catch {
+    return; // best-effort naming
+  }
+  return withThreadLock(async () => {
+    try {
+      const mem = masterMemory();
+      const thread = (await mem.get(`thread:${id}`)) ?? null;
+      if (!thread) return;
+      thread.name = name;
+      await mem.setTrusted(`thread:${id}`, thread);
+      const index = (await mem.get(INDEX_KEY)) ?? [];
+      const row = index.find((r) => r.id === id);
+      if (row) row.name = name;
+      await writeIndex(index);
+    } catch { /* best-effort naming */ }
   });
 }
 
@@ -218,6 +226,43 @@ export async function appendThreadMessage(id, message) {
     await writeIndex(index);
   }
   return thread;
+  });
+}
+
+/** Continue an EXISTING thread: atomically (under the thread lock) read the
+ * thread, snapshot its history (the PRIOR turns, excluding the new user turn),
+ * append the new user message, and return { thread, history }. This closes the
+ * wider-goal review's concurrency finding — two concurrent nudges previously
+ * read the SAME pre-append history, so the second run's model context diverged
+ * from the persisted thread. The read + append + history-derivation now happen
+ * under one lock. */
+export async function continueThread(id, task) {
+  if (!id) return { thread: null, history: [] };
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    if (!thread) return { thread: null, history: [] };
+    const history = historyFromThread(thread);
+    thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+    thread.messages.push({
+      role: "user",
+      content: boundText(task),
+      ts: Date.now(),
+    });
+    thread.messages = trimMessages(thread.messages);
+    thread.updatedAt = Date.now();
+    thread.status = "running";
+    await mem.setTrusted(`thread:${id}`, thread);
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const row = index.find((r) => r.id === id);
+    if (row) {
+      row.preview = previewOf(thread.messages[thread.messages.length - 1]?.content ?? "");
+      row.updatedAt = thread.updatedAt;
+      row.status = thread.status;
+      row.count = thread.messages.length;
+      await writeIndex(index);
+    }
+    return { thread, history };
   });
 }
 
