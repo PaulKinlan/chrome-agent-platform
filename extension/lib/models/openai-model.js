@@ -6,6 +6,7 @@
 // the extension never ships the owner's keys.
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { normaliseModelId } from "./model-name.js";
 
 // A single, deduped per-(url,status) log so a failing provider logs its HTTP
 // status + body ONCE (not once per retry attempt). The extension's describeError
@@ -26,13 +27,16 @@ async function _loggingFetch(input, init) {
       } catch { /* ignore */ }
       // eslint-disable-next-line no-console
       console.error(
-        `[provider] HTTP ${res.status} from ${url} — REQ ${JSON.stringify(init?.body ?? "").slice(0, 4000)} — RES ${body.slice(0, 4000)}`,
+        `[provider] HTTP ${res.status} from ${url}${body ? ` — ${body}` : ""}`,
       );
     }
   }
   return res;
 }
 
+// The Gemini OpenAI-compatible endpoint rejects a model name with the wrong
+// format (spaces/casing) with HTTP 400 "unexpected model name format".
+// normaliseModelId handles that ("Gemini 3.7 Flash" → "gemini-3.7-flash").
 export function createOpenAICompatibleModel(config) {
   const { baseURL, apiKey, model } = config ?? {};
   // baseURL + model are always required; apiKey is OPTIONAL (local Ollama has
@@ -40,6 +44,7 @@ export function createOpenAICompatibleModel(config) {
   if (!baseURL || !model) {
     throw new Error("OpenAI-compatible provider requires baseURL and model");
   }
+  const resolvedModel = normaliseModelId(model, baseURL);
   const openai = createOpenAICompatible({
     baseURL,
     apiKey: apiKey ?? "",
@@ -49,5 +54,5 @@ export function createOpenAICompatibleModel(config) {
     // AI_APICallError with statusCode/responseBody for describeError to map.
     fetch: _loggingFetch,
   });
-  return openai(model);
+  return openai(resolvedModel);
 }
