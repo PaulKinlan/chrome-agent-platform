@@ -63,6 +63,13 @@ there. The reviewer agents check against it.
   (docs/components.html — the playground where components are tested in isolation
   without running the extension). The gallery imports the SAME components.js
   (scripts/sync-gallery.mjs; check:gallery fails on drift).
+- **Docs never drift (Paul, 2026-08-17).** Before every commit, update the docs to
+  match the change: PLAN.md (the roadmap state), docs/KNOWN-ISSUES.md (the open/
+  fixed findings), docs/DESIGN.md (the design system), docs/OPEN-QUESTIONS.md,
+  docs/UI-FIXES-TRACKER.md, CHANGELOG.md (the version entry). A commit that lands
+  a feature/fix WITHOUT updating the docs is incomplete — the docs are part of the
+  change. Stale docs are a defect (GLM flagged PLAN.md showing landed items as
+  "in flight"). When in doubt, grep the docs for the thing you changed.
 - **Cross-subsystem consistency (Paul, 2026-08-17).** When you change one
   subsystem, CHECK + UPDATE every related part. Examples that broke: renaming
   recipes→skills left the / command saying "task" + the autocomplete not updated;
