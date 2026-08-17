@@ -724,8 +724,13 @@ class MicButton extends Component {
         for (let i = 0; i < e.results.length; i++) {
           const res = e.results[i];
           if (!res?.[0]) continue;
-          if (res.isFinal) finalText += res[0].transcript;
-          else interimText += res[0].transcript;
+          if (res.isFinal) {
+            // Separate committed utterances with a space — naive `+=` joined
+            // "word1"+"word2" into "word1word2" across the recognition gap.
+            finalText = finalText ? `${finalText} ${res[0].transcript}` : res[0].transcript;
+          } else {
+            interimText = interimText ? `${interimText} ${res[0].transcript}` : res[0].transcript;
+          }
         }
         const text = (finalText + (finalText && interimText ? " " : "") + interimText).trim();
         this._emit("transcript", { text, final: !interimText });

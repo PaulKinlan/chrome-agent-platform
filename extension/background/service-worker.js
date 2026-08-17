@@ -7,6 +7,7 @@ import {
   getModelForAgent,
   getProviderConfig,
   PROVIDER_CHOICES,
+  resolveModelFromConfig,
   setProviderConfig,
 } from "../lib/provider.js";
 import {
@@ -269,7 +270,7 @@ import {
   unregisterOriginScripts,
   withOriginLock,
 } from "../lib/enrollment.js";
-import { tool } from "ai";
+import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import {
@@ -1600,13 +1601,13 @@ const handlers = {
     const agent = await getNamedAgent(id);
     return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills }) {
-    const r = await createNamedAgent({ id, name, role, avatar, skills });
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }) {
+    const r = await createNamedAgent({ id, name, role, avatar, skills, coreAssets });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills }) {
-    const r = await updateNamedAgent(id, { name, role, avatar, skills });
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }) {
+    const r = await updateNamedAgent(id, { name, role, avatar, skills, coreAssets });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     return r;
   },
@@ -1650,6 +1651,37 @@ const handlers = {
       return { ok: true, avatar, agent: updated.agent };
     }
     return { ok: true, avatar: avatar ?? null };
+  },
+  async "named-agent.refine"({ id, role }) {
+    // Improve the agent's role/system prompt (the owner's intent) into a clearer,
+    // more effective instruction, using the Prompt API (on-device, free) when
+    // available, else the configured provider. Never writes — returns the refined
+    // text for the dialog to preview + the owner to accept.
+    const raw = String(role ?? "").trim();
+    if (!raw) return { ok: false, error: "nothing to refine — describe what the agent does first" };
+    let refined = null;
+    try {
+      const promptApi = await resolveModelFromConfig({ provider: "prompt-api", baseURL: "", apiKey: "", model: "gemini-nano" });
+      const model = promptApi?.modelId === "gemini-nano" ? promptApi.model : (await getModel()).model;
+      const r = await generateText({
+        model,
+        maxOutputTokens: 160,
+        prompt:
+          `Rewrite this agent description into a crisp, specific system prompt for an autonomous browser agent. ` +
+          `Keep it one short paragraph (≤160 tokens), first-person or imperative, concrete about WHAT it does and WHEN. ` +
+          `Do not add capabilities it doesn't mention.\n\nAgent description:\n${raw}\n\nSystem prompt:`,
+      });
+      refined = typeof r?.text === "string" ? r.text.trim() : null;
+    } catch {
+      refined = null;
+    }
+    if (!refined) {
+      // Fallback: a deterministic tidy-up (trim + capitalize + punctuation) so the
+      // button still returns something useful when no model is available.
+      refined = raw.replace(/\s+/g, " ").trim();
+      if (refined && !/[.!?]$/.test(refined)) refined += ".";
+    }
+    return { ok: true, refined };
   },
   async "named-agent.run"({ id, task, attachments, runId }) {
     // RUN/DELEGATE a task to a named agent (the wider-goal review found named

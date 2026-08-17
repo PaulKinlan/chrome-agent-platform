@@ -622,29 +622,165 @@ function configButton(text, variant) {
   }
   return b;
 }
+// ── the RICH agent-config dialog (item: avatar + name + role + skills + mic +
+//    core assets + refine) — shared by the Edit (named) + Create flows. Reuses
+//    the design-system components (<mic-button>, <attach-button>, <agent-dialog>)
+//    + the field helpers so it matches the rest of the UI.
+function agentAssetRow(name, type) {
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.alignItems = "center";
+  row.style.justifyContent = "space-between";
+  row.style.gap = "8px";
+  row.style.fontSize = "12.5px";
+  row.style.padding = "6px 8px";
+  row.style.border = "1px solid var(--border,#e3e0d9)";
+  row.style.borderRadius = "8px";
+  const lbl = document.createElement("span");
+  lbl.textContent = `${name}${type ? ` · ${type}` : ""}`;
+  lbl.style.overflow = "hidden";
+  lbl.style.textOverflow = "ellipsis";
+  lbl.style.whiteSpace = "nowrap";
+  const rm = document.createElement("button");
+  rm.type = "button";
+  rm.textContent = "✕";
+  rm.setAttribute("aria-label", `remove ${name}`);
+  rm.style.border = "0";
+  rm.style.background = "transparent";
+  rm.style.cursor = "pointer";
+  rm.style.color = "var(--muted,#635e56)";
+  rm.style.fontSize = "14px";
+  row.append(lbl, rm);
+  return { row, rm };
+}
+
 async function openAgentConfig() {
   if (currentAgentKind !== "named" || !currentAgentId) return;
   const res = await send("named-agent.get", { id: currentAgentId }).catch(() => ({ ok: false }));
   const agent = res.ok ? res.agent : null;
   if (!agent) { setStatus("Agent not found", false); return; }
+  await buildAgentConfigDialog({
+    title: `Edit “${agent.name || currentAgentId}”`,
+    name: agent.name ?? "",
+    role: agent.role ?? "",
+    avatar: agent.avatar ?? null,
+    initialSkills: agent.skills ?? [],
+    initialCoreAssets: agent.coreAssets ?? [],
+    canRegenerateAvatar: true,
+    savedLabel: "Save",
+    onSave: async (v) => {
+      const r = await send("named-agent.update", {
+        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
+      }).catch(() => ({ ok: false }));
+      return r?.ok !== false ? { ok: true } : { ok: false, error: r?.error ?? "unknown" };
+    },
+    onSaved: async () => { renderNamedAgents(); await openAgentChat(currentAgentId); },
+  });
+}
+
+function openQuickCreateAgent() {
+  buildAgentConfigDialog({
+    title: "Create an agent",
+    name: "",
+    role: "",
+    avatar: null,
+    initialSkills: [],
+    initialCoreAssets: [],
+    canRegenerateAvatar: false,
+    savedLabel: "Create agent",
+    onSave: async (v) => {
+      const r = await send("named-agent.create", {
+        name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
+      }).catch(() => ({ ok: false }));
+      return r?.ok ? { ok: true, id: r.agent?.id ?? v.name } : { ok: false, error: r?.error ?? "unknown" };
+    },
+    onSaved: async (result) => { renderNamedAgents(); await openAgentChat(result?.id); },
+  });
+}
+
+// Build the rich agent dialog. Returns via the onSave/onSaved callbacks (the
+// dialog owns its own lifecycle).
+async function buildAgentConfigDialog(opts) {
   const skillsRes = await send("skill.list").catch(() => ({ skills: [] }));
   const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
-  const agentSkillIds = new Set((agent.skills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
+  const agentSkillIds = new Set((opts.initialSkills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
 
   const dialog = document.createElement("agent-dialog");
-  dialog.setAttribute("title", `Edit “${agent.name || currentAgentId}”`);
+  dialog.setAttribute("title", opts.title);
   const body = document.createElement("div");
   body.style.display = "flex";
   body.style.flexDirection = "column";
   body.style.gap = "12px";
-  body.style.minWidth = "min(60vw, 460px)";
+  body.style.minWidth = "min(64vw, 520px)";
+  body.style.maxHeight = "min(76vh, 640px)";
+  body.style.overflow = "auto";
 
-  const nameField = configField("Name", "input", agent.name ?? "");
-  const roleField = configField("Role / system prompt", "textarea", agent.role ?? "", 4);
-  body.append(nameField.wrap, roleField.wrap);
+  // Avatar: a preview + regenerate (edit only) + a custom upload.
+  let avatarValue = opts.avatar ?? null;
+  const avatarRow = document.createElement("div");
+  avatarRow.style.display = "flex";
+  avatarRow.style.alignItems = "center";
+  avatarRow.style.gap = "10px";
+  const avatarImg = document.createElement("img");
+  const avatarLabel = document.createElement("span");
+  avatarLabel.textContent = "Avatar";
+  avatarLabel.style.fontWeight = "600";
+  avatarLabel.style.fontSize = "13px";
+  avatarLabel.style.marginRight = "auto";
+  function renderAvatarPreview() {
+    if (avatarValue) {
+      avatarImg.src = avatarValue;
+      avatarImg.alt = "agent avatar";
+      avatarImg.style.width = "36px";
+      avatarImg.style.height = "36px";
+      avatarImg.style.borderRadius = "50%";
+      avatarImg.style.objectFit = "cover";
+      avatarImg.style.border = "1px solid var(--border,#e3e0d9)";
+      avatarImg.style.display = "block";
+    } else {
+      avatarImg.removeAttribute("src");
+      avatarImg.style.display = "none";
+    }
+  }
+  renderAvatarPreview();
+  const uploadBtn = configButton("Upload", "secondary");
+  const uploadInput = document.createElement("input");
+  uploadInput.type = "file";
+  uploadInput.accept = "image/*";
+  uploadInput.style.display = "none";
+  uploadBtn.addEventListener("click", () => uploadInput.click());
+  uploadInput.addEventListener("change", () => {
+    const f = uploadInput.files?.[0];
+    if (!f) return;
+    const fr = new FileReader();
+    fr.onload = () => { avatarValue = String(fr.result); renderAvatarPreview(); };
+    fr.readAsDataURL(f);
+  });
+  avatarRow.append(avatarImg, avatarLabel, uploadBtn, uploadInput);
+  body.append(avatarRow);
 
-  // Skills: the reusable capabilities (the recipes→skills registry) the agent
-  // can have attached — each checked skill is injected into its system prompt.
+  const nameField = configField("Name", "input", opts.name ?? "");
+
+  // Role (the system prompt / what the agent does) + mic (dictate) + refine.
+  const roleField = configField("Role / what it does", "textarea", opts.role ?? "", 4);
+  const roleTools = document.createElement("div");
+  roleTools.style.display = "flex";
+  roleTools.style.gap = "8px";
+  roleTools.style.alignItems = "center";
+  const mic = document.createElement("mic-button");
+  mic.setAttribute("label", "Dictate the role");
+  mic.addEventListener("transcript", (e) => {
+    const text = e?.detail?.text ?? "";
+    if (!text) return;
+    const cur = roleField.el.value.trim();
+    roleField.el.value = cur ? `${cur} ${text}` : text;
+  });
+  mic.addEventListener("mic-error", (e) => setStatus(e?.detail?.message ?? "mic error", false));
+  const refineBtn = configButton("Refine", "secondary");
+  roleTools.append(mic, refineBtn);
+  body.append(nameField.wrap, roleField.wrap, roleTools);
+
+  // Skills (pull-in).
   const skillsBox = document.createElement("fieldset");
   skillsBox.style.border = "1px solid var(--border,#e3e0d9)";
   skillsBox.style.borderRadius = "8px";
@@ -684,23 +820,103 @@ async function openAgentConfig() {
   }
   body.append(skillsBox);
 
+  // Core assets: files whose content becomes part of the agent's context.
+  const coreAssets = [];
+  const assetsBox = document.createElement("fieldset");
+  assetsBox.style.border = "1px solid var(--border,#e3e0d9)";
+  assetsBox.style.borderRadius = "8px";
+  assetsBox.style.padding = "10px";
+  assetsBox.style.margin = "0";
+  const assetsLegend = document.createElement("legend");
+  assetsLegend.textContent = "Core assets";
+  assetsLegend.style.fontWeight = "600";
+  assetsLegend.style.fontSize = "13px";
+  assetsBox.append(assetsLegend);
+  const assetsHint = document.createElement("p");
+  assetsHint.textContent = "Attach a text file or image as a core asset — its content becomes part of the agent's instructions.";
+  assetsHint.style.fontSize = "12px";
+  assetsHint.style.color = "var(--muted,#635e56)";
+  assetsHint.style.margin = "0 0 6px";
+  assetsBox.append(assetsHint);
+  const assetsList = document.createElement("div");
+  assetsList.style.display = "flex";
+  assetsList.style.flexDirection = "column";
+  assetsList.style.gap = "6px";
+  const attach = document.createElement("attach-button");
+  attach.setAttribute("label", "Add a core asset");
+  attach.addEventListener("attach", async (e) => {
+    const d = e?.detail ?? {};
+    const file = d.file;
+    let content = d.content ?? "";
+    // Text files: read the actual text (the model can read it); images/other:
+    // keep the data URL as a reference.
+    if (file && (typeof file.type === "string" && file.type.startsWith("text/") || /\.(txt|md|json|csv|html|css|js|ts)$/i.test(file.name ?? ""))) {
+      try {
+        content = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsText(file); });
+      } catch { content = d.dataURL ?? ""; }
+    } else {
+      content = d.dataURL ?? content;
+    }
+    coreAssets.push({ name: d.name ?? file?.name ?? "asset", type: d.type ?? file?.type ?? "text/plain", content });
+    renderAssets();
+  });
+  function renderAssets() {
+    assetsList.replaceChildren();
+    for (let i = 0; i < coreAssets.length; i++) {
+      const a = coreAssets[i];
+      const { row, rm } = agentAssetRow(a.name, a.type);
+      rm.addEventListener("click", () => { coreAssets.splice(i, 1); renderAssets(); });
+      assetsList.append(row);
+    }
+  }
+  renderAssets();
+  assetsBox.append(attach, assetsList);
+  body.append(assetsBox);
+
+  // Actions.
   const actions = document.createElement("div");
   actions.style.display = "flex";
   actions.style.justifyContent = "flex-end";
   actions.style.gap = "8px";
-  const avatarBtn = configButton("Regenerate avatar", "secondary");
+  const regenBtn = opts.canRegenerateAvatar ? configButton("Regenerate avatar", "secondary") : null;
   const cancelBtn = configButton("Cancel", "secondary");
-  const saveBtn = configButton("Save", "primary");
-  actions.append(avatarBtn, cancelBtn, saveBtn);
+  const saveBtn = configButton(opts.savedLabel ?? "Save", "primary");
+  if (regenBtn) actions.append(regenBtn);
+  actions.append(cancelBtn, saveBtn);
   body.append(actions);
   dialog.append(body);
   document.body.append(dialog);
 
+  refineBtn.addEventListener("click", async () => {
+    const cur = roleField.el.value.trim();
+    if (!cur) { setStatus("Describe what the agent does first, then Refine.", false); return; }
+    refineBtn.disabled = true;
+    refineBtn.textContent = "Refining…";
+    const r = await send("named-agent.refine", { role: cur }).catch(() => ({ ok: false }));
+    refineBtn.disabled = false;
+    refineBtn.textContent = "Refine";
+    if (r?.ok && r.refined) roleField.el.value = r.refined;
+    else setStatus(`Refine failed: ${r?.error ?? "unknown"}`, false);
+  });
+
   cancelBtn.addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => dialog.remove());
+  if (regenBtn) {
+    regenBtn.addEventListener("click", async () => {
+      regenBtn.disabled = true;
+      regenBtn.textContent = "Generating…";
+      const r = await send("named-agent.avatar", { id: currentAgentId }).catch(() => ({ ok: false }));
+      regenBtn.disabled = false;
+      regenBtn.textContent = "Regenerate avatar";
+      if (r?.ok && r.avatar) { avatarValue = r.avatar; renderAvatarPreview(); setStatus("Avatar regenerated."); }
+      else setStatus(`Avatar failed: ${r?.error ?? "unknown"}`, false);
+    });
+  }
+
   saveBtn.addEventListener("click", async () => {
     const name = nameField.el.value.trim();
     const role = roleField.el.value.trim();
+    if (!name) { setStatus("An agent needs a name.", false); nameField.el.focus(); return; }
     const skills = [];
     for (const [id, cb] of skillChecks) {
       if (cb.checked) {
@@ -708,85 +924,18 @@ async function openAgentConfig() {
         skills.push(s ? { id: s.id ?? s.name, name: s.name ?? s.id, description: s.description ?? "" } : { id, name: id });
       }
     }
-    const r = await send("named-agent.update", { id: currentAgentId, name, role, skills }).catch(() => ({ ok: false }));
-    if (r?.ok !== false) {
-      dialog.close();
-      setStatus("Agent updated.");
-      renderNamedAgents();
-      await openAgentChat(currentAgentId);
-    } else {
-      setStatus(`Update failed: ${r?.error ?? "unknown"}`, false);
-    }
-  });
-  avatarBtn.addEventListener("click", async () => {
-    avatarBtn.disabled = true;
-    avatarBtn.textContent = "Generating…";
-    const r = await send("named-agent.avatar", { id: currentAgentId }).catch(() => ({ ok: false }));
-    avatarBtn.disabled = false;
-    avatarBtn.textContent = "Regenerate avatar";
-    if (r?.ok) { setStatus("Avatar regenerated."); renderNamedAgents(); }
-    else setStatus(`Avatar failed: ${r?.error ?? "unknown"}`, false);
-  });
-  dialog.show();
-}
-
-// ── quick-create an agent (item: the sidebar "+" in the Agents section) ─────
-//    A minimal owner-facing create form: a name + a role → named-agent.create
-//    (the id/avatar are derived from the name). Reuses the agent-config field
-//    helpers + the <agent-dialog> so it matches the Edit flow.
-function openQuickCreateAgent() {
-  const dialog = document.createElement("agent-dialog");
-  dialog.setAttribute("title", "Create an agent");
-  const body = document.createElement("div");
-  body.style.display = "flex";
-  body.style.flexDirection = "column";
-  body.style.gap = "12px";
-  body.style.minWidth = "min(60vw, 460px)";
-
-  const nameField = configField("Name", "input", "");
-  const roleField = configField("Role / what it does", "textarea", "", 3);
-  body.append(nameField.wrap, roleField.wrap);
-
-  const hint = document.createElement("p");
-  hint.textContent =
-    "An agent is a named, persistent teammate with its own memory + history. " +
-    "Give it a name + what it does; you can add skills + an avatar after.";
-  hint.style.fontSize = "12.5px";
-  hint.style.color = "var(--muted,#635e56)";
-  hint.style.margin = "0";
-  body.append(hint);
-
-  const actions = document.createElement("div");
-  actions.style.display = "flex";
-  actions.style.justifyContent = "flex-end";
-  actions.style.gap = "8px";
-  const cancelBtn = configButton("Cancel", "secondary");
-  const createBtn = configButton("Create agent", "primary");
-  actions.append(cancelBtn, createBtn);
-  body.append(actions);
-  dialog.append(body);
-  document.body.append(dialog);
-
-  cancelBtn.addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => dialog.remove());
-  createBtn.addEventListener("click", async () => {
-    const name = nameField.el.value.trim();
-    const role = roleField.el.value.trim();
-    if (!name) { setStatus("An agent needs a name.", false); return; }
-    createBtn.disabled = true;
-    createBtn.textContent = "Creating…";
-    const r = await send("named-agent.create", { name, role }).catch(() => ({ ok: false }));
-    createBtn.disabled = false;
-    createBtn.textContent = "Create agent";
+    saveBtn.disabled = true;
+    const r = await opts.onSave({ name, role, avatar: avatarValue, skills, coreAssets });
+    saveBtn.disabled = false;
     if (r?.ok) {
       dialog.close();
-      setStatus(`Agent “${name}” created.`);
-      renderNamedAgents();
-      await openAgentChat(r.agent?.id ?? name);
+      setStatus(`Agent “${name}” saved.`);
+      await opts.onSaved?.(r);
     } else {
-      setStatus(`Create failed: ${r?.error ?? "unknown"}`, false);
+      setStatus(`Save failed: ${r?.error ?? "unknown"}`, false);
     }
   });
+
   dialog.show();
   nameField.el.focus();
 }

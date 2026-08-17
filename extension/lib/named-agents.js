@@ -24,6 +24,27 @@ const MAX_AGENTS = 50;
 const MAX_NAME_LEN = 48;
 const MAX_ROLE_LEN = 200;
 const MAX_SKILLS = 32;
+const MAX_CORE_ASSETS = 8;
+const MAX_CORE_ASSET_BYTES = 4000;
+
+/** Normalize the core assets (files the owner attaches as the agent's core
+ * context — a text file's content, or an image's data URL). Bounded so a
+ * hostile/huge attachment can't bloat the chrome.storage registry. */
+export function normalizeCoreAssets(assets) {
+  if (!Array.isArray(assets)) return [];
+  const out = [];
+  for (const a of assets) {
+    if (!a || typeof a !== "object") continue;
+    const name = String(a.name ?? "").slice(0, 96);
+    const type = String(a.type ?? "text/plain").slice(0, 64);
+    let content = a.content == null ? "" : String(a.content);
+    if (content.length > MAX_CORE_ASSET_BYTES) content = content.slice(0, MAX_CORE_ASSET_BYTES) + "…";
+    if (!name && !content) continue;
+    out.push({ name, type, content });
+    if (out.length >= MAX_CORE_ASSETS) break;
+  }
+  return out;
+}
 
 let agentsMutex = Promise.resolve();
 function withAgentsLock(fn) {
@@ -121,12 +142,13 @@ export async function getNamedAgentProvider(id) {
  * natural-language path all land here); it also provisions the agent's own OPFS
  * sandbox (its `agents.md` operating instructions).
  */
-export async function createNamedAgent({ id, name, role = "", avatar = null, skills = [], agentsMd = null, provider = null }) {
+export async function createNamedAgent({ id, name, role = "", avatar = null, skills = [], coreAssets = [], agentsMd = null, provider = null }) {
   const cleanName = String(name ?? "").trim();
   if (!cleanName) return { ok: false, error: "an agent needs a name" };
   if (cleanName.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
   const roleText = String(role ?? "").trim().slice(0, MAX_ROLE_LEN);
   const skillList = Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : [];
+  const assetList = normalizeCoreAssets(coreAssets);
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const slug = slugifyAgentId(id) || slugifyAgentId(cleanName) || `agent-${Date.now()}`;
@@ -140,6 +162,7 @@ export async function createNamedAgent({ id, name, role = "", avatar = null, ski
       role: roleText,
       avatar: avatar ? String(avatar) : (existing?.avatar ?? null),
       skills: skillList,
+      coreAssets: assetList,
       provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
@@ -171,6 +194,7 @@ export async function updateNamedAgent(id, patch = {}) {
     if (patch.role !== undefined) next.role = String(patch.role).trim().slice(0, MAX_ROLE_LEN);
     if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
     if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
+    if (patch.coreAssets !== undefined) next.coreAssets = normalizeCoreAssets(patch.coreAssets);
     if (patch.provider !== undefined) {
       // `null` clears the override (inherit the global); a complete config sets it.
       next.provider = normalizeAgentProvider(patch.provider);
