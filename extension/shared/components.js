@@ -220,17 +220,45 @@ export const HTML_FRAME_CSP =
   "object-src 'none'; frame-src 'none'; media-src data: blob:; font-src data:;";
 
 /**
- * Inject the CSP <meta> as early as possible into an untrusted HTML document
- * (after <head>, or prepended to a fragment) so no remote load can precede it.
+ * A navigation guard injected FIRST (before any attacker content) into a
+ * generated-UI frame. The CSP blocks NETWORK loads, but it cannot stop the
+ * frame navigating ITSELF (self-location / window.open / link + form
+ * navigation) — a sandboxed iframe with allow-scripts can navigate its own
+ * browsing context. This guard neutralizes the navigation vectors:
+ * window.open, location.assign/replace, link clicks, form submits, and a
+ * best-effort location-href shadow. (The location.href setter is not fully
+ * overridable — that residual is closed by the parent intercepting the frame's
+ * navigation requests; see the security suite.)
+ */
+export function navigationGuardScript() {
+  return `<script data-cap-navguard>${[
+    "(function(){",
+    "try{window.open=function(){return null;};}catch(e){}",
+    "try{if(window.location){window.location.assign=function(){};window.location.replace=function(){};}}catch(e){}",
+    // Best-effort: shadow window.location with a non-navigating object.
+    "try{var L=window.location;Object.defineProperty(window,'location',{configurable:false,get:function(){return L;},set:function(){}});}catch(e){}",
+    "function block(e){e.preventDefault();e.stopPropagation();}",
+    "document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href],area[href]'):null;if(a)block(e);},true);",
+    "document.addEventListener('submit',block,true);",
+    "})();"].join("")}</script>`;
+}
+
+/** Strip the navigation/meta vectors a CSP cannot block (meta-refresh). */
+export function stripNavigationMeta(html) {
+  return String(html ?? "").replace(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*>/gi, "");
+}
+
+/**
+ * Inject the CSP <meta> + the navigation guard as early as possible into an
+ * untrusted HTML document — PREPENDED before ANY content (never after <head>,
+ * so no remote load or navigation can precede them). Returns the guarded HTML.
  */
 export function injectCspMeta(html) {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${HTML_FRAME_CSP}">`;
-  const s = String(html ?? "");
-  const m = s.match(/<head[^>]*>/i);
-  if (m) {
-    return s.replace(m[0], m[0] + meta);
-  }
-  return meta + s;
+  const s = stripNavigationMeta(String(html ?? ""));
+  // ALWAYS prepend the guard + the CSP before any content (the prior
+  // insert-after-<head> let an <img>/<script> before the <head> load first).
+  return navigationGuardScript() + meta + s;
 }
 
 /**
@@ -277,11 +305,18 @@ export function preferenceBootstrapScript(nonce) {
  * Inject the CSP <meta> + the preference bootstrap as early as possible.
  */
 export function injectFrameGuards(html, nonce) {
+  // injectCspMeta already PREPENDS the navigation guard + the CSP before any
+  // content. Prepend the preference bootstrap too (after the guard/CSP, before
+  // the attacker content) — never after a <head>.
   const guarded = injectCspMeta(html);
   const s = String(guarded ?? "");
-  const m = s.match(/<head[^>]*>/i);
-  if (m) {
-    return s.replace(m[0], m[0] + preferenceBootstrapScript(nonce));
+  // The nav guard + CSP are at the very start; insert the bootstrap after them
+  // (still before the attacker content).
+  const navGuard = navigationGuardScript();
+  if (s.startsWith(navGuard)) {
+    const rest = s.slice(navGuard.length);
+    const m = rest.match(/^<meta[^>]*Content-Security-Policy[^>]*>/i);
+    if (m) return navGuard + m[0] + preferenceBootstrapScript(nonce) + rest.slice(m[0].length);
   }
   return preferenceBootstrapScript(nonce) + s;
 }
@@ -1063,6 +1098,105 @@ class CapabilityRow extends Component {
 }
 customElements.define("capability-row", CapabilityRow);
 
+/* <artifact-card id name type size origin time> — an artifact card for the
+ * gallery: a LIVE preview thumbnail (an html artifact renders in a sandboxed
+ * iframe, an image renders inline, text/data renders as a truncated preview),
+ * the name + type/size + source origin + time, and actions (open / reuse /
+ * delete). The preview CONTENT is set via the `preview` property (not an
+ * attribute — content is large); the card renders a placeholder until it is
+ * set. Emits open / reuse / delete. */
+class ArtifactCard extends Component {
+  static get observedAttributes() {
+    return ["id", "name", "type", "size", "origin", "time"];
+  }
+  set preview(v) {
+    this._preview = v ?? "";
+    if (this._rendered) this._render();
+  }
+  get preview() { return this._preview ?? ""; }
+  _render() {
+    const id = this.getAttribute("id") || "";
+    const name = this.getAttribute("name") || "Untitled";
+    const type = this.getAttribute("type") || "data";
+    const size = this.getAttribute("size") || "0";
+    const origin = this.getAttribute("origin") || "master";
+    const time = this.getAttribute("time") || "";
+    const hasPreview = this._preview != null && this._preview !== "";
+    let previewHtml = "";
+    if (hasPreview) {
+      if (type === "html") {
+        previewHtml = renderHtmlFrame(this._preview);
+      } else if (type === "image") {
+        previewHtml = `<img class="img" src="${escapeHtml(this._preview)}" alt="">`;
+      } else {
+        const text = String(this._preview ?? "").slice(0, 400);
+        previewHtml = `<pre class="text">${escapeHtml(text)}</pre>`;
+      }
+    } else {
+      previewHtml = `<div class="placeholder"><span class="picon">${ICONS.image}</span><span>${escapeHtml(type)}</span></div>`;
+    }
+    const t = time ? new Date(Number(time) || time).toLocaleString() : "";
+    mountTemplate(this, `
+      :host { display:block; }
+      .card { display:flex; flex-direction:column; background:var(--panel,#ffffff);
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px);
+        overflow:hidden; box-shadow:var(--shadow-1, 0 1px 2px rgba(29,27,24,.05)); }
+      .preview { position:relative; height:132px; background:var(--panel-2,#efede8);
+        overflow:hidden; border-bottom:1px solid var(--border,#e3e0d9); cursor:pointer; }
+      .preview .html-frame, .preview .html-frame iframe { width:100%; height:100%; }
+      .preview .html-frame iframe { border:0; pointer-events:none; transform:scale(1); transform-origin:top left; }
+      .img { width:100%; height:100%; object-fit:cover; display:block; }
+      .text { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-size:11px; line-height:1.4; color:var(--muted,#635e56); white-space:pre-wrap;
+        word-break:break-word; overflow:hidden; }
+      .placeholder { height:100%; display:flex; flex-direction:column; gap:6px;
+        align-items:center; justify-content:center; color:var(--muted,#635e56);
+        font-size:12px; text-transform:capitalize; }
+      .placeholder .picon { display:inline-flex; color:var(--accent,#0e6e63); }
+      .placeholder .picon svg { width:24px; height:24px; }
+      .body { padding:10px 12px; display:flex; flex-direction:column; gap:2px; min-width:0; }
+      .name { font-weight:600; font-size:var(--text-sm,13px); color:var(--text,#1d1b18);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .meta { font-size:var(--text-xs,12px); color:var(--muted,#635e56);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .actions { display:flex; gap:6px; padding:0 12px 10px; }
+      .actions button { flex:1; display:inline-flex; align-items:center; justify-content:center;
+        gap:5px; font:inherit; font-size:var(--text-xs,12px); padding:5px 6px;
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+        background:transparent; color:var(--text,#1d1b18); cursor:pointer; }
+      .actions button:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .actions button.danger:hover { border-color:var(--danger,#b3261e); color:var(--danger,#b3261e); }
+      .actions button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      .actions button svg { width:14px; height:14px; }
+    `, `<div class="card">
+      <div class="preview" part="preview" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}">${previewHtml}</div>
+      <div class="body">
+        <span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        <span class="meta">${escapeHtml(type)} · ${escapeHtml(size)} B · ${escapeHtml(origin)}${t ? " · " + escapeHtml(t) : ""}</span>
+      </div>
+      <div class="actions">
+        <button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>
+        <button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>
+      </div>
+    </div>`);
+  }
+  _wire() {
+    const detail = () => ({
+      id: this.getAttribute("id") || "",
+      name: this.getAttribute("name") || "Untitled",
+      type: this.getAttribute("type") || "data",
+      origin: this.getAttribute("origin") || "master",
+    });
+    this._root.querySelector(".preview")?.addEventListener("click", () => this._emit("open", detail()));
+    this._root.querySelector(".preview")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open", detail()); }
+    });
+    this._root.querySelector('[data-act="reuse"]')?.addEventListener("click", () => this._emit("reuse", detail()));
+    this._root.querySelector('[data-act="delete"]')?.addEventListener("click", () => this._emit("delete", detail()));
+  }
+}
+customElements.define("artifact-card", ArtifactCard);
+
 /* <code-block lang="python">code text</code-block>
  * A fenced code block: monospace, a subtle panel surface, a language label,
  * horizontal scroll + a copy button. Content is its light-DOM text (already
@@ -1620,6 +1754,24 @@ class AgentComposer extends Component {
   get input() { return this._input; }
   get value() { return this._input?.value ?? ""; }
   set value(v) { if (this._input) this._input.value = v; }
+  /** Public: attach something (a reused artifact, an external reference) to the
+   * composer — pushes it onto the pending attachments + renders a removable
+   * chip, exactly like the + menu does. Returns the stored detail. */
+  addAttachment(detail) {
+    if (!detail) return null;
+    const d = {
+      name: detail.name ?? "attachment",
+      type: detail.type,
+      size: detail.size,
+      dataURL: detail.dataURL,
+      content: detail.content,
+      kind: detail.kind ?? "file",
+    };
+    this.attachments.push(d);
+    this._addChip(d);
+    this._emit("attach", d);
+    return d;
+  }
   setStatus(text, ready = true) {
     if (this._status) this._status.textContent = text || "";
     this._emit("status", { text, ready });

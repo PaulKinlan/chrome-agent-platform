@@ -2081,7 +2081,40 @@ chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
 });
 chrome.runtime.onInstalled?.addListener(() => {
   recordBrowserEvent("extension-installed", {}).catch(() => {});
+  setupGenerativeUiNetworkGuard().catch(() => {});
 });
+
+// ---- generative-UI network guard (the self-navigation exfil fix) ----
+// The generated-UI frames (renderHtmlFrame) are sandboxed srcdoc iframes. The
+// injected CSP blocks network LOADS, but a CSP cannot stop the frame navigating
+// ITSELF (location.href = attacker) — and the location object is unforgeable,
+// so an in-frame guard cannot fully block it either. declarativeNetRequest
+// closes it: block any external (http/https) sub_frame navigation initiated
+// from this extension's pages. The extension uses no legitimate external
+// sub-frames (its frames are srcdoc or extension pages), so this is safe.
+const GENERATIVE_UI_DNR_RULE_ID = 4001;
+async function setupGenerativeUiNetworkGuard() {
+  try {
+    if (!chrome.declarativeNetRequest?.updateSessionRules) return;
+    const has = await chrome.permissions?.contains?.({ permissions: ["declarativeNetRequest"] }).catch(() => false);
+    if (!has) return; // optional permission; if absent, the in-frame guard + CSP still apply
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [GENERATIVE_UI_DNR_RULE_ID],
+      addRules: [{
+        id: GENERATIVE_UI_DNR_RULE_ID,
+        priority: 1,
+        action: { type: "block" },
+        condition: {
+          resourceTypes: ["sub_frame"],
+          // Scope to sub-frame navigations initiated by THIS extension's pages
+          // (the generated-UI frames). The user's normal browsing is unaffected.
+          initiatorDomains: [chrome.runtime.id],
+          urlFilter: "|http",
+        },
+      }],
+    });
+  } catch { /* non-fatal */ }
+}
 
 // ---- system hooks (agents respond to chrome.* events) ----
 // Secret redaction + the hook payload untrusted-data delimiter live in

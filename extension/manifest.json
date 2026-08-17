@@ -13,7 +13,8 @@
     "scripting",
     "notifications",
     "audioCapture",
-    "videoCapture"
+    "videoCapture",
+    "declarativeNetRequest"
   ],
   "optional_host_permissions": [
     "http://*/*",
