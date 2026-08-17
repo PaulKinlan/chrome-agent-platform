@@ -124,7 +124,9 @@ Deno.test("security: injectCspMeta places the CSP after <head> or prepends", asy
   const full = mod.injectCspMeta(`<!doctype html><html><head><title>t</title></head><body>x</body></html>`);
   assert(full.indexOf("Content-Security-Policy") < full.indexOf("<title>"), "CSP must precede content");
   const frag = mod.injectCspMeta(`<div>hi</div>`);
-  assert(frag.startsWith("<meta"), "a fragment must get the CSP prepended");
+  // the CSP (and the navigation guard) must be PREPENDED before the content —
+  // the guard script may precede the meta, but both must come before <div>.
+  assert(frag.indexOf("Content-Security-Policy") < frag.indexOf("<div>"), "a fragment must get the CSP prepended before content");
 });
 
 Deno.test("security: a DENIED hook refuses subscription (the prompt-injection gate)", async () => {

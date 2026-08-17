@@ -63,3 +63,12 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 30. [DONE — the ready indicator removed (cleaner header)] **The "ready" indicator** — is it needed (given the terminal/error badge)? Simplify the header.
 31. [DONE — the per-provider model selector landed (dropdowns + OpenAI-compatible + custom)] **A better per-provider model selector** — a dropdown of known models per provider (not a wrong "gpt-4o-mini" placeholder everywhere); an OpenAI-compatible URL option with a model dropdown (Kimi, DeepSeek, etc.) + a user-addable custom model; keep the base default. Bedrock-style configurability.
 32. [DONE — chaos-style semver landed (scripts/bump-version.mjs + the version shown)] **Chaos-style semantic versioning** — match the chaos extension's semver mechanism.
+
+## The + menu options are broken in the real extension (Paul 2026-08-17) — test in the REAL extension, not just the gallery
+33. **Add tab opens a NEW tab instead of letting you PICK a tab** — should show a tab picker (a list/arrow through the open tabs) + attach the selected tab's CONTENTS.
+34. **Grab screenshot errors** (activeTab/URLs permission required) — should REQUEST the permission (a gesture) then capture.
+35. **Add window opens a NEW window** instead of adding the current window's contents — remove it OR make it add the current window's tabs' contents.
+36. **Record screen has no start/stop UI** — it should show a recording state + a stop control.
+37. **Capture camera: videoCapture permission denied** — the permission request isn't working (request videoCapture on the gesture).
+38. **Record audio: audioCapture permission denied** — same (request audioCapture on the gesture).
+39. **The + menu permissions aren't managed** — each option must request its permission properly + work. DEEP-test each in the REAL extension.

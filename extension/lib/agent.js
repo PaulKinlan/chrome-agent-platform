@@ -18,7 +18,7 @@ const DEFAULT_SYSTEM =
 user get things done on the web. You can read and write memory, call tools, and
 delegate to per-site sub-agents. Be concise; prefer actions over prose.`;
 
-function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
+export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
   if (!memory) return {};
   // Reads must be ENROLLMENT-scoped too (the round-24/25 finding: memory_get/
   // memory_list were completely unfenced, so a stale deleted worker could read a
@@ -500,12 +500,20 @@ export function createOrchestrator({
       // the agent so a stale in-flight delegation cannot start a new run in the
       // check→start gap.
       disposable: true,
+      // SCOPED (hook) runs are TRANSITIVELY side-effect-free (the sol addendum):
+      // a delegated worker must ALSO get read-only memory (no memory_set) —
+      // otherwise an untrusted hook payload could delegate into a worker that
+      // writes site memory / invokes page tools, defeating the scoping.
+      readOnlyMemory: scoped,
       onProgress,
     });
     workerAgents.set(w.origin, a);
   }
 
-  const delegate = multiAgent
+  // SCOPED (hook) runs must not delegate (the sol addendum): a hook-invoked
+  // run is side-effect-free, so it gets NO delegate_task — an untrusted event
+  // payload must not fan out into site workers that invoke page tools.
+  const delegate = (multiAgent && !scoped)
     ? {
       list_agents: tool({
         description: "List the available site sub-agents.",

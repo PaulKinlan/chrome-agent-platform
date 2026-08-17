@@ -1262,6 +1262,23 @@ const handlers = {
     }
     return { ok: true, avatar: avatar ?? null };
   },
+  async "named-agent.run"({ id, task, attachments }) {
+    // RUN/DELEGATE a task to a named agent (the wider-goal review found named
+    // agents had CRUD/grep/avatar but no run path). The agent runs the task
+    // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
+    // its runs read/write its own tier, never the master's or a site's.
+    const agent = await getNamedAgent(id);
+    if (!agent) return { ok: false, error: `no agent ${id}` };
+    const slug = slugifyAgentId(id);
+    const mem = namedAgentMemory(slug);
+    const result = await runTask({
+      id: `named:${slug}:${Date.now()}`,
+      task,
+      attachments: attachments ?? [],
+      memory: mem,
+    });
+    return result;
+  },
 
   // The agent run log (item 16): every journaled task/result/tool-call/screenshot
   // entry, most-recent-first, so the owner can SEE what the agents did (a
