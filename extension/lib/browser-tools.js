@@ -222,6 +222,16 @@ async function hasActiveTabPermission() {
   }
 }
 
+/** Whether the OPTIONAL `sidePanel` permission is currently granted. */
+async function hasSidePanelPermission() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["sidePanel"] });
+  } catch {
+    return false;
+  }
+}
+
 /** Whether the OPTIONAL `scripting` permission is currently granted. */
 async function hasScriptingPermission() {
   try {
@@ -600,6 +610,43 @@ export function browserToolset(readOnly = false) {
   // schedule. When readOnly, expose only the READ tools (read_page,
   // capture_screenshot, list_tabs, recent_browser_events).
   const all = {
+    open_side_panel: tool({
+      description:
+        "Open the Chrome side panel and load a page in it so you can watch and act on that page (its WebMCP tools are discovered via the content bridge). Requires the sidePanel permission.",
+      inputSchema: z.object({ url: z.string().url() }),
+      execute: async ({ url }) => {
+        if (!(await hasSidePanelPermission())) {
+          return {
+            error:
+              "sidePanel permission not granted — enable it in Settings (Side panel)",
+          };
+        }
+        // Get the active tab so the panel is bound to it (chrome.sidePanel is
+        // per-tab). The panel reads the target URL on load (sidepanel.getTarget).
+        const active = (
+          await chrome.tabs.query({ active: true, currentWindow: true })
+        )[0];
+        if (!active?.id) return { error: "no active tab to bind the side panel" };
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — side panel not opened" };
+        }
+        // Store the target URL for the panel to load, then open the panel.
+        await kvSet({ "cap:sidepanelTarget": url });
+        try {
+          await chrome.sidePanel.setOptions({
+            tabId: active.id,
+            path: "sidepanel/sidepanel.html",
+            enabled: true,
+          });
+          await chrome.sidePanel.open({ tabId: active.id });
+        } catch (e) {
+          return { error: `side panel could not open: ${e?.message ?? e}` };
+        }
+        return { ok: true, url };
+      },
+    }),
     open_tab: tool({
       description:
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
