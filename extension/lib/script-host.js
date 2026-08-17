@@ -148,12 +148,29 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000 } = {
 }
 
 /** The runtime-message handler both the offscreen doc and the NTP hub register
- * so the service worker's `chrome.runtime.sendMessage({type:"cap:script-run"})`
- * reaches whichever host is open. Returns `true` to hold the channel for the
- * async response. */
-export function handleScriptRunMessage(message, sendResponse, doc = document) {
+ * so the service worker's `chrome.runtime.sendMessage` reaches whichever host
+ * is open. A TWO-PHASE CLAIM PROTOCOL prevents double execution when two hosts
+ * are open at once (the offscreen doc AND the hub): the SW first announces the
+ * runId, the hosts claim it (the SW's sendMessage resolves with the FIRST
+ * claim), then the SW sends the source addressed to the winning host only.
+ *
+ * `hostId` identifies the caller ("offscreen" or "ntp").
+ *
+ * Returns `true` to hold the channel for the async response. */
+export function handleScriptRunMessage(message, sendResponse, doc = document, hostId = "host") {
+  if (message?.type === "cap:script-run-announce") {
+    // Claim phase: the FIRST host to respond wins (Chrome resolves the SW's
+    // sendMessage with the first sendResponse). Identify ourselves so the SW
+    // can address the source back to us.
+    if (typeof message.runId !== "string" || message.runId.length < 8 || message.runId.length > 64) return false;
+    sendResponse({ claimed: true, host: hostId, runId: message.runId });
+    return false;
+  }
   if (message?.type !== "cap:script-run") return false;
-  const { source, runId } = message;
+  const { source, runId, for: forHost } = message;
+  // Only the claimed host executes — a script addressed to another host is
+  // dropped (prevents every fetch/side-effect firing twice).
+  if (forHost && forHost !== hostId) return false;
   if (typeof source !== "string" || typeof runId !== "string" || runId.length < 8 || runId.length > 64) {
     sendResponse({ ok: false, error: "invalid script-run request" });
     return false;

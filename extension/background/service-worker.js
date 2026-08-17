@@ -169,20 +169,31 @@ async function ensureOffscreen() {
 
 /** Run a script source in the sandboxed host, bounded by a timeout. The
  * production host is the offscreen document (scheduled runs, no open page); the
- * on-demand fallback is the NTP hub page (both register the SAME
- * `cap:script-run` listener via lib/script-host.js). We broadcast to whichever
- * is open. */
+ * on-demand fallback is the NTP hub page. A TWO-PHASE CLAIM PROTOCOL ensures
+ * exactly ONE host executes (the offscreen doc AND the hub are often both
+ * open — a plain broadcast made every fetch/side-effect fire twice). */
 async function runScriptSandboxed(source) {
   // Best-effort: open the offscreen doc (the scheduled host). If it is
-  // unavailable (e.g. headless Chrome), the broadcast below still reaches the
-  // NTP page — the on-demand host — so a run from the hub always works.
+  // unavailable (e.g. headless Chrome), the NTP page — the on-demand host —
+  // answers the claim instead.
   await ensureOffscreen().catch(() => {});
   const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  // Phase 1 — announce + claim: the FIRST host to respond wins (the runtime
+  // sendMessage resolves with the first sendResponse).
+  let winner = null;
+  try {
+    const claim = await chrome.runtime.sendMessage({ type: "cap:script-run-announce", runId });
+    if (claim?.claimed && typeof claim.host === "string") winner = claim.host;
+  } catch { /* no host is open */ }
+  if (!winner) {
+    return { ok: false, error: "no script host is open — open the hub or enable a host page" };
+  }
+  // Phase 2 — send the source to the winning host ONLY.
   return new Promise((resolve) => {
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
     const timer = setTimeout(() => finish({ ok: false, error: "script run timed out (SW)" }), 40_000);
-    chrome.runtime.sendMessage({ type: "cap:script-run", source, runId }).then(
+    chrome.runtime.sendMessage({ type: "cap:script-run", source, runId, for: winner }).then(
       (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no response from the script host" }); },
       (e) => { clearTimeout(timer); finish({ ok: false, error: `no script host is open (${e?.message ?? e}) — open the hub or enable a host page` }); }
     );

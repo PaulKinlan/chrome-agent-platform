@@ -15,9 +15,11 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   injectively encoded); reject non-web schemes; never overload the master
   sentinel. (Verified: the A/B clear isolation test.)
 - **Sender-origin spoofing** — a page must not be able to claim another origin.
-  Derive the origin from `sender.tab.url`, reject claimed-origin mismatches,
-  treat all tool reports as page-controlled data, bound + validate descriptors.
-  (The re-review reproduced this exploit; the fix must hold.)
+  The ISOLATED bridge derives the origin from its OWN `location.origin` (never a
+  message-supplied origin — a content script never trusts `sender.tab.url`),
+  reject claimed-origin mismatches, treat all tool reports as page-controlled
+  data, bound + validate descriptors. (The re-review reproduced this exploit;
+  the fix must hold.)
 - **Unvalidated tool invocation** — every discovered tool is called with a
   validated schema (the descriptor's inputSchema, enforced as a zod schema).
   No `z.record(z.any())` bypass.
@@ -28,6 +30,10 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   can act. Prompt-injection: model output must not directly trigger destructive
   actions without the grant.
 - **MV3 CSP** — no `eval`/`new Function` in the bundle (verified: 0 sites).
+  (Exemption: the agent-script host `sandbox/script-sandbox.js` runs in the
+  manifest `sandbox` page — an opaque origin with no chrome.* access — and uses
+  `new Function` there. The sandbox origin IS the boundary; the bundle remains
+  eval-free.)
 - **XSS** — chat/directory/memory render untrusted data with `textContent`/
   escaping, never `innerHTML` with unvalidated data.
 - **Permissions** — ALL optional (Paul's hard requirement): the manifest declares

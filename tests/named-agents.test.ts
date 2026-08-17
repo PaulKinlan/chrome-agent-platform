@@ -138,11 +138,14 @@ Deno.test("named agents: the name generator is deterministic + quirky", () => {
   assert(/[A-Z][a-z]+ [A-Z][a-z]+/.test(a), "an alliterative-ish two-word name");
 });
 
-Deno.test("named agents: slugify is safe + initialAvatar returns a data URL", () => {
+Deno.test("named agents: slugify is safe + initialAvatar returns a UTF-8-safe data URL", () => {
   assertEquals(slugifyAgentId("My  Agent!!"), "my-agent");
   assertEquals(slugifyAgentId("   "), "");
   const av = initialAvatar("PR Penguin");
-  assert(av.startsWith("data:image/svg+xml;base64,"), "an SVG data URL");
+  assert(av.startsWith("data:image/svg+xml;utf8,"), "a UTF-8 SVG data URL");
+  // Non-Latin1 initials (CJK/emoji) must NOT throw — btoa would throw here.
+  assert(initialAvatar("Ω-machine").startsWith("data:image/svg+xml;utf8,"), "CJK-safe");
+  assert(initialAvatar("🚀 launcher").startsWith("data:image/svg+xml;utf8,"), "emoji-safe");
 });
 
 Deno.test("named agents: memory_grep searches the agent's own memory + history", async () => {

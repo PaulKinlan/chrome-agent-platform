@@ -182,14 +182,13 @@ export const SCRIPT_FRAME_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'";
 
 /**
- * Build the sandboxed `<iframe srcdoc>` that runs a script. The frame is an
- * opaque origin (sandbox="allow-scripts", no allow-same-origin) with no network
- * and no parent access. The user source is embedded DIRECTLY as the body of an
- * async function (no eval — the extension CSP forbids it even in a sandboxed
- * iframe). A bridge script defines the controlled api as GLOBALS (`fetch` +
- * `log`, shadowing the natives — the frame has no network of its own anyway)
- * and posts the result/error back over postMessage, gated by a one-time nonce +
- * the run id.
+ * TEST-ONLY: build the `<iframe srcdoc>` bootstrap for the unit tests. The
+ * PRODUCTION path does NOT use a srcdoc — it runs the source via
+ * `sandbox/script-sandbox.js` (the manifest `sandbox` page, which uses
+ * `new Function` in a page whose CSP is `sandbox allow-scripts` and which has
+ * no chrome.* access). The security boundary is the opaque sandbox origin,
+ * not the eval mechanism; the CONSTITUTION's "no eval in the bundle" applies
+ * to the extension bundle (SW + pages), not the isolated sandbox page.
  */
 export function buildScriptSrcdoc(source, { runId, nonce } = {}) {
   const rid = JSON.stringify(String(runId ?? ""));

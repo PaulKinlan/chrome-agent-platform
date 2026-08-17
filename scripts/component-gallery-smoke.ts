@@ -251,6 +251,24 @@ async function main() {
     })()`);
     check("composer / palette opens", pal.hidden === false && pal.count > 0, pal);
 
+    // L9 (light-DOM styling contract): the composer + conversation controls
+    // render light-DOM (shadow() → false for CDP), so their styles come from a
+    // document-scope <style>. A CSS collision (the blank-toggle mechanism) would
+    // zero their size — assert every key control has a non-zero computed box.
+    const sizes = await evl(s.sessionId, `(()=>{
+      const vis = (el) => { if(!el) return -1; const r=el.getBoundingClientRect(); return r.width*r.height; };
+      const c = document.querySelector('#composer');
+      const cv = document.getElementById('conv-example');
+      return {
+        taskInput: vis(c?.querySelector('#task-input')),
+        runTask: vis(c?.querySelector('#run-task, .run')),
+        composer: vis(c),
+        conversation: vis(cv),
+      };
+    })()`);
+    const zeroSized = Object.entries(sizes ?? {}).filter(([, v]) => typeof v === "number" && v <= 0);
+    check("composer/conversation controls have non-zero size", zeroSized.length === 0, sizes);
+
     // <agent-conversation> renders a full turn: a fenced code block in the user
     // message, a collapsible thinking trace, structured tool cards (done/error),
     // and a system response with code + inline code + a list (the conversation

@@ -380,12 +380,4 @@ async function downscaleAvatar(dataURL, size = 128) {
 }
 
 /** A deterministic fallback avatar (an SVG data URL with the agent's initial). */
-export function initialAvatar(name) {
-  const initial = (String(name ?? "?").trim()[0] || "?").toUpperCase();
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">` +
-    `<circle cx="32" cy="32" r="30" fill="#f7f6f3" stroke="#0e6e63" stroke-width="3"/>` +
-    `<text x="32" y="42" font-family="system-ui,sans-serif" font-size="28" font-weight="600" fill="#0e6e63" text-anchor="middle">${initial}</text>` +
-    `</svg>`;
-  return `data:image/svg+xml;base64,${btoa(svg)}`;
-}
+export { initialAvatar } from "./avatar.js";

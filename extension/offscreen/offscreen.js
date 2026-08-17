@@ -8,5 +8,5 @@
 import { handleScriptRunMessage } from "../lib/script-host.js";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
-  handleScriptRunMessage(message, sendResponse)
+  handleScriptRunMessage(message, sendResponse, document, "offscreen")
 );

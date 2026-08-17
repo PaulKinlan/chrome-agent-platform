@@ -34,6 +34,23 @@ export function slugifySkillId(name) {
     .slice(0, 64) || "imported-skill";
 }
 
+// Bounds for external skill import (the one fetch-and-persist path).
+const MAX_SKILL_BYTES = 64 * 1024; // 64KiB
+const MAX_DIR_WALK = 10; // max subdirectories scanned on a GitHub repo
+
+/** Read a response body, hard-capped at MAX_SKILL_BYTES (reject, not truncate). */
+async function readSkillText(resp) {
+  const declared = Number(resp.headers.get("content-length") ?? 0);
+  if (declared > MAX_SKILL_BYTES) {
+    throw new Error(`skill is too large (${declared} bytes > ${MAX_SKILL_BYTES})`);
+  }
+  const buf = await resp.arrayBuffer();
+  if (buf.byteLength > MAX_SKILL_BYTES) {
+    throw new Error(`skill is too large (${buf.byteLength} bytes > ${MAX_SKILL_BYTES})`);
+  }
+  return new TextDecoder().decode(buf);
+}
+
 /**
  * Fetch a SKILL.md from a GitHub repo URL or a direct markdown URL.
  * Returns { files: {SKILL.md: content}, meta: {name, description, author} }.
@@ -42,6 +59,14 @@ export function slugifySkillId(name) {
 export async function fetchSkillFromUrl(url) {
   const u = String(url ?? "").trim();
   if (!u) throw new Error("no skill URL provided");
+
+  // Only http(s) — reject file:/data:/anything else (no scheme restriction
+  // would let an untrusted URL reach a local/privileged fetch).
+  let parsedUrl;
+  try { parsedUrl = new URL(u); } catch { throw new Error("invalid skill URL"); }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error("skill URL must be http(s)");
+  }
 
   // Direct markdown URL first (raw.githubusercontent.com / a .md file).
   if (/\.md(?:\?.*)?$/.test(u) || u.includes("raw.githubusercontent.com")) {
@@ -60,7 +85,7 @@ export async function fetchSkillFromUrl(url) {
 async function fetchDirectSkill(url) {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`failed to fetch ${url} (${resp.status})`);
-  const content = await resp.text();
+  const content = await readSkillText(resp);
   const { meta } = parseFrontmatter(content);
   const urlName = url.split("/").pop().replace(/\.md$/i, "") || "imported-skill";
   return {
@@ -101,10 +126,11 @@ async function fetchGitHubSkill(url) {
       const skillFile = items.find((i) => i.type === "file" && i.name === "SKILL.md");
       if (skillFile?.download_url) {
         const fr = await fetch(skillFile.download_url);
-        if (fr.ok) skillContent = await fr.text();
+        if (fr.ok) skillContent = await readSkillText(fr);
       } else {
-        // A repo whose skills live under skills/ or .agents/skills/.
-        const dirs = items.filter((i) => i.type === "dir");
+        // A repo whose skills live under skills/ or .agents/skills/. Bound the
+        // walk (MAX_DIR_WALK) so a hostile repo can't drive unbounded fetches.
+        const dirs = items.filter((i) => i.type === "dir").slice(0, MAX_DIR_WALK);
         for (const dir of dirs) {
           const dresp = await fetch(
             `https://api.github.com/repos/${owner}/${repo}/contents/${dir.path}?ref=${branch}`,
@@ -117,7 +143,7 @@ async function fetchGitHubSkill(url) {
           );
           if (sub?.download_url) {
             const fr = await fetch(sub.download_url);
-            if (fr.ok) { skillContent = await fr.text(); break; }
+            if (fr.ok) { skillContent = await readSkillText(fr); break; }
           }
         }
       }
@@ -128,7 +154,7 @@ async function fetchGitHubSkill(url) {
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path ? path + "/" : ""}SKILL.md`;
     const resp = await fetch(rawUrl);
     if (!resp.ok) return null;
-    skillContent = await resp.text();
+    skillContent = await readSkillText(resp);
   }
 
   const { meta } = parseFrontmatter(skillContent);

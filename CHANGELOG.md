@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.72] — 2026-08-17
+- fix(review): GLM + DeepSeek findings — script double-execution claim protocol (one host runs), UTF-8-safe initialAvatar (no btoa crash on CJK/emoji), bounded skill-import (64KiB + http(s) + walk cap), mark buildScriptSrcdoc test-only + constitution sandbox-page exemption, the missing optional_permissions (bookmarks/history/webNavigation/contextMenus/idle/downloads), the constitution sender-check wording, favicons on every page, the light-DOM size smoke assertion
+
 ## [0.2.71] — 2026-08-17
 - fix(gemini): preserve the thought_signature across the tool-call round-trip
 
