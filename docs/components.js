@@ -772,7 +772,6 @@ class AttachButton extends Component {
         <button type="button" role="menuitem" data-kind="record-screen">Record screen</button>
         <button type="button" role="menuitem" data-kind="grab-screenshot">Grab screenshot</button>
         <button type="button" role="menuitem" data-kind="add-tab">Add tab</button>
-        <button type="button" role="menuitem" data-kind="add-window">Add window</button>
         <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
       </div>`);
     this._btn = this._root.querySelector(".plus");
@@ -803,11 +802,11 @@ class AttachButton extends Component {
         return;
       }
       if (kind === "record-screen" || kind === "grab-screenshot" ||
-          kind === "add-tab" || kind === "add-window") {
+          kind === "add-tab") {
         // Browser-context actions (the + menu's screen-recording / screenshot /
-        // new-tab / new-window options) — emitted for the host composer/page to
-        // wire (they need the OPTIONAL browser permissions, which the page
-        // requests/handles with a graceful error).
+        // tab-picker options) — emitted for the host composer/page to wire (they
+        // need the OPTIONAL browser permissions, which the page requests/handles
+        // with a graceful error).
         this._emit("attach-context", { kind });
         return;
       }
@@ -1571,6 +1570,22 @@ class AgentComposer extends Component {
       agent-composer .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       agent-composer > .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#635e56); }
       agent-composer > .composer-status:empty { display:none; }
+      /* the recording chip (record-screen / record-audio) — a visible start/stop */
+      agent-composer .composer .chips .chip.recording { align-items:center; gap:8px; border-color:var(--accent,#0e6e63); }
+      agent-composer .composer .chips .chip.recording .rec-dot { width:8px; height:8px; border-radius:50%; background:var(--accent,#0e6e63); animation:cap-pulse 1.2s ease-in-out infinite; }
+      agent-composer .composer .chips .chip.recording button { font-weight:600; color:var(--accent,#0e6e63); }
+      @keyframes cap-pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+      @media (prefers-reduced-motion: reduce) { agent-composer .composer .chips .chip.recording .rec-dot { animation:none; } }
+      /* the tab picker (add-tab / grab-screenshot) — a floating list, in-bounds */
+      .tab-picker { position:fixed; z-index:60; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9);
+        border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.12)); padding:4px; min-width:300px; max-width:420px; }
+      .tab-picker .tp-list { max-height:260px; overflow-y:auto; }
+      .tab-picker .tp-row { display:flex; flex-direction:column; gap:2px; width:100%; text-align:left; background:transparent;
+        border:0; border-radius:7px; padding:7px 10px; cursor:pointer; font:inherit; color:var(--text,#1d1b18); }
+      .tab-picker .tp-row:hover, .tab-picker .tp-row:focus-visible { background:var(--panel-2,#efede8); outline:none; }
+      .tab-picker .tp-title { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .tab-picker .tp-url { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .tab-picker .tp-empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
     `, html);
     this._input = this._root.querySelector("#task-input");
     this._mic = this._root.querySelector("#mic");
@@ -1615,28 +1630,107 @@ class AgentComposer extends Component {
   }
 
   // ── the + menu's browser-context actions (record-screen / grab-screenshot /
-  // add-tab / add-window) — items 18 + 19. These use the OPTIONAL browser
-  // capabilities; a missing permission surfaces a clear status (never a silent
-  // no-op).
+  // add-tab) — each requests the OPTIONAL browser permission in the SAME user
+  // gesture (the menu click) then acts. A missing/denied permission surfaces a
+  // clear status (never a silent no-op).
+
+  /** Request optional permissions. MUST be the first await in the action so it
+   *  runs inside the menu-click user gesture (a preceding await breaks the
+   *  gesture and Chrome auto-denies). */
+  async _requestPermission(perms) {
+    if (!chrome?.permissions?.request) return true; // no API → treat as available
+    try { return (await chrome.permissions.request({ permissions: perms })) === true; }
+    catch { return false; }
+  }
+
+  /** A floating tab picker. Resolves with the chosen tab or null (cancelled). */
+  _pickTab(tabs) {
+    return new Promise((resolve) => {
+      this._closeTabPicker();
+      const picker = document.createElement("div");
+      picker.className = "tab-picker";
+      picker.setAttribute("role", "listbox");
+      picker.setAttribute("aria-label", "Pick a tab");
+      const list = document.createElement("div");
+      list.className = "tp-list";
+      for (const t of tabs) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "tp-row";
+        row.setAttribute("role", "option");
+        const title = document.createElement("span");
+        title.className = "tp-title";
+        title.textContent = t.title || "(untitled)";
+        const url = document.createElement("span");
+        url.className = "tp-url";
+        url.textContent = t.url || "";
+        row.append(title, url);
+        row.addEventListener("click", () => { this._closeTabPicker(); resolve(t); });
+        list.append(row);
+      }
+      const empty = document.createElement("div");
+      empty.className = "tp-empty";
+      empty.textContent = "No tabs.";
+      picker.append(list, empty);
+      document.body.append(picker); // fixed positioning, never clipped by the composer
+      this._tabPicker = picker;
+      placeFloating(this._input, picker, { minWidth: 300 });
+      document.addEventListener("pointerdown", (e) => {
+        if (!picker.contains(e.target)) { this._closeTabPicker(); resolve(null); }
+      }, { once: true });
+      list.querySelector("button")?.focus();
+    });
+  }
+  _closeTabPicker() {
+    if (this._tabPicker) { this._tabPicker.remove(); this._tabPicker = null; }
+  }
+
+  /** A "Recording… ▸ Stop" chip so record-screen / record-audio have a visible
+   *  start/stop control (not an invisible OS-share-ended flow). */
+  _showRecordingUI(stopCb) {
+    this._clearRecordingUI();
+    const chip = document.createElement("span");
+    chip.className = "chip recording";
+    const dot = document.createElement("span");
+    dot.className = "rec-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = "Recording…";
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.textContent = "Stop";
+    stop.addEventListener("click", () => stopCb());
+    chip.append(dot, label, stop);
+    this._chips?.append(chip);
+    this._recordingChip = chip;
+  }
+  _clearRecordingUI() {
+    this._recordingChip?.remove();
+    this._recordingChip = null;
+  }
+
   async _contextAction(kind) {
     try {
-      if (kind === "add-tab") {
-        if (!chrome.tabs?.create) throw new Error("tabs API unavailable");
-        await chrome.tabs.create({});
-        this.setStatus("opened a new tab");
-        return;
-      }
-      if (kind === "add-window") {
-        if (!chrome.windows?.create) throw new Error("windows API unavailable");
-        await chrome.windows.create({});
-        this.setStatus("opened a new window");
-        return;
-      }
-      if (kind === "grab-screenshot") {
-        if (!chrome.tabs?.captureVisibleTab) throw new Error("captureVisibleTab unavailable");
-        const dataURL = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+      if (kind === "add-tab" || kind === "grab-screenshot") {
+        // Both pick a tab. add-tab attaches the tab as a reference (title+url);
+        // grab-screenshot activates + captures the chosen tab. `tabs` grants
+        // titles/urls; `activeTab` grants captureVisibleTab for the active tab.
+        const perms = kind === "grab-screenshot" ? ["activeTab", "tabs"] : ["tabs"];
+        const ok = await this._requestPermission(perms);
+        if (!ok) { this.setStatus("tab access not granted — enable the Tabs permission in Settings.", false); return; }
+        const tabs = await chrome.tabs.query({}).catch(() => []);
+        if (!tabs.length) { this.setStatus("no open tabs to pick from."); return; }
+        const tab = await this._pickTab(tabs);
+        if (!tab) return; // cancelled
+        if (kind === "add-tab") {
+          this._attachMedia({ name: tab.title || tab.url || "tab", url: tab.url || "", type: "tab", size: 0, kind: "tab", tabId: tab.id, windowId: tab.windowId });
+          this.setStatus(`attached tab: ${tab.title || tab.url}`);
+          return;
+        }
+        await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+        const dataURL = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
         this._attachMedia({ name: `screenshot-${Date.now()}.png`, type: "image/png", size: Math.round((dataURL.length * 3) / 4), dataURL, kind: "image" });
-        this.setStatus("attached a screenshot");
+        this.setStatus("attached a screenshot of " + (tab.title || "the tab"));
         return;
       }
       if (kind === "record-screen") {
@@ -1647,6 +1741,7 @@ class AgentComposer extends Component {
         const chunks = [];
         rec.ondataavailable = (ev) => { if (ev.data?.size) chunks.push(ev.data); };
         rec.onstop = () => {
+          this._clearRecordingUI();
           const blob = new Blob(chunks, { type: rec.mimeType || "video/webm" });
           stream.getTracks().forEach((t) => t.stop());
           const fr = new FileReader();
@@ -1656,11 +1751,9 @@ class AgentComposer extends Component {
           };
           fr.readAsDataURL(blob);
         };
-        stream.getVideoTracks()[0]?.addEventListener("ended", () => {
-          if (rec.state !== "inactive") rec.stop();
-        });
+        stream.getVideoTracks()[0]?.addEventListener("ended", () => { if (rec.state !== "inactive") rec.stop(); });
         rec.start();
-        this.setStatus("recording screen — end the share to attach the video");
+        this._showRecordingUI(() => { if (rec.state !== "inactive") rec.stop(); });
         return;
       }
     } catch (e) {
@@ -1672,50 +1765,33 @@ class AgentComposer extends Component {
   }
 
   // ── media capture (record-audio / capture-camera) ──────────────────────
-  // The wider-goal review found these menu items advertised but UNWIRED (the
-  // attach-button emitted attach-media, the composer re-emitted it, and the
-  // NTP/chat only listened for `send`/`status` — so clicking them silently did
-  // nothing). Wire the real capture here: a short audio recording / a camera
-  // frame becomes a dataURL attachment (the SW bounds it + sends it to the
-  // model like any file).
+  // A short audio recording / a camera frame becomes a dataURL attachment (the
+  // SW bounds it + sends it to the model like any file). The audioCapture /
+  // videoCapture permission is requested in the SAME gesture before getUserMedia.
   async _captureMedia(kind) {
     try {
-      // getUserMedia in an extension page needs the audioCapture/videoCapture
-      // permission (optional). Request it on this user gesture (the menu click)
-      // before calling getUserMedia, so the capture does not silently fail.
       const perm = kind === "record-audio" ? "audioCapture" : "videoCapture";
-      if (kind === "record-audio" || kind === "capture-camera") {
-        const has = await chrome.permissions?.contains?.({ permissions: [perm] }).catch(() => false);
-        if (!has) {
-          const granted = await chrome.permissions?.request?.({ permissions: [perm] }).catch(() => false);
-          if (!granted) { this.setStatus(`${perm} permission denied — enable it to capture.`, false); return; }
-        }
-      }
+      const ok = await this._requestPermission([perm]);
+      if (!ok) { this.setStatus(`${perm} permission denied — enable it to capture.`, false); return; }
       if (kind === "record-audio") {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        try {
-          const mime = MediaRecorder.isTypeSupported?.("audio/webm") ? "audio/webm" : "";
-          const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-          const chunks = [];
-          rec.ondataavailable = (ev) => { if (ev.data?.size) chunks.push(ev.data); };
-          const stopped = new Promise((res) => { rec.onstop = () => res(); });
-          rec.start();
-          this.setStatus("Recording audio… (auto-stops after 8s)");
-          await new Promise((resolve) => setTimeout(resolve, 8000));
-          if (rec.state !== "inactive") rec.stop();
-          await stopped;
-          const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-          const dataURL = await new Promise((res, rej) => {
-            const fr = new FileReader();
-            fr.onload = () => res(String(fr.result));
-            fr.onerror = () => rej(fr.error);
-            fr.readAsDataURL(blob);
-          });
-          this._attachMedia({ name: "recording.webm", type: blob.type || "audio/webm", size: blob.size, dataURL, kind });
-          this.setStatus("Audio attached.");
-        } finally {
+        const mime = MediaRecorder.isTypeSupported?.("audio/webm") ? "audio/webm" : "";
+        const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        const chunks = [];
+        rec.ondataavailable = (ev) => { if (ev.data?.size) chunks.push(ev.data); };
+        rec.onstop = () => {
+          this._clearRecordingUI();
           stream.getTracks().forEach((t) => t.stop());
-        }
+          const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+          const fr = new FileReader();
+          fr.onload = () => {
+            this._attachMedia({ name: "recording.webm", type: blob.type || "audio/webm", size: blob.size, dataURL: String(fr.result), kind: "audio" });
+            this.setStatus("Audio attached.");
+          };
+          fr.readAsDataURL(blob);
+        };
+        rec.start();
+        this._showRecordingUI(() => { if (rec.state !== "inactive") rec.stop(); });
         return;
       }
       if (kind === "capture-camera") {
@@ -1732,7 +1808,7 @@ class AgentComposer extends Component {
           canvas.height = video.videoHeight || 480;
           canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
           const dataURL = canvas.toDataURL("image/png");
-          this._attachMedia({ name: "camera.png", type: "image/png", size: dataURL.length, dataURL, kind });
+          this._attachMedia({ name: "camera.png", type: "image/png", size: dataURL.length, dataURL, kind: "image" });
           this.setStatus("Photo attached.");
         } finally {
           stream.getTracks().forEach((t) => t.stop());
@@ -2131,7 +2207,15 @@ class PanelButton extends Component {
     if (this._rendered && oldV !== newV) {
       this._render();
       this._wire();
-      if (this._open) this._refreshPanel();
+      if (this._open) {
+        // The re-render re-mounts the panel with `hidden` (the template default),
+        // so re-show it + re-anchor it, or the panel visually closes while
+        // _open is still true (the "Clear closes the console" bug — clear() sets
+        // the count attribute, which re-renders).
+        this._panel.hidden = false;
+        this._position();
+        this._refreshPanel();
+      }
     }
   }
   _render() {
@@ -2188,7 +2272,11 @@ class PanelButton extends Component {
       .shield-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:8px; }
       .shield-body .chips { display:flex; flex-wrap:wrap; gap:6px; }
       .shield-body .chip { font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--border,#e3e0d9); }
-      .shield-body .chip.ok { background:var(--on-accent-muted,#d7f0ea); border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .shield-body .chip.ok { background:var(--on-accent-muted,#d7f0ea); border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); display:inline-flex; align-items:center; gap:6px; }
+      .shield-body .chip .chip-revoke { border:0; background:transparent; color:inherit; cursor:pointer; padding:0; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; }
+      .shield-body .chip .chip-revoke:hover { background:rgba(14,110,99,.16); }
+      .shield-body .chip .chip-revoke:disabled { opacity:.5; cursor:default; }
+      .shield-body .chip .chip-revoke svg { width:11px; height:11px; }
       .shield-body .chip.muted { color:var(--muted,#635e56); }
       .shield-body .viol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
       .shield-body .viol li { display:flex; gap:8px; align-items:baseline; font-size:12px; }
@@ -2211,7 +2299,12 @@ class PanelButton extends Component {
     // Close on Escape + outside click (light-dismiss, like a native dialog).
     this._bindDocument("keydown", (e) => { if (e.key === "Escape") this._close(); });
     this._bindDocument("pointerdown", (e) => {
-      if (this._open && !this.contains(e.composedPath()[0])) this._close();
+      // NOTE: use composedPath().includes(this) — host.contains() does NOT
+      // traverse the shadow root, so `this.contains(e.composedPath()[0])` was
+      // false for every click INSIDE the panel (the buttons live in the shadow
+      // DOM). That made any panel-button click (copy / copy-all / clear)
+      // register as an outside click + close the panel instead of acting.
+      if (this._open && !e.composedPath().includes(this)) this._close();
     });
   }
   _toggle() { this._open ? this._close() : this._openPanel(); }
@@ -2368,8 +2461,15 @@ class SecurityShield extends PanelButton {
     const res = await backend("security.state");
     const granted = res.granted || [];
     const violations = res.violations || [];
+    // Item 41: each granted permission is REMOVABLE from the panel (not a
+    // read-only chip). The remove button calls capability.revoke (the SW's
+    // authoritative route, which also does the dependent cleanup) from the
+    // click gesture, then re-refreshes.
     const permRows = granted.length
-      ? granted.map((p) => `<span class="chip ok" title="granted">${escapeHtml(p)}</span>`).join("")
+      ? granted.map((p) =>
+        `<span class="chip ok" title="granted">${escapeHtml(p)}` +
+        `<button type="button" class="chip-revoke" data-revoke="${escapeHtml(p)}" aria-label="Revoke ${escapeHtml(p)}">${ICONS.close}</button></span>`
+      ).join("")
       : `<span class="chip muted">none — running with zero permissions</span>`;
     const viol = violations.length
       ? `<ul class="viol">${violations.map((v) =>
@@ -2379,6 +2479,18 @@ class SecurityShield extends PanelButton {
     body.innerHTML = `
       <div class="sect"><div class="sect-h">Granted permissions</div><div class="chips">${permRows}</div></div>
       <div class="sect"><div class="sect-h">Security events</div>${viol}</div>`;
+    // Delegate the revoke (the chips are re-rendered on every refresh).
+    body.onclick = async (ev) => {
+      const btn = ev.target.closest?.("[data-revoke]");
+      if (!btn) return;
+      const id = btn.getAttribute("data-revoke");
+      btn.disabled = true;
+      const res = await backend("capability.revoke", { id });
+      if (res?.ok === false && res?.error) {
+        this._emit("revoke-error", { id, error: res.error });
+      }
+      await this._refreshPanel();
+    };
   }
   async _clear() {
     await backend("security.clear");
