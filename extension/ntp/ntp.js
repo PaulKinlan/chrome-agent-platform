@@ -424,6 +424,19 @@ let currentThreadId = null;
 let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
 let currentAgentKind = null; // null | "named" | "background" — which agent kind the chat is scoped to
 
+// Sync the thread composer's agent scope so the /agent + @ mention exclude the
+// agent the user is currently talking to (they can't call the current agent).
+function syncComposerScope() {
+  if (!threadComposer) return;
+  if (currentAgentId) {
+    threadComposer.setAttribute("agent-id", currentAgentId);
+    threadComposer.setAttribute("agent-kind", currentAgentKind || "");
+  } else {
+    threadComposer.removeAttribute("agent-id");
+    threadComposer.removeAttribute("agent-kind");
+  }
+}
+
 // The inner (no-transition) cleanups, so openView/showThreadView can hide the
 // OTHER overlay without nesting a second document.startViewTransition (a nested
 // transition throws "transition was aborted because of invalid state snapshot").
@@ -439,6 +452,7 @@ function hideThreadViewInner() {
   currentThreadId = null;
   currentAgentId = null;
   currentAgentKind = null;
+  syncComposerScope();
   threadConversation.clear?.();
   renderRunStatus({ state: "idle" });
   syncViewOpen();
@@ -465,7 +479,13 @@ async function openThread(id) {
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
-  editAgentBtn.hidden = true;
+  // A TASK shows an Edit button (the same visual as the agent's) that renames
+  // the title in place — before, the button was hidden via the `hidden` attr
+  // but leaked because `.back { display:inline-flex }` beat `[hidden]`, so it
+  // appeared for tasks and did nothing (openAgentConfig only handles agents).
+  editAgentBtn.hidden = false;
+  editAgentBtn.setAttribute("aria-label", "Edit task");
+  syncComposerScope();
   const res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   const thread = res.ok ? res.thread : null;
   threadTitle.textContent = thread?.name || "Task";
@@ -485,7 +505,10 @@ async function openBackgroundAgentChat(id, name) {
   currentAgentId = id;
   currentAgentKind = "background";
   currentThreadId = null;
-  editAgentBtn.hidden = false;
+  // No per-agent config route exists for background agents yet (only
+  // named-agent.update), so hide the Edit button rather than show a dead one.
+  editAgentBtn.hidden = true;
+  syncComposerScope();
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
   threadTitle.textContent = name || id || "Background agent";
   renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
@@ -503,6 +526,8 @@ async function openAgentChat(id) {
   currentAgentKind = "named";
   currentThreadId = null;
   editAgentBtn.hidden = false;
+  editAgentBtn.setAttribute("aria-label", "Edit agent");
+  syncComposerScope();
   const [aRes, hRes] = await Promise.all([
     send("named-agent.get", { id }).catch(() => ({ ok: false })),
     send("named-agent.history", { id }).catch(() => ({ entries: [] })),
@@ -705,6 +730,67 @@ async function openAgentConfig() {
   dialog.show();
 }
 
+// ── quick-create an agent (item: the sidebar "+" in the Agents section) ─────
+//    A minimal owner-facing create form: a name + a role → named-agent.create
+//    (the id/avatar are derived from the name). Reuses the agent-config field
+//    helpers + the <agent-dialog> so it matches the Edit flow.
+function openQuickCreateAgent() {
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", "Create an agent");
+  const body = document.createElement("div");
+  body.style.display = "flex";
+  body.style.flexDirection = "column";
+  body.style.gap = "12px";
+  body.style.minWidth = "min(60vw, 460px)";
+
+  const nameField = configField("Name", "input", "");
+  const roleField = configField("Role / what it does", "textarea", "", 3);
+  body.append(nameField.wrap, roleField.wrap);
+
+  const hint = document.createElement("p");
+  hint.textContent =
+    "An agent is a named, persistent teammate with its own memory + history. " +
+    "Give it a name + what it does; you can add skills + an avatar after.";
+  hint.style.fontSize = "12.5px";
+  hint.style.color = "var(--muted,#635e56)";
+  hint.style.margin = "0";
+  body.append(hint);
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "8px";
+  const cancelBtn = configButton("Cancel", "secondary");
+  const createBtn = configButton("Create agent", "primary");
+  actions.append(cancelBtn, createBtn);
+  body.append(actions);
+  dialog.append(body);
+  document.body.append(dialog);
+
+  cancelBtn.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove());
+  createBtn.addEventListener("click", async () => {
+    const name = nameField.el.value.trim();
+    const role = roleField.el.value.trim();
+    if (!name) { setStatus("An agent needs a name.", false); return; }
+    createBtn.disabled = true;
+    createBtn.textContent = "Creating…";
+    const r = await send("named-agent.create", { name, role }).catch(() => ({ ok: false }));
+    createBtn.disabled = false;
+    createBtn.textContent = "Create agent";
+    if (r?.ok) {
+      dialog.close();
+      setStatus(`Agent “${name}” created.`);
+      renderNamedAgents();
+      await openAgentChat(r.agent?.id ?? name);
+    } else {
+      setStatus(`Create failed: ${r?.error ?? "unknown"}`, false);
+    }
+  });
+  dialog.show();
+  nameField.el.focus();
+}
+
 // ── the live run-status banner (the user must SEE it is working) ──────────
 const runStatusEl = document.getElementById("run-status");
 function renderRunStatus(s) {
@@ -781,10 +867,20 @@ threadComposer.addEventListener("send", async (ev) => {
   await runThreadTurn(text, attachments);
 });
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
-editAgentBtn?.addEventListener("click", openAgentConfig);
+// The Edit button is context-aware: a TASK → rename its title in place (the
+// same visual as the agent's Edit, but it edits the title); a NAMED agent →
+// open the agent config; a background agent → also the agent config (its own
+// edit surface). A task's button must not open the agent config (it did
+// nothing before because openAgentConfig only handles named agents).
+editAgentBtn?.addEventListener("click", () => {
+  if (currentAgentKind === "named") openAgentConfig();
+  else if (currentThreadId) startTitleEdit();
+});
 
-// ── edit the thread title (item 47): click the title → rename in place. ─────
-threadTitle.addEventListener("click", () => {
+// ── edit the thread title (item 47): click the title OR the Edit button →
+//    rename in place. The Edit button (the same visual as the agent's) does the
+//    SAME rename for a TASK; for a NAMED agent it opens the agent config. ─────
+function startTitleEdit() {
   if (!currentThreadId) return;
   if (threadTitle.querySelector("input")) return; // already editing
   const original = threadTitle.textContent || "Task";
@@ -813,7 +909,8 @@ threadTitle.addEventListener("click", () => {
   threadTitle.replaceChildren(input);
   input.focus();
   input.select();
-});
+}
+threadTitle.addEventListener("click", () => { if (currentThreadId) startTitleEdit(); });
 
 renderSiteAgents();
 renderNamedAgents();
@@ -851,6 +948,14 @@ sideToggle?.addEventListener("click", () => {
 document.getElementById("new-task")?.addEventListener("click", () => {
   if (!threadView.hidden) hideThreadView();
   composer.focus();
+});
+
+// The "+" create-agent button in the sidebar Agents section (item: a quick
+// create path — opens the create dialog; it returns to the hub first so the
+// dialog is not stacked behind the thread overlay).
+document.getElementById("new-agent")?.addEventListener("click", () => {
+  if (!threadView.hidden) hideThreadView();
+  openQuickCreateAgent();
 });
 
 // ── View Transitions (item 8): smooth in-page state changes, reduced-motion aware.

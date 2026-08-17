@@ -152,7 +152,7 @@
     }
     .side.collapsed .agent-item { padding: 8px; justify-content: center; }
     .side.collapsed .agent-item .a-name { display: none; }
-    .side.collapsed .side-agents .side-label-row { display: none; }
+    .side.collapsed .side-agents .side-label-row { justify-content: center; }
     /* the live run status banner (item: the user must see it is working). */
     .run-status {
       display: flex;
@@ -448,6 +448,10 @@
       outline: none;
     }
     .view-head .back svg { display: block; }
+    /* The `hidden` attribute is overridden by the inline-flex above (a class
+       selector beats the UA `[hidden]` rule), so the Edit button leaked into
+       views where it should be absent. Re-assert it. */
+    .view-head .back[hidden] { display: none; }
     .view-title { font-weight: 650; }
     .view-overlay iframe {
       flex: 1;
@@ -498,7 +502,10 @@
       </div>
       <nav class="thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
       <div class="side-agents">
-        <div class="side-label-row"><span class="side-label">Agents</span></div>
+        <div class="side-label-row">
+          <span class="side-label">Agents</span>
+          <button class="new-task" id="new-agent" type="button" aria-label="Create agent" title="Create agent">+</button>
+        </div>
         <div class="agent-list" id="side-agents" aria-label="Named agents"></div>
       </div>
       <div class="side-foot">
