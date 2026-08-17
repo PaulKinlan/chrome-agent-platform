@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifacts — Chrome Agent Platform</title>
+<link rel="stylesheet" href="../shared/theme.css">
+<script type="module" src="../shared/apply-theme.js"></script>
+<script type="module" src="../shared/components.js"></script>
+<style>
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 24px; }
+  .head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .back { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+    border: 1px solid var(--border); border-radius: 8px; background: transparent;
+    color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
+  .back:hover { border-color: var(--accent); color: var(--accent); }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px; }
+  .empty { color: var(--muted); padding: 28px 0; }
+  .status { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .foot { margin-top: 20px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <button class="back" id="back" type="button">← Back</button>
+    <h1>Artifacts</h1>
+  </div>
+  <p class="sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
+  <div class="status" id="status" aria-live="polite"></div>
+  <div class="grid" id="grid"></div>
+  <div class="foot" id="foot"></div>
+</div>
+<script type="module" src="./index.js"></script>
+</body>
+</html>
