@@ -24,6 +24,8 @@ export const RECIPE_CATEGORIES = [
   { id: "focus", label: "Focus" },
   { id: "summaries", label: "Summaries" },
   { id: "context", label: "Context actions" },
+  { id: "monitor", label: "Monitoring" },
+  { id: "analyze", label: "Analysis" },
 ];
 
 // Intent groups — what the user is TRYING to do, not which Chrome resource it
@@ -35,6 +37,8 @@ export const INTENTS = [
   { id: "digest", label: "Digest", hint: "read, summarise, understand" },
   { id: "capture", label: "Capture", hint: "save quotes, notes, screenshots" },
   { id: "focus", label: "Focus", hint: "protect attention, reflect" },
+  { id: "monitor", label: "Monitor", hint: "watch prices, pages, links" },
+  { id: "analyze", label: "Analyze", hint: "inspect, audit, extract" },
 ];
 
 // Default intent per recipe category, with explicit per-recipe overrides where
@@ -47,6 +51,8 @@ const CATEGORY_INTENT = {
   summaries: "digest",
   context: "capture",
   focus: "focus",
+  monitor: "monitor",
+  analyze: "analyze",
 };
 
 const INTENT_OVERRIDES = {
@@ -57,6 +63,7 @@ const INTENT_OVERRIDES = {
   "omnibox-ask": "digest",
   "download-nightly-summary": "digest",
   "tab-screenshot-diary": "capture",
+  "reader-mode": "digest",
 };
 
 /** Resolve a recipe's intent (with a safe fallback to "organize"). */
@@ -463,6 +470,152 @@ export const RECIPES = [
     requiredCapabilities: ["tabs", "storage"],
     prompt:
       "On each scheduled run, if it is Friday at 17:00 local (and not already run today), open a new tab with a pre-filled weekly review template (what went well, what didn't, what to carry forward). Turns 'I should reflect' into something that just appears.",
+  },
+
+  // ── Monitoring (watch + alert) ─────────────────────────────────────────
+  {
+    id: "price-watcher",
+    name: "Price watcher",
+    category: "monitor",
+    mode: BACKGROUND,
+    icon: "eye",
+    description: "Watch a product page and alert when the price drops.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 360 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "notifications", "storage"],
+    prompt:
+      "On each scheduled run, re-check the product page you are watching. Read the current price and compare it to the last recorded price in memory. If the price dropped, notify the user with the old and new price and the link. Record the new price. If the page is unreachable, do nothing this cycle.",
+  },
+  {
+    id: "page-change-watcher",
+    name: "Page change watcher",
+    category: "monitor",
+    mode: BACKGROUND,
+    icon: "eye",
+    description: "Alert when a watched page changes.",
+    trigger: "scheduled",
+    schedule: { periodInMinutes: 180 },
+    defaultEnabled: false,
+    requiredCapabilities: ["tabs", "notifications", "storage"],
+    prompt:
+      "On each scheduled run, re-fetch the watched page and compare its main content to the last snapshot in memory. If the content meaningfully changed, notify the user with a short summary of what changed. Store the new snapshot. If unchanged, do nothing.",
+  },
+  {
+    id: "link-checker",
+    name: "Link checker",
+    category: "monitor",
+    mode: ON_DEMAND,
+    icon: "scan",
+    description: "Check every link on the page and report the broken ones.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Collect every link on the current page. Check each one and report the broken links (404, 5xx, timeouts) with their URLs and anchor text. Cap the check at 50 links and report the total scanned.",
+  },
+
+  // ── Analysis (inspect / audit / extract) ───────────────────────────────
+  {
+    id: "data-extractor",
+    name: "Data extractor",
+    category: "analyze",
+    mode: ON_DEMAND,
+    icon: "table",
+    description: "Extract tables and lists from the page to CSV or JSON.",
+    requiredCapabilities: ["tabs", "downloads"],
+    prompt:
+      "Find the tables and structured lists on the current page. Extract the primary table into clean rows and columns and offer it as CSV (JSON if there are nested fields). Save the file via download and report the shape (rows × columns).",
+  },
+  {
+    id: "cookie-tracker-auditor",
+    name: "Tracker auditor",
+    category: "analyze",
+    mode: ON_DEMAND,
+    icon: "cookie",
+    description: "Audit the page's cookies and third-party trackers.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Inspect the cookies and third-party requests the current page sets. Report the tracking cookies, the third-party domains, and what they are likely used for. Flag the high-risk trackers and give a plain-language summary.",
+  },
+  {
+    id: "performance-reporter",
+    name: "Performance report",
+    category: "analyze",
+    mode: ON_DEMAND,
+    icon: "gauge",
+    description: "Report the page's Core Web Vitals and load performance.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Measure the current page's load performance: Largest Contentful Paint, Cumulative Layout Shift, and interaction readiness, plus the resource weight (total bytes and request count). Report the numbers against the 'good' thresholds and give one concrete improvement.",
+  },
+  {
+    id: "accessibility-checker",
+    name: "Accessibility check",
+    category: "analyze",
+    mode: ON_DEMAND,
+    icon: "accessible",
+    description: "Scan the page for accessibility issues.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Scan the current page for accessibility issues: missing alt text, missing form labels, low contrast, missing heading hierarchy, keyboard traps. Report the concrete issues with their elements, ordered by impact.",
+  },
+  {
+    id: "seo-meta-checker",
+    name: "SEO checker",
+    category: "analyze",
+    mode: ON_DEMAND,
+    icon: "search",
+    description: "Check the page's title, meta and headings for SEO.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Check the current page's SEO fundamentals: the title tag length, the meta description, the heading structure, the canonical link, and the open-graph tags. Report what is missing or suboptimal with specific fixes.",
+  },
+
+  // ── Capture / context (fill + annotate) ────────────────────────────────
+  {
+    id: "form-filler",
+    name: "Form filler",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "form",
+    description: "Fill the page's form fields from your stored profile.",
+    requiredCapabilities: ["tabs", "storage"],
+    prompt:
+      "Read the form fields on the current page (name, email, address, etc.) and fill them from the user's stored profile in memory. Only fill fields you can match confidently; never invent values. Report which fields you filled and which you left empty.",
+  },
+  {
+    id: "screenshot-annotate",
+    name: "Annotate screenshot",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "pen",
+    description: "Capture the page and annotate the key elements.",
+    requiredCapabilities: ["tabs", "activeTab"],
+    prompt:
+      "Capture a screenshot of the current page. Identify the most important elements (headline, call-to-action, key figure) and describe where they are so they can be highlighted. Return the screenshot with a short annotation summary.",
+  },
+
+  // ── Reading + research (digest) ────────────────────────────────────────
+  {
+    id: "reader-mode",
+    name: "Reader mode",
+    category: "reading",
+    mode: ON_DEMAND,
+    icon: "glasses",
+    description: "Extract the main article into clean, distraction-free reading.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Extract the main article content from the current page (title, byline, body text, images) and present it as clean readable markdown, stripping navigation, ads, sidebars, and comments. Preserve the reading order and the source link.",
+  },
+  {
+    id: "multi-tab-researcher",
+    name: "Multi-tab researcher",
+    category: "summaries",
+    mode: ON_DEMAND,
+    icon: "network",
+    description: "Gather across open tabs and synthesize a single answer.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "Gather the relevant content from the open tabs (list them with tab_list, read the ones relevant to the question). Synthesize a single, sourced answer that draws from all of them, citing which tab each point came from.",
   },
 ];
 

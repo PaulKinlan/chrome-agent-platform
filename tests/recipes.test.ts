@@ -120,3 +120,38 @@ Deno.test("each intent has at least one recipe", () => {
     assert(n > 0, `intent ${id} is empty`);
   }
 });
+
+// The wider-goal recipes added on top of the 27 prompt-in-a-box set
+// (monitoring, analysis, capture, reading/research utilities).
+const NEW_RECIPE_IDS = [
+  "price-watcher",
+  "page-change-watcher",
+  "link-checker",
+  "data-extractor",
+  "cookie-tracker-auditor",
+  "performance-reporter",
+  "accessibility-checker",
+  "seo-meta-checker",
+  "form-filler",
+  "screenshot-annotate",
+  "reader-mode",
+  "multi-tab-researcher",
+];
+
+Deno.test("the wider-goal utility recipes are present", () => {
+  const ids = new Set(RECIPES.map((r) => r.id));
+  for (const id of NEW_RECIPE_IDS) {
+    assert(ids.has(id), `missing new recipe ${id}`);
+  }
+});
+
+Deno.test("new recipes have valid intents + icons", () => {
+  const validIntent = new Set(INTENTS.map((i) => i.id));
+  for (const id of NEW_RECIPE_IDS) {
+    const r = getRecipe(id);
+    assert(r, `recipe ${id}`);
+    assert(validIntent.has(intentOf(r)), `intent for ${id}`);
+    assert(typeof r.icon === "string" && r.icon.length > 0, `icon for ${id}`);
+    assert(r.mode === "on-demand" || r.mode === "background", `mode for ${id}`);
+  }
+});
