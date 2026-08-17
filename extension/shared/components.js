@@ -1458,6 +1458,23 @@ customElements.define("message-bubble", MessageBubble);
  *   appendThinking(text, {step,totalSteps}) / appendTool({name,args,status,result})
  *   appendError(text) / clear() / setMessages(messages)
  * The `messages` attribute populates it declaratively for the showcase. */
+// A subtle-timestamp helper (item: the task view shows a timestamp only at
+// significant time gaps, not on every message). A gap >= 5 minutes marks a
+// meaningful boundary (the task started, then a gap, then it finished); the
+// rapid thinking/tool messages in between stay unmarked.
+export const TS_GAP_MS = 5 * 60 * 1000;
+export function formatTsLabel(ts) {
+  if (!Number.isFinite(ts)) return "";
+  const d = new Date(ts);
+  const delta = Date.now() - ts;
+  if (delta < 60 * 1000) return "just now";
+  if (delta < 60 * 60 * 1000) return `${Math.max(1, Math.round(delta / 60000))}m ago`;
+  const sameDay = new Date().toDateString() === d.toDateString();
+  if (sameDay) {
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
 class AgentConversation extends Component {
   static shadow() { return false; }
   static get observedAttributes() { return ["messages"]; }
@@ -1465,6 +1482,7 @@ class AgentConversation extends Component {
     ensureStyle("sc-agent-conversation-style", `
       agent-conversation { display:flex; flex-direction:column; min-height:0; }
       agent-conversation .empty { color:var(--muted,#635e56); font-size:var(--text-sm,13px); padding:2px 0; }
+      agent-conversation .ts-gap { align-self:center; margin:10px 0 4px; font-size:var(--text-xs,12px); color:var(--muted,#635e56); letter-spacing:.02em; user-select:none; }
     `);
     const msgs = this.getAttribute("messages");
     if (msgs != null) this.setMessages(parseJSONAttr(msgs, []));
@@ -1487,10 +1505,27 @@ class AgentConversation extends Component {
     this.scrollTop = this.scrollHeight;
     return b;
   }
-  appendUser(text) { return this._bubble("user", text); }
-  appendAgent(text) { return this._bubble("agent", text); }
-  appendSystem(text) { return this._bubble("system", text); }
-  appendError(text, { reason, action } = {}) {
+  // A subtle timestamp divider, inserted ONLY when there is a SIGNIFICANT time
+  // gap between consecutive persisted messages (or at the first message — the
+  // "task started" boundary). Rapid messages (the thinking loop) get no marker.
+  _maybeTsGap(ts) {
+    if (!ts || typeof ts !== "number") return;
+    const last = this._lastTs;
+    // First message of the conversation always gets a marker; after that only
+    // a gap larger than TS_GAP_MS warrants one.
+    const significant = last == null || ts - last >= TS_GAP_MS;
+    this._lastTs = ts;
+    if (!significant) return;
+    const d = document.createElement("div");
+    d.className = "ts-gap";
+    d.textContent = formatTsLabel(ts);
+    this.appendChild(d);
+  }
+  appendUser(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text); }
+  appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
+  appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
+  appendError(text, { reason, action, ts } = {}) {
+    if (ts) this._maybeTsGap(ts);
     return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null });
   }
   appendThinking(text, { step, totalSteps } = {}) {
@@ -1514,9 +1549,10 @@ class AgentConversation extends Component {
       "tool-detail": detail != null ? String(detail) : null,
     });
   }
-  clear() { this.replaceChildren(); }
+  clear() { this.replaceChildren(); this._lastTs = null; }
   setMessages(messages) {
     this.replaceChildren();
+    this._lastTs = null;
     const list = Array.isArray(messages) ? messages : [];
     if (!list.length) {
       const p = document.createElement("p");
@@ -1527,14 +1563,15 @@ class AgentConversation extends Component {
     }
     for (const m of list) {
       if (!m || typeof m !== "object") continue;
+      const ts = typeof m.ts === "number" ? m.ts : null;
       switch (m.role) {
-        case "user": this.appendUser(m.content); break;
-        case "agent": this.appendAgent(m.content); break;
-        case "system": this.appendSystem(m.content); break;
+        case "user": this.appendUser(m.content, ts); break;
+        case "agent": this.appendAgent(m.content, ts); break;
+        case "system": this.appendSystem(m.content, ts); break;
         case "thinking": this.appendThinking(m.content, m); break;
         case "tool": this.appendTool(m); break;
         case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null }); break;
-        default: this.appendAgent(m.content); break;
+        default: this.appendAgent(m.content, ts); break;
       }
     }
     this.scrollTop = this.scrollHeight;

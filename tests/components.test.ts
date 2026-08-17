@@ -173,3 +173,22 @@ Deno.test("components: preferenceBootstrapScript applies theme/locale + validate
   if (!script.includes("data-theme")) throw new Error("no theme apply");
   if (!script.includes("lang")) throw new Error("no locale apply");
 });
+
+Deno.test("components: formatTsLabel renders relative + absolute time", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const now = Date.now();
+  if (mod.formatTsLabel(now - 10_000) !== "just now") throw new Error("recent time not 'just now'");
+  if (mod.formatTsLabel(now - 5 * 60_000) !== "5m ago") throw new Error("5 minutes not '5m ago'");
+  // > 60 min but same day renders the time-of-day (no "ago" once past the hour)
+  const hourPlus = mod.formatTsLabel(now - 90 * 60_000);
+  if (/ago/.test(hourPlus)) throw new Error(`past-hour rendered relative: ${hourPlus}`);
+  if (!/\d/.test(hourPlus)) throw new Error(`past-hour not a time: ${hourPlus}`);
+  // a far-past timestamp renders a date, not a relative label
+  const old = mod.formatTsLabel(Date.UTC(2024, 0, 1));
+  if (/ago|just now/.test(old)) throw new Error(`old timestamp rendered relative: ${old}`);
+});
+
+Deno.test("components: TS_GAP_MS is the subtle-timestamp threshold", async () => {
+  const mod = await import("../extension/shared/components.js");
+  if (mod.TS_GAP_MS !== 5 * 60 * 1000) throw new Error(`TS_GAP_MS unexpected: ${mod.TS_GAP_MS}`);
+});
