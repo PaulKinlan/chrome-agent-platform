@@ -1,195 +1,44 @@
 # Changelog
 
-## [0.2.63] — 2026-08-17
-- (describe the change)
-
-## [0.2.62] — 2026-08-17
-- (describe the change)
-
-## [0.2.61] — 2026-08-17
-- (describe the change)
-
-## [0.2.60] — 2026-08-17
-- (describe the change)
-
-## [0.2.59] — 2026-08-17
-- (describe the change)
-
-## [0.2.58] — 2026-08-17
-- (describe the change)
-
-## [0.2.57] — 2026-08-17
-- (describe the change)
-
-## [0.2.56] — 2026-08-17
-- (describe the change)
-
-## [0.2.55] — 2026-08-17
-- (describe the change)
-
-## [0.2.54] — 2026-08-17
-- (describe the change)
-
-## [0.2.53] — 2026-08-17
-- (describe the change)
-
-## [0.2.52] — 2026-08-17
-- (describe the change)
-
-## [0.2.51] — 2026-08-17
-- (describe the change)
-
-## [0.2.50] — 2026-08-17
-- (describe the change)
-
-## [0.2.49] — 2026-08-17
-- (describe the change)
-
-## [0.2.48] — 2026-08-17
-- (describe the change)
-
-## [0.2.47] — 2026-08-17
-- (describe the change)
-
-## [0.2.46] — 2026-08-17
-- (describe the change)
-
-## [0.2.45] — 2026-08-17
-- (describe the change)
-
-## [0.2.44] — 2026-08-17
-- (describe the change)
-
-## [0.2.43] — 2026-08-17
-- (describe the change)
-
-## [0.2.42] — 2026-08-17
-- (describe the change)
-
-## [0.2.41] — 2026-08-17
-- (describe the change)
-
-## [0.2.40] — 2026-08-17
-- (describe the change)
-
-## [0.2.39] — 2026-08-17
-- (describe the change)
-
-## [0.2.38] — 2026-08-17
-- (describe the change)
-
-## [0.2.37] — 2026-08-17
-- (describe the change)
-
-## [0.2.36] — 2026-08-17
-- (describe the change)
-
-## [0.2.35] — 2026-08-17
-- (describe the change)
-
-## [0.2.34] — 2026-08-17
-- (describe the change)
-
-## [0.2.33] — 2026-08-17
-- (describe the change)
-
-## [0.2.32] — 2026-08-17
-- (describe the change)
-
-## [0.2.31] — 2026-08-17
-- (describe the change)
-
-## [0.2.30] — 2026-08-17
-- (describe the change)
-
-## [0.2.29] — 2026-08-17
-- (describe the change)
-
-## [0.2.28] — 2026-08-17
-- (describe the change)
-
-## [0.2.27] — 2026-08-17
-- (describe the change)
-
-## [0.2.26] — 2026-08-17
-- (describe the change)
-
-## [0.2.25] — 2026-08-17
-- (describe the change)
-
-## [0.2.24] — 2026-08-17
-- (describe the change)
-
-## [0.2.23] — 2026-08-17
-- (describe the change)
-
-## [0.2.22] — 2026-08-17
-- (describe the change)
-
-## [0.2.21] — 2026-08-17
-- (describe the change)
-
-## [0.2.20] — 2026-08-17
-- (describe the change)
-
-## [0.2.19] — 2026-08-17
-- (describe the change)
-
-## [0.2.18] — 2026-08-17
-- (describe the change)
-
-## [0.2.17] — 2026-08-17
-- (describe the change)
-
-## [0.2.16] — 2026-08-17
-- (describe the change)
-
-## [0.2.15] — 2026-08-17
-- (describe the change)
-
-## [0.2.14] — 2026-08-17
-- (describe the change)
-
-## [0.2.13] — 2026-08-17
-- (describe the change)
-
-## [0.2.12] — 2026-08-17
-- (describe the change)
-
-## [0.2.11] — 2026-08-17
-- (describe the change)
-
-## [0.2.10] — 2026-08-17
-- (describe the change)
-
-## [0.2.9] — 2026-08-17
-- (describe the change)
-
-## [0.2.8] — 2026-08-17
-- (describe the change)
-
-## [0.2.7] — 2026-08-17
-- (describe the change)
-
-## [0.2.6] — 2026-08-17
-- (describe the change)
-
-## [0.2.5] — 2026-08-17
-- (describe the change)
-
-## [0.2.4] — 2026-08-17
-- (describe the change)
-
-## [0.2.3] — 2026-08-17
-- (describe the change)
-
-## [0.2.2] — 2026-08-17
-- (describe the change)
-
-## [0.2.1] — 2026-08-17
+## [0.2.64] — 2026-08-17
 - (describe the change)
 
 All notable changes to the Chrome Agent Platform. Semantic versioning: MAJOR.MINOR.PATCH.
+
+## [0.2.63] — 2026-08-17
+
+A full day of feature work + hardening. (The 0.2.1 → 0.2.63 patch range was an artifact of the auto-bump hook bumping on every commit; consolidated here into the meaningful changes, grouped.)
+
+### Added
+- The agent model: persistent **named agents** (nano-banana-generated avatars + names), each with its **own OPFS sandbox** (memory + run history + skills + agents.md + a `memory_grep` tool). The master agent (and the user) create/manage/delegate to them; the sidebar shows them; clicking one opens its chat.
+- **Independent background agents** — instantiable from the skills, editable, duplicable, with their own OPFS (not the master's).
+- The **skills system** (recipes → skills): a skill is INCLUDED in a task (`/skill:<id>` anywhere in the composer), attachable to an agent, schedulable, and **external skills importable** (the chaos skill-loader pattern — GitHub/URL → SKILL.md → installable).
+- The **co-do generative-UI** (a `generate_ui` tool → HTML rendered in a sandboxed double-iframe, themed via preference-percolation, saved as a reusable artifact).
+- The **agent-generated repeatable JS scripts** (a script store + a sandboxed Web Worker/offscreen execution environment with a controlled API — run repeatedly without re-invoking the model).
+- The **side-panel mechanism** (the agent opens + drives a real page via WebMCP) + the **activity-log explorer** (a browsable/searchable per-agent + master timeline) + **per-agent provider config** + an end-to-end task-completion verification test.
+- The **artifact gallery** + the **per-agent OPFS memory explorer** (a file-system tree) + the changelog viewer (Settings → About).
+- The **BeautifulUI AI-native primitives** as Web Components (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar).
+- **Comprehensive test coverage**: a test suite per tool (browser/management/memory), UI integration tests, an a11y audit, a perf/leak trace, capability-lifecycle tests, and a real-browser OPFS verification.
+- The **standing security suite** (`test:security` — network exfil / sandbox escapes / prompt-injection all proven blocked).
+
+### Fixed
+- The **WebMCP discovery** (the content scripts now inject + discover in the open tab; both the declared tools AND the inferred `window.*` functions are found).
+- The **provider network gate** (the all-optional host permission is requested on the Run gesture / Set / Test — no more "Failed to fetch" / "host permission missing").
+- The **provider error UX** (a failed run shows the unwrapped reason + a "Grant network access" button + a "Fix in Settings" link + a provider-status chip in the header).
+- The **Gemini 400** (the model id is normalized — "Gemini 3.7 Flash" → `gemini-3.7-flash`).
+- The error flood (a circuit-breaker + the real HTTP status logged once) + comprehensive, actionable error reporting.
+- The tool output (readable summaries, not raw JSON) + the media attachments (image bytes reach the model + render in the thread).
+- The + menu (every option works in the real extension: the tab picker, the screenshot/capture permission flows, the start/stop controls).
+- The error console buttons (copy/copy-all/clear no longer close the panel) + the shield permissions (removable).
+- The task-list X (hover + delete) + the subtle timestamps + the inline run-status (at the bottom of the conversation).
+- The model lists (data-driven from the llm-prices table) + the pricing (cost tracking + spending limits).
+- The settings switches (one shared `<switch-toggle>` — the hand-rolled collision) + the hooks matching permissions.
+- The mic (the permission requested before recognition; the utterance space-join).
+
+### Security
+- The generative-UI sandbox escape (pre-CSP, self-navigation, meta-refresh) closed.
+- The named-agent avatar credential leak (a non-Gemini key never reaches Google) fixed.
+- The hook recursion terminated + the scoped runs made side-effect-free + the deny-list race closed.
 
 ## [0.2.0] — 2026-08-16
 ### Added

@@ -63,6 +63,13 @@ there. The reviewer agents check against it.
   (docs/components.html — the playground where components are tested in isolation
   without running the extension). The gallery imports the SAME components.js
   (scripts/sync-gallery.mjs; check:gallery fails on drift).
+- **Scale out + delegate reviews (Paul, 2026-08-17).** Use the whole fleet: spawn
+  subagents for parallel implementation AND delegate to the other pi instances via
+  intercom (sol, GLM-5.3, deepseek-v4-pro, deepseek-v4-flash). **Every change gets
+  an independent review from a DIFFERENT agent/instance** — not self-review. The
+  reviewers run continuously on the pushed work; their findings are tracked
+  (KNOWN-ISSUES) + actioned. Don''t leave the other instances idle — distribute the
+  work + the reviews across them.
 - **Continuous skill/quality runs (Paul, 2026-08-17).** Spin up subagents to
   regularly run the quality skills in the background: the impeccable design pass
   (the UI consistency), the modern-web-guidance checks, and the web-resilience
