@@ -769,7 +769,7 @@ class AttachButton extends Component {
       .menu[hidden] { display:none; }
       .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
         color:var(--text,#1d1b18); padding:8px 12px; border-radius:var(--radius-sm,6px); cursor:pointer; font:inherit; }
-      .menu button:hover, .menu button:focus-visible { background:var(--bg,#12121c); outline:none; }
+      .menu button:hover, .menu button:focus-visible { background:var(--bg,#f7f6f3); outline:none; }
       .note { font-size:var(--text-xs,12px); color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
@@ -919,10 +919,10 @@ class ThemePicker extends Component {
       .swatch[aria-pressed="true"] { border-color:var(--text,#1d1b18); }
       .swatch:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .swatch .label { position:absolute; inset:auto 0 2px; font-size:9px; text-align:center; color:inherit; }
-      .theme-midnight { background:#12121c; color:#cdd6f4; }
-      .theme-sunlit { background:#f4f1e8; color:#2b2b2b; }
-      .theme-neon { background:#0a0a14; color:#22d3ee; box-shadow:0 0 10px #22d3ee55; }
-      .theme-terminal { background:#0c0c0c; color:#33ff66; }
+      .theme-midnight { background:#181614; color:#3ec3b0; }
+      .theme-sunlit { background:#f7f6f3; color:#0e6e63; }
+      .theme-neon { background:#0e0e14; color:#7c5cff; }
+      .theme-terminal { background:#0b0f0d; color:#4ade80; }
     `, swatches);
   }
   _wire() {
@@ -1090,7 +1090,7 @@ class CapabilityRow extends Component {
         padding:12px 14px; border-bottom:1px solid var(--border,#30363d); background:transparent; }
       .row:last-child { border-bottom:0; }
       .row.clickable { cursor:pointer; border-radius:8px; }
-      .row.clickable:hover { background:var(--bg,#12121c); }
+      .row.clickable:hover { background:var(--bg,#f7f6f3); }
       .row.clickable:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .icon { display:inline-flex; align-items:center; justify-content:center;
         width:28px; height:28px; color:var(--muted,#8b949e); }
@@ -1621,7 +1621,7 @@ class ScreenshotStrip extends Component {
     mountTemplate(this, `
       :host { display:block; }
       .strip { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
-      .shot { position:relative; flex:0 0 auto; width:96px; height:64px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; padding:0; cursor:pointer; background:var(--bg,#12121c); }
+      .shot { position:relative; flex:0 0 auto; width:96px; height:64px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; padding:0; cursor:pointer; background:var(--bg,#f7f6f3); }
       .shot img { width:100%; height:100%; object-fit:cover; display:block; }
       .shot:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .lbl { position:absolute; inset:auto 0 0 0; font-size:9px; background:rgba(0,0,0,.6); color:#fff; padding:1px 3px; }
@@ -2572,7 +2572,7 @@ class AgentConfigForm extends Component {
       :host { display:block; }
       .form { display:flex; flex-direction:column; gap:12px; }
       label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted,#635e56); }
-      input, textarea { background:var(--bg,#12121c); border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:7px; padding:8px 10px; font:inherit; }
+      input, textarea { background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:7px; padding:8px 10px; font:inherit; }
       input:focus-visible, textarea:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       .save { align-self:flex-start; border:0; border-radius:8px; padding:8px 16px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
       .save:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }

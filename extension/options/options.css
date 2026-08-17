@@ -59,7 +59,7 @@ nav {
 }
 .content {
   flex: 1;
-  padding: 28px 36px;
+  padding: var(--space-5) var(--space-6);
   max-width: 760px;
 }
 .head {
@@ -67,7 +67,7 @@ nav {
 }
 .head h1 {
   margin: 0 0 4px;
-  font-size: 22px;
+  font-size: var(--text-xl);
 }
 .save-status {
   color: var(--muted);
@@ -95,8 +95,8 @@ nav {
 }
 code {
   background: var(--bg);
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
 }
 .hint {
   margin-top: 12px;
@@ -265,7 +265,7 @@ input:focus, select:focus, textarea:focus {
   padding: var(--space-3) var(--space-4);
 }
 .usage-stat .n {
-  font-size: 22px;
+  font-size: var(--text-xl);
   font-weight: 700;
 }
 .usage-stat .l {
@@ -292,6 +292,7 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-top: 12px;
 }
 .origin-row {
   display: flex;
