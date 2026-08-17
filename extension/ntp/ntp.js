@@ -266,8 +266,10 @@ async function renderArtifacts() {
     row.setAttribute("name", a.name ?? "Untitled");
     row.setAttribute("description", (a.type ?? "unknown") + " · " + (a.size ?? 0) + " B");
     row.setAttribute("icon", "");
-    row.setAttribute("action", "run");
-    row.addEventListener("run", () => openArtifactDialog(a.id ?? a.name, "master", a.name));
+    // An artifact is OPENED (viewed), not "run" — the open action (the title is
+    // a link + the Open button) opens the expanded view.
+    row.setAttribute("action", "open");
+    row.addEventListener("open", () => openArtifactDialog(a.id ?? a.name, "master", a.name));
     el.append(row);
   }
 }

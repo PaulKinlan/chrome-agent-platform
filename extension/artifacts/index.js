@@ -93,16 +93,29 @@ function wireCard(card) {
     }
     await render();
   });
-  card.addEventListener("reuse", (e) => {
+  card.addEventListener("reuse", async (e) => {
     const { id, name, type, origin } = e.detail ?? {};
     // Ask the parent NTP to attach this artifact to a new task (the NTP owns
-    // the composer + the thread surface).
+    // the composer + the thread surface). When the gallery is NOT in the NTP
+    // overlay (standalone), the postMessage goes nowhere — fall back to copying
+    // the artifact content so the action always does something.
+    const inOverlay = window.parent && window.parent !== window;
+    if (inOverlay) {
+      try {
+        window.parent.postMessage({
+          type: "cap:attach-artifact",
+          artifact: { id, name, type, origin: origin ?? "master" },
+        }, "*");
+        status.textContent = `"${name}" sent to the hub — it will attach to a new task.`;
+        return;
+      } catch { /* fall through to the copy fallback */ }
+    }
+    // Standalone fallback: copy the artifact content to the clipboard.
     try {
-      window.parent?.postMessage({
-        type: "cap:attach-artifact",
-        artifact: { id, name, type, origin: origin ?? "master" },
-      }, "*");
-      status.textContent = `"${name}" sent to the hub — it will attach to a new task.`;
+      const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+      const asset = full?.ok ? full.asset : null;
+      await navigator.clipboard.writeText(asset?.content ?? name ?? "");
+      status.textContent = `"${name}" copied — paste it into a new task on the hub.`;
     } catch {
       status.textContent = `Could not reach the hub. Open the artifact + copy it manually.`;
     }
