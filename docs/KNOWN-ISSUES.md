@@ -22,9 +22,9 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 ### Acceptance-coverage gaps (test/evidence depth)
 - **No headed-browser screenshot success path** (headless can't grant arbitrary-tab capture; the active-tab path is documented). Needs a headed-browser test.
 - **No full real-enrollment lifecycle journey** (enroll → discover → invoke → cleanup → Retry) as a single headed acceptance.
-- **Not all capability lifecycles have grant→use→revoke acceptance.**
-- **No accessibility audit run** (the a11y fixes landed but no automated a11y-tree acceptance).
-- **No performance/leak traces** (the Constitution's performance budgets lack automated traces).
+- **[CLOSED — scripts/capability-lifecycle.ts, 21 checks] Capability lifecycles** — grant→use→revoke acceptance for each optional capability (real CDP gestures), npm run test:capabilities.
+- **[CLOSED — scripts/a11y-audit.ts, 17 checks] No accessibility audit run** — an automated a11y-tree acceptance (labels/roles/contrast/focus/landmarks across the hub/chat/settings), npm run test:a11y.
+- **[CLOSED — scripts/perf-leak-trace.ts, 8 checks] No performance/leak traces** — an automated perf/leak trace (SW register/render budgets, the SW heap + OPFS + hub DOM bounded across a write loop), npm run test:perf.
 
 ## Verified-fixed (27 rounds)
 - All permissions optional (manifest permissions = []); no debugger; screenshots via captureVisibleTab + activeTab.
