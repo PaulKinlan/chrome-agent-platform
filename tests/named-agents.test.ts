@@ -13,6 +13,7 @@ import {
   grepAgentMemory,
   initialAvatar,
   listNamedAgents,
+  normalizeCoreAssets,
   slugifyAgentId,
   updateNamedAgent,
 } from "../extension/lib/named-agents.js";
@@ -187,4 +188,34 @@ Deno.test("named agents: create with an explicit id keeps the id", async () => {
   assert(created.ok);
   assertEquals(created.agent.id, "reader");
   await deleteNamedAgent("reader");
+});
+
+Deno.test("named agents: normalizeCoreAssets bounds + trims huge assets", () => {
+  // A text asset passes through; an oversized asset is truncated; non-object
+  // entries are dropped; the count is bounded.
+  const assets = normalizeCoreAssets([
+    { name: "guide.md", type: "text/markdown", content: "# Guide\nSome instructions" },
+    { name: "big.txt", type: "text/plain", content: "x".repeat(6000) },
+    null,
+    "garbage",
+  ]);
+  assertEquals(assets.length, 2, "only valid assets survive");
+  assertEquals(assets[0].content, "# Guide\nSome instructions", "normal content untouched");
+  assert(assets[1].content.length <= 4001, "oversized content is truncated");
+  assert(assets[1].content.endsWith("…"), "truncation is marked");
+  // Bounded to MAX_CORE_ASSETS (8).
+  const many = normalizeCoreAssets(Array.from({ length: 20 }, (_, i) => ({ name: `a${i}`, content: "x" })));
+  assertEquals(many.length, 8, "the asset count is bounded");
+});
+
+Deno.test("named agents: create + update persist coreAssets", async () => {
+  const created = await createNamedAgent({ name: "Asset Agent", role: "reads the asset", coreAssets: [{ name: "guide.md", type: "text/markdown", content: "# guide" }] });
+  assert(created.ok, "create ok");
+  assertEquals(created.agent.coreAssets.length, 1, "the core asset is stored");
+  const updated = await updateNamedAgent(created.agent.id, { coreAssets: [{ name: "x.txt", type: "text/plain", content: "hello" }] });
+  assert(updated.ok, "update ok");
+  assertEquals(updated.agent.coreAssets[0].name, "x.txt", "the core asset updates");
+  const fetched = await getNamedAgent(created.agent.id);
+  assertEquals(fetched.coreAssets[0].content, "hello", "the core asset persists on get");
+  await deleteNamedAgent(created.agent.id);
 });
