@@ -9,6 +9,15 @@ import {
   setProviderConfig,
 } from "../lib/provider.js";
 import {
+  providerRunGate,
+  recordProviderFailure,
+  recordProviderSuccess,
+  requestProviderHostAccess,
+  ProviderUnavailableError,
+  isProviderError,
+  logGateOnce,
+} from "../lib/provider-gate.js";
+import {
   canonicalOrigin,
   journalAppend,
   listOrigins,
@@ -82,6 +91,7 @@ import {
   historyFromThread,
   listThreads,
   nameThreadAsync,
+  recordThreadError,
   setThreadStatus,
 } from "../lib/threads.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
@@ -270,7 +280,14 @@ async function handleAlarm(alarm) {
       await markScheduledDone(alarm.name, token);
     }
   } catch (e) {
-    console.error("scheduled task failed", alarm.name, e);
+    // A provider-gate refusal (missing host permission / open breaker) must not
+    // flood the console per alarm tick — log it once + keep the run from
+    // firing again until the provider is fixed.
+    if (e instanceof ProviderUnavailableError) {
+      logGateOnce(e?.message ?? "provider unavailable");
+    } else {
+      console.error("scheduled task failed", alarm.name, e);
+    }
     // Keep the one-shot payload so a retry/restart can resume it.
   } finally {
     clearInterval(hb);
@@ -662,6 +679,12 @@ function attachmentContext(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return "";
   const parts = [];
   for (const a of attachments) {
+    if (a.kind === "tab" || a.url) {
+      // A tab reference (add-tab): the model gets the title + URL so it can
+      // reason about / act on the chosen page (granted the browser tools).
+      parts.push(`[tab: ${a.name ?? "tab"} — ${a.url ?? "(no url)"}]`);
+      continue;
+    }
     parts.push(
       `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${
         a.type ?? "unknown"
@@ -697,6 +720,14 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
+    // EARLY provider gate (Paul 2026-08-17): refuse before journaling/setup
+    // when the circuit-breaker is OPEN or the provider's host permission is
+    // missing — this is what stops a failing provider from flooding the
+    // console with one failed hook/task run per event.
+    {
+      const early = await providerRunGate(await getProviderConfig());
+      if (!early.ok) throw new ProviderUnavailableError(early.reason);
+    }
     const taskId = id ?? String(Date.now());
     // A BACKGROUND/SCHEDULED agent passes its OWN memory (Paul: all agents get
     // their own OPFS). The journal + the orchestrator's memory tools then write
@@ -769,7 +800,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
       // agent sees what came before).
-      const result = await orch.run(task, context, Array.isArray(history) ? history : []);
+      let result;
+      try {
+        result = await orch.run(task, context, Array.isArray(history) ? history : []);
+        recordProviderSuccess();
+      } catch (e) {
+        // Only a PROVIDER failure (network/config/credential) trips the
+        // circuit-breaker; a tool error or a fence abort must not pause the
+        // agent. Re-throw so the caller's own error handling still runs.
+        if (isProviderError(e)) recordProviderFailure(e?.message ?? e);
+        throw e;
+      }
       await fence?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
       await fence?.assertOwned?.();
@@ -1152,6 +1193,9 @@ const handlers = {
     }
 
     let result;
+    // Track the last tool the run attempted, so a failure can name the tool
+    // that was in flight (the per-task error view shows WHY it failed).
+    let lastTool = null;
     try {
       result = await runTask({
         id: m.id,
@@ -1162,11 +1206,14 @@ const handlers = {
         // Events are TAGGED with a per-run runId + the threadId so each listener
         // renders ONLY its own run — the wider-goal review found the untagged
         // global broadcast leaked/misattributed tool data across threads/pages.
-        onProgress: (event) => broadcastProgress({
-          ...event,
-          runId: m.runId ?? threadId ?? m.id,
-          threadId: threadId ?? null,
-        }),
+        onProgress: (event) => {
+          if (event?.type === "tool-call") lastTool = event.toolName ?? null;
+          broadcastProgress({
+            ...event,
+            runId: m.runId ?? threadId ?? m.id,
+            threadId: threadId ?? null,
+          });
+        },
         // The prior conversation turns (the unified conversational surface): a
         // follow-up message is a new turn in the same thread, so the agent sees
         // the task/result history that came before.
@@ -1177,7 +1224,7 @@ const handlers = {
       // "running" (the wider-goal review's failure-lifecycle finding: the outer
       // router only returned {ok:false} and the finalization below was skipped).
       // Convert the throw to a result so the finalizer below always runs.
-      result = { ok: false, error: String(e?.message ?? e) };
+      result = { ok: false, error: String(e?.message ?? e), failedTool: lastTool ?? null };
     }
     // Persist the result into the thread + mark it done/error (best-effort — a
     // thread write must never turn a successful run into a failure). Runs on
@@ -1187,7 +1234,18 @@ const handlers = {
       if (result && typeof result.result === "string" && result.result) {
         await appendThreadMessage(threadId, { role: "assistant", content: result.result }).catch(() => {});
       }
-      await setThreadStatus(threadId, result?.ok ? "done" : "error").catch(() => {});
+      // On failure, persist the error DETAIL into the thread (the message + the
+      // failed tool) so the task's error view shows WHY it failed — not just a
+      // red dot. A success just marks the thread done (and clears any prior
+      // error via setThreadStatus).
+      if (result && !result.ok) {
+        await recordThreadError(threadId, {
+          message: String(result.error ?? "run failed"),
+          tool: result.failedTool ?? null,
+        }).catch(() => {});
+      } else {
+        await setThreadStatus(threadId, result?.ok ? "done" : "error").catch(() => {});
+      }
     }
     result.threadId = threadId;
     if (dropped.length > 0) result.droppedAttachments = dropped;
@@ -2217,7 +2275,15 @@ async function dispatchHook(hookId, payload) {
       // (not the per-run timestamp), so its journal + read-only memory are
       // isolated from the master and from every other hook/recipe.
       memory: backgroundAgentMemory(sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`),
-    }).catch((e) => console.error(`hook ${hookId} run failed:`, e?.message ?? e));
+    }).catch((e) => {
+      // A provider-gate refusal (missing host permission / open breaker) must
+      // not flood the console per tab event — log it once.
+      if (e instanceof ProviderUnavailableError) {
+        logGateOnce(e?.message ?? "provider unavailable");
+      } else {
+        console.error(`hook ${hookId} run failed:`, e?.message ?? e);
+      }
+    });
     dispatched += 1;
   }
 }
