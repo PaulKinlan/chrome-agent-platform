@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { runConversationTurn } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress } from "../shared/conversation.js";
 
 import {
   installPageDiagnostics,
@@ -90,33 +90,74 @@ async function renderSiteAgents() {
 // ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
   const el = document.getElementById("named-agents");
-  if (!el) return;
   const res = await send("named-agent.list").catch(() => ({ agents: [] }));
   const agents = Array.isArray(res.agents) ? res.agents : [];
-  el.replaceChildren();
-  if (!agents.length) {
-    el.innerHTML = `<div class="empty">No named agents yet. Create one in a task ("create an agent…") or with /agent:create.</div>`;
-  } else {
-    for (const a of agents.slice(0, 6)) {
-      const row = document.createElement("capability-row");
-      row.setAttribute("name", a.name || a.id);
-      row.setAttribute("description", a.role || "a named agent");
-      row.setAttribute(
-        "icon",
-        `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`,
-      );
-      row.setAttribute("action", "run");
-      row.addEventListener("run", () => openView("directory/directory.html", "Agents"));
-      el.append(row);
-    }
-    if (agents.length > 6) {
-      const more = document.createElement("div");
-      more.className = "empty";
-      more.textContent = `+ ${agents.length - 6} more`;
-      el.append(more);
+  if (el) {
+    el.replaceChildren();
+    if (!agents.length) {
+      el.innerHTML = `<div class="empty">No named agents yet. Create one in a task ("create an agent…") or with /agent:create.</div>`;
+    } else {
+      for (const a of agents.slice(0, 6)) {
+        const row = document.createElement("capability-row");
+        row.setAttribute("name", a.name || a.id);
+        row.setAttribute("description", a.role || "a named agent");
+        row.setAttribute(
+          "icon",
+          `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`,
+        );
+        row.setAttribute("action", "run");
+        row.addEventListener("run", () => openView("directory/directory.html", "Agents"));
+        el.append(row);
+      }
+      if (agents.length > 6) {
+        const more = document.createElement("div");
+        more.className = "empty";
+        more.textContent = `+ ${agents.length - 6} more`;
+        el.append(more);
+      }
     }
   }
+  renderSidebarAgents(agents);
   refreshAgentCount();
+}
+
+// ── the named agents in the SIDEBAR (a created agent must appear here, not
+//    only in the main area) ───────────────────────────────────────────────
+async function renderSidebarAgents(agents) {
+  const list = document.getElementById("side-agents");
+  if (!list) return;
+  const rows = Array.isArray(agents) ? agents : [];
+  list.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "thread-empty";
+    empty.textContent = "No agents yet";
+    list.append(empty);
+    return;
+  }
+  for (const a of rows) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "agent-item";
+    item.title = (a.name || a.id) + (a.role ? " — " + a.role : "");
+    const avatar = document.createElement("img");
+    avatar.className = "a-avatar";
+    avatar.alt = "";
+    avatar.src = a.avatar || initialAvatar(a.name || a.id);
+    avatar.addEventListener("error", () => { avatar.src = initialAvatar(a.name || a.id); });
+    const label = document.createElement("span");
+    label.className = "a-name";
+    label.append(document.createTextNode(a.name || a.id));
+    if (a.role) {
+      const role = document.createElement("span");
+      role.className = "a-role";
+      role.textContent = a.role;
+      label.append(role);
+    }
+    item.append(avatar, label);
+    item.addEventListener("click", () => openView("directory/directory.html", "Agents"));
+    list.append(item);
+  }
 }
 
 function initialAvatar(name) {
@@ -351,6 +392,7 @@ function hideThreadView() {
     threadView.hidden = true;
     currentThreadId = null;
     threadConversation.clear?.();
+    renderRunStatus({ state: "idle" });
   });
 }
 
@@ -364,7 +406,33 @@ async function openThread(id) {
     messages.map((m) => ({ role: m.role, content: m.content })),
   );
   showThreadView();
+  renderRunStatus({ state: "idle" });
   renderTasks(id);
+}
+
+// ── the live run-status banner (the user must SEE it is working) ──────────
+const runStatusEl = document.getElementById("run-status");
+function renderRunStatus(s) {
+  if (!runStatusEl) return;
+  const state = s?.state;
+  if (!state || state === "idle") { runStatusEl.hidden = true; runStatusEl.replaceChildren(); return; }
+  runStatusEl.hidden = false;
+  runStatusEl.className = "run-status" + (state === "done" ? " done" : state === "error" ? " error" : "");
+  runStatusEl.replaceChildren();
+  const spin = document.createElement("span");
+  spin.className = "spin";
+  spin.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.className = "rs-label";
+  if (state === "working") {
+    runStatusEl.append(spin);
+    label.textContent = "Working… " + (s.activity || "thinking…");
+  } else if (state === "done") {
+    label.textContent = "Done";
+  } else if (state === "error") {
+    label.textContent = "Failed — " + (s.message || "error");
+  }
+  runStatusEl.append(label);
 }
 
 /** Run a turn in the thread surface (a new task, or a nudge). */
@@ -376,6 +444,7 @@ async function runThreadTurn(text, attachments = []) {
     attachments,
     history: [], // the SW derives the history from the thread when threadId is set
     threadId: currentThreadId,
+    onStatus: renderRunStatus,
   });
   if (res.ok) {
     // The SW created (or reused) the thread; capture its id for continuation.
@@ -415,6 +484,15 @@ renderBackgroundAgents();
 renderArtifacts();
 renderTasks();
 renderRunLog();
+
+// Re-render the named agents (main area + the sidebar) when the registry
+// changes — a task that creates an agent must show it in the sidebar without a
+// page reload. The SW broadcasts a named-agent-changed progress event on
+// create/update/delete (the registry lives in the all-optional storage, so
+// chrome.storage.onChanged may never fire).
+subscribeProgress((ev) => {
+  if (ev?.type === "named-agent-changed") renderNamedAgents();
+});
 
 // ── the task sidebar: collapse/expand + new-task (item 6/7) ──────────────
 const side = document.getElementById("side");

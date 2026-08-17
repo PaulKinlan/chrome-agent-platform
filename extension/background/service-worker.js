@@ -1288,13 +1288,19 @@ const handlers = {
     return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
   },
   async "named-agent.create"({ id, name, role, avatar, skills }) {
-    return await createNamedAgent({ id, name, role, avatar, skills });
+    const r = await createNamedAgent({ id, name, role, avatar, skills });
+    if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    return r;
   },
   async "named-agent.update"({ id, name, role, avatar, skills }) {
-    return await updateNamedAgent(id, { name, role, avatar, skills });
+    const r = await updateNamedAgent(id, { name, role, avatar, skills });
+    if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    return r;
   },
   async "named-agent.delete"({ id }) {
-    return await deleteNamedAgent(id);
+    const r = await deleteNamedAgent(id);
+    if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    return r;
   },
   async "named-agent.grep"({ id, query }) {
     // Search a named agent's OWN memory + history (the user-facing path). The

@@ -158,7 +158,33 @@ function newRunId() {
   try { return crypto.randomUUID(); } catch { return `r_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null }) {
+/** A human activity label for a tool call, so the live status reads "Working…
+ * creating agent Paul" rather than "Working… create_named_agent". The arg
+ * object is inspected for a name/url/agent so the label is concrete. */
+export function friendlyActivityLabel(toolName, args) {
+  const a = args && typeof args === "object" ? args : {};
+  const name = a.name || a.agent || a.origin || a.url || a.title || "";
+  const parts = String(toolName || "tool").split("_");
+  const verb = parts.length > 1 ? parts.join(" ") : toolName;
+  switch (toolName) {
+    case "create_named_agent": return name ? `creating agent ${name}` : "creating an agent";
+    case "update_named_agent": return name ? `updating agent ${name}` : "updating an agent";
+    case "delete_named_agent": return name ? `deleting agent ${name}` : "deleting an agent";
+    case "list_named_agents": return "listing agents";
+    case "schedule_task": return "scheduling a task";
+    case "create_agent": return "creating an agent";
+    case "list_agents": return "listing agents";
+    case "open_tab": case "navigate": return name ? `opening ${name}` : "opening a page";
+    case "memory_set": return "writing memory";
+    case "memory_grep": return "searching memory";
+    case "generate_ui": return "generating UI";
+    case "create_asset": return name ? `creating ${name}` : "creating an artifact";
+    case "delegate_task": return name ? `delegating to ${name}` : "delegating a task";
+    default: return verb;
+  }
+}
+
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null }) {
   const c = container;
   const runId = newRunId();
 
@@ -170,6 +196,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
   let thinking = typeof c.appendThinking === "function"
     ? c.appendThinking("thinking…")
     : appendBubble(c, "thinking", "thinking…");
+  onStatus?.({ state: "working", activity: "thinking…" });
   // Per-call tool cards: a FIFO queue per tool NAME so parallel same-name calls
   // are matched in order and a completed card is never duplicated (the
   // wider-goal review's finding that a single `lastTool` left A's card running
@@ -205,6 +232,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
       case "tool-call": {
         clearThinking();
+        onStatus?.({ state: "working", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
         const card = typeof c.appendTool === "function"
           ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
@@ -235,9 +263,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       case "done":
         clearThinking();
+        onStatus?.({ state: "done" });
         break;
       case "error":
         clearThinking();
+        onStatus?.({ state: "error", message: ev.message ?? "error" });
         appendBubble(c, "error", ev.message ?? "error");
         break;
     }
@@ -264,10 +294,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
   //    bubble locally so the user sees the outcome without a refresh).
   clearThinking();
   if (res?.ok) {
+    onStatus?.({ state: "done" });
     if (typeof res.result === "string" && res.result) {
       appendBubble(c, "agent", res.result);
     }
   } else {
+    onStatus?.({ state: "error", message: res?.error ?? "unknown" });
     appendBubble(c, "error", "Error: " + (res?.error ?? "unknown"));
   }
   return res;

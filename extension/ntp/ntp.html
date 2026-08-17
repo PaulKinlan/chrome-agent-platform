@@ -81,7 +81,93 @@
       flex-direction: column;
       gap: 2px;
       flex: 1;
+      overflow-y: auto;
     }
+    /* Named agents in the sidebar: a compact list below the tasks (item: a
+       created agent must be visible here, not just in the main area). */
+    .side-agents {
+      border-top: 1px solid var(--border);
+      padding-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 0 0 auto;
+      max-height: 32%;
+      overflow-y: auto;
+    }
+    .agent-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-align: left;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      min-width: 0;
+      width: 100%;
+    }
+    .agent-item:hover { background: var(--bg); }
+    .agent-item .a-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex: 0 0 auto;
+      display: block;
+      background: var(--panel-2);
+    }
+    .agent-item .a-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .agent-item .a-role {
+      display: block;
+      font-weight: 400;
+      font-size: 11px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .side.collapsed .agent-item { padding: 8px; justify-content: center; }
+    .side.collapsed .agent-item .a-name { display: none; }
+    .side.collapsed .side-agents .side-label-row { display: none; }
+    /* the live run status banner (item: the user must see it is working). */
+    .run-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      font-size: 13px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .run-status .spin {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--accent);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: sc-runspin 1s linear infinite;
+      flex: 0 0 auto;
+    }
+    @keyframes sc-runspin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .run-status .spin { animation: none; } }
+    .run-status.done { border-color: var(--success); color: var(--success); }
+    .run-status.error { border-color: var(--danger); color: var(--danger); }
+    .run-status .rs-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .thread-item {
       display: flex;
       flex-direction: column;
@@ -379,6 +465,10 @@
         <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task">+</button>
       </div>
       <nav class="thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
+      <div class="side-agents">
+        <div class="side-label-row"><span class="side-label">Agents</span></div>
+        <div class="agent-list" id="side-agents" aria-label="Named agents"></div>
+      </div>
       <div class="side-foot">
         <button class="btn ghost foot-btn" id="open-recipes" type="button" title="Recipes">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
@@ -473,6 +563,7 @@
         <span class="view-title" id="thread-title">Task</span>
       </div>
       <div class="thread-body">
+        <div class="run-status" id="run-status" hidden role="status" aria-live="polite"></div>
         <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
         <agent-composer id="thread-composer" placeholder="Reply, or @mention a site agent…" send-label="Send"></agent-composer>
       </div>
