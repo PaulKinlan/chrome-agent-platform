@@ -28,6 +28,19 @@ export function providerOriginPattern(cfg) {
   return null;
 }
 
+/** The providers that run LOCALLY (no network fetch → no host permission
+ * needed). The demo model is deterministic + on-device; the Prompt API is
+ * on-device Gemini nano. Neither makes a cross-origin fetch, so the network
+ * gate must not block them (a stale baseURL from a previously-selected
+ * network provider must not gate the local provider either). */
+const LOCAL_PROVIDER_IDS = new Set(["demo", "prompt-api"]);
+
+/** Whether the provider runs locally (no host permission needed). */
+export function isLocalProvider(cfg) {
+  const id = cfg?.provider ?? cfg?.id ?? "";
+  return LOCAL_PROVIDER_IDS.has(String(id).toLowerCase());
+}
+
 /** Whether the provider's origin host permission is currently granted.
  * Outside a real extension (tests), there is no chrome.permissions — return
  * true so the gate does not block pure-logic tests. */
@@ -101,6 +114,10 @@ export function recordProviderSuccess() {
 /** The combined pre-run gate: returns { ok, reason } — false when the provider
  * should not run (breaker open OR the host permission is missing). */
 export async function providerRunGate(cfg) {
+  // Local providers (demo + Prompt API) never fetch a remote origin — they
+  // must not be gated by a host permission (or a stale baseURL inherited from
+  // a previously-selected network provider).
+  if (isLocalProvider(cfg)) return { ok: true, reason: "" };
   if (providerBreakerOpen()) {
     return { ok: false, reason: `provider is temporarily unavailable (${lastReason || "recent failures"}) — paused, will retry automatically` };
   }

@@ -10,6 +10,8 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   providerOriginPattern,
   isProviderError,
+  isLocalProvider,
+  providerRunGate,
   ProviderUnavailableError,
   recordProviderFailure,
   recordProviderSuccess,
@@ -54,6 +56,28 @@ Deno.test("isProviderError does NOT classify tool errors or fence aborts", () =>
   assert(!isProviderError(new Error("permission denied")));
   assert(!isProviderError(new Error("run aborted")));
   assert(!isProviderError(new Error("no matching tool")));
+});
+
+// ---- local providers (demo + Prompt API) are never gated ----
+Deno.test("isLocalProvider identifies the demo + Prompt API (no host permission)", () => {
+  assert(isLocalProvider({ provider: "demo", baseURL: "" }));
+  assert(isLocalProvider({ provider: "prompt-api" }));
+  assert(!isLocalProvider({ provider: "gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai" }));
+  assert(!isLocalProvider({ provider: "openai", baseURL: "https://api.openai.com/v1" }));
+  assert(!isLocalProvider({}));
+});
+
+Deno.test("providerRunGate never gates a LOCAL provider, even with a stale baseURL", async () => {
+  recordProviderSuccess(); // clean breaker
+  // The regression: provider.set({provider:'demo'}) does not clear a stale
+  // baseURL from a previously-selected network provider. The demo must still
+  // pass the gate (it never fetches that URL).
+  const g = await providerRunGate({
+    provider: "demo",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+  });
+  assertEquals(g.ok, true);
+  assertEquals(g.reason, "");
 });
 
 // ---- ProviderUnavailableError carries a clear, user-facing reason ----
