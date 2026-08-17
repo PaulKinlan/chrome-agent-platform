@@ -14,6 +14,8 @@ import {
   recordProviderFailure,
   recordProviderSuccess,
   providerBreakerOpen,
+  logGateOnce,
+  resetGateLog,
 } from "../extension/lib/provider-gate.js";
 
 // ---- providerOriginPattern ----
@@ -84,4 +86,28 @@ Deno.test("a non-provider failure never trips the breaker (classified before rec
   // isProviderError guards the call site in runTask — a tool error is not recorded.
   assert(!isProviderError(new Error("tab not found")));
   // (the breaker is only advanced when isProviderError is true)
+});
+
+// ---- flood suppression (the per-event hook/task error FLOOD) ----
+// The hook + scheduled-task catch handlers route ANY provider failure
+// (including the agent-do re-thrown AI_NoOutputGeneratedError) through
+// logGateOnce, which dedupes per reason — a tabs.onUpdated burst logs at most
+// once, not one line per event.
+Deno.test("logGateOnce dedupes a repeated provider-failure reason (flood suppression)", () => {
+  resetGateLog();
+  const reason = "No output generated. Check the stream for errors.";
+  assertEquals(logGateOnce(reason), true);   // first time → logs
+  assertEquals(logGateOnce(reason), false);  // same reason → suppressed
+  assertEquals(logGateOnce(reason), false);  // still suppressed
+  // a DIFFERENT reason logs (the dedupe key is the message)
+  assertEquals(logGateOnce("network access to the provider is not granted"), true);
+});
+
+Deno.test("a no-output provider failure is classified as a provider error (so the hook catch backs off)", () => {
+  // The exact error Paul saw flooding the console: the agent-do run re-throws
+  // AI_NoOutputGeneratedError, which the hook/task catch must treat as a
+  // provider failure (log once + trip the breaker), not a per-event console.error.
+  assert(isProviderError(new Error("AI_NoOutputGeneratedError: No output generated. Check the stream for errors.")));
+  assert(isProviderError(new Error("AI_APICallError: 401 unauthorized")));
+  assert(isProviderError(new Error("AI_RetryError: Failed after 3 attempts. Last error: AI_APICallError")));
 });

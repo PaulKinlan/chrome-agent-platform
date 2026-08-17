@@ -345,7 +345,10 @@ async function renderTasks(activeId = null) {
     name.className = "t-name";
     const dot = document.createElement("span");
     dot.className = "dot" + (dotState ? " " + dotState : "");
-    name.append(dot, document.createTextNode(t.name || "Task"));
+    const title = document.createElement("span");
+    title.className = "t-title";
+    title.textContent = t.name || "Task";
+    name.append(dot, title);
     const preview = document.createElement("span");
     preview.className = "t-preview";
     preview.textContent = t.preview || "";
@@ -383,21 +386,37 @@ const threadTitle = document.getElementById("thread-title");
 const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
 let currentThreadId = null;
+let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
 
+// The inner (no-transition) cleanups, so openView/showThreadView can hide the
+// OTHER overlay without nesting a second document.startViewTransition (a nested
+// transition throws "transition was aborted because of invalid state snapshot").
+function hideThreadViewInner() {
+  threadView.hidden = true;
+  currentThreadId = null;
+  currentAgentId = null;
+  threadConversation.clear?.();
+  renderRunStatus({ state: "idle" });
+}
+function hideViewInner() {
+  viewOverlay.hidden = true;
+  viewFrame.src = "about:blank";
+}
 function showThreadView() {
-  withViewTransition(() => { threadView.hidden = false; });
+  withViewTransition(() => {
+    // Only ONE overlay at a time (item 48): the thread view replaces the
+    // settings/directory/recipes view.
+    if (!viewOverlay.hidden) hideViewInner();
+    threadView.hidden = false;
+  });
 }
 function hideThreadView() {
-  withViewTransition(() => {
-    threadView.hidden = true;
-    currentThreadId = null;
-    threadConversation.clear?.();
-    renderRunStatus({ state: "idle" });
-  });
+  withViewTransition(hideThreadViewInner);
 }
 
 async function openThread(id) {
   currentThreadId = id;
+  currentAgentId = null; // a thread is NOT an agent chat
   const res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   const thread = res.ok ? res.thread : null;
   threadTitle.textContent = thread?.name || "Task";
@@ -408,6 +427,60 @@ async function openThread(id) {
   showThreadView();
   renderRunStatus({ state: "idle" });
   renderTasks(id);
+}
+
+// ── the AGENT chat surface (item 43): click a named agent → chat with it ──
+// Opens the thread surface scoped to ONE named agent: the conversation shows
+// the agent's OWN run history (its journal from its OPFS), and the composer
+// starts tasks DIRECTLY in that agent (named-agent.run → its own memory/skills).
+async function openAgentChat(id) {
+  currentAgentId = id;
+  currentThreadId = null;
+  const [aRes, hRes] = await Promise.all([
+    send("named-agent.get", { id }).catch(() => ({ ok: false })),
+    send("named-agent.history", { id }).catch(() => ({ entries: [] })),
+  ]);
+  const agent = aRes.ok ? aRes.agent : null;
+  threadTitle.textContent = agent?.name || id || "Agent";
+  renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
+  showThreadView();
+  renderRunStatus({ state: "idle" });
+  threadComposer.focus();
+}
+
+// Render an agent's run history (its journal) as a conversation: task → user
+// bubble, result → agent bubble, tool-call/tool-result → a tool card. Chronological
+// (the history route is most-recent-first).
+function renderAgentHistory(container, entries) {
+  if (typeof container.setMessages === "function") container.setMessages([]);
+  const rows = [...entries].reverse(); // oldest → newest
+  const filtered = rows.filter(
+    (r) =>
+      (r?.type === "task" && typeof r.task === "string" && r.task.trim()) ||
+      (r?.type === "result" && typeof r.result === "string" && r.result.trim()) ||
+      r?.type === "tool-call" ||
+      r?.type === "tool-result",
+  );
+  if (!filtered.length) {
+    if (typeof container.appendSystem === "function") {
+      container.appendSystem("No runs yet — start a task below to chat with this agent.");
+    }
+    return;
+  }
+  for (const r of filtered) {
+    if (r.type === "task") appendBubble(container, "user", r.task);
+    else if (r.type === "result") appendBubble(container, "agent", r.result);
+    else if (r.type === "tool-call") {
+      if (typeof container.appendTool === "function") {
+        container.appendTool({ name: r.tool ?? "tool", status: "running" });
+      }
+    } else if (r.type === "tool-result") {
+      if (typeof container.appendTool === "function") {
+        const res = r.result == null ? "" : typeof r.result === "string" ? r.result : JSON.stringify(r.result);
+        container.appendTool({ name: r.tool ?? "tool", status: "success", result: res });
+      }
+    }
+  }
 }
 
 // ── the live run-status banner (the user must SEE it is working) ──────────
@@ -478,6 +551,38 @@ threadComposer.addEventListener("send", async (ev) => {
 });
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
 
+// ── edit the thread title (item 47): click the title → rename in place. ─────
+threadTitle.addEventListener("click", () => {
+  if (!currentThreadId) return;
+  if (threadTitle.querySelector("input")) return; // already editing
+  const original = threadTitle.textContent || "Task";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "title-edit";
+  input.value = original;
+  input.setAttribute("aria-label", "Rename task");
+  const restore = (text) => threadTitle.replaceChildren(document.createTextNode(text));
+  const commit = async () => {
+    const name = input.value.trim();
+    if (name && name !== original) {
+      const r = await send("thread.rename", { id: currentThreadId, name }).catch(() => ({ ok: false }));
+      if (r?.ok) restore(name);
+      else restore(original);
+      await renderTasks(currentThreadId);
+    } else {
+      restore(original);
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    if (e.key === "Escape") { restore(original); }
+  });
+  input.addEventListener("blur", commit);
+  threadTitle.replaceChildren(input);
+  input.focus();
+  input.select();
+});
+
 renderSiteAgents();
 renderNamedAgents();
 renderBackgroundAgents();
@@ -519,13 +624,34 @@ document.getElementById("new-task")?.addEventListener("click", () => {
 // ── View Transitions (item 8): smooth in-page state changes, reduced-motion aware.
 // Named elements let the thread body + composer morph between the hub and the
 // full-screen thread. No-op when the API is absent or reduced-motion is on.
+//
+// Guard against a transition already in flight: rapid view switches (task →
+// agent → recipes) call startViewTransition while the previous transition is
+// still capturing, which the browser aborts with "invalid state snapshot" /
+// "Capture failed" and throws. When one is active we skip straight to the
+// state change (no transition) rather than abort the running one.
+let viewTransitionActive = false;
 function withViewTransition(fn) {
-  if (typeof document.startViewTransition !== "function" || prefersReducedMotion()) {
+  if (
+    typeof document.startViewTransition !== "function" ||
+    prefersReducedMotion() ||
+    viewTransitionActive
+  ) {
     fn();
     return;
   }
-  const t = document.startViewTransition(() => fn());
-  t.finished?.catch(() => { /* a transition that never settles must not throw */ });
+  viewTransitionActive = true;
+  try {
+    const t = document.startViewTransition(() => fn());
+    // A transition that never settles must not throw; clear the guard either
+    // way so a later state change can use a transition again.
+    t?.finished?.finally(() => { viewTransitionActive = false; });
+  } catch {
+    // startViewTransition threw (invalid snapshot/state) — apply the change
+    // without a transition and release the guard.
+    viewTransitionActive = false;
+    fn();
+  }
 }
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
@@ -536,14 +662,16 @@ const viewTitle = document.getElementById("view-title");
 function openView(path, title) {
   viewFrame.src = chrome.runtime.getURL(path);
   viewTitle.textContent = title;
-  withViewTransition(() => { viewOverlay.hidden = false; });
+  withViewTransition(() => {
+    // Only ONE overlay at a time (item 48): the settings/directory/recipes
+    // view replaces the task thread.
+    if (!threadView.hidden) hideThreadViewInner();
+    viewOverlay.hidden = false;
+  });
   viewFrame.focus();
 }
 function closeView() {
-  withViewTransition(() => {
-    viewOverlay.hidden = true;
-    viewFrame.src = "about:blank";
-  });
+  withViewTransition(hideViewInner);
 }
 
 document.getElementById("view-back")?.addEventListener("click", closeView);

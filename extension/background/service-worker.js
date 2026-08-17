@@ -91,6 +91,7 @@ import {
   listThreads,
   nameThreadAsync,
   recordThreadError,
+  renameThread,
   setThreadStatus,
 } from "../lib/threads.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
@@ -279,10 +280,14 @@ async function handleAlarm(alarm) {
       await markScheduledDone(alarm.name, token);
     }
   } catch (e) {
-    // A provider-gate refusal (missing host permission / open breaker) must not
-    // flood the console per alarm tick — log it once + keep the run from
-    // firing again until the provider is fixed.
-    if (e instanceof ProviderUnavailableError) {
+    // A provider failure (missing host permission / open breaker / a model
+    // that returns no output) must not flood the console per alarm tick — log
+    // it once + keep the run from firing again until the provider is fixed.
+    // Use isProviderError (not instanceof ProviderUnavailableError): the
+    // agent-do run re-throws AI_NoOutputGeneratedError / AI_APICallError /
+    // AI_RetryError, which are provider failures too and must back off the
+    // same way instead of logging a line every tick.
+    if (isProviderError(e)) {
       logGateOnce(e?.message ?? "provider unavailable");
     } else {
       console.error("scheduled task failed", alarm.name, e);
@@ -1268,6 +1273,10 @@ const handlers = {
     const removed = await deleteThread(m?.id);
     return removed ? { ok: true } : { ok: false, error: "thread not found" };
   },
+  async "thread.rename"(m) {
+    const renamed = await renameThread(m?.id, m?.name);
+    return renamed ? { ok: true } : { ok: false, error: "thread not found or empty name" };
+  },
   async "thread.name"(m) {
     // Generate a title for a task (the model when available, else truncated).
     const name = await generateThreadName(m.task);
@@ -1325,7 +1334,7 @@ const handlers = {
     }
     return { ok: true, avatar: avatar ?? null };
   },
-  async "named-agent.run"({ id, task, attachments }) {
+  async "named-agent.run"({ id, task, attachments, runId }) {
     // RUN/DELEGATE a task to a named agent (the wider-goal review found named
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
@@ -1334,13 +1343,30 @@ const handlers = {
     if (!agent) return { ok: false, error: `no agent ${id}` };
     const slug = slugifyAgentId(id);
     const mem = namedAgentMemory(slug);
+    const runTag = runId ?? `named:${slug}:${Date.now()}`;
+    // The agent-chat surface needs LIVE progress (the tool calls streaming) —
+    // broadcast each event tagged with the runId + the agentId so the page's
+    // listener renders ONLY this agent run's tool cards.
     const result = await runTask({
-      id: `named:${slug}:${Date.now()}`,
+      id: runTag,
       task,
       attachments: attachments ?? [],
       memory: mem,
+      onProgress: (event) => {
+        broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
+      },
     });
     return result;
+  },
+  async "named-agent.history"({ id }) {
+    // The agent's OWN run history (its journal — task/result/tool-call rows),
+    // most-recent-first, so the agent-chat surface can show what the agent did.
+    // Reads the per-agent OPFS, never the master journal.
+    if (!(await getNamedAgent(id))) return { ok: false, error: `no agent ${id}` };
+    const mem = namedAgentMemory(slugifyAgentId(id));
+    const journal = (await mem.get("journal").catch(() => null)) ?? [];
+    const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
+    return { entries, count: entries.length };
   },
 
   // The agent run log (item 16): every journaled task/result/tool-call/screenshot
@@ -1363,7 +1389,11 @@ const handlers = {
     const origins = await listOrigins();
     const out = [];
     for (const o of origins) {
-      out.push(await agentInfo(o));
+      const info = await agentInfo(o);
+      // Item 44: a site with ZERO tools is not an agent (paul.kinlan.me with no
+      // WebMCP/inferred tools must not appear in the directory / the site-agents
+      // list). Only origins that actually expose tools are listed.
+      if (info.toolCount > 0) out.push(info);
     }
     return { agents: out };
   },
@@ -2281,9 +2311,14 @@ async function dispatchHook(hookId, payload) {
       // isolated from the master and from every other hook/recipe.
       memory: backgroundAgentMemory(sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`),
     }).catch((e) => {
-      // A provider-gate refusal (missing host permission / open breaker) must
-      // not flood the console per tab event — log it once.
-      if (e instanceof ProviderUnavailableError) {
+      // A provider failure (missing host permission / open breaker / a model
+      // that returns no output) must not flood the console per tab event —
+      // log it once + the breaker backs off. Use isProviderError (not
+      // instanceof ProviderUnavailableError): the agent-do run re-throws
+      // AI_NoOutputGeneratedError / AI_APICallError / AI_RetryError, which are
+      // provider failures too and were flooding the console one line per
+      // tabs.onUpdated event.
+      if (isProviderError(e)) {
         logGateOnce(e?.message ?? "provider unavailable");
       } else {
         console.error(`hook ${hookId} run failed:`, e?.message ?? e);
