@@ -63,6 +63,15 @@ there. The reviewer agents check against it.
   (docs/components.html — the playground where components are tested in isolation
   without running the extension). The gallery imports the SAME components.js
   (scripts/sync-gallery.mjs; check:gallery fails on drift).
+- **Cross-subsystem consistency (Paul, 2026-08-17).** When you change one
+  subsystem, CHECK + UPDATE every related part. Examples that broke: renaming
+  recipes→skills left the / command saying "task" + the autocomplete not updated;
+  the all-optional host permissions broke the provider fetch. A change is not done
+  until the related surfaces (the commands, the autocomplete, the UI, the docs,
+  the tests) are updated. Keep a mental (or written) map of the couplings: the
+  composer ↔ the command registry ↔ the autocomplete ↔ the skills/agents registry;
+  the permissions ↔ every feature that needs them; the components ↔ the pages that
+  use them. When in doubt, grep for the old term/concept across the repo.
 - **Fleet validation (Paul, 2026-08-16).** Every change is validated by a DIFFERENT
   review agent before it is considered done — the intercom fleet (sol for code/
   security review, deepseek-v4-pro for vision/UI review, GLM-5.3 for a second
