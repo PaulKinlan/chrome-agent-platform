@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.69] — 2026-08-17
+- chore: stop tracking extension/CHANGELOG.md (a build artifact — the build copies CHANGELOG.md into the extension package)
+
 ## [0.2.68] — 2026-08-17
 - chore(changelog): fill in the changelog from the commit history (no more '(describe the change)' placeholders) + make the bump hook use the commit message
 
