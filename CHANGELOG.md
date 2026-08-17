@@ -1,13 +1,13 @@
 # Changelog
 
+## [0.2.68] — 2026-08-17
+- chore(changelog): fill in the changelog from the commit history (no more '(describe the change)' placeholders) + make the bump hook use the commit message
+
 ## [0.2.67] — 2026-08-17
 - test(named-agents): normalizeCoreAssets bounds/truncation + coreAssets create/update persistence (the rich agent-config dialog's core-asset store)
 
 ## [0.2.66] — 2026-08-17
 - fix(webmcp): make tool discovery work on any page you visit — a 'Discover this page' flow on the hub (agent.discover-active resolves the active tab's origin, the click requests tabs+scripting+the origin host permission, then enroll-origin registers + injects the discovery scripts) + a self-contained WebMCP fixture server/page + a passing real-browser integration test (9/9)
-
-## [0.2.64] — 2026-08-17
-- (describe the change)
 
 All notable changes to the Chrome Agent Platform. Semantic versioning: MAJOR.MINOR.PATCH.
 

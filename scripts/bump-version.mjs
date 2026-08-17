@@ -4,10 +4,14 @@
 // Chaos-extension-style (adapted from ~/chaos/scripts/bump-version.mjs).
 //
 // Usage:
-//   node scripts/bump-version.mjs patch   # 0.2.0 -> 0.2.1
-//   node scripts/bump-version.mjs minor   # 0.2.0 -> 0.3.0
-//   node scripts/bump-version.mjs major   # 0.2.0 -> 1.0.0
-//   node scripts/bump-version.mjs 1.2.3   # set explicit version
+//   node scripts/bump-version.mjs patch                   # 0.2.0 -> 0.2.1
+//   node scripts/bump-version.mjs minor                   # 0.2.0 -> 0.3.0
+//   node scripts/bump-version.mjs major                   # 0.2.0 -> 1.0.0
+//   node scripts/bump-version.mjs 1.2.3                   # set explicit version
+//   node scripts/bump-version.mjs patch --message "..."   # use the commit message as the changelog entry
+//
+// The changelog entry is derived from --message (the commit message). No message
+// → no placeholder entry is written (the version is still bumped).
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -33,7 +37,12 @@ function bumpSemver(current, type) {
   }
 }
 
-const type = process.argv[2] || "patch";
+// Parse argv: the bump type is the first non-flag arg; --message/-m takes the next value.
+const argv = process.argv.slice(2);
+const type = argv.find((a) => !a.startsWith("-")) || "patch";
+const mi = argv.findIndex((a) => a === "--message" || a === "-m");
+const message = mi >= 0 ? argv[mi + 1] : null;
+
 const pkgPath = join(ROOT, "package.json");
 const manifestPath = join(ROOT, "extension", "manifest.json");
 const pkg = readJson(pkgPath);
@@ -47,14 +56,15 @@ manifest.version_name = next;
 writeJson(pkgPath, pkg);
 writeJson(manifestPath, manifest);
 
-// Prepend a CHANGELOG entry.
+// Prepend a CHANGELOG entry ONLY when we have a message (the commit message).
 const changelogPath = join(ROOT, "CHANGELOG.md");
-if (existsSync(changelogPath)) {
+if (existsSync(changelogPath) && message) {
   const date = new Date().toISOString().slice(0, 10);
   const existing = readFileSync(changelogPath, "utf-8");
-  const entry = `\n## [${next}] — ${date}\n- (describe the change)\n`;
+  const clean = message.replace(/^\[[^\]]*\]\s*/, "").trim();
+  const entry = `\n## [${next}] — ${date}\n- ${clean}\n`;
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
 }
 
-console.log(`Bumped ${current} → ${next}`);
+console.log(`Bumped ${current} → ${next}${message ? ` (changelog: ${message.slice(0, 60)})` : ""}`);
