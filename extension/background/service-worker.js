@@ -111,6 +111,14 @@ import {
   updateAsset,
 } from "../lib/artifacts.js";
 import {
+  createScript,
+  deleteScript,
+  getScript,
+  listScripts,
+  recordScriptRun,
+  updateScript,
+} from "../lib/scripts.js";
+import {
   browserToolset,
   captureTabScreenshot,
   isBrowserControlGranted,
@@ -121,6 +129,64 @@ import {
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
+
+// ── agent-generated script execution (Paul 2026-08-17) ───────────────────
+// A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
+// offscreen doc is a singleton host that spins up an opaque sandboxed iframe
+// per run (see offscreen/offscreen.js). `ensureOffscreen` creates it once; the
+// `script.run` route sends the source over + awaits the result.
+let offscreenCreating = null;
+async function ensureOffscreen() {
+  if (typeof chrome === "undefined" || !chrome.offscreen) {
+    return { ok: false, error: "chrome.offscreen unavailable" };
+  }
+  try {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"], documentUrls: [chrome.runtime.getURL("offscreen/offscreen.html")] });
+    if (contexts && contexts.length > 0) return { ok: true };
+  } catch { /* getContexts may be absent on older Chrome */ }
+  if (!offscreenCreating) {
+    offscreenCreating = chrome.offscreen
+      .createDocument({
+        url: "offscreen/offscreen.html",
+        reasons: ["WORKERS", "DOM_SCRAPING"],
+        justification: "Run agent-generated JavaScript in a sandboxed iframe (the controlled fetch bridge reads pages the agent is allowed to read)",
+      })
+      .catch((e) => {
+        offscreenCreating = null;
+        throw e;
+      });
+  }
+  try {
+    await offscreenCreating;
+    offscreenCreating = null;
+    return { ok: true };
+  } catch (e) {
+    offscreenCreating = null;
+    return { ok: false, error: `offscreen document could not be created: ${e?.message ?? e}` };
+  }
+}
+
+/** Run a script source in the sandboxed host, bounded by a timeout. The
+ * production host is the offscreen document (scheduled runs, no open page); the
+ * on-demand fallback is the NTP hub page (both register the SAME
+ * `cap:script-run` listener via lib/script-host.js). We broadcast to whichever
+ * is open. */
+async function runScriptSandboxed(source) {
+  // Best-effort: open the offscreen doc (the scheduled host). If it is
+  // unavailable (e.g. headless Chrome), the broadcast below still reaches the
+  // NTP page — the on-demand host — so a run from the hub always works.
+  await ensureOffscreen().catch(() => {});
+  const runId = `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const timer = setTimeout(() => finish({ ok: false, error: "script run timed out (SW)" }), 40_000);
+    chrome.runtime.sendMessage({ type: "cap:script-run", source, runId }).then(
+      (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no response from the script host" }); },
+      (e) => { clearTimeout(timer); finish({ ok: false, error: `no script host is open (${e?.message ?? e}) — open the hub or enable a host page` }); }
+    );
+  });
+}
 
 // ── editable/duplicable background agents (item 56) ──────────────────────
 // Custom recipe copies live in masterMemory under `customRecipes` (a built-in
@@ -325,16 +391,39 @@ async function handleAlarm(alarm) {
       return;
     }
     // Run FIRST, delete only on success (durable across worker interruption).
-    await runTask({
-      id: alarm.name,
-      task: task.task ?? alarm.name,
-      scheduled: true,
-      attachments: task.attachments ?? [],
-      fence,
-      // A background/scheduled agent gets its OWN OPFS (memory + run log),
-      // keyed by the schedule name — never the master's memory.
-      memory: backgroundAgentMemory(alarm.name),
-    });
+    // A script-backed schedule runs the agent-generated JS SANDBOXED (no model
+    // re-invocation — the same script every tick, no token burn).
+    if (task.scriptId) {
+      await fence.assertOwned();
+      const got = await getScript("master", task.scriptId);
+      if (got.ok) {
+        const run = await runScriptSandboxed(got.script.source);
+        let result = run?.result ?? null;
+        if (result != null) {
+          try { const s = JSON.stringify(result); if (s && s.length > 256 * 1024) result = String(result).slice(0, 256 * 1024); } catch { result = String(result).slice(0, 256 * 1024); }
+        }
+        await recordScriptRun("master", task.scriptId, { ok: run?.ok, result, error: run?.error }).catch(() => {});
+        await fence.assertOwned();
+        journalAppend(backgroundAgentMemory(alarm.name), {
+          type: "tool-result", id: alarm.name, tool: `script:${task.scriptId}`,
+          result: run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed"),
+        }).catch(() => {});
+      } else {
+        await fence.assertOwned();
+        journalAppend(backgroundAgentMemory(alarm.name), { type: "tool-result", id: alarm.name, tool: "script", result: `script ${task.scriptId} not found` }).catch(() => {});
+      }
+    } else {
+      await runTask({
+        id: alarm.name,
+        task: task.task ?? alarm.name,
+        scheduled: true,
+        attachments: task.attachments ?? [],
+        fence,
+        // A background/scheduled agent gets its OWN OPFS (memory + run log),
+        // keyed by the schedule name — never the master's memory.
+        memory: backgroundAgentMemory(alarm.name),
+      });
+    }
     if (!task.periodInMinutes) {
       await fence.assertOwned();
       await markScheduledDone(alarm.name, token);
@@ -1798,6 +1887,45 @@ const handlers = {
   },
   async "asset.get"({ origin, id }) {
     return await getAsset(origin ?? "master", id);
+  },
+
+  // ---- agent-generated scripts (create/update/delete/list/get/run) ----
+  async "script.create"({ origin, name, source }) {
+    return await createScript(origin ?? "master", { name, source });
+  },
+  async "script.update"({ origin, id, name, source }) {
+    const patch = {};
+    if (name !== undefined) patch.name = name;
+    if (source !== undefined) patch.source = source;
+    return await updateScript(origin ?? "master", id, patch);
+  },
+  async "script.delete"({ origin, id }) {
+    return await deleteScript(origin ?? "master", id);
+  },
+  async "script.list"({ origin }) {
+    return await listScripts(origin ?? "master");
+  },
+  async "script.get"({ origin, id }) {
+    return await getScript(origin ?? "master", id);
+  },
+  async "script.run"({ origin, id }) {
+    // Run an agent-generated script SANDBOXED (no model re-invocation — the
+    // same JS every time). Resolve the script body, run it in the offscreen
+    // host, record the outcome on the script, and return the result + logs.
+    const got = await getScript(origin ?? "master", id);
+    if (!got.ok) return got;
+    const source = got.script.source;
+    const run = await runScriptSandboxed(source);
+    // Bound the returned result so a script can't balloon the telemetry.
+    let result = run?.result ?? null;
+    if (result != null) {
+      try {
+        const s = JSON.stringify(result);
+        if (s && s.length > 256 * 1024) result = String(result).slice(0, 256 * 1024);
+      } catch { result = String(result).slice(0, 256 * 1024); }
+    }
+    await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
+    return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
 
   // ---- capability request (the agent can REQUEST; the owner approves) ----

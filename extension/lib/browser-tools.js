@@ -919,14 +919,15 @@ export function browserToolset(readOnly = false) {
     }),
     schedule_task: tool({
       description:
-        "Schedule a future task to run the agent at an absolute time (epoch ms) or after a delay (ms). The task runs even if the browser is idle.",
+        "Schedule a future task to run the agent at an absolute time (epoch ms) or after a delay (ms). The task runs even if the browser is idle. Pass scriptId (a script you created with create_script) to run that JS directly on the schedule — no model re-invocation.",
       inputSchema: z.object({
         task: z.string().min(1).max(4000),
         at: z.number().optional(),
         delayMs: z.number().optional(),
         periodInMinutes: z.number().optional(),
+        scriptId: z.string().optional().describe("run this script instead of the model"),
       }),
-      execute: async ({ task, at, delayMs, periodInMinutes }) => {
+      execute: async ({ task, at, delayMs, periodInMinutes, scriptId }) => {
         // schedule_task is a durable side-effecting boundary (persists a payload
         // + creates a Chrome alarm) — fence it (the round-16 fence coverage
         // finding: schedule_task persisted without a run-abort check). DUrable
@@ -943,6 +944,7 @@ export function browserToolset(readOnly = false) {
           at,
           delayMs,
           periodInMinutes,
+          scriptId,
         });
         return { ok: true, name, when };
       },

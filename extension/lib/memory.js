@@ -27,7 +27,7 @@ const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
 // reserved from the MODEL's `memory_set` too: the wider-goal review proved a
 // forged `threads` index could be written through `masterMemory().set` and
 // `listThreads()` returned it. Internal thread code uses `setTrusted`.
-const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets", "threads"]);
+const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets", "threads", "scripts"]);
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -40,6 +40,7 @@ const SITE_RESERVED_KEYS = new Set([
   "journal",
   "enrolled",
   "assets",
+  "scripts",
   "agentConfig",
 ]);
 

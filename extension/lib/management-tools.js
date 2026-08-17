@@ -42,6 +42,12 @@ export const MANAGEMENT_TOOL_NAMES = [
   "subscribe_hook",
   "unsubscribe_hook",
   "generate_ui",
+  "create_script",
+  "update_script",
+  "delete_script",
+  "list_scripts",
+  "get_script",
+  "run_script",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -257,6 +263,57 @@ export function managementToolset({ callRoute }) {
       }),
       execute: ({ name, html, origin }) =>
         call("asset.create", { origin, assetType: "html", name, content: html }),
+    }),
+
+    // ---- agent-generated scripts (repeatable JS, sandboxed — Paul 2026-08-17) ----
+    // A script runs the SAME JavaScript every time WITHOUT re-invoking the model
+    // (no token burn). Use it for repeatable tasks: read a page, transform data,
+    // return a value. The script runs SANDBOXED (an opaque iframe, no network of
+    // its own) with a CONTROLLED api: `fetch(url, opts)` (the extension fetches
+    // on its behalf, http/https only, size-bounded) and `log(...)`. It is an ASYNC
+    // function body — `return` the result. It has NO DOM, NO extension APIs, NO
+    // other origins, and NO direct network. A script can be scheduled (run it
+    // on a timer via schedule_task with scriptId) or run on demand (run_script).
+    create_script: tool({
+      description:
+        "Create a reusable JavaScript script (an async function body) that runs sandboxed + repeatedly without re-invoking the model. The script gets a controlled api: await fetch(url, opts) (reads an http/https page, returns {status, text}) + log(...). Return a value as the result. No DOM/extension/network access of its own.",
+      inputSchema: z.object({
+        name: z.string().describe("a short, clear name for the script"),
+        source: z.string().describe("the JavaScript function body (async), e.g. `const r = await fetch('https://example.com'); return r.text.slice(0, 200);`"),
+        origin: z.string().default("master").describe("'master' (hub-level script)"),
+      }),
+      execute: ({ name, source, origin }) => call("script.create", { origin, name, source }),
+    }),
+    update_script: tool({
+      description: "Update a script's name/source.",
+      inputSchema: z.object({
+        id: z.string(),
+        name: z.string().optional(),
+        source: z.string().optional(),
+        origin: z.string().default("master"),
+      }),
+      execute: ({ id, name, source, origin }) => call("script.update", { origin, id, name, source }),
+    }),
+    delete_script: tool({
+      description: "Delete a script.",
+      inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
+      execute: ({ id, origin }) => call("script.delete", { origin, id }),
+    }),
+    list_scripts: tool({
+      description: "List the scripts (metadata only).",
+      inputSchema: z.object({ origin: z.string().default("master") }),
+      execute: ({ origin }) => call("script.list", { origin }),
+    }),
+    get_script: tool({
+      description: "Read one script (name + source + last-run status).",
+      inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
+      execute: ({ id, origin }) => call("script.get", { origin, id }),
+    }),
+    run_script: tool({
+      description:
+        "Run a script NOW (sandboxed, no model re-invocation) and return its result.",
+      inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
+      execute: ({ id, origin }) => call("script.run", { origin, id }),
     }),
   };
 }

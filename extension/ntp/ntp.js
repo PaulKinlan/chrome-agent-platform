@@ -9,6 +9,7 @@ import { send } from "../lib/messages.js";
 import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/conversation.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
+import { handleScriptRunMessage } from "../lib/script-host.js";
 
 import {
   installPageDiagnostics,
@@ -849,3 +850,11 @@ async function handleOmniboxEntry() {
   }
 }
 handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));
+
+// ---- agent-script host (the on-demand fallback) ---------------------
+// The SW broadcasts `cap:script-run`; the offscreen document is the production
+// host for scheduled runs, and THIS page is the on-demand fallback (so a
+// script run from the hub works even where chrome.offscreen is unavailable).
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
+  handleScriptRunMessage(message, sendResponse)
+);

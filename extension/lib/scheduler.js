@@ -85,7 +85,7 @@ export const SCHEDULED_TASK_KEY = TASK_KEY;
 
 /** Validate timing FIRST, then persist, then create the alarm (atomic order). */
 export async function scheduleTask(
-  { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName },
+  { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName, scriptId },
 ) {
   return withLock(async () => {
     // Resolve `when` before any persistence so a bad time can't orphan a stored task.
@@ -125,7 +125,7 @@ export async function scheduleTask(
     await assertRunOwned();
 
     const tasks = { ...(store[TASK_KEY] ?? {}) };
-    tasks[name] = { name, task, at: when, periodInMinutes, attachments };
+    tasks[name] = { name, task, at: when, periodInMinutes, attachments, ...(scriptId ? { scriptId } : {}) };
     await kvSet({ [TASK_KEY]: tasks });
 
     // Re-check the fence before the IRREVERSIBLE alarm creation (a second abort
