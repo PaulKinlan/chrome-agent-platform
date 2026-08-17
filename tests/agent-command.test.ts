@@ -5,7 +5,7 @@
 // EXCLUDE the agent the user is currently inside (you can't call the agent
 // you're talking to).
 
-import { buildAgentCandidates } from "../extension/shared/components.js";
+import { buildAgentCandidates } from "../extension/shared/agent-candidates.js";
 import { assertEquals } from "jsr:@std/assert@1";
 
 const named = [

@@ -12,6 +12,8 @@
 // visual/behavioral consistency is structural (one component, everywhere).
 // docs/ keeps a synced copy (see build.mjs → copy:docs).
 
+import { buildAgentCandidates } from "./agent-candidates.js";
+
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
 
@@ -410,10 +412,6 @@ const RUNTIME_SEND = (() => {
 function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
-
-// The pure /agent + @ mention candidate builder lives in agent-candidates.js
-// (DOM-free so it's unit-testable in Deno).
-import { buildAgentCandidates } from "./agent-candidates.js";
 
 // Command namespaces (the / palette). Selecting one either opens its sub-items
 // or inserts the prefix for free-text commands (remember).
