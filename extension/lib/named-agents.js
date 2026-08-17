@@ -42,6 +42,42 @@ export function slugifyAgentId(value) {
     .slice(0, 64);
 }
 
+// A per-agent provider override is a COMPLETE provider-specific config
+// (provider id + baseURL + apiKey + model). It is self-contained so it can
+// never mix one provider's endpoint with another's credential (the wider-goal
+// review's credential-disclosure finding). The override is null (inherit the
+// global) when absent.
+const PROVIDER_IDS = new Set(["demo", "openai", "anthropic", "gemini", "deepseek", "ollama", "prompt-api"]);
+
+/** Validate + normalize a per-agent provider override. Returns null when the
+ * value is null/empty (inherit the global), or a clean complete config. */
+export function normalizeAgentProvider(value) {
+  if (value == null) return null;
+  if (typeof value !== "object") return null;
+  const provider = String(value.provider ?? "").trim();
+  if (!provider || !PROVIDER_IDS.has(provider)) return null;
+  return {
+    provider,
+    baseURL: String(value.baseURL ?? "").slice(0, 512),
+    apiKey: String(value.apiKey ?? "").slice(0, 512),
+    model: String(value.model ?? "").slice(0, 128),
+  };
+}
+
+/** Strip the apiKey from a provider override before it crosses into any
+ * non-Settings surface (the NTP sidebar, the directory, the model's tool
+ * results, the journal). Credentials never leave the Settings → resolution
+ * path. */
+export function redactAgentProvider(provider) {
+  if (!provider || typeof provider !== "object") return null;
+  return {
+    provider: provider.provider,
+    baseURL: provider.baseURL ?? "",
+    model: provider.model ?? "",
+    // apiKey deliberately omitted
+  };
+}
+
 async function agentsMap() {
   const s = await kvGet(AGENTS_KEY);
   return s[AGENTS_KEY] ?? {};
@@ -51,17 +87,31 @@ async function writeAgents(map) {
   await kvSet({ [AGENTS_KEY]: map });
 }
 
-/** List all named agents, most-recently-created first. */
+/** List all named agents, most-recently-created first. The per-agent provider
+ * override is REDACTED (no apiKey) — this list crosses into the NTP/sidebar. */
 export async function listNamedAgents() {
   const map = await agentsMap();
-  return Object.values(map).sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  return Object.values(map)
+    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+    .map((a) => a.provider ? { ...a, provider: redactAgentProvider(a.provider) } : a);
 }
 
-/** Fetch one named agent by id (or name). Returns null when absent. */
+/** Fetch one named agent by id (or name). Returns null when absent. The
+ * per-agent provider override is REDACTED (no apiKey). */
 export async function getNamedAgent(id) {
   const map = await agentsMap();
   const slug = slugifyAgentId(id);
-  return map[slug] ?? null;
+  const agent = map[slug] ?? null;
+  if (!agent) return null;
+  return agent.provider ? { ...agent, provider: redactAgentProvider(agent.provider) } : agent;
+}
+
+/** Fetch a named agent's FULL provider override (WITH the apiKey) — the SW
+ * model-resolution path ONLY. Never surfaced to the UI/model/console. */
+export async function getNamedAgentProvider(id) {
+  const map = await agentsMap();
+  const slug = slugifyAgentId(id);
+  return map[slug]?.provider ?? null;
 }
 
 /**
@@ -71,7 +121,7 @@ export async function getNamedAgent(id) {
  * natural-language path all land here); it also provisions the agent's own OPFS
  * sandbox (its `agents.md` operating instructions).
  */
-export async function createNamedAgent({ id, name, role = "", avatar = null, skills = [], agentsMd = null }) {
+export async function createNamedAgent({ id, name, role = "", avatar = null, skills = [], agentsMd = null, provider = null }) {
   const cleanName = String(name ?? "").trim();
   if (!cleanName) return { ok: false, error: "an agent needs a name" };
   if (cleanName.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
@@ -90,6 +140,7 @@ export async function createNamedAgent({ id, name, role = "", avatar = null, ski
       role: roleText,
       avatar: avatar ? String(avatar) : (existing?.avatar ?? null),
       skills: skillList,
+      provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
@@ -120,11 +171,25 @@ export async function updateNamedAgent(id, patch = {}) {
     if (patch.role !== undefined) next.role = String(patch.role).trim().slice(0, MAX_ROLE_LEN);
     if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
     if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
+    if (patch.provider !== undefined) {
+      // `null` clears the override (inherit the global); a complete config sets it.
+      next.provider = normalizeAgentProvider(patch.provider);
+    }
     next.updatedAt = Date.now();
     map[slug] = next;
     await writeAgents(map);
     return { ok: true, agent: next };
   });
+}
+
+/** Set (or clear) a named agent's provider override. `config` is a COMPLETE
+ * provider-specific config, or null to inherit the global. Returns { ok, agent }
+ * (the agent is REDACTED — no apiKey). */
+export async function setNamedAgentProvider(id, config) {
+  const normalized = config == null ? null : normalizeAgentProvider(config);
+  const r = await updateNamedAgent(id, { provider: normalized });
+  if (r?.ok === false) return r;
+  return { ok: true, agent: r.agent };
 }
 
 /** Delete a named agent + its OPFS sandbox. Returns { ok } (idempotent). */

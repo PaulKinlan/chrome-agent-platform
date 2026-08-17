@@ -396,12 +396,79 @@ async function renderAgents() {
   });
   $("#per-agent-provider").hidden = !on;
 
-  // Per-agent provider assignment is TODO: it needs COMPLETE provider-specific
-  // configs keyed by provider/agent (never one global {baseURL,apiKey,model}
-  // that could mix one provider's credential with another's endpoint). Until
-  // then, a single safe global provider is used for every agent. The explanatory
-  // note lives in options.html (do NOT append a duplicate here).
-  $("#agent-provider-list").replaceChildren();
+  // Per-agent provider overrides: each named agent can use its OWN provider +
+  // model (a COMPLETE config). The apiKey is written to storage but NEVER read
+  // back here — the field shows a blank placeholder when a key exists.
+  await renderAgentProviders();
+}
+
+/** A compact provider dropdown for the per-agent override (the global
+ * PROVIDERS list, minus the in-page baseURL/key fields — the override reuses the
+ * provider's own endpoint + a fresh key/model the user enters here). */
+function agentProviderOptionsHtml(current) {
+  const cur = current?.provider ?? "";
+  return [
+    `<option value="" ${cur ? "" : "selected"}>Use the global provider</option>`,
+    ...PROVIDERS.filter((p) => p.id !== "demo").map((p) =>
+      `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${p.name}</option>`
+    ),
+  ].join("");
+}
+
+async function renderAgentProviders() {
+  const list = $("#agent-provider-list");
+  if (!list) return;
+  list.innerHTML = "";
+  let agents = [];
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "named-agent.list" });
+    agents = Array.isArray(r?.agents) ? r.agents : [];
+  } catch {
+    agents = [];
+  }
+  if (!agents.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No named agents yet — create one first, then assign it a provider.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const a of agents) {
+    const row = document.createElement("div");
+    row.className = "agent-provider-row";
+    // The stored override is REDACTED (no key) — the provider + model are shown,
+    // the key is entered (and only ever written, never read back).
+    const cur = a.provider ?? {};
+    row.innerHTML = `
+      <span class="agent-provider-name" title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</span>
+      <select class="agent-provider-select" aria-label="Provider for ${escapeAttr(a.name)}">${agentProviderOptionsHtml(cur)}</select>
+      <label class="field" style="flex:1"><span class="field-label">Model id</span><input class="agent-provider-model" type="text" placeholder="e.g. deepseek-chat" value="${escapeAttr(cur.model ?? "")}"></label>
+      <label class="field" style="flex:1"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${cur.provider ? "(kept — leave blank to keep)" : "…"}" autocomplete="off"></label>
+      <button class="btn small set-agent-provider" type="button">Save</button>
+    `;
+    row.querySelector(".set-agent-provider").addEventListener("click", async () => {
+      const provider = row.querySelector(".agent-provider-select").value;
+      const model = row.querySelector(".agent-provider-model").value.trim();
+      const apiKey = row.querySelector(".agent-provider-key").value;
+      let config = null;
+      if (provider) {
+        // Build a COMPLETE config: the provider's own endpoint + the model/key
+        // entered here. When the key is left blank AND an override already
+        // exists, keep the stored key (a Save must not wipe a credential).
+        const preset = PROVIDERS.find((p) => p.id === provider);
+        config = {
+          provider,
+          baseURL: preset?.baseURL ?? "",
+          model,
+          apiKey: apiKey || (cur.provider === provider ? undefined : ""),
+        };
+      }
+      const r = await chrome.runtime.sendMessage({ type: "named-agent.set-provider", id: a.id, config });
+      saveFlash(r?.ok === false ? `Provider not saved: ${r.error ?? "unknown error"}` : `${a.name}: provider updated.`);
+      await renderAgentProviders();
+    });
+    list.appendChild(row);
+  }
 }
 
 // ── Background agents (scheduled recipes) ──
@@ -861,6 +928,96 @@ async function renderUsage() {
 }
 
 // ── Data / memory ──
+// Item 58: the OPFS memory explorer — browse EVERY agent's memory (master,
+// named, background, site), each its own sandbox. A store select + a key list +
+// a value viewer. Clear is per-store.
+async function renderMemoryExplorer() {
+  const el = $("#memory-explorer");
+  if (!el) return;
+  el.replaceChildren();
+  const res = await chrome.runtime
+    .sendMessage({ type: "memory.stores" })
+    .catch(() => ({ stores: [] }));
+  const stores = Array.isArray(res?.stores) ? res.stores : [];
+
+  const head = document.createElement("div");
+  head.className = "mem-head";
+  const select = document.createElement("select");
+  select.className = "mem-select";
+  select.setAttribute("aria-label", "Select an agent to browse its memory");
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Browse an agent's memory…";
+  empty.selected = true;
+  select.append(empty);
+  for (const s of stores) {
+    const o = document.createElement("option");
+    o.value = s.key;
+    o.textContent = `${s.label} (${s.keyCount ?? 0} keys)`;
+    select.append(o);
+  }
+  const keys = document.createElement("div");
+  keys.className = "mem-keys";
+  head.append(select, keys);
+  el.append(head);
+
+  select.addEventListener("change", async () => {
+    const origin = select.value;
+    keys.replaceChildren();
+    if (!origin) return;
+    const store = stores.find((s) => s.key === origin);
+    const title = document.createElement("div");
+    title.className = "mem-store-label";
+    title.textContent = store?.label ?? origin;
+    keys.append(title);
+    const keyList = await chrome.runtime
+      .sendMessage({ type: "memory.list", origin })
+      .catch(() => []);
+    if (!Array.isArray(keyList) || !keyList.length) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "No keys in this memory yet.";
+      keys.append(p);
+      return;
+    }
+    for (const key of keyList) {
+      const row = document.createElement("div");
+      row.className = "mem-key-row";
+      const name = document.createElement("button");
+      name.type = "button";
+      name.className = "mem-key";
+      name.textContent = key;
+      const val = document.createElement("div");
+      val.className = "mem-val" + " hidden";
+      name.addEventListener("click", async () => {
+        val.classList.toggle("hidden");
+        if (!val.classList.contains("hidden") && !val.textContent) {
+          const v = await chrome.runtime
+            .sendMessage({ type: "memory.get", origin, key })
+            .catch(() => null);
+          const pre = document.createElement("pre");
+          pre.className = "mem-pre";
+          pre.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+          val.append(pre);
+        }
+      });
+      row.append(name, val);
+      keys.append(row);
+    }
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "btn small ghost";
+    clearBtn.textContent = `Clear ${store?.label ?? origin}'s memory`;
+    clearBtn.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ type: "memory.clear", origin }).catch(() => {});
+      saveFlash(`Cleared ${store?.label ?? origin}'s memory.`);
+      select.dispatchEvent(new Event("change"));
+      renderData();
+    });
+    keys.append(clearBtn);
+  });
+}
+
 async function renderData() {
   // Enrolled origins are AUTHORITATIVE shared state — read them through the SW
   // (agent.list), not the page-local memory.js listOrigins (the round-16 split-
@@ -896,29 +1053,6 @@ async function renderData() {
       renderData();
     });
     row.appendChild(clear);
-
-    // Disenroll = AUTHORITATIVE revocation: unregister the content scripts,
-    // remove the host permission, tombstone the enrollment, and clear OPFS (the
-    // agent.delete route). "Clear" alone must never masquerade as revocation.
-    const disenroll = document.createElement("button");
-    disenroll.type = "button";
-    disenroll.className = "btn small ghost disenroll-origin";
-    disenroll.textContent = "Disenroll";
-    disenroll.setAttribute("aria-label", `Disenroll ${origin}`);
-    disenroll.addEventListener("click", async () => {
-      const res = await chrome.runtime
-        .sendMessage({ type: "agent.delete", origin })
-        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-      if (res?.ok) {
-        saveFlash(
-          `Disenrolled ${origin} (scripts + host permission removed).`,
-        );
-      } else {
-        saveFlash(`Disenroll incomplete: ${res?.error ?? "unknown"}.`);
-      }
-      renderData();
-    });
-    row.appendChild(disenroll);
 
     list.appendChild(row);
   }
@@ -1005,6 +1139,7 @@ await renderPermissions();
 await renderHooks();
 await renderUsage();
 await renderData();
+await renderMemoryExplorer();
 
 // The version in the footer (chaos-style semantic versioning — read from the
 // manifest so it always matches the installed build).

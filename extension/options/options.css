@@ -307,6 +307,79 @@ input:focus, select:focus, textarea:focus {
   font-family: ui-monospace, monospace;
   font-size: 13px;
 }
+/* ── the OPFS memory explorer (item 58) ── */
+.memory-explorer {
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg);
+}
+.mem-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mem-select {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  appearance: base-select;
+}
+.mem-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 340px;
+  overflow: auto;
+}
+.mem-store-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.mem-key-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mem-key {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.mem-key:hover,
+.mem-key:focus-visible {
+  background: var(--panel-2);
+  outline: none;
+}
+.mem-val {
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent);
+  margin-left: 4px;
+}
+.mem-val.hidden {
+  display: none;
+}
+.mem-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+}
 /* Buttons — the base .btn + .btn.ghost live in theme.css (consistent 36px
    control height + radius tokens). Only the settings page's additions below. */
 .btn.small {
@@ -578,3 +651,25 @@ input:focus, select:focus, textarea:focus {
   color: var(--muted);
 }
 .foot #app-version { font-variant-numeric: tabular-nums; }
+
+/* Per-agent provider override rows (the Agents section). */
+.agent-provider-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #e7e3dc);
+  flex-wrap: wrap;
+}
+.agent-provider-name {
+  min-width: 120px;
+  font-weight: 600;
+  align-self: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+.agent-provider-select {
+  min-width: 170px;
+}

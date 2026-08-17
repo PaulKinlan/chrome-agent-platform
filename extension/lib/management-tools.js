@@ -37,6 +37,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "delete_named_agent",
   "get_named_agent",
   "list_named_agents",
+  "set_agent_provider",
   "list_hooks",
   "subscribe_hook",
   "unsubscribe_hook",
@@ -190,6 +191,20 @@ export function managementToolset({ callRoute }) {
       description: "List every named agent.",
       inputSchema: z.object({}),
       execute: () => call("named-agent.list", {}),
+    }),
+    set_agent_provider: tool({
+      description:
+        "Set (or clear) a named agent's provider/model override. `config` is a COMPLETE provider-specific config (provider id + baseURL + apiKey + model); null clears it (the agent inherits the global provider).",
+      inputSchema: z.object({
+        id: z.string().describe("the agent id (slug)"),
+        config: z.object({
+          provider: z.string(),
+          baseURL: z.string().optional(),
+          apiKey: z.string().optional(),
+          model: z.string().optional(),
+        }).nullable().describe("a complete provider config, or null to inherit the global"),
+      }),
+      execute: ({ id, config }) => call("named-agent.set-provider", { id, config }),
     }),
 
     // ---- introspection ----

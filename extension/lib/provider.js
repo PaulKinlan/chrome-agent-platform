@@ -97,12 +97,11 @@ export async function setProviderConfig(partial) {
   return next;
 }
 
-/** Resolve the LanguageModel for the stored global provider. There is NO
- * per-agent provider resolution — every agent uses the one global provider
- * config, so a per-agent override can never mix one provider's endpoint with
- * another's credential. Returns { model, modelId, providerName }. */
-export async function getModel() {
-  const cfg = await getProviderConfig();
+/** Resolve a LanguageModel from a COMPLETE provider config (provider id +
+ * baseURL + apiKey + model). A complete config is self-contained — it never
+ * mixes one provider's endpoint with another's credential. Returns
+ * { model, modelId, providerName }. */
+export async function resolveModelFromConfig(cfg) {
   const id = cfg.provider;
 
   if (OPENAI_COMPATIBLE_IDS.has(id)) {
@@ -152,4 +151,26 @@ export async function getModel() {
     modelId: "demo-local",
     providerName: "demo",
   };
+}
+
+/** Resolve the LanguageModel for the stored global provider. */
+export async function getModel() {
+  return resolveModelFromConfig(await getProviderConfig());
+}
+
+/** Resolve the LanguageModel for a NAMED agent's provider OVERRIDE. When the
+ * override is absent (or not a complete valid config) the global provider is
+ * used instead. The override is a COMPLETE provider-specific config, so a
+ * per-agent model can never mix one provider's endpoint with another's
+ * credential (the wider-goal review's credential-disclosure finding). */
+export async function getModelForAgent(override) {
+  if (override && typeof override === "object" && override.provider) {
+    return resolveModelFromConfig({
+      provider: override.provider,
+      baseURL: override.baseURL ?? "",
+      apiKey: override.apiKey ?? "",
+      model: override.model ?? "",
+    });
+  }
+  return getModel();
 }

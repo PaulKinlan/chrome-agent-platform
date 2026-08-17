@@ -81,7 +81,7 @@
         <div id="per-agent-provider" class="per-agent" hidden>
           <h3>Per-agent providers</h3>
           <p
-            class="muted">Per-agent provider assignment is planned but not enabled yet — every agent uses the global provider for now.</p>
+            class="muted">Each named agent can use its own provider + model (overriding the global). Its key is stored with the agent and never shown back here.</p>
           <div id="agent-provider-list" class="agent-provider-list"></div>
         </div>
       </section>
@@ -143,7 +143,8 @@
       <section id="data" class="panel">
         <h2>Data & memory</h2>
         <p
-          class="muted">Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. Clear is per-origin.</p>
+          class="muted">Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. Browse each agent's memory below.</p>
+        <div id="memory-explorer" class="memory-explorer"></div>
         <div id="origin-list" class="origin-list"></div>
       </section>
 
