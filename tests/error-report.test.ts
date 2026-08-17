@@ -67,6 +67,14 @@ Deno.test("error-report: maps 'Failed to fetch' to network + actionable host-per
   assertStringIncludes(d.detail.toLowerCase(), "host permission");
 });
 
+Deno.test("error-report: the provider-run gate refusal maps to HOST_PERMISSION (not network/permission)", () => {
+  const e = new Error("network access to the provider (https://generativelanguage.googleapis.com/*) is not granted — click \"Use\"/\"Test connection\" in Settings to grant it");
+  e.name = "ProviderUnavailableError";
+  const d = describeError(e, { provider: "gemini" });
+  assertEquals(d.category, ERROR_CATEGORY.HOST_PERMISSION);
+  assertStringIncludes(d.action.toLowerCase(), "grant network access");
+});
+
 Deno.test("error-report: categorizes a plain auth text error", () => {
   const e = new Error("Unauthorized: invalid api key");
   const d = describeError(e, {});

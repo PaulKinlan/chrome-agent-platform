@@ -16,7 +16,7 @@
 
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
-import { requestProviderHostAccess, providerOriginPattern } from "../lib/provider-gate.js";
+import { requestProviderHostAccess, providerOriginPattern, hasProviderHostAccess, isLocalProvider } from "../lib/provider-gate.js";
 
 // ── the live progress port ────────────────────────────────────────────────
 // A single long-lived port per page. The SW broadcasts progress to every
@@ -188,11 +188,36 @@ export function friendlyActivityLabel(toolName, args) {
 
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
   const c = container;
+
+  // Proactively ensure the provider host permission BEFORE the run (the Run
+  // click is a user gesture, so the permission can be requested right here —
+  // the dynamic-permission-on-need principle: ask when needed, not after a
+  // failure). A denied request returns early with a clear error instead of
+  // running + failing.
+  try {
+    const cfg = await send("provider.get").catch(() => ({}));
+    if (!isLocalProvider(cfg)) {
+      const has = await hasProviderHostAccess(cfg);
+      if (!has) {
+        const r = await requestProviderHostAccess(cfg);
+        if (!r.granted) {
+          const err = { ok: false, error: "network access to the provider was denied — grant it in Settings (Providers) or click the Grant button", errorCategory: "host-permission", errorReason: "the provider host permission was denied", errorAction: "grant network access in Settings" };
+          onStatus?.({ state: "error", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
+          if (typeof c.appendError === "function") c.appendError(err.error, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
+          else appendBubble(c, "error", err.error);
+          return err;
+        }
+      }
+    }
+  } catch {
+    // A failure to check/request must not block the run — the run itself will
+    // surface the actionable error if the permission is still missing.
+  }
   // The host-permission provider failure: a DIRECT "Grant network access"
   // action (requests the provider's host permission right here, on the user's
   // click) — the dynamic-permission-on-need principle, not just "Fix in
   // Settings". Renders an inline button; clicking it grants + prompts a retry.
-  const appendProviderGrant = (category) => {
+  const appendProviderGrant = (category, retryFn) => {
     if (category !== "host-permission") return;
     const row = document.createElement("div");
     row.className = "provider-grant";
@@ -208,7 +233,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const cfg = await send("provider.get").catch(() => ({}));
         const r = await requestProviderHostAccess(cfg);
         if (r.granted) {
-          btn.textContent = "Granted — retry the task";
+          // The permission is granted ON THIS CLICK (a fresh user gesture) —
+          // auto-retry the run so the user doesn't have to re-type the task.
+          btn.textContent = "Granted — retrying…";
+          if (typeof retryFn === "function") {
+            row.remove();
+            await retryFn();
+          } else {
+            btn.textContent = "Granted — run the task again";
+          }
         } else {
           btn.textContent = "Denied — grant it in Settings";
           btn.disabled = false;
@@ -226,6 +259,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
 
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   appendBubble(c, "user", text, attachments);
+
+  // The run + result rendering, factored so the host-permission "Grant network
+  // access" button can RE-RUN the same turn after the permission is granted
+  // (the dynamic-permission-on-need retry).
+  const executeTurn = async () => {
 
   // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
   //    trace when reasoning arrives).
@@ -317,7 +355,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         } else {
           appendBubble(c, "error", ev.message ?? "error");
         }
-        appendProviderGrant(ev.category ?? null);
+        appendProviderGrant(ev.category ?? null, executeTurn);
         break;
     }
   });
@@ -386,7 +424,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
     } else {
       appendBubble(c, "error", "Error: " + msg);
     }
-    appendProviderGrant(category);
+    appendProviderGrant(category, executeTurn);
   }
   return res;
+  };
+
+  // 6. run the turn (the grant button re-invokes executeTurn on retry).
+  return await executeTurn();
 }
