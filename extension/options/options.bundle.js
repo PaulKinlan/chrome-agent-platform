@@ -2566,13 +2566,16 @@ var PanelButton = class extends Component {
     this._trigger?.setAttribute("aria-expanded", "false");
   }
   _position() {
-    if (supportsAnchorPositioning()) return;
     const r = this._trigger?.getBoundingClientRect?.();
     if (!r) return;
     const panel = this._panel;
-    panel.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 360)}px`;
     const w = panel.offsetWidth || 560;
+    panel.style.position = "fixed";
+    panel.style.positionAnchor = "auto";
+    panel.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 360)}px`;
     panel.style.left = `${Math.max(12, Math.min(r.right - w, window.innerWidth - w - 12))}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
   }
   // Subclasses:
   get triggerIcon() {
