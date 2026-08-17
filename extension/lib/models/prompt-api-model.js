@@ -19,6 +19,17 @@ function extractText(prompt) {
   return out;
 }
 
+// The Prompt API reports NO token counts (its usage comes back 0/0), which the
+// usage ledger then DROPS (usage.js returns on 0/0) — so on-device runs were
+// completely invisible in usage accounting (GLM-5.3 O3). Emit an ESTIMATE so the
+// on-device provider still shows as a real (zero-cost) row: ~4 chars/token is the
+// standard rough heuristic, and the estimatedCost stays 0 (on-device is free).
+function estimateTokens(text) {
+  const chars = String(text ?? "").length;
+  return chars === 0 ? 0 : Math.max(1, Math.ceil(chars / 4));
+}
+export { estimateTokens };
+
 function getPromptApi() {
   const g = globalThis;
   // Chrome exposes the Prompt API as `LanguageModel` (older) or via `window.ai.languageModel` (newer).
@@ -92,10 +103,13 @@ export function createPromptApiModel() {
       const s = await ensureSession();
       const text = extractText(options.prompt);
       const out = await s.prompt(text);
+      const inputTokens = estimateTokens(text);
+      const outputTokens = estimateTokens(out);
       return {
         content: [{ type: "text", text: out }],
         finishReason: "stop",
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, // Prompt API doesn't report tokens
+        // Estimated (the Prompt API reports no counts); zero-cost on-device.
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
         warnings: [],
       };
     },
@@ -103,22 +117,27 @@ export function createPromptApiModel() {
     async doStream(options) {
       const s = await ensureSession();
       const text = extractText(options.prompt);
+      const inputTokens = estimateTokens(text);
       const stream = s.promptStreaming(text);
       const id = `prompt-${crypto.randomUUID?.() ?? Math.random()}`;
       const readable = new ReadableStream({
         async start(controller) {
           controller.enqueue({ type: "stream-start", warnings: [] });
           controller.enqueue({ type: "text-start", id });
+          let outText = "";
           const reader = stream.getReader();
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
+            outText += value ?? "";
             controller.enqueue({ type: "text-delta", id, delta: value });
           }
           controller.enqueue({ type: "text-end", id });
+          const outputTokens = estimateTokens(outText);
           controller.enqueue({
             type: "finish",
-            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            // Estimated (the Prompt API reports no counts); zero-cost on-device.
+            usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
             finishReason: "stop",
           });
           controller.close();

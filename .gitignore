@@ -3,3 +3,4 @@ node_modules/
 .pi-subagents/
 extension/dist/
 extension/**/*.bundle.js
+dist/

@@ -58,7 +58,13 @@ async function captureShot(label) {
   s.style.background = `url(${res.screenshot}) center/cover`;
   s.setAttribute("aria-label", `Open page: ${label}`);
   s.addEventListener("click", () => {
-    if (res.url) window.open(res.url);
+    // Only re-open http(s) SOURCE pages (res.url is the captured tab's URL, not
+    // the screenshot data URL — that lives in res.screenshot). Chrome blocks
+    // top-level data: / chrome-extension: navigations from window.open, so guard
+    // to http(s) and never attempt to open a data: URL (GLM-5.3 O6).
+    if (typeof res.url === "string" && /^https?:\/\//i.test(res.url)) {
+      window.open(res.url, "_blank", "noopener");
+    }
   });
   shotsEl.append(s);
   while (shotsEl.children.length > MAX_SHOTS) shotsEl.firstElementChild.remove();

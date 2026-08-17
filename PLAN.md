@@ -12,7 +12,7 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 - **Modern web guidance** throughout.
 - **No external-project references** — usage-logging is an in-repo pattern, not a reference to another project.
 
-## Status (2026-08-15)
+## Status (2026-08-17)
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
 - [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)
 - [x] Provider options — a DEDICATED settings pane (options page): Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt-API/demo, multi-agent (1-vs-N) hub, theme picker (4 themes), scoped browser-control grant, usage log, per-origin memory (Paul 2026-08-15: the inline dropdown was not a config pane)
@@ -23,17 +23,25 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 - [x] Composer: "+" attach menu (file/audio/video/other), mic with Web Speech Recognition (in-button equalizer, dedup'd), Record audio + Capture camera
 - [x] Omnibox integration (keyword → start a task)
 - [x] SVG icons (no emoji)
-- [ ] Side-panel mechanism (open the real page in chrome.sidePanel / background tab + postMessage, drive via WebMCP) — STEERED, in flight
-- [ ] Activity-log explorer (JSONL per agent + master, browsable/searchable) — STEERED, in flight
-- [ ] End-to-end task completion verification (a task runs a real model + produces a result + usage recorded)
-- [ ] Per-agent provider config (TBD)
+- [x] Side-panel mechanism — the agent opens a real page in chrome.sidePanel + drives it via WebMCP (open_side_panel tool + sidepanel.getTarget/getTools routes) — landed 72e781a
+- [x] Activity-log explorer — a browsable/searchable timeline of every agent run (per-agent + master, tool calls/results/errors) — landed ba83236
+- [x] End-to-end task completion verification — a task runs a real model + produces a result + usage recorded (the e2e-task test + the real-browser OPFS verification) — landed 690188c + scripts/opfs-real-browser.ts
+- [x] Per-agent provider config — an agent can have its own model/provider override — landed 690188c
+- [x] The named-agent layer — every agent (named/site/background) its own OPFS sandbox (memory + history + skills + memory_grep); the master manages them — landed f8909c6/e28e600
+- [x] The skills system — recipes → skills; a skill is INCLUDED in a task (/skill:<id>), attached to an agent, scheduled, or imported (the chaos skill-loader pattern) — landed f7a49fc
+- [x] The co-do generative-UI (generate_ui + sandboxed double-iframe + the artifact system) — landed 7323a4c
+- [x] The hooks system (the full chrome.* on* event catalog + the owner-only authoritative deny-list) — landed
+- [x] The standing security suite (network exfil / sandbox escapes / prompt-injection blocked) — landed 9da411c
+- [x] The component design system (20+ Web Components, the gallery) + the impeccable design (paper/teal, PRODUCT.md + DESIGN.md) — landed
+- [x] Chaos-style semver (a post-commit hook auto-bumps the patch version after each commit) — landed
+- [x] The BeautifulUI AI-native primitives (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar) — landed 6adcfe6
 
-## In flight (2026-08-15)
-- **Dedicated configuration pane** — a proper settings/options page (options_page) like a dedicated options page: providers (Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt API, each with endpoint+key+model), agents (1-vs-N), appearance (theme picker), browser-control grant (scoped), usage view, per-origin data. The hub's inline dropdown links to it. Plus the UI polish (clean, modern, sectioned options style). STEERED.
+## In flight (2026-08-17)
+- (none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)
 
 ## Open questions for Paul
 - The provider default for a real model: Prompt API (on-device) vs a configured endpoint. Which?
-- The side-panel vs background-tab choice for driving pages (worker is evaluating).
+- The extension rename/packaging (still "Chrome Agent Platform").
 
 ## Feature: Artifacts (Paul 2026-08-16)
 Agents create things for the user in the context of a task (generated pages, files, UI, data). We need:
