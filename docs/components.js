@@ -1150,6 +1150,9 @@ class MessageBubble extends Component {
       /* rendered HTML output — the sandboxed iframe */
       .html-frame { margin-top:4px; }
       .html-frame iframe { width:100%; min-height:220px; max-height:480px; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
+      .genui { width:100%; }
+      .genui-head { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin:0 0 6px; }
+      .genui .html-frame iframe { max-height:520px; }
       /* thinking trace — collapsible, muted, clearly not a wall of text */
       .think { width:100%; }
       .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
@@ -1180,11 +1183,32 @@ class MessageBubble extends Component {
       const status = statusRaw === "success" ? "done" : statusRaw === "error" ? "error" : "running";
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
-      markup = `<div class="tool" role="status">
-        <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
-        ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
-        ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
-      </div>`;
+      // The generative-UI tools (generate_ui / create_asset with type html)
+      // render their HTML LIVE in the sandboxed double-iframe, inline.
+      let genHtml = null, genName = null;
+      if ((name === "generate_ui" || name === "create_asset" || name === "update_asset") && args != null) {
+        try {
+          const parsed = JSON.parse(args);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            genName = typeof parsed.name === "string" ? parsed.name : null;
+            if (typeof parsed.html === "string") genHtml = parsed.html;
+            else if (parsed.type === "html" && typeof parsed.content === "string") genHtml = parsed.content;
+          }
+        } catch { /* args may be a raw HTML string, handled below */ }
+        if (genHtml == null && isHtmlDocument(args)) genHtml = args;
+      }
+      if (genHtml != null && isHtmlDocument(genHtml)) {
+        markup = `<div class="genui" role="status">
+          <div class="genui-head">${escapeHtml(genName || "Generated UI")}</div>
+          ${renderHtmlFrame(genHtml)}
+        </div>`;
+      } else {
+        markup = `<div class="tool" role="status">
+          <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
+          ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
+          ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
+        </div>`;
+      }
     } else if (role === "thinking") {
       const step = this.getAttribute("step");
       const total = this.getAttribute("total-steps");
@@ -1205,6 +1229,27 @@ class MessageBubble extends Component {
       markup = `<div class="msg ${role}"><div class="body">${body}</div></div>`;
     }
     mountTemplate(this, style, markup);
+  }
+  _wire() {
+    // Percolate the current theme/locale into any rendered-HTML frame (the
+    // co-do generative-UI): wire the validated postMessage down-channel when a
+    // message renders a generated UI document.
+    if (this._frameCleanups) {
+      this._frameCleanups.forEach((c) => { try { c(); } catch { /* noop */ } });
+    }
+    this._frameCleanups = [];
+    const pref = currentFramePreference();
+    this.querySelectorAll?.(".html-frame").forEach((frame) => {
+      const nonce = frame.dataset?.frameNonce;
+      if (nonce) this._frameCleanups.push(wireHtmlFramePreference(frame, { nonce, ...pref }));
+    });
+  }
+  disconnectedCallback() {
+    if (this._frameCleanups) {
+      this._frameCleanups.forEach((c) => { try { c(); } catch { /* noop */ } });
+      this._frameCleanups = [];
+    }
+    super.disconnectedCallback();
   }
 }
 customElements.define("message-bubble", MessageBubble);

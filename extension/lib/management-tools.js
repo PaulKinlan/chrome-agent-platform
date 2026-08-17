@@ -40,6 +40,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "list_hooks",
   "subscribe_hook",
   "unsubscribe_hook",
+  "generate_ui",
 ];
 
 export function managementToolset({ callRoute }) {
@@ -228,6 +229,19 @@ export function managementToolset({ callRoute }) {
         recipeId: z.string().optional(),
       }),
       execute: ({ hookId, recipeId }) => call("hooks.unsubscribe", { hookId, recipeId }),
+    }),
+
+    // ---- generative UI (the co-do double-iframe) ----
+    generate_ui: tool({
+      description:
+        "Generate an interactive HTML UI (a page, a widget, a data visualization, a small app) for the owner. It is saved as an html artifact AND rendered LIVE in a sandboxed double-iframe in the conversation. The UI may use inline scripts + styles (interactive) but is fully sandboxed (no network, no access to the extension or the page). The owner's theme/locale is percolated in automatically.",
+      inputSchema: z.object({
+        name: z.string().describe("a short, clear name for the generated UI"),
+        html: z.string().describe("the complete HTML (a document or a fragment with inline script/style) to render"),
+        origin: z.string().default("master").describe("'master' for a hub-level artifact, or an https origin"),
+      }),
+      execute: ({ name, html, origin }) =>
+        call("asset.create", { origin, assetType: "html", name, content: html }),
     }),
   };
 }

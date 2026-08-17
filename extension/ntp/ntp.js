@@ -214,7 +214,8 @@ async function renderArtifacts() {
     row.setAttribute("description", (a.type ?? "unknown") + " · " + (a.size ?? 0) + " B");
     row.setAttribute("icon", "");
     row.setAttribute("action", "run");
-    row.addEventListener("run", () => openView("options/options.html", "Settings"));
+    row.addEventListener("run", () =>
+      openView(`artifact/artifact.html?id=${encodeURIComponent(a.id ?? a.name)}&origin=master`, a.name ?? "Artifact"));
     el.append(row);
   }
 }

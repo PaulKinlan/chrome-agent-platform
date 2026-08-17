@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Artifact — Chrome Agent Platform</title>
+    <link rel="stylesheet" href="../shared/theme.css">
+    <script type="module" src="../shared/apply-theme.js"></script>
+    <script type="module" src="../shared/components.js"></script>
+    <style>
+      .wrap { max-width: 960px; margin: 0 auto; padding: 28px 24px 64px; }
+      .head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+      .head h1 { font-size: 18px; font-weight: 650; margin: 0; color: var(--text, #1d1b18); }
+      .meta { font-size: 12px; color: var(--muted, #635e56); }
+      .back { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+        border: 1px solid var(--border, #e3e0d9); border-radius: 8px; background: transparent;
+        color: var(--text, #1d1b18); cursor: pointer; font: inherit; }
+      .frame { border: 1px solid var(--border, #e3e0d9); border-radius: 10px;
+        overflow: hidden; background: #fff; }
+      .frame iframe { width: 100%; height: 72vh; border: 0; display: block; }
+      .error { color: var(--danger, #b3261e); font-size: 14px; padding: 12px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="head">
+        <button class="back" id="back" type="button">← Back</button>
+        <div>
+          <h1 id="name">Artifact</h1>
+          <div class="meta" id="meta"></div>
+        </div>
+      </div>
+      <div id="out"></div>
+    </div>
+    <script type="module" src="./artifact.js"></script>
+  </body>
+</html>

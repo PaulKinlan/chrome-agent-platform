@@ -528,8 +528,81 @@ function injectCspMeta(html) {
   }
   return meta + s;
 }
-function renderHtmlFrame(html) {
-  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectCspMeta(html))}"></iframe></div>`;
+var FRAME_PREFERENCE_TYPE = "cap:preference";
+var FRAME_PREFERENCE_READY = "cap:preference-ready";
+function generateNonce() {
+  const b = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(b);
+  else for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+function preferenceBootstrapScript(nonce) {
+  const n = JSON.stringify(String(nonce ?? ""));
+  return `<script data-cap-bootstrap>${[
+    "(function(){var nonce=" + n + ";",
+    "function apply(p){if(!p)return;",
+    "if(p.theme){try{document.documentElement.setAttribute('data-theme',p.theme);}catch(e){}}",
+    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}",
+    "try{document.documentElement.setAttribute('data-cap-themed','1');}catch(e){}",
+    "try{document.dispatchEvent(new CustomEvent('cap:themed',{detail:p}));}catch(e){}}",
+    "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
+    "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
+    "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
+    "})();"
+  ].join("")}<\/script>`;
+}
+function injectFrameGuards(html, nonce) {
+  const guarded = injectCspMeta(html);
+  const s = String(guarded ?? "");
+  const m = s.match(/<head[^>]*>/i);
+  if (m) {
+    return s.replace(m[0], m[0] + preferenceBootstrapScript(nonce));
+  }
+  return preferenceBootstrapScript(nonce) + s;
+}
+function renderHtmlFrame(html, { nonce } = {}) {
+  const n = nonce ?? generateNonce();
+  return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectFrameGuards(html, n))}"></iframe></div>`;
+}
+function wireHtmlFramePreference(container, { nonce, theme, locale } = {}) {
+  const iframe = container && (container.matches?.("iframe") ? container : container.querySelector?.("iframe")) || null;
+  if (!iframe) return () => {
+  };
+  const n = nonce ?? container?.closest?.(".html-frame")?.dataset?.frameNonce ?? iframe.closest?.(".html-frame")?.dataset?.frameNonce ?? "";
+  if (!n) return () => {
+  };
+  const pref = { ...typeof theme === "string" && theme ? { theme } : {}, ...typeof locale === "string" && locale ? { locale } : {} };
+  let done = false;
+  const post = () => {
+    if (done) return;
+    try {
+      iframe.contentWindow?.postMessage({ type: FRAME_PREFERENCE_TYPE, nonce: n, preference: pref }, "*");
+    } catch {
+    }
+  };
+  const onMsg = (e) => {
+    const d = e.data;
+    if (d && d.type === FRAME_PREFERENCE_READY && d.nonce === n && e.source === iframe.contentWindow) {
+      done = true;
+      post();
+    }
+  };
+  const onLoad = () => {
+    post();
+  };
+  window.addEventListener("message", onMsg);
+  iframe.addEventListener("load", onLoad);
+  setTimeout(post, 0);
+  return () => {
+    window.removeEventListener("message", onMsg);
+    iframe.removeEventListener("load", onLoad);
+  };
+}
+function currentFramePreference() {
+  return {
+    theme: document.documentElement?.dataset?.theme || "sunlit",
+    locale: document.documentElement?.lang || (typeof navigator !== "undefined" ? navigator.language : void 0) || ""
+  };
 }
 var RUNTIME_SEND = (() => {
   try {
@@ -1257,6 +1330,9 @@ var MessageBubble = class extends Component {
       /* rendered HTML output \u2014 the sandboxed iframe */
       .html-frame { margin-top:4px; }
       .html-frame iframe { width:100%; min-height:220px; max-height:480px; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
+      .genui { width:100%; }
+      .genui-head { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin:0 0 6px; }
+      .genui .html-frame iframe { max-height:520px; }
       /* thinking trace \u2014 collapsible, muted, clearly not a wall of text */
       .think { width:100%; }
       .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
@@ -1287,11 +1363,31 @@ var MessageBubble = class extends Component {
       const status = statusRaw === "success" ? "done" : statusRaw === "error" ? "error" : "running";
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
-      markup = `<div class="tool" role="status">
-        <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
-        ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
-        ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
-      </div>`;
+      let genHtml = null, genName = null;
+      if ((name === "generate_ui" || name === "create_asset" || name === "update_asset") && args != null) {
+        try {
+          const parsed = JSON.parse(args);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            genName = typeof parsed.name === "string" ? parsed.name : null;
+            if (typeof parsed.html === "string") genHtml = parsed.html;
+            else if (parsed.type === "html" && typeof parsed.content === "string") genHtml = parsed.content;
+          }
+        } catch {
+        }
+        if (genHtml == null && isHtmlDocument(args)) genHtml = args;
+      }
+      if (genHtml != null && isHtmlDocument(genHtml)) {
+        markup = `<div class="genui" role="status">
+          <div class="genui-head">${escapeHtml(genName || "Generated UI")}</div>
+          ${renderHtmlFrame(genHtml)}
+        </div>`;
+      } else {
+        markup = `<div class="tool" role="status">
+          <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
+          ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
+          ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
+        </div>`;
+      }
     } else if (role === "thinking") {
       const step = this.getAttribute("step");
       const total = this.getAttribute("total-steps");
@@ -1312,6 +1408,34 @@ var MessageBubble = class extends Component {
       markup = `<div class="msg ${role}"><div class="body">${body}</div></div>`;
     }
     mountTemplate(this, style, markup);
+  }
+  _wire() {
+    if (this._frameCleanups) {
+      this._frameCleanups.forEach((c) => {
+        try {
+          c();
+        } catch {
+        }
+      });
+    }
+    this._frameCleanups = [];
+    const pref = currentFramePreference();
+    this.querySelectorAll?.(".html-frame").forEach((frame) => {
+      const nonce = frame.dataset?.frameNonce;
+      if (nonce) this._frameCleanups.push(wireHtmlFramePreference(frame, { nonce, ...pref }));
+    });
+  }
+  disconnectedCallback() {
+    if (this._frameCleanups) {
+      this._frameCleanups.forEach((c) => {
+        try {
+          c();
+        } catch {
+        }
+      });
+      this._frameCleanups = [];
+    }
+    super.disconnectedCallback();
   }
 };
 customElements.define("message-bubble", MessageBubble);
@@ -2084,7 +2208,7 @@ var PanelButton = class extends Component {
       :host { display:inline-flex; position:relative; }
       .trigger { position:relative; display:inline-flex; align-items:center; justify-content:center;
         width:36px; height:36px; border:1px solid var(--border,#e3e0d9); border-radius:8px;
-        background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:0; }
+        background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:0; anchor-name:--panel-anchor; }
       .trigger:hover { color:var(--text,#1d1b18); border-color:var(--accent,#0e6e63); }
       .trigger[data-attention="true"] { color:${attention ? "var(--warning,#9a6700)" : "var(--muted,#635e56)"}; border-color:${attention ? "var(--warning,#9a6700)" : "var(--border,#e3e0d9)"}; }
       .trigger:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
@@ -2094,6 +2218,13 @@ var PanelButton = class extends Component {
       .panel { position:fixed; z-index:200; width:min(560px, calc(100vw - 24px));
         background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px;
         box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08)); overflow:hidden; }
+      /* Item 28: the transparency panels are anchored to their trigger buttons
+         (CSS anchor positioning) so they scroll WITH the button + stay in-bounds
+         (position-area + position-try-fallbacks), like every other popover. */
+      @supports (position-area: top) {
+        .panel { position:absolute; inset:auto; position-anchor:--panel-anchor;
+          position-area:bottom span-right; position-try-fallbacks:flip-block, flip-inline; }
+      }
       .panel[hidden] { display:none; }
       .phead { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .phead .t { font-weight:600; font-size:13px; margin:0; flex:1; }
@@ -2168,6 +2299,7 @@ var PanelButton = class extends Component {
     this._trigger?.setAttribute("aria-expanded", "false");
   }
   _position() {
+    if (supportsAnchorPositioning()) return;
     const r = this._trigger?.getBoundingClientRect?.();
     if (!r) return;
     const panel = this._panel;

@@ -119,3 +119,44 @@ Deno.test("components: parseJSONAttr returns fallback on invalid input", async (
   const empty = mod.parseJSONAttr("", ["x"]);
   if (empty[0] !== "x") throw new Error("empty attr did not fall back");
 });
+
+Deno.test("components: renderHtmlFrame is a sandboxed double-iframe with CSP + preference bootstrap", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const nonce = "0123456789abcdef0123456789abcdef";
+  const html = "<!doctype html><html><head></head><body><h1>hi</h1></body></html>";
+  const out = mod.renderHtmlFrame(html, { nonce });
+  // the frame is sandboxed (opaque origin, no parent access) + srcdoc carries the guards
+  if (!out.includes('sandbox="allow-scripts"')) throw new Error("iframe not sandboxed");
+  if (!out.includes(`data-frame-nonce="${nonce}"`)) throw new Error("nonce not carried");
+  // the CSP meta is injected
+  if (!out.includes("Content-Security-Policy")) throw new Error("CSP meta not injected");
+  // the preference bootstrap is injected with the nonce
+  if (!out.includes("cap:preference")) throw new Error("preference bootstrap not injected");
+  if (!out.includes(nonce)) throw new Error("bootstrap missing the nonce");
+});
+
+Deno.test("components: injectFrameGuards blocks network + allows inline scripts", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const csp = mod.HTML_FRAME_CSP;
+  if (!csp.includes("connect-src 'none'")) throw new Error("network egress not blocked");
+  if (!csp.includes("default-src 'none'")) throw new Error("default-src not closed");
+  if (!csp.includes("script-src 'unsafe-inline'")) throw new Error("inline scripts not allowed");
+});
+
+Deno.test("components: generateNonce is unique + 32 hex chars", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const a = mod.generateNonce();
+  const b = mod.generateNonce();
+  if (a === b) throw new Error("nonces collided");
+  if (!/^[0-9a-f]{32}$/.test(a)) throw new Error(`nonce not 32 hex chars: ${a}`);
+});
+
+Deno.test("components: preferenceBootstrapScript applies theme/locale + validates source + nonce", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const script = mod.preferenceBootstrapScript("abc123");
+  if (!script.includes("cap:preference-ready")) throw new Error("no readiness announce");
+  if (!script.includes("e.source!==window.parent")) throw new Error("no source check");
+  if (!script.includes("nonce")) throw new Error("no nonce check");
+  if (!script.includes("data-theme")) throw new Error("no theme apply");
+  if (!script.includes("lang")) throw new Error("no locale apply");
+});
