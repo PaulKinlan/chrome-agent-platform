@@ -100,11 +100,11 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 59. **The OPFS explorer should be a file-system explorer** (an expandable directory tree, files clickable to view) — not a flat list.
 60. **The browser-control toggle STILL not working** (item 51's fix didn't fully land — double-check in the real extension + fix the real cause).
 61. **Background agents are INDEPENDENT agents** — clickable (their view/log/history + talk to them), instantiable from the recipes (multiple of the same), editable, and INDEPENDENT of the master hub (their own OPFS data/memory, in the Data & memory explorer as their own agent).
-62. **The media bytes must reach the model** (an attached image → an image part in the model input, multimodal — not a text note).
-63. **The attachment must display in the conversation** (an inline image/audio/video preview or file chip).
+62. [DONE] **The media bytes must reach the model** (an attached image → an image part in the model input, multimodal — not a text note).
+63. [DONE] **The attachment must display in the conversation** (an inline image/audio/video preview or file chip).
 
 ## Paul batch (2026-08-17 18:59) — the autocomplete + the X button + the remaining UI issues
-62. **The / autocomplete is broken around the edges** — typing /s should filter to schedule/skill (a live filter); /skill: should list ALL the skills (autocomplete); /task shouldn't be there (it's /skill now — recipes are gone); the popover flips above/below + scrollable. Make the / autocomplete actually useful.
-63. **The @ autocomplete** — list all agent types (named + background + site, delineated).
-64. **The X close button on the task list is broken** (still not fixed — verify + fix the delete).
+62. [DONE] **The / autocomplete is broken around the edges** — typing /s should filter to schedule/skill (a live filter); /skill: should list ALL the skills (autocomplete); /task shouldn't be there (it's /skill now — recipes are gone); the popover flips above/below + scrollable. Make the / autocomplete actually useful.
+63. [DONE] **The @ autocomplete** — list all agent types (named + background + site, delineated).
+64. [DONE] **The X close button on the task list is broken** (still not fixed — verify + fix the delete).
 65. **Reconcile: go through everything Paul listed in the past 1-2 hours + verify each is fixed** (the tracker items) — mark the genuinely-done + fix the rest.
