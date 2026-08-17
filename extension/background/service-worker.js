@@ -1914,6 +1914,43 @@ const handlers = {
     return { ok: true };
   },
 
+  // ---- background agents are INDEPENDENT agents (item 61) ----
+  // Clicking a background agent opens its OWN view: its run history (its
+  // journal from its OPFS sandbox) + a composer to TALK to it (run a task in
+  // its memory). Mirrors the named-agent routes so the two agent kinds behave
+  // consistently.
+  async "background-agent.history"({ id }) {
+    const recipe = await resolveRecipe(id);
+    if (!recipe) return { ok: false, error: `no background agent ${id}` };
+    const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
+    const journal = (await mem.get("journal").catch(() => null)) ?? [];
+    const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
+    return { entries, count: entries.length };
+  },
+  async "background-agent.run"({ id, task, attachments, runId }) {
+    const recipe = await resolveRecipe(id);
+    if (!recipe) return { ok: false, error: `no background agent ${id}` };
+    const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
+    const runTag = runId ?? `background:${recipe.id}:${Date.now()}`;
+    try {
+      const result = await runTask({
+        id: runTag,
+        task,
+        attachments: attachments ?? [],
+        memory: mem,
+        onProgress: (event) => {
+          broadcastProgress({ ...event, runId: runTag, agentId: `background:${recipe.id}` });
+        },
+      });
+      return result;
+    } catch (e) {
+      let cfg = null;
+      try { cfg = await getProviderConfig(); } catch { cfg = null; }
+      const desc = describeError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" });
+      return { ok: false, error: desc.message, errorCategory: desc.category, errorReason: desc.reason, errorAction: desc.action, errorDetail: desc.detail };
+    }
+  },
+
   // ---- system hooks (routes) ----
   async "hooks.status"() {
     // The Settings Hooks panel: every hook + denied state + subscribers.
