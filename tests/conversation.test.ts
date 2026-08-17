@@ -5,7 +5,7 @@
 // @ts-nocheck — the chrome mock is intentionally dynamic (no chrome.* types in Deno).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { historyFromJournal } from "../extension/shared/conversation.js";
+import { historyFromJournal, friendlyActivityLabel } from "../extension/shared/conversation.js";
 
 Deno.test("historyFromJournal maps task/result entries to user/assistant turns", () => {
   const journal = [
@@ -43,4 +43,16 @@ Deno.test("historyFromJournal returns [] for a non-array / empty journal", () =>
   assertEquals(historyFromJournal(undefined), []);
   assertEquals(historyFromJournal({ not: "an array" }), []);
   assertEquals(historyFromJournal([]), []);
+});
+
+Deno.test("friendlyActivityLabel maps tool names to human activity (with a name)", () => {
+  assertEquals(friendlyActivityLabel("create_named_agent", { name: "Paul" }), "creating agent Paul");
+  assertEquals(friendlyActivityLabel("create_named_agent", {}), "creating an agent");
+  assertEquals(friendlyActivityLabel("list_named_agents", {}), "listing agents");
+  assertEquals(friendlyActivityLabel("schedule_task", {}), "scheduling a task");
+  assertEquals(friendlyActivityLabel("open_tab", { url: "https://paul.kinlan.me" }), "opening https://paul.kinlan.me");
+  assertEquals(friendlyActivityLabel("generate_ui", {}), "generating UI");
+  assertEquals(friendlyActivityLabel("delegate_task", { agent: "Bob" }), "delegating to Bob");
+  // an unknown snake_case tool falls back to the split words
+  assertEquals(friendlyActivityLabel("some_unknown_tool", {}), "some unknown tool");
 });
