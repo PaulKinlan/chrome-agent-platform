@@ -63,6 +63,13 @@ there. The reviewer agents check against it.
   (docs/components.html — the playground where components are tested in isolation
   without running the extension). The gallery imports the SAME components.js
   (scripts/sync-gallery.mjs; check:gallery fails on drift).
+- **Ask for permissions on need, never fail silently (Paul, 2026-08-17).** When a
+  feature needs a permission (a screenshot needs activeTab/host access, a capture
+  needs audioCapture/videoCapture, a provider needs its host), REQUEST it on the
+  user gesture (chrome.permissions.request) — do NOT just fail with "permission
+  required". The all-optional model means features ask for their permission at the
+  moment of need, with a clear grant flow + a clear error only if the user denies.
+  A feature that just fails with "permission required" is a bug.
 - **Docs never drift (Paul, 2026-08-17).** Before every commit, update the docs to
   match the change: PLAN.md (the roadmap state), docs/KNOWN-ISSUES.md (the open/
   fixed findings), docs/DESIGN.md (the design system), docs/OPEN-QUESTIONS.md,

@@ -108,3 +108,8 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 63. [DONE] **The @ autocomplete** — list all agent types (named + background + site, delineated).
 64. [DONE] **The X close button on the task list is broken** (still not fixed — verify + fix the delete).
 65. **Reconcile: go through everything Paul listed in the past 1-2 hours + verify each is fixed** (the tracker items) — mark the genuinely-done + fix the rest.
+
+## Paul batch (2026-08-17 21:00)
+66. **Remove the Chrome Prompt API (Gemini nano) from the settings provider picker** — it's only for internal summarization, not a chat model. (Steered earlier; verify it landed.)
+67. **Remove the Demo (local) provider from the settings UI** — it's for testing only.
+68. **The WebMCP discovery doesn't pick up inferred OR known WebMCP endpoints** — not working at all now. Needs integration tests (proper WebMCP usage + the inference + the webmcp-utils project pattern).

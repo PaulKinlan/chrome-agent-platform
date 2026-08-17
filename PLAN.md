@@ -50,3 +50,8 @@ Agents create things for the user in the context of a task (generated pages, fil
 3. **Use artifacts** — open/preview/use them.
 4. **Attach to a new task** — the + button should offer existing artifacts as attachments (so a task can build on a prior artifact).
 Artifacts are origin-keyed (per-agent) with a master index. Types: generated page (HTML), file, data, screenshot, UI fragment. This connects to the co-do double-iframe generative-UI work (a generated UI IS an artifact).
+
+## Task backlog (Paul 2026-08-17)
+- Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only).
+- Fix the WebMCP discovery (the inferred + known endpoints) + integration tests.
+- (The UI-FIXES-TRACKER.md has the full UI batch.)
