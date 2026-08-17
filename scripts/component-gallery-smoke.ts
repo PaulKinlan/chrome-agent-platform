@@ -320,18 +320,22 @@ async function main() {
     const activity = await evl(s.sessionId, `(()=>{
       const a = document.getElementById('activity-demo');
       if (!a?.shadowRoot) return { found:false };
-      const rows = a.shadowRoot.querySelectorAll('.aex-row').length;
+      const rows = a.shadowRoot.querySelectorAll('.aex-entry').length;
       const options = [...a.shadowRoot.querySelectorAll('.aex-agent option')].map(o=>o.value).filter(Boolean);
+      const texts = [...a.shadowRoot.querySelectorAll('.aex-text')].map(x=>x.textContent);
       const search = a.shadowRoot.querySelector('.aex-search');
       search.value = 'paul';
       search.dispatchEvent(new Event('input', { bubbles: true }));
       return new Promise(r => setTimeout(() => r({
-        found:true, rows, options,
-        filteredRows: a.shadowRoot.querySelectorAll('.aex-row').length,
+        found:true, rows, options, texts,
+        filteredRows: a.shadowRoot.querySelectorAll('.aex-entry').length,
       }), 80));
     })()`);
     check("activity-explorer renders rows + agent filter", activity.found === true && activity.rows >= 5 && activity.options.length >= 3, activity);
     check("activity-explorer search narrows the list", activity.found === true && activity.filteredRows < activity.rows && activity.filteredRows >= 1, activity);
+    // The tool-result summary must be READABLE — never the double-escaped JSON.
+    const readable = (activity.texts || []).every((t) => !t.includes('\\"') && !t.includes('modelContent'));
+    check("activity tool-result renders a readable summary (no escaped JSON)", readable === true, activity.texts || []);
 
     // Regression: clicking the console's own buttons (copy-all / clear) must
     // NOT close the panel. The bug was host.contains() not traversing the shadow

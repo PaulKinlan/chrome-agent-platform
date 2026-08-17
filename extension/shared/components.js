@@ -424,9 +424,14 @@ export const COMMAND_NAMESPACES = [
 ];
 
 // Sub-items for a selected command namespace, filtered by the typed argument.
-async function commandItems(ns, arg = "") {
+// currentAgentId/currentAgentKind exclude the agent the composer is currently
+// scoped to (you can't call the agent you're talking to).
+async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKind = null) {
   const q = (arg || "").toLowerCase();
   const matches = (s) => !q || String(s ?? "").toLowerCase().includes(q);
+  // An item is the "current" agent if its id matches the scoped agent id.
+  const isCurrent = (id, kind) =>
+    !!currentAgentId && String(id).toLowerCase() === String(currentAgentId).toLowerCase();
   switch (ns) {
     case "skill": {
       // The recipes were renamed to SKILLS (f7a49fc). `skill.list` returns the
@@ -444,7 +449,11 @@ async function commandItems(ns, arg = "") {
         .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
     }
     case "agent": {
-      // ALL agent types, delineated: named + background + site.
+      // ALL agent types, delineated: named + background + site. Only agents that
+      // are ACTUALLY available to call are listed: the created named agents, the
+      // ENABLED background agents (not the available-but-not-enabled recipes),
+      // and the enrolled site agents. The current agent (the one the composer is
+      // scoped to) is excluded — you can't call the agent you're talking to.
       const [named, bg, site] = await Promise.all([
         RUNTIME_SEND ? RUNTIME_SEND("named-agent.list").catch(() => ({})) : Promise.resolve({}),
         RUNTIME_SEND ? RUNTIME_SEND("background-agent.list").catch(() => ({})) : Promise.resolve({}),
@@ -452,12 +461,16 @@ async function commandItems(ns, arg = "") {
       ]);
       const out = [];
       for (const a of (named.agents || [])) {
+        const aid = a.id ?? a.name;
+        if (isCurrent(aid, "named")) continue; // don't offer the current agent
         if (!matches(a.name) && !matches(a.id)) continue;
-        out.push({ id: `agent:${a.id ?? a.name}`, label: a.name, description: a.role || "named agent", kind: "agent" });
+        out.push({ id: `agent:${aid}`, label: a.name, description: a.role || "named agent", kind: "agent" });
       }
       for (const a of (bg.agents || [])) {
+        if (!a.enabled) continue; // only the ENABLED background agents are callable
+        if (isCurrent(a.id, "background")) continue;
         if (!matches(a.name) && !matches(a.id)) continue;
-        out.push({ id: `agent:${a.id}`, label: a.name, description: (a.description || "background agent") + (a.enabled ? " · enabled" : ""), kind: "background" });
+        out.push({ id: `agent:${a.id}`, label: a.name, description: a.description || "background agent", kind: "background" });
       }
       for (const a of (site.agents || []).filter((x) => x.enrolled)) {
         if (!matches(a.origin) && !matches(a.name || "")) continue;
@@ -487,11 +500,13 @@ async function commandItems(ns, arg = "") {
 }
 
 // @ mention candidates: named agents, background agents, site agents, skills,
-// and recent artifacts — all delineated so the user can tell them apart.
-async function mentionCandidates(q = "") {
+// and recent artifacts — all delineated so the user can tell them apart. The
+// current agent is excluded + only ENABLED background agents are listed.
+async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind = null) {
   const ql = (q || "").toLowerCase();
   const items = [];
   const hit = (s) => !ql || String(s ?? "").toLowerCase().includes(ql);
+  const isCurrent = (id) => !!currentAgentId && String(id).toLowerCase() === String(currentAgentId).toLowerCase();
   if (RUNTIME_SEND) {
     const [named, bg, site, skills, assets] = await Promise.all([
       RUNTIME_SEND("named-agent.list").catch(() => ({ agents: [] })),
@@ -501,12 +516,16 @@ async function mentionCandidates(q = "") {
       RUNTIME_SEND("asset.list", { origin: "master" }).catch(() => ({ assets: [] })),
     ]);
     for (const a of (named.agents || [])) {
+      const aid = a.id ?? a.name;
+      if (isCurrent(aid)) continue; // don't offer the current agent
       if (!hit(a.name) && !hit(a.id)) continue;
-      items.push({ id: `agent:${a.id ?? a.name}`, label: a.name, description: a.role || "named agent", kind: "agent" });
+      items.push({ id: `agent:${aid}`, label: a.name, description: a.role || "named agent", kind: "agent" });
     }
     for (const a of (bg.agents || [])) {
+      if (!a.enabled) continue; // only the ENABLED background agents are callable
+      if (isCurrent(a.id)) continue;
       if (!hit(a.name) && !hit(a.id)) continue;
-      items.push({ id: `agent:${a.id}`, label: a.name, description: (a.description || "background agent") + (a.enabled ? " · enabled" : ""), kind: "background" });
+      items.push({ id: `agent:${a.id}`, label: a.name, description: a.description || "background agent", kind: "background" });
     }
     for (const a of (site.agents || []).filter((x) => x.enrolled)) {
       if (!hit(a.origin) && !hit(a.name || "")) continue;
@@ -1717,8 +1736,14 @@ customElements.define("screenshot-strip", ScreenshotStrip);
  * target #task-input / #run-task. */
 class AgentComposer extends Component {
   static shadow() { return false; }
-  static get observedAttributes() { return ["placeholder", "label", "send-label"]; }
+  static get observedAttributes() { return ["placeholder", "label", "send-label", "agent-id", "agent-kind"]; }
   constructor() { super(); this.attachments = []; }
+  // The agent this composer is scoped to (null for the hub/thread): agent-id =
+  // the agent's slug/id, agent-kind = "named" | "background". Used to EXCLUDE the
+  // current agent from the /agent + @ mention lists (you can't call the agent
+  // you're talking to).
+  get _currentAgentId() { return this.getAttribute("agent-id") || null; }
+  get _currentAgentKind() { return this.getAttribute("agent-kind") || null; }
   _render() {
     const placeholder = this.getAttribute("placeholder") || "Ask anything…";
     const label = this.getAttribute("label") || "Message";
@@ -2112,7 +2137,7 @@ class AgentComposer extends Component {
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
         return;
       }
-      const items = await commandItems(ns, arg);
+      const items = await commandItems(ns, arg, this._currentAgentId, this._currentAgentKind);
       if (!items.length && ns === "remember") {
         this._showPopup([{ id: "free:remember", label: "/remember ", description: "write to memory", kind: "free", ns: "remember", free: true }],
           { type: "command", start: slashPos, end: caret, ns, arg });
@@ -2126,7 +2151,7 @@ class AgentComposer extends Component {
     const at = before.match(/(?:^|\s)@([^\s@]*)$/);
     if (at) {
       const atPos = text[at.index] === "@" ? at.index : at.index + 1;
-      const items = await mentionCandidates(at[1] || "");
+      const items = await mentionCandidates(at[1] || "", this._currentAgentId, this._currentAgentKind);
       this._showPopup(items, { type: "mention", start: atPos, end: caret });
       return;
     }
@@ -3080,38 +3105,78 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Turn a raw tool result into a short readable one-liner (mirrors the SW's
-// tool-summary: prefer the {userSummary, modelContent} envelope, then compact).
-function activityToolSummary(raw) {
-  let v = raw;
+// Turn a raw tool result into a short readable one-liner. The agent-do runtime
+// wraps tool results in {modelContent, userSummary}, and BOTH can themselves be
+// JSON strings (double-encoded). Recursively unwrap, then render per-tool (never
+// a raw escaped JSON blob). Mirrors lib/tool-summary.js summarizeToolResult.
+function _coerce(v) {
   if (typeof v === "string") {
     const s = v.trim();
+    if (s.startsWith("{") || s.startsWith("[")) {
+      try { return JSON.parse(s); } catch { return s; }
+    }
+  }
+  return v;
+}
+function _unwrap(v) {
+  if (v == null) return null;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
     if (s.startsWith("{") || s.startsWith("[")) {
       try {
         const o = JSON.parse(s);
         if (o && typeof o === "object" && !Array.isArray(o)) {
-          if (o.userSummary != null) v = o.userSummary;
-          else if (o.modelContent != null) v = o.modelContent;
-          else v = o;
-        } else {
-          v = o;
+          if (o.userSummary != null) return _coerce(o.userSummary);
+          if (o.modelContent != null) return _coerce(o.modelContent);
         }
-      } catch {
-        v = s;
-      }
-    } else {
-      v = s;
+        return o;
+      } catch { return s; }
+    }
+    return s;
+  }
+  return v;
+}
+function _short(v, n = 72) {
+  const s = String(v ?? "");
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+function activityToolSummary(name, raw) {
+  const d = _unwrap(raw);
+  if (d && typeof d === "object" && !Array.isArray(d) && Array.isArray(d.agents)) {
+    const items = d.agents.map((a) => {
+      const label = a?.name || a?.origin || a?.id || "agent";
+      const role = a?.role;
+      const mem = a?.memoryKeyCount != null ? `${a.memoryKeyCount} memory key${a.memoryKeyCount === 1 ? "" : "s"}` : null;
+      const tools = a?.toolCount != null && a?.toolCount > 0 ? `${a.toolCount} tools` : (a?.toolCount === 0 ? "no tools" : null);
+      return role ? `${label} — ${_short(role)}` : [label, mem, tools].filter(Boolean).join(" · ");
+    });
+    return `${d.agents.length} ${/named/i.test(name || "") ? "named agent" : "agent"}${d.agents.length === 1 ? "" : "s"}: ${items.join("; ")}`;
+  }
+  if (d && typeof d === "object" && !Array.isArray(d)) {
+    const a = d.agent || d.created || d.updated;
+    if (a && typeof a === "object" && (a.name || a.id)) {
+      const verb = /delete/i.test(name || "") ? "deleted" : /update/i.test(name || "") ? "updated" : "created";
+      return `${verb} ${a.name || a.id}${a.role ? ` (${_short(a.role, 60)})` : ""}`;
+    }
+    if (/schedule/i.test(name || "") && (d.id || d.task || d.name)) return `scheduled: ${_short(d.name || d.task || d.id)}`;
+    if (d.ok === true) return "done";
+    if (d.ok === false) return `failed: ${_short(d.error ?? d.reason ?? "")}`;
+    if (/memory/i.test(name || "")) {
+      if (d.keys && Array.isArray(d.keys)) return `${d.keys.length} key${d.keys.length === 1 ? "" : "s"}: ${d.keys.map(String).join(", ")}`;
+      if (d.value != null) return _short(String(d.value));
+      if (d.matches != null) return `${Array.isArray(d.matches) ? d.matches.length : 0} match${Array.isArray(d.matches) && d.matches.length === 1 ? "" : "es"}`;
+    }
+    if (/navigate|open_?tab|goto|url/i.test(name || "") && d.url) return `opened ${_short(d.url)}`;
+    const entries = Object.entries(d).filter(([, val]) => val != null);
+    if (entries.length && entries.length <= 4) {
+      return entries.map(([k, val]) => `${k}: ${_short(typeof val === "object" ? JSON.stringify(val) : val, 40)}`).join(" · ");
     }
   }
-  if (v && typeof v === "object") {
-    if (Array.isArray(v)) return `${v.length} item${v.length === 1 ? "" : "s"}`;
-    const keys = Object.keys(v);
-    if (!keys.length) return "{}";
-    const agents = Array.isArray(v.agents) ? v.agents : null;
-    if (agents) return `${agents.length} agent${agents.length === 1 ? "" : "s"}`;
-    return keys.slice(0, 3).map((k) => `${k}: ${shortText(v[k])}`).join(", ");
-  }
-  return shortText(v);
+  if (typeof d === "string") return _short(d, 120);
+  if (Array.isArray(d)) return `${d.length} item${d.length === 1 ? "" : "s"}`;
+  if (d == null) return "done";
+  return _short(JSON.stringify(d), 120);
 }
 function shortText(v, n = 80) {
   const s = String(v ?? "");
@@ -3124,10 +3189,26 @@ function activityText(e) {
     case "task": return e.task || "";
     case "result": return e.result || "";
     case "tool-call": return (e.tool || "tool") + (e.args ? ` ${shortText(e.args, 60)}` : "");
-    case "tool-result": return (e.tool || "tool") + " → " + activityToolSummary(e.result);
+    case "tool-result": return (e.tool || "tool") + " → " + activityToolSummary(e.tool, e.result);
     case "screenshot": return e.url || "screenshot";
     case "error": return e.error || e.message || "error";
     default: return e?.type || "";
+  }
+}
+
+// The FULL detail for a journal entry (shown in the expanded row).
+function activityDetail(e) {
+  switch (e?.type) {
+    case "tool-result": {
+      const raw = e.result;
+      const s = typeof raw === "string" ? raw : (raw == null ? "" : JSON.stringify(raw, null, 2));
+      return s || "(no result)";
+    }
+    case "tool-call": return typeof e.args === "string" ? e.args : (e.args == null ? "" : JSON.stringify(e.args, null, 2));
+    case "error": return [e.error, e.message, e.stack].filter(Boolean).join("\n") || "error";
+    case "task": return e.task || "";
+    case "result": return e.result || "";
+    default: return e?.detail || e?.url || "";
   }
 }
 
@@ -3140,18 +3221,22 @@ class ActivityExplorer extends Component {
       <style>
         :host { display:block; }
         .aex { display:flex; flex-direction:column; gap:8px; }
-        .aex-toolbar { display:flex; gap:8px; flex-wrap:wrap; }
-        .aex-search { flex:1; min-width:140px; padding:7px 10px; font:inherit; font-size:13px;
+        .aex-toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+        .aex-search { flex:1; min-width:140px; padding:8px 12px; font:inherit; font-size:13px;
           color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
-          border-radius:8px; }
-        .aex-agent { max-width:200px; padding:7px 8px; font:inherit; font-size:13px;
+          border-radius:var(--radius-sm,8px); }
+        .aex-search:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+        .aex-agent { max-width:200px; padding:8px 10px; font:inherit; font-size:13px;
           color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
-          border-radius:8px; appearance:base-select; }
-        .aex-list { display:flex; flex-direction:column; max-height:420px; overflow:auto; }
-        .aex-row { display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:baseline;
-          padding:7px 10px; border-bottom:1px solid var(--border,#e3e0d9); }
-        .aex-row:last-child { border-bottom:0; }
-        .aex-row:hover { background:var(--panel,#ffffff); }
+          border-radius:var(--radius-sm,8px); appearance:base-select; }
+        .aex-list { display:flex; flex-direction:column; max-height:420px; overflow-y:auto; overflow-x:hidden; }
+        .aex-entry { border-bottom:1px solid var(--border,#e3e0d9); }
+        .aex-entry:last-child { border-bottom:0; }
+        .aex-entry:hover { background:var(--panel,#ffffff); }
+        .aex-entry summary { list-style:none; cursor:pointer; display:grid; grid-template-columns:auto 1fr auto; gap:10px;
+          align-items:baseline; padding:9px 12px; }
+        .aex-entry summary::-webkit-details-marker { display:none; }
+        .aex-entry summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
         .aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
           max-width:150px; overflow:hidden; text-overflow:ellipsis; }
         .aex-main { min-width:0; }
@@ -3160,9 +3245,12 @@ class ActivityExplorer extends Component {
         .aex-kind.task { color:var(--accent,#0e6e63); }
         .aex-kind.tool-call, .aex-kind.tool-result { color:var(--accent2,#7a5c1d); }
         .aex-kind.error { color:var(--danger,#b3261e); }
-        .aex-text { font-size:13px; color:var(--text,#1d1b18); overflow:hidden; text-overflow:ellipsis;
+        .aex-text { font-size:13px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden; text-overflow:ellipsis;
           white-space:nowrap; }
         .aex-ts { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; }
+        .aex-detail { margin:0; padding:0 12px 10px 12px; font-size:12px; line-height:1.5;
+          color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere;
+          font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
         .aex-empty { padding:12px 10px; font-size:13px; color:var(--muted,#635e56); }
         .aex-count { font-size:11px; color:var(--muted,#635e56); }
       </style>
@@ -3238,9 +3326,9 @@ class ActivityExplorer extends Component {
       return;
     }
     for (const e of filtered) {
-      const row = document.createElement("div");
-      row.className = "aex-row";
-      row.title = activityText(e);
+      const entry = document.createElement("details");
+      entry.className = "aex-entry";
+      const summary = document.createElement("summary");
       const who = document.createElement("span");
       who.className = "aex-agent";
       who.textContent = e.agentLabel || e.source || "hub";
@@ -3256,8 +3344,17 @@ class ActivityExplorer extends Component {
       const ts = document.createElement("span");
       ts.className = "aex-ts";
       ts.textContent = timeAgo(e.ts);
-      row.append(who, main, ts);
-      this._list.append(row);
+      summary.append(who, main, ts);
+      entry.append(summary);
+      // The expanded detail (only for entries that have more than the one-liner).
+      const detail = activityDetail(e);
+      if (detail) {
+        const body = document.createElement("pre");
+        body.className = "aex-detail";
+        body.textContent = detail;
+        entry.append(body);
+      }
+      this._list.append(entry);
     }
   }
 }

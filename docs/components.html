@@ -359,7 +359,7 @@
       activityDemo.entries = [
         { ts: Date.now() - 60000, source: "master", agentLabel: "hub", type: "task", task: "Summarise the latest content from paul.kinlan.me" },
         { ts: Date.now() - 90000, source: "agent:paul", agentLabel: "Paul", type: "tool-call", tool: "list_agents", args: "{}" },
-        { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "tool-result", tool: "list_agents", result: "{\"userSummary\":\"1 site agent: paul.kinlan.me\"}" },
+        { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "tool-result", tool: "list_agents", result: "{\"modelContent\":\"{\\\"agents\\\":[{\\\"name\\\":\\\"Paul\\\",\\\"role\\\":\\\"summarises paul.kinlan.me\\\"}]}\"}" },
         { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
         { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
       ];
