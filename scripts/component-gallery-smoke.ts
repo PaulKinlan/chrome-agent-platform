@@ -195,13 +195,22 @@ async function main() {
     })()`);
     check("permission-row enable→disable→enable", perm.g1 === true && perm.g2 === false && perm.g3 === true, perm);
 
-    // mic toggle
-    const mic = await evl(s.sessionId, `(()=>{
+    // mic toggle — the mic now requests the mic permission (getUserMedia) first
+    // + surfaces a start() error, so stub BOTH the media permission and the
+    // recognition (headless has neither) + await the async start.
+    await evl(s.sessionId, `(()=>{
+      navigator.mediaDevices = navigator.mediaDevices || {};
+      navigator.mediaDevices.getUserMedia = () => Promise.resolve({ getTracks: () => [{ stop() {} }] });
+      class MockSR { constructor(){ this.onresult=null; this.onerror=null; this.onend=null; } start(){} stop(){ this.onend?.(); } abort(){} }
+      window.SpeechRecognition = MockSR;
+    })()`);
+    const mic = await evl(s.sessionId, `(async ()=>{
       const m=document.querySelector('mic-button');
       const clickMic=()=>m.shadowRoot.querySelector('.mic').click();
-      clickMic(); const on1=m.hasAttribute('listening');
-      clickMic(); const on2=m.hasAttribute('listening');
-      clickMic(); const on3=m.hasAttribute('listening');
+      const wait=()=>new Promise(r=>setTimeout(r,50));
+      clickMic(); await wait(); const on1=m.hasAttribute('listening');
+      clickMic(); await wait(); const on2=m.hasAttribute('listening');
+      clickMic(); await wait(); const on3=m.hasAttribute('listening');
       return {on1,on2,on3};
     })()`);
     check("mic on→off→on", mic.on1 === true && mic.on2 === false && mic.on3 === true, mic);

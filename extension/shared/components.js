@@ -643,6 +643,8 @@ class MicButton extends Component {
     super();
     this._recognition = null;
     this._listening = false;
+    this._mediaStream = null;
+    this._noSpeech = 0;
   }
   _render() {
     const listening = this.hasAttribute("listening");
@@ -677,18 +679,42 @@ class MicButton extends Component {
   toggle() {
     this._listening ? this.stop() : this.start();
   }
-  start() {
+  /** Ensure the microphone permission BEFORE starting recognition. The Web
+   *  Speech API can start "successfully" with no audio when the mic permission
+   *  is missing (the symptom Paul hit: the mic opens but NO text comes out, no
+   *  error surfaced). Requesting getUserMedia audio first (a) grants the
+   *  permission inside this click gesture and (b) lets us fail LOUDLY if the
+   *  mic is denied instead of silently never producing a transcript. */
+  async _ensureMicPermission() {
+    const md = navigator.mediaDevices;
+    if (!md?.getUserMedia) return true; // no API — let SpeechRecognition try
+    try {
+      const stream = await md.getUserMedia({ audio: true });
+      this._mediaStream = stream;
+      // SpeechRecognition captures its OWN audio; the stream above is just to
+      // grant/verify the permission. Release the tracks so we don't hold the
+      // mic open, but keep the stream handle for the stop teardown.
+      stream.getTracks().forEach((t) => t.stop());
+      return true;
+    } catch {
+      this._emit("mic-error", { message: "microphone permission denied — grant mic access to dictate" });
+      return false;
+    }
+  }
+  async start() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       this._emit("mic-error", { message: "speech recognition not available in this browser" });
       return;
     }
+    if (!(await this._ensureMicPermission())) return;
     if (!this._recognition) {
       this._recognition = new SR();
       this._recognition.continuous = true;
       this._recognition.interimResults = true;
       this._recognition.lang = "en-US";
       this._recognition.onresult = (e) => {
+        this._noSpeech = 0;
         // Accumulate the FULL transcript (committed finals + interim) across the
         // cumulative result list, NOT just the new chunk — otherwise every
         // event overwrites the input with only the latest word.
@@ -704,7 +730,18 @@ class MicButton extends Component {
         this._emit("transcript", { text, final: !interimText });
       };
       this._recognition.onerror = (e) => {
-        if (e.error === "no-speech" || e.error === "aborted") return;
+        if (e.error === "aborted") return;
+        // "no-speech" means the recognition is running but hearing nothing — the
+        // exact "mic opens but no text" symptom. Surface it after a couple of
+        // quiet rounds instead of staying silently open forever.
+        if (e.error === "no-speech") {
+          this._noSpeech += 1;
+          if (this._noSpeech >= 3) {
+            this._emit("mic-error", { message: "couldn't hear you — check the microphone is enabled and not muted" });
+            this.stop();
+          }
+          return;
+        }
         const msg =
           e.error === "not-allowed" || e.error === "service-not-allowed"
             ? "microphone permission denied"
@@ -722,16 +759,27 @@ class MicButton extends Component {
       };
     }
     this._listening = true;
+    this._noSpeech = 0;
     this.setAttribute("listening", TRUE);
     this._emit("mic-toggle", { listening: true });
-    try { this._recognition.start(); } catch { /* already started */ }
+    try {
+      this._recognition.start();
+    } catch (err) {
+      this._emit("mic-error", { message: "could not start speech recognition: " + (err?.message || err) });
+      this.stop();
+    }
   }
   stop() {
     this._listening = false;
+    this._noSpeech = 0;
     this.removeAttribute("listening");
     this._emit("mic-toggle", { listening: false });
     if (this._recognition) {
       try { this._recognition.stop(); } catch { /* ignore */ }
+    }
+    if (this._mediaStream) {
+      try { this._mediaStream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      this._mediaStream = null;
     }
   }
   disconnectedCallback() {
@@ -748,6 +796,10 @@ class MicButton extends Component {
         this._recognition.abort?.();
       } catch { /* ignore */ }
       this._recognition = null;
+    }
+    if (this._mediaStream) {
+      try { this._mediaStream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      this._mediaStream = null;
     }
     super.disconnectedCallback?.();
   }
