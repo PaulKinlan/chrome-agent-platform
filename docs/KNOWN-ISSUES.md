@@ -91,3 +91,7 @@ The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
 - memory_grep lacks a post-read generation recheck (a stale run can return the new enrollment's memory).
 - Named agents are NOT actually runnable/delegatable (CRUD/grep/avatar only; no run/delegate path; the AGENT-MODEL.md promise unmet).
 - The scoped-hook transitive bypass (the workers dont get readOnlyMemory:scoped + retain site/WebMCP tools; a hook payload can delegate into a side-effecting worker).
+
+## Sol verifications (regression-proven, HEAD 24dd3f7)
+- **CAS version issue NOT fixed** — the version is stored only in the value envelope + reset on delete, so a set→v1, delete, set-fresh reuses v1 (a stale compareAndDelete can match/delete the fresh recreation). Fix: a durable per-key version counter that survives delete/clear.
+- **Named-agent deletion leaves the OPFS sandbox** (verified: after create→delete, namedAgentMemory still returns the data).
