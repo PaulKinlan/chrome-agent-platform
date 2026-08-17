@@ -35,9 +35,9 @@ nav {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   text-decoration: none;
   font-size: 14px;
@@ -83,7 +83,7 @@ nav {
 }
 .panel h2 {
   margin: 0 0 8px;
-  font-size: 17px;
+  font-size: var(--text-lg);
 }
 .panel h3 {
   font-size: 14px;
@@ -107,7 +107,7 @@ code {
 .provider-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .provider-card {
   border: 1px solid var(--border);
@@ -140,7 +140,7 @@ code {
   flex-shrink: 0;
 }
 .test-status {
-  margin-top: 10px;
+  margin-top: 8px;
   font-size: var(--text-xs);
   display: flex;
   align-items: center;
@@ -162,7 +162,7 @@ code {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 .provider-card .fields input {
   width: 100%;
@@ -175,7 +175,7 @@ input, select, textarea {
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 8px 12px;
   font: inherit;
 }
 input, select {
@@ -200,7 +200,7 @@ input:focus, select:focus, textarea:focus {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--panel);
-  margin-top: 10px;
+  margin-top: 8px;
 }
 .toggle-field switch-toggle {
   grid-row: 1;
@@ -246,7 +246,7 @@ input:focus, select:focus, textarea:focus {
   flex: 0 0 60px;
 }
 .theme-card .theme-label {
-  padding: 8px 10px;
+  padding: 8px 12px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -256,7 +256,7 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   gap: 20px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .usage-stat {
   background: var(--bg);
@@ -273,7 +273,7 @@ input:focus, select:focus, textarea:focus {
   font-size: 12px;
 }
 .usage-detail {
-  margin-top: 10px;
+  margin-top: 8px;
   max-height: 300px;
   overflow: auto;
 }
@@ -296,10 +296,10 @@ input:focus, select:focus, textarea:focus {
 .origin-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: var(--bg);
 }
 .origin-row .origin {
@@ -318,16 +318,16 @@ input:focus, select:focus, textarea:focus {
 .mem-head {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .mem-select {
-  padding: 8px 10px;
+  padding: 8px 12px;
   font: inherit;
   font-size: 13px;
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   appearance: base-select;
 }
 .mem-keys {
@@ -394,7 +394,7 @@ input:focus, select:focus, textarea:focus {
   color: var(--text);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .recipe-edit::backdrop {
   background: rgba(0, 0, 0, 0.5);
@@ -407,8 +407,8 @@ input:focus, select:focus, textarea:focus {
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
+  border-radius: var(--radius-sm);
+  padding: 12px;
   resize: vertical;
 }
 .recipe-edit-actions {
@@ -465,9 +465,9 @@ input:focus, select:focus, textarea:focus {
 }
 .enroll-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: flex-end;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 /* Background agents (scheduled recipes) — mirrors the permission-row layout. */
@@ -676,7 +676,7 @@ input:focus, select:focus, textarea:focus {
 .perm-row .btn {
   grid-area: btn;
 }
-.btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn.danger { background: var(--danger); color: var(--btn-fg); border-color: var(--danger); }
 
 /* footer — the semantic version, muted at the bottom of the settings */
 .foot {
@@ -695,10 +695,10 @@ input:focus, select:focus, textarea:focus {
 /* Per-agent provider override rows (the Agents section). */
 .agent-provider-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: flex-end;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border, #e7e3dc);
+  border-bottom: 1px solid var(--border, #e3e0d9);
   flex-wrap: wrap;
 }
 .agent-provider-name {

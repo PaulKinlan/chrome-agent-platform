@@ -9,25 +9,25 @@
   .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
   h1 { font-size: 20px; margin: 0 0 6px; }
   .sub { color: var(--muted); margin-bottom: 20px; }
-  .master { background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 14px 16px; margin-bottom: 20px; }
+  .master { background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 20px; }
   .master h2 { margin: 0 0 8px; font-size: 14px; color: var(--accent); }
   .agents { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .mem { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .mem { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; }
   .mem .origin { font-weight: 700; margin-bottom: 6px; }
   .kv { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; border-top: 1px solid var(--border); padding: 4px 0; }
   .kv b { color: var(--text); font-weight: 500; }
   .actions { margin-top: 8px; display: flex; gap: 6px; }
-  .usage { margin-top: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .usage { margin-top: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }
   .usage h2 { margin: 0 0 8px; font-size: 14px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td, th { text-align: left; padding: 6px 8px; border-top: 1px solid var(--border); }
-  .shots { margin-top: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .shots { margin-top: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }
   .shots h2 { margin: 0 0 8px; font-size: 14px; }
   .shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
-  .shot { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .shot { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
   .shot img { display: block; width: 100%; height: auto; }
-  .shot .shot-meta { font-size: 11px; color: var(--muted); padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .shot a { display: block; font-size: 11px; padding: 4px 8px; }
+  .shot .shot-meta { font-size: var(--text-xs); color: var(--muted); padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shot a { display: block; font-size: var(--text-xs); padding: 4px 8px; }
 </style>
 </head>
 <body>

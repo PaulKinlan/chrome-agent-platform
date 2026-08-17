@@ -36,7 +36,7 @@
     .brand-row { display: flex; align-items: center; gap: 6px; }
     .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
     .side-toggle { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
-      border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--muted);
       cursor: pointer; padding: 0; flex: 0 0 auto; }
     .side-toggle:hover { color: var(--text); border-color: var(--accent); }
     .side-toggle svg { display: block; transition: transform .18s ease; }
@@ -44,7 +44,7 @@
     .side-label-row { display: flex; align-items: center; gap: 4px; }
     .side-label-row .side-label { flex: 1; min-width: 0; }
     .new-task { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
-      border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--accent);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--accent);
       cursor: pointer; padding: 0; font-size: 18px; line-height: 1; flex: 0 0 auto; }
     .new-task:hover { border-color: var(--accent); background: var(--on-accent-muted, #d7f0ea); }
     /* hide the text labels when collapsed (icon rail) */
@@ -56,7 +56,7 @@
     .side.collapsed .thread-item { padding: 8px; align-items: center; justify-content: center; min-height: 34px; }
     .side.collapsed .side-foot { align-items: center; }
     .side.collapsed .side-foot .foot-btn { width: 34px; height: 34px; padding: 0; justify-content: center; }
-    .side.collapsed .side-foot .foot-btn svg { width: 17px; height: 17px; }
+    .side.collapsed .side-foot .foot-btn svg { width: 16px; height: 16px; }
     /* the collapsed thread item is a centred status dot with a hover tooltip */
     .thread-item .t-dot { display: none; }
     .side.collapsed .thread-item .t-dot {
@@ -101,7 +101,7 @@
       gap: 8px;
       text-align: left;
       padding: 6px 12px;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       border: 0;
       background: transparent;
       color: var(--text);
@@ -132,7 +132,7 @@
     .agent-item .a-role {
       display: block;
       font-weight: 400;
-      font-size: 11px;
+      font-size: var(--text-xs);
       color: var(--muted);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -148,7 +148,7 @@
       gap: 8px;
       padding: 8px 12px;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: var(--radius-md);
       background: var(--panel);
       font-size: 13px;
       color: var(--text);
@@ -189,7 +189,7 @@
       gap: 2px;
       text-align: left;
       padding: 8px 12px;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       border: 0;
       background: transparent;
       color: var(--text);
@@ -231,8 +231,8 @@
       min-width: 0;
     }
     .thread-item .t-name .dot {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       flex: 0 0 auto;
       background: var(--muted);
@@ -254,7 +254,7 @@
       text-overflow: ellipsis;
     }
     .thread-item .t-meta {
-      font-size: 11px;
+      font-size: var(--text-xs);
       color: var(--muted);
     }
     .thread-empty {
@@ -281,7 +281,7 @@
     .foot-btn {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 8px;
       justify-content: flex-start;
       width: 100%;
     }
@@ -297,7 +297,7 @@
       max-width: 680px;
       width: 100%;
       margin: 0 auto;
-      padding: 40px 24px 64px;
+      padding: 32px 24px 48px;
     }
 
     /* ── header ── */
@@ -321,8 +321,8 @@
       margin-right: 4px;
     }
     .status .dot {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       background: var(--accent2);
       flex: 0 0 auto;
@@ -342,13 +342,13 @@
     .runlog .empty { padding: 8px 14px; color: var(--muted); font-size: 13px; }
     .rl { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; border-bottom: 1px solid var(--border); }
     .rl:last-child { border-bottom: 0; }
-    .rl .rl-kind { flex: 0 0 auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+    .rl .rl-kind { flex: 0 0 auto; font-size: var(--text-xs); font-weight: 600; }
     .rl .rl-kind.task { color: var(--accent); }
     .rl .rl-kind.result { color: var(--muted); }
     .rl .rl-kind.tool-call, .rl .rl-kind.tool-result { color: var(--accent2); }
     .rl .rl-kind.screenshot { color: var(--accent2); }
     .rl .rl-text { flex: 1; min-width: 0; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .rl .rl-ts { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+    .rl .rl-ts { flex: 0 0 auto; font-size: var(--text-xs); color: var(--muted); }
     .panel {
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
@@ -378,8 +378,6 @@
       padding: 8px 14px 4px;
       font-size: var(--text-xs);
       color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .04em;
       font-weight: 600;
     }
     .panel-subhead .hint-link {

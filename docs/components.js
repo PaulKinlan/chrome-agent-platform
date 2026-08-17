@@ -633,7 +633,7 @@ class MicButton extends Component {
       :host { display:inline-flex; }
       .mic { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
-        border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:8px;
+        border:1px solid var(--border, #333); color:var(--text, #eee); border-radius:var(--radius-sm,6px);
         padding:0; cursor:pointer; font:inherit; line-height:1; }
       .mic .icon { display:inline-flex; align-items:center; justify-content:center; }
       .mic svg { display:block; }
@@ -747,7 +747,7 @@ class AttachButton extends Component {
       :host { position:relative; display:inline-flex; }
       .plus { display:inline-flex; align-items:center; justify-content:center; width:var(--control,36px);
         height:var(--control,36px); background:transparent;
-        border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:8px;
+        border:1px solid var(--border,#e3e0d9); color:var(--text,#1d1b18); border-radius:var(--radius-sm,6px);
         padding:0; cursor:pointer; font:inherit; line-height:1; anchor-name:--attach-anchor; }
       .plus svg { display:block; }
       .plus:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
@@ -759,7 +759,7 @@ class AttachButton extends Component {
          off-screen). The popover is top-layer, so opening it never scrolls the
          main frame (the conversation scroll container is untouched). */
       .menu { position:absolute; inset:auto; margin:0; background:var(--panel,#ffffff);
-        border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); box-shadow:0 8px 24px rgba(0,0,0,.25);
         padding:4px; min-width:200px; z-index:20;
         position-anchor:--attach-anchor; position-area:block-start span-inline-end;
         position-try-fallbacks:flip-block, flip-inline; }
@@ -768,9 +768,9 @@ class AttachButton extends Component {
       }
       .menu[hidden] { display:none; }
       .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
-        color:var(--text,#1d1b18); padding:8px 10px; border-radius:7px; cursor:pointer; font:inherit; }
+        color:var(--text,#1d1b18); padding:8px 12px; border-radius:var(--radius-sm,6px); cursor:pointer; font:inherit; }
       .menu button:hover, .menu button:focus-visible { background:var(--bg,#12121c); outline:none; }
-      .note { font-size:11px; color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
+      .note { font-size:var(--text-xs,12px); color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
       <div class="menu" role="menu" aria-label="${escapeHtml(label)}" popover="manual"${open ? "" : " hidden"}>
