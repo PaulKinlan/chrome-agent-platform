@@ -10,6 +10,7 @@ import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
+import { initialAvatar } from "../lib/avatar.js";
 
 import {
   installPageDiagnostics,
@@ -234,16 +235,6 @@ async function renderSidebarAgents(agents) {
   }
 }
 
-function initialAvatar(name) {
-  const initial = (String(name ?? "?").trim()[0] || "?").toUpperCase();
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">` +
-    `<circle cx="32" cy="32" r="30" fill="#f7f6f3" stroke="#0e6e63" stroke-width="3"/>` +
-    `<text x="32" y="42" font-family="system-ui,sans-serif" font-size="28" font-weight="600" fill="#0e6e63" text-anchor="middle">${initial}</text>` +
-    `</svg>`;
-  return `data:image/svg+xml;base64,${btoa(svg)}`;
-}
-
 // ── background agents (scheduled recipes, enabled/disabled) ──────────────
 // Item 25: the hub shows only the ACTIVE (enabled) background agents — the
 // full catalog (presets + disabled) lives in Settings behind the "Configure"
@@ -399,6 +390,22 @@ async function renderRunLog() {
   const explorer = document.createElement("activity-explorer");
   explorer.setAttribute("limit", "100");
   el.replaceChildren(explorer);
+}
+
+// A small usage summary on the hub (the recent calls/tokens/cost) — reads the
+// SW's single-authority usage aggregate, so you see at a glance how much the
+// agents have been doing + what it cost.
+async function renderHubUsage() {
+  const el = document.getElementById("hub-usage");
+  if (!el) return;
+  const u = await send("usage.get").catch(() => null);
+  if (!u?.totals) {
+    el.textContent = "what the agents did";
+    return;
+  }
+  const t = u.totals;
+  const tokens = (t.inputTokens + t.outputTokens).toLocaleString();
+  el.textContent = `${t.calls} calls · ${tokens} tokens · $${t.estimatedCost.toFixed(4)}`;
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────
@@ -1144,6 +1151,7 @@ renderBackgroundAgents();
 renderArtifacts();
 renderTasks();
 renderRunLog();
+renderHubUsage();
 renderProviderStatus();
 
 // The provider-status warning: the user must know BEFORE running a task that
@@ -1368,9 +1376,11 @@ async function handleOmniboxEntry() {
 handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));
 
 // ---- agent-script host (the on-demand fallback) ---------------------
-// The SW broadcasts `cap:script-run`; the offscreen document is the production
-// host for scheduled runs, and THIS page is the on-demand fallback (so a
-// script run from the hub works even where chrome.offscreen is unavailable).
+// The SW announces `cap:script-run-announce` then addresses the source to the
+// winning host; the offscreen document is the production host for scheduled
+// runs, and THIS page is the on-demand fallback (so a script run from the hub
+// works even where chrome.offscreen is unavailable). The claim protocol ensures
+// only ONE host executes (no double side-effects).
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
-  handleScriptRunMessage(message, sendResponse)
+  handleScriptRunMessage(message, sendResponse, document, "ntp")
 );

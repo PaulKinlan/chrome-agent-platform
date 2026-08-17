@@ -107,3 +107,34 @@ Deno.test("clearUsage serializes against a concurrent append (round-25 blocker)"
     await clearUsage();
   }
 });
+
+Deno.test("getUsage aggregates by provider/model/agent/task/day", async () => {
+  __resetSessionForTest();
+  store.clear();
+  try {
+    await recordUsage({ agentId: "agent-a", taskId: "task-1", provider: "gemini", model: "gemini-3.7-flash", inputTokens: 100, outputTokens: 10, estimatedCost: 0.001 });
+    await recordUsage({ agentId: "agent-a", taskId: "task-2", provider: "gemini", model: "gemini-3.7-flash", inputTokens: 200, outputTokens: 20, estimatedCost: 0.002 });
+    await recordUsage({ agentId: "agent-b", taskId: "task-1", provider: "anthropic", model: "claude-opus-5", inputTokens: 50, outputTokens: 5, estimatedCost: 0.005 });
+    const u = await getUsage();
+    assert(u.totals.calls === 3, "3 calls total");
+    assert(u.totals.inputTokens === 350, "input tokens summed");
+    assert(u.totals.estimatedCost > 0.007, "cost summed");
+    // By provider
+    assert(u.byProvider.length === 2, "two providers");
+    const gemini = u.byProvider.find((p) => p.provider === "gemini");
+    assert(gemini.calls === 2 && gemini.estimatedCost > 0.002, "gemini aggregated");
+    // By model
+    assert(u.byModel.length === 2, "two models");
+    // By agent (with cost)
+    const a = u.byAgent.find((x) => x.agentId === "agent-a");
+    assert(a.calls === 2 && a.estimatedCost > 0.002, "agent-a aggregated with cost");
+    // By task
+    assert(u.byTask.length === 2, "two tasks");
+    const t1 = u.byTask.find((x) => x.taskId === "task-1");
+    assert(t1.calls === 2, "task-1 aggregated (both agents)");
+    // By day (the timestamp date)
+    assert(u.byDay.length === 1, "one day");
+  } finally {
+    await clearUsage();
+  }
+});

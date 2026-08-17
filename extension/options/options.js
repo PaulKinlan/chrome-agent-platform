@@ -1002,45 +1002,78 @@ async function renderUsage() {
   // page-local usage.js kv* (the round-16 split-authority finding).
   const u = await chrome.runtime.sendMessage({ type: "usage.get" });
   const sum = $("#usage-summary");
-  sum.innerHTML = `
-    <div class="usage-stat"><div class="n">${u.totals.calls}</div><div class="l">calls</div></div>
-    <div class="usage-stat"><div class="n">${
-    u.totals.inputTokens + u.totals.outputTokens
-  }</div><div class="l">tokens</div></div>
-    <div class="usage-stat"><div class="n">$${
-    u.totals.estimatedCost.toFixed(4)
-  }</div><div class="l">est. cost</div></div>`;
+  const tok = u.totals.inputTokens + u.totals.outputTokens;
+  sum.replaceChildren();
+  for (const [n, l] of [
+    [String(u.totals.calls), "calls"],
+    [tok.toLocaleString(), "tokens"],
+    ["$" + u.totals.estimatedCost.toFixed(4), "est. cost"],
+  ]) {
+    const s = document.createElement("div");
+    s.className = "usage-stat";
+    const nEl = document.createElement("div");
+    nEl.className = "n";
+    nEl.textContent = n;
+    const lEl = document.createElement("div");
+    lEl.className = "l";
+    lEl.textContent = l;
+    s.append(nEl, lEl);
+    sum.appendChild(s);
+  }
+
+  // The full breakdown: by provider, by model, by agent, by day. Each is a
+  // textContent-built table (never interpolate into innerHTML — untrusted).
   const detail = $("#usage-detail");
-  const table = document.createElement("table");
-  const thead = document.createElement("thead");
-  const headRow = document.createElement("tr");
-  for (const h of ["Provider", "Model", "Calls", "Tokens", "Cost"]) {
-    const th = document.createElement("th");
-    th.textContent = h;
-    headRow.appendChild(th);
-  }
-  thead.appendChild(headRow);
-  table.appendChild(thead);
-  const tbody = document.createElement("tbody");
-  for (const m of u.byModel) {
-    const tr = document.createElement("tr");
-    for (
-      const v of [
-        m.provider,
-        m.model,
-        String(m.calls),
-        String(m.inputTokens + m.outputTokens),
-        "$" + m.estimatedCost.toFixed(4),
-      ]
-    ) {
-      const td = document.createElement("td");
-      td.textContent = v; // textContent — never interpolate into innerHTML
-      tr.appendChild(td);
+  detail.replaceChildren();
+
+  const mk = (title, headings, rows) => {
+    const h = document.createElement("h3");
+    h.textContent = title;
+    detail.appendChild(h);
+    if (!rows.length) {
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "No usage recorded yet.";
+      detail.appendChild(p);
+      return;
     }
-    tbody.appendChild(tr);
-  }
-  table.appendChild(tbody);
-  detail.replaceChildren(table);
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const h of headings) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      for (const v of r) {
+        const td = document.createElement("td");
+        td.textContent = v; // textContent — never interpolate into innerHTML
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    detail.appendChild(table);
+  };
+
+  const fmtTok = (m) => String(m.inputTokens + m.outputTokens);
+  const fmtCost = (m) => "$" + m.estimatedCost.toFixed(4);
+  const sortCost = (a, b) => b.estimatedCost - a.estimatedCost;
+
+  mk("By provider", ["Provider", "Calls", "Tokens", "Cost"],
+    u.byProvider.slice().sort(sortCost).map((p) => [p.provider, String(p.calls), fmtTok(p), fmtCost(p)]));
+  mk("By model", ["Provider", "Model", "Calls", "Tokens", "Cost"],
+    u.byModel.slice().sort(sortCost).map((m) => [m.provider, m.model, String(m.calls), fmtTok(m), fmtCost(m)]));
+  mk("By agent", ["Agent", "Model", "Calls", "Tokens", "Cost"],
+    u.byAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
+  mk("By day", ["Day", "Calls", "Tokens", "Cost"],
+    u.byDay.slice().sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
+
   $("#usage-detail-toggle").addEventListener("click", () => {
     const d = $("#usage-detail");
     d.hidden = !d.hidden;

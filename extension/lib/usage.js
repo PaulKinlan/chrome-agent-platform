@@ -146,7 +146,10 @@ export async function getUsage() {
   );
 
   const byModel = {};
+  const byProvider = {};
   const byAgent = {};
+  const byTask = {};
+  const byDay = {};
   const totals = {
     calls: 0,
     inputTokens: 0,
@@ -168,15 +171,64 @@ export async function getUsage() {
     byModel[mk].outputTokens += r.outputTokens;
     byModel[mk].estimatedCost += r.estimatedCost;
 
-    byAgent[r.agentId] ??= {
-      agentId: r.agentId,
+    // By provider (the provider-level breakdown).
+    byProvider[r.provider] ??= {
+      provider: r.provider,
       calls: 0,
       inputTokens: 0,
       outputTokens: 0,
+      estimatedCost: 0,
+    };
+    byProvider[r.provider].calls++;
+    byProvider[r.provider].inputTokens += r.inputTokens;
+    byProvider[r.provider].outputTokens += r.outputTokens;
+    byProvider[r.provider].estimatedCost += r.estimatedCost;
+
+    // By agent (each agent's attributable usage + cost).
+    byAgent[r.agentId] ??= {
+      agentId: r.agentId,
+      provider: r.provider,
+      model: r.model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0,
     };
     byAgent[r.agentId].calls++;
     byAgent[r.agentId].inputTokens += r.inputTokens;
     byAgent[r.agentId].outputTokens += r.outputTokens;
+    byAgent[r.agentId].estimatedCost += r.estimatedCost;
+
+    // By task (each task's attributable usage + cost, with its agent).
+    const tk = r.taskId ?? "adhoc";
+    byTask[tk] ??= {
+      taskId: tk,
+      agentId: r.agentId ?? "hub",
+      provider: r.provider,
+      model: r.model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0,
+    };
+    byTask[tk].calls++;
+    byTask[tk].inputTokens += r.inputTokens;
+    byTask[tk].outputTokens += r.outputTokens;
+    byTask[tk].estimatedCost += r.estimatedCost;
+
+    // By day (the times/dates — a per-day breakdown).
+    const day = r.timestamp.slice(0, 10); // YYYY-MM-DD
+    byDay[day] ??= {
+      day,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0,
+    };
+    byDay[day].calls++;
+    byDay[day].inputTokens += r.inputTokens;
+    byDay[day].outputTokens += r.outputTokens;
+    byDay[day].estimatedCost += r.estimatedCost;
 
     totals.calls++;
     totals.inputTokens += r.inputTokens;
@@ -186,7 +238,10 @@ export async function getUsage() {
   return {
     totals,
     byModel: Object.values(byModel),
+    byProvider: Object.values(byProvider),
     byAgent: Object.values(byAgent),
+    byTask: Object.values(byTask),
+    byDay: Object.values(byDay),
     rows,
   };
 }
