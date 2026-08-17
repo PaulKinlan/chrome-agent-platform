@@ -128,6 +128,26 @@ export function describeError(error, context = {}) {
   const body = parseResponseBody(e?.responseBody ?? e?.data?.responseBody ?? "");
   if (body) detailParts.push(`body: ${body}`);
 
+  // 0. The provider RUN GATE refusal (ProviderUnavailableError) — the
+  //    host permission for the provider origin is not granted. This is the
+  //    HOST_PERMISSION category (the UI shows a "Grant network access"
+  //    button), NOT the generic PERMISSION/NETWORK category. Check FIRST so
+  //    the gate's "not granted" phrasing never falls through to NETWORK.
+  if (
+    e?.name === "ProviderUnavailableError" ||
+    /network access to the provider .* is not granted/i.test(raw)
+  ) {
+    return build(
+      ERROR_CATEGORY.HOST_PERMISSION,
+      provider
+        ? `network access to ${provider} is not granted`
+        : (raw || "the provider host permission is not granted"),
+      ACTION[ERROR_CATEGORY.HOST_PERMISSION],
+      raw,
+      detailParts,
+    );
+  }
+
   // 1. Host-permission / network (the "Failed to fetch" class).
   if (/failed to fetch/i.test(raw + " " + cause) || /networkerror/i.test(raw + " " + cause)) {
     const reason = provider

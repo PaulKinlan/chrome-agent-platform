@@ -16,6 +16,7 @@
 
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { requestProviderHostAccess, providerOriginPattern } from "../lib/provider-gate.js";
 
 // ── the live progress port ────────────────────────────────────────────────
 // A single long-lived port per page. The SW broadcasts progress to every
@@ -187,6 +188,40 @@ export function friendlyActivityLabel(toolName, args) {
 
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
   const c = container;
+  // The host-permission provider failure: a DIRECT "Grant network access"
+  // action (requests the provider's host permission right here, on the user's
+  // click) — the dynamic-permission-on-need principle, not just "Fix in
+  // Settings". Renders an inline button; clicking it grants + prompts a retry.
+  const appendProviderGrant = (category) => {
+    if (category !== "host-permission") return;
+    const row = document.createElement("div");
+    row.className = "provider-grant";
+    row.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 14px;justify-content:flex-start;";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Grant network access";
+    btn.style.cssText = "font:inherit;font-size:12.5px;font-weight:600;color:var(--accent,#0e6e63);background:transparent;border:1px solid var(--accent,#0e6e63);border-radius:6px;padding:4px 10px;cursor:pointer;";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Requesting…";
+      try {
+        const cfg = await send("provider.get").catch(() => ({}));
+        const r = await requestProviderHostAccess(cfg);
+        if (r.granted) {
+          btn.textContent = "Granted — retry the task";
+        } else {
+          btn.textContent = "Denied — grant it in Settings";
+          btn.disabled = false;
+        }
+      } catch {
+        btn.textContent = "Grant it in Settings";
+        btn.disabled = false;
+      }
+    });
+    row.append(btn);
+    c.append(row);
+    if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+  };
   const runId = newRunId();
 
   // 1. the user's turn appears immediately — the surface becomes a conversation.
@@ -282,6 +317,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         } else {
           appendBubble(c, "error", ev.message ?? "error");
         }
+        appendProviderGrant(ev.category ?? null);
         break;
     }
   });
@@ -350,6 +386,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     } else {
       appendBubble(c, "error", "Error: " + msg);
     }
+    appendProviderGrant(category);
   }
   return res;
 }
