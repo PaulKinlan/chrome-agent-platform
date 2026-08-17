@@ -165,15 +165,24 @@
 
   // The RAW tools (with their execute fn + window), un-normalized — used for both
   // discovery (declaredTools) and invocation (executeTool needs the raw object).
+  // The native WebMCP API's getTools() returns a ReadonlyMap, which may NOT pass
+  // `instanceof Map` (it is a WebIDL ReadonlyMap, and cross-realm wrappers fail
+  // the check), so duck-type any Map-LIKE result (has .values()/.entries()/.get()).
+  function isMapLike(v) {
+    return !!v && typeof v === "object" && typeof v.values === "function" && typeof v.entries === "function" && typeof v.get === "function";
+  }
   async function getRawTools() {
     const mc = document.modelContext;
     if (!mc) return [];
     if (typeof mc.getTools === "function") {
       const got = await mc.getTools().catch(() => null);
       if (Array.isArray(got)) return got;
-      if (got instanceof Map) return [...got.values()];
+      if (isMapLike(got)) return [...got.values()];
+      // Some implementations return an object keyed by tool name.
+      if (got && typeof got === "object") return Object.values(got);
     }
-    if (mc.tools instanceof Map) return [...mc.tools.values()];
+    if (isMapLike(mc.tools)) return [...mc.tools.values()];
+    if (Array.isArray(mc.tools)) return mc.tools;
     return [];
   }
 
@@ -189,8 +198,12 @@
 
   async function collectTools() {
     const declared = await declaredTools();
-    const inferred = declared.length ? [] : inferTools();
-    return [...declared, ...inferred];
+    // Include BOTH the declared WebMCP tools AND the inferred window.* functions
+    // (Paul: a page's known WebMCP endpoints AND its inferred functions must both
+    // be discovered). Dedupe by name (a declared tool wins) + cap the total.
+    const declaredNames = new Set(declared.map((t) => t.name));
+    const inferred = inferTools().filter((t) => !declaredNames.has(t.name));
+    return [...declared, ...inferred].slice(0, 200);
   }
 
   function post(msg) {

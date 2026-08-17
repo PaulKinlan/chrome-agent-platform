@@ -33,10 +33,12 @@ function makeModelContext(tools) {
 }
 
 // Evaluate the MAIN-world content script in a mocked window/document context.
-// Returns { posted } — every window.postMessage payload captured.
-async function evaluateDiscovery(modelContext) {
+// Returns { posted } — every window.postMessage payload captured. `pageGlobals`
+// are extra window.* functions the script should INFER (enumerated by inferTools).
+async function evaluateDiscovery(modelContext, pageGlobals = {}) {
   const posted = [];
   const windowObj = {
+    ...pageGlobals,
     postMessage(msg) { posted.push(msg); },
     addEventListener() {},
   };
@@ -94,4 +96,33 @@ Deno.test("webmcp discovery: no modelContext → no declared tools (inference on
   const toolsMsg = posted.find((m) => m?.type === "tools");
   const declared = (toolsMsg?.tools ?? []).filter((t) => t.source === "declared");
   assertEquals(declared.length, 0);
+});
+
+Deno.test("webmcp discovery: a Map-LIKE (non-instanceof-Map) getTools result is handled", async () => {
+  // The NATIVE WebMCP getTools() returns a ReadonlyMap, which can fail
+  // `instanceof Map` (WebIDL + cross-realm). Duck-type the Map-like.
+  const mc = {
+    getTools: async () => ({
+      values: () => [{ name: "native.one", description: "native", inputSchema: JSON.stringify({ type: "object", properties: {} }) }],
+      entries: () => [],
+      get: () => undefined,
+    }),
+  };
+  const { posted } = await evaluateDiscovery(mc);
+  const toolsMsg = posted.find((m) => m?.type === "tools");
+  const declared = (toolsMsg?.tools ?? []).filter((t) => t.source === "declared");
+  assertEquals(declared.length, 1, "the Map-like ReadonlyMap result should yield the declared tool");
+  assertEquals(declared[0].name, "native.one");
+});
+
+Deno.test("webmcp discovery: declared tools AND inferred page functions are BOTH discovered", async () => {
+  const mc = makeModelContext([
+    { name: "shop.total", description: "Calculate a price", inputSchema: { type: "object", properties: { price: { type: "number" } } } },
+  ]);
+  // A page-defined global function (not in the isDomOwned platform list).
+  const { posted } = await evaluateDiscovery(mc, { greet: function greet(name) { return "hi " + name; } });
+  const toolsMsg = posted.find((m) => m?.type === "tools");
+  const names = (toolsMsg?.tools ?? []).map((t) => t.name);
+  assertEquals(names.includes("shop.total"), true, "declared tool present");
+  assertEquals(names.includes("greet"), true, "inferred page function present alongside the declared tool");
 });
