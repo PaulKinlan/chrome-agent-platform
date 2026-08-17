@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebMCP Fixture</title>
+  <script>
+    // A realistic WebMCP polyfill (the GoogleChromeLabs/webmcp-tools shape):
+    // document.modelContext.registerTool() + getTools() (async, stringified
+    // inputSchema) + executeTool(tool, args).
+    (function installModelContext() {
+      const tools = new Map();
+      function define(name, description, inputSchema, execute) {
+        tools.set(name, { name, description, inputSchema, execute });
+      }
+      // Two declared WebMCP tools the discovery must pick up.
+      define("shop.total", "Return the cart total", { type: "object", properties: {} }, () => ({ total: 42.5, currency: "USD" }));
+      define("shop.catalog", "List the shop catalog", { type: "object", properties: { category: { type: "string" } } }, (args) => ({ items: ["widget", "gadget", args?.category ?? "all"] }));
+      // A third registered LATER (async registration — the re-poll must catch it).
+      setTimeout(() => {
+        define("shop.coupon", "Check a coupon code", { type: "object", properties: { code: { type: "string" } } }, (args) => ({ valid: args?.code === "SAVE10" }));
+      }, 700);
+
+      document.modelContext = {
+        getTools: async () => Array.from(tools.values()).map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: JSON.stringify(t.inputSchema ?? { type: "object", properties: {} }),
+          execute: t.execute,
+        })),
+        registerTool: async (t) => {
+          tools.set(t.name, { name: t.name, description: t.description, inputSchema: t.inputSchema ?? {}, execute: t.execute ?? (() => null) });
+          return t;
+        },
+        executeTool: async (tool, args) => {
+          if (tool?.execute) return tool.execute(args);
+          return "executed";
+        },
+      };
+    })();
+
+    // A callable page function the discovery must INFER (window.* non-DOM-owned).
+    window.greet = (name) => `hello ${name}`;
+  </script>
+</head>
+<body>
+  <h1>WebMCP Fixture</h1>
+  <p id="msg">fixture loaded</p>
+</body>
+</html>

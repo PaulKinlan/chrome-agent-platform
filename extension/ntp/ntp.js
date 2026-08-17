@@ -95,6 +95,70 @@ async function renderSiteAgents() {
   refreshAgentCount();
 }
 
+// ── "Discover this page" (the active-tab tool discovery) ─────────────────
+// Browsing a page must be discoverable without typing the origin into Settings
+// (the dynamic-permission-on-need principle). The flow: query the active tab's
+// origin (requesting `tabs` on the click if needed), then request the origin's
+// host permission + `scripting` (one gesture), then enroll-origin — the SW
+// registers the discovery scripts + injects them into the open tab, and the
+// tools appear in the Site agents section.
+async function discoverActivePage() {
+  let active = await send("agent.discover-active").catch(() => ({ ok: false }));
+  if (active?.needTabs) {
+    // The URL is hidden without the `tabs` permission — request it (the click IS
+    // the user gesture), then re-query.
+    const granted = await chrome.permissions
+      .request({ permissions: ["tabs"] })
+      .catch(() => false);
+    if (!granted) {
+      setStatus("Tabs permission denied — can't see the active page", false);
+      return;
+    }
+    active = await send("agent.discover-active").catch(() => ({ ok: false }));
+  }
+  if (!active?.ok || !active?.origin) {
+    setStatus(active?.error ?? "Couldn't resolve the active page", false);
+    return;
+  }
+  const origin = active.origin;
+  // Request the exact origin's host permission + `scripting` together (one
+  // prompt) — the same owner-gesture the Settings Enroll button uses.
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({
+      permissions: ["scripting"],
+      origins: [`${origin}/*`],
+    });
+  } catch (e) {
+    setStatus("Permission request failed: " + String(e?.message ?? e), false);
+    return;
+  }
+  if (!granted) {
+    setStatus("Host permission not granted — " + origin + " was not enrolled.", false);
+    return;
+  }
+  const res = await send("agent.enroll-origin", { origin, ownerGesture: true }).catch(
+    () => ({ ok: false }),
+  );
+  if (res?.ok) {
+    setStatus(`Discovered ${origin} — give it a moment to scan for tools…`, true);
+    // Re-poll the site agents + the directory so the newly-discovered tools
+    // appear without a manual refresh.
+    renderSiteAgents();
+    refreshAgentCount();
+    // The discovery scripts re-poll asynchronously (800ms/2s/4s) — refresh again
+    // after they report so the tool count lands.
+    for (const delay of [1200, 3200]) {
+      setTimeout(() => {
+        renderSiteAgents();
+        refreshAgentCount();
+      }, delay);
+    }
+  } else {
+    setStatus("Discovery failed: " + (res?.error ?? "unknown"), false);
+  }
+}
+
 // ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
   const el = document.getElementById("named-agents");
@@ -1217,6 +1281,11 @@ document.getElementById("bg-configure")?.addEventListener(
 document.getElementById("browse-artifacts")?.addEventListener(
   "click",
   (e) => { e.preventDefault(); openView("artifacts/index.html", "Artifacts"); },
+);
+
+document.getElementById("discover-page")?.addEventListener(
+  "click",
+  (e) => { e.preventDefault(); discoverActivePage(); },
 );
 
 // Reuse an artifact from the gallery: the gallery (in the view frame) posts a

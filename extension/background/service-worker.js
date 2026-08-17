@@ -1662,16 +1662,26 @@ const handlers = {
     let refined = null;
     try {
       const promptApi = await resolveModelFromConfig({ provider: "prompt-api", baseURL: "", apiKey: "", model: "gemini-nano" });
-      const model = promptApi?.modelId === "gemini-nano" ? promptApi.model : (await getModel()).model;
-      const r = await generateText({
-        model,
-        maxOutputTokens: 160,
-        prompt:
-          `Rewrite this agent description into a crisp, specific system prompt for an autonomous browser agent. ` +
-          `Keep it one short paragraph (≤160 tokens), first-person or imperative, concrete about WHAT it does and WHEN. ` +
-          `Do not add capabilities it doesn't mention.\n\nAgent description:\n${raw}\n\nSystem prompt:`,
-      });
-      refined = typeof r?.text === "string" ? r.text.trim() : null;
+      let model;
+      let isDemo = false;
+      if (promptApi?.modelId === "gemini-nano") {
+        model = promptApi.model;
+      } else {
+        const resolved = await getModel();
+        model = resolved.model;
+        isDemo = resolved.modelId === "demo-local";
+      }
+      if (!isDemo) {
+        const r = await generateText({
+          model,
+          maxOutputTokens: 160,
+          prompt:
+            `Rewrite this agent description into a crisp, specific system prompt for an autonomous browser agent. ` +
+            `Keep it one short paragraph (≤160 tokens), first-person or imperative, concrete about WHAT it does and WHEN. ` +
+            `Do not add capabilities it doesn't mention.\n\nAgent description:\n${raw}\n\nSystem prompt:`,
+        });
+        refined = typeof r?.text === "string" ? r.text.trim() : null;
+      }
     } catch {
       refined = null;
     }
@@ -1813,6 +1823,35 @@ const handlers = {
   },
 
   // The hub agent's management surface (list_agents / get_agent / update_agent).
+  // `agent.discover-active` — resolve the ACTIVE tab's origin so the hub can
+  // offer a one-click "Discover this page" flow (the dynamic-permission-on-need
+  // principle: browsing a page must be discoverable without typing the origin
+  // into Settings). The active tab's URL is visible to the SW only when the
+  // OPTIONAL `tabs` permission (or the transient `activeTab` from an action
+  // click) is granted; otherwise we report `needTabs` honestly so the hub can
+  // request it on the user's click.
+  async "agent.discover-active"() {
+    let tab = null;
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = tabs[0] ?? null;
+    } catch {
+      tab = null;
+    }
+    if (!tab?.id) return { ok: false, error: "no active tab" };
+    if (tab?.url) {
+      try {
+        const canonical = canonicalOrigin(new URL(tab.url).origin);
+        return { ok: true, origin: canonical, url: tab.url, title: tab.title ?? "" };
+      } catch {
+        return { ok: false, error: "active tab is not an http(s) page" };
+      }
+    }
+    // The URL is undefined — the extension has neither `tabs` nor `activeTab`.
+    // The hub requests `tabs` on the user's click, then re-queries.
+    return { ok: false, needTabs: true, error: "tabs permission needed to see the active page" };
+  },
+
   // `agent.directory` returns the RICH listing (name + tools + memory + enrollment
   // state) the management `list_agents` tool uses, without breaking `agent.list`
   // (the bare origin array the fan-out journeys depend on).
