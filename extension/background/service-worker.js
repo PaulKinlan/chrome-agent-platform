@@ -119,6 +119,7 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
+import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
 
 // ── editable/duplicable background agents (item 56) ──────────────────────
 // Custom recipe copies live in masterMemory under `customRecipes` (a built-in
@@ -132,7 +133,44 @@ async function resolveRecipe(id) {
   const builtIn = getRecipe(id);
   if (builtIn) return builtIn;
   const custom = await getCustomRecipes();
-  return custom.find((r) => r.id === id) ?? null;
+  const fromCustom = custom.find((r) => r.id === id);
+  if (fromCustom) return fromCustom;
+  const imported = (await masterMemory().get("importedSkills")) ?? [];
+  return imported.find((s) => s.id === id) ?? null;
+}
+
+// ── skill references (a skill is INCLUDED in a task) ─────────────────────
+// The composer can reference a skill ANYWHERE in the string via /skill:<id>.
+// resolveSkillRefs extracts those references + expands each to its prompt, so
+// a task like "read this page with /skill:reader-mode" runs WITH the skill's
+// instructions injected — multiple skills compose, and a /skill: reference is
+// never left in the literal task the model sees.
+function skillRefIds(task) {
+  if (typeof task !== "string") return [];
+  const ids = [];
+  const re = /\/skill:([a-z0-9][a-z0-9-]*)/gi;
+  let m;
+  while ((m = re.exec(task)) !== null) {
+    const id = m[1].toLowerCase();
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+async function resolveSkillRefs(task) {
+  const ids = skillRefIds(task);
+  const out = [];
+  for (const id of ids) {
+    const skill = await resolveRecipe(id);
+    if (skill) out.push(skill);
+  }
+  return out;
+}
+function skillContextBlock(skills) {
+  if (!skills?.length) return "";
+  const blocks = skills.map((s) =>
+    `## Skill: ${s.name}\n${s.prompt ?? s.description ?? ""}`,
+  );
+  return `\n\n--- Included skills ---\n${blocks.join("\n\n")}\n`;
 }
 import {
   checkHookAllowed,
@@ -829,13 +867,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // awaited commit, never after).
       await fence?.assertOwned?.();
       const context = attachmentContext(attachments);
+      // Include any /skill:<id> references from the task string: the skill's
+      // prompt is injected into the run context so the model actually executes
+      // the skill's behaviour. The /skill:<id> tokens stay in the user's task
+      // text (for the thread display), but the SKILLS' instructions ride along
+      // in the context so a referenced skill is never a no-op.
+      const skillContext = skillContextBlock(await resolveSkillRefs(task));
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
       // agent sees what came before).
       let result;
       try {
-        result = await orch.run(task, context, Array.isArray(history) ? history : []);
+        result = await orch.run(task, context + skillContext, Array.isArray(history) ? history : []);
         recordProviderSuccess();
       } catch (e) {
         // Only a PROVIDER failure (network/config/credential) trips the
@@ -1799,7 +1843,26 @@ const handlers = {
   async "recipe.list"() {
     // Decorate each recipe with its intent so the hub can group the unified
     // capability list (on-demand + background) by what the user is trying to do.
-    return { recipes: RECIPES.map((r) => ({ ...r, intent: intentOf(r) })) };
+    // Imported skills are included too (they are first-class skills).
+    const imported = (await masterMemory().get("importedSkills")) ?? [];
+    return {
+      recipes: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })),
+    };
+  },
+  async "skill.list"() {
+    const imported = (await masterMemory().get("importedSkills")) ?? [];
+    return { skills: [...RECIPES, ...imported].map((r) => ({ ...r, intent: intentOf(r) })) };
+  },
+  async "skill.import"(m) {
+    const url = String(m?.url ?? "").trim();
+    if (!url) return { ok: false, error: "no skill URL provided" };
+    try {
+      const fetched = await fetchSkillFromUrl(url);
+      const skill = await installImportedSkill(masterMemory(), fetched);
+      return { ok: true, skill };
+    } catch (e) {
+      return { ok: false, error: e?.message ?? String(e) };
+    }
   },
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);

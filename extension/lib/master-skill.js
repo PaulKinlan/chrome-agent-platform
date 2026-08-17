@@ -69,16 +69,18 @@ a data file, a UI fragment. Create them; let the owner view + reuse them.
 - get_usage() — usage/cost summary.
 - get_memory_overview() — per-origin memory keys + sizes.
 
-### Recipes
-- Recipes are pre-baked utility behaviours (a prompt + the tool steps), ported
-  from the prompt-in-a-box pattern. On-demand recipes are chips the owner taps;
-  background recipes are agents that live in the background on a schedule.
-- The Sorting Hat (recipe id auto-group-by-domain) groups open tabs by domain
+### Skills
+- Skills are reusable, composable capabilities (a prompt + the tool steps),
+  ported from the prompt-in-a-box pattern. A skill is INCLUDED in a task —
+  referenced anywhere in the composer string (e.g. "/skill:reader-mode") or
+  attached to an agent / scheduled as a background agent. Skills are not
+  "run" in isolation.
+- The Sorting Hat (skill id auto-group-by-domain) groups open tabs by domain
   into colour-coded collapsed groups — the canonical background agent.
-- The owner can also address recipes as /task:<id> or @-mention a recipe name
-  when the editor supports it; the stable id is the reference.
-- When a recipe's behaviour is what the owner asked for, run that recipe rather
-  than re-describing it from scratch.
+- The owner references a skill as /skill:<id> (or @-mentions a skill name);
+  the stable id is the reference. Multiple skills can be combined in one task.
+- When the owner's request matches a skill's behaviour, INCLUDE that skill
+  (its prompt + steps are injected) rather than re-describing it from scratch.
 
 ## 2. How to work
 

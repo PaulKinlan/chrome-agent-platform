@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Recipes — Chrome Agent Platform</title>
+    <title>Skills — Chrome Agent Platform</title>
     <link rel="stylesheet" href="../shared/theme.css">
     <script type="module" src="../shared/apply-theme.js"></script>
     <script type="module" src="../shared/components.js"></script>
@@ -75,17 +75,27 @@
       color: var(--muted);
     }
     .empty { color: var(--muted); font-size: var(--text-sm); padding: 14px; }
+    .import { display: flex; gap: 8px; align-items: center; margin-bottom: 24px; }
+    .import input { flex: 1; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+    .import .hint { color: var(--muted); font-size: var(--text-xs); }
     </style>
   </head>
   <body>
     <div class="wrap">
       <header class="head">
-        <div class="logo">Recipes</div>
+        <div class="logo">Skills</div>
       </header>
       <p class="sub">
-        On-demand utility agents, each documented below. Run one here, or type
-        <span class="muted">/task:name</span> in the composer on the hub.
+        Reusable capabilities, each documented below. A skill is included in a
+        task — type <span class="muted">/skill:name</span> anywhere in the
+        composer on the hub, or attach it to an agent. Use one here to start a
+        task with it pre-filled.
       </p>
+      <div class="import" id="import">
+        <input id="import-url" type="url" placeholder="Import a skill — a GitHub repo or a SKILL.md URL" aria-label="Skill URL">
+        <button id="import-btn" class="btn" type="button">Import</button>
+        <span class="hint" id="import-status"></span>
+      </div>
       <div id="recipes"></div>
     </div>
     <script type="module" src="recipes.js"></script>

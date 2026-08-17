@@ -623,6 +623,21 @@ export function getRecipe(id) {
   return RECIPES.find((r) => r.id === id);
 }
 
+// ── Skills aliases ────────────────────────────────────────────────────────
+// Recipes are the user-facing SKILLS: reusable, composable capabilities you
+// INCLUDE in a task (anywhere in the composer string) or attach to an agent /
+// schedule as a background agent — not things you "run" in isolation. The
+// SKILLS/* aliases are the canonical skill-facing names; RECIPES/* remain for
+// back-compat with the existing routes.
+export const SKILLS = RECIPES;
+export const getSkill = getRecipe;
+export const skillsByMode = recipesByMode;
+export const skillsByCategory = recipesByCategory;
+export const onDemandSkills = onDemandRecipes;
+export const backgroundSkills = backgroundRecipes;
+export const skillById = getRecipe;
+export const skillIntentOf = intentOf;
+
 export function recipesByMode(mode) {
   return RECIPES.filter((r) => r.mode === mode);
 }

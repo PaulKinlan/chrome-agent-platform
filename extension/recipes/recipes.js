@@ -16,8 +16,9 @@ function escapeHtml(s) {
   );
 }
 
-/** A recipe = the shared capability-row (consistent layout) + a collapsed
- * "how it works" details for the documentation. */
+/** A skill = the shared capability-row (consistent layout) + a collapsed
+ * "how it works" details for the documentation. The action is "Use in a task"
+ * (a skill is included in a task, not run in isolation). */
 function recipeCard(r) {
   const wrap = document.createElement("div");
   wrap.className = "recipe";
@@ -31,15 +32,12 @@ function recipeCard(r) {
   row.setAttribute("name", r.name);
   row.setAttribute("description", baseDesc);
   row.setAttribute("icon", RECIPE_ICON[r.icon] ?? "");
-  row.setAttribute("action", "run");
-  row.addEventListener("run", async () => {
-    row.setAttribute("description", "Running…");
-    const out = await send("recipe.run", { id: r.id });
-    row.setAttribute(
-      "description",
-      out?.ok ? "Done — ran the recipe." : "Failed — try again.",
-    );
-    setTimeout(() => row.setAttribute("description", baseDesc), 2000);
+  row.setAttribute("action", "use");
+  row.addEventListener("use", async () => {
+    // Use the skill in a task: hand the reference to the hub composer (the
+    // hub's openView overlay closes + the composer is pre-filled with the
+    // /skill:<id> reference — the skill is INCLUDED, not run in isolation).
+    window.parent?.postMessage({ type: "use-skill", id: r.id }, "*");
   });
 
   const details = document.createElement("details");
@@ -50,7 +48,7 @@ function recipeCard(r) {
   how.textContent = r.prompt ?? "";
   const hint = document.createElement("span");
   hint.className = "hint";
-  hint.textContent = `/task:${r.id}`;
+  hint.textContent = `/skill:${r.id}`;
   details.append(summary, how, hint);
 
   wrap.append(row, details);
@@ -64,7 +62,7 @@ async function render() {
   );
   root.replaceChildren();
   if (!recipes.length) {
-    root.innerHTML = `<div class="empty">No recipes yet.</div>`;
+    root.innerHTML = `<div class="empty">No skills yet.</div>`;
     return;
   }
   const byIntent = {};
@@ -80,5 +78,27 @@ async function render() {
     root.append(group);
   }
 }
+
+// ── skill import (the chaos skill-loader pattern) ────────────────────────
+const importUrl = document.getElementById("import-url");
+const importBtn = document.getElementById("import-btn");
+const importStatus = document.getElementById("import-status");
+async function doImport() {
+  const url = importUrl?.value?.trim();
+  if (!url) { importStatus.textContent = "Enter a URL first"; return; }
+  importBtn.disabled = true;
+  importStatus.textContent = "Importing…";
+  const out = await send("skill.import", { url }).catch(() => ({ ok: false, error: "import failed" }));
+  importBtn.disabled = false;
+  if (out?.ok) {
+    importStatus.textContent = `Imported "${out.skill.name}" — use /skill:${out.skill.id}`;
+    importUrl.value = "";
+    await render();
+  } else {
+    importStatus.textContent = out?.error ?? "import failed";
+  }
+}
+importBtn?.addEventListener("click", doImport);
+importUrl?.addEventListener("keydown", (e) => { if (e.key === "Enter") doImport(); });
 
 render();
