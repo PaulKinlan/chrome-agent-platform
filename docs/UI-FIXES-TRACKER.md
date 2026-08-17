@@ -77,3 +77,13 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 40. **The error-console buttons CLOSE the console instead of working** — clicking copy-all / copy / clear closes the panel (the button click is treated as an outside-click-to-close). The buttons must WORK (copy the line, copy all, clear) WITHOUT closing the console.
 41. **The security-panel permission toggles do nothing** — toggling/removing a granted permission doesn't work (asked before).
 42. **Task errors aren't logged to the task** — when a task errors, the task shows red but no error detail; the errors must be logged to the task (a detailed error view per task).
+
+## Paul batch (2026-08-17 13:22) — state management + agent chat + task polish + console errors
+43. **Click an agent in the sidebar → chat with it** — start tasks directly in that agent + see its log + run history (not just go to the directory).
+44. **A site with no WebMCP tools should NOT be an enrolled agent** (paul.kinlan.me has zero tools — don't enroll it).
+45. **Task title too long → over two lines** — single line with an ellipsis (+ scroll/show on hover).
+46. **A weird empty "run status" div at the top** when opening a task — hide it when empty.
+47. **Edit the task title** (click + rename).
+48. **STATE MANAGEMENT BROKEN** — clicking a task then agents → the task still overlays the directory. The views must replace each other: the sidebar always visible, the inner content swapped (task/agent/recipes/directory replace each other; settings is a separate view). Fix the stacking/layering.
+49. **Console errors to deep-investigate:** "transition aborted: invalid state snapshot; Capture failed" (frequently) + "hook.tabs.onUpdated run failed: No output generated" (all the time). Find the root cause + fix.
+50. **Tests must check the console log for errors** (a journey fails if the console has errors).

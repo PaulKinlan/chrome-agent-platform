@@ -320,18 +320,29 @@ export async function recordThreadError(id, detail) {
     const mem = masterMemory();
     const thread = (await mem.get(`thread:${id}`)) ?? null;
     if (!thread) return null;
+    // The comprehensive error detail: the category + the UNDERLYING reason +
+    // the actionable "what to do", plus the failed tool. The thread surface
+    // renders the reason prominently + the action as guidance (not a raw
+    // "No output generated" wrapper).
     const message = boundText(String(detail?.message ?? "run failed"));
     const tool = detail?.tool ? String(detail.tool) : null;
+    const category = detail?.category ? String(detail.category) : "error";
+    const reason = detail?.reason ? boundText(String(detail.reason)) : null;
+    const action = detail?.action ? boundText(String(detail.action)) : null;
+    const raw = detail?.detail ? boundText(String(detail.detail)) : null;
     thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
     thread.messages.push({
       role: "error",
       content: message,
       tool: tool ?? undefined,
+      category: category,
+      reason: reason ?? undefined,
+      action: action ?? undefined,
       ts: Date.now(),
     });
     thread.messages = trimMessages(thread.messages);
     thread.status = "error";
-    thread.lastError = { message, tool, at: Date.now() };
+    thread.lastError = { message, tool, category, reason, action, raw, at: Date.now() };
     thread.updatedAt = Date.now();
     await mem.setTrusted(`thread:${id}`, thread);
     const index = (await mem.get(INDEX_KEY)) ?? [];

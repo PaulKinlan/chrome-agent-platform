@@ -1251,7 +1251,7 @@ customElements.define("code-block", CodeBlock);
  * fallback), so the gallery can populate it declaratively. */
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "tool-name", "tool-status", "tool-args", "tool-result", "step", "total-steps"];
+    return ["role", "content", "tool-name", "tool-status", "tool-args", "tool-result", "step", "total-steps", "error-reason", "error-action"];
   }
   _content() {
     return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
@@ -1269,6 +1269,8 @@ class MessageBubble extends Component {
       :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
       :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
       :host([role="error"]) .body { color:var(--danger,#b3261e); }
+      .err-reason { font-weight:600; margin:0 0 4px; }
+      .err-action { color:var(--ink,#1d1b18); margin:0; }
       /* markdown content inside agent/system */
       .body p { margin:0 0 8px; }
       .body p:last-child { margin-bottom:0; }
@@ -1352,6 +1354,16 @@ class MessageBubble extends Component {
       } else {
         markup = `<details class="think"><summary><svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg><span>${escapeHtml(label)}</span></summary><div class="trace">${escapeHtml(content)}</div></details>`;
       }
+    } else if (role === "error") {
+      // The comprehensive error: the category + the UNDERLYING reason (danger,
+      // prominent) + the actionable "what to do" (plain ink) — never a raw
+      // "No output generated. Check the stream for errors".
+      const reason = this.getAttribute("error-reason") || content;
+      const action = this.getAttribute("error-action") || "";
+      markup = `<div class="msg error"><div class="body">
+        <p class="err-reason">${escapeHtml(reason)}</p>
+        ${action ? `<p class="err-action">${escapeHtml(action)}</p>` : ""}
+      </div></div>`;
     } else {
       let body;
       if ((role === "agent" || role === "system") && isHtmlDocument(content)) {
@@ -1426,7 +1438,9 @@ class AgentConversation extends Component {
   appendUser(text) { return this._bubble("user", text); }
   appendAgent(text) { return this._bubble("agent", text); }
   appendSystem(text) { return this._bubble("system", text); }
-  appendError(text) { return this._bubble("error", text); }
+  appendError(text, { reason, action } = {}) {
+    return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null });
+  }
   appendThinking(text, { step, totalSteps } = {}) {
     return this._bubble("thinking", text, { step, "total-steps": totalSteps });
   }
@@ -1463,7 +1477,7 @@ class AgentConversation extends Component {
         case "system": this.appendSystem(m.content); break;
         case "thinking": this.appendThinking(m.content, m); break;
         case "tool": this.appendTool(m); break;
-        case "error": this.appendError(m.content); break;
+        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null }); break;
         default: this.appendAgent(m.content); break;
       }
     }

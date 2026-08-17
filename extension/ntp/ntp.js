@@ -427,7 +427,7 @@ async function openThread(id) {
   threadTitle.textContent = thread?.name || "Task";
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   threadConversation.setMessages?.(
-    messages.map((m) => ({ role: m.role, content: m.content })),
+    messages.map((m) => ({ role: m.role, content: m.content, reason: m.reason ?? null, action: m.action ?? null })),
   );
   showThreadView();
   renderRunStatus({ state: "idle" });

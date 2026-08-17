@@ -16,6 +16,7 @@ import {
   isProviderError,
   logGateOnce,
 } from "../lib/provider-gate.js";
+import { describeError, formatError, errorDetail } from "../lib/error-report.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -287,10 +288,14 @@ async function handleAlarm(alarm) {
     // agent-do run re-throws AI_NoOutputGeneratedError / AI_APICallError /
     // AI_RetryError, which are provider failures too and must back off the
     // same way instead of logging a line every tick.
+    let cfg = null;
+    try { cfg = await getProviderConfig(); } catch { cfg = null; }
     if (isProviderError(e)) {
-      logGateOnce(e?.message ?? "provider unavailable");
+      // UNWRAP the AI SDK wrapper + log the UNDERLYING reason (a 401, a rate
+      // limit, a network failure) ONCE, not per tick.
+      logGateOnce(formatError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" }));
     } else {
-      console.error("scheduled task failed", alarm.name, e);
+      console.error("scheduled task failed", alarm.name, formatError(e));
     }
     // Keep the one-shot payload so a retry/restart can resume it.
   } finally {
@@ -812,7 +817,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // Only a PROVIDER failure (network/config/credential) trips the
         // circuit-breaker; a tool error or a fence abort must not pause the
         // agent. Re-throw so the caller's own error handling still runs.
-        if (isProviderError(e)) recordProviderFailure(e?.message ?? e);
+        if (isProviderError(e)) recordProviderFailure(formatError(e));
         throw e;
       }
       await fence?.assertOwned?.();
@@ -1228,7 +1233,24 @@ const handlers = {
       // "running" (the wider-goal review's failure-lifecycle finding: the outer
       // router only returned {ok:false} and the finalization below was skipped).
       // Convert the throw to a result so the finalizer below always runs.
-      result = { ok: false, error: String(e?.message ?? e), failedTool: lastTool ?? null };
+      // UNWRAP the AI SDK wrapper so the user sees the UNDERLYING reason +
+      // what to do, not a useless "No output generated. Check the stream".
+      let cfg = null;
+      try { cfg = await getProviderConfig(); } catch { cfg = null; }
+      const desc = describeError(e, {
+        provider: cfg?.id ?? cfg?.name ?? "",
+        model: cfg?.model ?? "",
+        tool: lastTool ?? undefined,
+      });
+      result = {
+        ok: false,
+        error: desc.message,
+        errorCategory: desc.category,
+        errorReason: desc.reason,
+        errorAction: desc.action,
+        errorDetail: desc.detail,
+        failedTool: lastTool ?? null,
+      };
     }
     // Persist the result into the thread + mark it done/error (best-effort — a
     // thread write must never turn a successful run into a failure). Runs on
@@ -1246,6 +1268,10 @@ const handlers = {
         await recordThreadError(threadId, {
           message: String(result.error ?? "run failed"),
           tool: result.failedTool ?? null,
+          category: result.errorCategory ?? "error",
+          reason: result.errorReason ?? null,
+          action: result.errorAction ?? null,
+          detail: result.errorDetail ?? null,
         }).catch(() => {});
       } else {
         await setThreadStatus(threadId, result?.ok ? "done" : "error").catch(() => {});
@@ -1347,16 +1373,24 @@ const handlers = {
     // The agent-chat surface needs LIVE progress (the tool calls streaming) —
     // broadcast each event tagged with the runId + the agentId so the page's
     // listener renders ONLY this agent run's tool cards.
-    const result = await runTask({
-      id: runTag,
-      task,
-      attachments: attachments ?? [],
-      memory: mem,
-      onProgress: (event) => {
-        broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
-      },
-    });
-    return result;
+    try {
+      const result = await runTask({
+        id: runTag,
+        task,
+        attachments: attachments ?? [],
+        memory: mem,
+        onProgress: (event) => {
+          broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
+        },
+      });
+      return result;
+    } catch (e) {
+      // UNWRAP the AI SDK wrapper + say what to do (not a raw "No output").
+      let cfg = null;
+      try { cfg = await getProviderConfig(); } catch { cfg = null; }
+      const desc = describeError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" });
+      return { ok: false, error: desc.message, errorCategory: desc.category, errorReason: desc.reason, errorAction: desc.action, errorDetail: desc.detail };
+    }
   },
   async "named-agent.history"({ id }) {
     // The agent's OWN run history (its journal — task/result/tool-call rows),
@@ -2153,7 +2187,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   handler(message).then((result) => sendResponse(result)).catch((e) => {
-    sendResponse({ ok: false, error: String(e?.message ?? e) });
+    // The comprehensive error: unwrap the AI SDK wrapper + say what to do,
+    // instead of the raw "No output generated. Check the stream for errors".
+    const desc = errorDetail(e, { tool: message?.type || "" });
+    sendResponse({
+      ok: false,
+      error: desc.message,
+      errorCategory: desc.category,
+      errorReason: desc.reason,
+      errorAction: desc.action,
+      errorDetail: desc.detail,
+    });
   });
   return true; // async response
 });
