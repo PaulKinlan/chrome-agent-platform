@@ -168,6 +168,20 @@
     .run-status.done { border-color: var(--success); color: var(--success); }
     .run-status.error { border-color: var(--danger); color: var(--danger); }
     .run-status .rs-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* the .run-status { display:flex } above would override the UA [hidden]
+       display:none, so an empty banner stayed visible — restore it. */
+    .run-status[hidden] { display: none; }
+    .title-edit {
+      font: inherit;
+      font-weight: 650;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      outline: none;
+      width: 100%;
+      padding: 0;
+    }
     .thread-item {
       display: flex;
       flex-direction: column;
@@ -225,6 +239,13 @@
     }
     .thread-item .t-name .dot.running { background: var(--accent2); }
     .thread-item .t-name .dot.error { background: var(--danger); }
+    .thread-item .t-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
     .thread-item .t-preview {
       font-size: 12px;
       color: var(--muted);

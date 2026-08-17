@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { runConversationTurn, subscribeProgress } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/conversation.js";
 
 import {
   installPageDiagnostics,
@@ -59,10 +59,15 @@ async function renderSiteAgents() {
   const el = document.getElementById("site-agents");
   if (!el) return;
   const res = await send("agent.directory").catch(() => ({ agents: [] }));
-  const agents = Array.isArray(res.agents) ? res.agents : [];
+  // Item 44: a site with ZERO tools is not an agent (paul.kinlan.me with no
+  // WebMCP/inferred tools must not appear as a site agent). Only origins that
+  // actually expose tools are listed here.
+  const agents = (Array.isArray(res.agents) ? res.agents : []).filter(
+    (a) => (a.toolCount ?? a.tools?.length ?? 0) > 0,
+  );
   el.replaceChildren();
   if (!agents.length) {
-    el.innerHTML = `<div class="empty">No sites enrolled yet. Visit a site to give it a sub-agent.</div>`;
+    el.innerHTML = `<div class="empty">No site agents yet. Visit a site that exposes tools (WebMCP or window functions) to give it a sub-agent.</div>`;
   } else {
     for (const a of agents.slice(0, 6)) {
       const row = document.createElement("capability-row");
@@ -106,7 +111,7 @@ async function renderNamedAgents() {
           `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`,
         );
         row.setAttribute("action", "run");
-        row.addEventListener("run", () => openView("directory/directory.html", "Agents"));
+        row.addEventListener("run", () => openAgentChat(a.id || a.name));
         el.append(row);
       }
       if (agents.length > 6) {
@@ -155,7 +160,7 @@ async function renderSidebarAgents(agents) {
       label.append(role);
     }
     item.append(avatar, label);
-    item.addEventListener("click", () => openView("directory/directory.html", "Agents"));
+    item.addEventListener("click", () => openAgentChat(a.id || a.name));
     list.append(item);
   }
 }
@@ -452,7 +457,7 @@ async function openAgentChat(id) {
 // bubble, result → agent bubble, tool-call/tool-result → a tool card. Chronological
 // (the history route is most-recent-first).
 function renderAgentHistory(container, entries) {
-  if (typeof container.setMessages === "function") container.setMessages([]);
+  if (typeof container.clear === "function") container.clear();
   const rows = [...entries].reverse(); // oldest → newest
   const filtered = rows.filter(
     (r) =>
@@ -518,16 +523,19 @@ async function runThreadTurn(text, attachments = []) {
     history: [], // the SW derives the history from the thread when threadId is set
     threadId: currentThreadId,
     onStatus: renderRunStatus,
+    agentId: currentAgentId, // null for a thread; set when chatting with a named agent
   });
   if (res.ok) {
-    // The SW created (or reused) the thread; capture its id for continuation.
-    if (res.threadId) currentThreadId = res.threadId;
-    if (res.threadId) {
-      const t = await send("thread.get", { id: res.threadId }).catch(() => ({}));
-      if (t.thread?.name) threadTitle.textContent = t.thread.name;
+    if (!currentAgentId) {
+      // The SW created (or reused) the thread; capture its id for continuation.
+      if (res.threadId) currentThreadId = res.threadId;
+      if (res.threadId) {
+        const t = await send("thread.get", { id: res.threadId }).catch(() => ({}));
+        if (t.thread?.name) threadTitle.textContent = t.thread.name;
+      }
+      await renderTasks(currentThreadId);
     }
     setStatus("ready");
-    await renderTasks(currentThreadId);
   } else {
     setStatus("error: " + (res.error ?? "unknown"), false);
   }
@@ -537,6 +545,7 @@ const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments } = ev.detail;
   currentThreadId = null; // a new task → a new thread
+  currentAgentId = null; // the hub composer is the MASTER agent, not a named-agent chat
   threadConversation.clear?.();
   threadTitle.textContent = "New task";
   await runThreadTurn(task, attachments);

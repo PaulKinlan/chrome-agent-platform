@@ -1389,11 +1389,7 @@ const handlers = {
     const origins = await listOrigins();
     const out = [];
     for (const o of origins) {
-      const info = await agentInfo(o);
-      // Item 44: a site with ZERO tools is not an agent (paul.kinlan.me with no
-      // WebMCP/inferred tools must not appear in the directory / the site-agents
-      // list). Only origins that actually expose tools are listed.
-      if (info.toolCount > 0) out.push(info);
+      out.push(await agentInfo(o));
     }
     return { agents: out };
   },

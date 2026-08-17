@@ -198,6 +198,26 @@ export async function nameThreadAsync(id, task) {
   });
 }
 
+/** Rename a thread (the user edits the title). Updates the thread body + the
+ * index row's name under the per-thread lock. Returns false when absent. */
+export async function renameThread(id, name) {
+  if (!id) return false;
+  const trimmed = boundText(String(name ?? "").trim(), MAX_NAME_CHARS);
+  if (!trimmed) return false;
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    if (!thread) return false;
+    thread.name = trimmed;
+    await mem.setTrusted(`thread:${id}`, thread);
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const row = index.find((r) => r.id === id);
+    if (row) row.name = trimmed;
+    await writeIndex(index);
+    return true;
+  });
+}
+
 /** Append a message to a thread + update the index (preview/time/status). */
 export async function appendThreadMessage(id, message) {
   if (!id) return null;
