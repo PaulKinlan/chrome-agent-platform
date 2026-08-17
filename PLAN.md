@@ -2,6 +2,14 @@
 
 The working plan for the fleet. Every agent/session reads this to see what's happening + where things are.
 
+## The project
+Chrome as the agent platform: a new-tab agent hub that orchestrates the web with
+persistent named agents (each with its own OPFS sandbox), per-site sub-agents (WebMCP
+tool discovery), the generative-UI artifacts surface, a skills system, agent-generated
+repeatable scripts, and a system-hooks layer — all under an all-optional-permissions
+security model. The README is the overview; THIS file is the single source of truth for
+what's landed vs what's next.
+
 ## Principles (from the 2026-08-15 thread — NON-NEGOTIABLE)
 - **Never accept "it serves" as "it works."** Every feature/fix is verified by driving the real behavior in a browser (CDP) with screenshots as evidence. A route returning 200 or a build passing is zero evidence.
 - **Independent review before push** — a different model/session reviews the diff + evidence; vision review is one gate, not a substitute for code/security review.
@@ -39,8 +47,14 @@ The working plan for the fleet. Every agent/session reads this to see what's hap
 ## In flight (2026-08-17)
 - (none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)
 
+## Remaining work (the proactive backlog)
+- Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only) — see the task backlog.
+- Fix the WebMCP discovery (the inferred + known endpoints) + a real-browser integration test.
+- The screenshot / media-capture permission flows (ask-on-need, not fail).
+- The UI polish + the review backlog (see docs/UI-FIXES-TRACKER.md + docs/KNOWN-ISSUES.md).
+- The extension rename/packaging (still "Chrome Agent Platform").
+
 ## Open questions for Paul
-- The provider default for a real model: Prompt API (on-device) vs a configured endpoint. Which?
 - The extension rename/packaging (still "Chrome Agent Platform").
 
 ## Feature: Artifacts (Paul 2026-08-16)
