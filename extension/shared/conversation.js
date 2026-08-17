@@ -184,7 +184,7 @@ export function friendlyActivityLabel(toolName, args) {
   }
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null }) {
   const c = container;
   const runId = newRunId();
 
@@ -274,16 +274,24 @@ export async function runConversationTurn(container, { text, attachments = [], h
   });
 
   // 4. run the task (history = the prior turns, so a nudge steers the thread).
+  //    A named-agent chat (agentId set) delegates to that agent's OWN sandbox.
   let res;
   try {
-    res = await send("agent.run", {
-      task: text,
-      id: String(Date.now()),
-      runId,
-      attachments,
-      history,
-      threadId,
-    });
+    res = agentId
+      ? await send("named-agent.run", {
+          id: agentId,
+          task: text,
+          runId,
+          attachments,
+        })
+      : await send("agent.run", {
+          task: text,
+          id: String(Date.now()),
+          runId,
+          attachments,
+          history,
+          threadId,
+        });
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {

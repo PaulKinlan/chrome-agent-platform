@@ -16,7 +16,7 @@ import {
   slugifyAgentId,
   updateNamedAgent,
 } from "../extension/lib/named-agents.js";
-import { namedAgentMemory } from "../extension/lib/memory.js";
+import { namedAgentMemory, masterMemory } from "../extension/lib/memory.js";
 
 // ---- in-memory chrome + OPFS mock ----
 const store = new Map();
@@ -158,6 +158,28 @@ Deno.test("named agents: memory_grep searches the agent's own memory + history",
   const miss = await grepAgentMemory(mem, "zzz-not-present");
   assertEquals(miss.count, 0);
   await mem.clear();
+});
+
+Deno.test("named agents: the agent's run history lives in its OWN journal (isolated)", async () => {
+  const created = await createNamedAgent({ name: "Summarizer" });
+  assert(created.ok, "create ok");
+  const mem = namedAgentMemory(created.agent.id);
+  // The named-agent.run history (the named-agent.history route's data source):
+  // task/result/tool-call rows in the agent's OWN journal.
+  await mem.setTrusted("journal", [
+    { type: "task", task: "summarise the page" },
+    { type: "tool-call", tool: "open_tab", args: '{"url":"https://x.example"}' },
+    { type: "result", result: "here is the summary" },
+  ]);
+  const journal = (await mem.get("journal")) ?? [];
+  assertEquals(journal.length, 3, "the agent's journal holds its run history");
+  assert(journal.some((e) => e.type === "tool-call"), "the run history includes tool calls");
+  assert(journal.some((e) => e.type === "result"), "the run history includes the result");
+  // Isolation: the MASTER journal is unaffected (the agent runs read/write their
+  // own tier, never the master's).
+  const masterJournal = (await masterMemory().get("journal")) ?? [];
+  assertEquals(Array.isArray(masterJournal) ? masterJournal.length : 0, 0, "the master journal is separate");
+  await deleteNamedAgent(created.agent.id);
 });
 
 Deno.test("named agents: create with an explicit id keeps the id", async () => {
