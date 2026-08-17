@@ -12,6 +12,7 @@ import { recordUsage } from "./usage.js";
 import { buildSkillsPrompt } from "./skills.js";
 import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
+import { MODEL_PRICING } from "./model-prices.js";
 
 const DEFAULT_SYSTEM =
   `You are the Chrome Agent Platform hub agent. You help the
@@ -319,6 +320,7 @@ export function createAgent({
     systemPrompt,
     tools: allTools,
     maxIterations,
+    usage: { pricing: MODEL_PRICING },
     hooks: {
       // LIVE progress hooks — forward the agent-do step/tool lifecycle to the
       // UI as normalized events. onProgress may be async (the SW broadcast is a
