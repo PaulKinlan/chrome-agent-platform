@@ -82,3 +82,12 @@ The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
 ## Security testing (Paul, 2026-08-16) — a standing suite
 - **A repeatable security test suite** (an agent/automated tests) reviewing the security of the site: **network exfiltration** (network traces/info must not escape), **sandbox escapes** (HTML/scripts in the double-iframe must not escape + influence the page). chaos + co-do were robust here; match that.
 - **MCP-apps-style preference percolation** — user preferences should flow down through the layers (the double-iframe) properly (how? design + implement).
+
+## CRITICAL (sol, HEAD 24dd3f7) — generative-UI sandbox network exfil
+- renderHtmlFrame's injected meta CSP is insufficient: (a) injectCspMeta inserts after the first <head>, so resources BEFORE it load before the policy; (b) CSP/default-src does NOT prevent the opaque sandbox from navigating ITSELF (self-location, meta-refresh). A real Chromium probe reproduced attacker requests for all three payloads (pre-csp-image, self-location, meta-refresh). The security suite misses these escapes. Fix: enforce outside attacker-controlled markup/navigation (a non-network-capable document + request interception/URL allow policy); always prepend the CSP; block self-navigation. (sol)
+
+## Sol addendum (HEAD 24dd3f7) — 4 HIGH
+- clear() deletes the wrong path (deleting an agent leaves its OPFS sandbox/history; memoryStoreAt.clear() treats every non-master store as a site origin).
+- memory_grep lacks a post-read generation recheck (a stale run can return the new enrollment's memory).
+- Named agents are NOT actually runnable/delegatable (CRUD/grep/avatar only; no run/delegate path; the AGENT-MODEL.md promise unmet).
+- The scoped-hook transitive bypass (the workers dont get readOnlyMemory:scoped + retain site/WebMCP tools; a hook payload can delegate into a side-effecting worker).
