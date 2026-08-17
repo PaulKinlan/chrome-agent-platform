@@ -95,3 +95,10 @@ The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
 ## Sol verifications (regression-proven, HEAD 24dd3f7)
 - **CAS version issue NOT fixed** — the version is stored only in the value envelope + reset on delete, so a set→v1, delete, set-fresh reuses v1 (a stale compareAndDelete can match/delete the fresh recreation). Fix: a durable per-key version counter that survives delete/clear.
 - **Named-agent deletion leaves the OPFS sandbox** (verified: after create→delete, namedAgentMemory still returns the data).
+
+## Sol deep-review of the generative-UI + named-agent layer (HEAD 24dd3f7)
+- **CRITICAL: the named-agent avatar path leaks the WRONG provider's key** (getProviderConfig ignores its argument → the active OpenAI/Anthropic/DeepSeek key sent to Google's image API). A cross-provider credential disclosure.
+- HIGH: artifact-viewer XSS (the query-param id into innerHTML); artifact network egress (a model-created image artifact with an arbitrary URL loaded outside the sandbox); artifact authority gaps (the model can overwrite asset:<id> bodies; unlocked body+index multi-write).
+- HIGH: the thread concurrency is partially fixed (the follow-up history snapshot before the run lock; run 1 releases the lock before appending).
+- MEDIUM: the text→HTML detection regex; the preference percolation shadow-root query + done/post ordering.
+(All in the sandbox-fix-2 worker, k3.)
