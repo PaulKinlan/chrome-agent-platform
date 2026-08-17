@@ -380,6 +380,42 @@ input:focus, select:focus, textarea:focus {
   font-family: ui-monospace, monospace;
   color: var(--muted);
 }
+/* ── editable/duplicable background agents (item 56) ── */
+.agent-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.recipe-edit {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  max-width: min(90vw, 560px);
+  background: var(--panel);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.recipe-edit::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.recipe-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
+}
+.recipe-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 /* Buttons — the base .btn + .btn.ghost live in theme.css (consistent 36px
    control height + radius tokens). Only the settings page's additions below. */
 .btn.small {
@@ -442,16 +478,20 @@ input:focus, select:focus, textarea:focus {
 }
 .background-agent-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   grid-template-areas:
-    "name state toggle"
-    "hint hint hint";
+    "name state toggle actions"
+    "hint hint hint actions";
   gap: 0.15rem 0.75rem;
   align-items: center;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--panel);
+}
+.background-agent-row .agent-actions {
+  grid-area: actions;
+  justify-self: end;
 }
 .background-agent-row .perm-name {
   grid-area: name;

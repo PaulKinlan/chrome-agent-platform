@@ -9,10 +9,8 @@
 <style>
   .wrap { max-width: 1040px; margin: 0 auto; padding: 24px; }
   .head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-  .back { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
-    border: 1px solid var(--border); border-radius: 8px; background: transparent;
-    color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
-  .back:hover { border-color: var(--accent); color: var(--accent); }
+  .logo { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .logo span { color: var(--accent); }
   h1 { font-size: 20px; margin: 0; }
   .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -24,10 +22,13 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="head">
-    <button class="back" id="back" type="button">← Back</button>
-    <h1>Artifacts</h1>
-  </div>
+  <!-- Item 54: opened IN-CONTEXT from the hub (the view overlay provides the
+       single Back button + the "Artifacts" title), so this page has NO back
+       button and NO h1 of its own — a small logo only, matching the recipes
+       page. The old back + h1 doubled up with the overlay's header. -->
+  <header class="head">
+    <div class="logo">Artifacts</div>
+  </header>
   <p class="sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
   <div class="status" id="status" aria-live="polite"></div>
   <div class="grid" id="grid"></div>

@@ -6,6 +6,7 @@
 // NTP's in-context view frame; messaging via lib/messages.js).
 
 import { send } from "../lib/messages.js";
+import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
 
 const grid = document.getElementById("grid");
 const status = document.getElementById("status");
@@ -16,7 +17,7 @@ const foot = document.getElementById("foot");
 // cards (still openable/deletable).
 const MAX_PREVIEWS = 24;
 
-document.getElementById("back").addEventListener("click", () => {
+document.getElementById("back")?.addEventListener("click", () => {
   if (history.length > 1) history.back();
   else location.href = "../ntp/ntp.html";
 });
@@ -76,8 +77,11 @@ async function render() {
 
 function wireCard(card) {
   card.addEventListener("open", (e) => {
+    // Item 53/54: open the artifact in an <agent-dialog> (the full live render)
+    // instead of navigating to the artifact.html viewer, which doubled up its
+    // own back button with the hub's overlay header.
     const { id, origin } = e.detail ?? {};
-    location.href = `../artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`;
+    openArtifactDialog(id, origin ?? "master");
   });
   card.addEventListener("delete", async (e) => {
     const { id, name, origin } = e.detail ?? {};
@@ -103,6 +107,47 @@ function wireCard(card) {
       status.textContent = `Could not reach the hub. Open the artifact + copy it manually.`;
     }
   });
+}
+
+// Item 53/54: the artifact expand dialog — the full live render (html in the
+// sandboxed iframe, image inline, or text) in an <agent-dialog>, without the
+// artifact.html viewer's doubled-up header.
+async function openArtifactDialog(id, origin) {
+  const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+  const asset = res?.ok ? res.asset : null;
+  if (!asset) { status.textContent = "Artifact not found."; return; }
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", asset.name ?? "Artifact");
+  const body = document.createElement("div");
+  body.style.minWidth = "min(76vw, 920px)";
+  body.style.minHeight = "200px";
+  const type = asset.type ?? "data";
+  const content = asset.content ?? "";
+  if (type === "html" || (type === "text" && isHtmlDocument(content))) {
+    const frame = document.createElement("div");
+    frame.style.border = "1px solid var(--border)";
+    frame.style.borderRadius = "10px";
+    frame.style.overflow = "hidden";
+    frame.style.background = "#fff";
+    frame.innerHTML = renderHtmlFrame(content);
+    body.append(frame);
+  } else if (type === "image") {
+    const img = document.createElement("img");
+    img.src = content;
+    img.alt = asset.name ?? "artifact";
+    img.style.maxWidth = "100%";
+    body.append(img);
+  } else {
+    const pre = document.createElement("pre");
+    pre.textContent = content;
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.fontSize = "13px";
+    body.append(pre);
+  }
+  dialog.append(body);
+  document.body.append(dialog);
+  dialog.show();
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
 }
 
 render();

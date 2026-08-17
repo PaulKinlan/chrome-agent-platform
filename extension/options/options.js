@@ -369,10 +369,54 @@ async function renderEnroll() {
     if (res?.ok) {
       saveFlash(`Enrolled ${origin}${res.scriptsRegistered ? " (scripts registered)" : ""}.`);
       renderData();
+      renderEnrolledSites();
     } else {
       saveFlash("Enroll failed: " + (res?.error ?? "unknown"));
     }
   });
+}
+
+// ── Enrolled sites (the Disenroll lives HERE — the agent lifecycle, not the
+//    Data & memory section — item 58) ──
+async function renderEnrolledSites() {
+  const el = $("#enrolled-sites");
+  if (!el) return;
+  const origins = await chrome.runtime.sendMessage({ type: "agent.list" }).catch(() => []);
+  el.replaceChildren();
+  for (const origin of (origins ?? [])) {
+    const row = document.createElement("div");
+    row.className = "origin-row";
+    const label = document.createElement("span");
+    label.className = "origin";
+    label.textContent = origin; // textContent — never interpolate an origin
+    row.appendChild(label);
+
+    // Disenroll = AUTHORITATIVE revocation: unregister the content scripts,
+    // remove the host permission, tombstone the enrollment, and clear OPFS (the
+    // agent.delete route).
+    const disenroll = document.createElement("button");
+    disenroll.type = "button";
+    disenroll.className = "btn small ghost disenroll-origin";
+    disenroll.textContent = "Disenroll";
+    disenroll.setAttribute("aria-label", `Disenroll ${origin}`);
+    disenroll.addEventListener("click", async () => {
+      const res = await chrome.runtime
+        .sendMessage({ type: "agent.delete", origin })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok) {
+        saveFlash(
+          `Disenrolled ${origin} (scripts + host permission removed).`,
+        );
+      } else {
+        saveFlash(`Disenroll incomplete: ${res?.error ?? "unknown"}.`);
+      }
+      renderEnrolledSites();
+      renderData();
+    });
+    row.appendChild(disenroll);
+
+    el.appendChild(row);
+  }
 }
 
 // ── Agents ──
@@ -518,8 +562,90 @@ function backgroundAgentRow(a) {
     renderBackgroundAgents();
   });
 
-  row.append(name, state, hint, toggle);
+  // Item 56: duplicate a background agent into an EDITABLE copy (the built-in
+  // template stays pristine; the copy's prompt can be edited).
+  const duplicate = document.createElement("button");
+  duplicate.type = "button";
+  duplicate.className = "btn small ghost";
+  duplicate.textContent = "Duplicate";
+  duplicate.setAttribute("aria-label", `Duplicate ${a.name} into an editable copy`);
+  duplicate.addEventListener("click", async () => {
+    const out = await chrome.runtime
+      .sendMessage({ type: "recipe.duplicate", id: a.id })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    saveFlash(out?.ok ? `Duplicated ${a.name} — edit the copy below.` : `Could not duplicate: ${out?.error ?? "failed"}.`);
+    renderBackgroundAgents();
+  });
+
+  const actions = document.createElement("span");
+  actions.className = "agent-actions";
+  actions.append(duplicate);
+
+  // A CUSTOM copy is editable: an Edit button opens a prompt editor (the
+  // system prompt / constraints). A custom copy can also be deleted.
+  if (a.custom) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn small ghost";
+    edit.textContent = "Edit prompt";
+    edit.setAttribute("aria-label", `Edit ${a.name}'s prompt`);
+    edit.addEventListener("click", () => editRecipePrompt(a));
+    actions.append(edit);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn small ghost";
+    del.textContent = "Delete";
+    del.setAttribute("aria-label", `Delete ${a.name}`);
+    del.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ type: "recipe.delete", id: a.id }).catch(() => ({ ok: false }));
+      saveFlash(`Deleted ${a.name}.`);
+      renderBackgroundAgents();
+    });
+    actions.append(del);
+  }
+
+  row.append(name, state, hint, toggle, actions);
   return row;
+}
+
+// Edit a custom recipe's prompt (item 56): a dialog with the current prompt in
+// a textarea + Save (recipe.update). Built with the native <dialog> + textContent
+// (never innerHTML for the user-edited value).
+function editRecipePrompt(recipe) {
+  const dialog = document.createElement("dialog");
+  dialog.className = "recipe-edit";
+  const label = document.createElement("label");
+  label.textContent = `${recipe.name} — system prompt`;
+  label.className = "field-label";
+  const textarea = document.createElement("textarea");
+  textarea.rows = 8;
+  textarea.value = recipe.prompt ?? "";
+  textarea.setAttribute("aria-label", `System prompt for ${recipe.name}`);
+  const actions = document.createElement("div");
+  actions.className = "recipe-edit-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn small ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => dialog.close());
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn small";
+  save.textContent = "Save";
+  save.addEventListener("click", async () => {
+    const out = await chrome.runtime
+      .sendMessage({ type: "recipe.update", id: recipe.id, prompt: textarea.value })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    saveFlash(out?.ok ? `Updated ${recipe.name}.` : `Could not update: ${out?.error ?? "failed"}.`);
+    dialog.close();
+    renderBackgroundAgents();
+  });
+  actions.append(cancel, save);
+  dialog.append(label, textarea, actions);
+  document.body.append(dialog);
+  dialog.showModal();
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
 }
 
 // The "Add background agent" control uses the NEW customizable HTML select
@@ -1140,6 +1266,7 @@ await renderHooks();
 await renderUsage();
 await renderData();
 await renderMemoryExplorer();
+await renderEnrolledSites();
 
 // The version in the footer (chaos-style semantic versioning — read from the
 // manifest so it always matches the installed build).
