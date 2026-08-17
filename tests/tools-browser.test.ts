@@ -12,6 +12,7 @@ import {
   setOriginBrowserControlGrant,
   setDenyAllBrowserControlGrant,
   revokeBrowserControlGrant,
+  isBrowserControlGranted,
 } from "../extension/lib/browser-tools.js";
 import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
 
@@ -105,6 +106,24 @@ globalThis.chrome = {
 };
 
 const toolset = () => browserToolset();
+
+Deno.test("browser grant: PERSISTS — the owner grant does not auto-expire (tracker item 51)", async () => {
+  reset();
+  await setGlobalBrowserControlGrant(); // no expiry → PERSISTENT
+  const s = await chrome.storage.local.get("cap:browserControlGrant");
+  const grant = s["cap:browserControlGrant"];
+  assertEquals(grant.scope, "global", "the empty-origins toggle grants GLOBAL (all origins)");
+  assertEquals(grant.expiresAt, null, "a persistent grant has no expiry (revoked explicitly, never auto-expires)");
+  // A persistent global grant authorizes ANY origin (not a deny-all record).
+  assertEquals(await isBrowserControlGranted("https://anything.example"), true);
+});
+
+Deno.test("browser grant: a TIMED grant still expires (an explicit expiryMs is honored)", async () => {
+  reset();
+  await setGlobalBrowserControlGrant(1); // 1ms
+  await new Promise((r) => setTimeout(r, 15));
+  assertEquals(await isBrowserControlGranted("https://anything.example"), false);
+});
 
 Deno.test("browser open_tab: opens a tab when the grant + permission are present", async () => {
   reset();
