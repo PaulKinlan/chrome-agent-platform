@@ -12,7 +12,6 @@ import {
   providerRunGate,
   recordProviderFailure,
   recordProviderSuccess,
-  requestProviderHostAccess,
   ProviderUnavailableError,
   isProviderError,
   logGateOnce,
