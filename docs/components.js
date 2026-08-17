@@ -1842,10 +1842,14 @@ class AgentComposer extends Component {
 
   /** Request optional permissions. MUST be the first await in the action so it
    *  runs inside the menu-click user gesture (a preceding await breaks the
-   *  gesture and Chrome auto-denies). */
-  async _requestPermission(perms) {
+   *  gesture and Chrome auto-denies). Supports both API permissions (perms) and
+   *  scoped host origins (origins). */
+  async _requestPermission(perms, origins) {
     if (!chrome?.permissions?.request) return true; // no API → treat as available
-    try { return (await chrome.permissions.request({ permissions: perms })) === true; }
+    const req = {};
+    if (perms?.length) req.permissions = perms;
+    if (origins?.length) req.origins = origins;
+    try { return (await chrome.permissions.request(req)) === true; }
     catch { return false; }
   }
 
@@ -1919,11 +1923,14 @@ class AgentComposer extends Component {
     try {
       if (kind === "add-tab" || kind === "grab-screenshot") {
         // Both pick a tab. add-tab attaches the tab as a reference (title+url);
-        // grab-screenshot activates + captures the chosen tab. `tabs` grants
-        // titles/urls; `activeTab` grants captureVisibleTab for the active tab.
-        const perms = kind === "grab-screenshot" ? ["activeTab", "tabs"] : ["tabs"];
-        const ok = await this._requestPermission(perms);
-        if (!ok) { this.setStatus("tab access not granted — enable the Tabs permission in Settings.", false); return; }
+        // grab-screenshot activates + captures the chosen tab. Listing the tabs
+        // needs `tabs`; capturing a SPECIFIC tab needs host access to THAT
+        // origin (activeTab is transient + tied to the tab active at grant
+        // time, so it does not authorize a later-activated pick). The dynamic-
+        // permission-on-need principle: request the scoped host origin on the
+        // gesture, never fail with a bare "permission required".
+        const tabsGranted = await this._requestPermission(["tabs"]);
+        if (!tabsGranted) { this.setStatus("tab listing not granted — enable the Tabs permission in Settings.", false); return; }
         const tabs = await chrome.tabs.query({}).catch(() => []);
         if (!tabs.length) { this.setStatus("no open tabs to pick from."); return; }
         const tab = await this._pickTab(tabs);
@@ -1932,6 +1939,13 @@ class AgentComposer extends Component {
           this._attachMedia({ name: tab.title || tab.url || "tab", url: tab.url || "", type: "tab", size: 0, kind: "tab", tabId: tab.id, windowId: tab.windowId });
           this.setStatus(`attached tab: ${tab.title || tab.url}`);
           return;
+        }
+        // Capture the picked tab: request the scoped host origin on the gesture.
+        let origin = "";
+        try { origin = new URL(tab.url || "").origin; } catch { /* keep empty */ }
+        if (origin && origin !== "null") {
+          const granted = await this._requestPermission(null, [`${origin}/*`]);
+          if (!granted) { this.setStatus(`screenshot blocked — grant access to ${origin} in the permission prompt.`, false); return; }
         }
         await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
         const dataURL = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
