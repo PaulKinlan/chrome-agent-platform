@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.71] — 2026-08-17
+- fix(gemini): preserve the thought_signature across the tool-call round-trip
+
 ## [0.2.70] — 2026-08-17
 - feat(usage): full usage-tracking visibility — getUsage aggregates by provider/model/agent/task/day (the times/dates), the Usage view shows the complete breakdown (summary + by-provider/model/agent/day tables), and the hub shows a usage summary (calls/tokens/cost); + a breakdown unit test. (ntp.js also carries the concurrent review-fixes worker's avatar/script-host edits — interleaved, both valid.)
 
