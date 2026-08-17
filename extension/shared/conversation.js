@@ -270,8 +270,18 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       case "error":
         clearThinking();
-        onStatus?.({ state: "error", message: ev.message ?? "error" });
-        appendBubble(c, "error", ev.message ?? "error");
+        onStatus?.({
+          state: "error",
+          message: ev.reason ?? ev.message ?? "error",
+          errorReason: ev.reason ?? null,
+          errorAction: ev.action ?? null,
+          errorCategory: ev.category ?? null,
+        });
+        if (typeof c.appendError === "function") {
+          c.appendError(ev.message ?? "error", { reason: ev.reason ?? null, action: ev.action ?? null, category: ev.category ?? null });
+        } else {
+          appendBubble(c, "error", ev.message ?? "error");
+        }
         break;
     }
   });
@@ -321,8 +331,25 @@ export async function runConversationTurn(container, { text, attachments = [], h
       appendBubble(c, "agent", res.result);
     }
   } else {
-    onStatus?.({ state: "error", message: res?.error ?? "unknown" });
-    appendBubble(c, "error", "Error: " + (res?.error ?? "unknown"));
+    // A provider/config failure must be CLEAR + ACTIONABLE, not a generic
+    // "Error: …" — surface the UNWRAPPED reason + the "what to do" + a
+    // "Fix in Settings" button (the category drives the button).
+    const reason = res?.errorReason ?? null;
+    const action = res?.errorAction ?? null;
+    const category = res?.errorCategory ?? null;
+    const msg = res?.error ?? "unknown error";
+    onStatus?.({
+      state: "error",
+      message: reason ?? msg,
+      errorReason: reason,
+      errorAction: action,
+      errorCategory: category,
+    });
+    if (typeof c.appendError === "function") {
+      c.appendError(msg, { reason, action, category });
+    } else {
+      appendBubble(c, "error", "Error: " + msg);
+    }
   }
   return res;
 }

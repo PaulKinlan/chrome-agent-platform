@@ -306,6 +306,23 @@ async function main() {
     check("block-level HTML fragment renders in an iframe", htmlFrame.fragmentIframe === true, htmlFrame);
     check("markdown does NOT render an iframe", htmlFrame.markdownIframe === false, htmlFrame);
 
+    // A provider/config error bubble shows the UNWRAPPED reason + the action +
+    // a "Fix in Settings" button (the actionable provider-failure path).
+    const errBubble = await evl(s.sessionId, `(()=>{
+      const b=document.createElement('message-bubble');
+      b.setAttribute('role','error');
+      b.setAttribute('error-reason','the provider returned 401 (invalid API key)');
+      b.setAttribute('error-action','Check the API key in Settings.');
+      b.setAttribute('error-category','provider-auth');
+      document.body.appendChild(b);
+      return new Promise(r=>setTimeout(()=>r({
+        reason: b.shadowRoot?.querySelector('.err-reason')?.textContent?.trim(),
+        action: !!b.shadowRoot?.querySelector('.err-action'),
+        fixBtn: !!b.shadowRoot?.querySelector('.err-fix'),
+      }), 150));
+    })()`);
+    check("error bubble shows the unwrapped reason + action + Fix button", errBubble.reason?.includes('401') === true && errBubble.action === true && errBubble.fixBtn === true, errBubble);
+
     // error-console copy-all button (per-line copy is only present with entries;
     // the showcase degrades to the empty state, but the header control must exist).
     const consoleCopy = await evl(s.sessionId, `(()=>{

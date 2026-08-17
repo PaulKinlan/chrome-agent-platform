@@ -180,6 +180,11 @@
     .run-status.done { border-color: var(--success); color: var(--success); }
     .run-status.error { border-color: var(--danger); color: var(--danger); }
     .run-status .rs-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-status .rs-fix { font: inherit; font-size: 12px; font-weight: 600; color: var(--accent, #0e6e63); background: transparent; border: 1px solid var(--accent, #0e6e63); border-radius: 6px; padding: 3px 9px; cursor: pointer; flex: 0 0 auto; }
+    .run-status .rs-fix:hover { background: var(--accent, #0e6e63); color: #fff; }
+    /* the provider-status warning chip (the user must know BEFORE a run) */
+    .provider-status { font: inherit; font-size: 12px; font-weight: 600; color: var(--danger, #b3261e); background: transparent; border: 1px solid var(--danger, #b3261e); border-radius: 999px; padding: 2px 10px; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .provider-status:hover { background: var(--danger, #b3261e); color: #fff; }
     /* the .run-status { display:flex } above would override the UA [hidden]
        display:none, so an empty banner stayed visible — restore it. */
     .run-status[hidden] { display: none; }
@@ -534,6 +539,7 @@
         <header class="top">
           <div class="top-actions">
             <span class="status" id="status" role="status" aria-live="polite" hidden></span>
+            <button type="button" class="provider-status" id="provider-status" hidden title="Open Settings to fix the provider"></button>
             <security-shield count="0" label="Security + permissions"></security-shield>
             <error-console count="0" label="Console (errors + warnings)"></error-console>
           </div>

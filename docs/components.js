@@ -1367,7 +1367,7 @@ customElements.define("code-block", CodeBlock);
  * fallback), so the gallery can populate it declaratively. */
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "step", "total-steps", "error-reason", "error-action"];
+    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "step", "total-steps", "error-reason", "error-action", "error-category"];
   }
   _attachments() {
     const raw = this.getAttribute("attachments");
@@ -1394,7 +1394,10 @@ class MessageBubble extends Component {
       :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
       :host([role="error"]) .body { color:var(--danger,#b3261e); }
       .err-reason { font-weight:600; margin:0 0 4px; }
-      .err-action { color:var(--ink,#1d1b18); margin:0; }
+      .err-action { color:var(--ink,#1d1b18); margin:0 0 8px; }
+      .err-fix { font:inherit; font-size:12.5px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--accent,#0e6e63); border-radius:6px; padding:4px 10px; cursor:pointer; }
+      .err-fix:hover { background:var(--accent,#0e6e63); color:#fff; }
+      .err-fix:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
       .msg .attach { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
       .msg .attach img { max-width:100%; max-height:260px; border-radius:8px; border:1px solid var(--border,#e3e0d9); display:block; }
       .msg .attach .file-chip { font-size:12.5px; color:var(--muted,#635e56); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:4px 8px; display:inline-flex; align-items:center; gap:6px; }
@@ -1491,12 +1494,18 @@ class MessageBubble extends Component {
     } else if (role === "error") {
       // The comprehensive error: the category + the UNDERLYING reason (danger,
       // prominent) + the actionable "what to do" (plain ink) — never a raw
-      // "No output generated. Check the stream for errors".
+      // "No output generated. Check the stream for errors". A provider/config
+      // failure gets a "Fix in Settings" button (the actionable path: the
+      // provider pane's Test/Use button grants the host permission + tests the
+      // key).
       const reason = this.getAttribute("error-reason") || content;
       const action = this.getAttribute("error-action") || "";
+      const category = this.getAttribute("error-category") || "";
+      const fixable = /host-permission|provider-auth|model-config|network/i.test(category);
       markup = `<div class="msg error"><div class="body">
         <p class="err-reason">${escapeHtml(reason)}</p>
         ${action ? `<p class="err-action">${escapeHtml(action)}</p>` : ""}
+        ${fixable ? `<button type="button" class="err-fix" part="fix">Fix in Settings</button>` : ""}
       </div></div>`;
     } else {
       let body;
@@ -1526,6 +1535,14 @@ class MessageBubble extends Component {
     mountTemplate(this, style, markup);
   }
   _wire() {
+    // The "Fix in Settings" button on a provider/config error: open the options
+    // page (the provider pane's Test/Use button grants the host permission +
+    // tests the key — the actionable path for a provider failure).
+    this._root.querySelector(".err-fix")?.addEventListener("click", () => {
+      if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+        chrome.runtime.openOptionsPage();
+      }
+    });
     // Percolate the current theme/locale into any rendered-HTML frame (the
     // co-do generative-UI): wire the validated postMessage down-channel when a
     // message renders a generated UI document.
@@ -1622,9 +1639,9 @@ class AgentConversation extends Component {
   appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
   appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
-  appendError(text, { reason, action, ts } = {}) {
+  appendError(text, { reason, action, category, ts } = {}) {
     if (ts) this._maybeTsGap(ts);
-    return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null });
+    return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null, "error-category": category ?? null });
   }
   appendThinking(text, { step, totalSteps } = {}) {
     return this._bubble("thinking", text, { step, "total-steps": totalSteps });
@@ -1670,7 +1687,7 @@ class AgentConversation extends Component {
         case "system": this.appendSystem(m.content, ts); break;
         case "thinking": this.appendThinking(m.content, m); break;
         case "tool": this.appendTool(m); break;
-        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null }); break;
+        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
         default: this.appendAgent(m.content, ts); break;
       }
     }

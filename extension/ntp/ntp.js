@@ -813,9 +813,22 @@ function renderRunStatus(s) {
     if (state === "done") {
       label.textContent = "Done";
     } else if (state === "error") {
-      label.textContent = "Failed — " + (s.message || "error");
+      label.textContent = "Failed — " + (s.errorReason || s.message || "error");
     }
     runStatusEl.append(label);
+    // A provider/config failure gets an inline "Fix in Settings" button (the
+    // actionable path), not just the message.
+    const cat = s?.errorCategory ?? "";
+    if (state === "error" && /host-permission|provider-auth|model-config|network/i.test(cat)) {
+      const fix = document.createElement("button");
+      fix.type = "button";
+      fix.className = "rs-fix";
+      fix.textContent = "Fix in Settings";
+      fix.addEventListener("click", () => {
+        if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+      });
+      runStatusEl.append(fix);
+    }
   }
 }
 
@@ -918,6 +931,26 @@ renderBackgroundAgents();
 renderArtifacts();
 renderTasks();
 renderRunLog();
+renderProviderStatus();
+
+// The provider-status warning: the user must know BEFORE running a task that
+// the provider is unreachable / misconfigured (not be surprised by a failure
+// after the run). A small warning chip in the header links to Settings.
+async function renderProviderStatus() {
+  const slot = document.getElementById("provider-status");
+  if (!slot) return;
+  const st = await send("provider.status").catch(() => ({ ok: true }));
+  if (st?.ok === false) {
+    slot.hidden = false;
+    slot.textContent = "Provider issue — " + (st.reason || "check Settings");
+  } else {
+    slot.hidden = true;
+    slot.textContent = "";
+  }
+}
+document.getElementById("provider-status")?.addEventListener("click", () => {
+  if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+});
 
 // Re-render the named agents (main area + the sidebar) when the registry
 // changes — a task that creates an agent must show it in the sidebar without a

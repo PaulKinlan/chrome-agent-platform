@@ -1343,6 +1343,19 @@ const handlers = {
     const cfg = await getProviderConfig();
     return { provider: cfg.provider };
   },
+  async "provider.status"() {
+    // Whether the active provider can RUN right now — the hub shows a warning
+    // BEFORE a task when the provider is unreachable / misconfigured, so the
+    // user isn't surprised by a failure after running. Redacted: only the id,
+    // a boolean, and a human reason (never the key / base URL / model).
+    const cfg = await getProviderConfig();
+    const gate = await providerRunGate(cfg);
+    return {
+      provider: cfg.provider ?? "",
+      ok: gate.ok,
+      reason: gate.ok ? "" : gate.reason,
+    };
+  },
   async "provider.set"(m) {
     const next = await setProviderConfig(m.config);
     // The running agent must switch immediately — invalidate the cached model + orchestrator.

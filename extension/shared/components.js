@@ -1639,9 +1639,9 @@ class AgentConversation extends Component {
   appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
   appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
-  appendError(text, { reason, action, ts } = {}) {
+  appendError(text, { reason, action, category, ts } = {}) {
     if (ts) this._maybeTsGap(ts);
-    return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null });
+    return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null, "error-category": category ?? null });
   }
   appendThinking(text, { step, totalSteps } = {}) {
     return this._bubble("thinking", text, { step, "total-steps": totalSteps });
@@ -1687,7 +1687,7 @@ class AgentConversation extends Component {
         case "system": this.appendSystem(m.content, ts); break;
         case "thinking": this.appendThinking(m.content, m); break;
         case "tool": this.appendTool(m); break;
-        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null }); break;
+        case "error": this.appendError(m.content, { reason: m.reason ?? null, action: m.action ?? null, category: m.category ?? null }); break;
         default: this.appendAgent(m.content, ts); break;
       }
     }
