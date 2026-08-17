@@ -362,8 +362,9 @@ const EXPECTED = [
   "Settings: Clear key removed only the key (endpoint/model preserved)",
   "Settings: clicked Update via a real click",
   "Settings: Update preserved endpoint/model + empty key",
-  "Settings: switched back to Demo via a real click",
+  "Settings: demo + prompt-api absent from the provider picker",
   "Settings: provider restored to demo",
+  "Settings: demo still resolvable via the SW (testing only)",
   "Settings: Enroll input present",
   "Settings: typed a loopback origin into the Enroll field",
   "Settings: clicked Enroll via a real click",
@@ -839,13 +840,22 @@ async function main() {
         afterUpdate?.baseURL === "https://custom.invalid/v1" &&
         afterUpdate?.model === "model-one",
     );
+    // The demo + prompt-api providers are no longer in the SETTINGS PICKER
+    // (Paul 2026-08-17: the Prompt API is internal-only; the demo is testing-only),
+    // but they remain resolvable through the service worker for the tests. Verify
+    // BOTH: the picker omits them AND the SW still resolves demo.
     check(
-      "Settings: switched back to Demo via a real click",
-      await clickSel(cdp, optsSession, `.provider-card[data-provider="demo"] .set-default`),
+      "Settings: demo + prompt-api absent from the provider picker",
+      (await evalIn(cdp, optsSession, `document.querySelectorAll('.provider-card[data-provider="demo"], .provider-card[data-provider="prompt-api"]').length`)) === 0,
     );
-    await sleep(500);
+    await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+    await sleep(300);
     const demoCfg = await msgValue({ type: "provider.get" });
-    check("Settings: provider restored to demo", demoCfg?.provider === "demo");
+    check("Settings: provider restored to demo", demoCfg?.provider === "demo" && !demoCfg?.baseURL);
+    check(
+      "Settings: demo still resolvable via the SW (testing only)",
+      demoCfg?.provider === "demo",
+    );
 
     // ─────────────────────────────────────────────────────────────
     // ENROLLMENT — genuine owner gesture: type a loopback origin + click Enroll.

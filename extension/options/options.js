@@ -16,23 +16,13 @@ import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import "../shared/components.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
+// NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
+// picker (Paul 2026-08-17). The Chrome Prompt API (Gemini nano) is only for
+// INTERNAL summarization/auto-naming (see lib/threads.js — it calls
+// createPromptApiModel() directly, not the user's selected provider), and the
+// Demo (local) provider is TESTING-only. Both remain resolvable in lib/provider.js
+// for those internal/test paths, but the user picks only a real chat provider.
 const PROVIDERS = [
-  {
-    id: "demo",
-    name: "Demo (local)",
-    hint: "Deterministic local model — no key, always runs.",
-    baseURL: "",
-    needsKey: false,
-    onDevice: false,
-  },
-  {
-    id: "prompt-api",
-    name: "Chrome Prompt API",
-    hint: "Gemini nano on-device — no key, works offline.",
-    baseURL: "",
-    needsKey: false,
-    onDevice: true,
-  },
   {
     id: "openai",
     name: "OpenAI",
@@ -1375,4 +1365,68 @@ try {
   const v = chrome.runtime.getManifest().version;
   const el = $("#app-version");
   if (el && v) el.textContent = "v" + v;
+  const av = $("#about-version");
+  if (av && v) av.textContent = "v" + v;
 } catch { /* non-extension (browser test) — leave the placeholder */ }
+
+// ── About / changelog ────────────────────────────────────────────────────────
+// Render the bundled CHANGELOG.md into the About section. Each `## [version]`
+// becomes a version card with its bullet list (built as DOM nodes, never
+// innerHTML, so the markdown stays inert).
+function renderChangelog(md) {
+  const host = $("#changelog");
+  if (!host) return;
+  host.replaceChildren();
+  const lines = String(md).split(/\r?\n/);
+  let current = null;
+  let list = null;
+  const commit = () => {
+    if (current && list && list.children.length) current.append(list);
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const h = line.match(/^##\s+\[([^\]]+)\]\s*—?\s*(.*)$/);
+    if (h) {
+      commit();
+      current = document.createElement("div");
+      current.className = "changelog-entry";
+      const head = document.createElement("div");
+      head.className = "changelog-head";
+      const v = document.createElement("strong");
+      v.textContent = "v" + h[1].trim();
+      const date = document.createElement("span");
+      date.className = "muted";
+      date.textContent = h[2].trim();
+      head.append(v, date);
+      current.append(head);
+      host.append(current);
+      list = document.createElement("ul");
+      list.className = "changelog-items";
+      continue;
+    }
+    if (current && line.startsWith("- ")) {
+      if (!list) { list = document.createElement("ul"); list.className = "changelog-items"; }
+      const li = document.createElement("li");
+      li.textContent = line.slice(2).trim();
+      list.append(li);
+      continue;
+    }
+  }
+  commit();
+  if (!host.children.length) {
+    host.innerHTML = `<p class="muted">No changelog yet.</p>`;
+  }
+}
+
+async function renderAbout() {
+  try {
+    const url = chrome.runtime.getURL("CHANGELOG.md");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("changelog fetch " + res.status);
+    renderChangelog(await res.text());
+  } catch {
+    // Non-extension (browser test) or the file isn't bundled — a graceful fallback.
+    renderChangelog("# Changelog\n\n## [0.0.0] — \n- Changelog unavailable in this context.\n");
+  }
+}
+await renderAbout();
