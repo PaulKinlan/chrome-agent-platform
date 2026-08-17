@@ -56,3 +56,23 @@ Deno.test("friendlyActivityLabel maps tool names to human activity (with a name)
   // an unknown snake_case tool falls back to the split words
   assertEquals(friendlyActivityLabel("some_unknown_tool", {}), "some unknown tool");
 });
+
+// appendBubble passes the entry's timestamp through to the conversation surface
+// so the agent run history shows the subtle time-gap divider (item: the agent
+// run history was dropping the ts — a task list showed it, an agent run didn't).
+Deno.test("appendBubble forwards ts to the rich append methods", async () => {
+  const calls = [];
+  const container = {
+    appendUser(text, ts, attachments) { calls.push(["user", text, ts]); },
+    appendAgent(text, ts) { calls.push(["agent", text, ts]); },
+    appendSystem(text, ts) { calls.push(["system", text, ts]); },
+  };
+  const { appendBubble } = await import("../extension/shared/conversation.js");
+  const t = 1786971572895;
+  appendBubble(container, "user", "hi", undefined, t);
+  appendBubble(container, "agent", "result", undefined, t);
+  appendBubble(container, "system", "note", undefined, t);
+  assertEquals(calls[0], ["user", "hi", t]);
+  assertEquals(calls[1], ["agent", "result", t]);
+  assertEquals(calls[2], ["system", "note", t]);
+});

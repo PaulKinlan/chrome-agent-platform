@@ -552,6 +552,159 @@ function renderAgentHistory(container, entries) {
   }
 }
 
+// ── the agent-config surface (item 66): edit a NAMED agent's name, role (the
+//    system prompt), avatar, and skills — wired to the named-agent routes.
+//    The management tools (update_agent / add_skill / remove_skill) are the
+//    model-facing paths; this is the OWNER-facing UI for the same routes.
+function configField(labelText, tag, value, rows) {
+  const wrap = document.createElement("label");
+  wrap.style.display = "flex";
+  wrap.style.flexDirection = "column";
+  wrap.style.gap = "4px";
+  wrap.style.fontSize = "13px";
+  const lbl = document.createElement("span");
+  lbl.textContent = labelText;
+  lbl.style.fontWeight = "600";
+  const el = document.createElement(tag);
+  el.style.padding = "8px 10px";
+  el.style.font = "inherit";
+  el.style.border = "1px solid var(--border,#e3e0d9)";
+  el.style.borderRadius = "8px";
+  el.style.background = "var(--bg,#f7f6f3)";
+  el.style.color = "var(--text,#1d1b18)";
+  if (tag === "textarea") { el.rows = rows ?? 3; el.style.resize = "vertical"; }
+  else { el.type = "text"; }
+  el.value = value ?? "";
+  wrap.append(lbl, el);
+  return { wrap, el };
+}
+function configButton(text, variant) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = text;
+  b.style.padding = "8px 14px";
+  b.style.font = "inherit";
+  b.style.borderRadius = "8px";
+  b.style.cursor = "pointer";
+  b.style.border = "1px solid var(--border,#e3e0d9)";
+  if (variant === "primary") {
+    b.style.background = "var(--accent,#0e6e63)";
+    b.style.color = "#fff";
+    b.style.borderColor = "var(--accent,#0e6e63)";
+  } else {
+    b.style.background = "transparent";
+    b.style.color = "var(--text,#1d1b18)";
+  }
+  return b;
+}
+async function openAgentConfig() {
+  if (currentAgentKind !== "named" || !currentAgentId) return;
+  const res = await send("named-agent.get", { id: currentAgentId }).catch(() => ({ ok: false }));
+  const agent = res.ok ? res.agent : null;
+  if (!agent) { setStatus("Agent not found", false); return; }
+  const skillsRes = await send("skill.list").catch(() => ({ skills: [] }));
+  const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
+  const agentSkillIds = new Set((agent.skills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
+
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", `Edit “${agent.name || currentAgentId}”`);
+  const body = document.createElement("div");
+  body.style.display = "flex";
+  body.style.flexDirection = "column";
+  body.style.gap = "12px";
+  body.style.minWidth = "min(60vw, 460px)";
+
+  const nameField = configField("Name", "input", agent.name ?? "");
+  const roleField = configField("Role / system prompt", "textarea", agent.role ?? "", 4);
+  body.append(nameField.wrap, roleField.wrap);
+
+  // Skills: the reusable capabilities (the recipes→skills registry) the agent
+  // can have attached — each checked skill is injected into its system prompt.
+  const skillsBox = document.createElement("fieldset");
+  skillsBox.style.border = "1px solid var(--border,#e3e0d9)";
+  skillsBox.style.borderRadius = "8px";
+  skillsBox.style.padding = "10px";
+  skillsBox.style.margin = "0";
+  const legend = document.createElement("legend");
+  legend.textContent = "Skills";
+  legend.style.fontWeight = "600";
+  legend.style.fontSize = "13px";
+  skillsBox.append(legend);
+  const skillChecks = new Map();
+  if (!available.length) {
+    const none = document.createElement("p");
+    none.textContent = "No skills available.";
+    none.style.fontSize = "12.5px";
+    none.style.color = "var(--muted,#635e56)";
+    none.style.margin = "4px 0 0";
+    skillsBox.append(none);
+  } else {
+    for (const s of available) {
+      const id = s?.id ?? s?.name ?? String(s);
+      const row = document.createElement("label");
+      row.style.display = "flex";
+      row.style.alignItems = "baseline";
+      row.style.gap = "8px";
+      row.style.fontSize = "13px";
+      row.style.padding = "2px 0";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = agentSkillIds.has(id);
+      const text = document.createElement("span");
+      text.textContent = `${s.name ?? id} — ${s.description ?? ""}`.replace(/\s+—\s*$/, "");
+      row.append(cb, text);
+      skillChecks.set(id, cb);
+      skillsBox.append(row);
+    }
+  }
+  body.append(skillsBox);
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "8px";
+  const avatarBtn = configButton("Regenerate avatar", "secondary");
+  const cancelBtn = configButton("Cancel", "secondary");
+  const saveBtn = configButton("Save", "primary");
+  actions.append(avatarBtn, cancelBtn, saveBtn);
+  body.append(actions);
+  dialog.append(body);
+  document.body.append(dialog);
+
+  cancelBtn.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove());
+  saveBtn.addEventListener("click", async () => {
+    const name = nameField.el.value.trim();
+    const role = roleField.el.value.trim();
+    const skills = [];
+    for (const [id, cb] of skillChecks) {
+      if (cb.checked) {
+        const s = available.find((x) => (x?.id ?? x?.name ?? String(x)) === id);
+        skills.push(s ? { id: s.id ?? s.name, name: s.name ?? s.id, description: s.description ?? "" } : { id, name: id });
+      }
+    }
+    const r = await send("named-agent.update", { id: currentAgentId, name, role, skills }).catch(() => ({ ok: false }));
+    if (r?.ok !== false) {
+      dialog.close();
+      setStatus("Agent updated.");
+      renderNamedAgents();
+      await openAgentChat(currentAgentId);
+    } else {
+      setStatus(`Update failed: ${r?.error ?? "unknown"}`, false);
+    }
+  });
+  avatarBtn.addEventListener("click", async () => {
+    avatarBtn.disabled = true;
+    avatarBtn.textContent = "Generating…";
+    const r = await send("named-agent.avatar", { id: currentAgentId }).catch(() => ({ ok: false }));
+    avatarBtn.disabled = false;
+    avatarBtn.textContent = "Regenerate avatar";
+    if (r?.ok) { setStatus("Avatar regenerated."); renderNamedAgents(); }
+    else setStatus(`Avatar failed: ${r?.error ?? "unknown"}`, false);
+  });
+  dialog.show();
+}
+
 // ── the live run-status banner (the user must SEE it is working) ──────────
 const runStatusEl = document.getElementById("run-status");
 function renderRunStatus(s) {
@@ -628,6 +781,7 @@ threadComposer.addEventListener("send", async (ev) => {
   await runThreadTurn(text, attachments);
 });
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
+editAgentBtn?.addEventListener("click", openAgentConfig);
 
 // ── edit the thread title (item 47): click the title → rename in place. ─────
 threadTitle.addEventListener("click", () => {
