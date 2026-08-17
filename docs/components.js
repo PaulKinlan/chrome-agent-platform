@@ -2036,6 +2036,327 @@ class AgentComposer extends Component {
 }
 customElements.define("agent-composer", AgentComposer);
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * BeautifulUI-inspired AI-native primitives
+ * Re-implementations of the beautifului.dev patterns (loading state, thinking,
+ * streaming text, approval card, tool chips, task rows, chat/prompt bar) as
+ * native Web Components — MV3-CSP-safe, matching the DESIGN.md tokens.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* <loading-state label="Working…" elapsed="3" active> — a pixel-grid loader +
+ * elapsed time, the BeautifulUI "Loading State" primitive. A calm, restrained
+ * working indicator (not a generic spinner). `active` animates the grid; when
+ * absent it shows the static (settled) state. `elapsed` seconds, if present,
+ * render as a subtle time readout. */
+class LoadingState extends Component {
+  static get observedAttributes() { return ["label", "elapsed", "active"]; }
+  _render() {
+    const label = this.getAttribute("label") || "Working";
+    const elapsed = Number(this.getAttribute("elapsed") || 0);
+    const active = this.hasAttribute("active");
+    // A 3×3 pixel grid; the cells pulse in a reading order (the BeautifulUI
+    // pixel-grid loader, calmed to the paper/teal system).
+    const cells = Array.from({ length: 9 }, (_, i) =>
+      `<span class="px" style="animation-delay:${(i * 60)}ms" aria-hidden="true"></span>`
+    ).join("");
+    mountTemplate(this, `
+      :host { display:inline-flex; align-items:center; gap:10px; }
+      .grid { display:grid; grid-template-columns:repeat(3,4px); gap:3px; width:18px; height:18px; }
+      .px { width:4px; height:4px; border-radius:1px; background:var(--accent,#0e6e63); }
+      :host([active]) .px { animation:cap-px 1.4s ease-in-out infinite; }
+      .label { font-size:13px; color:var(--muted,#635e56); }
+      .time { font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; opacity:.85; }
+      .settled { color:var(--success,#1a7f37); font-weight:600; }
+      @keyframes cap-px { 0%,100%{opacity:.25;} 50%{opacity:1;} }
+      @media (prefers-reduced-motion: reduce) { :host([active]) .px { animation:none; opacity:.6; } }
+    `, `<span class="grid" role="status" aria-label="${escapeHtml(label)}">${cells}</span>
+      <span class="label">${escapeHtml(label)}</span>
+      ${elapsed > 0 ? `<span class="time">${escapeHtml(String(elapsed))}s</span>` : ""}`);
+  }
+}
+customElements.define("loading-state", LoadingState);
+
+/* <thinking-trace label="reasoning" open steps='[{"label","text"}]'> — an
+ * expandable reasoning trace (the BeautifulUI "Thinking" primitive). A muted,
+ * collapsible <details> of the agent's steps; slotted content or the `steps`
+ * JSON list renders as a clean trace (never a wall of text). */
+class ThinkingTrace extends Component {
+  static get observedAttributes() { return ["label", "open", "steps"]; }
+  _render() {
+    const label = this.getAttribute("label") || "reasoning";
+    const open = this.hasAttribute("open");
+    const steps = parseJSONAttr(this.getAttribute("steps"), []);
+    let body;
+    if (Array.isArray(steps) && steps.length) {
+      body = `<ol class="steps">${steps.map((s) => {
+        const l = typeof s === "object" ? (s.label ?? s.text ?? "") : String(s ?? "");
+        const t = typeof s === "object" ? (s.text ?? "") : "";
+        return `<li><span class="s-label">${escapeHtml(l)}</span>${t ? `<span class="s-text">${escapeHtml(t)}</span>` : ""}</li>`;
+      }).join("")}</ol>`;
+    } else {
+      body = `<div class="trace"><slot></slot></div>`;
+    }
+    mountTemplate(this, `
+      :host { display:block; width:100%; }
+      details { width:100%; }
+      summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
+      summary::-webkit-details-marker { display:none; }
+      summary:hover { color:var(--ink,#1d1b18); }
+      .caret { transition:transform .15s ease; flex:0 0 auto; display:inline-flex; }
+      details[open] .caret { transform:rotate(90deg); }
+      .steps { list-style:none; margin:8px 0 0; padding:8px 12px; border-left:2px solid var(--border,#e3e0d9); display:flex; flex-direction:column; gap:6px; }
+      .steps li { display:flex; flex-direction:column; gap:2px; }
+      .s-label { font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); }
+      .s-text { font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; }
+      .trace { margin-top:8px; padding:8px 12px; border-left:2px solid var(--border,#e3e0d9); color:var(--muted,#635e56); font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.5; }
+      @media (prefers-reduced-motion: reduce) { .caret { transition:none; } }
+    `, `<details${open ? " open" : ""}><summary><span class="caret" aria-hidden="true"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg></span><span>${escapeHtml(label)}</span></summary>${body}</details>`);
+  }
+  _wire() {
+    const d = this._root.querySelector("details");
+    d?.addEventListener("toggle", () => this._emit("toggle", { open: d.open }));
+  }
+}
+customElements.define("thinking-trace", ThinkingTrace);
+
+/* <tool-chips tools='[{"name","status"}]'> — the tool calls as compact chips
+ * (the BeautifulUI "Tool Chips" primitive). Each chip: the tool name + a status
+ * dot (running/done/error). A clean row instead of a full-width card. */
+class ToolChips extends Component {
+  static get observedAttributes() { return ["tools"]; }
+  _render() {
+    const tools = parseJSONAttr(this.getAttribute("tools"), []);
+    const chips = (Array.isArray(tools) ? tools : []).map((t, i) => {
+      const name = typeof t === "object" ? (t.name ?? "tool") : String(t ?? "tool");
+      const status = typeof t === "object" ? (t.status ?? "done") : "done";
+      const cls = status === "running" ? "running" : status === "error" ? "error" : "done";
+      return `<button type="button" class="chip" data-index="${i}" aria-label="${escapeHtml(name)} — ${escapeHtml(cls)}">
+        <span class="dot ${cls}" aria-hidden="true"></span><span class="name">${escapeHtml(name)}</span></button>`;
+    }).join("");
+    mountTemplate(this, `
+      :host { display:flex; flex-wrap:wrap; gap:6px; }
+      .chip { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border:1px solid var(--border,#e3e0d9); border-radius:999px; background:var(--panel,#ffffff); font:inherit; font-size:12.5px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink,#1d1b18); cursor:pointer; }
+      .chip:hover { border-color:var(--accent,#0e6e63); }
+      .chip:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .dot { width:6px; height:6px; border-radius:50%; flex:0 0 auto; }
+      .dot.done { background:var(--success,#1a7f37); }
+      .dot.running { background:var(--muted,#635e56); animation:cap-blink 1.2s ease-in-out infinite; }
+      .dot.error { background:var(--danger,#b3261e); }
+      @keyframes cap-blink { 0%,100%{opacity:.3;} 50%{opacity:1;} }
+      @media (prefers-reduced-motion: reduce) { .dot.running { animation:none; opacity:.7; } }
+    `, chips || `<span class="empty">No tool calls.</span>`);
+  }
+  _wire() {
+    this._root.querySelectorAll(".chip").forEach((c) =>
+      c.addEventListener("click", () => this._emit("select", { index: Number(c.dataset.index) }))
+    );
+  }
+}
+customElements.define("tool-chips", ToolChips);
+
+/* <task-row name status time> — a live agent-task row (the BeautifulUI "Task
+ * Rows" primitive). A status indicator (running spinner / done check / failed
+ * cross) + the task name + a time. Emits `open` on activate + `delete` on the
+ * affordance. */
+class TaskRow extends Component {
+  static get observedAttributes() { return ["name", "status", "time", "active"]; }
+  _render() {
+    const name = this.getAttribute("name") || "Task";
+    const status = this.getAttribute("status") || "completed";
+    const time = this.getAttribute("time") || "";
+    const active = this.hasAttribute("active");
+    const indicator = status === "running"
+      ? `<span class="ind running" aria-hidden="true"><span class="spin"></span></span>`
+      : status === "failed"
+        ? `<span class="ind failed" aria-hidden="true">${ICONS.close}</span>`
+        : `<span class="ind done" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>`;
+    mountTemplate(this, `
+      :host { display:block; }
+      .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:10px; cursor:pointer; }
+      .row:hover { background:var(--panel-2,#efede8); }
+      :host([active]) .row { border-color:var(--accent,#0e6e63); background:var(--panel,#ffffff); }
+      .ind { width:18px; height:18px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; }
+      .ind.done { color:var(--success,#1a7f37); }
+      .ind.failed { color:var(--danger,#b3261e); }
+      .ind.running { color:var(--muted,#635e56); }
+      .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:cap-spin 1s linear infinite; display:inline-block; }
+      .name { flex:1; min-width:0; font-size:14px; color:var(--ink,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .time { flex:0 0 auto; font-size:12px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
+      .del { flex:0 0 auto; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:2px 4px; font:inherit; font-size:15px; line-height:1; border-radius:6px; }
+      .del:hover { color:var(--danger,#b3261e); background:var(--panel-2,#efede8); }
+      .del:focus-visible, .row:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @keyframes cap-spin { to { transform:rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+    `, `<div class="row" role="button" tabindex="0" aria-current="${active ? "true" : "false"}">
+        ${indicator}<span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>${time ? `<span class="time">${escapeHtml(time)}</span>` : ""}<button type="button" class="del" aria-label="Delete ${escapeHtml(name)}">×</button></div>`);
+  }
+  _wire() {
+    this._root.querySelector(".row")?.addEventListener("click", () => this._emit("open"));
+    this._root.querySelector(".row")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open"); }
+    });
+    this._root.querySelector(".del")?.addEventListener("click", (e) => {
+      e.stopPropagation(); this._emit("delete");
+    });
+  }
+}
+customElements.define("task-row", TaskRow);
+
+/* <streaming-text content sources='[]' actions='[]' streaming> — a streamed answer
+ * with inline source chips + follow-up actions (the BeautifulUI "Streaming Text"
+ * primitive). A live caret shows while `streaming`; sources + actions are the
+ * trusted inline affordances. */
+class StreamingText extends Component {
+  static get observedAttributes() { return ["content", "sources", "actions", "streaming"]; }
+  _render() {
+    const content = this.getAttribute("content") ?? "";
+    const streaming = this.hasAttribute("streaming");
+    const sources = parseJSONAttr(this.getAttribute("sources"), []);
+    const actions = parseJSONAttr(this.getAttribute("actions"), []);
+    const sourceChips = (Array.isArray(sources) ? sources : []).map((s, i) =>
+      `<span class="src" data-index="${i}">${escapeHtml(typeof s === "object" ? (s.label ?? s.url ?? "source") : String(s))}</span>`
+    ).join("");
+    const actionBtns = (Array.isArray(actions) ? actions : []).map((a, i) =>
+      `<button type="button" class="act" data-index="${i}">${escapeHtml(typeof a === "object" ? (a.label ?? a.text ?? "action") : String(a))}</button>`
+    ).join("");
+    mountTemplate(this, `
+      :host { display:block; }
+      .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); white-space:pre-wrap; overflow-wrap:anywhere; }
+      :host([streaming]) .body::after { content:""; display:inline-block; width:6px; height:14px; margin-left:2px; background:var(--accent,#0e6e63); vertical-align:-2px; animation:cap-caret 1s steps(1) infinite; }
+      .srcs { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+      .src { font-size:11px; color:var(--muted,#635e56); border:1px solid var(--border,#e3e0d9); border-radius:999px; padding:2px 8px; }
+      .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+      .act { border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); color:var(--accent,#0e6e63); border-radius:999px; padding:4px 12px; font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; }
+      .act:hover { border-color:var(--accent,#0e6e63); }
+      .act:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @keyframes cap-caret { 0%,100%{opacity:1;} 50%{opacity:0;} }
+      @media (prefers-reduced-motion: reduce) { :host([streaming]) .body::after { animation:none; opacity:.6; } }
+    `, `<div class="body">${renderMarkdown(content)}</div>${sourceChips ? `<div class="srcs">${sourceChips}</div>` : ""}${actionBtns ? `<div class="acts">${actionBtns}</div>` : ""}`);
+  }
+  _wire() {
+    this._root.querySelectorAll(".act").forEach((b) =>
+      b.addEventListener("click", () => this._emit("action", { index: Number(b.dataset.index) }))
+    );
+    this._root.querySelectorAll(".src").forEach((s) =>
+      s.addEventListener("click", () => this._emit("source", { index: Number(s.dataset.index) }))
+    );
+  }
+}
+customElements.define("streaming-text", StreamingText);
+
+/* <approval-card title body> — a human-in-the-loop approval (the BeautifulUI
+ * "Approval Card" primitive). The agent asks before acting; the owner Approves
+ * or Denies. Emits `approve` / `deny`. */
+class ApprovalCard extends Component {
+  static get observedAttributes() { return ["title", "body", "approve-label", "deny-label"]; }
+  _render() {
+    const title = this.getAttribute("title") || "Approve this action?";
+    const body = this.getAttribute("body") || "";
+    const approveLabel = this.getAttribute("approve-label") || "Approve";
+    const denyLabel = this.getAttribute("deny-label") || "Deny";
+    mountTemplate(this, `
+      :host { display:block; }
+      .card { border:1px solid var(--border,#e3e0d9); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:440px; }
+      .title { font-size:14px; font-weight:600; color:var(--ink,#1d1b18); margin:0 0 4px; }
+      .body { font-size:13px; color:var(--muted,#635e56); margin:0 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+      .actions { display:flex; gap:8px; }
+      .approve { border:0; border-radius:8px; padding:7px 16px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
+      .deny { border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:7px 16px; background:var(--panel,#ffffff); color:var(--ink,#1d1b18); cursor:pointer; font:inherit; }
+      .approve:focus-visible, .deny:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+    `, `<div class="card" role="group" aria-label="Approval request">
+        <p class="title">${escapeHtml(title)}</p>
+        ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
+        <div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>
+      </div>`);
+  }
+  _wire() {
+    this._root.querySelector(".approve")?.addEventListener("click", () => this._emit("approve"));
+    this._root.querySelector(".deny")?.addEventListener("click", () => this._emit("deny"));
+  }
+}
+customElements.define("approval-card", ApprovalCard);
+
+/* <prompt-bar placeholder model> — the BeautifulUI "Prompt Bar" primitive: a
+ * composer with @ sources, / commands, a model picker, and dictation. Composes
+ * the atomic mic-button + attach-button + a model picker + the mention/command
+ * popups (anchor-positioned, in-bounds). Emits `send`, `model-change`,
+ * `mention`, `command`. */
+class PromptBar extends Component {
+  static get observedAttributes() { return ["placeholder", "model"]; }
+  _render() {
+    const placeholder = this.getAttribute("placeholder") || "Ask anything, or @mention a site agent…";
+    const model = this.getAttribute("model") || "demo";
+    mountTemplate(this, `
+      :host { display:block; }
+      .bar { display:flex; align-items:flex-end; gap:8px; border:1px solid var(--border,#e3e0d9); border-radius:14px; background:var(--panel,#ffffff); padding:8px 10px; }
+      .bar:focus-within { border-color:var(--accent,#0e6e63); }
+      textarea { flex:1; border:0; background:transparent; resize:none; font:inherit; font-size:14px; line-height:1.5; color:var(--ink,#1d1b18); padding:6px 2px; min-height:24px; max-height:160px; outline:none; }
+      textarea::placeholder { color:var(--muted,#635e56); }
+      .tools { display:flex; align-items:center; gap:4px; flex:0 0 auto; }
+      .model { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border,#e3e0d9); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); cursor:pointer; background:var(--panel,#ffffff); }
+      .model:hover { border-color:var(--accent,#0e6e63); }
+      .model:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .pop { display:none; position:absolute; z-index:20; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.15); min-width:220px; max-height:260px; overflow:auto; padding:6px; }
+      .pop.open { display:block; }
+      .pop button { display:block; width:100%; text-align:left; background:transparent; border:0; border-radius:7px; padding:7px 10px; font:inherit; font-size:13px; color:var(--ink,#1d1b18); cursor:pointer; }
+      .pop button:hover, .pop button[aria-selected="true"] { background:var(--panel-2,#efede8); }
+      .pop .head { font-size:11px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
+    `, `<div class="bar">
+        <textarea id="pb-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Prompt"></textarea>
+        <div class="tools">
+          <button type="button" class="model" id="pb-model" aria-haspopup="listbox" aria-expanded="false">${escapeHtml(model)} ▾</button>
+          <mic-button label="Dictate" aria-label="Dictate"></mic-button>
+          <attach-button label="Attach" aria-label="Attach"></attach-button>
+        </div>
+        <div class="pop" id="pb-pop" role="listbox" aria-label="Suggestions"></div>
+      </div>`);
+  }
+  _wire() {
+    const ta = this._root.querySelector("#pb-input");
+    const pop = this._root.querySelector("#pb-pop");
+    const modelBtn = this._root.querySelector("#pb-model");
+    // Auto-grow the textarea.
+    ta?.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; });
+    ta?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._emit("send", { text: ta.value }); ta.value = ""; ta.style.height = "auto"; }
+    });
+    // @ sources + / commands: show a small suggestion popup (anchor-positioned,
+    // in-bounds). The host wires the real mention/command data; here we surface
+    // the events so the extension can populate them.
+    ta?.addEventListener("input", () => {
+      const v = ta.value;
+      const m = v.match(/(?:^|\s)([@/])([\w-]*)$/);
+      if (!m) { pop.classList.remove("open"); modelBtn.setAttribute("aria-expanded", "false"); return; }
+      const trigger = m[1];
+      this._emit(trigger === "@" ? "mention" : "command", { query: m[2] });
+      pop.classList.add("open");
+      modelBtn.setAttribute("aria-expanded", "true");
+      const anchor = ta.getBoundingClientRect();
+      pop.style.position = "fixed";
+      pop.style.left = Math.max(8, Math.min(anchor.left, window.innerWidth - 228)) + "px";
+      pop.style.top = (anchor.top - 8) + "px";
+      pop.innerHTML = `<div class="head">${trigger === "@" ? "Mention an agent" : "Commands"}</div>`;
+    });
+    modelBtn?.addEventListener("click", () => {
+      const open = pop.classList.toggle("open");
+      modelBtn.setAttribute("aria-expanded", String(open));
+      pop.innerHTML = `<div class="head">Model</div>`;
+    });
+    // Dictation + attachments (composed from the atomic components).
+    this._root.querySelector("mic-button")?.addEventListener("transcript", (e) => {
+      ta.value = e.detail?.text ?? "";
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    this._root.querySelector("attach-button")?.addEventListener("attach", (e) =>
+      this._emit("attach", e.detail)
+    );
+    this._root.querySelector("attach-button")?.addEventListener("attach-media", (e) =>
+      this._emit("attach-media", e.detail)
+    );
+  }
+}
+customElements.define("prompt-bar", PromptBar);
+
 /* <agent-dialog title> — consistent modal dialog (slotted content), built on the
  * native <dialog> element so close (X), light-dismiss (backdrop click), Escape,
  * focus trap, and focus-return are native behaviors. */

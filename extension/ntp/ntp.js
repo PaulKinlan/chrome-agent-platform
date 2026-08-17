@@ -497,20 +497,23 @@ function renderRunStatus(s) {
   runStatusEl.hidden = false;
   runStatusEl.className = "run-status" + (state === "done" ? " done" : state === "error" ? " error" : "");
   runStatusEl.replaceChildren();
-  const spin = document.createElement("span");
-  spin.className = "spin";
-  spin.setAttribute("aria-hidden", "true");
-  const label = document.createElement("span");
-  label.className = "rs-label";
   if (state === "working") {
-    runStatusEl.append(spin);
-    label.textContent = "Working… " + (s.activity || "thinking…");
-  } else if (state === "done") {
-    label.textContent = "Done";
-  } else if (state === "error") {
-    label.textContent = "Failed — " + (s.message || "error");
+    // The BeautifulUI-inspired working indicator (a pixel-grid loader + the
+    // live activity label), reused from the shared design system.
+    const loader = document.createElement("loading-state");
+    loader.setAttribute("label", s.activity || "thinking…");
+    loader.setAttribute("active", "");
+    runStatusEl.append(loader);
+  } else {
+    const label = document.createElement("span");
+    label.className = "rs-label";
+    if (state === "done") {
+      label.textContent = "Done";
+    } else if (state === "error") {
+      label.textContent = "Failed — " + (s.message || "error");
+    }
+    runStatusEl.append(label);
   }
-  runStatusEl.append(label);
 }
 
 /** Run a turn in the thread surface (a new task, or a nudge). */

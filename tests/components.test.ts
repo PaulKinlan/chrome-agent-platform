@@ -47,9 +47,14 @@ const COMPONENTS = [
   "mic-button",
   "attach-button",
   "theme-picker",
+  "switch-toggle",
   "permission-row",
+  "capability-row",
   "site-agent-card",
+  "artifact-card",
+  "code-block",
   "message-bubble",
+  "agent-conversation",
   "screenshot-strip",
   "agent-composer",
   "agent-dialog",
@@ -58,6 +63,14 @@ const COMPONENTS = [
   "agent-nav",
   "error-console",
   "security-shield",
+  // BeautifulUI-inspired primitives
+  "loading-state",
+  "thinking-trace",
+  "tool-chips",
+  "task-row",
+  "streaming-text",
+  "approval-card",
+  "prompt-bar",
 ];
 
 Deno.test("components: every design-system element registers as a custom element", async () => {

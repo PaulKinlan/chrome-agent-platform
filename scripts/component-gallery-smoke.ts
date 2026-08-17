@@ -317,6 +317,29 @@ async function main() {
       consoleButtons.openAfterTrigger === true &&
       consoleButtons.openAfterCopyAll === true &&
       consoleButtons.openAfterClear === true, consoleButtons);
+
+    // The BeautifulUI-inspired primitives render their shadow content (not
+    // empty/blank) + expose the key affordances.
+    const bui = await evl(s.sessionId, `(()=>{
+      const pick = (n) => document.querySelector(n);
+      const renderLen = (n) => { const e = pick(n); return e && e.shadowRoot ? e.shadowRoot.textContent.trim().length : -1; };
+      return {
+        loadingGrid: !!(pick('loading-state')?.shadowRoot?.querySelector('.grid')),
+        thinkingDetails: !!(pick('thinking-trace')?.shadowRoot?.querySelector('details')),
+        toolChipCount: (pick('tool-chips')?.shadowRoot?.querySelectorAll('.chip')?.length ?? 0),
+        taskRowInd: !!(pick('task-row')?.shadowRoot?.querySelector('.ind')),
+        streamingCaret: !!(pick('streaming-text[streaming]')?.shadowRoot?.querySelector('.body')),
+        approvalButtons: (pick('approval-card')?.shadowRoot?.querySelectorAll('button')?.length ?? 0),
+        promptBarInput: !!(pick('prompt-bar')?.shadowRoot?.querySelector('#pb-input')),
+      };
+    })()`);
+    check("loading-state renders the pixel grid", bui.loadingGrid === true, bui);
+    check("thinking-trace renders a collapsible details", bui.thinkingDetails === true, bui);
+    check("tool-chips renders 3 chips", bui.toolChipCount === 3, bui);
+    check("task-row renders a status indicator", bui.taskRowInd === true, bui);
+    check("streaming-text[streaming] renders the body + caret", bui.streamingCaret === true, bui);
+    check("approval-card renders Approve/Deny buttons", bui.approvalButtons === 2, bui);
+    check("prompt-bar renders the composer input", bui.promptBarInput === true, bui);
   } finally {
     try { ws.close(); } catch { /* ignore */ }
     try { proc.kill("SIGKILL"); } catch { /* ignore */ }

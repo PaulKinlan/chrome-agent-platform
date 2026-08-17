@@ -139,6 +139,70 @@
         <p class="caption">a shield icon + the security posture: granted optional permissions + CSP/denied-hook/blocked-action violations. An <code>attention</code> attribute flags violations.</p>
       </div>
 
+      <!-- ── BeautifulUI-inspired AI-native primitives ───────────── -->
+      <h2 class="section">BeautifulUI-inspired primitives</h2>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;loading-state&gt;</code> — the pixel-grid loader + elapsed time</h3>
+        <div class="stage row">
+          <loading-state label="Working…" active></loading-state>
+          <loading-state label="Scheduling" elapsed="3" active></loading-state>
+        </div>
+        <p class="caption">a calm pixel-grid working indicator (not a generic spinner); <code>active</code> animates, <code>elapsed</code> shows the time.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;thinking-trace&gt;</code> — an expandable reasoning trace</h3>
+        <div class="stage column" style="max-width:520px">
+          <thinking-trace label="reasoning · 3 steps" steps='[{"label":"List the tabs","text":"tab_list returned 12 tabs across 2 windows."},{"label":"Group by domain","text":"github.com ×4, news.ycombinator.com ×3, others ×5."},{"label":"Name each group","text":"Use the domain, colour from the hash."}]'></thinking-trace>
+          <thinking-trace label="working…"><span>grouping tabs by domain…</span></thinking-trace>
+        </div>
+        <p class="caption">a muted, collapsible <code>&lt;details&gt;</code> of the agent's steps — never a wall of text. Emits <code>toggle</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;tool-chips&gt;</code> — tool calls as compact chips</h3>
+        <div class="stage row">
+          <tool-chips tools='[{"name":"tab_list","status":"done"},{"name":"tab_group","status":"running"},{"name":"navigate","status":"error"}]'></tool-chips>
+        </div>
+        <p class="caption">each chip: the tool name + a status dot (done/running/error). Emits <code>select</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;task-row&gt;</code> — a live task-status row</h3>
+        <div class="stage column" style="max-width:360px">
+          <task-row name="Summarise the docs" status="completed" time="2m ago" active></task-row>
+          <task-row name="Group tabs by domain" status="running" time="now"></task-row>
+          <task-row name="Diff the branch" status="failed" time="8m ago"></task-row>
+        </div>
+        <p class="caption">a status indicator (done / running / failed) + the name (ellipsized) + the time. Emits <code>open</code> / <code>delete</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;streaming-text&gt;</code> — a streamed answer with sources + actions</h3>
+        <div class="stage column" style="max-width:520px">
+          <streaming-text content="This page argues three things: **a**, **b**, and **c**." sources='["paul.kinlan.me","github.com"]' actions='["Summarise further","Compare with the spec"]'></streaming-text>
+          <streaming-text content="Still generating the next section" streaming></streaming-text>
+        </div>
+        <p class="caption">a live caret while <code>streaming</code>; inline source chips + follow-up actions. Emits <code>action</code> / <code>source</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;approval-card&gt;</code> — a human-in-the-loop approval</h3>
+        <div class="stage column" style="max-width:440px">
+          <approval-card title="Open 4 tabs into a group?" body="The agent wants to group github.com ×4 into a colour-coded tab group." approve-label="Approve" deny-label="Deny"></approval-card>
+        </div>
+        <p class="caption">the agent asks before acting; the owner Approves or Denies. Emits <code>approve</code> / <code>deny</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;prompt-bar&gt;</code> — the composer with @ sources + / commands + a model picker + dictation</h3>
+        <div class="stage column" style="max-width:640px">
+          <prompt-bar model="demo" placeholder="Ask anything, or @mention a site agent…"></prompt-bar>
+        </div>
+        <p class="caption">a composer composed from the atomic <code>mic-button</code> + <code>attach-button</code> + a model picker + the @ / popups. Emits <code>send</code>, <code>mention</code>, <code>command</code>, <code>model-change</code>.</p>
+      </div>
+
       <!-- ── Composite ───────────────────────────────────────────── -->
       <h2 class="section">Composite components</h2>
 
