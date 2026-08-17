@@ -8,6 +8,7 @@ import {
   requestCapability,
 } from "../lib/capabilities.js";
 import { testProvider } from "../lib/provider-test.js";
+import { requestProviderHostAccess } from "../lib/provider-gate.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
@@ -237,11 +238,19 @@ async function renderProviders(restoreFocus = false) {
       });
       // Route through the worker's provider.set so the running agent's cached
       // model/orchestrator is invalidated immediately (no stale provider).
+      // FIRST request the provider's OPTIONAL host permission (this click is the
+      // user gesture) — without it, the service worker's fetch to the provider
+      // fails with "Failed to fetch" (the root cause Paul hit).
+      const host = await requestProviderHostAccess(fields);
       await chrome.runtime.sendMessage({
         type: "provider.set",
         config: { provider: p.id, ...fields },
       });
-      await saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
+      await saveFlash(
+        host.granted === false
+          ? `Saved ${p.name}, but network access was NOT granted — the agent can't reach it. Re-enable it when Chrome asks.`
+          : (isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`),
+      );
       renderProviders(true);
     });
     card.querySelector(".test-connection")?.addEventListener("click", async () => {
@@ -265,6 +274,9 @@ async function renderProviders(restoreFocus = false) {
       testStatus.className = "test-status testing";
       testStatus.textContent = "Testing…";
       testBtn.disabled = true;
+      // Request the provider's OPTIONAL host permission (this click is a real
+      // user gesture) — the test fetch fails without it.
+      await requestProviderHostAccess(fields);
       const res = await testProvider(p, fields);
       testBtn.disabled = false;
       testStatus.className = "test-status " + (res.ok ? "ok" : "err");

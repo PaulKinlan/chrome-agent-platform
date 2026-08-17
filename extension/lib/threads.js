@@ -266,7 +266,8 @@ export async function continueThread(id, task) {
   });
 }
 
-/** Mark a thread's final status (done / error). */
+/** Mark a thread's final status (done / error). A successful transition clears
+ * any prior error detail (a retry that succeeds wipes the stale failure). */
 export async function setThreadStatus(id, status) {
   if (!id) return;
   return withThreadLock(async () => {
@@ -274,15 +275,56 @@ export async function setThreadStatus(id, status) {
   const thread = (await mem.get(`thread:${id}`)) ?? null;
   if (!thread) return;
   thread.status = status;
+  if (status === "done") delete thread.lastError;
   thread.updatedAt = Date.now();
   await mem.setTrusted(`thread:${id}`, thread);
   const index = (await mem.get(INDEX_KEY)) ?? [];
   const row = index.find((r) => r.id === id);
   if (row) {
     row.status = status;
+    if (status === "done") delete row.error;
     row.updatedAt = thread.updatedAt;
     await writeIndex(index);
   }
+  });
+}
+
+/** Record a task FAILURE so the user can see WHY it failed (not just a red
+ * dot): append an `error` message to the thread + store a `lastError` detail
+ * (message + the tool that failed) + mark the thread "error" + surface the
+ * error as the index preview. The thread surface renders the `error` message as
+ * a danger-styled bubble (MessageBubble role="error"). */
+export async function recordThreadError(id, detail) {
+  if (!id) return null;
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    if (!thread) return null;
+    const message = boundText(String(detail?.message ?? "run failed"));
+    const tool = detail?.tool ? String(detail.tool) : null;
+    thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+    thread.messages.push({
+      role: "error",
+      content: message,
+      tool: tool ?? undefined,
+      ts: Date.now(),
+    });
+    thread.messages = trimMessages(thread.messages);
+    thread.status = "error";
+    thread.lastError = { message, tool, at: Date.now() };
+    thread.updatedAt = Date.now();
+    await mem.setTrusted(`thread:${id}`, thread);
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const row = index.find((r) => r.id === id);
+    if (row) {
+      row.status = "error";
+      row.error = message;
+      row.preview = message;
+      row.updatedAt = thread.updatedAt;
+      row.count = thread.messages.length;
+      await writeIndex(index);
+    }
+    return thread;
   });
 }
 

@@ -13,6 +13,8 @@ import {
   getThread,
   historyFromThread,
   listThreads,
+  recordThreadError,
+  setThreadStatus,
 } from "../extension/lib/threads.js";
 
 // ---- minimal in-memory OPFS fake ----
@@ -151,6 +153,39 @@ Deno.test("concurrent createThread calls never lose an index row (wider-goal thr
   for (const t of ids) {
     assert(indexed.has(t.id), `thread ${t.id} must be in the index`);
   }
+});
+
+Deno.test("recordThreadError stores the failure detail + surfaces the error preview", async () => {
+  const t = await createThread("summarise a page");
+  await recordThreadError(t.id, { message: "No output generated", tool: "open_tab" });
+
+  const thread = await getThread(t.id);
+  assertEquals(thread.status, "error");
+  assertEquals(thread.lastError.message, "No output generated");
+  assertEquals(thread.lastError.tool, "open_tab");
+  // The error is an `error`-role message in the thread (rendered as a danger bubble).
+  const last = thread.messages[thread.messages.length - 1];
+  assertEquals(last.role, "error");
+  assertEquals(last.content, "No output generated");
+
+  const index = await listThreads();
+  const row = index.find((r) => r.id === t.id);
+  assertEquals(row.status, "error");
+  assertEquals(row.preview, "No output generated", "the error is the list preview");
+});
+
+Deno.test("a successful retry clears the prior error detail", async () => {
+  const t = await createThread("summarise a page");
+  await recordThreadError(t.id, { message: "failed" });
+  await appendThreadMessage(t.id, { role: "assistant", content: "done now" });
+  await setThreadStatus(t.id, "done");
+
+  const thread = await getThread(t.id);
+  assertEquals(thread.status, "done");
+  assertEquals(thread.lastError, undefined, "a success clears the stale error");
+  const index = await listThreads();
+  const row = index.find((r) => r.id === t.id);
+  assertEquals(row.status, "done");
 });
 
 Deno.test("deleteThread removes the index row AND the body atomically (item 17)", async () => {

@@ -72,3 +72,8 @@ Verified working: the threads feature end-to-end, the toggles (the blank-toggle 
 37. **Capture camera: videoCapture permission denied** — the permission request isn't working (request videoCapture on the gesture).
 38. **Record audio: audioCapture permission denied** — same (request audioCapture on the gesture).
 39. **The + menu permissions aren't managed** — each option must request its permission properly + work. DEEP-test each in the REAL extension.
+
+## URGENT interaction bugs (Paul 2026-08-17) — scale out, fix fast
+40. **The error-console buttons CLOSE the console instead of working** — clicking copy-all / copy / clear closes the panel (the button click is treated as an outside-click-to-close). The buttons must WORK (copy the line, copy all, clear) WITHOUT closing the console.
+41. **The security-panel permission toggles do nothing** — toggling/removing a granted permission doesn't work (asked before).
+42. **Task errors aren't logged to the task** — when a task errors, the task shows red but no error detail; the errors must be logged to the task (a detailed error view per task).

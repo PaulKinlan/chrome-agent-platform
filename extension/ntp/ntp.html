@@ -51,6 +51,7 @@
     .side.collapsed .brand, .side.collapsed .side-label,
     .side.collapsed .thread-item .t-name, .side.collapsed .thread-item .t-preview,
     .side.collapsed .thread-item .t-meta,
+    .side.collapsed .thread-empty,
     .side.collapsed .foot-btn .btn-label { display: none; }
     .side.collapsed .thread-item { padding: 8px; align-items: center; justify-content: center; min-height: 34px; }
     .side.collapsed .side-foot { align-items: center; }
@@ -231,8 +232,8 @@
     /* ── activity overview sections ── */
     section { margin-bottom: 32px; }
     .runlog { display: flex; flex-direction: column; gap: 4px; }
-    .runlog .empty { padding: 8px 0; color: var(--muted); font-size: 13px; }
-    .rl { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .runlog .empty { padding: 8px 14px; color: var(--muted); font-size: 13px; }
+    .rl { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; border-bottom: 1px solid var(--border); }
     .rl:last-child { border-bottom: 0; }
     .rl .rl-kind { flex: 0 0 auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
     .rl .rl-kind.task { color: var(--accent); }
