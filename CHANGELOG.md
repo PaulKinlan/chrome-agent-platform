@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2] — 2026-08-17
+- (describe the change)
+
+## [0.2.1] — 2026-08-17
+- (describe the change)
+
 All notable changes to the Chrome Agent Platform. Semantic versioning: MAJOR.MINOR.PATCH.
 
 ## [0.2.0] — 2026-08-16
