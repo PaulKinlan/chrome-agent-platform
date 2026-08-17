@@ -9,6 +9,7 @@ import {
 } from "../lib/capabilities.js";
 import { testProvider } from "../lib/provider-test.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
+import { modelsForVendor } from "../lib/model-prices.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
@@ -31,7 +32,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["gpt-5.6", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o4-mini", "o3", "o3-mini"],
+    models: modelsForVendor("openai"),
   },
   {
     id: "anthropic",
@@ -41,7 +42,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["claude-opus-4-8", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-7-sonnet"],
+    models: modelsForVendor("anthropic"),
   },
   {
     id: "gemini",
@@ -51,7 +52,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
+    models: modelsForVendor("gemini"),
   },
   {
     id: "deepseek",
@@ -61,7 +62,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["deepseek-chat", "deepseek-reasoner"],
+    models: modelsForVendor("deepseek"),
   },
   {
     id: "openai-compatible",

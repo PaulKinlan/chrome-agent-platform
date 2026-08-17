@@ -22,11 +22,11 @@ async function _loggingFetch(input, init) {
       _loggedFetchFailures.add(key);
       let body = "";
       try {
-        body = (await res.clone().text()).slice(0, 500);
+        body = await res.clone().text();
       } catch { /* ignore */ }
       // eslint-disable-next-line no-console
       console.error(
-        `[provider] HTTP ${res.status} from ${url}${body ? ` — ${body}` : ""}`,
+        `[provider] HTTP ${res.status} from ${url} — REQ ${JSON.stringify(init?.body ?? "").slice(0, 4000)} — RES ${body.slice(0, 4000)}`,
       );
     }
   }

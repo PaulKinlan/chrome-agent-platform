@@ -214,3 +214,64 @@ export const MODEL_PRICING = {
   "sonar-reasoning": { input: 2, output: 8 },
   "text-davinci-003": { input: 20, output: 20 },
 };
+
+// ── Vendor model lists (driven by the pricing data above — single source of
+// truth, so the settings dropdowns never drift from the bundled pricing). ──
+
+// Which models belong to which chat provider, by id prefix. Filtered against
+// MODEL_PRICING so only priced (real/current) models appear.
+const VENDOR_PREFIXES = {
+  openai: ["gpt-", "o1", "o3", "o4", "chatgpt-"],
+  anthropic: ["claude-"],
+  gemini: ["gemini-"],
+  deepseek: ["deepseek-"],
+};
+
+// Family weight — breaks ties when two models share a version (e.g. gpt-5.6
+// vs gpt-5.6-luna), so the more-capable family sorts first.
+const FAMILY = [
+  ["pro", "terra", "sol", "opus"],
+  ["sonnet", "luna", "reasoner", "preview"],
+  ["flash", "chat", "haiku"],
+  ["coder", "fable", "mythos", "lite", "mini", "nano", "deep-research", "codex"],
+];
+function familyRank(id) {
+  const lower = id.toLowerCase();
+  let best = 999;
+  FAMILY.forEach((tier, idx) => {
+    if (tier.some((f) => lower.includes(f))) best = Math.min(best, idx);
+  });
+  return best;
+}
+
+// Extract a comparable [major, minor] version from a model id.
+function versionOf(id) {
+  const m = id.match(/[-\s]?(\d+)(?:[._-](\d+))?/);
+  if (!m) return [0, 0];
+  return [parseInt(m[1], 10), m[2] ? parseInt(m[2], 10) : 0];
+}
+
+// The newest/most-capable first: version desc, then family tier asc, then
+// the fuller id (a variant like "…-272k" sorts after its base) desc.
+function sortNewestFirst(a, b) {
+  const [am, an] = versionOf(a);
+  const [bm, bn] = versionOf(b);
+  if (bm !== am) return bm - am;
+  if (bn !== an) return bn - an;
+  const fr = familyRank(a) - familyRank(b);
+  if (fr !== 0) return fr;
+  return b.length - a.length;
+}
+
+/**
+ * The current chat models for a provider, derived from MODEL_PRICING and
+ * sorted newest-first. Returns [] for providers without a vendor mapping.
+ */
+export function modelsForVendor(vendor) {
+  const prefixes = VENDOR_PREFIXES[vendor];
+  if (!prefixes) return [];
+  return Object.keys(MODEL_PRICING)
+    .filter((id) => prefixes.some((p) => id.startsWith(p)))
+    .filter((id) => !id.includes("image"))
+    .sort(sortNewestFirst);
+}
