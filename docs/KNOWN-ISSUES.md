@@ -71,8 +71,8 @@ The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
 - Full-suite-green gate; visual verification (no "it serves" as "it works").
 
 ## Fresh sol review (HEAD 0ffd991) — CRITICAL + HIGH
-- **CRITICAL: the storage-hook paid recursion is NOT fixed** — the storage mapper returns changedKeys:[] for internal keys but bind() still dispatches for EVERY storage event; the in-memory limiter throttles but doesn't terminate + resets on SW restart. Internal writes still invoke the subscribed agent.
-- **HIGH: the "scoped" hook runs still expose durable/destructive tools** — browserToolset includes schedule_task + browser actions; memory_set is always added. Prompt-injected event data can persist state/schedule future runs. Scoped != side-effect-free.
+- **[FIXED 78d630a] CRITICAL: the storage-hook paid recursion** — terminated (internal writes return null, never dispatch). ~~NOT fixed~~ — the storage mapper returns changedKeys:[] for internal keys but bind() still dispatches for EVERY storage event; the in-memory limiter throttles but doesn't terminate + resets on SW restart. Internal writes still invoke the subscribed agent.
+- **[FIXED 78d630a] HIGH: the scoped hook runs** — now side-effect-free. ~~still expose durable/destructive tools~~ — browserToolset includes schedule_task + browser actions; memory_set is always added. Prompt-injected event data can persist state/schedule future runs. Scoped != side-effect-free.
 - **HIGH: hook fan-out is unbounded** — no registry count/template-byte/recipe validation bounds; unique recipeIds let one event enqueue unbounded runs.
 - **HIGH: the model-facing enroll_origin lacks a per-origin owner grant** — broad host access lets the model activate any origin without a fresh exact-origin gesture.
 - **HIGH correctness: concurrent follow-ups take thread history before run serialization (diverge); nameThreadAsync holds the global thread mutex while awaiting the Prompt API title.**
