@@ -73,9 +73,9 @@ export function historyFromJournal(journal) {
 // appendBubble routes a role to the container's rich methods when it is an
 // <agent-conversation>, with a plain <message-bubble> fallback for any other
 // element (so callers never need to know which surface they're driving).
-export function appendBubble(container, role, text) {
+export function appendBubble(container, role, text, attachments) {
   const c = container;
-  if (role === "user" && typeof c.appendUser === "function") return c.appendUser(text);
+  if (role === "user" && typeof c.appendUser === "function") return c.appendUser(text, undefined, attachments);
   if (role === "agent" && typeof c.appendAgent === "function") return c.appendAgent(text);
   if (role === "system" && typeof c.appendSystem === "function") return c.appendSystem(text);
   if (role === "error" && typeof c.appendError === "function") return c.appendError(text);
@@ -97,7 +97,7 @@ export function renderJournal(container, journal) {
         (r?.type === "task" && typeof r.task === "string" && r.task.trim()) ||
         (r?.type === "result" && typeof r.result === "string" && r.result.trim()))
       .map((r) => r.type === "task"
-        ? { role: "user", content: r.task }
+        ? { role: "user", content: r.task, attachments: r.attachments }
         : { role: "agent", content: r.result }));
     return;
   }
@@ -111,7 +111,7 @@ export function renderJournal(container, journal) {
   }
   for (const r of rows.slice(-20)) {
     if (r?.type === "task" && typeof r.task === "string") {
-      appendBubble(container, "user", r.task);
+      appendBubble(container, "user", r.task, r.attachments);
     } else if (r?.type === "result" && typeof r.result === "string") {
       appendBubble(container, "agent", r.result);
     }
@@ -190,7 +190,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
   const runId = newRunId();
 
   // 1. the user's turn appears immediately — the surface becomes a conversation.
-  appendBubble(c, "user", text);
+  appendBubble(c, "user", text, attachments);
 
   // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
   //    trace when reasoning arrives).

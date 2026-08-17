@@ -18,6 +18,7 @@
 // budget per thread so a long conversation cannot grow the store unbounded.
 
 import { masterMemory } from "./memory.js";
+import { sanitizeAttachments } from "./attachments.js";
 import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-model.js";
 
 const INDEX_KEY = "threads";
@@ -141,7 +142,7 @@ export async function generateThreadName(task) {
  * so the task is never blocked on a model call. Returns the thread. The caller
  * should then call `nameThreadAsync` to upgrade the name via the model.
  */
-export async function createThread(task) {
+export async function createThread(task, attachments) {
   return withThreadLock(async () => {
   const mem = masterMemory();
   const id = newThreadId();
@@ -150,7 +151,7 @@ export async function createThread(task) {
   const thread = {
     id,
     name: fallbackName,
-    messages: [{ role: "user", content: boundText(task), ts: now }],
+    messages: [{ role: "user", content: boundText(task), ts: now, ...(sanitizeAttachments(attachments) ? { attachments: sanitizeAttachments(attachments) } : {}) }],
     createdAt: now,
     updatedAt: now,
     status: "running",
@@ -227,10 +228,12 @@ export async function appendThreadMessage(id, message) {
   if (!thread) return null;
   const { role = "assistant", content = "" } = message ?? {};
   thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+  const att = sanitizeAttachments(message?.attachments);
   thread.messages.push({
     role,
     content: boundText(content),
     ts: Date.now(),
+    ...(att ? { attachments: att } : {}),
   });
   thread.messages = trimMessages(thread.messages);
   thread.updatedAt = Date.now();
@@ -256,7 +259,7 @@ export async function appendThreadMessage(id, message) {
  * read the SAME pre-append history, so the second run's model context diverged
  * from the persisted thread. The read + append + history-derivation now happen
  * under one lock. */
-export async function continueThread(id, task) {
+export async function continueThread(id, task, attachments) {
   if (!id) return { thread: null, history: [] };
   return withThreadLock(async () => {
     const mem = masterMemory();
@@ -264,10 +267,12 @@ export async function continueThread(id, task) {
     if (!thread) return { thread: null, history: [] };
     const history = historyFromThread(thread);
     thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+    const att = sanitizeAttachments(attachments);
     thread.messages.push({
       role: "user",
       content: boundText(task),
       ts: Date.now(),
+      ...(att ? { attachments: att } : {}),
     });
     thread.messages = trimMessages(thread.messages);
     thread.updatedAt = Date.now();

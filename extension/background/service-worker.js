@@ -18,6 +18,7 @@ import {
   logGateOnce,
 } from "../lib/provider-gate.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
+import { buildMultimodalTask } from "../lib/attachments.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -777,7 +778,9 @@ function attachmentContext(attachments) {
         parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
       } catch { /* not decodable */ }
     } else if (a.dataURL && type.startsWith("image/")) {
-      parts.push("  (image attached — bytes not described in this build)");
+      // The image bytes are now supplied to the model as a MULTIMODAL vision
+      // part (buildMultimodalTask), not described here.
+      parts.push("  (image attached — provided to the model as a vision input)");
     } else if (!textish) {
       parts.push(
         "  (media attached — not transcribed/described in this build)",
@@ -861,6 +864,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         task,
         scheduled,
         attachmentCount: attachments?.length ?? 0,
+        attachments: Array.isArray(attachments) ? attachments.map((a) => ({
+          name: a?.name ?? "attachment",
+          type: a?.type ?? "",
+          size: a?.size ?? 0,
+          kind: a?.kind ?? "file",
+          dataURL: typeof a?.dataURL === "string" ? a.dataURL : "",
+        })) : undefined,
       }, journalGuard);
       // Re-check durable ownership AFTER the task journal COMMIT (never only
       // before — the round-19 blocker: journal ownership was checked before the
@@ -879,7 +889,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // agent sees what came before).
       let result;
       try {
-        result = await orch.run(task, context + skillContext, Array.isArray(history) ? history : []);
+        result = await orch.run(buildMultimodalTask(task, attachments), context + skillContext, Array.isArray(history) ? history : []);
         recordProviderSuccess();
       } catch (e) {
         // Only a PROVIDER failure (network/config/credential) trips the
@@ -1260,11 +1270,11 @@ const handlers = {
     let threadId = null;
     let threadHistory = m.history ?? [];
     if (m.threadId) {
-      const cont = await continueThread(m.threadId, m.task).catch(() => ({ thread: null, history: [] }));
+      const cont = await continueThread(m.threadId, m.task, m.attachments).catch(() => ({ thread: null, history: [] }));
       threadId = cont.thread?.id ?? m.threadId;
       threadHistory = cont.thread ? cont.history : (m.history ?? []);
     } else {
-      const thread = await createThread(m.task).catch(() => null);
+      const thread = await createThread(m.task, m.attachments).catch(() => null);
       threadId = thread?.id ?? null;
       if (threadId) nameThreadAsync(threadId, m.task).catch(() => {});
     }

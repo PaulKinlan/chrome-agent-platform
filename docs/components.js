@@ -1296,7 +1296,15 @@ customElements.define("code-block", CodeBlock);
  * fallback), so the gallery can populate it declaratively. */
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "step", "total-steps", "error-reason", "error-action"];
+    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "step", "total-steps", "error-reason", "error-action"];
+  }
+  _attachments() {
+    const raw = this.getAttribute("attachments");
+    if (!raw) return [];
+    try {
+      const a = JSON.parse(raw);
+      return Array.isArray(a) ? a : [];
+    } catch { return []; }
   }
   _content() {
     return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
@@ -1316,6 +1324,9 @@ class MessageBubble extends Component {
       :host([role="error"]) .body { color:var(--danger,#b3261e); }
       .err-reason { font-weight:600; margin:0 0 4px; }
       .err-action { color:var(--ink,#1d1b18); margin:0; }
+      .msg .attach { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
+      .msg .attach img { max-width:100%; max-height:260px; border-radius:8px; border:1px solid var(--border,#e3e0d9); display:block; }
+      .msg .attach .file-chip { font-size:12.5px; color:var(--muted,#635e56); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:4px 8px; display:inline-flex; align-items:center; gap:6px; }
       /* markdown content inside agent/system */
       .body p { margin:0 0 8px; }
       .body p:last-child { margin-bottom:0; }
@@ -1423,7 +1434,23 @@ class MessageBubble extends Component {
       } else {
         body = (role === "agent" || role === "system" || role === "user") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
       }
-      markup = `<div class="msg ${role}"><div class="body">${body}</div></div>`;
+      // Inline attachments: image attachments render as a thumbnail so the user
+      // can SEE what they attached; other media render as a file chip.
+      const atts = this._attachments();
+      let attachHtml = "";
+      if (atts.length) {
+        const pieces = atts.map((a) => {
+          const type = String(a?.type ?? "").toLowerCase();
+          const url = String(a?.dataURL ?? "");
+          const name = String(a?.name ?? "attachment");
+          if (url.startsWith("data:image/") || type.startsWith("image/")) {
+            return `<img src="${escapeHtml(url)}" alt="${escapeHtml(name)}" loading="lazy">`;
+          }
+          return `<span class="file-chip">${escapeHtml(name)}</span>`;
+        });
+        attachHtml = `<div class="attach">${pieces.join("")}</div>`;
+      }
+      markup = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div></div>`;
     }
     mountTemplate(this, style, markup);
   }
@@ -1521,7 +1548,7 @@ class AgentConversation extends Component {
     d.textContent = formatTsLabel(ts);
     this.appendChild(d);
   }
-  appendUser(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text); }
+  appendUser(text, ts, attachments) { if (ts) this._maybeTsGap(ts); return this._bubble("user", text, attachments?.length ? { attachments: JSON.stringify(attachments) } : null); }
   appendAgent(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("agent", text); }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
   appendError(text, { reason, action, ts } = {}) {
@@ -1565,7 +1592,7 @@ class AgentConversation extends Component {
       if (!m || typeof m !== "object") continue;
       const ts = typeof m.ts === "number" ? m.ts : null;
       switch (m.role) {
-        case "user": this.appendUser(m.content, ts); break;
+        case "user": this.appendUser(m.content, ts, m.attachments); break;
         case "agent": this.appendAgent(m.content, ts); break;
         case "system": this.appendSystem(m.content, ts); break;
         case "thinking": this.appendThinking(m.content, m); break;
