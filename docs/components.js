@@ -414,51 +414,54 @@ function shortOrigin(o) {
 // Command namespaces (the / palette). Selecting one either opens its sub-items
 // or inserts the prefix for free-text commands (remember).
 export const COMMAND_NAMESPACES = [
-  { id: "task", label: "task", description: "run a recipe", kind: "recipe" },
-  { id: "schedule", label: "schedule", description: "run a recipe in the background", kind: "background" },
-  { id: "agent", label: "agent", description: "direct the message to a site agent", kind: "agent" },
   { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
+  { id: "schedule", label: "schedule", description: "run a skill in the background", kind: "background" },
+  { id: "agent", label: "agent", description: "direct the message to an agent", kind: "agent" },
   { id: "model", label: "model", description: "switch the provider/model", kind: "model" },
   { id: "theme", label: "theme", description: "switch the theme", kind: "theme" },
   { id: "remember", label: "remember", description: "write something to memory", kind: "free" },
-  { id: "focus", label: "focus", description: "protect attention", kind: "recipe" },
+  { id: "focus", label: "focus", description: "protect attention", kind: "skill" },
 ];
 
 // Sub-items for a selected command namespace, filtered by the typed argument.
 async function commandItems(ns, arg = "") {
   const q = (arg || "").toLowerCase();
-  const matches = (s) => !q || s.toLowerCase().includes(q);
+  const matches = (s) => !q || String(s ?? "").toLowerCase().includes(q);
   switch (ns) {
-    case "task": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("recipe.list").catch(() => ({})) : {};
-      return (res.recipes || [])
-        .filter((r) => r.mode !== "background")
+    case "skill": {
+      // The recipes were renamed to SKILLS (f7a49fc). `skill.list` returns the
+      // built-in + imported skills ({ skills: [{ id, name, description, ... }] }).
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("skill.list").catch(() => ({})) : {};
+      return (res.skills || [])
         .filter((r) => matches(r.name) || matches(r.id))
-        .map((r) => ({ id: `task:${r.id}`, label: r.name, description: r.description || "", kind: "recipe" }));
+        .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "skill" }));
     }
     case "schedule": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("recipe.list").catch(() => ({})) : {};
-      return (res.recipes || [])
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("skill.list").catch(() => ({})) : {};
+      return (res.skills || [])
         .filter((r) => r.mode === "background")
         .filter((r) => matches(r.name) || matches(r.id))
-        .map((r) => ({ id: `schedule:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
+        .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
     }
     case "agent": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("agent.directory").catch(() => ({})) : {};
-      return (res.agents || [])
-        .filter((a) => a.enrolled)
-        .filter((a) => matches(a.origin) || matches(a.name || ""))
-        .map((a) => ({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools`, kind: "agent" }));
-    }
-    case "skill": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("skills.all").catch(() => ({})) : {};
+      // ALL agent types, delineated: named + background + site.
+      const [named, bg, site] = await Promise.all([
+        RUNTIME_SEND ? RUNTIME_SEND("named-agent.list").catch(() => ({})) : Promise.resolve({}),
+        RUNTIME_SEND ? RUNTIME_SEND("background-agent.list").catch(() => ({})) : Promise.resolve({}),
+        RUNTIME_SEND ? RUNTIME_SEND("agent.directory").catch(() => ({})) : Promise.resolve({}),
+      ]);
       const out = [];
-      for (const [origin, skills] of Object.entries(res || {})) {
-        for (const s of skills) {
-          if (matches(s) || matches(shortOrigin(origin))) {
-            out.push({ id: `skill:${origin}:${s}`, label: s, description: shortOrigin(origin), kind: "skill" });
-          }
-        }
+      for (const a of (named.agents || [])) {
+        if (!matches(a.name) && !matches(a.id)) continue;
+        out.push({ id: `agent:${a.id ?? a.name}`, label: a.name, description: a.role || "named agent", kind: "agent" });
+      }
+      for (const a of (bg.agents || [])) {
+        if (!matches(a.name) && !matches(a.id)) continue;
+        out.push({ id: `agent:${a.id}`, label: a.name, description: (a.description || "background agent") + (a.enabled ? " · enabled" : ""), kind: "background" });
+      }
+      for (const a of (site.agents || []).filter((x) => x.enrolled)) {
+        if (!matches(a.origin) && !matches(a.name || "")) continue;
+        out.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · site agent`, kind: "agent" });
       }
       return out;
     }
@@ -472,38 +475,53 @@ async function commandItems(ns, arg = "") {
       return THEMES.filter((t) => matches(t.label) || matches(t.id))
         .map((t) => ({ id: `theme:${t.id}`, label: t.label, description: "theme", kind: "theme" }));
     case "focus": {
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("recipe.list").catch(() => ({})) : {};
-      return (res.recipes || [])
+      const res = RUNTIME_SEND ? await RUNTIME_SEND("skill.list").catch(() => ({})) : {};
+      return (res.skills || [])
         .filter((r) => r.mode === "background" && (r.category === "focus" || (r.id || "").includes("focus")))
         .filter((r) => matches(r.name) || matches(r.id))
-        .map((r) => ({ id: `task:${r.id}`, label: r.name, description: r.description || "", kind: "recipe" }));
+        .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "skill" }));
     }
     default:
       return [];
   }
 }
 
-// @ mention candidates: site agents, recipes, recent artifacts.
+// @ mention candidates: named agents, background agents, site agents, skills,
+// and recent artifacts — all delineated so the user can tell them apart.
 async function mentionCandidates(q = "") {
   const ql = (q || "").toLowerCase();
   const items = [];
+  const hit = (s) => !ql || String(s ?? "").toLowerCase().includes(ql);
   if (RUNTIME_SEND) {
-    const [agents, recipes, assets] = await Promise.all([
+    const [named, bg, site, skills, assets] = await Promise.all([
+      RUNTIME_SEND("named-agent.list").catch(() => ({ agents: [] })),
+      RUNTIME_SEND("background-agent.list").catch(() => ({ agents: [] })),
       RUNTIME_SEND("agent.directory").catch(() => ({ agents: [] })),
-      RUNTIME_SEND("recipe.list").catch(() => ({ recipes: [] })),
+      RUNTIME_SEND("skill.list").catch(() => ({ skills: [] })),
       RUNTIME_SEND("asset.list", { origin: "master" }).catch(() => ({ assets: [] })),
     ]);
-    for (const a of (agents.agents || []).filter((x) => x.enrolled)) {
+    for (const a of (named.agents || [])) {
+      if (!hit(a.name) && !hit(a.id)) continue;
+      items.push({ id: `agent:${a.id ?? a.name}`, label: a.name, description: a.role || "named agent", kind: "agent" });
+    }
+    for (const a of (bg.agents || [])) {
+      if (!hit(a.name) && !hit(a.id)) continue;
+      items.push({ id: `agent:${a.id}`, label: a.name, description: (a.description || "background agent") + (a.enabled ? " · enabled" : ""), kind: "background" });
+    }
+    for (const a of (site.agents || []).filter((x) => x.enrolled)) {
+      if (!hit(a.origin) && !hit(a.name || "")) continue;
       items.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · site agent`, kind: "agent" });
     }
-    for (const r of recipes.recipes || []) {
-      items.push({ id: `recipe:${r.id}`, label: r.name, description: r.description || "", kind: "recipe" });
+    for (const s of (skills.skills || [])) {
+      if (!hit(s.name) && !hit(s.id)) continue;
+      items.push({ id: `skill:${s.id}`, label: s.name, description: s.description || "skill", kind: "skill" });
     }
     for (const a of assets.assets || []) {
+      if (!hit(a.name) && !hit(a.id)) continue;
       items.push({ id: `asset:${a.id ?? a.name}`, label: a.name, description: a.type || "artifact", kind: "artifact" });
     }
   }
-  return items.filter((i) => (i.label || "").toLowerCase().includes(ql) || (i.id || "").toLowerCase().includes(ql));
+  return items;
 }
 
 // A shared base that renders a Shadow-DOM template + a scoped <style> once.
@@ -2008,7 +2026,18 @@ class AgentComposer extends Component {
       const slashPos = text[slash.index] === "/" ? slash.index : slash.index + 1;
       const ns = (slash[1] || "").toLowerCase();
       const arg = (slash[2] || "").trim();
+      const hasColon = String(slash[0]).includes(":");
+      if (!hasColon) {
+        // No colon typed yet — FILTER the namespace list by the typed prefix
+        // (/ → all, /s → schedule + skill, /sk → skill).
+        const items = COMMAND_NAMESPACES
+          .filter((n) => !ns || n.id.startsWith(ns) || n.label.startsWith(ns))
+          .map((n) => ({ id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id }));
+        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
+        return;
+      }
       if (!ns) {
+        // A colon with no namespace (e.g. "/:") — show all namespaces.
         const items = COMMAND_NAMESPACES.map((n) => ({
           id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id,
         }));
@@ -2045,9 +2074,11 @@ class AgentComposer extends Component {
     this._renderPopupItems();
     if (this._popup) {
       this._popup.hidden = false;
-      if (!supportsAnchorPositioning()) {
-        placeFloating(this._root.querySelector(".composer"), this._popup, { fullWidth: true });
-      }
+      // Always position via the JS fallback (flips above/below + clamps). The
+      // native CSS anchor positioning (position-area) proved unreliable for the
+      // bottom-anchored composer (the popup fell off-screen), so the JS path
+      // wins: it sets position:fixed + the correct top/left, overriding the CSS.
+      placeFloating(this._root.querySelector(".composer"), this._popup, { fullWidth: true });
     }
   }
 
@@ -2099,8 +2130,8 @@ class AgentComposer extends Component {
         input.focus();
         return;
       }
-      // A concrete command item → insert its full reference.
-      input.setRangeText(item.id, token.start, token.end, "end");
+      // A concrete command item → insert its full reference (with the /).
+      input.setRangeText(`/${item.id}`, token.start, token.end, "end");
       this._hidePopup();
       this._emit("command", { namespace: item.ns, item });
       input.focus();

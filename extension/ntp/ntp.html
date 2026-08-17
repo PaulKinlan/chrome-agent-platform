@@ -73,6 +73,8 @@
       display: block; width: 8px; height: 8px; border-radius: 50%;
       background: var(--muted); flex: 0 0 auto;
     }
+    /* when hovering a collapsed item, the dot hides so the delete X is clear */
+    .side.collapsed .thread-item:hover .t-dot { display: none; }
     .side.collapsed .thread-item .t-dot.running { background: var(--accent2); }
     .side.collapsed .thread-item .t-dot.error { background: var(--danger); }
     .brand {
@@ -216,6 +218,7 @@
       position: absolute;
       top: 6px;
       right: 6px;
+      z-index: 1;
       display: none;
       width: 24px;
       height: 24px;

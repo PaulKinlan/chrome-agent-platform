@@ -41,7 +41,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini", "o3-mini"],
+    models: ["gpt-5.6", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o4-mini", "o3", "o3-mini"],
   },
   {
     id: "anthropic",
@@ -51,7 +51,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+    models: ["claude-opus-4-8", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-7-sonnet"],
   },
   {
     id: "gemini",
@@ -61,7 +61,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash"],
+    models: ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
   },
   {
     id: "deepseek",
@@ -81,7 +81,7 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "kimi-k2", "moonshot-v1-8k", "qwen-plus", "claude-sonnet-4-5", "llama-3.3-70b"],
+    models: ["gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2", "moonshot-v1-8k", "qwen-plus", "claude-sonnet-4-5", "llama-3.3-70b"],
   },
   {
     id: "ollama",
@@ -230,12 +230,6 @@ async function renderProviders(restoreFocus = false) {
         apiKey,
         model: effectiveModel(card),
       };
-      // The model dropdown's "Custom…" option reveals the free-text input.
-      card.querySelector(".model-select")?.addEventListener("change", (e) => {
-        const custom = card.querySelector(".model-custom");
-        if (e.target.value === "__custom__") { custom.hidden = false; custom.focus(); }
-        else custom.hidden = true;
-      });
       // Route through the worker's provider.set so the running agent's cached
       // model/orchestrator is invalidated immediately (no stale provider).
       // FIRST request the provider's OPTIONAL host permission (this click is the
@@ -1347,6 +1341,19 @@ document.querySelectorAll(".nav-item").forEach((a) => {
     );
     a.setAttribute("aria-current", "true");
   });
+});
+
+// The model dropdown's "Custom…" option reveals the free-text input. Delegated
+// on the provider list (NOT inside the Use/Update click handler) so selecting
+// "Custom…" works immediately at render time — the old placement only wired it
+// after a Use/Update click, so the custom input never appeared (Paul's bug).
+$("#provider-list")?.addEventListener("change", (e) => {
+  const select = e.target;
+  if (!(select instanceof HTMLSelectElement) || !select.classList.contains("model-select")) return;
+  const custom = select.closest(".provider-card")?.querySelector(".model-custom");
+  if (!custom) return;
+  if (select.value === "__custom__") { custom.hidden = false; custom.focus(); }
+  else { custom.hidden = true; }
 });
 
 await renderProviders();

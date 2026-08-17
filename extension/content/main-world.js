@@ -148,22 +148,47 @@
     return out.slice(0, 200);
   }
 
-  function declaredTools() {
-    const mc = document.modelContext;
-    const tools = mc?.tools ?? (typeof mc?.getTools === "function" ? mc.getTools() : null);
-    const out = [];
-    if (tools instanceof Map) {
-      for (const [name, t] of tools) {
-        out.push({ name, source: "declared", description: t.description ?? "", inputSchema: t.inputSchema ?? { type: "object", properties: {} } });
-      }
-    } else if (Array.isArray(tools)) {
-      for (const t of tools) out.push({ name: t.name, source: "declared", description: t.description ?? "", inputSchema: t.inputSchema ?? {} });
+  // The WebMCP API (GoogleChromeLabs/webmcp-tools): tools are read via
+  // document.modelContext.getTools(), which is ASYNC and returns an ARRAY of
+  // tool objects whose `inputSchema` is a STRINGIFIED JSON (not an object).
+  // The prior code read `mc.getTools()` synchronously (a Promise, not an array →
+  // empty) and never awaited it, so a page that had registered WebMCP tools
+  // (e.g. aifoc.us via webmcp-lib) reported ZERO declared tools. `mc.tools` may
+  // exist as a ReadonlyMap on the native (non-polyfilled) implementation.
+  function parseInputSchema(schema) {
+    if (schema == null) return { type: "object", properties: {} };
+    if (typeof schema === "string") {
+      try { return JSON.parse(schema); } catch { return { type: "object", properties: {} }; }
     }
-    return out;
+    return schema;
   }
 
-  function collectTools() {
-    const declared = declaredTools();
+  // The RAW tools (with their execute fn + window), un-normalized — used for both
+  // discovery (declaredTools) and invocation (executeTool needs the raw object).
+  async function getRawTools() {
+    const mc = document.modelContext;
+    if (!mc) return [];
+    if (typeof mc.getTools === "function") {
+      const got = await mc.getTools().catch(() => null);
+      if (Array.isArray(got)) return got;
+      if (got instanceof Map) return [...got.values()];
+    }
+    if (mc.tools instanceof Map) return [...mc.tools.values()];
+    return [];
+  }
+
+  async function declaredTools() {
+    const raw = await getRawTools();
+    return raw.map((t) => ({
+      name: t.name,
+      source: "declared",
+      description: t.description ?? "",
+      inputSchema: parseInputSchema(t.inputSchema),
+    }));
+  }
+
+  async function collectTools() {
+    const declared = await declaredTools();
     const inferred = declared.length ? [] : inferTools();
     return [...declared, ...inferred];
   }
@@ -201,8 +226,23 @@
       }
       return await fn.apply(window, ordered);
     }
-    // 2. a WebMCP registered tool
+    // 2. a WebMCP registered tool. The webmcp-tools API executes via
+    // `document.modelContext.executeTool(tool, args)` (a TOOL OBJECT, not a name),
+    // or the tool's own execute fn; the old `mc.callTool`/`mc.invoke` (by name)
+    // don't exist, so every WebMCP invocation fell through to "no such tool".
     const mc = document.modelContext;
+    const raw = await getRawTools();
+    const tool = raw.find((t) => t.name === name);
+    if (tool) {
+      if (cancelledAll || isCancelled(requestId)) {
+        throw new Error("invocation cancelled");
+      }
+      if (typeof mc?.executeTool === "function") {
+        return await mc.executeTool(tool, args ?? {});
+      }
+      if (typeof tool.execute === "function") return await tool.execute(args ?? {});
+      if (typeof tool._execute === "function") return await tool._execute(args ?? {});
+    }
     if (typeof mc?.callTool === "function") {
       if (cancelledAll || isCancelled(requestId)) {
         throw new Error("invocation cancelled");
@@ -225,9 +265,9 @@
     if (data.type === "init") {
       nonce = data.nonce;
       cancelledAll = false; // a fresh bridge/nonce resets the cancel epoch
-      post({ type: "tools", origin: location.origin, tools: collectTools() });
+      collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools }));
     } else if (data.type === "collect") {
-      post({ type: "tools", origin: location.origin, tools: collectTools() });
+      collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools }));
     } else if (data.type === "resume") {
       // Re-enrollment: clear the cancel epoch so NEW invokes are allowed again.
       // In-flight ids cancelled by the prior disenrollment stay cancelled (their
@@ -277,6 +317,7 @@
   });
 
   // First pass after the page settles.
-  if (document.readyState === "complete") setTimeout(() => post({ type: "tools", origin: location.origin, tools: collectTools() }), 300);
-  else window.addEventListener("load", () => setTimeout(() => post({ type: "tools", origin: location.origin, tools: collectTools() }), 300));
+  const discoverAfterLoad = () => setTimeout(() => collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools })), 300);
+  if (document.readyState === "complete") discoverAfterLoad();
+  else window.addEventListener("load", discoverAfterLoad);
 })();
