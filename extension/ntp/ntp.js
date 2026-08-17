@@ -7,6 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/conversation.js";
+import { summarizeToolResult } from "../lib/tool-summary.js";
 
 import {
   installPageDiagnostics,
@@ -275,7 +276,7 @@ function runLogText(entry) {
     case "task": return entry.task || "";
     case "result": return entry.result || "";
     case "tool-call": return (entry.tool || "tool") + (entry.args ? `(${entry.args})` : "");
-    case "tool-result": return (entry.tool || "tool") + (entry.result ? ` → ${entry.result}` : "");
+    case "tool-result": return (entry.tool || "tool") + (entry.result != null ? ` → ${summarizeToolResult(entry.tool, entry.result)}` : "");
     case "screenshot": return entry.url || "screenshot";
     default: return entry?.type || "";
   }
@@ -481,8 +482,9 @@ function renderAgentHistory(container, entries) {
       }
     } else if (r.type === "tool-result") {
       if (typeof container.appendTool === "function") {
-        const res = r.result == null ? "" : typeof r.result === "string" ? r.result : JSON.stringify(r.result);
-        container.appendTool({ name: r.tool ?? "tool", status: "success", result: res });
+        const raw = r.result == null ? "" : typeof r.result === "string" ? r.result : JSON.stringify(r.result);
+        const summary = r.result == null ? "" : summarizeToolResult(r.tool, r.result);
+        container.appendTool({ name: r.tool ?? "tool", status: "success", result: summary, detail: raw && raw !== summary ? raw : null });
       }
     }
   }

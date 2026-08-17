@@ -15,6 +15,7 @@
 // the message rendering: markdown, code blocks, tool cards, thinking traces).
 
 import { send } from "../lib/messages.js";
+import { summarizeToolResult } from "../lib/tool-summary.js";
 
 // ── the live progress port ────────────────────────────────────────────────
 // A single long-lived port per page. The SW broadcasts progress to every
@@ -246,14 +247,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // parallel same-name calls in order), mark it done; fall back to a fresh
         // done card only when no in-flight card exists.
         const card = takeInFlight(ev.toolName);
+        const raw = safeToolResult(ev.result);
+        const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
         if (card) {
           card.setAttribute?.("tool-status", "success");
-          const r = safeToolResult(ev.result);
-          if (r) card.setAttribute?.("tool-result", r);
+          if (summary) card.setAttribute?.("tool-result", summary);
+          if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status: "success", result: safeToolResult(ev.result) });
+          c.appendTool({ name: ev.toolName, status: "success", result: summary, detail: raw !== summary ? raw : null });
         } else {
-          appendBubble(c, "tool", `✓ ${ev.toolName}${ev.result != null ? ` — ${safeToolResult(ev.result)}` : ""}`);
+          appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
         break;
       }

@@ -1251,7 +1251,7 @@ customElements.define("code-block", CodeBlock);
  * fallback), so the gallery can populate it declaratively. */
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "tool-name", "tool-status", "tool-args", "tool-result", "step", "total-steps", "error-reason", "error-action"];
+    return ["role", "content", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "step", "total-steps", "error-reason", "error-action"];
   }
   _content() {
     return this.hasAttribute("content") ? (this.getAttribute("content") ?? "") : (this.textContent ?? "");
@@ -1310,6 +1310,11 @@ class MessageBubble extends Component {
       .tool .tool-status.error { color:var(--danger,#b3261e); background:var(--panel,#ffffff); }
       .tool .tool-args { padding:6px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; }
       .tool .tool-result { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
+      .tool .tool-detail { padding:0 10px 6px; border-top:1px solid var(--border,#e3e0d9); }
+      .tool .tool-detail summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; color:var(--muted,#635e56); font-size:11.5px; padding:4px 0 0; user-select:none; }
+      .tool .tool-detail summary::-webkit-details-marker { display:none; }
+      .tool .tool-detail summary:hover { color:var(--text,#1d1b18); }
+      .tool .tool-detail .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
     `;
     let markup;
     if (role === "tool") {
@@ -1318,6 +1323,7 @@ class MessageBubble extends Component {
       const status = statusRaw === "success" ? "done" : statusRaw === "error" ? "error" : "running";
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
+      const detail = this.getAttribute("tool-detail");
       // The generative-UI tools (generate_ui / create_asset with type html)
       // render their HTML LIVE in the sandboxed double-iframe, inline.
       let genHtml = null, genName = null;
@@ -1342,6 +1348,7 @@ class MessageBubble extends Component {
           <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
           ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
           ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
+          ${detail != null ? `<details class="tool-detail"><summary>details</summary><div class="tool-detail-raw">${escapeHtml(detail)}</div></details>` : ""}
         </div>`;
       }
     } else if (role === "thinking") {
@@ -1445,17 +1452,21 @@ class AgentConversation extends Component {
     return this._bubble("thinking", text, { step, "total-steps": totalSteps });
   }
   appendTool(m = {}) {
-    // Accept both the imperative {name,args,status,result} and the message
-    // object {tool-name,tool-status,tool-args,tool-result} conventions.
+    // Accept both the imperative {name,args,status,result,detail} and the
+    // message object {tool-name,tool-status,tool-args,tool-result,tool-detail}
+    // conventions. The CALLER is responsible for passing a readable `result`
+    // summary (see lib/tool-summary.js) + the raw `detail` (shown on expand).
     const name = m.name ?? m["tool-name"];
     const status = m.status ?? m["tool-status"];
     const args = m.args ?? m["tool-args"];
     const result = m.result ?? m["tool-result"];
+    const detail = m.detail ?? m["tool-detail"];
     return this._bubble("tool", null, {
       "tool-name": name,
       "tool-status": status || "running",
       "tool-args": args != null ? (typeof args === "string" ? args : JSON.stringify(args)) : null,
       "tool-result": result != null ? String(result) : null,
+      "tool-detail": detail != null ? String(detail) : null,
     });
   }
   clear() { this.replaceChildren(); }
