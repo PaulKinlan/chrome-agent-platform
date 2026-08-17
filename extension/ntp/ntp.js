@@ -423,6 +423,13 @@ let currentAgentKind = null; // null | "named" | "background" — which agent ki
 // The inner (no-transition) cleanups, so openView/showThreadView can hide the
 // OTHER overlay without nesting a second document.startViewTransition (a nested
 // transition throws "transition was aborted because of invalid state snapshot").
+// When any in-context view (thread / settings / directory / skills / etc.) is
+// open, the hub is hidden + its scroll is frozen so the BACKGROUND page cannot
+// scroll behind the overlay (the scrollbar belongs to the ACTIVE view only).
+function syncViewOpen() {
+  const anyOpen = !threadView.hidden || !viewOverlay.hidden;
+  document.body.classList.toggle("view-open", anyOpen);
+}
 function hideThreadViewInner() {
   threadView.hidden = true;
   currentThreadId = null;
@@ -430,10 +437,12 @@ function hideThreadViewInner() {
   currentAgentKind = null;
   threadConversation.clear?.();
   renderRunStatus({ state: "idle" });
+  syncViewOpen();
 }
 function hideViewInner() {
   viewOverlay.hidden = true;
   viewFrame.src = "about:blank";
+  syncViewOpen();
 }
 function showThreadView() {
   withViewTransition(() => {
@@ -442,6 +451,7 @@ function showThreadView() {
     if (!viewOverlay.hidden) hideViewInner();
     threadView.hidden = false;
   });
+  syncViewOpen();
 }
 function hideThreadView() {
   withViewTransition(hideThreadViewInner);
@@ -727,6 +737,7 @@ function openView(path, title) {
     if (!threadView.hidden) hideThreadViewInner();
     viewOverlay.hidden = false;
   });
+  syncViewOpen();
   viewFrame.focus();
 }
 function closeView() {

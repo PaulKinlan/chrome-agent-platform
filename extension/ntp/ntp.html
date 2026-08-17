@@ -16,6 +16,16 @@
       display: flex;
       min-height: 100vh;
     }
+    /* When an in-context view is open, hide the hub + freeze the page scroll so
+       the background cannot scroll behind the overlay (the scrollbar belongs to
+       the active view only). The sidebar stays visible for the task thread. */
+    body.view-open {
+      overflow: hidden;
+      height: 100vh;
+    }
+    body.view-open main.content {
+      display: none;
+    }
     .side {
       width: 240px;
       flex: 0 0 240px;
