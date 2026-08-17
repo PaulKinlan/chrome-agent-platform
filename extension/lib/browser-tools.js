@@ -11,7 +11,7 @@ import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
-const DEFAULT_GRANT_MS = 15 * 60 * 1000; // 15-minute scope — re-confirm after expiry
+const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs is passed
 
 // A GLOBAL grant mutex serializes the grant CHECK with the destructive Chrome
 // mutation (open/navigate/close/capture) against revoke. The round-17 blocker
@@ -58,14 +58,23 @@ export async function getBrowserControlGrantIdentity() {
 //   - "origins": the owner granted control over a non-empty origin allowlist.
 // A grant is NEVER an indefinite global Boolean, and an empty origin list is
 // never silently treated as unrestricted.
+/** Whether a grant record is expired. A PERSISTENT grant (expiresAt null or
+ * absent) never auto-expires — it is revoked explicitly by the owner. A numeric
+ * expiresAt expires once the clock passes it; a malformed value is expired
+ * (fail closed). */
+function grantExpired(grant) {
+  if (grant.expiresAt === null || grant.expiresAt === undefined) return false;
+  if (typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)) {
+    return true;
+  }
+  return grant.expiresAt <= Date.now();
+}
+
 export async function isBrowserControlGranted(origin) {
   const s = await kvGet(GRANT_KEY);
   const grant = s[GRANT_KEY];
   if (!grant || typeof grant !== "object") return false;
-  if (
-    typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)
-  ) return false;
-  if (grant.expiresAt <= Date.now()) return false;
+  if (grantExpired(grant)) return false;
   if (grant.scope === "global") return true;
   if (
     grant.scope === "origins" && Array.isArray(grant.origins) &&
@@ -83,7 +92,7 @@ function clampExpiryMs(expiryMs) {
 }
 
 export async function setGlobalBrowserControlGrant(
-  expiryMs = DEFAULT_GRANT_MS,
+  expiryMs = null,
 ) {
   // Grant MUTATION must hold the SAME authority mutex as the checked browser
   // mutations (open/navigate/close) AND revoke: a re-scope/regrant written
@@ -94,7 +103,9 @@ export async function setGlobalBrowserControlGrant(
     const grant = {
       id: newGrantId(),
       scope: "global",
-      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      // PERSISTENT by default (null → revoked explicitly, never auto-expires).
+      // An explicit expiryMs still produces a timed grant.
+      expiresAt: expiryMs == null ? null : Date.now() + clampExpiryMs(expiryMs),
       grantedAt: Date.now(),
     };
     await kvSet({ [GRANT_KEY]: grant });
@@ -104,7 +115,7 @@ export async function setGlobalBrowserControlGrant(
 
 export async function setOriginBrowserControlGrant(
   origins,
-  expiryMs = DEFAULT_GRANT_MS,
+  expiryMs = null,
 ) {
   return await withGrantLock(async () => {
     const canonical = [
@@ -125,7 +136,9 @@ export async function setOriginBrowserControlGrant(
       id: newGrantId(),
       scope: "origins",
       origins: canonical,
-      expiresAt: Date.now() + clampExpiryMs(expiryMs),
+      // PERSISTENT by default (null → revoked explicitly); an explicit expiryMs
+      // still produces a timed grant.
+      expiresAt: expiryMs == null ? null : Date.now() + clampExpiryMs(expiryMs),
       grantedAt: Date.now(),
     };
     await kvSet({ [GRANT_KEY]: grant });
@@ -244,10 +257,7 @@ function withTabCaptureLock(tabId, fn) {
  * otherwise slip between a scope check and an identity check). */
 function validateGrantFor(grant, origin) {
   if (!grant || typeof grant !== "object") return null;
-  if (
-    typeof grant.expiresAt !== "number" || !Number.isFinite(grant.expiresAt)
-  ) return null;
-  if (grant.expiresAt <= Date.now()) return null;
+  if (grantExpired(grant)) return null;
   let authorized = false;
   if (grant.scope === "global") {
     authorized = true;

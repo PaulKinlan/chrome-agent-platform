@@ -110,7 +110,7 @@ import {
   isBrowserControlGranted,
   recordBrowserEvent,
   revokeBrowserControlGrant,
-  setDenyAllBrowserControlGrant,
+  setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
@@ -1709,15 +1709,19 @@ const handlers = {
   async "browser-control.get"() {
     const s = await kvGet("cap:browserControlGrant");
     const grant = s["cap:browserControlGrant"];
-    let expiresInMs = 0;
+    let expiresInMs = null;
     if (
       grant && typeof grant.expiresAt === "number" &&
       Number.isFinite(grant.expiresAt)
     ) {
       expiresInMs = Math.max(0, grant.expiresAt - Date.now());
     }
+    // A PERSISTENT grant (expiresAt null) is active until revoked; a numeric
+    // expiresAt is active until the clock passes it.
     const active = Boolean(
-      grant && typeof grant === "object" && grant.expiresAt > Date.now(),
+      grant && typeof grant === "object" &&
+        (grant.expiresAt === null || grant.expiresAt === undefined ||
+          grant.expiresAt > Date.now()),
     );
     return {
       // "active" = a grant EXISTS and is unexpired (regardless of scope).
@@ -1739,11 +1743,12 @@ const handlers = {
     if (Array.isArray(m?.origins) && m.origins.length > 0) {
       grant = await setOriginBrowserControlGrant(m.origins, m?.expiryMs);
     } else {
-      // No origins → a DENY-ALL scoped grant, NOT a global grant. The record
-      // exists so the UI shows "granted" + reveals the origin field, but it
-      // authorizes NOTHING until the owner scopes it (the round-16 finding: the
-      // default created a 15-min whole-browser authority before any scope existed).
-      grant = await setDenyAllBrowserControlGrant(m?.expiryMs);
+      // No origins → a GLOBAL all-origins grant (the owner's explicit "control
+      // the whole browser" opt-in), PERSISTENT until revoked. This is the fix
+      // for tracker item 51: the toggle must STAY toggled and the all-origins
+      // grant must persist (the prior deny-all default both expired after 15
+      // minutes AND authorized nothing, which made the toggle look broken).
+      grant = await setGlobalBrowserControlGrant(m?.expiryMs);
     }
     return { grant };
   },

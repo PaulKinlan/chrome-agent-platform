@@ -589,7 +589,14 @@ async function renderAppearance(restoreFocus = false) {
 async function renderBrowser() {
   const s = await storage.get("cap:browserControlGrant");
   const grant = s["cap:browserControlGrant"];
-  const granted = Boolean(grant && grant.expiresAt > Date.now());
+  // A PERSISTENT grant (expiresAt null) stays granted until revoked; a numeric
+  // expiresAt is granted until the clock passes it (tracker item 51: the
+  // toggle must STAY toggled).
+  const granted = Boolean(
+    grant &&
+      (grant.expiresAt === null || grant.expiresAt === undefined ||
+        grant.expiresAt > Date.now()),
+  );
   const toggle = $("#browser-grant");
   toggle.checked = granted;
   $("#grant-origins").hidden = !granted;
@@ -619,7 +626,7 @@ async function renderBrowser() {
       $("#grant-origins").hidden = false;
       saveFlash(
         captureGranted
-          ? "Browser control granted (global, 15 min — set origins below to scope it)."
+          ? "Browser control granted (global, all origins — set origins below to scope it)."
           : "Browser control granted (screenshots unavailable — activeTab permission not granted).",
       );
       renderPermissions();
