@@ -157,3 +157,37 @@ Deno.test("buildScriptSrcdoc escapes a closing script tag in the source", () => 
   assert(!srcdoc.includes("</script><img"), "a closing script tag must be neutralized");
   assert(srcdoc.includes("<\\/script"), "the closing tag must be backslash-escaped");
 });
+
+Deno.test("runFetch routes through the SW (no direct CORS-blocked fetch)", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  // Fake chrome.runtime.sendMessage → the SW route (the extension-page fetch
+  // must NOT go direct, which would be CORS-blocked for a cross-origin page).
+  const calls = [];
+  (globalThis as any).chrome = {
+    runtime: {
+      sendMessage: async (msg: any) => { calls.push(msg); return { ok: true, status: 200, url: msg.url, text: "<html>hi</html>" }; },
+    },
+  };
+  const res = await runFetch({ url: "https://www.bbc.co.uk/news", opts: {} });
+  assert(res.ok === true, "the routed fetch must succeed");
+  assert(res.status === 200, "the SW response status must pass through");
+  assert(calls.length === 1, "exactly one SW message must be sent");
+  assert(calls[0].type === "cap:fetch", "the message must be the cap:fetch route");
+  assert(calls[0].url === "https://www.bbc.co.uk/news", "the URL must be passed to the SW");
+  // A non-http scheme is rejected before the SW is contacted.
+  const bad = await runFetch({ url: "file:///etc/passwd", opts: {} });
+  assert(bad.ok === false, "a non-http scheme must be rejected");
+  assert((globalThis as any).chrome?.runtime?.sendMessage, "chrome must still be present");
+  // Cleanup so later tests (if any) don't inherit the fake chrome.
+  delete (globalThis as any).chrome;
+});
+
+Deno.test("runFetch rejects credentials + non-GET methods", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  (globalThis as any).chrome = { runtime: { sendMessage: async () => ({ ok: true, status: 200, text: "" }) } };
+  const cred = await runFetch({ url: "https://user:pass@example.com/", opts: {} });
+  assert(cred.ok === false, "credential URLs must be rejected");
+  const post = await runFetch({ url: "https://example.com/", opts: { method: "POST" } });
+  assert(post.ok === false, "non-GET/HEAD methods must be rejected");
+  delete (globalThis as any).chrome;
+});

@@ -281,6 +281,13 @@ import {
   schemaToZod as buildSchema,
 } from "../lib/pure.js";
 
+// Suppress the AI SDK's own warning/retry console spam. The extension surfaces
+// provider failures through describeError (one actionable error with the status
+// + body) — the SDK's per-attempt `console.error` of AI_APICallError (× the
+// retry count) was the "flood" Paul saw. Quiet it so the single real error is
+// the only thing in the console.
+globalThis.AI_SDK_LOG_WARNINGS = false;
+
 // ---- run serialization ----
 // The cached orchestrator (and its single agent-do abort controller) is SHARED
 // across runs. Two concurrent runs would overwrite/abort each other's controller
@@ -1146,6 +1153,52 @@ async function agentInfo(origin) {
 }
 
 const handlers = {
+  // The controlled cross-origin fetch for the script-host (and any extension
+  // page): the service worker performs the fetch with the extension's host
+  // permission (which bypasses CORS), so a page/script fetch never hits the
+  // CORS wall a direct chrome-extension://-page fetch does. GET/HEAD, http/https
+  // only, size-bounded.
+  async "cap:fetch"({ url, method = "GET" }) {
+    let u;
+    try {
+      u = new URL(String(url ?? ""));
+    } catch {
+      return { ok: false, error: "invalid URL" };
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return { ok: false, error: `protocol ${u.protocol} is not allowed` };
+    }
+    const m = String(method ?? "GET").toUpperCase();
+    if (m !== "GET" && m !== "HEAD") {
+      return { ok: false, error: `method ${m} is not allowed (GET/HEAD only)` };
+    }
+    try {
+      // The SW fetch only bypasses CORS when the extension holds the host
+      // permission for the origin. The all-optional host permissions are not
+      // granted by default, so check + fail clearly (not a raw "Failed to fetch").
+      const hasHost = await chrome.permissions?.contains?.({
+        origins: [`${u.protocol}//${u.host}/*`],
+      }).catch(() => false);
+      if (hasHost === false) {
+        return {
+          ok: false,
+          error: `network access to ${u.host} is not granted — enable the host permission (Settings → Permissions) or read the active tab instead`,
+        };
+      }
+      const res = await fetch(u.href, { method: m });
+      const buf = await res.arrayBuffer();
+      const MAX = 1_000_000;
+      let text = "";
+      if (buf.byteLength > MAX) {
+        text = (await res.text()).slice(0, MAX);
+      } else {
+        text = await res.text();
+      }
+      return { ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) };
+    } catch (e) {
+      return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
+    }
+  },
   async "capabilities.status"() {
     // Granted/absent status of every OPTIONAL capability (storage, alarms,
     // tabs, scripting, notifications, sidePanel). The Settings panel renders

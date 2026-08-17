@@ -27,13 +27,28 @@ function validateUrl(url) {
   return { ok: true, url: u.href };
 }
 
-/** The read-only fetch capability (GET/HEAD, size-bounded). */
-async function runFetch(payload) {
+/** The read-only fetch capability (GET/HEAD, size-bounded). Routed through the
+ * SERVICE WORKER (chrome.runtime `cap:fetch`) so the cross-origin fetch carries
+ * the extension's host permission — a DIRECT fetch from the NTP/offscreen page
+ * is CORS-blocked for a cross-origin page with no Access-Control-Allow-Origin. */
+export async function runFetch(payload) {
   const v = validateUrl(payload?.url);
   if (!v.ok) return { ok: false, error: v.error };
   const method = payload?.opts?.method ? String(payload.opts.method).toUpperCase() : "GET";
   if (method !== "GET" && method !== "HEAD") {
     return { ok: false, error: `method ${method} is not allowed (GET/HEAD only)` };
+  }
+  // Prefer the SW route (host permission → no CORS wall). Fall back to a direct
+  // fetch only when chrome.runtime is absent (a unit test / non-extension host),
+  // where the caller's context is trusted.
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "cap:fetch", url: v.url, method });
+      if (res?.ok) return res;
+      return { ok: false, error: res?.error ?? "fetch failed" };
+    } catch (e) {
+      return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
+    }
   }
   let res;
   try {

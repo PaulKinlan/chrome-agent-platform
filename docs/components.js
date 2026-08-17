@@ -1633,11 +1633,13 @@ class AgentConversation extends Component {
     // message object {tool-name,tool-status,tool-args,tool-result,tool-detail}
     // conventions. The CALLER is responsible for passing a readable `result`
     // summary (see lib/tool-summary.js) + the raw `detail` (shown on expand).
+    // `ts` (optional) participates in the subtle timestamp-gap divider.
     const name = m.name ?? m["tool-name"];
     const status = m.status ?? m["tool-status"];
     const args = m.args ?? m["tool-args"];
     const result = m.result ?? m["tool-result"];
     const detail = m.detail ?? m["tool-detail"];
+    if (typeof m.ts === "number") this._maybeTsGap(m.ts);
     return this._bubble("tool", null, {
       "tool-name": name,
       "tool-status": status || "running",

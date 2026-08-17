@@ -419,6 +419,7 @@ const threadView = document.getElementById("thread-view");
 const threadTitle = document.getElementById("thread-title");
 const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
+const editAgentBtn = document.getElementById("edit-agent");
 let currentThreadId = null;
 let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
 let currentAgentKind = null; // null | "named" | "background" — which agent kind the chat is scoped to
@@ -463,6 +464,8 @@ function hideThreadView() {
 async function openThread(id) {
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
+  currentAgentKind = null;
+  editAgentBtn.hidden = true;
   const res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   const thread = res.ok ? res.thread : null;
   threadTitle.textContent = thread?.name || "Task";
@@ -482,6 +485,7 @@ async function openBackgroundAgentChat(id, name) {
   currentAgentId = id;
   currentAgentKind = "background";
   currentThreadId = null;
+  editAgentBtn.hidden = false;
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
   threadTitle.textContent = name || id || "Background agent";
   renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
@@ -498,6 +502,7 @@ async function openAgentChat(id) {
   currentAgentId = id;
   currentAgentKind = "named";
   currentThreadId = null;
+  editAgentBtn.hidden = false;
   const [aRes, hRes] = await Promise.all([
     send("named-agent.get", { id }).catch(() => ({ ok: false })),
     send("named-agent.history", { id }).catch(() => ({ entries: [] })),
@@ -530,17 +535,18 @@ function renderAgentHistory(container, entries) {
     return;
   }
   for (const r of filtered) {
-    if (r.type === "task") appendBubble(container, "user", r.task);
-    else if (r.type === "result") appendBubble(container, "agent", r.result);
+    const ts = typeof r.ts === "number" ? r.ts : null;
+    if (r.type === "task") appendBubble(container, "user", r.task, undefined, ts);
+    else if (r.type === "result") appendBubble(container, "agent", r.result, undefined, ts);
     else if (r.type === "tool-call") {
       if (typeof container.appendTool === "function") {
-        container.appendTool({ name: r.tool ?? "tool", status: "running" });
+        container.appendTool({ name: r.tool ?? "tool", status: "running", ts });
       }
     } else if (r.type === "tool-result") {
       if (typeof container.appendTool === "function") {
         const raw = r.result == null ? "" : typeof r.result === "string" ? r.result : JSON.stringify(r.result);
         const summary = r.result == null ? "" : summarizeToolResult(r.tool, r.result);
-        container.appendTool({ name: r.tool ?? "tool", status: "success", result: summary, detail: raw && raw !== summary ? raw : null });
+        container.appendTool({ name: r.tool ?? "tool", status: "success", result: summary, detail: raw && raw !== summary ? raw : null, ts });
       }
     }
   }

@@ -73,12 +73,12 @@ export function historyFromJournal(journal) {
 // appendBubble routes a role to the container's rich methods when it is an
 // <agent-conversation>, with a plain <message-bubble> fallback for any other
 // element (so callers never need to know which surface they're driving).
-export function appendBubble(container, role, text, attachments) {
+export function appendBubble(container, role, text, attachments, ts) {
   const c = container;
-  if (role === "user" && typeof c.appendUser === "function") return c.appendUser(text, undefined, attachments);
-  if (role === "agent" && typeof c.appendAgent === "function") return c.appendAgent(text);
-  if (role === "system" && typeof c.appendSystem === "function") return c.appendSystem(text);
-  if (role === "error" && typeof c.appendError === "function") return c.appendError(text);
+  if (role === "user" && typeof c.appendUser === "function") return c.appendUser(text, ts, attachments);
+  if (role === "agent" && typeof c.appendAgent === "function") return c.appendAgent(text, ts);
+  if (role === "system" && typeof c.appendSystem === "function") return c.appendSystem(text, ts);
+  if (role === "error" && typeof c.appendError === "function") return c.appendError(text, { ts });
   if (role === "thinking" && typeof c.appendThinking === "function") return c.appendThinking(text);
   const b = document.createElement("message-bubble");
   b.setAttribute("role", role);
