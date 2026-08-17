@@ -764,6 +764,55 @@ input:focus, select:focus, textarea:focus {
 }
 .foot #app-version { font-variant-numeric: tabular-nums; }
 
+/* About / changelog section. */
+.about-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 12px);
+  background: var(--card, var(--bg));
+  margin-bottom: 20px;
+}
+.about-brand {
+  font-size: var(--text-lg, 18px);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.about-meta {
+  margin-top: 12px;
+  font-size: var(--text-sm);
+}
+.about-meta strong { font-variant-numeric: tabular-nums; }
+.changelog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.changelog-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 12px);
+  padding: 12px 14px;
+  background: var(--card, var(--bg));
+}
+.changelog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.changelog-head strong { font-variant-numeric: tabular-nums; }
+.changelog-items {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.changelog-items li { margin: 3px 0; }
+.changelog-items li::marker { color: var(--muted); }
+
 /* Per-agent provider override rows (the Agents section). */
 .agent-provider-row {
   display: flex;

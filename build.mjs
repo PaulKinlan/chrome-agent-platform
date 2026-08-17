@@ -1,7 +1,7 @@
 // Build the MV3 service worker + shared agent-core modules with esbuild
 // (the AI SDK + zod need bundling for the service-worker environment).
 import { build } from "esbuild";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, copyFile } from "node:fs/promises";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 
 const OUT = "extension/dist/background/service-worker.js";
@@ -93,3 +93,8 @@ console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Fu
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The
 // docs/ copies are committed too so the GitHub Pages showcase works standalone.
 await syncGallery();
+
+// Copy the CHANGELOG into the extension package so the Settings About section
+// can render it (extension pages fetch it via chrome.runtime.getURL).
+await copyFile(new URL("./CHANGELOG.md", import.meta.url).pathname, new URL("./extension/CHANGELOG.md", import.meta.url).pathname);
+console.log("copied CHANGELOG.md → extension/CHANGELOG.md");

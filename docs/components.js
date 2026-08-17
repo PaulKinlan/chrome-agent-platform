@@ -411,6 +411,10 @@ function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
 
+// The pure /agent + @ mention candidate builder lives in agent-candidates.js
+// (DOM-free so it's unit-testable in Deno).
+import { buildAgentCandidates } from "./agent-candidates.js";
+
 // Command namespaces (the / palette). Selecting one either opens its sub-items
 // or inserts the prefix for free-text commands (remember).
 export const COMMAND_NAMESPACES = [
@@ -429,9 +433,6 @@ export const COMMAND_NAMESPACES = [
 async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKind = null) {
   const q = (arg || "").toLowerCase();
   const matches = (s) => !q || String(s ?? "").toLowerCase().includes(q);
-  // An item is the "current" agent if its id matches the scoped agent id.
-  const isCurrent = (id, kind) =>
-    !!currentAgentId && String(id).toLowerCase() === String(currentAgentId).toLowerCase();
   switch (ns) {
     case "skill": {
       // The recipes were renamed to SKILLS (f7a49fc). `skill.list` returns the
@@ -449,34 +450,17 @@ async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKin
         .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
     }
     case "agent": {
-      // ALL agent types, delineated: named + background + site. Only agents that
-      // are ACTUALLY available to call are listed: the created named agents, the
-      // ENABLED background agents (not the available-but-not-enabled recipes),
-      // and the enrolled site agents. The current agent (the one the composer is
-      // scoped to) is excluded — you can't call the agent you're talking to.
+      // Only the callable agents (enabled background + created named + enrolled
+      // site) — the current agent excluded (see buildAgentCandidates).
       const [named, bg, site] = await Promise.all([
         RUNTIME_SEND ? RUNTIME_SEND("named-agent.list").catch(() => ({})) : Promise.resolve({}),
         RUNTIME_SEND ? RUNTIME_SEND("background-agent.list").catch(() => ({})) : Promise.resolve({}),
         RUNTIME_SEND ? RUNTIME_SEND("agent.directory").catch(() => ({})) : Promise.resolve({}),
       ]);
-      const out = [];
-      for (const a of (named.agents || [])) {
-        const aid = a.id ?? a.name;
-        if (isCurrent(aid, "named")) continue; // don't offer the current agent
-        if (!matches(a.name) && !matches(a.id)) continue;
-        out.push({ id: `agent:${aid}`, label: a.name, description: a.role || "named agent", kind: "agent" });
-      }
-      for (const a of (bg.agents || [])) {
-        if (!a.enabled) continue; // only the ENABLED background agents are callable
-        if (isCurrent(a.id, "background")) continue;
-        if (!matches(a.name) && !matches(a.id)) continue;
-        out.push({ id: `agent:${a.id}`, label: a.name, description: a.description || "background agent", kind: "background" });
-      }
-      for (const a of (site.agents || []).filter((x) => x.enrolled)) {
-        if (!matches(a.origin) && !matches(a.name || "")) continue;
-        out.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · site agent`, kind: "agent" });
-      }
-      return out;
+      return buildAgentCandidates(named.agents || [], bg.agents || [], site.agents || [], {
+        query: arg,
+        currentAgentId,
+      });
     }
     case "model": {
       const res = RUNTIME_SEND ? await RUNTIME_SEND("provider.models").catch(() => ({})) : {};

@@ -63,6 +63,12 @@ there. The reviewer agents check against it.
   (docs/components.html — the playground where components are tested in isolation
   without running the extension). The gallery imports the SAME components.js
   (scripts/sync-gallery.mjs; check:gallery fails on drift).
+- **Continuous skill/quality runs (Paul, 2026-08-17).** Spin up subagents to
+  regularly run the quality skills in the background: the impeccable design pass
+  (the UI consistency), the modern-web-guidance checks, and the web-resilience
+  audit + fix (skills/web-resilience-audit + skills/web-resilience-fix). These run
+  continuously — the UI, the modern-web correctness, and the resilience are always
+  being verified, not one-off.
 - **Ask for permissions on need, never fail silently (Paul, 2026-08-17).** When a
   feature needs a permission (a screenshot needs activeTab/host access, a capture
   needs audioCapture/videoCapture, a provider needs its host), REQUEST it on the
