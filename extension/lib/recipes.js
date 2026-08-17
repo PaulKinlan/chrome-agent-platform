@@ -11,7 +11,7 @@
 // so the agent can request them — never granted wholesale. Recipes are DATA
 // (a prompt + config), never eval'd. This file is the single source of truth
 // for the hub's recipe chips, the background-agent manager, and the future
-// /task:name command + @-mention targets (ids are stable).
+// /skill:name command + @-mention targets (ids are stable).
 
 const ON_DEMAND = "on-demand";
 const BACKGROUND = "background";

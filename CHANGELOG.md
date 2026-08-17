@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.30] — 2026-08-17
+- (describe the change)
+
 ## [0.2.29] — 2026-08-17
 - (describe the change)
 
