@@ -6,7 +6,7 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { masterMemory, saveScreenshot, listScreenshots, journalAppend, backgroundAgentMemory, namedAgentMemory } from "../extension/lib/memory.js";
+import { masterMemory, saveScreenshot, listScreenshots, journalAppend, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds } from "../extension/lib/memory.js";
 
 // ---- minimal in-memory OPFS fake ----
 // A directory tree: { kind, children: Map<name, node>, content?: string }
@@ -285,4 +285,25 @@ Deno.test("backgroundAgentMemory + namedAgentMemory are isolated from masterMemo
   // read/write the master's or another's state).
   assertEquals((await master.keys()).includes("k"), true);
   assertEquals((await master.get("k")) === "sorting-hat-value", false, "the background write must not reach the master");
+});
+
+// The activity-log explorer needs to enumerate the named-agent + background-agent
+// sandboxes (listNamedAgentIds / listBackgroundAgentIds) so the SW's
+// `activity.list` can aggregate their journals. Writes create the directories;
+// the lister then enumerates only REAL directories (never forges a worker from a
+// stale dir — but does surface one that actually has data).
+Deno.test("listNamedAgentIds + listBackgroundAgentIds enumerate the per-agent sandboxes", async () => {
+  await journalAppend(namedAgentMemory("paul"), { type: "task", id: "t1", task: "hello" });
+  await journalAppend(namedAgentMemory("reader"), { type: "result", id: "t2", result: "ok" });
+  await journalAppend(backgroundAgentMemory("recipe:auto-group-by-domain"), { type: "tool-result", id: "t3", tool: "tab_group", result: "{}" });
+  const named = await listNamedAgentIds();
+  const background = await listBackgroundAgentIds();
+  assertEquals(named.includes("paul"), true, "named agent paul sandbox must be listed");
+  assertEquals(named.includes("reader"), true, "named agent reader sandbox must be listed");
+  // backgroundAgentMemory slugifies the id (recipe:auto-group-by-domain →
+  // recipe-auto-group-by-domain), and listBackgroundAgentIds returns that slug.
+  assertEquals(background.includes("recipe-auto-group-by-domain"), true, "background agent sandbox must be listed (by slug)");
+  // The named + background stores are ISOLATED (a named store never collides
+  // with a background store, and neither with the master).
+  assertEquals((await namedAgentMemory("paul").get("journal")).length > 0, true);
 });

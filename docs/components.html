@@ -233,6 +233,14 @@
         <p class="caption">emits <code>select</code>.</p>
       </div>
 
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;activity-explorer&gt;</code> — the browsable/searchable activity log</h3>
+        <div class="stage column" style="max-width:680px">
+          <activity-explorer id="activity-demo" limit="50"></activity-explorer>
+        </div>
+        <p class="caption">search by text, filter by agent (seeded demo entries — the real surface queries <code>activity.list</code> across master + named + background + site agents).</p>
+      </div>
+
       <!-- ── Composed ───────────────────────────────────────────── -->
       <h2 class="section">Composed — a mini hub</h2>
       <div class="grid-2">
@@ -343,6 +351,17 @@
         { role: "tool", "tool-name": "verify_syntax", "tool-status": "error", "tool-args": "{\"lang\":\"python\"}", "tool-result": "python3 not installed on this machine" },
         { role: "system", content: "Here is the function:\n\n```python\ndef greet(name=\"world\"):\n    return f\"Hello, {name}!\"\n```\n\nUse it with `greet(\"Paul\")`. A few notes:\n- it defaults to \"world\"\n- it is an f-string\n- see [the docs](https://docs.python.org/3/tutorial/inputoutput.html)" },
       ]);
+
+      // <activity-explorer> example — seed demo entries (the gallery has no
+      // extension backend; the real component queries activity.list).
+      const activityDemo = document.getElementById("activity-demo");
+      activityDemo.entries = [
+        { ts: Date.now() - 60000, source: "master", agentLabel: "hub", type: "task", task: "Summarise the latest content from paul.kinlan.me" },
+        { ts: Date.now() - 90000, source: "agent:paul", agentLabel: "Paul", type: "tool-call", tool: "list_agents", args: "{}" },
+        { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "tool-result", tool: "list_agents", result: "{\"userSummary\":\"1 site agent: paul.kinlan.me\"}" },
+        { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
+        { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
+      ];
     </script>
   </body>
 </html>

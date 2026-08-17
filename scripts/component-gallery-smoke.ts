@@ -294,6 +294,25 @@ async function main() {
     })()`);
     check("error-console has a Copy all button", consoleCopy === true, consoleCopy);
 
+    // <activity-explorer> — the browsable/searchable activity log. Seeded demo
+    // entries must render rows (one per entry), the agent filter must list the
+    // distinct sources, and a search query must narrow the list.
+    const activity = await evl(s.sessionId, `(()=>{
+      const a = document.getElementById('activity-demo');
+      if (!a?.shadowRoot) return { found:false };
+      const rows = a.shadowRoot.querySelectorAll('.aex-row').length;
+      const options = [...a.shadowRoot.querySelectorAll('.aex-agent option')].map(o=>o.value).filter(Boolean);
+      const search = a.shadowRoot.querySelector('.aex-search');
+      search.value = 'paul';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      return new Promise(r => setTimeout(() => r({
+        found:true, rows, options,
+        filteredRows: a.shadowRoot.querySelectorAll('.aex-row').length,
+      }), 80));
+    })()`);
+    check("activity-explorer renders rows + agent filter", activity.found === true && activity.rows >= 5 && activity.options.length >= 3, activity);
+    check("activity-explorer search narrows the list", activity.found === true && activity.filteredRows < activity.rows && activity.filteredRows >= 1, activity);
+
     // Regression: clicking the console's own buttons (copy-all / clear) must
     // NOT close the panel. The bug was host.contains() not traversing the shadow
     // root, so every in-panel click read as an outside click + closed it.

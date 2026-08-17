@@ -4,6 +4,7 @@
 
 import {
   getModel,
+  getModelForAgent,
   getProviderConfig,
   PROVIDER_CHOICES,
   setProviderConfig,
@@ -21,6 +22,7 @@ import {
   canonicalOrigin,
   journalAppend,
   listBackgroundAgentIds,
+  listNamedAgentIds,
   listOrigins,
   listScreenshots,
   loadScreenshot,
@@ -77,8 +79,10 @@ import {
   deleteNamedAgent,
   generateAgentAvatar,
   getNamedAgent,
+  getNamedAgentProvider,
   grepAgentMemory,
   listNamedAgents,
+  setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
 } from "../lib/named-agents.js";
@@ -115,6 +119,21 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
+
+// ── editable/duplicable background agents (item 56) ──────────────────────
+// Custom recipe copies live in masterMemory under `customRecipes` (a built-in
+// template stays pristine; enabling/duplicating makes an editable instance).
+// `resolveRecipe` checks the built-ins FIRST, then the custom copies.
+async function getCustomRecipes() {
+  const v = await masterMemory().get("customRecipes");
+  return Array.isArray(v) ? v : [];
+}
+async function resolveRecipe(id) {
+  const builtIn = getRecipe(id);
+  if (builtIn) return builtIn;
+  const custom = await getCustomRecipes();
+  return custom.find((r) => r.id === id) ?? null;
+}
 import {
   checkHookAllowed,
   getHook,
@@ -422,13 +441,13 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null) {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
   // memory instead of the agent's own tier.
   if (memoryOverride) {
-    return await buildOrchestrator(onProgress, scoped, memoryOverride);
+    return await buildOrchestrator(onProgress, scoped, memoryOverride, modelOverride);
   }
   while (true) {
     const gen = generation;
@@ -462,8 +481,12 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
 
 // The orchestrator build (the memory, the workers, the tools). Shared by
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
-async function buildOrchestrator(onProgress, scoped, mem) {
-    const model = await ensureModel();
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null) {
+    // A per-agent model override (the named-agent provider config) REPLACES the
+    // global model for THIS build — the resolved { model, modelId, providerName }
+    // is self-contained, so a per-agent model never mixes one provider's
+    // endpoint with another's credential.
+    const model = modelOverride ?? await ensureModel();
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
@@ -726,7 +749,7 @@ function attachmentContext(attachments) {
   return "Attachments:\n" + parts.join("\n");
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -765,7 +788,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         journalAppend(mem, { type: "tool-result", id: taskId, tool: event.toolName ?? "tool", result }).catch(() => {});
       }
     };
-    const orch = await ensureOrchestrator(journalingProgress, scoped, memory);
+    const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride);
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or
     // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
@@ -1333,6 +1356,19 @@ const handlers = {
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     return r;
   },
+  async "named-agent.set-provider"({ id, config }) {
+    // Set (or clear) a named agent's provider override. `config` is a COMPLETE
+    // provider-specific config (the apiKey flows ONLY from the Settings UI input
+    // → storage → model resolution; never surfaced back). Returns the REDACTED
+    // agent (no apiKey).
+    const r = await setNamedAgentProvider(id, config);
+    if (r?.ok !== false) {
+      // The running model cache is global; a per-agent override does NOT touch
+      // it (the override is threaded per-run via runTask's modelOverride).
+      broadcastProgress({ type: "named-agent-changed" });
+    }
+    return r;
+  },
   async "named-agent.delete"({ id }) {
     const r = await deleteNamedAgent(id);
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
@@ -1371,6 +1407,15 @@ const handlers = {
     const slug = slugifyAgentId(id);
     const mem = namedAgentMemory(slug);
     const runTag = runId ?? `named:${slug}:${Date.now()}`;
+    // PER-AGENT provider override: resolve the agent's OWN complete provider
+    // config (the full override WITH its key — never surfaced), then thread the
+    // resolved model into THIS run so the agent uses its provider, not the
+    // global. Absent override → the global model (getModelForAgent falls back).
+    let modelOverride = null;
+    try {
+      const override = await getNamedAgentProvider(id);
+      if (override) modelOverride = await getModelForAgent(override);
+    } catch { modelOverride = null; }
     // The agent-chat surface needs LIVE progress (the tool calls streaming) —
     // broadcast each event tagged with the runId + the agentId so the page's
     // listener renders ONLY this agent run's tool cards.
@@ -1380,6 +1425,7 @@ const handlers = {
         task,
         attachments: attachments ?? [],
         memory: mem,
+        modelOverride,
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
         },
@@ -1682,6 +1728,51 @@ const handlers = {
     return { ok: true, overview };
   },
 
+  // ---- the per-agent memory stores (item 58) ----
+  // Enumerate EVERY memory store (the master + each named agent + each
+  // background agent + each enrolled site origin) with its key count, so the
+  // Data & memory explorer can browse each agent's OWN OPFS sandbox. The
+  // selector is what memory.get/list/clear accept (resolveMemory).
+  async "memory.stores"() {
+    const [namedIds, bgIds, origins] = await Promise.all([
+      listNamedAgentIds(),
+      listBackgroundAgentIds(),
+      listOrigins(),
+    ]);
+    const named = await listNamedAgents();
+    const nameById = new Map(named.map((a) => [slugifyAgentId(a.id), a.name || a.id]));
+    const stores = [{ key: "master", label: "Master (the hub)", kind: "master" }];
+    for (const id of namedIds) {
+      const store = namedAgentMemory(id);
+      stores.push({
+        key: `agent:${id}`,
+        label: nameById.get(id) ?? id,
+        kind: "named",
+        keyCount: (await store.keys()).length,
+      });
+    }
+    for (const id of bgIds) {
+      const store = backgroundAgentMemory(id);
+      stores.push({
+        key: `background:${id}`,
+        label: id,
+        kind: "background",
+        keyCount: (await store.keys()).length,
+      });
+    }
+    for (const origin of origins) {
+      const store = siteMemory(origin);
+      stores.push({
+        key: origin,
+        label: origin,
+        kind: "site",
+        keyCount: (await store.keys()).length,
+      });
+    }
+    stores[0].keyCount = (await masterMemory().keys()).length;
+    return { ok: true, stores };
+  },
+
   async "register-task"(m) {
     const { name, when } = await registerAlarm(m.task);
     return { ok: true, name, when };
@@ -1719,17 +1810,19 @@ const handlers = {
     });
   },
   async "background-agent.list"() {
-    // The background-agent manager: each background recipe + its enabled state
-    // (derived from the scheduled-task store, so it reflects reality, not a
-    // stale in-memory flag).
+    // The background-agent manager: each background recipe (built-in AND custom
+    // copies — item 56) + its enabled state (derived from the scheduled-task
+    // store, so it reflects reality, not a stale in-memory flag).
     const tasks = await listScheduledTasks();
     const enabled = new Set(
       (tasks ?? [])
         .map((t) => t.name)
         .filter((n) => n.startsWith("recipe:")),
     );
+    const custom = await getCustomRecipes();
+    const all = [...backgroundRecipes(), ...custom.filter((r) => r.mode !== "on-demand")];
     return {
-      agents: backgroundRecipes().map((r) => ({
+      agents: all.map((r) => ({
         ...r,
         enabled: enabled.has(`recipe:${r.id}`),
       })),
@@ -1741,7 +1834,7 @@ const handlers = {
     // periodInMinutes. Disable authoritatively cancels it. This routes through
     // the SAME atomic scheduleTask/cancelScheduledTask paths as schedule_task /
     // task.cancel (fenced, crash-safe, quarantined-on-unknown-state).
-    const recipe = getRecipe(m?.id);
+    const recipe = await resolveRecipe(m?.id);
     if (!recipe || recipe.mode !== "background") {
       return { ok: false, error: `no background recipe ${m?.id}` };
     }
@@ -1776,6 +1869,49 @@ const handlers = {
       name,
     });
     return { ok: true, enabled: true, id: recipe.id, name, nextRunAt: when };
+  },
+
+  // ---- editable/duplicable background agents (item 56) ----
+  // Enabling a background agent makes a COPY (an editable instance); the built-in
+  // template stays pristine. A duplicated recipe is stored in masterMemory under
+  // `customRecipes` and becomes a background recipe the user can edit (the system
+  // prompt / constraints) + reference.
+  async "recipe.custom-list"() {
+    return { recipes: await getCustomRecipes() };
+  },
+  async "recipe.duplicate"({ id }) {
+    const src = await resolveRecipe(id);
+    if (!src) return { ok: false, error: `no recipe ${id}` };
+    const custom = await getCustomRecipes();
+    const newId = `${src.id}-custom-${Date.now()}`;
+    const copy = {
+      ...src,
+      id: newId,
+      name: `${src.name} (copy)`,
+      mode: "background",
+      custom: true,
+      schedule: src.schedule ?? { periodInMinutes: 60 },
+    };
+    custom.push(copy);
+    await masterMemory().set("customRecipes", custom);
+    return { ok: true, recipe: copy };
+  },
+  async "recipe.update"({ id, prompt, name, description }) {
+    const custom = await getCustomRecipes();
+    const idx = custom.findIndex((r) => r.id === id);
+    if (idx < 0) return { ok: false, error: `no custom recipe ${id}` };
+    if (prompt !== undefined) custom[idx].prompt = String(prompt);
+    if (name !== undefined) custom[idx].name = String(name);
+    if (description !== undefined) custom[idx].description = String(description);
+    await masterMemory().set("customRecipes", custom);
+    return { ok: true, recipe: custom[idx] };
+  },
+  async "recipe.delete"({ id }) {
+    const custom = await getCustomRecipes();
+    const next = custom.filter((r) => r.id !== id);
+    await masterMemory().set("customRecipes", next);
+    await cancelScheduledTask(`recipe:${id}`).catch(() => ({ ok: false }));
+    return { ok: true };
   },
 
   // ---- system hooks (routes) ----

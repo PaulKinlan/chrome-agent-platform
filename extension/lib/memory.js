@@ -472,6 +472,20 @@ export function backgroundAgentMemory(id) {
  * introspection; the AUTHORITATIVE registry is in chrome.storage, see
  * lib/named-agents.js.) */
 export async function listNamedAgentIds() {
+  return listStoreIds("agents");
+}
+
+/** Enumerate the background/scheduled-agent ids that have an OPFS sandbox
+ * directory (`memory/background/<slug>`). Read-only introspection for the
+ * activity-log explorer — the AUTHORITATIVE schedule registry is in
+ * chrome.storage (lib/scheduler.js listScheduledTasks). */
+export async function listBackgroundAgentIds() {
+  return listStoreIds("background");
+}
+
+/** Enumerate the id slugs directly under `memory/<dir>/`. Used by both the
+ * named-agent (`agents`) and background-agent (`background`) sandboxes. */
+async function listStoreIds(dir) {
   const root = await rootDir();
   let memDir;
   try {
@@ -481,7 +495,7 @@ export async function listNamedAgentIds() {
   }
   let agentsDir;
   try {
-    agentsDir = await memDir.getDirectoryHandle("agents");
+    agentsDir = await memDir.getDirectoryHandle(dir);
   } catch {
     return [];
   }

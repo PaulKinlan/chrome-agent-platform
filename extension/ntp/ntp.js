@@ -8,6 +8,7 @@
 import { send } from "../lib/messages.js";
 import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/conversation.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
 
 import {
   installPageDiagnostics,
@@ -111,8 +112,10 @@ async function renderNamedAgents() {
           "icon",
           `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`,
         );
-        row.setAttribute("action", "run");
-        row.addEventListener("run", () => openAgentChat(a.id || a.name));
+        // Item 55: the WHOLE row opens the agent's view (history + run log) +
+        // lets you talk to it — a chevron affordance, not a misleading "Run".
+        row.setAttribute("action", "open");
+        row.addEventListener("open", () => openAgentChat(a.id || a.name));
         el.append(row);
       }
       if (agents.length > 6) {
@@ -261,52 +264,71 @@ async function renderArtifacts() {
     row.setAttribute("description", (a.type ?? "unknown") + " · " + (a.size ?? 0) + " B");
     row.setAttribute("icon", "");
     row.setAttribute("action", "run");
-    row.addEventListener("run", () =>
-      openView(`artifact/artifact.html?id=${encodeURIComponent(a.id ?? a.name)}&origin=master`, a.name ?? "Artifact"));
+    row.addEventListener("run", () => openArtifactDialog(a.id ?? a.name, "master", a.name));
     el.append(row);
   }
 }
 
-// ── Recent activity (the agent run log — item 16) ────────────────────────
-// Shows what the agents DID (task / result / tool-call / tool-result /
-// screenshot entries, most-recent-first) so a background agent's work is
-// visible even without a live UI.
-function runLogText(entry) {
-  switch (entry?.type) {
-    case "task": return entry.task || "";
-    case "result": return entry.result || "";
-    case "tool-call": return (entry.tool || "tool") + (entry.args ? `(${entry.args})` : "");
-    case "tool-result": return (entry.tool || "tool") + (entry.result != null ? ` → ${summarizeToolResult(entry.tool, entry.result)}` : "");
-    case "screenshot": return entry.url || "screenshot";
-    default: return entry?.type || "";
+// ── the artifact expand dialog (item 53) ────────────────────────────────
+// Clicking a recent artifact opens it in an <agent-dialog> — the full live
+// render (an html artifact in the sandboxed double-iframe, an image inline, or
+// the text), without navigating away from the hub.
+async function openArtifactDialog(id, origin, fallbackName) {
+  const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+  const asset = res?.ok ? res.asset : null;
+  if (!asset) { setStatus("Artifact not found", false); return; }
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", asset.name ?? fallbackName ?? "Artifact");
+  const body = document.createElement("div");
+  body.style.minWidth = "min(76vw, 920px)";
+  body.style.minHeight = "200px";
+  const type = asset.type ?? "data";
+  const content = asset.content ?? "";
+  if (type === "html" || (type === "text" && isHtmlDocument(content))) {
+    const frame = document.createElement("div");
+    frame.className = "frame";
+    frame.style.border = "1px solid var(--border)";
+    frame.style.borderRadius = "10px";
+    frame.style.overflow = "hidden";
+    frame.style.background = "#fff";
+    frame.innerHTML = renderHtmlFrame(content);
+    const nonce = frame.querySelector(".html-frame")?.dataset?.frameNonce;
+    if (nonce) {
+      const { wireHtmlFramePreference, currentFramePreference } = await import("../shared/components.js");
+      wireHtmlFramePreference(frame, { nonce, ...currentFramePreference() });
+    }
+    body.append(frame);
+  } else if (type === "image") {
+    const img = document.createElement("img");
+    img.src = content;
+    img.alt = asset.name ?? "artifact";
+    img.style.maxWidth = "100%";
+    img.style.display = "block";
+    body.append(img);
+  } else {
+    const pre = document.createElement("pre");
+    pre.textContent = content;
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.fontSize = "13px";
+    body.append(pre);
   }
+  dialog.append(body);
+  document.body.append(dialog);
+  dialog.show();
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
 }
+
+// ── Recent activity (the agent run log — item 16) ────────────────────────
+// Shows what the agents DID across the WHOLE system (master + named + background
+// + site agents), most-recent-first, so a background agent's work is visible
+// even without a live UI. Rendered by the reusable <activity-explorer> Web
+// Component (searchable + filterable by agent).
 async function renderRunLog() {
   const el = document.getElementById("run-log");
   if (!el) return;
-  const res = await send("run-log.list").catch(() => ({ entries: [] }));
-  const entries = Array.isArray(res.entries) ? res.entries : [];
-  el.replaceChildren();
-  if (!entries.length) {
-    el.innerHTML = `<div class="empty">No activity yet — agents you run will show up here.</div>`;
-    return;
-  }
-  for (const e of entries.slice(0, 12)) {
-    const row = document.createElement("div");
-    row.className = "rl";
-    const kind = document.createElement("span");
-    kind.className = "rl-kind " + (e.type || "");
-    kind.textContent = e.type || "";
-    const text = document.createElement("span");
-    text.className = "rl-text";
-    text.textContent = runLogText(e);
-    text.title = runLogText(e);
-    const ts = document.createElement("span");
-    ts.className = "rl-ts";
-    ts.textContent = timeAgo(e.ts);
-    row.append(kind, text, ts);
-    el.append(row);
-  }
+  const explorer = document.createElement("activity-explorer");
+  explorer.setAttribute("limit", "100");
+  el.replaceChildren(explorer);
 }
 
 // ── Tasks (the distinct task threads) ────────────────────────────────────

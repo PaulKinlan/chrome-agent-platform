@@ -31,6 +31,7 @@ export const ICONS = {
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
   terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
   alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -750,13 +751,20 @@ class AttachButton extends Component {
         padding:0; cursor:pointer; font:inherit; line-height:1; anchor-name:--attach-anchor; }
       .plus svg { display:block; }
       .plus:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      /* Item 52: the menu anchors to the + button and flips above/below it.
+         block-start span-inline-end = place it above the button, aligned to the
+         button's end edge; flip-block moves it BELOW when there is no room above
+         (the + button sits at the bottom of the composer, so "above" is the
+         common case, but a thread with a tall conversation must not push it
+         off-screen). The popover is top-layer, so opening it never scrolls the
+         main frame (the conversation scroll container is untouched). */
       .menu { position:absolute; inset:auto; margin:0; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.25);
         padding:4px; min-width:200px; z-index:20;
-        position-anchor:--attach-anchor; position-area:top span-left;
+        position-anchor:--attach-anchor; position-area:block-start span-inline-end;
         position-try-fallbacks:flip-block, flip-inline; }
       @supports not (position-area: top) {
-        .menu { position:absolute; bottom:calc(100% + 6px); left:0; }
+        .menu { position:fixed; bottom:auto; left:auto; }
       }
       .menu[hidden] { display:none; }
       .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
@@ -1056,15 +1064,26 @@ class CapabilityRow extends Component {
     const action = this.getAttribute("action") || "run";
     const enabled = this.hasAttribute("enabled");
     const lastRun = this.getAttribute("last-run") || "";
+    // "open" = the WHOLE row is clickable (an agent → open its chat/view) with a
+    // chevron affordance instead of a "Run" button; "toggle" = an enable/disable
+    // switch; "run" = a small Run button. All three emit their event.
     const actionHtml = action === "toggle"
       ? `<switch-toggle part="toggle"${enabled ? " checked" : ""}
           label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)} in the background"></switch-toggle>`
-      : `<button part="run" class="run" type="button">Run</button>`;
+      : action === "open"
+        ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>`
+        : `<button part="run" class="run" type="button">Run</button>`;
+    const rowAttrs = action === "open"
+      ? ` part="row" class="row clickable" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}"`
+      : ` part="row" class="row"`;
     mountTemplate(this, `
       :host { display:block; }
       .row { display:grid; grid-template-columns:28px 1fr auto; gap:12px; align-items:center;
         padding:12px 14px; border-bottom:1px solid var(--border,#30363d); background:transparent; }
       .row:last-child { border-bottom:0; }
+      .row.clickable { cursor:pointer; border-radius:8px; }
+      .row.clickable:hover { background:var(--bg,#12121c); }
+      .row.clickable:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .icon { display:inline-flex; align-items:center; justify-content:center;
         width:28px; height:28px; color:var(--muted,#8b949e); }
       .icon svg { width:18px; height:18px; display:block; }
@@ -1077,8 +1096,13 @@ class CapabilityRow extends Component {
         padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
         white-space:nowrap; }
       .run:hover, .run:focus-visible { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); outline:none; }
+      .open { justify-self:end; display:inline-flex; align-items:center; justify-content:center;
+        width:28px; height:28px; border:0; background:transparent; color:var(--muted,#8b949e);
+        cursor:pointer; border-radius:6px; }
+      .open:hover, .open:focus-visible { color:var(--accent,#0e6e63); outline:none; }
+      .open svg { width:16px; height:16px; display:block; }
       .meta { display:flex; align-items:center; gap:6px; }
-    `, `<div part="row" class="row">
+    `, `<div${rowAttrs}>
       <span class="icon" aria-hidden="true">${icon}</span>
       <span class="label"><span class="name">${escapeHtml(name)}</span>
         <span class="desc">${escapeHtml(description)}</span>${
@@ -1090,6 +1114,17 @@ class CapabilityRow extends Component {
   _wire() {
     const run = this._root.querySelector(".run");
     run?.addEventListener("click", () => this._emit("run"));
+    const open = this._root.querySelector(".open");
+    open?.addEventListener("click", (e) => { e.stopPropagation(); this._emit("open"); });
+    // The whole row is clickable for the "open" action (an agent → open its
+    // chat), matching the keyboard affordance (role=button + tabindex).
+    const row = this._root.querySelector(".row.clickable");
+    if (row) {
+      row.addEventListener("click", () => this._emit("open"));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open"); }
+      });
+    }
     this._root.querySelector("switch-toggle")?.addEventListener("toggle", (e) => {
       this._emit("toggle", { enabled: e.detail.checked });
     });
@@ -2852,6 +2887,208 @@ class SecurityShield extends PanelButton {
   }
 }
 customElements.define("security-shield", SecurityShield);
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * <activity-explorer agent? limit?> — the browsable/searchable activity log
+ * (the agent run log ACROSS the system: master + named + background + site
+ * agents). Queries activity.list; each row shows the agent (which agent did
+ * it), the entry type, the readable text, and the time. Search box + an agent
+ * filter; a per-agent view when the `agent` attribute is set. The gallery can
+ * seed it with demo entries (no extension backend) via the `entries` property.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+function timeAgo(ts) {
+  const d = Date.now() - (ts ?? 0);
+  const m = Math.floor(d / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// Turn a raw tool result into a short readable one-liner (mirrors the SW's
+// tool-summary: prefer the {userSummary, modelContent} envelope, then compact).
+function activityToolSummary(raw) {
+  let v = raw;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s.startsWith("{") || s.startsWith("[")) {
+      try {
+        const o = JSON.parse(s);
+        if (o && typeof o === "object" && !Array.isArray(o)) {
+          if (o.userSummary != null) v = o.userSummary;
+          else if (o.modelContent != null) v = o.modelContent;
+          else v = o;
+        } else {
+          v = o;
+        }
+      } catch {
+        v = s;
+      }
+    } else {
+      v = s;
+    }
+  }
+  if (v && typeof v === "object") {
+    if (Array.isArray(v)) return `${v.length} item${v.length === 1 ? "" : "s"}`;
+    const keys = Object.keys(v);
+    if (!keys.length) return "{}";
+    const agents = Array.isArray(v.agents) ? v.agents : null;
+    if (agents) return `${agents.length} agent${agents.length === 1 ? "" : "s"}`;
+    return keys.slice(0, 3).map((k) => `${k}: ${shortText(v[k])}`).join(", ");
+  }
+  return shortText(v);
+}
+function shortText(v, n = 80) {
+  const s = String(v ?? "");
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// The readable one-liner for a journal entry.
+function activityText(e) {
+  switch (e?.type) {
+    case "task": return e.task || "";
+    case "result": return e.result || "";
+    case "tool-call": return (e.tool || "tool") + (e.args ? ` ${shortText(e.args, 60)}` : "");
+    case "tool-result": return (e.tool || "tool") + " → " + activityToolSummary(e.result);
+    case "screenshot": return e.url || "screenshot";
+    case "error": return e.error || e.message || "error";
+    default: return e?.type || "";
+  }
+}
+
+class ActivityExplorer extends Component {
+  static get observedAttributes() {
+    return ["agent", "limit"];
+  }
+  _render() {
+    this._root.innerHTML = `
+      <style>
+        :host { display:block; }
+        .aex { display:flex; flex-direction:column; gap:8px; }
+        .aex-toolbar { display:flex; gap:8px; flex-wrap:wrap; }
+        .aex-search { flex:1; min-width:140px; padding:7px 10px; font:inherit; font-size:13px;
+          color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
+          border-radius:8px; }
+        .aex-agent { max-width:200px; padding:7px 8px; font:inherit; font-size:13px;
+          color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
+          border-radius:8px; appearance:base-select; }
+        .aex-list { display:flex; flex-direction:column; max-height:420px; overflow:auto; }
+        .aex-row { display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:baseline;
+          padding:7px 10px; border-bottom:1px solid var(--border,#e3e0d9); }
+        .aex-row:last-child { border-bottom:0; }
+        .aex-row:hover { background:var(--panel,#ffffff); }
+        .aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
+          max-width:150px; overflow:hidden; text-overflow:ellipsis; }
+        .aex-main { min-width:0; }
+        .aex-kind { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+          color:var(--muted,#635e56); margin-right:6px; }
+        .aex-kind.task { color:var(--accent,#0e6e63); }
+        .aex-kind.tool-call, .aex-kind.tool-result { color:var(--accent2,#7a5c1d); }
+        .aex-kind.error { color:var(--danger,#b3261e); }
+        .aex-text { font-size:13px; color:var(--text,#1d1b18); overflow:hidden; text-overflow:ellipsis;
+          white-space:nowrap; }
+        .aex-ts { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; }
+        .aex-empty { padding:12px 10px; font-size:13px; color:var(--muted,#635e56); }
+        .aex-count { font-size:11px; color:var(--muted,#635e56); }
+      </style>
+      <div class="aex">
+        <div class="aex-toolbar">
+          <input class="aex-search" type="search" placeholder="Search activity…" aria-label="Search activity">
+          <select class="aex-agent" aria-label="Filter by agent"></select>
+        </div>
+        <div class="aex-list" role="log" aria-live="polite"></div>
+      </div>`;
+  }
+  _wire() {
+    this._search = this._root.querySelector(".aex-search");
+    this._agent = this._root.querySelector(".aex-agent");
+    this._list = this._root.querySelector(".aex-list");
+    this._entries = this._entries || [];
+    this._search.addEventListener("input", () => this._refresh());
+    this._agent.addEventListener("change", () => this._refresh());
+    this._load();
+  }
+  // Set demo entries directly (the gallery has no extension backend).
+  set entries(v) {
+    this._entries = Array.isArray(v) ? v : [];
+    this._seeded = true;
+    if (this._rendered) this._refresh();
+  }
+  get entries() {
+    return this._entries;
+  }
+  async _load() {
+    // If entries were seeded synchronously (the gallery), never clobber them
+    // with the empty backend result (the _load await would race the setter).
+    if (!this._seeded) {
+      const res = await backend("activity.list", {
+        agent: this.getAttribute("agent") || undefined,
+        limit: Number(this.getAttribute("limit")) || 200,
+      });
+      if (!this._seeded) {
+        this._entries = Array.isArray(res.entries) ? res.entries : [];
+      }
+    }
+    const seen = new Map();
+    for (const e of this._entries) {
+      if (!seen.has(e.source)) seen.set(e.source, e.agentLabel || e.source);
+    }
+    const cur = this._agent.value;
+    this._agent.innerHTML = `<option value="">All agents</option>` +
+      [...seen].map(([s, label]) => `<option value="${escapeHtml(s)}">${escapeHtml(label)}</option>`).join("");
+    if (cur) this._agent.value = cur;
+    this._refresh();
+  }
+  _refresh() {
+    if (!this._list) return;
+    const q = (this._search?.value || "").trim().toLowerCase();
+    const agent = this._agent?.value || "";
+    const fixed = this.getAttribute("agent");
+    const filtered = (this._entries || []).filter((e) => {
+      if (fixed && e.source !== fixed) return false;
+      if (agent && e.source !== agent) return false;
+      if (q) {
+        const hay = [e.agentLabel, e.type, e.task, e.result, e.tool, e.args, e.url, e.source, e.id]
+          .map((v) => (v == null ? "" : String(v))).join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    this._list.replaceChildren();
+    if (!filtered.length) {
+      const d = document.createElement("div");
+      d.className = "aex-empty";
+      d.textContent = "No activity matches.";
+      this._list.append(d);
+      return;
+    }
+    for (const e of filtered) {
+      const row = document.createElement("div");
+      row.className = "aex-row";
+      row.title = activityText(e);
+      const who = document.createElement("span");
+      who.className = "aex-agent";
+      who.textContent = e.agentLabel || e.source || "hub";
+      const main = document.createElement("span");
+      main.className = "aex-main";
+      const kind = document.createElement("span");
+      kind.className = "aex-kind " + (e.type || "");
+      kind.textContent = e.type || "";
+      const text = document.createElement("span");
+      text.className = "aex-text";
+      text.textContent = activityText(e);
+      main.append(kind, text);
+      const ts = document.createElement("span");
+      ts.className = "aex-ts";
+      ts.textContent = timeAgo(e.ts);
+      row.append(who, main, ts);
+      this._list.append(row);
+    }
+  }
+}
+customElements.define("activity-explorer", ActivityExplorer);
 
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs
