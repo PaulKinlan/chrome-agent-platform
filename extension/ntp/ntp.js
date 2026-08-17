@@ -130,16 +130,24 @@ function initialAvatar(name) {
 }
 
 // ── background agents (scheduled recipes, enabled/disabled) ──────────────
+// Item 25: the hub shows only the ACTIVE (enabled) background agents — the
+// full catalog (presets + disabled) lives in Settings behind the "Configure"
+// link + the base-select picker.
 async function renderBackgroundAgents() {
   const el = document.getElementById("background-agents");
   if (!el) return;
   const res = await send("background-agent.list").catch(() => ({ agents: [] }));
   const agents = Array.isArray(res.agents) ? res.agents : [];
+  const active = agents.filter((a) => a.enabled);
   el.replaceChildren();
-  if (!agents.length) {
-    el.innerHTML = `<div class="empty">No background agents available.</div>`;
+  if (!active.length) {
+    el.innerHTML = `<div class="empty">No background agents running — <a href="#" class="hint-link" data-open-bg>enable one in Settings</a>.</div>`;
+    el.querySelector("[data-open-bg]")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      openView("options/options.html", "Settings");
+    });
   } else {
-    for (const a of agents) {
+    for (const a of active) {
       const row = document.createElement("capability-row");
       row.setAttribute("name", a.name || a.id);
       row.setAttribute("description", a.description || "");
@@ -421,9 +429,11 @@ sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
 });
 
-// The "+" new-task button focuses the composer (the empty state says "start one
-// above" — this gives it the affordance above the list).
+// The "+" new-task button returns to the hub + focuses the composer. When the
+// user is inside a task thread, it also closes the thread view so the composer
+// (on the hub) can receive focus (item 26).
 document.getElementById("new-task")?.addEventListener("click", () => {
+  if (!threadView.hidden) hideThreadView();
   composer.focus();
 });
 
@@ -470,6 +480,11 @@ document.getElementById("open-directory")?.addEventListener(
 document.getElementById("open-recipes")?.addEventListener(
   "click",
   () => openView("recipes/index.html", "Recipes"),
+);
+
+document.getElementById("bg-configure")?.addEventListener(
+  "click",
+  (e) => { e.preventDefault(); openView("options/options.html", "Settings"); },
 );
 
 setStatus("ready");

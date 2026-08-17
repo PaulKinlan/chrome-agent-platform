@@ -161,6 +161,15 @@
       flex-direction: column;
       gap: 6px;
     }
+    /* the collapse chevron lives at the BOTTOM of the sidebar (item 26) — the
+       brand row at the top was overlapping the heading; a dedicated foot row is
+       cleaner. */
+    .side-collapse-row {
+      display: flex;
+      justify-content: flex-end;
+      padding-top: 2px;
+    }
+    .side.collapsed .side-collapse-row { justify-content: center; }
     .foot-btn {
       display: flex;
       align-items: center;
@@ -265,6 +274,17 @@
       letter-spacing: .04em;
       font-weight: 600;
     }
+    .panel-subhead .hint-link {
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 500;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .panel-subhead .hint-link:hover, .panel-subhead .hint-link:focus-visible {
+      text-decoration: underline;
+      outline: none;
+    }
     .panel-body { padding: 4px 0; }
     .empty {
       padding: 14px;
@@ -317,6 +337,13 @@
       background: var(--bg);
     }
 
+    /* The task thread does NOT cover the sidebar: it fills the area to the
+       RIGHT of the task sidebar so the sidebar (and its active-thread state)
+       stays visible while inside a task (item 26). The settings/directory/
+       recipes overlay (#view) stays full-screen. */
+    #thread-view.view-overlay { top: 0; bottom: 0; right: 0; left: 240px; transition: left .18s ease; }
+    #side.collapsed ~ #thread-view.view-overlay { left: 60px; }
+
     /* ── the full-screen task thread ── */
     .thread-body {
       flex: 1;
@@ -345,9 +372,6 @@
     <aside class="side" id="side" aria-label="Tasks">
       <div class="brand-row">
         <div class="brand">Chrome <span>Agent</span> Platform</div>
-        <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
       </div>
       <div class="side-label-row">
         <span class="side-label">Tasks</span>
@@ -363,6 +387,11 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           <span class="btn-label">Directory</span>
         </button>
+        <div class="side-collapse-row">
+          <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+        </div>
         <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="btn-label">Settings</span>
@@ -391,7 +420,7 @@
             </div>
             <div class="panel-subhead"><span>Named agents</span><span class="hint">your agents</span></div>
             <div class="panel-body" id="named-agents"></div>
-            <div class="panel-subhead"><span>Background agents</span><span class="hint">run on a schedule</span></div>
+            <div class="panel-subhead"><span>Background agents</span><a href="#" class="hint-link" id="bg-configure">Configure</a></div>
             <div class="panel-body" id="background-agents"></div>
             <div class="panel-subhead"><span>Site agents</span><span class="hint">enrolled origins</span></div>
             <div class="panel-body" id="site-agents"></div>

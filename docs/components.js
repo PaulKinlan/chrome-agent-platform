@@ -234,6 +234,59 @@ export function injectCspMeta(html) {
 }
 
 /**
+ * The preference-percolation down-channel for a rendered-HTML frame. The
+ * generated UI is an UNTRUSTED layer: it never reads the user's settings
+ * directly; the trusted surface posts a minimal, validated projection (theme +
+ * locale only) into the frame over postMessage, gated by a one-time nonce (the
+ * canonical schema lives in lib/preference-bridge.js; this is the self-contained
+ * browser-side mirror so components.js stays import-free for the showcase).
+ */
+export const FRAME_PREFERENCE_TYPE = "cap:preference";
+export const FRAME_PREFERENCE_READY = "cap:preference-ready";
+
+/** A fresh, unguessable one-time token for the frame handshake. */
+export function generateNonce() {
+  const b = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(b);
+  else for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** The bootstrapping script injected into a generated document. It (a) announces
+ * readiness to the parent, and (b) applies a parent-validated theme/locale. It
+ * re-checks the nonce + the source (parent only) so a sibling frame cannot forge
+ * a preference. It has no network access (the CSP) + no parent-DOM access (the
+ * sandbox), so it is a confined, one-way receiver.
+ */
+export function preferenceBootstrapScript(nonce) {
+  const n = JSON.stringify(String(nonce ?? ""));
+  return `<script data-cap-bootstrap>${[
+    "(function(){var nonce=" + n + ";",
+    "function apply(p){if(!p)return;",
+    "if(p.theme){try{document.documentElement.setAttribute('data-theme',p.theme);}catch(e){}}",
+    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}",
+    "try{document.documentElement.setAttribute('data-cap-themed','1');}catch(e){}",
+    "try{document.dispatchEvent(new CustomEvent('cap:themed',{detail:p}));}catch(e){}}",
+    "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
+    "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
+    "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
+    "})();"].join("")}</script>`;
+}
+
+/**
+ * Inject the CSP <meta> + the preference bootstrap as early as possible.
+ */
+export function injectFrameGuards(html, nonce) {
+  const guarded = injectCspMeta(html);
+  const s = String(guarded ?? "");
+  const m = s.match(/<head[^>]*>/i);
+  if (m) {
+    return s.replace(m[0], m[0] + preferenceBootstrapScript(nonce));
+  }
+  return preferenceBootstrapScript(nonce) + s;
+}
+
+/**
  * Render untrusted HTML output in a SANDBOXED iframe (the co-do double-iframe
  * pattern: this trusted extension surface is the OUTER frame; the model's HTML
  * runs in an INNER opaque-sandbox iframe with no access to the extension origin
@@ -244,9 +297,57 @@ export function injectCspMeta(html) {
  * closes the network egress that a prompt-injected script would otherwise use
  * to exfiltrate. Scripts may run (the UI can be interactive) but they are
  * confined to the frame + cannot reach the network or the extension.
+ *
+ * The generated UI is also THEMED via the preference-percolation: the frame
+ * carries a one-time nonce + a bootstrap that applies the parent's theme/locale.
  */
-export function renderHtmlFrame(html) {
-  return `<div class="html-frame"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectCspMeta(html))}"></iframe></div>`;
+export function renderHtmlFrame(html, { nonce } = {}) {
+  const n = nonce ?? generateNonce();
+  return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectFrameGuards(html, n))}"></iframe></div>`;
+}
+
+/**
+ * Wire the preference-percolation DOWN-channel into a rendered-HTML frame.
+ * When the frame announces readiness (or on its load event), the trusted
+ * surface posts the minimal { theme, locale } projection with the nonce. Returns
+ * a cleanup function. Pure + dependency-free.
+ */
+export function wireHtmlFramePreference(container, { nonce, theme, locale } = {}) {
+  const iframe = (container && (container.matches?.("iframe") ? container : container.querySelector?.("iframe"))) || null;
+  if (!iframe) return () => {};
+  const n = nonce ?? (container?.closest?.(".html-frame")?.dataset?.frameNonce) ?? (iframe.closest?.(".html-frame")?.dataset?.frameNonce) ?? "";
+  if (!n) return () => {};
+  const pref = { ...(typeof theme === "string" && theme ? { theme } : {}), ...(typeof locale === "string" && locale ? { locale } : {}) };
+  let done = false;
+  const post = () => {
+    if (done) return;
+    try { iframe.contentWindow?.postMessage({ type: FRAME_PREFERENCE_TYPE, nonce: n, preference: pref }, "*"); } catch { /* frame may not be ready */ }
+  };
+  const onMsg = (e) => {
+    const d = e.data;
+    if (d && d.type === FRAME_PREFERENCE_READY && d.nonce === n && e.source === iframe.contentWindow) {
+      done = true;
+      post();
+    }
+  };
+  const onLoad = () => { post(); };
+  window.addEventListener("message", onMsg);
+  iframe.addEventListener("load", onLoad);
+  // The frame may already be loaded (srcdoc resolves fast) — try once now.
+  setTimeout(post, 0);
+  return () => {
+    window.removeEventListener("message", onMsg);
+    iframe.removeEventListener("load", onLoad);
+  };
+}
+
+/** The current theme + locale to percolate into a generated UI (host-document
+ * state, set by apply-theme.js). */
+export function currentFramePreference() {
+  return {
+    theme: document.documentElement?.dataset?.theme || "sunlit",
+    locale: document.documentElement?.lang || (typeof navigator !== "undefined" ? navigator.language : undefined) || "",
+  };
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1847,7 +1948,7 @@ class PanelButton extends Component {
       :host { display:inline-flex; position:relative; }
       .trigger { position:relative; display:inline-flex; align-items:center; justify-content:center;
         width:36px; height:36px; border:1px solid var(--border,#e3e0d9); border-radius:8px;
-        background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:0; }
+        background:transparent; color:var(--muted,#635e56); cursor:pointer; padding:0; anchor-name:--panel-anchor; }
       .trigger:hover { color:var(--text,#1d1b18); border-color:var(--accent,#0e6e63); }
       .trigger[data-attention="true"] { color:${attention ? "var(--warning,#9a6700)" : "var(--muted,#635e56)"}; border-color:${attention ? "var(--warning,#9a6700)" : "var(--border,#e3e0d9)"}; }
       .trigger:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
@@ -1857,6 +1958,13 @@ class PanelButton extends Component {
       .panel { position:fixed; z-index:200; width:min(560px, calc(100vw - 24px));
         background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px;
         box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08)); overflow:hidden; }
+      /* Item 28: the transparency panels are anchored to their trigger buttons
+         (CSS anchor positioning) so they scroll WITH the button + stay in-bounds
+         (position-area + position-try-fallbacks), like every other popover. */
+      @supports (position-area: top) {
+        .panel { position:absolute; inset:auto; position-anchor:--panel-anchor;
+          position-area:bottom span-right; position-try-fallbacks:flip-block, flip-inline; }
+      }
       .panel[hidden] { display:none; }
       .phead { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .phead .t { font-weight:600; font-size:13px; margin:0; flex:1; }
@@ -1930,6 +2038,10 @@ class PanelButton extends Component {
     this._trigger?.setAttribute("aria-expanded", "false");
   }
   _position() {
+    // Native CSS anchor positioning (position-area + position-try-fallbacks)
+    // wins when supported — the inline top/left fallback must not override it
+    // (item 28).
+    if (supportsAnchorPositioning()) return;
     const r = this._trigger?.getBoundingClientRect?.();
     if (!r) return;
     const panel = this._panel;
