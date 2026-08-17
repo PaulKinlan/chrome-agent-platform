@@ -293,6 +293,30 @@ async function main() {
       return !!c?.shadowRoot?.querySelector('[data-copy-all]');
     })()`);
     check("error-console has a Copy all button", consoleCopy === true, consoleCopy);
+
+    // Regression: clicking the console's own buttons (copy-all / clear) must
+    // NOT close the panel. The bug was host.contains() not traversing the shadow
+    // root, so every in-panel click read as an outside click + closed it.
+    const consoleButtons = await evl(s.sessionId, `(async()=>{
+      const c=document.querySelector('error-console');
+      if(!c?.shadowRoot) return {found:false};
+      c.shadowRoot.querySelector('.trigger').click();
+      await new Promise(r=>setTimeout(r,60));
+      const panel=c.shadowRoot.querySelector('.panel');
+      const openAfterTrigger = !panel.hidden;
+      c.shadowRoot.querySelector('[data-copy-all]').click();
+      await new Promise(r=>setTimeout(r,60));
+      const openAfterCopyAll = !panel.hidden;
+      c.shadowRoot.querySelector('[data-clear]').click();
+      await new Promise(r=>setTimeout(r,80));
+      const openAfterClear = !panel.hidden;
+      return {found:true, openAfterTrigger, openAfterCopyAll, openAfterClear};
+    })()`);
+    check("console buttons (copy-all/clear) do NOT close the panel",
+      consoleButtons.found === true &&
+      consoleButtons.openAfterTrigger === true &&
+      consoleButtons.openAfterCopyAll === true &&
+      consoleButtons.openAfterClear === true, consoleButtons);
   } finally {
     try { ws.close(); } catch { /* ignore */ }
     try { proc.kill("SIGKILL"); } catch { /* ignore */ }

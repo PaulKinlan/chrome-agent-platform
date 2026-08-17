@@ -2328,17 +2328,22 @@ class PanelButton extends Component {
     this._trigger?.setAttribute("aria-expanded", "false");
   }
   _position() {
-    // Native CSS anchor positioning (position-area + position-try-fallbacks)
-    // wins when supported — the inline top/left fallback must not override it
-    // (item 28).
-    if (supportsAnchorPositioning()) return;
     const r = this._trigger?.getBoundingClientRect?.();
     if (!r) return;
     const panel = this._panel;
-    panel.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 360)}px`;
-    // Right-align the panel to the trigger; clamp into the viewport.
+    // Always clamp into the viewport (belt-and-suspenders over the native
+    // position-area anchor positioning, which does NOT reliably keep a wide
+    // panel on-screen when the trigger is near the right edge — item 28's
+    // flip-inline fallback missed it and the console popped off-screen). A
+    // fixed position + clamped top/left means the panel can never fall outside
+    // the viewport, regardless of anchor-positioning support.
     const w = panel.offsetWidth || 560;
+    panel.style.position = "fixed";
+    panel.style.positionAnchor = "auto";
+    panel.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 360)}px`;
     panel.style.left = `${Math.max(12, Math.min(r.right - w, window.innerWidth - w - 12))}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
   }
   // Subclasses:
   get triggerIcon() { return ""; }
