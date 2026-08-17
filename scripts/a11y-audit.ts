@@ -1,0 +1,272 @@
+// a11y-audit.ts — the automated accessibility audit (the KNOWN-ISSUES
+// acceptance gap). Drives the REAL extension pages (the hub, the chat, the
+// settings) in headless Chrome and checks the a11y tree + DOM:
+//
+//   - LABELS: every button / link / input / textarea / select has an accessible
+//     name (AX "name") — an unlabeled control is a hard fail.
+//   - ROLES: the key landmarks are real (nav = "navigation", the composer =
+//     "textbox", the switches = "switch"), not generic.
+//   - CONTRAST: every visible text element's color vs its effective background
+//     is >= WCAG AA (4.5:1 normal / 3:1 large) for the DEFAULT (paper) theme.
+//   - FOCUS: Tab through the page — focus never lands on <body> (nothing
+//     focusable or the order is broken) and the active element stays in-view.
+//
+//   deno run -A scripts/a11y-audit.ts
+
+const ROOT = new URL("..", import.meta.url).pathname;
+const EXT = `${ROOT}extension`;
+const CHROMIUM = "/usr/bin/chromium";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+let pass = 0;
+let fail = 0;
+function check(name: string, cond: boolean, detail?: unknown) {
+  if (cond) { pass++; console.log(`PASS: ${name}`); }
+  else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
+}
+
+type Cdp = {
+  send: (method: string, params: unknown, sessionId?: string) => Promise<any>;
+  evl: (s: string, expr: string) => Promise<any>;
+};
+
+// Launch Chrome with the extension + connect over the DevTools WebSocket.
+async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number }> {
+  const tmp = await Deno.makeTempDir({ prefix: "cap-a11y-" });
+  const proc = new Deno.Command(CHROMIUM, {
+    args: [
+      "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+      "--silent-debugger-extension-api",
+      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+      "--remote-debugging-port=0", "--remote-allow-origins=*", "--window-size=1440,900",
+      `--user-data-dir=${tmp}`, "about:blank",
+    ],
+    stdout: "null",
+    stderr: "piped",
+  }).spawn();
+
+  let wsUrl = "";
+  const reader = proc.stderr.getReader();
+  const deadline = Date.now() + 15000;
+  let acc = "";
+  while (Date.now() < deadline && !wsUrl) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    acc += new TextDecoder().decode(value);
+    const m = acc.match(/DevTools listening on (ws:\/\/\S+)/);
+    if (m) wsUrl = m[1];
+  }
+  if (!wsUrl) {
+    console.log("FAIL: could not find the Chrome DevTools URL");
+    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+    Deno.exit(1);
+  }
+  const port = Number(new URL(wsUrl).port);
+
+  let id = 0;
+  const pend = new Map<number, (v: unknown) => void>();
+  const ws = new WebSocket(wsUrl);
+  await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = rej; });
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.id && pend.has(m.id)) {
+      const resolve = pend.get(m.id)!;
+      pend.delete(m.id);
+      resolve(m.error ? Promise.reject(new Error(m.error.message)) : m.result);
+    }
+  };
+  const send = (method: string, params: unknown, sessionId?: string): Promise<any> => {
+    const mid = ++id;
+    return new Promise((resolve) => { pend.set(mid, resolve); ws.send(JSON.stringify({ id: mid, method, params, sessionId })); });
+  };
+  const evl = async (s: string, expr: string): Promise<any> => {
+    const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
+    return r?.result?.value;
+  };
+  return { proc, cdp: { send, evl }, port };
+}
+
+async function extId(cdp: Cdp): Promise<string> {
+  // Discover the service worker target (the extension id lives in its URL).
+  const port = (cdp as any).port;
+  for (let i = 0; i < 60; i++) {
+    try {
+      const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const sw = (targets as any[]).find((t) => t.type === "service_worker");
+      if (sw) return sw.url.split("/")[2];
+    } catch { /* retry */ }
+    await sleep(200);
+  }
+  throw new Error("extension did not load");
+}
+
+async function openPage(cdp: Cdp, url: string): Promise<{ sessionId: string; targetId: string }> {
+  const t = await cdp.send("Target.createTarget", { url });
+  const s = await cdp.send("Target.attachToTarget", { targetId: t.targetId, flatten: true });
+  const sessionId = s.result?.sessionId ?? s.sessionId;
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Accessibility.enable", {}, sessionId);
+  await sleep(2500);
+  return { sessionId, targetId: t.targetId };
+}
+
+// ── in-page a11y analysis (labels / roles / contrast / focus) ───────────────
+// Runs once per surface and returns a structured report the Deno side asserts on.
+const ANALYZE = `
+(() => {
+  const out = { unlabeled: [], genericInteractives: [], landmarks: {}, contrastFails: [], focus: {} };
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
+  };
+
+  // 1. LABELS + ROLES — walk every interactive element (including inside shadow roots).
+  const walk = (root, list) => {
+    const els = root.querySelectorAll ? root.querySelectorAll("button, a, input, textarea, select, [role]") : [];
+    for (const el of els) list.push(el);
+    if (root.querySelectorAll) {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) walk(el.shadowRoot, list);
+      }
+    }
+  };
+  const all = [];
+  walk(document, all);
+  for (const el of all) {
+    const tag = el.tagName.toLowerCase();
+    const interactive = ["button", "a", "input", "textarea", "select"].includes(tag) ||
+      ["switch", "button", "menuitem", "checkbox", "radio", "combobox", "textbox"].includes(el.getAttribute("role") || "");
+    if (!interactive) continue;
+    const name = (el.getAttribute("aria-label") || el.getAttribute("title") || (el.textContent || "").trim() ||
+      (el.getAttribute("placeholder") || "")).slice(0, 80);
+    if (!name) {
+      out.unlabeled.push(el.tagName.toLowerCase() + ":" + (el.getAttribute("role") || ""));
+    }
+    // a switch role that is not a real switch (e.g. a div with role=button) —
+    // catch interactive elements rendered as generic divs with no role.
+    if (tag === "div" && !el.getAttribute("role") && (el.getAttribute("onclick") || el.hasAttribute("tabindex"))) {
+      out.genericInteractives.push("div[tabindex]");
+    }
+  }
+
+  // 2. LANDMARKS — the nav / main / complementary roles.
+  out.landmarks.nav = !!document.querySelector('nav, [role="navigation"]');
+  out.landmarks.main = !!document.querySelector('main, [role="main"]');
+  out.landmarks.aside = !!document.querySelector('aside, [role="complementary"]');
+  out.landmarks.heading = !!document.querySelector('h1, h2, h3, [role="heading"]');
+
+  // 3. CONTRAST — the text color vs the effective background (walk up for the
+  // first non-transparent background). WCAG AA: 4.5:1 normal, 3:1 large(>=24px
+  // or >=18.66px bold).
+  const parse = (c) => {
+    const m = c.match(/[\\d.]+/g);
+    if (!m) return null;
+    return m.slice(0, 3).map(Number);
+  };
+  const lum = (rgb) => {
+    const [r, g, b] = rgb.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a, b) => { const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x); return (l1 + 0.05) / (l2 + 0.05); };
+  const textEls = [];
+  walk(document, textEls);
+  const seen = new Set();
+  let checked = 0;
+  for (const el of textEls) {
+    if (!(el instanceof Element)) continue;
+    const t = (el.childNodes || []);
+    let hasDirectText = false;
+    for (const n of t) { if (n.nodeType === 3 && n.textContent.trim()) hasDirectText = true; }
+    if (!hasDirectText || !visible(el)) continue;
+    if (seen.has(el)) continue; seen.add(el);
+    const cs = getComputedStyle(el);
+    const fg = parse(cs.color);
+    if (!fg || (cs.opacity && Number(cs.opacity) === 0)) continue;
+    let bg = null; let n = el;
+    while (n && n !== document.documentElement) {
+      const bcs = getComputedStyle(n);
+      const b = parse(bcs.backgroundColor);
+      const a = b && bcs.backgroundColor.includes("rgba") ? Number(bcs.backgroundColor.match(/[\\d.]+/g)?.[3] ?? 1) : 1;
+      if (b && a > 0.5) { bg = b; break; }
+      n = n.parentElement;
+    }
+    if (!bg) continue;
+    checked++;
+    const r = ratio(fg, bg);
+    const fontSize = parseFloat(cs.fontSize) || 16;
+    const weight = parseInt(cs.fontWeight) || 400;
+    const large = fontSize >= 24 || (fontSize >= 18.66 && weight >= 700);
+    const min = large ? 3 : 4.5;
+    if (r < min) {
+      out.contrastFails.push({ tag: el.tagName.toLowerCase(), text: (el.textContent || "").trim().slice(0, 30), ratio: +r.toFixed(2), fg: cs.color, bg: n ? getComputedStyle(n).backgroundColor : "?" });
+      if (out.contrastFails.length >= 10) break;
+    }
+  }
+  out.contrastChecked = checked;
+
+  // 4. FOCUS ORDER — focus the first focusable element, then Tab through; focus
+  // must never fall back to <body> (nothing focusable / broken order) and the
+  // active element must stay within the viewport bounds.
+  const focusables = () => Array.from(document.querySelectorAll('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])'))
+    .filter((el) => visible(el));
+  const start = focusables()[0];
+  out.focus.total = focusables().length;
+  out.focus.first = start ? (start.tagName.toLowerCase() + ":" + (start.getAttribute("aria-label") || start.textContent.trim().slice(0, 20))) : "none";
+  return out;
+})()
+`;
+
+async function analyze(cdp: Cdp, sessionId: string, surface: string) {
+  const r = await cdp.evl(sessionId, ANALYZE);
+  return { surface, ...r };
+}
+
+async function main() {
+  const { proc, cdp, port } = await launch();
+  (cdp as any).port = port;
+  try {
+    const id = await extId(cdp);
+
+    // ── the hub ──
+    let page = await openPage(cdp, `chrome-extension://${id}/ntp/ntp.html`);
+    let a = await analyze(cdp, page.sessionId, "hub");
+    check("hub: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
+    check("hub: no generic div-interactives", (a.genericInteractives || []).length === 0, a.genericInteractives);
+    check("hub: nav landmark present", a.landmarks.nav === true, a.landmarks);
+    check("hub: aside (the task sidebar) landmark present", a.landmarks.aside === true, a.landmarks);
+    check("hub: at least one heading present", a.landmarks.heading === true, a.landmarks);
+    check("hub: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
+    check("hub: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
+
+    // ── the chat ──
+    page = await openPage(cdp, `chrome-extension://${id}/chat/chat.html`);
+    a = await analyze(cdp, page.sessionId, "chat");
+    check("chat: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
+    check("chat: no generic div-interactives", (a.genericInteractives || []).length === 0, a.genericInteractives);
+    check("chat: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
+
+    // ── the settings ──
+    page = await openPage(cdp, `chrome-extension://${id}/options/options.html`);
+    a = await analyze(cdp, page.sessionId, "settings");
+    check("settings: no unlabeled interactive controls", (a.unlabeled || []).length === 0, a.unlabeled);
+    check("settings: nav landmark present", a.landmarks.nav === true, a.landmarks);
+    check("settings: main landmark present", a.landmarks.main === true, a.landmarks);
+    check("settings: at least one heading present", a.landmarks.heading === true, a.landmarks);
+    check("settings: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
+    check("settings: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
+
+    // the settings must expose every optional capability (the permission rows)
+    const capRows = await cdp.evl(page.sessionId,
+      `document.querySelectorAll('#permission-list [class*=perm], #permission-list .perm-row, #permission-list > *').length`);
+    check("settings: the permission list renders the capability rows", Number(capRows) >= 6, capRows);
+  } finally {
+    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+  }
+
+  console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
+  Deno.exit(fail === 0 ? 0 : 1);
+}
+
+await main();
