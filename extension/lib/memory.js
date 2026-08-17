@@ -410,6 +410,10 @@ function memoryStoreAt(path, { isMaster, origin }) {
       } catch { /* absent */ }
     },
     async clear() {
+      // Delete THIS store's own directory (the `path` passed to memoryStoreAt),
+      // not a hardcoded origins path — the wider-goal review found clear() was
+      // deleting `memory/origins/<origin>` even for named/background agents
+      // (memory/agents/<slug>, memory/background/<slug>), leaving their sandboxes.
       if (isMaster) {
         const parent = await openDir([ROOT]);
         try {
@@ -417,10 +421,13 @@ function memoryStoreAt(path, { isMaster, origin }) {
         } catch { /* absent */ }
         return;
       }
-      // Remove ONLY this origin's subdirectory — never the whole origins tree.
-      const origins = await openDir([ROOT, "origins"]);
+      // The store lives at `path` = [ROOT, <bucket>, <leaf>] — remove the leaf
+      // from its parent bucket so the whole per-store subtree is gone.
+      const leaf = path[path.length - 1];
+      const parentPath = path.slice(0, -1);
+      const parent = await openDir(parentPath);
       try {
-        await origins.removeEntry(encodeOrigin(origin), { recursive: true });
+        await parent.removeEntry(leaf, { recursive: true });
       } catch { /* absent */ }
     },
   };

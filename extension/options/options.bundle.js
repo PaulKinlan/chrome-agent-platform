@@ -17,7 +17,18 @@ var RECIPE_ICON = {
   translate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M5 8l6 6"/><path d="M4 14l6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="M22 22l-5-10-5 10"/><path d="M14 18h6"/></svg>',
   quote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>',
   ask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-  tags: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
+  tags: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+  form: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="13" y2="13"/></svg>',
+  glasses: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M14 15a2 2 0 0 0-4 0"/><path d="M2 15l1-6a2 2 0 0 1 2-1.6h0A2 2 0 0 1 6 9l1 6"/><path d="M22 15l-1-6a2 2 0 0 0-2-1.6h0A2 2 0 0 0 18 9l-1 6"/></svg>',
+  scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>',
+  table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>',
+  pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  network: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  cookie: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c.5 0 1 .05 1.5.15a4 4 0 0 0 5.35 5.35c.1.5.15 1 .15 1.5z"/></svg>',
+  gauge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 15l3.5-3.5"/><path d="M20.3 18a10 10 0 1 0-16.6 0"/><circle cx="12" cy="15" r="1.5"/></svg>',
+  accessible: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="12" cy="4" r="2"/><path d="M8 8l4 4v8"/><path d="M8 21h8"/><path d="M12 12l4-4"/><path d="M12 8h.01"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
 };
 
 // extension/lib/capabilities.js
@@ -519,14 +530,26 @@ function isHtmlDocument(text) {
   return false;
 }
 var HTML_FRAME_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; media-src data: blob:; font-src data:;";
+function navigationGuardScript() {
+  return `<script data-cap-navguard>${[
+    "(function(){",
+    "try{window.open=function(){return null;};}catch(e){}",
+    "try{if(window.location){window.location.assign=function(){};window.location.replace=function(){};}}catch(e){}",
+    // Best-effort: shadow window.location with a non-navigating object.
+    "try{var L=window.location;Object.defineProperty(window,'location',{configurable:false,get:function(){return L;},set:function(){}});}catch(e){}",
+    "function block(e){e.preventDefault();e.stopPropagation();}",
+    "document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href],area[href]'):null;if(a)block(e);},true);",
+    "document.addEventListener('submit',block,true);",
+    "})();"
+  ].join("")}<\/script>`;
+}
+function stripNavigationMeta(html) {
+  return String(html ?? "").replace(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*>/gi, "");
+}
 function injectCspMeta(html) {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${HTML_FRAME_CSP}">`;
-  const s = String(html ?? "");
-  const m = s.match(/<head[^>]*>/i);
-  if (m) {
-    return s.replace(m[0], m[0] + meta);
-  }
-  return meta + s;
+  const s = stripNavigationMeta(String(html ?? ""));
+  return navigationGuardScript() + meta + s;
 }
 var FRAME_PREFERENCE_TYPE = "cap:preference";
 var FRAME_PREFERENCE_READY = "cap:preference-ready";
@@ -554,9 +577,11 @@ function preferenceBootstrapScript(nonce) {
 function injectFrameGuards(html, nonce) {
   const guarded = injectCspMeta(html);
   const s = String(guarded ?? "");
-  const m = s.match(/<head[^>]*>/i);
-  if (m) {
-    return s.replace(m[0], m[0] + preferenceBootstrapScript(nonce));
+  const navGuard = navigationGuardScript();
+  if (s.startsWith(navGuard)) {
+    const rest = s.slice(navGuard.length);
+    const m = rest.match(/^<meta[^>]*Content-Security-Policy[^>]*>/i);
+    if (m) return navGuard + m[0] + preferenceBootstrapScript(nonce) + rest.slice(m[0].length);
   }
   return preferenceBootstrapScript(nonce) + s;
 }
@@ -1251,6 +1276,102 @@ var CapabilityRow = class extends Component {
   }
 };
 customElements.define("capability-row", CapabilityRow);
+var ArtifactCard = class extends Component {
+  static get observedAttributes() {
+    return ["id", "name", "type", "size", "origin", "time"];
+  }
+  set preview(v) {
+    this._preview = v ?? "";
+    if (this._rendered) this._render();
+  }
+  get preview() {
+    return this._preview ?? "";
+  }
+  _render() {
+    const id = this.getAttribute("id") || "";
+    const name = this.getAttribute("name") || "Untitled";
+    const type = this.getAttribute("type") || "data";
+    const size = this.getAttribute("size") || "0";
+    const origin = this.getAttribute("origin") || "master";
+    const time = this.getAttribute("time") || "";
+    const hasPreview = this._preview != null && this._preview !== "";
+    let previewHtml = "";
+    if (hasPreview) {
+      if (type === "html") {
+        previewHtml = renderHtmlFrame(this._preview);
+      } else if (type === "image") {
+        previewHtml = `<img class="img" src="${escapeHtml(this._preview)}" alt="">`;
+      } else {
+        const text = String(this._preview ?? "").slice(0, 400);
+        previewHtml = `<pre class="text">${escapeHtml(text)}</pre>`;
+      }
+    } else {
+      previewHtml = `<div class="placeholder"><span class="picon">${ICONS.image}</span><span>${escapeHtml(type)}</span></div>`;
+    }
+    const t = time ? new Date(Number(time) || time).toLocaleString() : "";
+    mountTemplate(this, `
+      :host { display:block; }
+      .card { display:flex; flex-direction:column; background:var(--panel,#ffffff);
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px);
+        overflow:hidden; box-shadow:var(--shadow-1, 0 1px 2px rgba(29,27,24,.05)); }
+      .preview { position:relative; height:132px; background:var(--panel-2,#efede8);
+        overflow:hidden; border-bottom:1px solid var(--border,#e3e0d9); cursor:pointer; }
+      .preview .html-frame, .preview .html-frame iframe { width:100%; height:100%; }
+      .preview .html-frame iframe { border:0; pointer-events:none; transform:scale(1); transform-origin:top left; }
+      .img { width:100%; height:100%; object-fit:cover; display:block; }
+      .text { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-size:11px; line-height:1.4; color:var(--muted,#635e56); white-space:pre-wrap;
+        word-break:break-word; overflow:hidden; }
+      .placeholder { height:100%; display:flex; flex-direction:column; gap:6px;
+        align-items:center; justify-content:center; color:var(--muted,#635e56);
+        font-size:12px; text-transform:capitalize; }
+      .placeholder .picon { display:inline-flex; color:var(--accent,#0e6e63); }
+      .placeholder .picon svg { width:24px; height:24px; }
+      .body { padding:10px 12px; display:flex; flex-direction:column; gap:2px; min-width:0; }
+      .name { font-weight:600; font-size:var(--text-sm,13px); color:var(--text,#1d1b18);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .meta { font-size:var(--text-xs,12px); color:var(--muted,#635e56);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .actions { display:flex; gap:6px; padding:0 12px 10px; }
+      .actions button { flex:1; display:inline-flex; align-items:center; justify-content:center;
+        gap:5px; font:inherit; font-size:var(--text-xs,12px); padding:5px 6px;
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+        background:transparent; color:var(--text,#1d1b18); cursor:pointer; }
+      .actions button:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .actions button.danger:hover { border-color:var(--danger,#b3261e); color:var(--danger,#b3261e); }
+      .actions button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      .actions button svg { width:14px; height:14px; }
+    `, `<div class="card">
+      <div class="preview" part="preview" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}">${previewHtml}</div>
+      <div class="body">
+        <span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        <span class="meta">${escapeHtml(type)} \xB7 ${escapeHtml(size)} B \xB7 ${escapeHtml(origin)}${t ? " \xB7 " + escapeHtml(t) : ""}</span>
+      </div>
+      <div class="actions">
+        <button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>
+        <button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>
+      </div>
+    </div>`);
+  }
+  _wire() {
+    const detail = () => ({
+      id: this.getAttribute("id") || "",
+      name: this.getAttribute("name") || "Untitled",
+      type: this.getAttribute("type") || "data",
+      origin: this.getAttribute("origin") || "master"
+    });
+    this._root.querySelector(".preview")?.addEventListener("click", () => this._emit("open", detail()));
+    this._root.querySelector(".preview")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        this._emit("open", detail());
+      }
+    });
+    this._root.querySelector('[data-act="reuse"]')?.addEventListener("click", () => this._emit("reuse", detail()));
+    this._root.querySelector('[data-act="delete"]')?.addEventListener("click", () => this._emit("delete", detail()));
+  }
+};
+customElements.define("artifact-card", ArtifactCard);
 var CodeBlock = class extends Component {
   static get observedAttributes() {
     return ["lang"];
@@ -1851,6 +1972,24 @@ var AgentComposer = class extends Component {
   }
   set value(v) {
     if (this._input) this._input.value = v;
+  }
+  /** Public: attach something (a reused artifact, an external reference) to the
+   * composer — pushes it onto the pending attachments + renders a removable
+   * chip, exactly like the + menu does. Returns the stored detail. */
+  addAttachment(detail) {
+    if (!detail) return null;
+    const d = {
+      name: detail.name ?? "attachment",
+      type: detail.type,
+      size: detail.size,
+      dataURL: detail.dataURL,
+      content: detail.content,
+      kind: detail.kind ?? "file"
+    };
+    this.attachments.push(d);
+    this._addChip(d);
+    this._emit("attach", d);
+    return d;
   }
   setStatus(text, ready = true) {
     if (this._status) this._status.textContent = text || "";

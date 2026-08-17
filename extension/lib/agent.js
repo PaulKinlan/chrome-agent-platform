@@ -221,7 +221,13 @@ function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnl
       execute: async ({ query }) => {
         const err = await enrolledGuard();
         if (err) return err;
-        return await grepAgentMemory(memory, query);
+        const result = await grepAgentMemory(memory, query);
+        // POST-read generation revalidation (the sol addendum): a re-enroll
+        // DURING the multi-key grep must not return the NEW enrollment's memory
+        // to the stale run. Match memory_get/list — revalidate, then return.
+        const err2 = await enrolledGuard();
+        if (err2) return err2;
+        return result;
       },
     }),
   };

@@ -488,6 +488,50 @@ document.getElementById("bg-configure")?.addEventListener(
   (e) => { e.preventDefault(); openView("options/options.html", "Settings"); },
 );
 
+document.getElementById("browse-artifacts")?.addEventListener(
+  "click",
+  (e) => { e.preventDefault(); openView("artifacts/index.html", "Artifacts"); },
+);
+
+// Reuse an artifact from the gallery: the gallery (in the view frame) posts a
+// request; we fetch the artifact + attach it to the hub composer as a pending
+// attachment (the model can then read a text/html/json artifact's bytes).
+function utf8ToBase64(s) {
+  const bytes = new TextEncoder().encode(String(s ?? ""));
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function assetDataURL(type, content) {
+  if (type === "image") return content ?? ""; // stored as a data URL
+  const mime = type === "html" ? "text/html"
+    : type === "json" ? "application/json"
+    : "text/plain";
+  return `data:${mime};base64,${utf8ToBase64(content ?? "")}`;
+}
+window.addEventListener("message", async (e) => {
+  const d = e.data;
+  if (!d || d.type !== "cap:attach-artifact") return;
+  if (e.source !== viewFrame.contentWindow) return; // only our own gallery
+  const { id, name, type, origin } = d.artifact ?? {};
+  if (!id) return;
+  const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+  const asset = full?.ok ? full.asset : null;
+  if (!asset) { setStatus("Artifact not found", false); return; }
+  const mime = type === "html" ? "text/html" : type === "json" ? "application/json" : type === "image" ? "image/png" : "text/plain";
+  composer.addAttachment({
+    name: asset.name ?? name ?? "artifact",
+    type: mime,
+    size: asset.size ?? 0,
+    kind: "file",
+    dataURL: assetDataURL(type, asset.content),
+    content: asset.content,
+  });
+  closeView();
+  setStatus(`Attached "${asset.name ?? name}" to a new task`);
+  setTimeout(() => composer.input?.focus?.(), 0);
+});
+
 setStatus("ready");
 
 // Transparency surface: capture the page's own errors/CSP violations into the
