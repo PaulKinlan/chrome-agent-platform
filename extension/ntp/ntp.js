@@ -202,11 +202,14 @@ async function renderBackgroundAgents() {
       row.setAttribute("name", a.name || a.id);
       row.setAttribute("description", a.description || "");
       row.setAttribute("icon", "");
-      row.setAttribute("action", "toggle");
+      // item 61: a background agent is an INDEPENDENT agent — a chevron opens
+      // its view (history + chat) AND a switch enables/disables it.
+      row.setAttribute("action", "open-toggle");
       if (a.enabled) row.setAttribute("enabled", "");
       if (a.schedule?.periodInMinutes) {
         row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
       }
+      row.addEventListener("open", () => openBackgroundAgentChat(a.id, a.name));
       row.addEventListener("toggle", async (ev) => {
         const enabled = ev.detail?.enabled;
         // ENABLE time (a real user gesture): request the OPTIONAL notifications
@@ -415,6 +418,7 @@ const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
 let currentThreadId = null;
 let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
+let currentAgentKind = null; // null | "named" | "background" — which agent kind the chat is scoped to
 
 // The inner (no-transition) cleanups, so openView/showThreadView can hide the
 // OTHER overlay without nesting a second document.startViewTransition (a nested
@@ -423,6 +427,7 @@ function hideThreadViewInner() {
   threadView.hidden = true;
   currentThreadId = null;
   currentAgentId = null;
+  currentAgentKind = null;
   threadConversation.clear?.();
   renderRunStatus({ state: "idle" });
 }
@@ -457,12 +462,28 @@ async function openThread(id) {
   renderTasks(id);
 }
 
+// ── the BACKGROUND-agent chat surface (item 61): a background agent is an
+//    INDEPENDENT agent — click it to see its OWN run history + talk to it (a
+//    task runs in its own OPFS sandbox), exactly like a named agent.
+async function openBackgroundAgentChat(id, name) {
+  currentAgentId = id;
+  currentAgentKind = "background";
+  currentThreadId = null;
+  const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
+  threadTitle.textContent = name || id || "Background agent";
+  renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
+  showThreadView();
+  renderRunStatus({ state: "idle" });
+  threadComposer.focus();
+}
+
 // ── the AGENT chat surface (item 43): click a named agent → chat with it ──
 // Opens the thread surface scoped to ONE named agent: the conversation shows
 // the agent's OWN run history (its journal from its OPFS), and the composer
 // starts tasks DIRECTLY in that agent (named-agent.run → its own memory/skills).
 async function openAgentChat(id) {
   currentAgentId = id;
+  currentAgentKind = "named";
   currentThreadId = null;
   const [aRes, hRes] = await Promise.all([
     send("named-agent.get", { id }).catch(() => ({ ok: false })),
@@ -550,7 +571,8 @@ async function runThreadTurn(text, attachments = []) {
     history: [], // the SW derives the history from the thread when threadId is set
     threadId: currentThreadId,
     onStatus: renderRunStatus,
-    agentId: currentAgentId, // null for a thread; set when chatting with a named agent
+    agentId: currentAgentId, // null for a thread; set when chatting with a named/background agent
+    agentKind: currentAgentKind,
   });
   if (res.ok) {
     if (!currentAgentId) {
@@ -573,6 +595,7 @@ composer.addEventListener("send", async (ev) => {
   const { text: task, attachments } = ev.detail;
   currentThreadId = null; // a new task → a new thread
   currentAgentId = null; // the hub composer is the MASTER agent, not a named-agent chat
+  currentAgentKind = null;
   threadConversation.clear?.();
   threadTitle.textContent = "New task";
   await runThreadTurn(task, attachments);
@@ -722,7 +745,7 @@ document.getElementById("open-directory")?.addEventListener(
 );
 document.getElementById("open-recipes")?.addEventListener(
   "click",
-  () => openView("recipes/index.html", "Recipes"),
+  () => openView("recipes/index.html", "Skills"),
 );
 
 document.getElementById("bg-configure")?.addEventListener(
@@ -753,6 +776,17 @@ function assetDataURL(type, content) {
 }
 window.addEventListener("message", async (e) => {
   const d = e.data;
+  if (d?.type === "use-skill") {
+    // A skill was chosen on the Skills page → close the overlay + pre-fill the
+    // composer with the /skill:<id> reference (the skill is INCLUDED in the
+    // task, not run in isolation).
+    if (e.source !== viewFrame.contentWindow) return;
+    const id = String(d.id ?? "").trim();
+    closeView();
+    composer.value = composer.value ? `${composer.value} /skill:${id}` : `/skill:${id}`;
+    composer.focus();
+    return;
+  }
   if (!d || d.type !== "cap:attach-artifact") return;
   if (e.source !== viewFrame.contentWindow) return; // only our own gallery
   const { id, name, type, origin } = d.artifact ?? {};

@@ -220,6 +220,17 @@ async function main() {
     })()`);
     check("capability-row toggle is a visible switch (36×20)", sw.found && sw.w === "36px" && sw.h === "20px", sw);
 
+    // capability-row open-toggle (item 61) renders BOTH a chevron (open the
+    // agent's view) AND a switch (enable/disable) — the background-agent row.
+    const ot = await evl(s.sessionId, `(()=>{
+      const row = document.querySelector('capability-row[action="open-toggle"]');
+      if (!row) return { found: false };
+      const open = row.shadowRoot.querySelector('.open');
+      const st = row.shadowRoot.querySelector('switch-toggle');
+      return { found: true, hasOpen: !!open, hasToggle: !!st };
+    })()`);
+    check("capability-row open-toggle has a chevron + a switch", ot.found && ot.hasOpen && ot.hasToggle, ot);
+
     // composer / command palette opens (the static namespace registry; the
     // data-driven sub-items need chrome.runtime, which the showcase lacks).
     const pal = await evl(s.sessionId, `(()=>{

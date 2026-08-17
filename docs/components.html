@@ -65,7 +65,8 @@
         <h3 class="spec"><code class="tag">&lt;capability-row&gt;</code> — a recipe/capability (icon | name+desc | action)</h3>
         <div class="stage column" style="max-width:560px">
           <capability-row name="Tab hygiene" description="Find duplicate/stale tabs and close or group them." icon="&lt;svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' width='18' height='18'&gt;&lt;path d='M21 3l-9 9-3-3 9-9z'/&gt;&lt;/svg&gt;" action="run"></capability-row>
-          <capability-row name="Sorting Hat" description="Group open tabs by domain into colour-coded collapsed groups." last-run="runs every 30 min" icon="&lt;svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' width='18' height='18'&gt;&lt;polygon points='12 2 2 7 12 12 22 7 12 2'/&gt;&lt;/svg&gt;" action="toggle" enabled></capability-row>
+          <capability-row name="Sorting Hat" description="Group open tabs by domain into colour-coded collapsed groups." last-run="runs every 30 min" icon="&lt;svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' width='18' height='18'&gt;&lt;polygon points='12 2 2 7 12 12 22 7 12 2'/&gt;&lt;/svg&gt;" action="open-toggle" enabled></capability-row>
+          <capability-row name="Open-toggle (background agent)" description="A chevron opens the agent's view + a switch enables it." icon="" action="open-toggle"></capability-row>
           <capability-row name="Auto-pin favourites" description="Pin tabs that reappear 5+ times a week." last-run="runs every 60 min" icon="" action="toggle"></capability-row>
         </div>
         <p class="caption">name + description are stacked (never run together); action right-aligned on a 28px|1fr|auto grid.</p>

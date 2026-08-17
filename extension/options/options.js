@@ -799,6 +799,16 @@ async function renderBrowser() {
   toggle.addEventListener("toggle", async (e) => {
     const checked = e.detail.checked;
     if (checked) {
+      // PERSISTENCE (tracker item 60): the browser-control grant lives in
+      // chrome.storage.local, which requires the OPTIONAL "storage" permission.
+      // Without it the grant is SESSION-ONLY (the SW's in-memory fallback) and
+      // the toggle silently resets on the next page/extension load — the
+      // "never stays toggled" bug. Request "storage" HERE (a real gesture) so
+      // the grant survives a reload; a denial is surfaced honestly.
+      let storageGranted = true;
+      try {
+        storageGranted = await chrome.permissions.request({ permissions: ["storage"] });
+      } catch { storageGranted = false; }
       // Screenshot capture uses chrome.tabs.captureVisibleTab with the SILENT
       // `activeTab` permission (NOT `tabs`, which warns and can't be granted in
       // headless; NOT the Chrome debugger, which can't be optional). Requested
@@ -819,8 +829,10 @@ async function renderBrowser() {
       $("#grant-origins").hidden = false;
       saveFlash(
         captureGranted
-          ? "Browser control granted (global, all origins — set origins below to scope it)."
-          : "Browser control granted (screenshots unavailable — activeTab permission not granted).",
+          ? "Browser control granted (global, all origins — set origins below to scope it)." +
+            (storageGranted ? "" : " (session-only — storage permission not granted)")
+          : "Browser control granted (screenshots unavailable — activeTab permission not granted)." +
+            (storageGranted ? "" : " (session-only — storage permission not granted)"),
       );
       renderPermissions();
     } else {
@@ -1054,9 +1066,11 @@ async function renderUsage() {
 }
 
 // ── Data / memory ──
-// Item 58: the OPFS memory explorer — browse EVERY agent's memory (master,
-// named, background, site), each its own sandbox. A store select + a key list +
-// a value viewer. Clear is per-store.
+// Item 59: the OPFS memory explorer is now a FILE-SYSTEM tree — an expandable
+// directory tree (Master / Named agents / Background agents / Site agents),
+// each agent a directory whose keys are files you click to view. Directories
+// expand/collapse; a file toggles its value. Like a file manager, not a flat
+// list.
 async function renderMemoryExplorer() {
   const el = $("#memory-explorer");
   if (!el) return;
@@ -1065,83 +1079,163 @@ async function renderMemoryExplorer() {
     .sendMessage({ type: "memory.stores" })
     .catch(() => ({ stores: [] }));
   const stores = Array.isArray(res?.stores) ? res.stores : [];
-
-  const head = document.createElement("div");
-  head.className = "mem-head";
-  const select = document.createElement("select");
-  select.className = "mem-select";
-  select.setAttribute("aria-label", "Select an agent to browse its memory");
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = "Browse an agent's memory…";
-  empty.selected = true;
-  select.append(empty);
-  for (const s of stores) {
-    const o = document.createElement("option");
-    o.value = s.key;
-    o.textContent = `${s.label} (${s.keyCount ?? 0} keys)`;
-    select.append(o);
+  if (!stores.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No memory stores yet.";
+    el.append(p);
+    return;
   }
-  const keys = document.createElement("div");
-  keys.className = "mem-keys";
-  head.append(select, keys);
-  el.append(head);
 
-  select.addEventListener("change", async () => {
-    const origin = select.value;
-    keys.replaceChildren();
-    if (!origin) return;
-    const store = stores.find((s) => s.key === origin);
-    const title = document.createElement("div");
-    title.className = "mem-store-label";
-    title.textContent = store?.label ?? origin;
-    keys.append(title);
+  const root = document.createElement("div");
+  root.className = "mem-tree";
+  el.append(root);
+
+  const master = stores.find((s) => s.kind === "master");
+  const named = stores.filter((s) => s.kind === "named");
+  const bg = stores.filter((s) => s.kind === "background");
+  const site = stores.filter((s) => s.kind === "site");
+
+  // ── helper: a directory node (expandable) ──────────────────────────────
+  function dirNode(label, kind, children) {
+    const wrap = document.createElement("div");
+    wrap.className = "mem-dir";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "mem-dir-head";
+    head.setAttribute("aria-expanded", "false");
+    const caret = document.createElement("span");
+    caret.className = "mem-caret";
+    caret.textContent = "▸";
+    caret.setAttribute("aria-hidden", "true");
+    const icon = document.createElement("span");
+    icon.className = "mem-dir-icon";
+    icon.innerHTML = kind === "master"
+      ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12l9-8 9 8"/><path d="M5 10v9h14v-9"/></svg>`
+      : `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
+    const name = document.createElement("span");
+    name.className = "mem-dir-name";
+    name.textContent = label;
+    head.append(caret, icon, name);
+    const body = document.createElement("div");
+    body.className = "mem-dir-body" + " hidden";
+    head.addEventListener("click", () => {
+      const open = head.getAttribute("aria-expanded") === "true";
+      head.setAttribute("aria-expanded", String(!open));
+      caret.textContent = open ? "▸" : "▾";
+      body.classList.toggle("hidden", open);
+    });
+    wrap.append(head, body);
+    for (const c of children) body.append(c);
+    return wrap;
+  }
+
+  // ── helper: a store node (an agent's directory of keys/files) ──────────
+  function storeNode(store) {
+    const wrap = document.createElement("div");
+    wrap.className = "mem-dir mem-store";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "mem-dir-head";
+    head.setAttribute("aria-expanded", "false");
+    const caret = document.createElement("span");
+    caret.className = "mem-caret";
+    caret.textContent = "▸";
+    caret.setAttribute("aria-hidden", "true");
+    const name = document.createElement("span");
+    name.className = "mem-dir-name";
+    name.textContent = `${store.label} (${store.keyCount ?? 0})`;
+    head.append(caret, name);
+    const body = document.createElement("div");
+    body.className = "mem-dir-body" + " hidden";
+    // Lazy: list the keys on first expand.
+    let loaded = false;
+    head.addEventListener("click", async () => {
+      const open = head.getAttribute("aria-expanded") === "true";
+      head.setAttribute("aria-expanded", String(!open));
+      caret.textContent = open ? "▸" : "▾";
+      body.classList.toggle("hidden", open);
+      if (!open && !loaded) {
+        loaded = true;
+        await fillKeys(store, body);
+      }
+    });
+    wrap.append(head, body);
+    return wrap;
+  }
+
+  async function fillKeys(store, body) {
+    body.replaceChildren();
     const keyList = await chrome.runtime
-      .sendMessage({ type: "memory.list", origin })
+      .sendMessage({ type: "memory.list", origin: store.key })
       .catch(() => []);
     if (!Array.isArray(keyList) || !keyList.length) {
       const p = document.createElement("p");
-      p.className = "muted";
-      p.textContent = "No keys in this memory yet.";
-      keys.append(p);
+      p.className = "muted mem-empty";
+      p.textContent = "No keys yet.";
+      body.append(p);
       return;
     }
     for (const key of keyList) {
-      const row = document.createElement("div");
-      row.className = "mem-key-row";
-      const name = document.createElement("button");
-      name.type = "button";
-      name.className = "mem-key";
-      name.textContent = key;
-      const val = document.createElement("div");
-      val.className = "mem-val" + " hidden";
-      name.addEventListener("click", async () => {
-        val.classList.toggle("hidden");
-        if (!val.classList.contains("hidden") && !val.textContent) {
-          const v = await chrome.runtime
-            .sendMessage({ type: "memory.get", origin, key })
-            .catch(() => null);
-          const pre = document.createElement("pre");
-          pre.className = "mem-pre";
-          pre.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2);
-          val.append(pre);
-        }
-      });
-      row.append(name, val);
-      keys.append(row);
+      body.append(fileNode(store, key));
     }
     const clearBtn = document.createElement("button");
     clearBtn.type = "button";
-    clearBtn.className = "btn small ghost";
-    clearBtn.textContent = `Clear ${store?.label ?? origin}'s memory`;
+    clearBtn.className = "btn small ghost mem-clear";
+    clearBtn.textContent = `Clear ${store.label}'s memory`;
     clearBtn.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ type: "memory.clear", origin }).catch(() => {});
-      saveFlash(`Cleared ${store?.label ?? origin}'s memory.`);
-      select.dispatchEvent(new Event("change"));
+      await chrome.runtime.sendMessage({ type: "memory.clear", origin: store.key }).catch(() => {});
+      saveFlash(`Cleared ${store.label}'s memory.`);
+      renderMemoryExplorer();
       renderData();
     });
-    keys.append(clearBtn);
-  });
+    body.append(clearBtn);
+  }
+
+  // ── a file node (a key) — click to view its value ──────────────────────
+  function fileNode(store, key) {
+    const wrap = document.createElement("div");
+    wrap.className = "mem-file";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "mem-file-head";
+    head.setAttribute("aria-expanded", "false");
+    const caret = document.createElement("span");
+    caret.className = "mem-caret";
+    caret.textContent = "▸";
+    caret.setAttribute("aria-hidden", "true");
+    const name = document.createElement("span");
+    name.className = "mem-file-name";
+    name.textContent = key;
+    head.append(caret, name);
+    const val = document.createElement("div");
+    val.className = "mem-val hidden";
+    let loaded = false;
+    head.addEventListener("click", async () => {
+      const open = head.getAttribute("aria-expanded") === "true";
+      head.setAttribute("aria-expanded", String(!open));
+      caret.textContent = open ? "▸" : "▾";
+      val.classList.toggle("hidden", open);
+      if (!open && !loaded) {
+        loaded = true;
+        const v = await chrome.runtime
+          .sendMessage({ type: "memory.get", origin: store.key, key })
+          .catch(() => null);
+        const pre = document.createElement("pre");
+        pre.className = "mem-pre";
+        pre.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+        val.append(pre);
+      }
+    });
+    wrap.append(head, val);
+    return wrap;
+  }
+
+  // ── build the tree ─────────────────────────────────────────────────────
+  if (master) root.append(storeNode(master));
+  if (named.length) root.append(dirNode("Named agents", "named", named.map(storeNode)));
+  if (bg.length) root.append(dirNode("Background agents", "background", bg.map(storeNode)));
+  if (site.length) root.append(dirNode("Site agents", "site", site.map(storeNode)));
 }
 
 async function renderData() {

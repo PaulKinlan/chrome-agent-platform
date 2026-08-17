@@ -380,6 +380,77 @@ input:focus, select:focus, textarea:focus {
   font-family: ui-monospace, monospace;
   color: var(--muted);
 }
+/* ── the file-system tree (item 59) ── */
+.mem-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.mem-dir { margin-left: 0; }
+.mem-dir .mem-dir { margin-left: 14px; }
+.mem-dir-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.mem-dir-head:hover,
+.mem-dir-head:focus-visible {
+  background: var(--panel-2);
+  outline: none;
+}
+.mem-dir-icon {
+  display: inline-flex;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.mem-dir-name { font-weight: 600; }
+.mem-caret {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 10px;
+  width: 10px;
+}
+.mem-dir-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mem-dir-body.hidden { display: none; }
+.mem-file { margin-left: 0; }
+.mem-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 3px 6px 3px 16px;
+  border-radius: 6px;
+}
+.mem-file-head:hover,
+.mem-file-head:focus-visible {
+  background: var(--panel-2);
+  outline: none;
+}
+.mem-file-name { font-family: ui-monospace, monospace; }
+.mem-empty { margin-left: 14px; }
+.mem-clear { margin: 6px 0 2px 16px; align-self: flex-start; }
 /* ── editable/duplicable background agents (item 56) ── */
 .agent-actions {
   display: inline-flex;

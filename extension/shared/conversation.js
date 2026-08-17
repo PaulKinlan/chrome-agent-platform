@@ -185,7 +185,7 @@ export function friendlyActivityLabel(toolName, args) {
   }
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
   const c = container;
   const runId = newRunId();
 
@@ -277,24 +277,35 @@ export async function runConversationTurn(container, { text, attachments = [], h
   });
 
   // 4. run the task (history = the prior turns, so a nudge steers the thread).
-  //    A named-agent chat (agentId set) delegates to that agent's OWN sandbox.
+  //    A named-agent chat (agentId set, agentKind="named") delegates to that
+  //    agent's OWN sandbox; a background-agent chat (agentKind="background")
+  //    runs the task in the background agent's own memory.
   let res;
   try {
-    res = agentId
-      ? await send("named-agent.run", {
-          id: agentId,
-          task: text,
-          runId,
-          attachments,
-        })
-      : await send("agent.run", {
-          task: text,
-          id: String(Date.now()),
-          runId,
-          attachments,
-          history,
-          threadId,
-        });
+    if (agentKind === "background") {
+      res = await send("background-agent.run", {
+        id: agentId,
+        task: text,
+        runId,
+        attachments,
+      });
+    } else if (agentId) {
+      res = await send("named-agent.run", {
+        id: agentId,
+        task: text,
+        runId,
+        attachments,
+      });
+    } else {
+      res = await send("agent.run", {
+        task: text,
+        id: String(Date.now()),
+        runId,
+        attachments,
+        history,
+        threadId,
+      });
+    }
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {

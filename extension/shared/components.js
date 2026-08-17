@@ -1066,13 +1066,21 @@ class CapabilityRow extends Component {
     const lastRun = this.getAttribute("last-run") || "";
     // "open" = the WHOLE row is clickable (an agent → open its chat/view) with a
     // chevron affordance instead of a "Run" button; "toggle" = an enable/disable
-    // switch; "run" = a small Run button. All three emit their event.
+    // switch; "open-toggle" = BOTH (a chevron to open the agent's view AND a
+    // switch to enable/disable) — for background agents (item 61: they are
+    // independent, clickable AND enableable); "run" = a small Run button.
     const actionHtml = action === "toggle"
       ? `<switch-toggle part="toggle"${enabled ? " checked" : ""}
           label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)} in the background"></switch-toggle>`
       : action === "open"
         ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>`
-        : `<button part="run" class="run" type="button">Run</button>`;
+        : action === "open-toggle"
+          ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>
+             <switch-toggle part="toggle"${enabled ? " checked" : ""}
+              label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)}"></switch-toggle>`
+          : action === "use"
+            ? `<button part="use" class="run" type="button">Use</button>`
+            : `<button part="run" class="run" type="button">Run</button>`;
     const rowAttrs = action === "open"
       ? ` part="row" class="row clickable" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}"`
       : ` part="row" class="row"`;
@@ -1114,6 +1122,8 @@ class CapabilityRow extends Component {
   _wire() {
     const run = this._root.querySelector(".run");
     run?.addEventListener("click", () => this._emit("run"));
+    const use = this._root.querySelector("[part=use]");
+    use?.addEventListener("click", () => this._emit("use"));
     const open = this._root.querySelector(".open");
     open?.addEventListener("click", (e) => { e.stopPropagation(); this._emit("open"); });
     // The whole row is clickable for the "open" action (an agent → open its
