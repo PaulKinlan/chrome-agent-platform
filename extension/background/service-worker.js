@@ -647,6 +647,51 @@ async function siteToolset(origin, runGenCell) {
  * the MAIN world, and a stale sync can never re-authorize it — the monotonic
  * bridge ordering). Best-effort: a tab that closed or a bridge that failed to
  * respond must not fail the enroll/delete operation. */
+// After enrollment registers the DYNAMIC content scripts, the already-open tabs
+// for that origin do NOT inject them (dynamic scripts only inject on the NEXT
+// navigation). The WebMCP-discovery break Paul hit: he enrolled aifoc.us while it
+// was open, so the discovery scripts never ran and the tools never appeared until
+// a reload. Inject the SAME two scripts (MAIN + isolated) into the open tabs now
+// so discovery happens immediately, without a reload. Best-effort (a missing
+// scripting permission or a closed tab must not fail the enroll).
+async function injectScriptsIntoOpenTabs(canonical) {
+  try {
+    const hasScripting = await chrome.permissions
+      .contains({ permissions: ["scripting"] })
+      .catch(() => false);
+    if (!hasScripting) return;
+    const tabs = await chrome.tabs.query({ url: `${canonical}/*` });
+    const targets = tabs.filter((t) => {
+      try {
+        return t.id != null && t.url ? new URL(t.url).origin === canonical : false;
+      } catch {
+        return false;
+      }
+    });
+    for (const t of targets) {
+      // MAIN-world first (it registers its message listener), then the isolated
+      // relay (its ensureMainWorld posts the nonce handshake that triggers the
+      // discovery collect).
+      await chrome.scripting
+        .executeScript({
+          target: { tabId: t.id },
+          files: ["content/main-world.js"],
+          world: "MAIN",
+        })
+        .catch(() => {});
+      await chrome.scripting
+        .executeScript({
+          target: { tabId: t.id },
+          files: ["content/content-script.js"],
+          world: "ISOLATED",
+        })
+        .catch(() => {});
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 async function notifyOriginBridge(canonical, message) {
   try {
     const tabs = await chrome.tabs.query({});
@@ -2203,6 +2248,10 @@ const handlers = {
         };
       }
       invalidateAgent();
+      // Inject the discovery scripts into the ALREADY-OPEN tabs for this origin
+      // (dynamic content scripts only run on the next navigation — without this,
+      // an enrolled-but-open tab discovers nothing until reloaded).
+      await injectScriptsIntoOpenTabs(canonical);
       await notifyOriginBridge(canonical, {
         type: "enrollment-sync",
         gen: snapAfter.gen,

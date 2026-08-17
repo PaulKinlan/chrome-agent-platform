@@ -217,7 +217,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-// Kick off discovery once on load.
+// Kick off discovery once on load, then RE-POLL a few times for sites that
+// register their WebMCP tools ASYNCHRONOUSLY (aifoc.us resolves dynamic packs
+// after `load`, so a single collect can read `getTools()` before the tools are
+// registered). Each re-collect is idempotent (the SW upsert replaces the origin's
+// tool set), so a late registration is picked up without duplicating.
+function collectNow() {
+  window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*");
+}
 ensureMainWorld();
-if (document.readyState === "complete") window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*");
-else window.addEventListener("load", () => window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*"));
+if (document.readyState === "complete") collectNow();
+else window.addEventListener("load", collectNow);
+// Re-poll at 800ms / 2s / 4s after load to catch async-registered tools.
+for (const delay of [800, 2000, 4000]) {
+  setTimeout(collectNow, delay);
+}
