@@ -224,7 +224,9 @@ export function createDemoModel() {
             // summary the model already produced (the final text stays the
             // authoritative outcome — FAILED or succeeded, never a neutral
             // rewrite that could mask a failed delegation)
-            const prior = (options.prompt ?? [])
+            // scope to the CURRENT run's slice ONLY — a prior run's success in
+            // the broader history can never be replayed onto the current failure
+            const prior = runSlice(options.prompt)
               .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
               .flatMap((m) => m.content)
               .find((p2) => p2?.type === "text" && /\[demo model\] Delegation/.test(p2.text ?? ""));

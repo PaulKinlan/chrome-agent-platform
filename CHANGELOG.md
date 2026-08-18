@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.95] — 2026-08-18
+- fix(tool-calls): successor-6 — every ownership fence typed, run-local continuation, original-error preservation, REAL AI SDK content test, probative deep-equality, tracker ancestry, versions 0.2.94
+
 ## [0.2.93] — 2026-08-18
 - fix(tool-calls): successor-5 — run NEVER resolves an abort, run-local demo derivation, structural SDK parsing, fail-closed evidence, tracker ancestry
 

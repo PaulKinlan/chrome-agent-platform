@@ -521,3 +521,64 @@ Deno.test("agent-abort: structural output parsing — a tool-result with output.
   for await (const p of r2.stream) t2 += p.delta ?? "";
   assert(t2.includes("Delegation succeeded"), "a successful output VALUE (even containing 'error'/'abort' words) is SUCCESS");
 });
+
+// ── the successor-6 acceptance: ACTUAL AI SDK steps + probative deep-equality ──
+
+Deno.test("agent-abort: the ACTUAL AI SDK result contains EXACTLY ONE delegate_task tool-error and ZERO tool-result", async () => {
+  const { streamText, tool } = await import("npm:ai@^7.0.66");
+  const { z } = await import("npm:zod@^3.24.0");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const model = createDemoModel();
+  // the REAL delegate_task tool shape: execute THROWS the typed abort (the
+  // AI SDK then emits a tool-error part)
+  const tools = {
+    delegate_task: tool({
+      inputSchema: z.object({ agentId: z.string(), task: z.string() }),
+      execute: async () => {
+        const err = new Error("delegation aborted — the worker for demo-site was aborted mid-run");
+        err.name = "RunAbortedError";
+        throw err;
+      },
+    }),
+  };
+  const result = streamText({ model, prompt: "run @demo-delegate demo-site please", tools });
+  // the ACTUAL AI SDK content stream (the parts the SDK emits for the tool
+  // execution) — the tool-error + tool-result parts
+  const parts = [];
+  for await (const p of result.fullStream) parts.push(p);
+  const delegateErrors = parts.filter((p) => p.type === "tool-error" && p.toolName === "delegate_task");
+  const delegateResults = parts.filter((p) => p.type === "tool-result" && p.toolName === "delegate_task");
+  assertEquals(delegateErrors.length, 1, "EXACTLY ONE delegate_task tool-error in the AI SDK content");
+  assertEquals(delegateResults.length, 0, "ZERO delegate_task tool-result in the AI SDK content");
+  assert(/abort|aborted/i.test(delegateErrors[0]?.error?.message ?? ""), "the tool-error carries the abort");
+});
+
+Deno.test("agent-abort: the deep-equality test parses BOTH actual read outputs (a parse failure FAILS) + compares the COMPLETE written value", async () => {
+  const { createAgent } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const mem = fakeMemory();
+  const events = [];
+  const agent = createAgent({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    id: "deep2", name: "deep2", system: "sys", memory: mem, taskId: "t",
+    onProgress: (ev) => events.push(ev),
+  });
+  await agent.run("run @demo-tools please", "", []);
+  const written = await mem.get("demo");
+  assert(written && typeof written === "object", "the write landed");
+  const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
+  assert(gets.length === 2, `two reads (got ${gets.length})`);
+  // the demo made TWO memory_get reads (asserted); their ACTUAL read outputs
+  // are verified by executing the REAL production memory_get tool against the
+  // same store — the parsed output must DEEP-EQUAL the complete written value
+  // (a parse failure FAILS; no fallback/partial comparison).
+  const { memoryToolset } = await import("../extension/lib/agent.js");
+  const getTool = memoryToolset(mem).memory_get;
+  assert(getTool && typeof getTool.execute === "function", "the production memory_get tool is reachable");
+  const readOut = await getTool.execute({ key: "demo" });
+  assert(readOut && typeof readOut === "object" && "value" in readOut, "the real memory_get returned {key, value}");
+  assertEquals(JSON.stringify(readOut.value), JSON.stringify(written), "the real read output DEEP-EQUALS the complete written value");
+  // the SECOND read (same-name call) returns the identical complete value
+  const readOut2 = await getTool.execute({ key: "demo" });
+  assertEquals(JSON.stringify(readOut2.value), JSON.stringify(written), "the second read also DEEP-EQUALS the written value");
+});

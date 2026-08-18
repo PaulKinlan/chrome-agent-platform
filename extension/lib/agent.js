@@ -610,8 +610,13 @@ export function createOrchestrator({
           // Re-check the fence AFTER the guard await: an abort during the
           // delegateGuard await must still prevent the worker from starting
           // (the round-16 blocker: delegate_task could abort during the guard
-          // then still start the worker).
-          await assertRunOwned();
+          // then still start the worker). An ownership loss HERE is the single
+          // typed abort error too (every ownership fence is typed).
+          try {
+            await assertRunOwned();
+          } catch {
+            throw new RunAbortedError("run aborted — delegation ownership lost before start");
+          }
           // Thread the captured generation into a.run so the worker's memory/
           // usage commits revalidate THAT immutable identity, not the current
           // enrollment (the round-22 ABA blocker).
@@ -631,7 +636,7 @@ export function createOrchestrator({
                 `delegation aborted — the worker for ${agentId} was aborted mid-run`,
               );
             }
-            throw new Error(`delegation failed — the worker for ${agentId} errored: ${e?.message ?? e}`);
+            throw e; // UNRELATED worker failures are preserved UNCHANGED (identity, type, stack, custom fields)
           }
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded
