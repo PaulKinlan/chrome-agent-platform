@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.81] — 2026-08-18
+- chore: keep package-lock version in sync with the post-commit bump
+
 ## [0.2.80] — 2026-08-18
 - chore: reconcile package-lock.json version with package.json (pre-existing staleness flagged by the sol review)
 
