@@ -89,18 +89,25 @@ if (remaining > 0) {
 }
 console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Function-constructor probe site(s); ${remaining} remaining)`);
 
-// SECURITY/build assertion: the TEST-ONLY KV fault seam must never reach the
-// shipped bundle. The integration harness injects a backend failure via a
-// test-only mechanism, never a production route, so the token, the `kv.fault`
-// route, and the `__setKvFaultForTest` control must be ABSENT from the dist.
-const FORBIDDEN_SEAMS = ["__setKvFaultForTest", "kv.fault", "cap-kv-fault-test", "injected test fault"];
-const distText = await readFile(OUT, "utf8");
-for (const needle of FORBIDDEN_SEAMS) {
-  if (distText.includes(needle)) {
-    throw new Error(`production bundle contains the forbidden test seam \`${needle}\` — the fault injection must live only in the unit-test/harness layer`);
+// SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
+// shipped extension. Scan EVERY shipped JS file (the SW bundle + every static
+// extension script) for the fault-seam symbols AND for any window.__* test
+// oracle, and FAIL the build if any appear.
+const FORBIDDEN_SEAMS = [
+  "__setKvFaultForTest", "kv.fault", "cap-kv-fault-test", "injected test fault",
+  "__sidebarPersistence", "__lastViewTransition", "window.__sidebarPersistence", "window.__lastViewTransition",
+];
+const SHIPPED_JS = [OUT, "extension/ntp/ntp.js", "extension/shared/components.js", "extension/shared/composer.js", "extension/shared/conversation.js", "extension/shared/apply-theme.js", "extension/options/options.js", "extension/sidepanel/sidepanel.js"];
+for (const file of SHIPPED_JS) {
+  let text;
+  try { text = await readFile(file, "utf8"); } catch { continue; } // optional file
+  for (const needle of FORBIDDEN_SEAMS) {
+    if (text.includes(needle)) {
+      throw new Error(`shipped ${file} contains the forbidden test control \`${needle}\` — test controls/oracles must live only in the unit-test/harness layer, never in the production bundle or a shipped script`);
+    }
   }
 }
-console.log("build assertion: no test fault seam in the production bundle");
+console.log("build assertion: no test controls/oracles in any shipped JS");
 
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The

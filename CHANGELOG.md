@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.79] — 2026-08-18
+- fix(sidebar): remove shipped test oracles, add visible durability hint, real composer path, broad build scan
+
 ## [0.2.78] — 2026-08-18
 - fix(sidebar): remove the test fault seam from the production bundle
 

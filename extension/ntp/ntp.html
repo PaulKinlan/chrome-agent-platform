@@ -67,7 +67,7 @@
     .side-toggle svg { display: block; transition: transform .18s ease; }
     #side.collapsed ~ .side-toggle svg { transform: rotate(180deg); }
     @media (prefers-reduced-motion: reduce) {
-      .side-toggle, .side-toggle .nub, .side-toggle svg { transition: none; }
+      .side-toggle, .side-toggle .nub, .side-toggle svg, .side, #thread-view { transition: none; }
     }
     /* RTL: the rail sits on the right — mirror the nub to the left edge, flip
        the horizontal translate (the nub protrudes LEFT now), and mirror the
@@ -322,6 +322,8 @@
       flex-direction: column;
       gap: 6px;
     }
+    #sidebar-durability-hint { font-size: 11px; line-height: 1.4; color: var(--warning, #9a6700); padding: 4px 8px; }
+    #sidebar-durability-hint[hidden] { display: none; }
     /* (the collapse control is now the edge nub, not a foot row) */
     .foot-btn {
       display: flex;
@@ -541,6 +543,7 @@
         <div class="agent-list" id="side-agents" aria-label="Named agents"></div>
       </div>
       <div class="side-foot">
+        <span id="sidebar-durability-hint" role="status" aria-live="polite" hidden></span>
         <button class="btn ghost foot-btn" id="open-recipes" type="button" title="Skills">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           <span class="btn-label">Skills</span>

@@ -1185,12 +1185,27 @@ subscribeProgress((ev) => {
 // ── the task sidebar: collapse/expand + new-task (item 6/7) ──────────────
 const side = document.getElementById("side");
 const sideToggle = document.getElementById("side-toggle");
+const durabilityHint = document.getElementById("sidebar-durability-hint");
 let sidebarCollapsed = false;
 const SIDEBAR_KEY = "hub.sidebarCollapsed";
-// Serialize sidebar writes so a rapid toggle's LAST write always lands, and a
-// reload/evidence step can await the final write via sidebarPersistence().
+// Serialize sidebar writes so a rapid toggle's LAST write always lands. The
+// durability is surfaced through PUBLIC DOM (data-durability + a visible/ARIA
+// hint), never a window.* test oracle.
 let sidebarWriteQueue = Promise.resolve();
 let sidebarDurability = "unknown"; // "durable" | "session" | "error"
+function renderDurability() {
+  side.setAttribute("data-durability", sidebarDurability);
+  if (!durabilityHint) return;
+  if (sidebarDurability === "session") {
+    durabilityHint.textContent = "Session-only — enable Storage in Settings to persist changes.";
+    durabilityHint.hidden = false;
+  } else if (sidebarDurability === "error") {
+    durabilityHint.textContent = "Couldn't save the sidebar state (storage failed).";
+    durabilityHint.hidden = false;
+  } else {
+    durabilityHint.hidden = true;
+  }
+}
 function persistSidebar(collapsed) {
   sidebarWriteQueue = sidebarWriteQueue.then(async () => {
     try {
@@ -1205,25 +1220,19 @@ function persistSidebar(collapsed) {
     } catch {
       sidebarDurability = "error"; // worker unreachable
     }
-    // Update the exposed attribute AFTER the write resolves (not before).
-    side.setAttribute("data-durability", sidebarDurability);
+    // Update the PUBLIC durability surface AFTER the write resolves.
+    renderDurability();
   }).catch(() => {});
   return sidebarWriteQueue;
 }
-// Awaitable durability read + flush, exposed for tests + the UI hint.
-function sidebarPersistence() {
-  return { durability: () => sidebarDurability, flush: () => sidebarWriteQueue };
-}
-window.__sidebarPersistence = sidebarPersistence;
 function setSidebarCollapsed(collapsed) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
-  // Surface the durability on the sidebar (a visible session-only/error hint).
-  side.setAttribute("data-durability", sidebarDurability);
-  persistSidebar(collapsed); // serialized + ordered; flush() awaits the tail
+  renderDurability();
+  persistSidebar(collapsed); // serialized + ordered
 }
 sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
@@ -1265,10 +1274,6 @@ document.getElementById("new-agent")?.addEventListener("click", () => {
 // "Capture failed" and throws. When one is active we skip straight to the
 // state change (no transition) rather than abort the running one.
 let viewTransitionActive = false;
-// The most-recent ViewTransition, exposed so tests can await its `finished`
-// (the rapid-toggle test proves the transition LIFECYCLE completes, not just
-// that the CSS width transition settled).
-let lastViewTransition = null;
 function withViewTransition(fn) {
   if (
     typeof document.startViewTransition !== "function" ||
@@ -1281,7 +1286,6 @@ function withViewTransition(fn) {
   viewTransitionActive = true;
   try {
     const t = document.startViewTransition(() => fn());
-    lastViewTransition = t;
     // A transition that never settles must not throw; clear the guard either
     // way so a later state change can use a transition again.
     t?.finished?.finally(() => { viewTransitionActive = false; });
@@ -1294,7 +1298,6 @@ function withViewTransition(fn) {
     return null;
   }
 }
-window.__lastViewTransition = () => lastViewTransition;
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");
