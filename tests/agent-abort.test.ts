@@ -222,13 +222,79 @@ Deno.test("agent-abort: the PRODUCTION delegate_task fails on an aborted worker 
   }
   const text = out && typeof out === "object" ? (out.text ?? out.error ?? "") : String(out);
   assert(!text.includes("[object Object]"), "no object leaked into the result");
-  // the PRODUCTION delegate_task FAILED the delegation: the worker's abort is
-  // caught into the explicit "delegation aborted" failure — observable in the
-  // tool-result progress event (the model-facing result) AND/OR the run text
-  const toolResults = workerEvents.filter((e) => e?.type === "tool-result");
-  const delegationResult = JSON.stringify(toolResults.map((e) => e?.result ?? e).join(" "));
+  // The delegation FAILED with a REAL AI SDK tool-error (the delegate_task now
+  // THROWS for an aborted worker — a returned {error} would be a SUCCESSFUL
+  // tool-result). Assert: (a) the run's failure reflects the tool-error, and
+  // (b) there is NO successful delegate_task result anywhere.
+  const delegateToolResults = workerEvents.filter((e) => e?.type === "tool-result" && /delegate_task/.test(JSON.stringify(e)));
+  const delegateResultText = JSON.stringify(delegateToolResults.map((e) => e?.result ?? e).join(" "));
+  // a returned {error} object would appear as a tool-result here — the throw
+  // path must NOT leave one
+  assert(!delegateResultText.includes('"error":"delegation aborted'), "no successful {error} tool-result for the aborted delegation");
   assert(
-    /abort|delegation aborted|no output|failed/i.test(text + " " + delegationResult),
-    `the delegation failed explicitly (text: ${text.slice(0, 80)} | tool-result: ${delegationResult.slice(0, 120)})`,
+    /abort|delegation aborted|no output|tool-error|failed/i.test(text + " " + delegateResultText),
+    `the delegation failed explicitly via the tool-error path (text: ${text.slice(0, 80)})`,
   );
+});
+
+// ── the successor-3 acceptance: reads observe the write + no callback clobber ──
+
+Deno.test("agent-abort: the sequenced demo reads BOTH observe the written value (never the pre-write state)", async () => {
+  const { createAgent } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const mem = fakeMemory();
+  const events = [];
+  const agent = createAgent({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    id: "read-test", name: "read-test", system: "sys", memory: mem, taskId: "t",
+    onProgress: (ev) => events.push(ev),
+  });
+  const out = await agent.run("run @demo-tools please", "", []);
+  assert(out && typeof out === "object" && out.aborted === false, "the run completed");
+  // the TWO memory_get tool results must each contain the newly written value
+  const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
+  assert(gets.length === 2, `exactly two memory_get results (got ${gets.length})`);
+  for (const g of gets) {
+    const text = JSON.stringify(g);
+    assert(text.includes("Espresso machine"), "the read returned the WRITTEN value (memory_get observed the committed write)");
+    assert(!text.includes('"value":null'), "the read is not the pre-write null");
+  }
+  // the write actually happened (the store holds the value)
+  const stored = await mem.get("demo");
+  assert(stored && Array.isArray(stored?.items) && stored.items.length === 2, "the demo key was written (memory_set stored the value)");
+});
+
+Deno.test("agent-abort: a direct delegate's own progress binding never CLOBBERS a concurrent run's callback", async () => {
+  const { createOrchestrator } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const masterEvents = [];
+  const orch = createOrchestrator({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    system: "hub", masterMemory: fakeMemory(),
+    workers: [{ origin: "demo-site", memory: fakeMemory() }],
+    multiAgent: true,
+    delegateGuard: async () => ({ ok: true, gen: 1 }),
+    onProgress: (ev) => masterEvents.push(ev?.type),
+  });
+  // run A: a normal master run WITH its own progress callback bound
+  const runA = orch.run("hello A", "", []);
+  const t0 = Date.now();
+  while (!masterEvents.includes("thinking")) { if (Date.now() - t0 > 5000) break; await sleep(5); }
+  // the DIRECT delegate (a concurrent run): it binds the WORKER's progress
+  // inside its own lock — the master's callback must stay intact
+  const worker = orch.workers.get("demo-site");
+  const runD = (async () => {
+    worker.setProgress?.((ev) => { /* the delegate's own sink */ });
+    try {
+      return await worker.run("hello worker", "", []);
+    } finally {
+      worker.setProgress?.(null);
+    }
+  })();
+  const outA = await runA;
+  const outD = await runD;
+  assert(outA && typeof outA === "object" && typeof outA.text === "string", "run A completed");
+  assert(outD && typeof outD === "object" && typeof outD.text === "string", "the delegate completed");
+  // the master's progress callback STILL received its events (never clobbered)
+  assert(masterEvents.includes("text") || masterEvents.length >= 2, `the master's callback kept receiving its stream (${masterEvents.join(",")})`);
 });

@@ -136,9 +136,16 @@ async function captureShot(cdp: Cdp, session: string): Promise<Uint8Array | null
   return new Uint8Array(atob(b64).split("").map((c) => c.charCodeAt(0)));
 }
 
+const capturedImages: Record<string, { at: string; sha256: string }> = {};
 async function writeEvidence(name: string, bytes: Uint8Array) {
-  await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-  await Deno.writeFile(`${EVIDENCE_DIR}/${name}`, bytes);
+  // EVERY listed screenshot is CAPTURED in the current invocation — written
+  // DIRECTLY to the (fresh) external output dir, never inherited from an
+  // earlier run. The capture event (name + time + content SHA-256) is
+  // recorded for the provenance manifest.
+  await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
+  await Deno.writeFile(`${EVIDENCE_OUT}/${name}`, bytes);
+  const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  capturedImages[name] = { at: new Date().toISOString(), sha256: hash };
 }
 
 let pass = 0, fail = 0;
@@ -150,6 +157,8 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 /** The EXTERNAL evidence output dir (never committed) — defaults to /tmp. */
 const EVIDENCE_OUT = Deno.env.get("GVS_EVIDENCE_OUT") ?? `/tmp/gvs-evidence-${Date.now()}`;
+try { Deno.removeSync(EVIDENCE_OUT, { recursive: true }); } catch { /* a first run has nothing to clear */ }
+await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
@@ -566,6 +575,9 @@ async function main() {
         return { x: r.x + r.width / 2, y: r.y + r.height / 2, label: (row.textContent || '').trim().slice(0, 40) };
       })()`);
       check("persist: a persisted task row exists after the reload", taskRow !== null, taskRow);
+      // tree-4: the RELOADED hub with the persisted task (CAPTURED this run)
+      const reloadHubShot = await captureShot(cdp, session);
+      if (reloadHubShot) await writeEvidence("tree-4-reopen.png", reloadHubShot);
       if (taskRow) {
         await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: (taskRow as any).x, y: (taskRow as any).y, button: "left", buttons: 1, clickCount: 1 }, session);
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: (taskRow as any).x, y: (taskRow as any).y, button: "left", buttons: 0, clickCount: 1 }, session);
@@ -623,16 +635,19 @@ async function main() {
         checks: `${pass}/${pass + fail}`,
         screenshots: shotList,
       };
-      await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
-      const imageHashes: Record<string, string> = {};
-      for (const shot of shotList) {
-        try {
-          const bytes = await Deno.readFile(`${EVIDENCE_DIR}/${shot}`);
-          await Deno.writeFile(`${EVIDENCE_OUT}/${shot}`, bytes);
-          imageHashes[shot] = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-        } catch { imageHashes[shot] = "missing"; }
+      // EVERY listed image must have been CAPTURED in THIS invocation (never
+      // inherited): a missing capture FAILS the run; the manifest records each
+      // capture's provenance (time + content SHA-256 from the write).
+      const missing = shotList.filter((shot: string) => !capturedImages[shot]);
+      if (missing.length) {
+        console.error("evidence FAIL: images never captured this run:", missing.join(", "));
+        for (const shot of missing) {
+          transcript.push({ name: `evidence: ${shot} captured in THIS invocation`, pass: false, detail: "never captured" });
+        }
+        fail += missing.length;
       }
-      manifest.images = imageHashes; // per-image SHA-256 bound to THIS run
+      manifest.images = Object.fromEntries(shotList.map((shot: string) => [shot, capturedImages[shot]?.sha256 ?? "missing"]));
+      manifest.captureProvenance = capturedImages; // name → { at, sha256 } — every capture recorded
       await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");

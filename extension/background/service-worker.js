@@ -621,7 +621,12 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       // CURRENT caller — the callback is per-run, not baked into the cached
       // agent (which is reused across runs). Rebuilding is avoided; the shared
       // master's hooks consult this binding.
-      cached.setProgress?.(onProgress);
+      // NEVER rebind to null here: the direct-delegation path calls
+      // ensureOrchestrator() with no callback, and a null rebind would CLOBBER
+      // the progress callback of a run still inside its lock (the
+      // callback-clobber race). Per-run callbacks bind inside the run's own
+      // lock + unbind in its finally.
+      if (onProgress) cached.setProgress?.(onProgress);
       return cached;
     }
     const orch = await buildOrchestrator(onProgress, scoped, masterMemory());
@@ -1146,6 +1151,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       return { ok: true, result };
     } finally {
       clearRunFence();
+      // Unbind the per-run PROGRESS callback (the live UI + the journaling
+      // forwarder) so no stale callback survives into the next run — the next
+      // run's ensureOrchestrator rebinds inside ITS lock.
+      try {
+        orch.setProgress?.(null);
+      } catch { /* best-effort */ }
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
       // `handleAlarm` calls releaseInflight AFTER runTask returns — releasing
@@ -2802,7 +2813,19 @@ const handlers = {
       // Thread the captured generation into a.run so the worker's memory/usage
       // commits revalidate THAT immutable identity (the round-22 ABA blocker: a
       // delete→re-enroll lets a stale run write into the new enrollment).
-      return await a.run(task, "", [], gen);
+      // Bind THIS delegation's own progress callback INSIDE the lock (never
+      // null-clobber the callback of a concurrent locked run — the cached
+      // ensureOrchestrator no longer null-rebinds, and this explicit binding +
+      // the finally restore keep the worker's stream owned by THIS attempt).
+      const delegationRunId = `delegate:${canonical}:${Date.now()}`;
+      a.setProgress?.((ev) => {
+        try { broadcastProgress({ ...ev, runId: delegationRunId, agentId: canonical }); } catch { /* best-effort */ }
+      });
+      try {
+        return await a.run(task, "", [], gen);
+      } finally {
+        try { a.setProgress?.(null); } catch { /* best-effort */ }
+      }
     });
     // The worker's PER-RUN outcome: unwrap the text for the string contract +
     // map an aborted delegation to a FAILED delegation (never a success with an

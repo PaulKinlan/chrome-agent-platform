@@ -591,9 +591,12 @@ export function createOrchestrator({
           try {
             result = await a.run(task, undefined, undefined, gen);
           } catch (e) {
-            return {
-              error: `delegation aborted — the worker for ${agentId} failed mid-run (${e?.message ?? "aborted"})`,
-            };
+            // A THROWN abort/rejection → a REAL AI SDK tool-error (never a
+            // successful {error} tool-result): the SDK emits a tool-error part,
+            // so the model-facing delegation genuinely FAILED with no success.
+            throw new Error(
+              `delegation aborted — the worker for ${agentId} failed mid-run (${e?.message ?? "aborted"})`,
+            );
           }
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded
@@ -602,20 +605,15 @@ export function createOrchestrator({
           if (delegateGuard && gen) {
             const after = await delegateGuard(agentId);
             if (!after?.ok || (after.gen ?? 0) !== gen) {
-              return {
-                error: `agent ${agentId} was disenrolled during the task`,
-              };
+              throw new Error(`agent ${agentId} was disenrolled during the task`);
             }
           }
-          // the worker's per-run outcome object → the delegation's TEXT result.
-          // An ABORTED worker must FAIL the delegation (never a success object
-          // handed back to the model): the outcome's aborted state is checked
-          // FIRST + an explicit aborted failure is returned.
+          // An ABORTED worker must FAIL the delegation with a REAL tool-error
+          // (never a success object handed back to the model): the outcome's
+          // aborted state is checked FIRST and THROWN as a typed error.
           const workerAborted = !!(result && typeof result === "object" && result.aborted === true);
           if (workerAborted) {
-            return {
-              error: `delegation aborted — the worker for ${agentId} was aborted mid-run`,
-            };
+            throw new Error(`delegation aborted — the worker for ${agentId} was aborted mid-run`);
           }
           const workerResult = (result && typeof result === "object" && typeof result.text === "string") ? result.text : result;
           return { agentId, result: workerResult };
