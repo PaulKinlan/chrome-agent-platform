@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.76] — 2026-08-18
+- test(evidence): refresh the retained chrome-journeys manifest against the corrective commit (119/119)
+
 ## [0.2.75] — 2026-08-18
 - fix(webmcp): corrective round — startup enrollment sync, exact-tab picker, opt-in inference + source dispatch, cancellation/singleton/snapshot/status hardening, production-path acceptance (32/32; permission gesture stays OPEN, headed macro in docs/WEBMCP-ACCEPTANCE.md)
 
