@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.91] — 2026-08-18
+- fix(tool-calls): successor-4 — typed RunAbortedError for EVERY abort shape, stateless run-scoped demo, output-part parsing, fail-closed evidence, tracker counts
+
 ## [0.2.90] — 2026-08-18
 - fix(tool-calls): successor-3 — real tool-error delegate abort, per-step sequenced demo, fresh provenance-bound evidence, callback-race fix
 

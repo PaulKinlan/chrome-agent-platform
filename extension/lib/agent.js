@@ -28,6 +28,30 @@ CONTROLLED api: await fetch(url, opts) (reads an http/https page, returns
 {status, text}) and log(...). No DOM, no extension APIs, no network of its own.
 return the result.`;
 
+/**
+ * The SINGLE typed abort error for the tool/delegation boundary. Every abort
+ * shape — the initial run fence, a pre-start disposable worker, or a mid-run
+ * controller abort — throws THIS type, so the AI SDK emits a real tool-error
+ * and an abort can never masquerade as a successful {error} tool-result.
+ */
+export class RunAbortedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RunAbortedError";
+  }
+}
+
+/** A single abort predicate: true for EVERY abort-shaped outcome (a typed
+ * RunAbortedError, an {error: 'run aborted…'} return, or {aborted:true}). */
+export function isAbortShape(value) {
+  if (value instanceof RunAbortedError) return true;
+  if (value && typeof value === "object") {
+    if (value.aborted === true) return true;
+    if (typeof value.error === "string" && /^run aborted|abort/.test(value.error)) return true;
+  }
+  return false;
+}
+
 export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
   if (!memory) return {};
   // Reads must be ENROLLMENT-scoped too (the round-24/25 finding: memory_get/
@@ -402,13 +426,14 @@ export function createAgent({
       // PRE-START abort check: abort() may have been called while the guard await
       // above was in flight (agent.delete → abortWorker), and agent-do's own
       // abort() before run() is a no-op (its controller is null until run starts).
-      // A disposable worker that was aborted must never begin a new run.
-      if (aborted) return { error: "run aborted before start" };
+      // A disposable worker that was aborted must never begin a new run — a
+      // TYPED abort error, never a successful {error} object.
+      if (aborted) throw new RunAbortedError("run aborted before start");
       const controller = new AbortController();
       activeRun = { gen, controller };
       if (aborted || controller.signal.aborted) {
         activeRun = null;
-        return { error: "run aborted before start" };
+        throw new RunAbortedError("run aborted before start");
       }
       // Wire the run-scoped controller to agent-do so abort() during the run
       // cancels the model loop (agent-do's own abort() only works after its run()
@@ -559,7 +584,7 @@ export function createOrchestrator({
           try {
             await assertRunOwned();
           } catch {
-            return { error: "run aborted — delegation not started" };
+            throw new RunAbortedError("run aborted — delegation not started");
           }
           const a = workerAgents.get(agentId);
           if (!a) return { error: `no agent for ${agentId}` };
@@ -591,10 +616,9 @@ export function createOrchestrator({
           try {
             result = await a.run(task, undefined, undefined, gen);
           } catch (e) {
-            // A THROWN abort/rejection → a REAL AI SDK tool-error (never a
-            // successful {error} tool-result): the SDK emits a tool-error part,
-            // so the model-facing delegation genuinely FAILED with no success.
-            throw new Error(
+            // A THROWN abort/rejection → a REAL AI SDK tool-error via the typed
+            // error (never a successful {error} tool-result).
+            throw new RunAbortedError(
               `delegation aborted — the worker for ${agentId} failed mid-run (${e?.message ?? "aborted"})`,
             );
           }
@@ -608,12 +632,12 @@ export function createOrchestrator({
               throw new Error(`agent ${agentId} was disenrolled during the task`);
             }
           }
-          // An ABORTED worker must FAIL the delegation with a REAL tool-error
-          // (never a success object handed back to the model): the outcome's
-          // aborted state is checked FIRST and THROWN as a typed error.
-          const workerAborted = !!(result && typeof result === "object" && result.aborted === true);
-          if (workerAborted) {
-            throw new Error(`delegation aborted — the worker for ${agentId} was aborted mid-run`);
+          // An ABORT-shaped outcome — the pre-start {error:'run aborted…'} OR a
+          // mid-run {aborted:true} — must FAIL the delegation with a REAL
+          // tool-error: the single predicate covers every shape, so no abort can
+          // masquerade as a successful delegate result.
+          if (isAbortShape(result)) {
+            throw new RunAbortedError(`delegation aborted — the worker for ${agentId} was aborted`);
           }
           const workerResult = (result && typeof result === "object" && typeof result.text === "string") ? result.text : result;
           return { agentId, result: workerResult };

@@ -157,8 +157,21 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 /** The EXTERNAL evidence output dir (never committed) — defaults to /tmp. */
 const EVIDENCE_OUT = Deno.env.get("GVS_EVIDENCE_OUT") ?? `/tmp/gvs-evidence-${Date.now()}`;
-try { Deno.removeSync(EVIDENCE_OUT, { recursive: true }); } catch { /* a first run has nothing to clear */ }
-await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
+const invocationStartedAt = Date.now();
+// FAIL-CLOSED fresh output dir: the recursive cleanup only IGNORES a
+// NotFound (nothing to clear); ANY other removal failure ABORTS the run
+// (a stale dir must never be silently reused). The new dir is then created
+// EXCLUSIVELY (a dir that appears concurrently fails).
+try {
+  Deno.removeSync(EVIDENCE_OUT, { recursive: true });
+} catch (e) {
+  if (!(e instanceof Deno.errors.NotFound)) throw new Error(`evidence: cannot clear ${EVIDENCE_OUT}: ${e?.message ?? e}`);
+}
+try {
+  Deno.mkdirSync(EVIDENCE_OUT, { recursive: false });
+} catch (e) {
+  throw new Error(`evidence: cannot create a FRESH ${EVIDENCE_OUT} exclusively: ${e?.message ?? e}`);
+}
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
@@ -648,6 +661,41 @@ async function main() {
       }
       manifest.images = Object.fromEntries(shotList.map((shot: string) => [shot, capturedImages[shot]?.sha256 ?? "missing"]));
       manifest.captureProvenance = capturedImages; // name → { at, sha256 } — every capture recorded
+      // VALIDATION (fail closed):
+      // (a) every capture timestamp must be WITHIN this invocation (no stale
+      //     image can pass — the dir was freshly created above, so a stale
+      //     timestamp means a concurrent writer)
+      for (const [shot, prov] of Object.entries(capturedImages)) {
+        const at = new Date(prov.at).getTime();
+        if (!Number.isFinite(at) || at < invocationStartedAt) {
+          console.error(`evidence FAIL: ${shot} captured BEFORE this invocation (stale)`);
+          transcript.push({ name: `evidence: ${shot} captured within THIS invocation`, pass: false, detail: prov });
+          fail += 1;
+        }
+      }
+      // (b) the hashes are RECOMPUTED from the written files and must match the
+      //     manifest (a tampered/missing file fails)
+      for (const shot of shotList) {
+        try {
+          const bytes = await Deno.readFile(`${EVIDENCE_OUT}/${shot}`);
+          const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+          if (hash !== capturedImages[shot]?.sha256) {
+            console.error(`evidence FAIL: ${shot} hash mismatch after write`);
+            transcript.push({ name: `evidence: ${shot} hash matches the captured bytes`, pass: false, detail: { manifest: capturedImages[shot]?.sha256, file: hash } });
+            fail += 1;
+          }
+        } catch { /* a missing file fails the count below */ }
+      }
+      // (c) NO unexpected files/PNGs in the dir (only the listed images + the
+      //     manifest/transcript/metadata/log are allowed)
+      for (const entry of Deno.readDirSync(EVIDENCE_OUT)) {
+        const allowed = entry.name.endsWith(".png") ? shotList.includes(entry.name) : ["manifest.json", "evidence.log", "transcript.jsonl", "metadata.json"].includes(entry.name);
+        if (!allowed) {
+          console.error(`evidence FAIL: unexpected file in the output dir: ${entry.name}`);
+          transcript.push({ name: `evidence: no unexpected files in the output dir (${entry.name})`, pass: false, detail: null });
+          fail += 1;
+        }
+      }
       await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");

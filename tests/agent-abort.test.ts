@@ -99,9 +99,18 @@ Deno.test("agent-abort: a PRE-START abort never starts a run + is reported abort
     onProgress: () => {},
   });
   agent.abort(); // before the run starts
-  const result = await agent.run("hello", "", []);
+  // the pre-start abort now THROWS the typed RunAbortedError (never a
+  // successful {error} object — a returned object would be a successful
+  // tool-result in the delegate path)
+  let threw = null;
+  try {
+    await agent.run("hello", "", []);
+  } catch (e) {
+    threw = e;
+  }
+  assert(threw !== null, "the pre-start abort THROWS");
+  assert(/aborted|abort/i.test(threw?.message ?? ""), "the typed abort error names the abort");
   assert(agent.isAborted() === true);
-  assertEquals(String(result?.error ?? result).includes("aborted"), true, "the pre-start abort surfaces");
 });
 
 
@@ -297,4 +306,114 @@ Deno.test("agent-abort: a direct delegate's own progress binding never CLOBBERS 
   assert(outD && typeof outD === "object" && typeof outD.text === "string", "the delegate completed");
   // the master's progress callback STILL received its events (never clobbered)
   assert(masterEvents.includes("text") || masterEvents.length >= 2, `the master's callback kept receiving its stream (${masterEvents.join(",")})`);
+});
+
+// ── the successor-4 acceptance: typed abort every shape + stateless isolation ──
+
+Deno.test("agent-abort: the typed abort error covers EVERY shape (fence, pre-start, mid-run) + the outcome never succeeds", async () => {
+  const { RunAbortedError, isAbortShape } = await import("../extension/lib/agent.js");
+  // every abort shape is recognized by the single predicate
+  assert(isAbortShape(new RunAbortedError("run aborted")) === true, "typed error");
+  assert(isAbortShape({ error: "run aborted before start" }) === true, "pre-start {error} return");
+  assert(isAbortShape({ aborted: true }) === true, "mid-run {aborted:true} outcome");
+  assert(isAbortShape({ ok: true, result: "fine" }) === false, "a success is not an abort");
+  assert(isAbortShape({ error: "memory not written" }) === false, "a tool error is not an abort");
+});
+
+Deno.test("agent-abort: the PRODUCTION delegate throws — ZERO delegate_task tool-results + the failure text", async () => {
+  const { createOrchestrator } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const events = [];
+  const orch = createOrchestrator({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    system: "hub", masterMemory: fakeMemory(),
+    workers: [{ origin: "demo-site", memory: fakeMemory() }],
+    multiAgent: true, delegateGuard: async () => ({ ok: true, gen: 1 }),
+    onProgress: (ev) => events.push(ev),
+  });
+  const runP = orch.run("@demo-delegate demo-site", "", []);
+  const t0 = Date.now();
+  while (!events.some((e) => e?.type === "tool-call")) { if (Date.now() - t0 > 8000) break; await sleep(5); }
+  await sleep(120);
+  orch.workers.get("demo-site").abort();
+  let out;
+  try { out = await runP; } catch (e) { out = { error: e?.message ?? String(e) }; }
+  const text = out && typeof out === "object" ? (out.text ?? out.error ?? "") : String(out);
+  // ZERO successful delegate_task tool-results (the throw emits a tool-error,
+  // never a result part)
+  const delegateResults = events.filter((e) => e?.type === "tool-result" && /delegate_task/.test(JSON.stringify(e)));
+  assertEquals(delegateResults.length, 0, "no successful delegate_task tool-result");
+  // the final text is the authoritative FAILED outcome (the continuation
+  // re-emits the prior summary — never a neutral rewrite)
+  assert(/Delegation FAILED|aborted|failed/i.test(text), `the delegation failed in the final text (got: ${text.slice(0, 80)})`);
+  assert(!text.includes("[object Object]"), "no object leak");
+});
+
+Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-marker reset + multi-agent isolation", async () => {
+  const { createAgent, createOrchestrator } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  // TWO runs on the SAME model instance (consecutive marker runs) — each must
+  // complete the full set→get→get sequence (the stateless derivation starts
+  // at step 0 from each run's own prompt history)
+  const mem1 = fakeMemory();
+  const events1 = [];
+  const agent = createAgent({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    id: "iso", name: "iso", system: "sys", memory: mem1, taskId: "t",
+    onProgress: (ev) => events1.push(ev),
+  });
+  const out1 = await agent.run("run @demo-tools please", "", []);
+  const out2 = await agent.run("run @demo-tools please", "", []);
+  for (const out of [out1, out2]) {
+    assert(out && typeof out === "object" && out.aborted === false, "each consecutive marker run completes");
+  }
+  const gets1 = events1.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
+  assert(gets1.length === 4, `two consecutive runs → 2+2 memory_get results (got ${gets1.length})`);
+  for (const g of gets1) {
+    assert(JSON.stringify(g).includes("Espresso machine"), "every read in both runs observed the written value");
+  }
+  // a NON-marker run between resets nothing (stateless) + a normal text result
+  const outPlain = await agent.run("hello", "", []);
+  assert(typeof outPlain?.text === "string" && outPlain.text.includes("Task received"), "the non-marker run is a normal text");
+  // MULTI-AGENT isolation: two agents sharing the SAME model instance (the
+  // orchestrator's master + worker share the model) cannot consume each
+  // other's steps — each gets its own set→get→get
+  const orch = createOrchestrator({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    system: "hub", masterMemory: fakeMemory(),
+    workers: [{ origin: "demo-site", memory: fakeMemory() }],
+    multiAgent: true, delegateGuard: async () => ({ ok: true, gen: 1 }),
+    onProgress: () => {},
+  });
+  const masterOut = await orch.run("run @demo-tools please", "", []);
+  const workerOut = await orch.workers.get("demo-site").run("run @demo-tools please", "", []);
+  assert(masterOut && typeof masterOut === "object" && masterOut.aborted === false, "the master's run completed");
+  assert(workerOut && typeof workerOut === "object" && workerOut.aborted === false, "the worker's run completed (own steps)");
+});
+
+Deno.test("agent-abort: the delegate classification parses SDK parts via `output` — success vs failed", async () => {
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const model = createDemoModel();
+  // a SUCCESSFUL delegation: the SDK tool message carries a tool-result part
+  // with an `output` value (NOT `result`)
+  const successPrompt = [
+    { role: "user", content: "run @demo-delegate demo-site please" },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "c", toolName: "delegate_task", input: "{}" }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: "c", toolName: "delegate_task", output: { type: "text", value: JSON.stringify({ agentId: "demo-site", result: "worker text" }) } }] },
+  ];
+  const r1 = await model.doStream({ prompt: successPrompt, abortSignal: new AbortController().signal });
+  let text1 = "";
+  for await (const p of r1.stream) text1 += p.delta ?? "";
+  assert(text1.includes("Delegation succeeded"), `success classified (got ${text1.slice(0, 80)})`);
+  // a FAILED delegation: the tool message carries a tool-error part with
+  // an error-text output
+  const failPrompt = [
+    { role: "user", content: "run @demo-delegate demo-site please" },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "c", toolName: "delegate_task", input: "{}" }] },
+    { role: "tool", content: [{ type: "tool-error", toolCallId: "c", toolName: "delegate_task", output: { type: "error-text", value: "Error: delegation aborted — the worker was aborted" } }] },
+  ];
+  const r2 = await model.doStream({ prompt: failPrompt, abortSignal: new AbortController().signal });
+  let text2 = "";
+  for await (const p of r2.stream) text2 += p.delta ?? "";
+  assert(text2.includes("Delegation FAILED"), `failure classified (got ${text2.slice(0, 80)})`);
 });
