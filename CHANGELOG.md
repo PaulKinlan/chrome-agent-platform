@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.88] — 2026-08-18
+- feat(ui): pure durability renderer + overlay-open matrix coverage
+
 ## [0.2.87] — 2026-08-18
 - build: replace regex scan with an acorn AST export+oracle walk
 

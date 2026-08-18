@@ -422,6 +422,35 @@ try {
   await cdp.eval(hub, `document.querySelector('#side-toggle').click()`);
   await sleep(400);
 
+  // 7c. Durability UI STATE→ELEMENT contract on the REAL element: drive the
+  //     production pure renderer (lib/durability-ui.js) through session→error→
+  //     durable on the real #sidebar-durability-hint + #side, asserting the
+  //     text/visibility/data-durability transitions + the stale-text clear.
+  //     No shipped fault global: the error state is exercised by calling the
+  //     pure renderer directly (the real persist path can only reach session
+  //     in a permissionless headless profile; headed storage-granted restart
+  //     remains OPEN).
+  const durTransitions = await cdp.eval(hub, `(async () => {
+    const { renderDurabilityState } = await import('/lib/durability-ui.js');
+    const side = document.querySelector('#side');
+    const hint = document.getElementById('sidebar-durability-hint');
+    const snap = () => ({ d: side.getAttribute('data-durability'), text: (hint.textContent || '').trim(), hidden: hint.hidden });
+    const out = {};
+    // session (real path already left the rail in session mode)
+    renderDurabilityState({ side, hint }, 'session');
+    out.session = snap();
+    // session → error
+    renderDurabilityState({ side, hint }, 'error');
+    out.error = snap();
+    // error → durable (must CLEAR the stale error text + hide the live region)
+    renderDurabilityState({ side, hint }, 'durable');
+    out.durable = snap();
+    return out;
+  })()`);
+  check("durability UI: session state renders the warning + data-durability=session", durTransitions?.session?.d === 'session' && /session-only/i.test(durTransitions?.session?.text ?? '') && durTransitions?.session?.hidden === false, durTransitions?.session);
+  check("durability UI: session→error renders the failure text + is visible + data-durability=error", durTransitions?.error?.d === 'error' && /storage failed/i.test(durTransitions?.error?.text ?? '') && durTransitions?.error?.hidden === false, durTransitions?.error);
+  check("durability UI: error→durable clears the stale text + hides the live region + data-durability=durable", durTransitions?.durable?.d === 'durable' && (durTransitions?.durable?.text ?? '') === '' && durTransitions?.durable?.hidden === true, durTransitions?.durable);
+
   // ---- Settings ----
   const settings = await openPage(`chrome-extension://${extId}/options/options.html`);
 
@@ -490,6 +519,104 @@ try {
     return out;
   })()`);
   check("dark theme: nub renders with a visible border", darkNub?.visible === true, darkNub);
+
+  // 9. Overlay-OPEN matrix (the reviewer's D blocker): the real thread overlay
+  //    must stay OPEN while sidebar + overlay + nub are asserted across RTL /
+  //    dark / narrow / reduced-motion / focus — not just the default light LTR
+  //    run. Re-open the thread created in step 7 (real pointer), then assert
+  //    each dimension + capture overlay-open screenshots.
+  const reopen = await cdp.eval(hub, `(async () => {
+    const tv = document.getElementById('thread-view');
+    if (tv?.hidden === false) return { alreadyOpen: true };
+    const item = document.querySelector('.thread-item');
+    if (!item) return { noThread: true };
+    const r = item.getBoundingClientRect();
+    return { x: r.left + r.width/2, y: r.top + r.height/2 };
+  })()`);
+  if (reopen?.x != null) {
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: reopen.x, y: reopen.y }, hub);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: reopen.x, y: reopen.y, button: "left", clickCount: 1 }, hub);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: reopen.x, y: reopen.y, button: "left", clickCount: 1 }, hub);
+    await sleep(700);
+  }
+  const overlayOpen = await cdp.eval(hub, `document.getElementById('thread-view').hidden === false`);
+  check("overlay-open matrix: the thread overlay is OPEN", overlayOpen === true, { overlayOpen, reopen });
+
+  // Baseline overlay-open evidence.
+  const shotOverlay = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
+  await Deno.writeFile(`${ROOT}test-artifacts/overlay-open.png`, Uint8Array.from(atob(shotOverlay.data), (c: number) => c.charCodeAt(0)));
+
+  const overlayGeom = await cdp.eval(hub, `(() => {
+    const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), cx: Math.round(b.left + b.width/2) }; };
+    return { side: r(document.querySelector('#side')), overlay: r(document.getElementById('thread-view')), nub: r(document.querySelector('#side-toggle')), vw: innerWidth, vh: innerHeight };
+  })()`);
+  check("overlay-open matrix: overlay + nub are in-bounds", overlayGeom && overlayGeom.overlay && overlayGeom.nub && overlayGeom.overlay.left >= 0 && overlayGeom.overlay.right <= overlayGeom.vw && overlayGeom.nub.right <= overlayGeom.vw && overlayGeom.nub.left >= 0, overlayGeom);
+
+  // RTL (overlay open): the rail + nub flip to the right; the nub centres on the
+  // rail's inner (left) boundary and the overlay remains in-bounds.
+  const overlayRtl = await cdp.eval(hub, `(() => {
+    document.documentElement.setAttribute('dir', 'rtl');
+    const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), cx: Math.round(b.left + b.width/2) }; };
+    const side = r(document.querySelector('#side')); const nub = r(document.querySelector('#side-toggle')); const overlay = r(document.getElementById('thread-view'));
+    const out = { sideLeft: side.left, nubCx: nub.cx, nubOnInner: Math.abs(nub.cx - side.left) <= 3, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, vw: innerWidth };
+    document.documentElement.removeAttribute('dir');
+    return out;
+  })()`);
+  check("overlay-open RTL: nub centres on the rail's inner boundary", overlayRtl?.nubOnInner === true, overlayRtl);
+  check("overlay-open RTL: overlay stays in-bounds", overlayRtl?.overlayInBounds === true, overlayRtl);
+  await cdp.eval(hub, `document.documentElement.setAttribute('dir', 'rtl')`);
+  const shotOverlayRtl = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
+  await Deno.writeFile(`${ROOT}test-artifacts/overlay-rtl.png`, Uint8Array.from(atob(shotOverlayRtl.data), (c: number) => c.charCodeAt(0)));
+  await cdp.eval(hub, `document.documentElement.removeAttribute('dir')`);
+
+  // Dark (overlay open): nub keeps a visible border + the overlay text is legible.
+  const overlayDark = await cdp.eval(hub, `(() => {
+    document.documentElement.dataset.theme = 'charcoal';
+    const nub = document.querySelector('#side-toggle .nub');
+    const cs = getComputedStyle(nub);
+    const overlay = document.getElementById('thread-view');
+    const ov = getComputedStyle(overlay);
+    const out = { nubBorder: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', overlayVisible: ov.display !== 'none' && overlay.hidden === false };
+    document.documentElement.dataset.theme = 'sunlit';
+    return out;
+  })()`);
+  check("overlay-open dark: nub keeps a visible border + overlay visible", overlayDark?.nubBorder === true && overlayDark?.overlayVisible === true, overlayDark);
+  await cdp.eval(hub, `document.documentElement.dataset.theme = 'charcoal'`);
+  const shotOverlayDark = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
+  await Deno.writeFile(`${ROOT}test-artifacts/overlay-dark.png`, Uint8Array.from(atob(shotOverlayDark.data), (c: number) => c.charCodeAt(0)));
+  await cdp.eval(hub, `document.documentElement.dataset.theme = 'sunlit'`);
+
+  // Narrow (overlay open): overlay + nub remain in-bounds at 500px.
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);
+  const overlayNarrow = await cdp.eval(hub, `(() => {
+    const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right) }; };
+    const overlay = r(document.getElementById('thread-view')); const nub = r(document.querySelector('#side-toggle'));
+    return { overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, nubInBounds: nub.left >= 0 && nub.right <= innerWidth, vw: innerWidth };
+  })()`);
+  check("overlay-open narrow: overlay + nub stay in-bounds", overlayNarrow?.overlayInBounds === true && overlayNarrow?.nubInBounds === true, overlayNarrow);
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, hub);
+
+  // Reduced-motion (overlay open): sidebar + overlay + nub transitions disabled.
+  await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }, hub);
+  const overlayReduced = await cdp.eval(hub, `(() => {
+    const g = (sel) => getComputedStyle(document.querySelector(sel)).transition;
+    return { nub: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
+  })()`);
+  check("overlay-open reduced-motion: nub transition disabled", overlayReduced && noMotion(overlayReduced.nub), overlayReduced);
+  check("overlay-open reduced-motion: sidebar transition disabled", overlayReduced && noMotion(overlayReduced.side), overlayReduced);
+  check("overlay-open reduced-motion: overlay transition disabled", overlayReduced && noMotion(overlayReduced.overlay), overlayReduced);
+  await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
+
+  // Focus (overlay open): the nub remains Tab-reachable above the overlay.
+  await cdp.eval(hub, `document.querySelector('#open-settings')?.focus()`);
+  await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 }, hub);
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 }, hub);
+  await sleep(200);
+  const overlayFocus = await cdp.eval(hub, `document.activeElement?.id === 'side-toggle'`);
+  check("overlay-open focus: the nub is Tab-reachable above the overlay", overlayFocus === true, { overlayFocus });
+  // Restore: close the overlay for a clean end state.
+  await cdp.eval(hub, `document.getElementById('thread-back')?.click()`);
+  await sleep(300);
 
   exitCode = fail === 0 ? 0 : 1;
 } finally {

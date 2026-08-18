@@ -11,6 +11,7 @@ import { summarizeToolResult } from "../lib/tool-summary.js";
 import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
+import { renderDurabilityState } from "../lib/durability-ui.js";
 
 import {
   installPageDiagnostics,
@@ -1194,19 +1195,7 @@ const SIDEBAR_KEY = "hub.sidebarCollapsed";
 let sidebarWriteQueue = Promise.resolve();
 let sidebarDurability = "unknown"; // "durable" | "session" | "error"
 function renderDurability() {
-  side.setAttribute("data-durability", sidebarDurability);
-  if (!durabilityHint) return;
-  if (sidebarDurability === "session") {
-    durabilityHint.textContent = "Session-only — enable Storage in Settings to persist changes.";
-    durabilityHint.hidden = false;
-  } else if (sidebarDurability === "error") {
-    durabilityHint.textContent = "Couldn't save the sidebar state (storage failed).";
-    durabilityHint.hidden = false;
-  } else {
-    // Durable (or unknown): clear the stale text AND hide the live region.
-    durabilityHint.textContent = "";
-    durabilityHint.hidden = true;
-  }
+  renderDurabilityState({ side, hint: durabilityHint }, sidebarDurability);
 }
 function persistSidebar(collapsed) {
   sidebarWriteQueue = sidebarWriteQueue.then(async () => {
