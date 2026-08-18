@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.85] — 2026-08-18
+- docs(ui-fixes): record the acceptance round-2 commit hash + exact-HEAD evidence manifest/log
+
 ## [0.2.84] — 2026-08-18
 - fix(tool-calls): acceptance round-2 — durable per-run abort, guaranteed UTF-8 envelope, distinct same-name callIds, correct duplicates, restored args, exact-HEAD evidence
 
