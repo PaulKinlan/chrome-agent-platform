@@ -72,7 +72,7 @@ import {
   isEnrolled,
   listTools,
   pendingApprovals,
-  upsertTools,
+  replaceTools,
   withEnrollmentLock,
 } from "../lib/tools.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
@@ -285,12 +285,18 @@ import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import {
+  acceptToolSnapshot,
+  applyWebmcpLifecycle,
+  applyWebmcpPageReport,
   authorizeToolReport,
+  boundWebmcpError,
+  buildWebmcpPageReport,
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
   redactSecrets,
   sanitizeToolName as safeToolName,
   schemaToZod as buildSchema,
+  summarizeInjection,
 } from "../lib/pure.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
@@ -763,17 +769,14 @@ async function siteToolset(origin, runGenCell) {
 // so discovery happens immediately, without a reload. Best-effort (a missing
 // scripting permission or a closed tab must not fail the enroll).
 async function injectScriptsIntoOpenTabs(canonical) {
-  let injected = 0;
-  let failed = 0;
-  let targetCount = 0;
   try {
     const hasScripting = await chrome.permissions
       .contains({ permissions: ["scripting"] })
       .catch(() => false);
     if (!hasScripting) {
-      await recordWebmcpStatus(canonical, { scriptStatus: "no-scripting-permission" });
+      await recordWebmcpLifecycle(canonical, { scriptStatus: "no-scripting-permission" });
       swWebmcpLog("inject", JSON.stringify({ origin: canonical, ok: false, error: "scripting permission not granted" }));
-      return { injected: 0, failed: 0, error: "scripting permission not granted" };
+      return { targets: 0, ready: [], partial: [], failed: [], scriptStatus: "no-scripting-permission", error: "scripting permission not granted" };
     }
     const tabs = await chrome.tabs.query({ url: `${canonical}/*` });
     const targets = tabs.filter((t) => {
@@ -783,39 +786,51 @@ async function injectScriptsIntoOpenTabs(canonical) {
         return false;
       }
     });
-    targetCount = targets.length;
+    // Per-tab PER-ROLE results (the partial-injection finding: the old code
+    // counted scripts and reported "injected" whenever EITHER world succeeded,
+    // discarding the other world's failure). A tab is READY only when BOTH the
+    // MAIN-world and the ISOLATED-world script injected.
+    const results = [];
     for (const t of targets) {
+      const r = { tabId: t.id, main: false, bridge: false, error: null };
       // MAIN-world first (it registers its message listener), then the isolated
       // relay (its ensureMainWorld posts the nonce handshake that triggers the
-      // discovery collect). Each injection's success/failure is recorded so the
-      // discovery pipeline is never silent about a failed injection.
-      for (const [files, world] of [
-        [["content/main-world.js"], "MAIN"],
-        [["content/content-script.js"], "ISOLATED"],
+      // discovery collect).
+      for (const [files, world, key] of [
+        [["content/main-world.js"], "MAIN", "main"],
+        [["content/content-script.js"], "ISOLATED", "bridge"],
       ]) {
-        const ok = await chrome.scripting
-          .executeScript({
+        try {
+          await chrome.scripting.executeScript({
             target: { tabId: t.id },
             files,
             world,
-          })
-          .then(() => true)
-          .catch((e) => {
-            failed++;
-            swWebmcpLog("inject", JSON.stringify({ origin: canonical, tabId: t.id, world, ok: false, error: String(e?.message ?? e) }));
-            return false;
           });
-        if (ok) injected++;
+          r[key] = true;
+        } catch (e) {
+          r.error = boundWebmcpError(e?.message ?? e);
+          swWebmcpLog("inject", JSON.stringify({ origin: canonical, tabId: t.id, world, ok: false, error: r.error }));
+        }
       }
+      results.push(r);
     }
-    const scriptStatus = injected > 0 ? "injected" : (targetCount > 0 ? "injection-failed" : "no-open-tabs");
-    await recordWebmcpStatus(canonical, { scriptStatus });
-    swWebmcpLog("inject", JSON.stringify({ origin: canonical, injected, failed, targets: targetCount, scriptStatus }));
-    return { injected, failed, targets: targetCount, scriptStatus };
+    const summary = summarizeInjection(results);
+    // No open tabs: the dynamic registration means the scripts run on the next
+    // navigation — record the SW-attested registration state honestly.
+    const scriptStatus = summary.targets === 0 ? "registered" : summary.scriptStatus;
+    const injection = {
+      targets: summary.targets,
+      ready: summary.ready,
+      partial: summary.partial,
+      failed: summary.failed,
+    };
+    await recordWebmcpLifecycle(canonical, { scriptStatus, injection });
+    swWebmcpLog("inject", JSON.stringify({ origin: canonical, ...injection, scriptStatus }));
+    return { ...injection, scriptStatus };
   } catch (e) {
-    await recordWebmcpStatus(canonical, { scriptStatus: "injection-error", error: String(e?.message ?? e) });
+    await recordWebmcpLifecycle(canonical, { scriptStatus: "injection-error", error: String(e?.message ?? e) });
     swWebmcpLog("inject", JSON.stringify({ origin: canonical, ok: false, error: String(e?.message ?? e) }));
-    return { injected, failed, error: String(e?.message ?? e) };
+    return { targets: 0, ready: [], partial: [], failed: [], scriptStatus: "injection-error", error: boundWebmcpError(e?.message ?? e) };
   }
 }
 
@@ -868,6 +883,21 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
       error: `origin ${canonical} was re-enrolled during run — site invocation rejected`,
     };
   }
+  // Resolve the tool's DISPATCH SOURCE from the directory (declared|inferred)
+  // so the MAIN world dispatches by descriptor identity: a DECLARED WebMCP tool
+  // is only ever resolved through document.modelContext, an INFERRED tool only
+  // through the captured exposure registry — never through a hijackable
+  // window[name] global (the declared-vs-inferred identity finding: discovery
+  // lets a declared tool win a name collision, so invocation must not resolve
+  // the colliding global first).
+  const dir = await listTools(canonical);
+  const descriptor = dir.find((t) => t.name === name);
+  if (!descriptor) {
+    return { error: `no such tool on ${canonical}: ${name}` };
+  }
+  if (descriptor.source !== "declared" && descriptor.source !== "inferred") {
+    return { error: `tool ${name} is not page-invocable (source ${descriptor.source})` };
+  }
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((t) => {
     try {
@@ -903,6 +933,7 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
       name,
       args,
       gen, // enrollment-scoped identity — the content script enforces it (round-20)
+      source: descriptor.source, // descriptor identity — declared/inferred dispatch
     });
     // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
     // call (a single locked snapshot, not two unlocked reads).
@@ -1193,6 +1224,8 @@ async function agentInfo(origin) {
 // script). The status is a single latest entry (never an unbounded log).
 const WEBMCP_DIAG_KEY = "cap:webmcpDiagnostics";
 const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
+// Per-origin discovery-snapshot ordering gate: { [origin]: { sessionId, seq } }.
+const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
 
 // Cached diagnostics toggle so SW-side injection/enrollment logging can gate
 // synchronously (refreshed whenever the flag is read or set).
@@ -1220,20 +1253,37 @@ async function webmcpStatus() {
   return { diagnostics: await webmcpDiagnosticsEnabled(), status };
 }
 
-/** Record the latest discovery outcome for an origin (bounded to one entry). */
-async function recordWebmcpStatus(origin, fields) {
+/** Record the latest SW-ATTESTED lifecycle outcome for an origin (bounded to
+ * one entry). Lifecycle fields (scriptStatus / injection) are ONLY ever
+ * written here, from the service worker's own observations — page-reported
+ * tool data lands in the separate `lastReport` section via
+ * recordWebmcpPageReport, so a page can never masquerade its data as an
+ * attested lifecycle state. */
+async function recordWebmcpLifecycle(origin, fields) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return;
-  const status = {
+  const prev = (await kvGet(WEBMCP_STATUS_KEY))[WEBMCP_STATUS_KEY] ?? null;
+  const status = applyWebmcpLifecycle(prev, {
     origin: canonical,
-    at: Date.now(),
-    scriptStatus: fields?.scriptStatus ?? "unknown",
-    declaredCount: fields?.declaredCount ?? 0,
-    inferredCount: fields?.inferredCount ?? 0,
-    toolCount: fields?.toolCount ?? 0,
-    toolNames: Array.isArray(fields?.toolNames) ? fields.toolNames.slice(0, 50) : [],
+    scriptStatus: fields?.scriptStatus,
     error: fields?.error ?? null,
-  };
+    injection: fields?.injection ?? null,
+  });
+  await kvSet({ [WEBMCP_STATUS_KEY]: status });
+}
+
+/** Record a PAGE-REPORTED tool snapshot (explicitly labeled page data) derived
+ * from the SANITIZED descriptors the SW accepted — never the raw page
+ * payload. Never touches the attested lifecycle fields. */
+async function recordWebmcpPageReport(origin, acceptedTools) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  const prev = (await kvGet(WEBMCP_STATUS_KEY))[WEBMCP_STATUS_KEY] ?? null;
+  const status = applyWebmcpPageReport(
+    prev,
+    canonical,
+    buildWebmcpPageReport(acceptedTools),
+  );
   await kvSet({ [WEBMCP_STATUS_KEY]: status });
 }
 
@@ -1907,33 +1957,51 @@ const handlers = {
   },
 
   // The hub agent's management surface (list_agents / get_agent / update_agent).
-  // `agent.discover-active` — resolve the ACTIVE tab's origin so the hub can
-  // offer a one-click "Discover this page" flow (the dynamic-permission-on-need
-  // principle: browsing a page must be discoverable without typing the origin
-  // into Settings). The active tab's URL is visible to the SW only when the
-  // OPTIONAL `tabs` permission (or the transient `activeTab` from an action
-  // click) is granted; otherwise we report `needTabs` honestly so the hub can
-  // request it on the user's click.
-  async "agent.discover-active"() {
-    let tab = null;
+  // `agent.discoverable-tabs` — list the OPEN http(s) tabs the hub's "Discover
+  // this page" picker can offer (the exact-tab-identity finding: the old
+  // `agent.discover-active` resolved {active,currentWindow}, which is the
+  // extension's OWN NTP tab while the user is clicking in the hub — so the
+  // flow enrolled the NTP, not the page the user meant). The hub renders this
+  // list as an explicit picker and threads the CHOSEN tab's id + origin through
+  // enrollment. Tab URLs/titles are visible only with the OPTIONAL `tabs`
+  // permission; without it we report `needTabs` honestly so the hub requests
+  // it on the user's click.
+  async "agent.discoverable-tabs"() {
+    let tabs = null;
     try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      tab = tabs[0] ?? null;
+      tabs = await chrome.tabs.query({});
     } catch {
-      tab = null;
+      tabs = null;
     }
-    if (!tab?.id) return { ok: false, error: "no active tab" };
-    if (tab?.url) {
+    if (!tabs) return { ok: false, needTabs: true, error: "tabs permission needed to list open pages" };
+    if (tabs.length > 0 && tabs.every((t) => !t.url)) {
+      // Every tab's URL is hidden — the `tabs` permission is absent.
+      return { ok: false, needTabs: true, error: "tabs permission needed to list open pages" };
+    }
+    const out = [];
+    for (const t of tabs) {
+      if (t.id == null || !t.url) continue;
+      let origin;
       try {
-        const canonical = canonicalOrigin(new URL(tab.url).origin);
-        return { ok: true, origin: canonical, url: tab.url, title: tab.title ?? "" };
+        origin = canonicalOrigin(new URL(t.url).origin);
       } catch {
-        return { ok: false, error: "active tab is not an http(s) page" };
+        continue;
       }
+      if (!origin || !/^https?:/.test(origin)) continue;
+      out.push({
+        id: t.id,
+        title: String(t.title ?? "").slice(0, 200),
+        url: String(t.url).slice(0, 500),
+        origin,
+        active: t.active === true,
+        lastAccessed: typeof t.lastAccessed === "number" ? t.lastAccessed : 0,
+      });
+      if (out.length >= 50) break;
     }
-    // The URL is undefined — the extension has neither `tabs` nor `activeTab`.
-    // The hub requests `tabs` on the user's click, then re-queries.
-    return { ok: false, needTabs: true, error: "tabs permission needed to see the active page" };
+    // Most-recently-used first (the page the user was just looking at sorts to
+    // the top of the picker).
+    out.sort((a, b) => b.lastAccessed - a.lastAccessed);
+    return { ok: true, tabs: out };
   },
 
   // `agent.directory` returns the RICH listing (name + tools + memory + enrollment
@@ -1974,7 +2042,7 @@ const handlers = {
     if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
     return await listTools(origin);
   },
-  async "tools.upsert"({ origin, tools }) {
+  async "tools.upsert"({ origin, tools, sessionId, seq }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     // Serialize the isEnrolled check + the OPFS write under the SAME origin
@@ -1986,22 +2054,44 @@ const handlers = {
       if (!(await isEnrolled(canonical))) {
         return { ok: false, error: "origin not enrolled — enroll it in Settings" };
       }
-      await upsertTools(canonical, tools);
-      // Record the LAST discovery outcome so the Settings/Hub status surface can
-      // show when discovery ran, for which origin, and how many tools it found
-      // (the pipeline is no longer opaque — Paul's observable failure).
-      const list = Array.isArray(tools) ? tools : [];
-      await recordWebmcpStatus(canonical, {
-        scriptStatus: "discovered",
-        declaredCount: list.filter((t) => t.source === "declared").length,
-        inferredCount: list.filter((t) => t.source === "inferred").length,
-        toolCount: list.length,
-        toolNames: list.map((t) => t.name),
+      // A COMPLETE ORDERED REPLACEMENT SNAPSHOT (the stale-tools finding): the
+      // report replaces the origin's discovered tool set wholesale — including
+      // an EMPTY snapshot (a page that removed all its tools clears them) — so
+      // removed tools never linger listed/approvable. Session/sequence ordering
+      // drops stale same-session replays; a fresh session (reload/navigation)
+      // supersedes. The gate map is a shared cross-origin registry, so its
+      // read-modify-write runs under the GLOBAL enrollment lock (lock order
+      // origin → enrollment, the same as enroll/delete).
+      return await withEnrollmentLock(async () => {
+        const gate = await kvGet(SNAPSHOT_GATE_KEY);
+        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        if (!acceptToolSnapshot(map[canonical], sessionId, seq)) {
+          return { ok: false, error: "stale or malformed snapshot — rejected", stale: true };
+        }
+        const accepted = await replaceTools(canonical, tools);
+        map[canonical] = { sessionId, seq };
+        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        // Page-reported status from the SANITIZED accepted descriptors,
+        // explicitly labeled page data (never an attested lifecycle state).
+        await recordWebmcpPageReport(canonical, accepted);
+        // New tools/sites must reach the running orchestrator — rebuild it.
+        invalidateAgent();
+        return { ok: true, accepted: accepted.length };
       });
-      // New tools/sites must reach the running orchestrator — rebuild it.
-      invalidateAgent();
-      return { ok: true };
     });
+  },
+  // `enrollment.status` — the bridge-ready startup sync (the reload/navigation
+  // finding): a freshly injected content-script bridge pulls the CURRENT
+  // enrollment generation for ITS OWN origin (the sender-derived origin — the
+  // auth layer overwrites message.origin for page senders) instead of waiting
+  // for a one-time enrollment push that a document created later can never
+  // receive. Read-only; the bridge applies the response through its monotonic
+  // lifecycle fence.
+  async "enrollment.status"({ origin }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    const snap = await enrollmentSnapshot(canonical);
+    return { ok: true, enrolled: snap.enrolled, gen: snap.gen };
   },
   async "tools.approve"({ origin, name, decision }) {
     return await approveTool(origin, name, decision);
@@ -2522,7 +2612,7 @@ const handlers = {
       return { ok: true, origin: canonical, name };
     });
   },
-  async "agent.enroll-origin"({ origin, ownerGesture = false }) {
+  async "agent.enroll-origin"({ origin, ownerGesture = false, tabId = null }) {
     // ENROLLMENT IS OWNER-ONLY (the wider-goal review's finding: the
     // model-facing enroll_origin could activate any origin when broad host
     // access was granted, without a fresh exact-origin gesture). The Settings
@@ -2538,6 +2628,23 @@ const handlers = {
     // route registers the discovery scripts for the now-granted origin.
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
+    // The hub's tab picker threads the EXACT tab the owner chose (the
+    // exact-tab-identity finding: the flow must never silently act on a
+    // different page than the one picked). Validate it matches the origin.
+    let pickedTab = null;
+    if (tabId != null) {
+      const t = await chrome.tabs.get(Number(tabId)).catch(() => null);
+      let tabOrigin = null;
+      try {
+        tabOrigin = t?.url ? canonicalOrigin(new URL(t.url).origin) : null;
+      } catch {
+        tabOrigin = null;
+      }
+      if (!t || tabOrigin !== canonical) {
+        return { ok: false, error: "the picked tab no longer shows that origin — re-pick the page" };
+      }
+      pickedTab = t.id;
+    }
     return await withOriginLock(canonical, async () => {
       // TRANSACTIONAL: enroll the origin, then register its scripts. If
       // registration FAILS (permission absent or registerContentScripts error),
@@ -2617,13 +2724,13 @@ const handlers = {
         };
       }
       invalidateAgent();
-      // Record the registration outcome so the status surface shows the scripts
-      // are registered (the discovery pipeline is observable end-to-end).
-      await recordWebmcpStatus(canonical, { scriptStatus: "registered" });
       // Inject the discovery scripts into the ALREADY-OPEN tabs for this origin
       // (dynamic content scripts only run on the next navigation — without this,
-      // an enrolled-but-open tab discovers nothing until reloaded).
-      await injectScriptsIntoOpenTabs(canonical);
+      // an enrolled-but-open tab discovers nothing until reloaded). The result
+      // is per-tab per-role; a partial injection is SURFACED, never reported as
+      // success (injectScriptsIntoOpenTabs also records the SW-attested
+      // lifecycle status).
+      const injection = await injectScriptsIntoOpenTabs(canonical);
       await notifyOriginBridge(canonical, {
         type: "enrollment-sync",
         gen: snapAfter.gen,
@@ -2646,7 +2753,15 @@ const handlers = {
           retryable: true,
         };
       }
-      return { ok: true, origin: canonical, scriptsRegistered: true };
+      return {
+        ok: true,
+        origin: canonical,
+        scriptsRegistered: true,
+        injection,
+        pickedTab,
+        pickedTabReady: pickedTab != null ? injection.ready?.includes(pickedTab) === true : null,
+        injectionPartial: (injection.partial?.length ?? 0) > 0 || (injection.failed?.length ?? 0) > 0,
+      };
     });
   },
   async "agent.delete"({ origin }) {

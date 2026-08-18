@@ -109,71 +109,124 @@ async function renderWebmcpHubStatus() {
     el.textContent = "Site tools are discovered when you enroll a page — use Discover this page.";
     return;
   }
-  const when = new Date(s.at).toLocaleTimeString();
-  el.textContent = `WebMCP discovery: ${s.origin} · ${s.toolCount ?? 0} tools (${s.declaredCount ?? 0} declared / ${s.inferredCount ?? 0} inferred) · ${s.scriptStatus} · ${when}`;
+  // The record separates the SW-ATTESTED script lifecycle from the
+  // PAGE-REPORTED tool counts — label them honestly.
+  const parts = [`WebMCP discovery: ${s.origin}`];
+  if (s.scriptStatus && s.scriptStatus !== "none") {
+    const when = s.scriptStatusAt ? new Date(s.scriptStatusAt).toLocaleTimeString() : null;
+    parts.push(`scripts ${s.scriptStatus}${when ? ` · ${when}` : ""}`);
+  }
+  if (s.lastReport) {
+    const r = s.lastReport;
+    parts.push(
+      `page report: ${r.toolCount ?? 0} tools (${r.declaredCount ?? 0} declared / ${r.inferredCount ?? 0} inferred) · ${new Date(r.at).toLocaleTimeString()}`,
+    );
+  }
+  el.textContent = parts.join(" · ");
 }
 
-// ── "Discover this page" (the active-tab tool discovery) ─────────────────
+// ── "Discover this page" (explicit tab picker) ───────────────────────────
 // Browsing a page must be discoverable without typing the origin into Settings
-// (the dynamic-permission-on-need principle). The flow: query the active tab's
-// origin (requesting `tabs` on the click if needed), then request the origin's
-// host permission + `scripting` (one gesture), then enroll-origin — the SW
-// registers the discovery scripts + injects them into the open tab, and the
-// tools appear in the Site agents section.
+// (the dynamic-permission-on-need principle). The EXACT-TAB finding: the old
+// flow resolved the ACTIVE tab — which is the hub's own NTP while the user is
+// clicking here — so it enrolled the NTP instead of the page the user meant.
+// Now the flow lists the open http(s) tabs in an explicit picker; the CHOSEN
+// tab's id + origin are threaded through enrollment and the SW verifies the
+// picked tab still shows that origin before acting on it.
 async function discoverActivePage() {
-  let active = await send("agent.discover-active").catch(() => ({ ok: false }));
-  if (active?.needTabs) {
-    // The URL is hidden without the `tabs` permission — request it (the click IS
-    // the user gesture), then re-query.
+  let listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
+  if (listing?.needTabs) {
+    // Tab URLs/titles are hidden without the `tabs` permission — request it
+    // (the click IS the user gesture), then re-list.
     const granted = await chrome.permissions
       .request({ permissions: ["tabs"] })
       .catch(() => false);
     if (!granted) {
-      setStatus("Tabs permission denied — can't see the active page", false);
+      setStatus("Tabs permission denied — can't list the open pages", false);
       return;
     }
-    active = await send("agent.discover-active").catch(() => ({ ok: false }));
+    listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
   }
-  if (!active?.ok || !active?.origin) {
-    setStatus(active?.error ?? "Couldn't resolve the active page", false);
+  if (!listing?.ok) {
+    setStatus(listing?.error ?? "Couldn't list the open pages", false);
     return;
   }
-  const origin = active.origin;
+  const tabs = Array.isArray(listing.tabs) ? listing.tabs : [];
+  if (tabs.length === 0) {
+    setStatus("No open web pages to discover — open the page in a tab first.", false);
+    return;
+  }
+  openDiscoverPicker(tabs);
+}
+
+function openDiscoverPicker(tabs) {
+  const dialog = document.createElement("agent-dialog");
+  dialog.setAttribute("title", "Discover a page");
+  const list = document.createElement("div");
+  const hint = document.createElement("div");
+  hint.className = "empty";
+  hint.textContent = "Pick the tab to scan for tools — the exact tab you pick is enrolled and injected.";
+  list.append(hint);
+  for (const t of tabs) {
+    const row = document.createElement("capability-row");
+    row.setAttribute("name", t.title || t.origin);
+    row.setAttribute("description", t.origin);
+    row.setAttribute("icon", "");
+    row.setAttribute("action", "run");
+    row.addEventListener("run", () => {
+      dialog.close();
+      discoverTab(t);
+    });
+    list.append(row);
+  }
+  dialog.append(list);
+  document.body.append(dialog);
+  dialog.show();
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+}
+
+async function discoverTab(tab) {
   // Request the exact origin's host permission + `scripting` together (one
-  // prompt) — the same owner-gesture the Settings Enroll button uses.
+  // prompt) — the same owner-gesture the Settings Enroll button uses. The
+  // picked tab's id rides along so the SW can verify tab↔origin identity and
+  // report whether THAT tab was fully injected.
   let granted = false;
   try {
     granted = await chrome.permissions.request({
       permissions: ["scripting"],
-      origins: [`${origin}/*`],
+      origins: [`${tab.origin}/*`],
     });
   } catch (e) {
     setStatus("Permission request failed: " + String(e?.message ?? e), false);
     return;
   }
   if (!granted) {
-    setStatus("Host permission not granted — " + origin + " was not enrolled.", false);
+    setStatus("Host permission not granted — " + tab.origin + " was not enrolled.", false);
     return;
   }
-  const res = await send("agent.enroll-origin", { origin, ownerGesture: true }).catch(
-    () => ({ ok: false }),
-  );
+  const res = await send("agent.enroll-origin", {
+    origin: tab.origin,
+    ownerGesture: true,
+    tabId: tab.id,
+  }).catch(() => ({ ok: false }));
   if (res?.ok) {
-    setStatus(`Discovered ${origin} — give it a moment to scan for tools…`, true);
-    // Re-poll the site agents + the directory so the newly-discovered tools
-    // appear without a manual refresh.
-    renderSiteAgents();
-    refreshAgentCount();
-    renderWebmcpHubStatus();
-    // The discovery scripts re-poll asynchronously (800ms/2s/4s) — refresh again
-    // after they report so the tool count lands.
-    for (const delay of [1200, 3200]) {
-      setTimeout(() => {
-        renderSiteAgents();
-        refreshAgentCount();
-        renderWebmcpHubStatus();
-      }, delay);
+    if (res.pickedTabReady === true) {
+      setStatus(`Discovered ${tab.origin} — give it a moment to scan for tools…`, true);
+    } else if (res.pickedTabReady === false) {
+      setStatus(`Enrolled ${tab.origin}, but the picked tab was not fully injected — reload that tab.`, false);
+    } else {
+      setStatus(`Enrolled ${tab.origin} — the discovery scripts run on the next page load.`, true);
     }
+    // Re-poll the site agents + the directory so the newly-discovered tools
+    // appear without a manual refresh. The discovery scripts re-poll
+    // asynchronously (800ms/2s/4s) — refresh again after they report.
+    const refresh = () => {
+      renderSiteAgents();
+      refreshAgentCount();
+      renderWebmcpHubStatus();
+    };
+    refresh();
+    for (const delay of [1200, 3200]) setTimeout(refresh, delay);
   } else {
     setStatus("Discovery failed: " + (res?.error ?? "unknown"), false);
   }

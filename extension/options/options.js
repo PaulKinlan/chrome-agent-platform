@@ -352,7 +352,15 @@ async function renderEnroll() {
     }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     input.value = "";
     if (res?.ok) {
-      saveFlash(`Enrolled ${origin}${res.scriptsRegistered ? " (scripts registered)" : ""}.`);
+      // Surface the injection outcome honestly — a partial injection (one
+      // world failed in an open tab) is never reported as plain success.
+      const inj = res.injection;
+      let suffix = " (scripts registered)";
+      if (inj && (inj.targets ?? 0) > 0) {
+        suffix = ` (injected into ${inj.ready?.length ?? 0}/${inj.targets} open tab(s))`;
+        if (res.injectionPartial) suffix += " — a tab only partially injected; reload it";
+      }
+      saveFlash(`Enrolled ${origin}${suffix}.`);
       renderData();
       renderEnrolledSites();
       renderWebmcpStatus();
@@ -444,28 +452,43 @@ async function renderWebmcpStatus() {
   }
   const row = document.createElement("div");
   row.className = "webmcp-row";
+  // The record separates the SW-ATTESTED script lifecycle (registration /
+  // injection) from the PAGE-REPORTED tool counts — render both, labeled.
   const lines = [
-    `Last discovery: ${new Date(s.at).toLocaleString()}`,
     `Origin: ${s.origin}`,
-    `Script status: ${s.scriptStatus}`,
-    `Tools discovered: ${s.toolCount ?? 0} (${s.declaredCount ?? 0} declared, ${s.inferredCount ?? 0} inferred)`,
+    `Script status (attested): ${s.scriptStatus}${s.scriptStatusAt ? " · " + new Date(s.scriptStatusAt).toLocaleString() : ""}`,
   ];
+  if (s.injection && (s.injection.targets ?? 0) > 0) {
+    lines.push(
+      `Injection: ${s.injection.ready?.length ?? 0}/${s.injection.targets} tab(s) ready` +
+        ((s.injection.partial?.length ?? 0) > 0 ? ` · ${s.injection.partial.length} partial` : "") +
+        ((s.injection.failed?.length ?? 0) > 0 ? ` · ${s.injection.failed.length} failed` : ""),
+    );
+  }
+  if (s.lastReport) {
+    const r = s.lastReport;
+    lines.push(
+      `Page report: ${r.toolCount ?? 0} tools (${r.declaredCount ?? 0} declared, ${r.inferredCount ?? 0} inferred) · ${new Date(r.at).toLocaleString()}`,
+    );
+  } else {
+    lines.push("Page report: none yet");
+  }
   for (const line of lines) {
     const p = document.createElement("div");
     p.className = "webmcp-line";
     p.textContent = line; // textContent — the origin/status are untrusted data
     row.appendChild(p);
   }
-  if (Array.isArray(s.toolNames) && s.toolNames.length) {
+  if (Array.isArray(s.lastReport?.toolNames) && s.lastReport.toolNames.length) {
     const names = document.createElement("div");
     names.className = "webmcp-tools muted";
-    names.textContent = s.toolNames.join(", ");
+    names.textContent = s.lastReport.toolNames.join(", ");
     row.appendChild(names);
   }
-  if (s.error) {
+  if (s.scriptError) {
     const err = document.createElement("div");
     err.className = "webmcp-line error";
-    err.textContent = "Error: " + s.error;
+    err.textContent = "Error: " + s.scriptError;
     row.appendChild(err);
   }
   body.appendChild(row);

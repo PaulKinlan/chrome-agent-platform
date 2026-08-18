@@ -1,10 +1,10 @@
 # Changelog
 
-## [0.2.74] — 2026-08-18
-- fix(webmcp): make discovery pipeline observable (Paul: where is the content script / no logs)
+## [0.2.75] — 2026-08-18
+- fix(webmcp): corrective round — startup enrollment sync, exact-tab picker, opt-in inference + source dispatch, cancellation/singleton/snapshot/status hardening, production-path acceptance (32/32; permission gesture stays OPEN, headed macro in docs/WEBMCP-ACCEPTANCE.md)
 
-## [0.2.73] — 2026-08-18
-- fix(webmcp): make the discovery pipeline observable (Paul: "where is the content script / no logs proving it runs") — structured, gated `[WebMCP]` logs in the MAIN-world + isolated bridge + SW (start, injection success/failure, declared/inferred counts, tool names, origin, registration result), a Settings → Site agents → Diagnostics toggle, a `webmcp.status` route + a Settings/Hub status surface (last discovery, origin, script status, tool count), and current-tab injection now reports success/failure instead of swallowing it. Real-browser proof: scripts/webmcp-integration.ts 17/17 (declared + inferred + async-registered discovery, MAIN-world invoke, idempotent upsert, diagnostics/status routes).
+## [0.2.74] — 2026-08-18
+- fix(webmcp): make the discovery pipeline observable (Paul: "where is the content script / no logs proving it runs") — structured, gated `[WebMCP]` logs in the MAIN-world + isolated bridge + SW, a Settings → Site agents → Diagnostics toggle, a `webmcp.status` route + status surfaces, and current-tab injection reporting. (Consolidates the duplicate 0.2.73 entry. NOTE: this version's browser evidence was later found to bypass the production path — superseded by the corrective round that follows; see docs/KNOWN-ISSUES.md.)
 
 ## [0.2.72] — 2026-08-17
 - fix(review): GLM + DeepSeek findings — script double-execution claim protocol (one host runs), UTF-8-safe initialAvatar (no btoa crash on CJK/emoji), bounded skill-import (64KiB + http(s) + walk cap), mark buildScriptSrcdoc test-only + constitution sandbox-page exemption, the missing optional_permissions (bookmarks/history/webNavigation/contextMenus/idle/downloads), the constitution sender-check wording, favicons on every page, the light-DOM size smoke assertion

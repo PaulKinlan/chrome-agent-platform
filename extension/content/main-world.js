@@ -1,11 +1,32 @@
 // content/main-world.js — runs in the PAGE's world (world: "MAIN"), so it can
-// see the page's own globals + document.modelContext (WebMCP). It cannot use
-// chrome.* APIs, so it talks to the isolated-world content script over a
-// window.postMessage channel authenticated with a nonce.
+// see the page's own exposed functions + document.modelContext (WebMCP). It
+// cannot use chrome.* APIs, so it talks to the isolated-world content script
+// over a window.postMessage channel authenticated with a nonce.
 //
-// Discovery: reads window.* (non-DOM-owned functions) + document.modelContext
-// tools, and posts them up. Invocation: on an authenticated "cairn-invoke"
-// message, calls the page function / WebMCP tool and posts the result back.
+// Discovery: reads the page's POSITIVE opt-in exposure (window.webmcpExpose) +
+// document.modelContext tools, and posts them up. Blind window.* enumeration is
+// GONE (the round-28 review: enumerating every enumerable global function was
+// an unsafe eligibility policy). Invocation: on an authenticated "cairn-invoke"
+// message, dispatches BY SOURCE — a declared WebMCP tool is only ever resolved
+// through document.modelContext, an inferred tool only through the captured
+// exposure registry (never window[name], so a global cannot hijack a declared
+// tool name).
+
+// Versioned singleton guard (the repeated-enrollment finding): an immediate
+// re-injection (re-enroll while the tab is open) re-executes this file in the
+// SAME page world. Without a guard every execution would install ANOTHER
+// message listener, so one invoke would run the page function once per stale
+// listener (duplicate side effects). The previous execution is torn down
+// (listeners removed, timers cleared, in-flight results suppressed) before the
+// new one installs, so exactly ONE live MAIN-world bridge exists per tab.
+const MAIN_WORLD_VERSION = 2;
+const GUARD_KEY = "__cairnMainWorldBridge";
+{
+  const prev = window[GUARD_KEY];
+  if (prev && typeof prev === "object" && typeof prev.teardown === "function") {
+    try { prev.teardown(); } catch { /* a stale world must never block the new one */ }
+  }
+}
 
 (() => {
   const CHANNEL = "__cairn_bridge";
@@ -123,6 +144,13 @@
     return platform.has(name);
   }
 
+  // A tool name must be a plain dotted identifier (no prototype-chain tricks,
+  // no whitespace/control bytes, bounded length).
+  const TOOL_NAME_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
+  function validToolName(name) {
+    return typeof name === "string" && name.length > 0 && name.length <= 128 && TOOL_NAME_RE.test(name);
+  }
+
   function paramNames(fn) {
     try {
       const src = Function.prototype.toString.call(fn);
@@ -134,43 +162,89 @@
     }
   }
 
+  // ── Inferred tools: conservative POSITIVE opt-in ─────────────────────────
+  // A page exposes callable functions by assigning an array of functions (or
+  // { name?, description?, fn } descriptors) to `window.webmcpExpose`. Anything
+  // NOT explicitly listed is never inferred — the old blind window.* function
+  // enumeration is removed (it violated conservative eligibility: every
+  // enumerable global function became a tool). The captured registry preserves
+  // descriptor IDENTITY: invocation calls the captured function reference, so
+  // reassigning a global after discovery cannot hijack an approved tool.
+  const EXPOSE_KEY = "webmcpExpose";
+  const MAX_EXPOSED = 100;
+  // name → { fn, description } captured at the last collect.
+  let exposedRegistry = new Map();
+  function captureExposed() {
+    const out = new Map();
+    const raw = window[EXPOSE_KEY];
+    if (!Array.isArray(raw)) {
+      exposedRegistry = out;
+      return out;
+    }
+    for (const entry of raw) {
+      let fn = null;
+      let name = null;
+      let description = "";
+      if (typeof entry === "function") {
+        fn = entry;
+        name = entry.name;
+      } else if (entry && typeof entry === "object" && typeof entry.fn === "function") {
+        fn = entry.fn;
+        name = typeof entry.name === "string" && entry.name ? entry.name : entry.fn.name;
+        description = typeof entry.description === "string" ? entry.description : "";
+      }
+      if (!fn || !validToolName(name)) continue;
+      if (isDomOwned(name)) continue; // defense-in-depth: never re-expose a platform global
+      if (out.has(name)) continue; // first exposure wins
+      out.set(name, { fn, description });
+      if (out.size >= MAX_EXPOSED) break;
+    }
+    exposedRegistry = out;
+    return out;
+  }
+
   function inferTools() {
     const out = [];
-    for (const key of Object.keys(window)) {
-      if (isDomOwned(key)) continue;
-      try {
-        const val = window[key];
-        if (typeof val !== "function") continue;
-        const params = paramNames(val);
-        out.push({
-          name: key,
-          source: "inferred",
-          description: `Inferred global function ${key}`,
-          inputSchema: {
-            type: "object",
-            properties: Object.fromEntries(params.map((p) => [p, { type: "string" }])),
-            required: [],
-          },
-          args: params,
-        });
-      } catch { /* not callable */ }
+    for (const [name, { fn, description }] of exposedRegistry) {
+      const params = paramNames(fn);
+      out.push({
+        name,
+        source: "inferred",
+        description: description || `Exposed page function ${name}`,
+        inputSchema: {
+          type: "object",
+          properties: Object.fromEntries(params.map((p) => [p, { type: "string" }])),
+          required: [],
+        },
+      });
     }
-    return out.slice(0, 200);
+    return out;
   }
 
   // The WebMCP API (GoogleChromeLabs/webmcp-tools): tools are read via
   // document.modelContext.getTools(), which is ASYNC and returns an ARRAY of
   // tool objects whose `inputSchema` is a STRINGIFIED JSON (not an object).
-  // The prior code read `mc.getTools()` synchronously (a Promise, not an array →
-  // empty) and never awaited it, so a page that had registered WebMCP tools
-  // (e.g. aifoc.us via webmcp-lib) reported ZERO declared tools. `mc.tools` may
-  // exist as a ReadonlyMap on the native (non-polyfilled) implementation.
+  // `mc.tools` may exist as a ReadonlyMap on the native (non-polyfilled)
+  // implementation.
+  //
+  // Schema validation is STRICT: a malformed schema (unparseable string,
+  // non-object, array, or a non-object `type`) REJECTS the descriptor — the
+  // old code converted garbage into a permissive empty schema, silently
+  // accepting malformed tools.
   function parseInputSchema(schema) {
     if (schema == null) return { type: "object", properties: {} };
-    if (typeof schema === "string") {
-      try { return JSON.parse(schema); } catch { return { type: "object", properties: {} }; }
+    let s = schema;
+    if (typeof s === "string") {
+      if (s.length > 16384) return null;
+      try {
+        s = JSON.parse(s);
+      } catch {
+        return null; // malformed string schema — reject the descriptor
+      }
     }
-    return schema;
+    if (!s || typeof s !== "object" || Array.isArray(s)) return null;
+    if (s.type !== undefined && s.type !== "object") return null;
+    return s;
   }
 
   // The RAW tools (with their execute fn + window), un-normalized — used for both
@@ -198,29 +272,65 @@
 
   async function declaredTools() {
     const raw = await getRawTools();
-    return raw.map((t) => ({
-      name: t.name,
-      source: "declared",
-      description: t.description ?? "",
-      inputSchema: parseInputSchema(t.inputSchema),
-    }));
+    const out = [];
+    for (const t of raw) {
+      if (!t || !validToolName(t.name)) continue; // malformed descriptor — reject
+      const schema = parseInputSchema(t.inputSchema);
+      if (schema === null) continue; // malformed schema — reject the descriptor
+      out.push({
+        name: t.name,
+        source: "declared",
+        description: typeof t.description === "string" ? t.description : "",
+        inputSchema: schema,
+      });
+    }
+    return out;
   }
 
   async function collectTools() {
     const declared = await declaredTools();
-    // Include BOTH the declared WebMCP tools AND the inferred window.* functions
-    // (Paul: a page's known WebMCP endpoints AND its inferred functions must both
-    // be discovered). Dedupe by name (a declared tool wins) + cap the total.
+    // Include BOTH the declared WebMCP tools AND the positively-exposed page
+    // functions. Dedupe by name (a DECLARED tool wins a collision) + cap.
+    captureExposed();
     const declaredNames = new Set(declared.map((t) => t.name));
     const inferred = inferTools().filter((t) => !declaredNames.has(t.name));
     return [...declared, ...inferred].slice(0, 200);
   }
 
   function post(msg) {
-    window.postMessage({ [CHANNEL]: true, ...msg }, "*");
+    // Every message carries the bridge-issued nonce once known (the isolated
+    // bridge drops nonce-less reports, so a page script / a stale MAIN world
+    // cannot spoof a tools report or a result). Before the init handshake
+    // there is nothing trusted to say — stay silent.
+    if (!nonce) return;
+    window.postMessage({ [CHANNEL]: true, nonce, ...msg }, "*");
   }
 
-  async function invoke(requestId, name, args) {
+  // Page-thrown exception text is attacker-controlled and may embed secrets —
+  // never surface it to the bridge/SW/model. Report only a bounded, allowlisted
+  // error NAME (the full text stays in the page's own console via the gated log,
+  // where the page already had it).
+  const SAFE_ERROR_NAMES = new Set([
+    "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError",
+    "EvalError", "URIError", "AggregateError", "DOMException",
+  ]);
+  function redactError(e) {
+    const name = e && typeof e === "object" ? e.constructor?.name : null;
+    return SAFE_ERROR_NAMES.has(name) ? name : "Error";
+  }
+  // Errors WE throw (cancellation, dispatch, unknown tool) carry safe static
+  // messages and may cross the bridge; page-thrown errors are redacted.
+  function internalError(message) {
+    const e = new Error(message);
+    e.__cairnInternal = true;
+    return e;
+  }
+  function resultError(e) {
+    if (e && e.__cairnInternal === true) return String(e.message).slice(0, 200);
+    return `tool failed (${redactError(e)})`;
+  }
+
+  async function invoke(requestId, name, args, source) {
     // PRE-START cancellation check (the round-22 blocker: cancel only discarded
     // the RESULT, so a page function whose side effect had already executed kept
     // running). This synchronous check runs BEFORE the page function is invoked,
@@ -229,64 +339,76 @@
     // cooperative: once a page function has begun, its own DOM / storage /
     // network effects cannot be unwound — the result is discarded and the
     // invocation is marked cancelled, but the in-flight function itself runs
-    // to settlement. That limit is documented (not papered over) below.
+    // to settlement.
     if (cancelledAll || isCancelled(requestId)) {
-      throw new Error("invocation cancelled");
+      throw internalError("invocation cancelled");
     }
-    // 1. a page-defined global function
-    const fn = window[name];
-    if (typeof fn === "function") {
-      const params = paramNames(fn);
-      const ordered = params.map((p) => args?.[p]);
-      // Re-check IMMEDIATELY before the actual function call — the `paramNames`
-      // reflection above is synchronous but the check must sit as close to the
-      // side effect as possible so a cancel that landed in the same synchronous
-      // turn (via the cancel EPOCH) is still honored right up to the call edge.
-      // This is the MINIMUM window; once fn.apply runs, its effects are
-      // unwindable (cooperative cancellation can only discard the result).
-      if (cancelledAll || isCancelled(requestId)) {
-        throw new Error("invocation cancelled");
-      }
-      return await fn.apply(window, ordered);
+    if (!validToolName(name)) {
+      throw internalError("invalid tool name");
     }
-    // 2. a WebMCP registered tool. The webmcp-tools API executes via
-    // `document.modelContext.executeTool(tool, args)` (a TOOL OBJECT, not a name),
-    // or the tool's own execute fn; the old `mc.callTool`/`mc.invoke` (by name)
-    // don't exist, so every WebMCP invocation fell through to "no such tool".
-    const mc = document.modelContext;
-    const raw = await getRawTools();
-    const tool = raw.find((t) => t.name === name);
-    if (tool) {
-      if (cancelledAll || isCancelled(requestId)) {
-        throw new Error("invocation cancelled");
+    // Dispatch BY SOURCE (the descriptor identity is threaded from the SW's
+    // tool directory): a DECLARED WebMCP tool is resolved only through
+    // document.modelContext — NEVER through window[name], so a page global
+    // colliding with a declared tool name cannot hijack the invocation. An
+    // INFERRED tool is resolved only through the captured exposure registry
+    // (the exact function that was discovered), never a fresh window lookup.
+    if (source === "inferred") {
+      const entry = exposedRegistry.get(name);
+      if (entry && typeof entry.fn === "function") {
+        if (cancelledAll || isCancelled(requestId)) {
+          throw internalError("invocation cancelled");
+        }
+        const params = paramNames(entry.fn);
+        const ordered = params.map((p) => args?.[p]);
+        return await entry.fn.apply(window, ordered);
       }
-      if (typeof mc?.executeTool === "function") {
-        return await mc.executeTool(tool, args ?? {});
-      }
-      if (typeof tool.execute === "function") return await tool.execute(args ?? {});
-      if (typeof tool._execute === "function") return await tool._execute(args ?? {});
+      throw internalError(`no such exposed function: ${name}`);
     }
-    if (typeof mc?.callTool === "function") {
-      if (cancelledAll || isCancelled(requestId)) {
-        throw new Error("invocation cancelled");
+    if (source === "declared") {
+      // The webmcp-tools API executes via `document.modelContext.executeTool(
+      // tool, args)` (a TOOL OBJECT, not a name), or the tool's own execute fn.
+      const mc = document.modelContext;
+      const raw = await getRawTools();
+      const tool = raw.find((t) => t && t.name === name);
+      if (tool) {
+        if (cancelledAll || isCancelled(requestId)) {
+          throw internalError("invocation cancelled");
+        }
+        if (typeof mc?.executeTool === "function") {
+          return await mc.executeTool(tool, args ?? {});
+        }
+        if (typeof tool.execute === "function") return await tool.execute(args ?? {});
+        if (typeof tool._execute === "function") return await tool._execute(args ?? {});
       }
-      return await mc.callTool(name, args ?? {});
-    }
-    if (typeof mc?.invoke === "function") {
-      if (cancelledAll || isCancelled(requestId)) {
-        throw new Error("invocation cancelled");
+      if (typeof mc?.callTool === "function") {
+        if (cancelledAll || isCancelled(requestId)) {
+          throw internalError("invocation cancelled");
+        }
+        return await mc.callTool(name, args ?? {});
       }
-      return await mc.invoke(name, args ?? {});
+      if (typeof mc?.invoke === "function") {
+        if (cancelledAll || isCancelled(requestId)) {
+          throw internalError("invocation cancelled");
+        }
+        return await mc.invoke(name, args ?? {});
+      }
+      throw internalError(`no such declared tool: ${name}`);
     }
-    throw new Error(`no such function/tool: ${name}`);
+    throw internalError(`unknown tool source: ${String(source)}`);
   }
 
-  window.addEventListener("message", (event) => {
+  const inflightTimers = new Set();
+  function trackTimer(id) {
+    inflightTimers.add(id);
+    return id;
+  }
+
+  function onMessage(event) {
     if (event.source !== window) return; // only same-window messages
     const data = event.data;
     if (!data || typeof data !== "object" || data[CHANNEL] !== true) return;
     if (data.type === "init") {
-      nonce = data.nonce;
+      nonce = typeof data.nonce === "string" ? data.nonce : null;
       diagnostics = data.diagnostics === true;
       cancelledAll = false; // a fresh bridge/nonce resets the cancel epoch
       log("start", JSON.stringify({ origin: location.origin, role: "main-world" }));
@@ -320,46 +442,79 @@
       cancelledAll = true;
       for (const id of inFlight) markCancelled(id);
       log("cancel", JSON.stringify({ origin: location.origin }));
-    } else if (data.type === "invoke" && data.nonce === nonce) {
+    } else if (data.type === "invoke" && nonce && data.nonce === nonce) {
       log("invoke", JSON.stringify({ name: data.name, requestId: data.requestId }));
+      const requestId = data.requestId;
+      // REGISTER the in-flight id BEFORE the deferral (the round-28 regression:
+      // without inFlight.add, a cancel could never tombstone a running invoke).
+      inFlight.add(requestId);
       // Bound the in-flight set: a hung page function must not leave its request
       // id resident forever (the content-script drops the response at 15s, but
       // this world's promise could otherwise linger).
-      setTimeout(() => { inFlight.delete(data.requestId); }, 20000);
+      trackTimer(setTimeout(() => { inFlight.delete(requestId); }, 20000));
       // Defer the page-function invocation by ONE macrotask so a `cancel`
       // delivered in the same turn (a disenrollment that raced this invoke)
       // can run FIRST and mark the request cancelled BEFORE the page function
       // starts (the round-23 blocker: invoking synchronously meant a later
       // cancel could never interleave between inFlight.add and the call).
-      setTimeout(() => {
-        if (cancelledAll || isCancelled(data.requestId)) {
-          inFlight.delete(data.requestId);
-          post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
+      trackTimer(setTimeout(() => {
+        if (cancelledAll || isCancelled(requestId)) {
+          inFlight.delete(requestId);
+          post({ type: "result", requestId, ok: false, error: "invocation cancelled" });
           return;
         }
-        invoke(data.requestId, data.name, data.args)
+        invoke(requestId, data.name, data.args, data.source)
           .then((result) => {
-            inFlight.delete(data.requestId);
-            if (isCancelled(data.requestId)) {
-              cancelled.delete(data.requestId);
-              post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
+            inFlight.delete(requestId);
+            // Check BOTH the per-id tombstone AND the cancel epoch (the round-28
+            // regression: the success path only checked the tombstone, so a
+            // cancel-all during the await let the result through).
+            if (cancelledAll || isCancelled(requestId)) {
+              cancelled.delete(requestId);
+              post({ type: "result", requestId, ok: false, error: "invocation cancelled" });
               return;
             }
-            log("result", JSON.stringify({ name: data.name, requestId: data.requestId, ok: true }));
-            post({ type: "result", nonce, requestId: data.requestId, ok: true, result });
+            log("result", JSON.stringify({ name: data.name, requestId, ok: true }));
+            post({ type: "result", requestId, ok: true, result });
           })
           .catch((e) => {
-            inFlight.delete(data.requestId);
-            cancelled.delete(data.requestId);
-            log("result", JSON.stringify({ name: data.name, requestId: data.requestId, ok: false, error: String(e?.message ?? e) }));
-            post({ type: "result", nonce, requestId: data.requestId, ok: false, error: String(e?.message ?? e) });
+            inFlight.delete(requestId);
+            cancelled.delete(requestId);
+            log("result", JSON.stringify({ name: data.name, requestId, ok: false, error: String(e?.message ?? e) }));
+            // Redact the page-thrown body — only our own internal messages or
+            // an allowlisted error NAME cross the bridge boundary.
+            post({ type: "result", requestId, ok: false, error: resultError(e) });
           });
-      }, 0);
+      }, 0));
     }
-  });
+  }
+  window.addEventListener("message", onMessage);
 
-  // First pass after the page settles.
-  const discoverAfterLoad = () => setTimeout(() => collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools })), 300);
+  // First pass after the page settles (the bridge's init also triggers a
+  // collect; this covers a bridge that started later than this world).
+  let loadTimer = null;
+  const discoverAfterLoad = () => {
+    loadTimer = trackTimer(setTimeout(() => collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools })), 300));
+  };
+  const onLoad = () => discoverAfterLoad();
   if (document.readyState === "complete") discoverAfterLoad();
-  else window.addEventListener("load", discoverAfterLoad);
+  else window.addEventListener("load", onLoad);
+
+  // Register the versioned singleton so a re-injection tears THIS instance
+  // down instead of stacking a duplicate listener (exactly one live MAIN-world
+  // bridge per tab, no matter how many times enrollment re-injects).
+  window[GUARD_KEY] = {
+    version: MAIN_WORLD_VERSION,
+    teardown() {
+      // Suppress every in-flight + future result, remove the listeners, and
+      // clear the pending timers so nothing from this instance can fire again.
+      cancelledAll = true;
+      for (const id of inFlight) markCancelled(id);
+      for (const t of inflightTimers) clearTimeout(t);
+      inflightTimers.clear();
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("load", onLoad);
+      nonce = null; // post() goes silent even if a stale closure fires
+    },
+  };
 })();

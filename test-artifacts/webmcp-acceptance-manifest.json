@@ -1,0 +1,230 @@
+{
+  "testedSourceCommit": "2aa3068608467c689c83b1ad1c1dfae2136937ea",
+  "evidenceCommitNote": "run against the working tree that became the corrective commit (a tracked manifest cannot contain its own commit hash)",
+  "worktreeDirtyFiles": [
+    "M CHANGELOG.md",
+    " M PLAN.md",
+    " M docs/KNOWN-ISSUES.md",
+    " M docs/UI-FIXES-TRACKER.md",
+    " M extension/background/service-worker.js",
+    " M extension/content/content-script.js",
+    " M extension/content/main-world.js",
+    " M extension/lib/pure.js",
+    " M extension/lib/tools.js",
+    " M extension/ntp/ntp.js",
+    " M extension/options/options.js",
+    " M fixtures/webmcp-fixture.html",
+    " M fixtures/webmcp-server.ts",
+    " M package.json",
+    "D  scripts/webmcp-integration.ts",
+    "D  scripts/webmcp-repro.ts",
+    " M test-artifacts/ntp-driven.png",
+    " M test-artifacts/options-driven.png",
+    " M tests/webmcp-discovery.test.ts",
+    " M tests/webmcp-status.test.ts",
+    "?? docs/WEBMCP-ACCEPTANCE.md",
+    "?? scripts/webmcp-acceptance.ts",
+    "?? test-artifacts/webmcp-acceptance-after-reload.png",
+    "?? test-artifacts/webmcp-acceptance-manifest.json",
+    "?? test-artifacts/webmcp-acceptance-side-effect.png",
+    "?? tests/webmcp-snapshot.test.ts"
+  ],
+  "runId": "webmcp-acceptance-1787061388611",
+  "ts": "2026-08-18T13:56:28.611Z",
+  "mode": "automated-variant",
+  "permissionGrant": "test-manifest-pregranted",
+  "overallStatus": "OPEN — the OS-level permission-prompt gesture is unattested in this environment (headless auto-denies optional host permissions; no display/Xvfb). Run with --headed to complete the attestation.",
+  "variantNote": "the loaded extension is byte-identical to the shipped one EXCEPT manifest.json pre-holds scripting+tabs+the fixture host permission (the headed flow's real prompt grants exactly these)",
+  "passed": 32,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "build succeeded (dist matches sources)",
+      "pass": true
+    },
+    {
+      "name": "extension loaded (service worker present)",
+      "pass": true
+    },
+    {
+      "name": "Settings: clicked the Diagnostics toggle via a real click",
+      "pass": true
+    },
+    {
+      "name": "Settings: diagnostics gate enabled",
+      "pass": true
+    },
+    {
+      "name": "fixture page loaded",
+      "pass": true
+    },
+    {
+      "name": "hub: clicked Discover this page via a real click",
+      "pass": true
+    },
+    {
+      "name": "hub: the tab picker lists the fixture tab (explicit tab identity)",
+      "pass": true
+    },
+    {
+      "name": "hub: picked the fixture tab in the picker via a real click",
+      "pass": true
+    },
+    {
+      "name": "the fixture origin is enrolled (real enroll-origin route)",
+      "pass": true
+    },
+    {
+      "name": "SW-attested status: scripts injected (not merely 'served')",
+      "pass": true
+    },
+    {
+      "name": "the EXACT picked tab was injected (injection.ready contains its tab id)",
+      "pass": true
+    },
+    {
+      "name": "CDP scriptParsed: content/main-world.js executed in the picked tab",
+      "pass": true
+    },
+    {
+      "name": "CDP scriptParsed: content/content-script.js executed in the picked tab",
+      "pass": true
+    },
+    {
+      "name": "the discovery scripts executed WITHOUT a reload (immediate injection)",
+      "pass": true
+    },
+    {
+      "name": "console: [WebMCP:bridge] start lifecycle event",
+      "pass": true
+    },
+    {
+      "name": "console: [WebMCP:main] discover lifecycle event",
+      "pass": true
+    },
+    {
+      "name": "declared + inferred tools discovered through the production bridge",
+      "pass": true
+    },
+    {
+      "name": "async-registered tool picked up by the re-poll (shop.coupon)",
+      "pass": true
+    },
+    {
+      "name": "the enrollment generation is readable (agent.directory.gen)",
+      "pass": true
+    },
+    {
+      "name": "invoke: SW→isolated→MAIN returns the page function result",
+      "pass": true
+    },
+    {
+      "name": "invoke: VISIBLE side effect on the page (DOM + counter, exactly once)",
+      "pass": true
+    },
+    {
+      "name": "invoke: declared shop.total resolves via modelContext (42.5), never the colliding global (999)",
+      "pass": true
+    },
+    {
+      "name": "invoke: a generationless invoke is rejected",
+      "pass": true
+    },
+    {
+      "name": "invoke: a source-less invoke is rejected",
+      "pass": true
+    },
+    {
+      "name": "re-enrollment: picked the same tab again",
+      "pass": true
+    },
+    {
+      "name": "re-enrollment advanced the generation",
+      "pass": true
+    },
+    {
+      "name": "re-enrollment singleton: exactly ONE side effect per invoke (no duplicate listeners)",
+      "pass": true
+    },
+    {
+      "name": "reload: BOTH discovery scripts re-executed via the DYNAMIC registration (scriptParsed)",
+      "pass": true
+    },
+    {
+      "name": "reload: the fresh bridge startup-synced its enrollment generation (console lifecycle)",
+      "pass": true
+    },
+    {
+      "name": "reload: invocation works WITHOUT re-enrollment (the startup-sync fix), one side effect",
+      "pass": true
+    },
+    {
+      "name": "reload: the side effect is visible after reload",
+      "pass": true
+    },
+    {
+      "name": "navigation: invocation works after a cross-document navigation (no re-enrollment)",
+      "pass": true
+    }
+  ],
+  "evidence": {
+    "scriptParsedUrls": [
+      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/main-world.js",
+      "http://127.0.0.1:8934/index.html",
+      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/content-script.js",
+      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/main-world.js",
+      "http://127.0.0.1:8934/index.html?nav=2",
+      "chrome-extension://gkhikhejjhncjambjgecnepgdckdmkjp/content/content-script.js"
+    ],
+    "consoleEvents": [
+      "[WebMCP:bridge] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"isolated-bridge\",\"diagnostics\":true}",
+      "[WebMCP:bridge] enrollment-sync {\"origin\":\"http://127.0.0.1:8934\",\"gen\":2,\"via\":\"startup\"}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:main] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"main-world\"}",
+      "[WebMCP:main] resume {\"origin\":\"http://127.0.0.1:8934\"}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] invoke-tool {\"origin\":\"http://127.0.0.1:8934\",\"name\":\"greet\",\"requestId\":\"1\",\"gen\":2,\"source\":\"inferred\"}",
+      "[WebMCP:main] invoke {\"name\":\"greet\",\"requestId\":\"1\"}",
+      "[WebMCP:main] result {\"name\":\"greet\",\"requestId\":\"1\",\"ok\":true}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"isolated-bridge\",\"diagnostics\":true}",
+      "[WebMCP:bridge] enrollment-sync {\"origin\":\"http://127.0.0.1:8934\",\"gen\":2,\"via\":\"startup\"}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:main] start {\"origin\":\"http://127.0.0.1:8934\",\"role\":\"main-world\"}",
+      "[WebMCP:main] resume {\"origin\":\"http://127.0.0.1:8934\"}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":3,\"declaredCount\":2,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"greet\"]}",
+      "[WebMCP:main] discover {\"origin\":\"http://127.0.0.1:8934\",\"declaredCount\":3,\"inferredCount\":1,\"toolCount\":4,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":4,\"declaredCount\":3,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":3}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":4}",
+      "[WebMCP:main] discover {\"origin\":\"http://127.0.0.1:8934\",\"declaredCount\":3,\"inferredCount\":1,\"toolCount\":4,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
+      "[WebMCP:bridge] tools-reported {\"origin\":\"http://127.0.0.1:8934\",\"toolCount\":4,\"declaredCount\":3,\"inferredCount\":1,\"toolNames\":[\"shop.total\",\"shop.catalog\",\"shop.coupon\",\"greet\"]}",
+      "[WebMCP:bridge] registration {\"origin\":\"http://127.0.0.1:8934\",\"ok\":true,\"accepted\":4}",
+      "[WebMCP:bridge] invoke-tool {\"origin\":\"http://127.0.0.1:8934\",\"name\":\"greet\",\"requestId\":\"1\",\"gen\":2,\"source\":\"inferred\"}",
+      "[WebMCP:main] invoke {\"name\":\"greet\",\"requestId\":\"1\"}",
+      "[WebMCP:main] result {\"name\":\"greet\",\"requestId\":\"1\",\"ok\":true}"
+    ],
+    "screenshots": [
+      {
+        "name": "webmcp-acceptance-side-effect.png",
+        "sha256": "7c358e8d813ee0d50414ce39dfaefb7f2647928f6bc6734d5653371b48bc3971",
+        "bytes": 14193
+      },
+      {
+        "name": "webmcp-acceptance-after-reload.png",
+        "sha256": "a7accfc13016c2f99fa08a506ee087a784289de589ead113736131dba2d6c39b",
+        "bytes": 14171
+      }
+    ]
+  }
+}
