@@ -308,6 +308,26 @@ input:focus, select:focus, textarea:focus {
   font-family: ui-monospace, monospace;
   font-size: 13px;
 }
+/* ── WebMCP discovery status (Paul 2026-08-18) ── */
+.webmcp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.webmcp-line {
+  font-size: 13px;
+}
+.webmcp-line.error {
+  color: var(--danger);
+}
+.webmcp-tools {
+  font-size: 12px;
+  word-break: break-word;
+}
 /* ── the OPFS memory explorer (item 58) ── */
 .memory-explorer {
   margin-bottom: 18px;

@@ -703,7 +703,230 @@ export const PAGE_ALLOWED_ROUTES = new Set([
   "tools.list",
   "tools.upsert",
   "tools.pending",
+  "webmcp.diagnostics.get", // read-only owner toggle (a page's script may read its own diagnostics gate)
+  "enrollment.status", // read-only: a freshly-injected bridge syncs the enrollment generation for ITS OWN origin (sender-derived)
 ]);
+
+// ── WebMCP status bounding + discovery-snapshot ordering (pure, testable) ──
+// The SW-attested lifecycle (script registration/injection) is kept STRICTLY
+// separate from page-reported tool data: a page can report tools, but it can
+// never write the attested lifecycle fields — page reports land in a labeled
+// `lastReport` section only.
+
+/** The closed set of SW-attested script lifecycle states. Anything else is
+ * coerced to "injection-error" so a caller can never inject a fabricated
+ * status string into the attested record. */
+export const WEBMCP_SCRIPT_STATUSES = new Set([
+  "none",
+  "registered",
+  "no-open-tabs",
+  "no-scripting-permission",
+  "injected",
+  "injection-partial",
+  "injection-failed",
+  "injection-error",
+]);
+
+/** Byte-bound an error string for the status record (page/SW exception text is
+ * unbounded attacker-influenced data — never store it raw). */
+export function boundWebmcpError(e, max = 300) {
+  if (e == null) return null;
+  return String(e).slice(0, max);
+}
+
+/** Clamp a count to a sane non-negative integer (page-reported counts are
+ * untrusted). */
+export function clampToolCount(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return 0;
+  return Math.min(Math.floor(v), 100000);
+}
+
+/** Build the PAGE-REPORTED section of the status record from the SANITIZED
+ * (bounded) tool descriptors the SW accepted — never from the raw page
+ * payload, so out-of-bounds descriptors cannot inflate the status. */
+export function buildWebmcpPageReport(tools, at = Date.now()) {
+  const list = Array.isArray(tools) ? tools : [];
+  return {
+    at,
+    declaredCount: clampToolCount(list.filter((t) => t?.source === "declared").length),
+    inferredCount: clampToolCount(list.filter((t) => t?.source === "inferred").length),
+    toolCount: clampToolCount(list.length),
+    toolNames: list
+      .map((t) => String(t?.name ?? "").slice(0, 128))
+      .filter(Boolean)
+      .slice(0, 50),
+  };
+}
+
+/** Merge an SW-ATTESTED lifecycle patch into the status record. Only the
+ * service worker calls this; a page report can never masquerade as an
+ * attested lifecycle state. A lifecycle record for a DIFFERENT origin drops
+ * the previous origin's page report (the record is a single latest slot). */
+export function applyWebmcpLifecycle(prev, patch, at = Date.now()) {
+  const origin = String(patch?.origin ?? "");
+  const status = WEBMCP_SCRIPT_STATUSES.has(patch?.scriptStatus)
+    ? patch.scriptStatus
+    : "injection-error";
+  const sameOrigin = prev && prev.origin === origin;
+  return {
+    origin,
+    at,
+    scriptStatus: status,
+    scriptStatusAt: at,
+    scriptError: boundWebmcpError(patch?.error),
+    injection: patch?.injection ?? null,
+    lastReport: sameOrigin ? prev.lastReport ?? null : null,
+  };
+}
+
+/** Merge a PAGE-REPORTED tool snapshot into the status record. Never touches
+ * the SW-attested lifecycle fields. */
+export function applyWebmcpPageReport(prev, origin, report) {
+  const sameOrigin = prev && prev.origin === origin;
+  const base = sameOrigin
+    ? prev
+    : {
+        origin,
+        at: report.at,
+        scriptStatus: "none",
+        scriptStatusAt: null,
+        scriptError: null,
+        injection: null,
+        lastReport: null,
+      };
+  return { ...base, at: report.at, lastReport: report };
+}
+
+/** Summarize per-tab per-role injection results. A tab is READY only when BOTH
+ * the MAIN-world and the ISOLATED-world script injected; exactly one world
+ * succeeding is a PARTIAL (the bridge without MAIN discovers nothing, MAIN
+ * without the bridge reports nowhere) and must be surfaced, never counted as
+ * success. */
+export function summarizeInjection(results) {
+  const list = Array.isArray(results) ? results : [];
+  const ready = [];
+  const partial = [];
+  const failed = [];
+  for (const r of list) {
+    const main = r?.main === true;
+    const bridge = r?.bridge === true;
+    if (main && bridge) {
+      ready.push(r.tabId);
+    } else if (!main && !bridge) {
+      failed.push({ tabId: r?.tabId ?? null, error: boundWebmcpError(r?.error) });
+    } else {
+      partial.push({
+        tabId: r?.tabId ?? null,
+        missing: [main ? null : "main", bridge ? null : "bridge"].filter(Boolean),
+      });
+    }
+  }
+  const scriptStatus = list.length === 0
+    ? "no-open-tabs"
+    : partial.length === 0 && failed.length === 0
+      ? "injected"
+      : ready.length === 0
+        ? "injection-failed"
+        : "injection-partial";
+  return { targets: list.length, ready, partial, failed, scriptStatus };
+}
+
+// ── Discovery-snapshot ordering: origin / tab / document / navigation epoch ──
+// The round-30 blocker: the old gate accepted ANY new random session id
+// unconditionally, so a late report from an older session — or from a SECOND
+// same-origin tab — could replace a newer snapshot. The gate is now keyed by
+// the origin and ordered by BROWSER-ATTESTED identity the page cannot forge:
+// the service worker derives `tabId` + `documentId` from the message SENDER
+// (never from the message body) and assigns a MONOTONIC navigation epoch per
+// origin. A snapshot is accepted only from the bound tab's CURRENT document
+// with an advancing per-document sequence.
+
+/** The empty per-origin snapshot gate. `maxEpoch` is monotonic and survives
+ * re-enrollment seeding, so a navigation epoch is never reissued. */
+export function emptySnapshotGate() {
+  return { tabId: null, documentId: null, epoch: -1, maxEpoch: -1, seq: -1 };
+}
+
+function validTabId(tabId) {
+  return typeof tabId === "number" && Number.isInteger(tabId) && tabId >= 0;
+}
+function validDocumentId(documentId) {
+  return typeof documentId === "string" && documentId.length > 0 && documentId.length <= 128;
+}
+function validSeq(seq) {
+  return typeof seq === "number" && Number.isInteger(seq) && seq >= 0 && seq <= 1e9;
+}
+
+/** Seed/rebind the gate at (re-)enrollment. A picker-approved tab becomes the
+ * ONLY tab whose reports are accepted (`pickedTabId`); a null pick leaves the
+ * gate unbound so the first reporting tab binds. `maxEpoch` is preserved — a
+ * re-enrollment must never reissue a stale navigation epoch. */
+export function seedSnapshotGate(prev, pickedTabId) {
+  const maxEpoch = Number.isInteger(prev?.maxEpoch) ? prev.maxEpoch : -1;
+  return {
+    tabId: validTabId(pickedTabId) ? pickedTabId : null,
+    documentId: null,
+    epoch: -1,
+    maxEpoch,
+    seq: -1,
+  };
+}
+
+/** A bridge startup sync observed a document on a tab. Advances the gate to
+ * that document with a fresh monotonic epoch when the document is NEW on the
+ * bound tab (a navigation). Returns { gate, bound } — `bound` is false when
+ * the sender is NOT the authoritative tab (a second same-origin tab never
+ * displaces the bound tab's document). Pure. */
+export function syncSnapshotDocument(prev, tabId, documentId) {
+  const gate = prev ?? emptySnapshotGate();
+  if (!validTabId(tabId) || !validDocumentId(documentId)) {
+    return { gate, bound: false };
+  }
+  if (gate.tabId == null) {
+    const epoch = gate.maxEpoch + 1;
+    return { gate: { tabId, documentId, epoch, maxEpoch: epoch, seq: -1 }, bound: true };
+  }
+  if (tabId !== gate.tabId) return { gate, bound: false };
+  if (documentId === gate.documentId) return { gate, bound: true };
+  const epoch = gate.maxEpoch + 1;
+  return { gate: { tabId, documentId, epoch, maxEpoch: epoch, seq: -1 }, bound: true };
+}
+
+/** Accept a complete replacement snapshot ONLY from the current
+ * (tab, document, epoch) with an advancing per-document sequence. `report` is
+ * { tabId, documentId, epoch, seq } where tabId/documentId are
+ * SENDER-DERIVED by the service worker and `epoch` is the epoch the SW issued
+ * to that document at its startup sync (echoed by the bridge — a stale
+ * document can only echo its own older epoch and is rejected). Returns
+ * { accept, gate }. Pure. */
+export function acceptToolSnapshot(prev, report) {
+  const gate = prev ?? emptySnapshotGate();
+  const { tabId, documentId, epoch, seq } = report ?? {};
+  if (!validTabId(tabId) || !validDocumentId(documentId) || !validSeq(seq)) {
+    return { accept: false, gate };
+  }
+  // Snapshot reports NEVER establish identity. Only enrollment.status from an
+  // active, browser-attested document may bind/advance the gate through
+  // syncSnapshotDocument; otherwise a report that raced startup could choose
+  // its own identity/epoch.
+  if (gate.tabId == null || gate.documentId == null || gate.epoch < 0) {
+    return { accept: false, gate };
+  }
+  if (tabId !== gate.tabId) {
+    return { accept: false, gate }; // a second same-origin tab never replaces
+  }
+  if (documentId !== gate.documentId) {
+    return { accept: false, gate }; // a stale document's late report
+  }
+  if (epoch !== gate.epoch) {
+    return { accept: false, gate }; // a wrong/older navigation epoch
+  }
+  if (seq <= gate.seq) {
+    return { accept: false, gate }; // a same-document replay/stale sequence
+  }
+  return { accept: true, gate: { ...gate, seq } };
+}
 
 /** Parse an omnibox-entered string into an intent.
  *  - "recipe:<id>"  → { kind: "recipe", id }

@@ -22,7 +22,9 @@ isolated OPFS memory, run history, skills, and avatar.
   the `/agent` slash command (grouped, keyboard-complete, stale selections
   rejected).
 - **Sites as sub-agents** — enrolled origins expose their WebMCP tools; the agent
-  discovers + invokes them (first-run approval per tool).
+  discovers + invokes them (first-run approval per tool). Discovery is observable:
+  enable **Settings → Site agents → Diagnostics** for gated `[WebMCP]` logs (page
+  DevTools console) + a status readout (last discovery, origin, script state, tool count).
 - **Tasks as threads** — a task is a distinct thread (auto-named, full-screen, with
   live progress + per-task error detail + a nudge/continue composer).
 - **Skills** — reusable capabilities (the recipes reworked into skills): include a

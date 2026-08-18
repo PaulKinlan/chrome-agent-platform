@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.78] — 2026-08-18
+- merge(webmcp): integrate frozen production discovery with unified agent access
+
 ## [0.2.77] — 2026-08-18
 - test: grant only required system metadata access
 

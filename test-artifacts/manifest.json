@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "28cf510cc8fdcc7f637f29468f837dbab9ee7efe",
+  "testedSourceCommit": "92b07ceb86606bc06c369d7e3d5b884b3a003e9b",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1786846367269",
+  "runId": "cap-1787061436110",
   "retain": true,
-  "ts": "2026-08-16T02:13:29.222Z",
-  "evidenceDir": "/home/paulkinlan/chrome-agent-platform/test-artifacts",
-  "passed": 105,
+  "ts": "2026-08-18T13:58:02.132Z",
+  "evidenceDir": "/tmp/cap-webmcp-discovery/test-artifacts",
+  "passed": 119,
   "failed": 0,
   "checks": [
     {
@@ -143,11 +143,15 @@
       "pass": true
     },
     {
-      "name": "Settings: switched back to Demo via a real click",
+      "name": "Settings: demo + prompt-api absent from the provider picker",
       "pass": true
     },
     {
       "name": "Settings: provider restored to demo",
+      "pass": true
+    },
+    {
+      "name": "Settings: demo still resolvable via the SW (testing only)",
       "pass": true
     },
     {
@@ -395,6 +399,58 @@
       "pass": true
     },
     {
+      "name": "mgmt: orchestrator exposes the management tool suite",
+      "pass": true
+    },
+    {
+      "name": "mgmt: create_agent returned ok",
+      "pass": true
+    },
+    {
+      "name": "mgmt: agent.directory lists it with enrollment state",
+      "pass": true
+    },
+    {
+      "name": "mgmt: get_agent inspects it (tools + memory keys)",
+      "pass": true
+    },
+    {
+      "name": "mgmt: update_agent changed the name",
+      "pass": true
+    },
+    {
+      "name": "mgmt: create_asset succeeded (hub asset)",
+      "pass": true
+    },
+    {
+      "name": "mgmt: list_assets lists the asset (no content)",
+      "pass": true
+    },
+    {
+      "name": "mgmt: get_asset round-trips content",
+      "pass": true
+    },
+    {
+      "name": "mgmt: update_asset patched the asset",
+      "pass": true
+    },
+    {
+      "name": "mgmt: delete_asset removed it",
+      "pass": true
+    },
+    {
+      "name": "mgmt: asset gone after delete",
+      "pass": true
+    },
+    {
+      "name": "mgmt: delete_agent removed the agent",
+      "pass": true
+    },
+    {
+      "name": "mgmt: agent gone from the directory after delete",
+      "pass": true
+    },
+    {
       "name": "no service-worker console errors",
       "pass": true
     },
@@ -434,13 +490,13 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "d3098fb8e13461f10895be39fa3ff9a660a1c6ec52e995b8cc72971334c3ecdc",
-      "bytes": 81155
+      "sha256": "b9488dadf931decd761d0aa0edddea81782cdf10449027633d3d27e93663b241",
+      "bytes": 58274
     },
     {
       "name": "options-driven.png",
-      "sha256": "d1584c565f22afac22b255b2bab3b60b596b12b3bac00e4ea3a7034b985061d7",
-      "bytes": 224823
+      "sha256": "075dacfbd66c3f9b626fc5c937ca87a43ee1cd54a0c21106aeb96b06f6164f90",
+      "bytes": 231145
     }
   ]
 }

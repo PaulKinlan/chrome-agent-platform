@@ -1,6 +1,6 @@
 // fixtures/webmcp-server.ts — a tiny static server for the WebMCP discovery
 // fixture (serves fixtures/webmcp-fixture.html on http://127.0.0.1:8934/).
-// Used by scripts/webmcp-integration.ts so the real-browser discovery test has
+// Used by scripts/webmcp-acceptance.ts so the production-path acceptance has
 // a REAL page (declared WebMCP tools + an inferred window function) to drive.
 //
 //   deno run -A fixtures/webmcp-server.ts

@@ -352,9 +352,18 @@ async function renderEnroll() {
     }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     input.value = "";
     if (res?.ok) {
-      saveFlash(`Enrolled ${origin}${res.scriptsRegistered ? " (scripts registered)" : ""}.`);
+      // Surface the injection outcome honestly — a partial injection (one
+      // world failed in an open tab) is never reported as plain success.
+      const inj = res.injection;
+      let suffix = " (scripts registered)";
+      if (inj && (inj.targets ?? 0) > 0) {
+        suffix = ` (injected into ${inj.ready?.length ?? 0}/${inj.targets} open tab(s))`;
+        if (res.injectionPartial) suffix += " — a tab only partially injected; reload it";
+      }
+      saveFlash(`Enrolled ${origin}${suffix}.`);
       renderData();
       renderEnrolledSites();
+      renderWebmcpStatus();
     } else {
       saveFlash("Enroll failed: " + (res?.error ?? "unknown"));
     }
@@ -397,11 +406,92 @@ async function renderEnrolledSites() {
       }
       renderEnrolledSites();
       renderData();
+      renderWebmcpStatus();
     });
     row.appendChild(disenroll);
 
     el.appendChild(row);
   }
+}
+
+// ── WebMCP discovery status + diagnostics toggle (Paul 2026-08-18) ──
+// A small, honest status surface: when did discovery last run, for which origin,
+// what is the script/injection state, and how many tools were found — plus the
+// diagnostics toggle that gates the [WebMCP] content-script console logs.
+let webmcpDiagWired = false;
+async function renderWebmcpStatus() {
+  const body = $("#webmcp-status-body");
+  const toggle = $("#webmcp-diagnostics");
+  if (!body || !toggle) return;
+
+  if (!webmcpDiagWired) {
+    webmcpDiagWired = true;
+    toggle.addEventListener("toggle", async (e) => {
+      const checked = e.detail.checked === true;
+      await chrome.runtime
+        .sendMessage({ type: "webmcp.diagnostics.set", enabled: checked })
+        .catch(() => {});
+      saveFlash(checked ? "WebMCP diagnostics logs enabled." : "WebMCP diagnostics logs disabled.");
+    });
+  }
+  let diag = { enabled: false };
+  try { diag = await chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }); } catch { /* SW not ready */ }
+  toggle.checked = diag?.enabled === true;
+
+  const status = await chrome.runtime
+    .sendMessage({ type: "webmcp.status" })
+    .catch(() => null);
+  body.replaceChildren();
+  const s = status?.status;
+  if (!s) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No discovery yet — enroll a site above to scan it for WebMCP tools.";
+    body.appendChild(p);
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "webmcp-row";
+  // The record separates the SW-ATTESTED script lifecycle (registration /
+  // injection) from the PAGE-REPORTED tool counts — render both, labeled.
+  const lines = [
+    `Origin: ${s.origin}`,
+    `Script status (attested): ${s.scriptStatus}${s.scriptStatusAt ? " · " + new Date(s.scriptStatusAt).toLocaleString() : ""}`,
+  ];
+  if (s.injection && (s.injection.targets ?? 0) > 0) {
+    lines.push(
+      `Injection: ${s.injection.ready?.length ?? 0}/${s.injection.targets} tab(s) ready` +
+        ((s.injection.partial?.length ?? 0) > 0 ? ` · ${s.injection.partial.length} partial` : "") +
+        ((s.injection.failed?.length ?? 0) > 0 ? ` · ${s.injection.failed.length} failed` : ""),
+    );
+  }
+  if (s.lastReport) {
+    const r = s.lastReport;
+    lines.push(
+      `Page report: ${r.toolCount ?? 0} tools (${r.declaredCount ?? 0} declared, ${r.inferredCount ?? 0} inferred) · ${new Date(r.at).toLocaleString()}`,
+    );
+  } else {
+    lines.push("Page report: none yet");
+  }
+  for (const line of lines) {
+    const p = document.createElement("div");
+    p.className = "webmcp-line";
+    p.textContent = line; // textContent — the origin/status are untrusted data
+    row.appendChild(p);
+  }
+  if (Array.isArray(s.lastReport?.toolNames) && s.lastReport.toolNames.length) {
+    const names = document.createElement("div");
+    names.className = "webmcp-tools muted";
+    names.textContent = s.lastReport.toolNames.join(", ");
+    row.appendChild(names);
+  }
+  if (s.scriptError) {
+    const err = document.createElement("div");
+    err.className = "webmcp-line error";
+    err.textContent = "Error: " + s.scriptError;
+    row.appendChild(err);
+  }
+  body.appendChild(row);
 }
 
 // ── Agents ──
@@ -1534,6 +1624,7 @@ await renderUsage();
 await renderData();
 await renderMemoryExplorer();
 await renderEnrolledSites();
+await renderWebmcpStatus();
 
 // The version in the footer (chaos-style semantic versioning — read from the
 // manifest so it always matches the installed build).

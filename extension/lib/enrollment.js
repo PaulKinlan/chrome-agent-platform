@@ -13,6 +13,10 @@
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvSet } from "./kv.js";
 
+// content/bridge-auth.js runs FIRST in each world: it defines the shared MAC
+// primitive (globalThis.CairnBridgeAuth) that authenticates every MAIN↔isolated
+// bridge message (the nonce never transits the broadcast postMessage channel).
+const BRIDGE_AUTH_JS = "content/bridge-auth.js";
 const MAIN_WORLD_JS = "content/main-world.js";
 const BRIDGE_JS = "content/content-script.js";
 
@@ -119,7 +123,7 @@ export async function ensureOriginScriptsRegistered(origin) {
     toRegister.push({
       id: scriptId(canonical, "main"),
       matches,
-      js: [MAIN_WORLD_JS],
+      js: [BRIDGE_AUTH_JS, MAIN_WORLD_JS],
       runAt: "document_start",
       world: "MAIN",
       allFrames: false,
@@ -129,7 +133,7 @@ export async function ensureOriginScriptsRegistered(origin) {
     toRegister.push({
       id: scriptId(canonical, "bridge"),
       matches,
-      js: [BRIDGE_JS],
+      js: [BRIDGE_AUTH_JS, BRIDGE_JS],
       runAt: "document_idle",
       world: "ISOLATED",
       allFrames: false,

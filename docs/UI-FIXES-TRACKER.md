@@ -4,6 +4,15 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 **Reconciled 2026-08-17 against the current code (HEAD 431bf59).** Items below are grouped; each is verified against the committed code, not the worker's claim.
 
+## Open
+
+### WebMCP discovery (Paul 2026-08-18 — "where is the content script?")
+- **Paul's exact observable failure:** "Where is the WebMCP content script that looks at the page and determines which functions/tools it can register? It is not visible in Chrome DevTools Sources and there are no logs proving it runs."
+- **Round-28 review BLOCK:** the first fix's browser evidence bypassed the implementation (Runtime.evaluate'd source, direct route calls), and the review found a cancellation regression, no post-reload generation sync, an NTP-selecting "Discover this page", blind window.* inference, forgeable status, duplicate listeners on re-enroll, stale tools never removed, and partial injection reported as success. The premature "Done" wording was reverted — this item stayed open.
+- **Round-30 correction:** production acceptance now enters extension-only `tools.invoke` and the real `invokeSiteTool`; enrollment binds the picker-approved tab and active `documentId`; SW-issued navigation epochs reject other/stale same-origin documents; immutable cancellation epochs prevent post-resume late results; cross-world transport is MAC/replay-fenced with an out-of-band key; repeated injection is function-scoped so singleton teardown actually runs; and diagnostics redact page exception bodies. MAIN remains page-controlled and is not described as attested.
+- **Evidence status:** prior 32/32 artifacts are superseded and do not prove this correction. Generate exact-clean-commit browser evidence outside the source tree with `WEBMCP_ARTIFACT_DIR=… deno run -A scripts/webmcp-acceptance.ts`; independent re-review is still required.
+- **Residual (why this is still OPEN):** the OS-level host-permission prompt cannot be automated headless (auto-denied; no display here). Complete the attestation with `deno run -A scripts/webmcp-acceptance.ts --headed` + the two manual Allow clicks — the executable macro in docs/WEBMCP-ACCEPTANCE.md.
+
 ## Done (verified in the committed code)
 
 ### Settings
@@ -69,8 +78,6 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 1. **Browser-control toggle/grant persistence** — Paul flagged "STILL not working" after the item-51 fix; re-verify the toggle stays ON + the grant persists across a reload in the real extension, and fix the actual cause. (The grant-storage read/write is present; the persistence needs a real-browser proof.)
 
 2. **Remove the Chrome Prompt API (Gemini nano) + Demo (local) from the settings provider picker** — both are for internal/testing use only. The picker filtering is IN FLIGHT (uncommitted); verify it lands + only the real chat providers show.
-
-3. **WebMCP discovery** — the site agents still don't pick up the inferred/known WebMCP tools (Paul: not working). IN FLIGHT (scripts/webmcp-diag.ts); needs the fix + a real-browser integration test (a WebMCP page → the tools discovered), not a mock.
 
 ## Evidence
 - `deno test -A tests/` — 374 passed (incl. 50 system-prompt tests + 7 Prompt API tests: protected-last full-skill composition, exact streaming capture, mandatory CAS/strict quarantine/coordinated lifecycle, FIPS/RFC vectors, malformed-Unicode contracts, versioned key rotation, and run-bound attestation over the real agent core).

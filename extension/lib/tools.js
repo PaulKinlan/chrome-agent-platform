@@ -69,6 +69,7 @@ export function describeTool(t) {
 
 /** Bound a single descriptor; returns null when it violates the bounds. */
 function boundTool(t) {
+  if (!t || typeof t !== "object") return null; // hostile/garbage entries never crash the fold
   const name = String(t.name ?? "");
   const description = String(t.description ?? "");
   const schema = t.inputSchema ?? { type: "object", properties: {} };
@@ -106,6 +107,41 @@ export async function upsertTools(origin, tools) {
   }
   let total = 0;
   next = next.filter((t) => {
+    let b;
+    try {
+      b = JSON.stringify(t).length;
+    } catch {
+      b = TOOL_BOUNDS.maxTotalBytes + 1;
+    }
+    total += b;
+    return total <= TOOL_BOUNDS.maxTotalBytes;
+  });
+  await store.setTrusted(DIR_KEY, next);
+  return next;
+}
+
+/** A COMPLETE discovery snapshot REPLACES the origin's discovered tool set
+ * (declared + inferred). A tool that disappeared from the page is REMOVED from
+ * the directory — a removed page tool must not linger listed/approvable
+ * forever — and an EMPTY snapshot is a valid "this page now exposes nothing"
+ * replacement that clears the discovered set. Only the page-discovery sources
+ * are accepted (a snapshot never writes linked/other-source entries). Returns
+ * the bounded, accepted directory. */
+export async function replaceTools(origin, tools) {
+  const store = siteMemory(origin);
+  const seen = new Set();
+  const accepted = [];
+  for (const t of Array.isArray(tools) ? tools : []) {
+    const bounded = boundTool(t);
+    if (!bounded) continue; // reject (not silently accept) out-of-bounds descriptors
+    if (bounded.source !== "declared" && bounded.source !== "inferred") continue;
+    if (seen.has(bounded.name)) continue; // first descriptor for a name wins
+    seen.add(bounded.name);
+    accepted.push(bounded);
+    if (accepted.length >= TOOL_BOUNDS.maxToolsPerOrigin) break;
+  }
+  let total = 0;
+  const next = accepted.filter((t) => {
     let b;
     try {
       b = JSON.stringify(t).length;

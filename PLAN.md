@@ -46,12 +46,14 @@ what's landed vs what's next.
 - [x] The layered, versioned system-prompt architecture (lib/system-prompts.js — the single composition authority for every run type; lib/runtime-policy.js — the single authoritative protected-constraints source, enforced LAST after full referenced-skill bodies even for foreign caller prompts; Settings → Advanced with the built-in viewer, per-scope append/prepend/replace customization, the built-in-updated keep/reset/diff flow, mandatory mutation CAS + strict store quarantine + coordinated named-agent lifecycle, the context-aware preview, exact generate/stream provider-boundary capture, and unique-execution keyed attestations with versioned rotation/ephemeral labelling) — docs/SYSTEM-PROMPTS.md
 - [x] Unified agent access (CAP-FB-20260818-AGENT-ACCESS-01) — canonical named:/background:/site: refs; redacted, revisioned `agent.registry` + lifecycle broadcasts; the ONE shared `<agent-picker>` for the + menu and strict-position `/agent`; stale/request/history race fencing; side-panel browse/history/task list with no iframe/stub; sender-authenticated, owner-gesture-gated real-tab navigation — integrated 2026-08-18 (`scripts/agent-access-journeys.ts`: 88 fixed real-CDP checks + external commit-bound manifest/screenshots)
 
+- [ ] **WebMCP discovery observability (Paul 2026-08-18) — OPEN (round-30 correction awaiting evidence/re-review).** Earlier rounds fixed startup sync, explicit tab picking, positive-opt-in `window.webmcpExpose`, source-threaded dispatch, strict schemas, singleton teardown, replacement snapshots, injection readiness, and attested-vs-page-reported status separation. Round 30 still BLOCKED completion: acceptance bypassed `invokeSiteTool`; invocation lost the approved tab; snapshots were not ordered by real document identity; cancellation fencing expired; the bridge nonce crossed an observable channel; diagnostics logged raw page errors; and retained evidence did not identify the tested bytes. The current source addresses those blockers with production `tools.invoke` → `invokeSiteTool`, exact approved tab + active `documentId`, SW-issued navigation epochs, immutable cancellation epochs, MAC/replay-fenced cross-world transport with the key delivered out-of-band, and diagnostics redaction. MAIN remains explicitly untrusted: page-owned tools/results are never described as attested. **No completion claim is made here:** exact-clean-commit browser evidence must be generated externally (`WEBMCP_ARTIFACT_DIR=… deno run -A scripts/webmcp-acceptance.ts`) and independently reviewed. The OS permission prompts additionally remain a headed manual gate (`--headed`; docs/WEBMCP-ACCEPTANCE.md).
+
 ## In flight (2026-08-17)
-- (none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)
+- **WebMCP discovery correction + attestation** — implementation is awaiting exact-clean-commit automated evidence, independent re-review, and the headed permission-prompt gesture (see the OPEN item above + docs/WEBMCP-ACCEPTANCE.md).
+- (otherwise none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)
 
 ## Remaining work (the proactive backlog)
 - Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only) — see the task backlog.
-- Fix the WebMCP discovery (the inferred + known endpoints) + a real-browser integration test.
 - The screenshot / media-capture permission flows (ask-on-need, not fail).
 - The UI polish + the review backlog (see docs/UI-FIXES-TRACKER.md + docs/KNOWN-ISSUES.md).
 - The extension rename/packaging (still "Chrome Agent Platform").
@@ -69,5 +71,4 @@ Artifacts are origin-keyed (per-agent) with a master index. Types: generated pag
 
 ## Task backlog (Paul 2026-08-17)
 - Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only).
-- Fix the WebMCP discovery (the inferred + known endpoints) + integration tests.
 - (The UI-FIXES-TRACKER.md has the full UI batch.)
