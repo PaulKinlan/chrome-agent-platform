@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.76] — 2026-08-18
+- docs(ui-fixes): record the sol-review fix commit hash in the tracker
+
 ## [0.2.75] — 2026-08-18
 - fix(tool-calls): sol-review blockers — working copy buttons, request-path finalization, paired persisted replay, safe public appendTool
 
