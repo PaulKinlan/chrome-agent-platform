@@ -16,9 +16,10 @@
     }
   ],
   "tests": {
-    "test:ui": "42/42 pass",
+    "test:ui": "41/41 pass",
     "test:components": "34/34 pass",
-    "npm test (deno test -A tests/)": "323/323 pass"
+    "npm test (deno test -A tests/)": "322/322 pass",
+    "build assertion": "no test fault seam in the production bundle (kv.fault / __setKvFaultForTest / cap-kv-fault-test absent from dist)"
   },
   "verified": [
     "exactly five rail actions exist + share one centre (≤2px spread) + uniform 34×34",
@@ -27,11 +28,14 @@
     "REAL thread via production UI: a demo-provider task run creates a thread; clicking the sidebar thread opens the surface; a DENSE elementFromPoint grid across the 44×44 nub + a real pointer toggle work with the thread overlay open (no forced hidden)",
     "Enter + Space toggle; aria-expanded/label/title track; Enter focuses the nub first",
     "collapsed state persists across reload after an awaited write flush",
-    "durability matrix: permissionless profile → 'session'; token-gated kv.fault seam (fail-closed) → 'error'; the kvSet mode return (durable/session) is unit-tested + the sidebar exposes data-durability",
+    "kvSet reports durable vs session mode (unit-tested); the sidebar exposes data-durability; permissionless profile → 'session'",
     "RTL nub centres on the rail's inner (left) boundary + swaps the border to the inner edge",
     "rapid double-click returns to the deterministic prior state + the View Transition.finished is awaited",
     "recent-activity renders a journal entry via the production activity.list path (memory.set + reload)",
     "narrow (500px) in-bounds, prefers-reduced-motion disables the transition, dark theme renders a visible border"
   ],
-  "note": "A storage-GRANTED round-trip (durable across a SW restart) still requires the optional storage permission, which the headless profile does not grant (chrome.permissions.request needs a headed user gesture); the durable write path itself is unit-tested (tests/kv.test.ts: kvSet reports 'durable' when the backend is present+healthy)."
+  "limitations": [
+    "A storage-GRANTED durable round-trip across a SERVICE-WORKER restart is NOT exercised by the integration harness: the optional storage permission requires a headed owner gesture (chrome.permissions.request) that a headless profile cannot grant. The durable WRITE path itself is unit-tested (kvSet returns 'durable' when the backend is present + healthy, and throws StorageBackendError when the backend write fails — tests/kv.test.ts).",
+    "The sidebar's 'error' durability path is exercised at the UNIT level (kvSet rejects on a backend failure), not through a production fault route: the fault seam is deliberately ABSENT from the shipped bundle (build.mjs asserts kv.fault / __setKvFaultForTest / cap-kv-fault-test are not in the dist)."
+  ]
 }

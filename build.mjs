@@ -89,6 +89,19 @@ if (remaining > 0) {
 }
 console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Function-constructor probe site(s); ${remaining} remaining)`);
 
+// SECURITY/build assertion: the TEST-ONLY KV fault seam must never reach the
+// shipped bundle. The integration harness injects a backend failure via a
+// test-only mechanism, never a production route, so the token, the `kv.fault`
+// route, and the `__setKvFaultForTest` control must be ABSENT from the dist.
+const FORBIDDEN_SEAMS = ["__setKvFaultForTest", "kv.fault", "cap-kv-fault-test", "injected test fault"];
+const distText = await readFile(OUT, "utf8");
+for (const needle of FORBIDDEN_SEAMS) {
+  if (distText.includes(needle)) {
+    throw new Error(`production bundle contains the forbidden test seam \`${needle}\` — the fault injection must live only in the unit-test/harness layer`);
+  }
+}
+console.log("build assertion: no test fault seam in the production bundle");
+
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The
 // docs/ copies are committed too so the GitHub Pages showcase works standalone.

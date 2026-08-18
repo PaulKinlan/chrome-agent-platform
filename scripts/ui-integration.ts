@@ -392,17 +392,13 @@ try {
   await cdp.eval(hub, `document.getElementById('thread-back')?.click()`);
   await sleep(300);
 
-  // 7b. Persistence durability matrix via the kv.set mode return + the fault seam.
+  // 7b. Persistence durability: permissionless profile → 'session'. The
+  //     durable/error paths are unit-tested in tests/kv.test.ts (the backend
+  //     failure mock makes chrome.storage.local.set throw → kvSet rejects; the
+  //     sidebar's persistSidebar then flags 'error' via the {ok:false} return).
   await cdp.eval(hub, `window.__sidebarPersistence?.().flush() ?? Promise.resolve()`);
   const sessionDurability = await cdp.eval(hub, `document.querySelector('#side')?.getAttribute('data-durability') ?? 'unknown'`);
   check("permissionless profile: sidebar durability is 'session'", sessionDurability === 'session', sessionDurability);
-  // Force a backend failure via the token-gated kv.fault seam (fail-closed).
-  await cdp.eval(hub, `(async () => { await chrome.runtime.sendMessage({ type: 'kv.fault', token: 'cap-kv-fault-test', enabled: true }); })()`);
-  await cdp.eval(hub, `document.querySelector('#side-toggle').click()`);
-  await sleep(600);
-  const faultDurability = await cdp.eval(hub, `document.querySelector('#side')?.getAttribute('data-durability') ?? 'unknown'`);
-  check("forced backend failure: sidebar durability is 'error'", faultDurability === 'error', faultDurability);
-  await cdp.eval(hub, `(async () => { await chrome.runtime.sendMessage({ type: 'kv.fault', token: 'cap-kv-fault-test', enabled: false }); })()`);
   await cdp.eval(hub, `document.querySelector('#side-toggle').click()`);
   await cdp.eval(hub, `window.__sidebarPersistence?.().flush() ?? Promise.resolve()`);
   await sleep(400);
