@@ -343,6 +343,12 @@ export function createAgent({
   // provider/model identity. NO prompt content crosses the sink.
   let attestationCb = null;
   let lastAttestedDigest = null; // dedupe: the system message is stable per run
+  // The ACTIVE run's full system prompt (the construction composition plus any
+  // per-run skills inserted before the protected block). Runs of an agent are
+  // serialized (the per-worker runQueue / the SW runMutex), so this mutable
+  // binding always names the CURRENT run's composition — the attestation
+  // compares the wire message against EXACTLY what this run was built with.
+  let activeSystemPrompt = null;
   const emitAttestation = (options) => {
     if (!attestationCb) return;
     try {
@@ -351,6 +357,7 @@ export function createAgent({
       const digest = sha256Hex(sent);
       if (digest === lastAttestedDigest) return;
       lastAttestedDigest = digest;
+      const composed = activeSystemPrompt ?? systemPrompt;
       attestationCb({
         agentId: id,
         provider: model.providerName,
@@ -358,11 +365,11 @@ export function createAgent({
         // The exact provider-bound system message (digest + bytes only).
         digest,
         bytes: utf8ByteLength(sent),
-        // The platform composition this agent was built with, and whether the
+        // The platform composition this run was built with, and whether the
         // wire message EMBEDS it byte-for-byte as its prefix.
-        composedDigest: sha256Hex(systemPrompt),
-        composedBytes: utf8ByteLength(systemPrompt),
-        prefixMatch: sent.startsWith(systemPrompt),
+        composedDigest: sha256Hex(composed),
+        composedBytes: utf8ByteLength(composed),
+        prefixMatch: sent.startsWith(composed),
         at: Date.now(),
       });
     } catch { /* attestation is telemetry — never break a run */ }
@@ -394,14 +401,21 @@ export function createAgent({
   // protected constraints LAST); any caller-supplied skills are inserted
   // ahead of the protected block by the composition authority — never
   // concatenated after it, so a mutable/site-origin skill can never override
-  // the runtime policy.
+  // the runtime policy. appendSkillsLayer is THE agent boundary: it also
+  // appends the protected block to a FOREIGN prompt that never carried one,
+  // so every caller's system message ends with the runtime policy.
   const systemPrompt = appendSkillsLayer(system, skills);
 
-  const agent = agentDoCreateAgent({
+  // The agent-do agent builder, parameterized by the system prompt so a run
+  // carrying per-run skills (a /skill:<id> reference resolved for THIS run)
+  // gets a FRESH agent whose system prompt recomposes those full skill bodies
+  // BEFORE the protected block — the composition stays the single authority
+  // and the protected layer is still structurally last.
+  const makeAgent = (sysPrompt) => agentDoCreateAgent({
     id,
     name,
     model: boundModel,
-    systemPrompt,
+    systemPrompt: sysPrompt,
     tools: allTools,
     maxIterations,
     usage: { pricing: MODEL_PRICING },
@@ -447,6 +461,9 @@ export function createAgent({
     },
   });
 
+  // The shared agent (no per-run skills — the common case).
+  const agent = makeAgent(systemPrompt);
+
   return {
     id,
     name,
@@ -460,8 +477,12 @@ export function createAgent({
     // captured at delegation start. The run + its worker commits revalidate THAT
     // generation (delete→re-enroll ABA), and abort() before the run prevents the
     // start (the check→start gap where agent-do's own controller is null until
-    // run() begins).
-    run: async (task, context, history, runGen) => {
+    // run() begins). The optional FIFTH `runSkills` argument carries skills
+    // resolved for THIS run only (e.g. /skill:<id> references): their FULL
+    // prompt bodies recompose into the system prompt BEFORE the protected
+    // block (a fresh agent for this run), so referenced-skill instructions
+    // never sit after the runtime policy.
+    run: async (task, context, history, runGen, runSkills) => {
       // Serialize the run behind any prior run of THIS worker (see runQueue above).
       // `execute` carries the full original body; the queue always advances even
       // if a run rejects, so a failed run can never poison later runs.
@@ -488,9 +509,18 @@ export function createAgent({
       // cancels the model loop (agent-do's own abort() only works after its run()
       // started). The listener is removed in finally so a post-run abort can
       // never leak into a queued next run (the round-16 cross-run abort blocker).
+      // A run carrying per-run skills runs on a FRESH agent whose system prompt
+      // recomposes those skills before the protected block.
+      const hasRunSkills = Array.isArray(runSkills) && runSkills.length > 0;
+      const runAgent = hasRunSkills
+        ? makeAgent(appendSkillsLayer(system, [...(skills ?? []), ...runSkills]))
+        : agent;
+      activeSystemPrompt = hasRunSkills
+        ? appendSkillsLayer(system, [...(skills ?? []), ...runSkills])
+        : systemPrompt;
       const onAbort = () => {
         try {
-          agent.abort();
+          runAgent.abort();
         } catch { /* no active run */ }
       };
       controller.signal.addEventListener("abort", onAbort);
@@ -506,7 +536,7 @@ export function createAgent({
             return { error: "origin re-enrolled before run — task not started" };
           }
         }
-        const result = await agent.run(task, context, history);
+        const result = await runAgent.run(task, context, history);
         // Post-run generation revalidation: a re-enroll DURING the model loop
         // must discard the result rather than return it to the caller under a
         // stale enrollment (the round-24 finding — the provider path had no
@@ -521,6 +551,7 @@ export function createAgent({
       } finally {
         controller.signal.removeEventListener("abort", onAbort);
         activeRun = null;
+        activeSystemPrompt = null;
       }
       };
       const result = runQueue.then(execute, execute);
@@ -683,11 +714,13 @@ export function createOrchestrator({
   return {
     master,
     workers: workerAgents,
-    async run(task, context, history) {
+    async run(task, context, history, runSkills) {
       // Solo mode REUSES the master agent (which carries the non-delegation
       // browser/management tools); it must NOT build a fresh agent that loses
       // those capabilities. Multi-agent mode adds the delegate tools on top.
-      return await master.run(task, context, history);
+      // `runSkills` (per-run /skill:<id> bodies) are threaded into the
+      // master's run so they recompose BEFORE the protected block.
+      return await master.run(task, context, history, undefined, runSkills);
     },
     abort() {
       master.abort();

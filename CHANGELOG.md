@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.75] — 2026-08-18
+- fix(system-prompts): close independent review blockers
+
 ## [0.2.74] — 2026-08-18
 - fix(system-prompts): the review-blocker correction — one authoritative runtime policy + run-bound attestation + hardened persistence
 

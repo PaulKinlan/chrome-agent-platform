@@ -122,10 +122,12 @@ export const PROMPT_REGISTRY = [
   {
     id: "cap.hub.master",
     title: "Hub agent operating manual",
-    // 1.1.0: the runtime-security statements moved OUT of the editable base
-    // into lib/runtime-policy.js (the protected layer now carries them).
-    version: "1.1.0",
-    release: "0.2.74",
+    // 1.2.0: the remaining editable permission/origin SEMANTICS (grant
+    // semantics, memory-isolation claims, the capability-request behaviour)
+    // moved OUT of this replaceable base — the protected runtime policy is
+    // the sole carrier of security semantics.
+    version: "1.2.0",
+    release: "0.2.75",
     protected: false,
     content: MASTER_SKILL,
   },
@@ -264,8 +266,14 @@ function validateStoredRecord(rec) {
 
 /** Read + validate the persisted store. Returns
  * { revision, scopes, invalid: [{scope, reason, record}] }. Legacy shapes
- * migrate: a plain scope→record map (the pre-versioned format) reads as
- * revision 0; anything unrecognized reads as EMPTY + quarantined. */
+ * migrate: a plain scope→record map with NO version envelope (the
+ * pre-versioned format) reads as revision 0. STRICT store-level validation:
+ * an unrecognized shape — including a FUTURE/foreign versioned envelope
+ * (a `version` that is not STORE_VERSION, or a malformed `scopes`) — is
+ * NEVER treated as a legacy map (its `version`/`revision`/`scopes` fields
+ * would otherwise be read as scope keys and silently destroyed on the next
+ * write). It reads as EMPTY and the COMPLETE object is quarantined intact
+ * (visible + recoverable), fail-closed. */
 async function readStore() {
   const s = await kvGet(PROMPT_OVERRIDES_KEY);
   const raw = s[PROMPT_OVERRIDES_KEY];
@@ -279,11 +287,17 @@ async function readStore() {
   ) {
     revision = Number.isSafeInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0;
     scopesRaw = raw.scopes;
-  } else if (typeof raw === "object" && !Array.isArray(raw)) {
-    // Legacy: a plain scope→record map (pre-versioned). Migrate on next write.
+  } else if (
+    typeof raw === "object" && !Array.isArray(raw) &&
+    raw.version === undefined && raw.scopes === undefined && raw.revision === undefined
+  ) {
+    // Legacy: a plain scope→record map (pre-versioned, no envelope markers).
+    // Migrate on next write.
     scopesRaw = raw;
   } else {
-    store.invalid.push({ scope: "(store)", reason: "unrecognized store shape", record: null });
+    // Unknown store shape: a future/foreign versioned envelope, a malformed
+    // versioned store, or junk. Quarantine the COMPLETE object verbatim.
+    store.invalid.push({ scope: "(store)", reason: "unrecognized store shape", record: raw ?? null });
     return store;
   }
   store.revision = revision;
@@ -398,28 +412,45 @@ export async function getPromptOverride(scope, { registry } = {}) {
 
 /** Create/update the override for a scope, stamped with the CURRENT base
  * version/hash/snapshot. Options:
- *   expectedRevision — CAS guard: when non-null, the write is REJECTED with
- *     a conflict error unless the store's current revision matches (two
- *     Settings windows can never silently last-write-wins).
+ *   expectedRevision — MANDATORY CAS guard (a safe integer): the write is
+ *     REJECTED unless the store's current revision matches exactly. Every
+ *     mutation of the prompt store is compare-and-swap — a caller describes
+ *     the scope first (describePrompt returns the revision) and saves against
+ *     that revision, so two Settings windows (or a stale banner) can never
+ *     silently last-write-wins. There is no unguarded write path.
  *   agentExists — async (slug) => boolean: agent:<slug> scopes are rejected
- *     when the named agent does not exist (no orphan overrides).
+ *     when the named agent does not exist (no orphan overrides). The check
+ *     runs INSIDE the overrides mutex (check+write are atomic w.r.t. every
+ *     other prompt-store mutation), and the service-worker route additionally
+ *     holds the named-agent registry lock across the whole call (lock order:
+ *     agents → overrides — the same order deleteNamedAgent uses), so an agent
+ *     deletion can never interleave between the existence check and the
+ *     override write (no orphan/ABA override).
  * Returns { ok, override, revision } or { ok:false, error, conflict? }. */
-export async function setPromptOverride(scope, input, { registry, expectedRevision = null, agentExists = null } = {}) {
+export async function setPromptOverride(scope, input, { registry, expectedRevision, agentExists = null } = {}) {
   const s = normalizeScope(scope);
   if (!s) return { ok: false, error: "unknown prompt scope" };
   const base = registryEntry(baseIdForScope(s), registry);
   if (!base) return { ok: false, error: "unknown base prompt for scope" };
   const clean = normalizeOverrideInput(input);
   if (!clean.ok) return clean;
-  if (s.startsWith("agent:") && typeof agentExists === "function") {
-    const exists = await agentExists(s.slice("agent:".length)).catch(() => false);
-    if (!exists) {
-      return { ok: false, error: `no named agent ${s.slice("agent:".length)} — create it first` };
-    }
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+    return {
+      ok: false,
+      error: "a store revision is required (expectedRevision) — describe the scope first, then save against that revision (compare-and-swap)",
+    };
   }
   return await withOverridesLock(async () => {
+    // The agent-existence check is INSIDE the lock: the check and the write
+    // are one atomic prompt-store mutation (see the docstring's lock order).
+    if (s.startsWith("agent:") && typeof agentExists === "function") {
+      const exists = await agentExists(s.slice("agent:".length)).catch(() => false);
+      if (!exists) {
+        return { ok: false, error: `no named agent ${s.slice("agent:".length)} — create it first` };
+      }
+    }
     const store = await readStore();
-    if (expectedRevision != null && expectedRevision !== store.revision) {
+    if (expectedRevision !== store.revision) {
       return {
         ok: false,
         conflict: true,
@@ -453,12 +484,36 @@ export async function setPromptOverride(scope, input, { registry, expectedRevisi
  * `target: "effective"` walks the inheritance chain and deletes the override
  * that ACTUALLY applies (the inherited hub record when an agent has none of
  * its own) — the release-update banner's Reset uses this so it never no-ops
- * against an inherited conflict. */
-export async function clearPromptOverride(scope, { target = "exact" } = {}) {
+ * against an inherited conflict.
+ * expectedRevision is MANDATORY (the same CAS discipline as setPromptOverride)
+ * — a stale window must never delete a newer write it hasn't seen. */
+export async function clearPromptOverride(scope, { target = "exact", expectedRevision } = {}) {
   const s = normalizeScope(scope);
   if (!s) return { ok: false, error: "unknown prompt scope" };
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+    return {
+      ok: false,
+      error: "a store revision is required (expectedRevision) — describe the scope first, then reset against that revision (compare-and-swap)",
+    };
+  }
+  return await clearPromptOverrideLocked(s, { target, expectedRevision });
+}
+
+/** The locked delete body shared by the route-facing CAS path and the
+ * internal lifecycle path (deleteAgentPromptOverride — part of the named-agent
+ * deletion transaction, which holds the agent registry lock and needs no UI
+ * revision). Returns { ok, revision } or a conflict. */
+async function clearPromptOverrideLocked(s, { target = "exact", expectedRevision = null } = {}) {
   return await withOverridesLock(async () => {
     const store = await readStore();
+    if (expectedRevision != null && expectedRevision !== store.revision) {
+      return {
+        ok: false,
+        conflict: true,
+        revision: store.revision,
+        error: "the customization changed elsewhere (another window?) — reloaded state required; retry the reset",
+      };
+    }
     if (target === "effective") {
       for (const candidate of scopeChain(s)) {
         if (store.scopes[candidate]) {
@@ -477,14 +532,30 @@ export async function clearPromptOverride(scope, { target = "exact" } = {}) {
 
 /** "Keep my customization" after a built-in update: re-stamp the EFFECTIVE
  * override (the inherited hub record when this scope has none of its own)
- * onto the CURRENT base (version/hash/snapshot) without touching mode/text. */
-export async function restampPromptOverride(scope, { registry } = {}) {
+ * onto the CURRENT base (version/hash/snapshot) without touching mode/text.
+ * expectedRevision is MANDATORY (the same CAS discipline as setPromptOverride)
+ * — a stale banner must never re-stamp over a newer write it hasn't seen. */
+export async function restampPromptOverride(scope, { registry, expectedRevision } = {}) {
   const s = normalizeScope(scope);
   if (!s) return { ok: false, error: "unknown prompt scope" };
   const base = registryEntry(baseIdForScope(s), registry);
   if (!base) return { ok: false, error: "unknown base prompt for scope" };
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+    return {
+      ok: false,
+      error: "a store revision is required (expectedRevision) — describe the scope first, then keep against that revision (compare-and-swap)",
+    };
+  }
   return await withOverridesLock(async () => {
     const store = await readStore();
+    if (expectedRevision !== store.revision) {
+      return {
+        ok: false,
+        conflict: true,
+        revision: store.revision,
+        error: "the customization changed elsewhere (another window?) — reloaded state required; retry the keep",
+      };
+    }
     let target = null;
     for (const candidate of scopeChain(s)) {
       if (store.scopes[candidate]) {
@@ -508,11 +579,16 @@ export async function restampPromptOverride(scope, { registry } = {}) {
 
 /** Delete a named agent's override when the agent is deleted (lifecycle
  * cleanup — a deleted agent must never leave an orphan override that a
- * later same-slug agent would silently inherit). Called by named-agents.js. */
+ * later same-slug agent would silently inherit). Called by named-agents.js
+ * INSIDE the agent-registry lock (lock order: agents → overrides), so the
+ * registry delete + this override delete are one coordinated transaction.
+ * This is the internal lifecycle path: it runs under the overrides mutex
+ * without a UI revision (no window holds a revision for a deleted agent),
+ * and a failure PROPAGATES to the caller (never silently swallowed). */
 export async function deleteAgentPromptOverride(slug) {
   const s = normalizeScope(`agent:${String(slug ?? "")}`);
   if (!s) return { ok: false, error: "invalid agent slug" };
-  return await clearPromptOverride(s);
+  return await clearPromptOverrideLocked(s, { target: "exact" });
 }
 
 /* ── Composition (the single authority) ─────────────────────────────────── */
@@ -655,25 +731,54 @@ export function baselineSystemPrompt(baseId, registry = PROMPT_REGISTRY) {
   return composeSystemPrompt({ baseId, registry }).text;
 }
 
+/** Render the boundary skills layer. Installed skills render as the
+ * name/description manifest (agent-do's buildSkillsPrompt shape); a skill
+ * carrying a full prompt body (a /skill:<id> reference resolved for THIS
+ * run) composes its FULL body — the instructions the model must actually
+ * follow, never a bare name the model could ignore. */
+function renderBoundarySkills(skills) {
+  const blocks = (skills ?? []).map((s) =>
+    s?.prompt != null && String(s.prompt).trim()
+      ? `## Skill: ${s.name}\n${String(s.prompt)}`
+      : `- ${s.name}: ${s.description ?? ""}`
+  );
+  if (!blocks.length) return "";
+  return `## Available skills\n${blocks.join("\n\n")}`;
+}
+
 /**
- * Append the per-run skills layer to an ALREADY-COMPOSED system prompt while
- * preserving the protected-last invariant (lib/agent.js uses this when a
- * caller supplies skills outside the composer): the skills text is inserted
- * BEFORE the trailing protected constraints block, never after it.
+ * THE agent-boundary enforcement of the protected-last invariant
+ * (lib/agent.js routes EVERY caller's system prompt through this): the
+ * skills text is inserted BEFORE the trailing protected constraints block,
+ * never after it — and a FOREIGN system prompt (not composed by
+ * composeSystemPrompt, so it carries no protected block) gets the protected
+ * runtime policy APPENDED as the final layer. Structurally: whatever text a
+ * caller hands the agent core, the model's system message ALWAYS ends with
+ * the immutable runtime policy, so no owner text, role, site-origin skill,
+ * or foreign prompt can override it with a later instruction.
  */
 export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY) {
   const sys = String(systemText ?? "");
-  const skillsText = buildSkillsPrompt(skills).trim();
-  if (!skillsText) return sys;
+  const skillsText = renderBoundarySkills(skills).trim();
   const constraints = registryEntry(CONSTRAINTS_ID, registry);
   const protectedText = constraints ? String(constraints.content ?? "") : "";
-  if (protectedText && sys.endsWith(protectedText)) {
-    const head = sys.slice(0, sys.length - protectedText.length).replace(/\s+$/, "");
-    return `${head}\n\n${skillsText}\n\n${protectedText}`;
+  let out = sys;
+  if (skillsText) {
+    if (protectedText && sys.endsWith(protectedText)) {
+      const head = sys.slice(0, sys.length - protectedText.length).replace(/\s+$/, "");
+      out = `${head}\n\n${skillsText}\n\n${protectedText}`;
+    } else {
+      // A prompt without a trailing protected block: skills append at the end
+      // (the protected block is then (re)asserted last below).
+      out = sys ? `${sys}\n\n${skillsText}` : skillsText;
+    }
   }
-  // A foreign system prompt (not composed here): no protected block to
-  // protect — append the skills at the end.
-  return sys ? `${sys}\n\n${skillsText}` : skillsText;
+  // The structural invariant: the protected runtime policy is ALWAYS the
+  // final layer — appended to a foreign prompt that never carried it.
+  if (protectedText && !out.endsWith(protectedText)) {
+    out = out ? `${out}\n\n${protectedText}` : protectedText;
+  }
+  return out;
 }
 
 /**
@@ -770,38 +875,150 @@ export async function describePrompt(scope, { role = "", skills = [], registry }
 
 /* ── Attestation (keyed receipts — parity proof without a public fingerprint) */
 
-let cachedAttestationKey = null;
+/* The per-install HMAC key lives under ATTESTATION_KEY_STORE as a VERSIONED
+ * envelope: { v: 1, current: { version, bytes, createdAt }, previous: [{version, bytes}] }.
+ *  - VERSIONED: every receipt carries the keyVersion it was computed with, so
+ *    a receipt always identifies its key epoch.
+ *  - ROTATABLE: rotateAttestationKey() issues a fresh key, bumps the version,
+ *    and retains a BOUNDED history of previous keys so older receipts remain
+ *    verifiable (never an unbounded key graveyard).
+ *  - DURABLE-OR-LABELLED: with the optional `storage` permission the key is
+ *    durable per install. Without it the key lives in the SW session map and
+ *    a restart silently generates another — so receipts computed with a
+ *    session key are LABELLED `ephemeral: true` (never implied durable).
+ *  - SECRET: key material is never exposed by any message route (the generic
+ *    kv.get route refuses/strips it; only HMAC receipts cross).
+ */
+const KEY_ENVELOPE_VERSION = 1;
+const MAX_PREVIOUS_KEYS = 4;
+
+let cachedAttestationKey = null; // { bytes, version, durable }
 let attestationKeyInFlight = null;
 
-/** The per-install attestation key (32 random bytes, generated once, stored
- * via kv, NEVER exposed by any message route). Receipts keyed with it prove
- * two platform-computed values are identical without publishing a stable
- * content fingerprint that could be dictionary-tested against guessed owner
- * text. Concurrent first calls share ONE generation (the in-flight promise),
- * so two callers can never cache different keys. */
-export function attestationKeyBytes() {
+function isKeyBytes(raw) {
+  return Array.isArray(raw) && raw.length === 32 &&
+    raw.every((n) => Number.isInteger(n) && n >= 0 && n < 256);
+}
+
+/** Parse a stored key envelope (strict). Returns
+ * { current: {version, bytes:[...]}, previous: [...] } or null. A LEGACY raw
+ * 32-byte array (the pre-versioned format) migrates to version 1. */
+function parseKeyEnvelope(raw) {
+  if (isKeyBytes(raw)) {
+    return { current: { version: 1, bytes: raw, createdAt: 0 }, previous: [] };
+  }
+  if (
+    raw && typeof raw === "object" && !Array.isArray(raw) &&
+    raw.v === KEY_ENVELOPE_VERSION &&
+    raw.current && Number.isSafeInteger(raw.current.version) &&
+    raw.current.version >= 1 && isKeyBytes(raw.current.bytes)
+  ) {
+    const previous = (Array.isArray(raw.previous) ? raw.previous : [])
+      .filter((p) => p && Number.isSafeInteger(p.version) && isKeyBytes(p.bytes))
+      .slice(-MAX_PREVIOUS_KEYS);
+    return {
+      current: {
+        version: raw.current.version,
+        bytes: raw.current.bytes,
+        createdAt: Number.isFinite(raw.current.createdAt) ? raw.current.createdAt : 0,
+      },
+      previous,
+    };
+  }
+  return null;
+}
+
+/** The current attestation key state: { bytes: Uint8Array, version, durable }.
+ * Concurrent first calls share ONE generation (the in-flight promise), so two
+ * callers can never cache different keys. */
+export function attestationKeyState() {
   if (cachedAttestationKey) return Promise.resolve(cachedAttestationKey);
   if (!attestationKeyInFlight) {
     attestationKeyInFlight = (async () => {
+      const durable = await storageAvailable().catch(() => false);
       const s = await kvGet(ATTESTATION_KEY_STORE);
-      const raw = s[ATTESTATION_KEY_STORE];
-      if (
-        Array.isArray(raw) && raw.length === 32 &&
-        raw.every((n) => Number.isInteger(n) && n >= 0 && n < 256)
-      ) {
-        cachedAttestationKey = new Uint8Array(raw);
-        return cachedAttestationKey;
+      let envelope = parseKeyEnvelope(s[ATTESTATION_KEY_STORE]);
+      if (!envelope) {
+        // First use (or an unparseable blob — NEVER reuse ambiguous key
+        // material): generate a fresh key. A corrupt envelope is replaced,
+        // not composed from.
+        const key = new Uint8Array(32);
+        globalThis.crypto.getRandomValues(key);
+        envelope = {
+          current: { version: 1, bytes: [...key], createdAt: Date.now() },
+          previous: [],
+        };
+        await kvSet({
+          [ATTESTATION_KEY_STORE]: { v: KEY_ENVELOPE_VERSION, ...envelope },
+        });
+      } else if (isKeyBytes(s[ATTESTATION_KEY_STORE])) {
+        // Legacy raw array → persist the migrated versioned envelope.
+        await kvSet({
+          [ATTESTATION_KEY_STORE]: { v: KEY_ENVELOPE_VERSION, ...envelope },
+        });
       }
-      const key = new Uint8Array(32);
-      globalThis.crypto.getRandomValues(key);
-      await kvSet({ [ATTESTATION_KEY_STORE]: [...key] });
-      cachedAttestationKey = key;
-      return key;
+      cachedAttestationKey = {
+        bytes: new Uint8Array(envelope.current.bytes),
+        version: envelope.current.version,
+        durable,
+      };
+      return cachedAttestationKey;
     })().finally(() => {
       attestationKeyInFlight = null;
     });
   }
   return attestationKeyInFlight;
+}
+
+/** The current attestation key bytes (32 random bytes, generated once per
+ * install, stored via kv, NEVER exposed by any message route). Receipts keyed
+ * with it prove two platform-computed values are identical without publishing
+ * a stable content fingerprint that could be dictionary-tested against guessed
+ * owner text. */
+export async function attestationKeyBytes() {
+  return (await attestationKeyState()).bytes;
+}
+
+/** A historical key by version (for verifying older receipts), or null. */
+export async function attestationKeyForVersion(version) {
+  const cur = await attestationKeyState();
+  if (cur.version === version) return cur.bytes;
+  const s = await kvGet(ATTESTATION_KEY_STORE);
+  const envelope = parseKeyEnvelope(s[ATTESTATION_KEY_STORE]);
+  const prev = envelope?.previous?.find((p) => p.version === version);
+  return prev ? new Uint8Array(prev.bytes) : null;
+}
+
+/** Deliberate key rotation (the owner-driven operation): issue a fresh key,
+ * bump the version, retain the outgoing key in the bounded previous-key
+ * history (older receipts stay verifiable), and re-cache. Returns
+ * { ok, version, durable }. */
+export async function rotateAttestationKey() {
+  // Serialize with first-use generation: wait out any in-flight establish.
+  await attestationKeyState();
+  const durable = await storageAvailable().catch(() => false);
+  const s = await kvGet(ATTESTATION_KEY_STORE);
+  const envelope = parseKeyEnvelope(s[ATTESTATION_KEY_STORE]) ?? {
+    current: { version: 0, bytes: null, createdAt: 0 },
+    previous: [],
+  };
+  const previous = [...envelope.previous];
+  if (envelope.current.bytes) {
+    previous.push({ version: envelope.current.version, bytes: envelope.current.bytes });
+  }
+  const key = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(key);
+  const next = {
+    current: { version: envelope.current.version + 1, bytes: [...key], createdAt: Date.now() },
+    previous: previous.slice(-MAX_PREVIOUS_KEYS),
+  };
+  await kvSet({ [ATTESTATION_KEY_STORE]: { v: KEY_ENVELOPE_VERSION, ...next } });
+  cachedAttestationKey = {
+    bytes: key,
+    version: next.current.version,
+    durable,
+  };
+  return { ok: true, version: next.current.version, durable };
 }
 
 /** Test hook: forget the cached attestation key (unit tests). */
@@ -816,9 +1033,20 @@ export function __resetAttestationKeyForTest() {
  * are identical WITHOUT the prompt text ever crossing the wire — and the
  * receipt is not a public stable fingerprint of (possibly low-entropy) owner
  * text. Also journaled (in summary form) at run start.
- */
-export async function attestComposition(composed, scope = "hub", { key } = {}) {
-  const k = key ?? await attestationKeyBytes();
+ *
+ * Every attestation identifies its key epoch (`keyVersion`) and the key's
+ * durability (`ephemeral: true` when the install holds no `storage`
+ * permission — a session key whose receipts never survive a restart, and are
+ * LABELLED as such rather than implied durable). There is deliberately NO
+ * unkeyed composition hash here: an unkeyed digest of owner-customized text
+ * is a public dictionary oracle, so the routed/journaled attestation carries
+ * keyed receipts ONLY. */
+export async function attestComposition(composed, scope = "hub", { key, keyVersion, ephemeral } = {}) {
+  // An explicit `key` (unit tests / external verification) skips the install
+  // key state entirely — and then keyVersion/ephemeral come from the CALLER,
+  // never from the (null) state.
+  const state = key ? null : await attestationKeyState();
+  const k = key ?? state.bytes;
   return {
     scope,
     receipt: hmacSha256Hex(k, composed.text ?? ""),
@@ -827,6 +1055,8 @@ export async function attestComposition(composed, scope = "hub", { key } = {}) {
     // over the digest the agent core captured, not the text).
     digestReceipt: hmacSha256Hex(k, composed.hash ?? sha256Hex(composed.text ?? "")),
     bytes: utf8ByteLength(composed.text ?? ""),
+    keyVersion: keyVersion ?? state?.version ?? null,
+    ephemeral: ephemeral ?? (state ? !state.durable : false),
     layers: (composed.layers ?? []).map((l) => ({
       id: l.id,
       label: l.label,

@@ -76,7 +76,7 @@ async function waitForPort(proc: Deno.ChildProcess): Promise<number> {
 class Cdp {
   ws: WebSocket;
   id = 0;
-  pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>();
+  pending = new Map<number, { res: (v: Record<string, any>) => void; rej: (e: Error) => void }>();
   errors: { sessionId: string; detail: string }[] = [];
   dialogs: { message: string; accepted: boolean }[] = [];
   // The JavaScript-dialog policy: the dirty-scope-switch confirm() must be
@@ -289,16 +289,19 @@ try {
   const defaultDigest = /Effective digest\s*([0-9a-f]{64})/.exec(effDefault?.meta ?? "")?.[1] ?? null;
   check("effective tab: the effective SHA-256 digest is displayed (64-hex)", Boolean(defaultDigest), effDefault?.meta);
 
-  // 5. Preview parity (default): the UI digest == the SW preview attestation's
-  // composition hash; the keyed receipt carries NO content.
+  // 5. Preview parity (default): the UI digest == the composition authority's
+  // describe digest. The attestation route deliberately exposes KEYED receipts
+  // only — never an unkeyed owner-composition fingerprint.
+  const authorityDefault = await send("prompt.describe", { scope: "hub" });
   const attestDefault = await send("prompt.attest", { scope: "hub" });
-  check("parity (default): the UI effective digest == the SW prompt.attest composition hash",
-    attestDefault?.ok === true && attestDefault?.compositionHash === defaultDigest,
-    { ui: defaultDigest, sw: attestDefault?.compositionHash });
-  check("attestation carries a KEYED receipt + NO prompt content",
+  check("parity (default): the UI effective digest == the SW composition authority digest",
+    authorityDefault?.ok === true && authorityDefault?.effective?.hash === defaultDigest,
+    { ui: defaultDigest, sw: authorityDefault?.effective?.hash });
+  check("attestation carries a KEYED receipt + NO prompt content/public fingerprint",
     attestDefault?.ok === true && /^[0-9a-f]{64}$/.test(attestDefault?.receipt ?? "") &&
+    !("compositionHash" in (attestDefault ?? {})) &&
     !JSON.stringify(attestDefault).includes("Hub Agent Operating Manual"),
-    { bytes: attestDefault?.bytes });
+    { bytes: attestDefault?.bytes, keyVersion: attestDefault?.keyVersion, ephemeral: attestDefault?.ephemeral });
 
   await screenshot(cdp, settings, "advanced-default");
 
@@ -419,10 +422,12 @@ try {
     effCustom.layers[2].text.includes("Safety constraints"),
     effCustom?.layers.map((l: { badge: string }) => l.badge));
   const customDigest = /Effective digest\s*([0-9a-f]{64})/.exec(effCustom?.meta ?? "")?.[1] ?? null;
+  const describeCustom = await send("prompt.describe", { scope: "hub" });
   const attestCustom = await send("prompt.attest", { scope: "hub" });
-  check("parity (customized): the UI effective digest == the SW prompt.attest composition hash",
-    attestCustom?.ok === true && attestCustom?.compositionHash === customDigest && customDigest !== defaultDigest,
-    { ui: customDigest, sw: attestCustom?.compositionHash, defaultDigest });
+  check("parity (customized): the UI effective digest == the SW composition authority digest",
+    describeCustom?.ok === true && describeCustom?.effective?.hash === customDigest && customDigest !== defaultDigest &&
+    attestCustom?.digestReceipt !== attestDefault?.digestReceipt,
+    { ui: customDigest, sw: describeCustom?.effective?.hash, defaultDigest });
   const attestationLeaks = JSON.stringify(attestCustom).includes("British English");
   check("attestation (customized) carries NO owner text", !attestationLeaks, null);
 
@@ -485,10 +490,12 @@ try {
   check("reset (real click): the override is deleted; the default composes clean",
     resetClicked === true && resetState?.ok === true && resetState?.override === null && resetState?.builtinChanged === false,
     { override: resetState?.override });
+  const describeReset = await send("prompt.describe", { scope: "hub" });
   const attestReset = await send("prompt.attest", { scope: "hub" });
-  check("reset: the composition returns to the default digest",
-    attestReset?.ok === true && attestReset?.compositionHash === defaultDigest,
-    { after: attestReset?.compositionHash, defaultDigest });
+  check("reset: the composition returns to the default digest + keyed receipt",
+    describeReset?.ok === true && describeReset?.effective?.hash === defaultDigest &&
+    attestReset?.ok === true && attestReset?.digestReceipt === attestDefault?.digestReceipt,
+    { after: describeReset?.effective?.hash, defaultDigest });
 
   // 11. The worker scope composes over the site-worker base — with the
   // context-aware preview note (no false exact-parity claim for run skills).
@@ -527,7 +534,13 @@ try {
   const bogus = await send("prompt.describe", { scope: "../etc" });
   const badMode = await send("prompt.set", { scope: "hub", mode: "inject", text: "x" });
   const empty = await send("prompt.set", { scope: "hub", mode: "append", text: "   " });
-  const ghostAgent = await send("prompt.set", { scope: "agent:ghost", mode: "append", text: "x" });
+  const ghostDescription = await send("prompt.describe", { scope: "agent:ghost" });
+  const ghostAgent = await send("prompt.set", {
+    scope: "agent:ghost",
+    mode: "append",
+    text: "x",
+    expectedRevision: ghostDescription?.revision,
+  });
   check("fail-closed: an unknown scope is rejected (describe)",
     bogus?.ok === false && typeof bogus?.error === "string", bogus);
   check("fail-closed: an invalid mode is rejected (set)",
@@ -540,6 +553,12 @@ try {
   check("key authority: the generic kv.set route REFUSES the prompt-override store",
     kvBypass?.ok === false && String(kvBypass?.error ?? "").includes("prompt.*"),
     kvBypass);
+  const keyRead = await send("kv.get", { keys: ["cap:attestationKey"] });
+  check("key secrecy: an explicit generic kv.get of attestation key material is REFUSED",
+    keyRead?.ok === false && String(keyRead?.error ?? "").includes("key material"), keyRead);
+  const readAll = await send("kv.get", {});
+  check("key secrecy: generic kv.get-all strips attestation key material",
+    readAll && !("cap:attestationKey" in readAll), Object.keys(readAll ?? {}).slice(0, 8));
   const kvReadback = await send("prompt.describe", { scope: "hub" });
   check("key authority: the refused write left the store untouched",
     kvReadback?.ok === true && kvReadback?.override === null, { override: kvReadback?.override });
@@ -549,7 +568,7 @@ try {
   check("CAS through the route: the current revision saves, the stale one conflicts",
     casWrite?.ok === true && casStale?.ok === false && casStale?.conflict === true,
     { write: casWrite?.ok, stale: casStale });
-  await send("prompt.reset", { scope: "hub" });
+  await send("prompt.reset", { scope: "hub", expectedRevision: casWrite?.revision });
   const stillClean = await send("prompt.describe", { scope: "hub" });
   check("fail-closed: the rejected writes left no residue",
     stillClean?.ok === true && stillClean?.override === null, { override: stillClean?.override });

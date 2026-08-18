@@ -4,19 +4,68 @@
 // Chrome when enabled (chrome://flags → Prompt API for Gemini Nano) with the
 // model downloaded. When it is NOT available, the caller must fall back to the
 // demo model — this adapter never fakes success.
+//
+// THE TRUE FINAL REQUEST BOUNDARY (the review's provider-bound capture
+// blocker): the run-bound prompt attestation observes the AI-SDK options at
+// doGenerate/doStream. For this provider, what Gemini nano ACTUALLY receives
+// is (a) the session's systemPrompt and (b) the session.prompt(text) input.
+// An earlier version created the session ONCE with a hard-coded system prompt
+// and flattened the whole AI-SDK prompt into the user text — so the captured
+// attestation did NOT describe the real provider request (the real session
+// system prompt differed, and message roles were lost). Now the adapter binds
+// capture EXACTLY: the AI-SDK system message becomes the session's
+// systemPrompt VERBATIM (a fresh session per call — a session's systemPrompt
+// is immutable), and the remaining messages are serialized WITH their roles,
+// so what the attestation captures is byte-for-byte what the provider gets.
 
-function extractText(prompt) {
-  let out = "";
-  for (const msg of prompt ?? []) {
+/** Extract the exact system message an AI-SDK LanguageModel call carries
+ * (options.system, or the role:"system" prompt messages) — the same shape the
+ * attestation boundary in lib/agent.js captures, so the provider session is
+ * bound to byte-for-byte what the attestation observed. */
+function extractSystemMessage(options) {
+  if (typeof options?.system === "string" && options.system) return options.system;
+  const msgs = Array.isArray(options?.prompt) ? options.prompt : [];
+  return msgs
+    .filter((m) => m?.role === "system")
+    .map((m) =>
+      typeof m.content === "string"
+        ? m.content
+        : Array.isArray(m.content)
+          ? m.content.map((p) => p?.text ?? "").join("")
+          : ""
+    )
+    .join("\n");
+}
+
+/** Serialize the NON-system messages into a role-preserving transcript: every
+ * message is labelled with its role, so user/assistant/tool content is never
+ * misrepresented as one undifferentiated user turn. */
+function serializeMessages(options) {
+  const msgs = (Array.isArray(options?.prompt) ? options.prompt : [])
+    .filter((m) => m?.role !== "system");
+  const out = [];
+  for (const msg of msgs) {
+    const role = String(msg?.role ?? "user");
     const c = msg?.content;
-    if (typeof c === "string") out += c;
+    let text = "";
+    if (typeof c === "string") text = c;
     else if (Array.isArray(c)) {
       for (const part of c) {
-        if (part?.type === "text") out += part.text;
+        if (part?.type === "text") text += part.text;
+        else if (part?.type === "tool-result") {
+          try {
+            text += `\n[tool result]\n${JSON.stringify(part?.result ?? part?.output ?? "")}`;
+          } catch { text += "\n[tool result]"; }
+        } else if (part?.type === "tool-call") {
+          try {
+            text += `\n[tool call ${part?.toolName ?? "tool"}]\n${JSON.stringify(part?.args ?? part?.input ?? "")}`;
+          } catch { text += `\n[tool call ${part?.toolName ?? "tool"}]`; }
+        }
       }
     }
+    out.push(`${role}:\n${text}`);
   }
-  return out;
+  return out.join("\n\n");
 }
 
 // The Prompt API reports NO token counts (its usage comes back 0/0), which the
@@ -59,16 +108,18 @@ export function createPromptApiModel() {
   const api = getPromptApi();
   if (!api) throw new Error("Chrome Prompt API not available");
 
-  let session = null;
-  const ensureSession = async () => {
-    if (session) return session;
+  // A FRESH session per call, bound to the EXACT system message the AI-SDK
+  // layer carried (the attestation boundary observes the same options, so the
+  // captured digest describes the real provider request). A session's
+  // systemPrompt is immutable, so reuse across differing compositions would
+  // silently bind the wrong system prompt — never cached.
+  const createSession = async (systemPrompt) => {
     // The Prompt API rejects a session that specifies topK without temperature
     // (or vice versa) with NotSupportedError. Pass BOTH together, or neither.
     // topK: 40 + temperature: 0.4 is a deterministic, agent-appropriate default.
     try {
-      session = await api.create({
-        systemPrompt:
-          "You are the Chrome Agent Platform hub agent. Be concise and helpful.",
+      return await api.create({
+        systemPrompt: systemPrompt || undefined,
         topK: 40,
         temperature: 0.4,
       });
@@ -86,7 +137,6 @@ export function createPromptApiModel() {
       }
       throw new Error(`Chrome Prompt API session failed: ${msg}`);
     }
-    return session;
   };
 
   return {
@@ -100,24 +150,32 @@ export function createPromptApiModel() {
     supportedUrls: {},
 
     async doGenerate(options) {
-      const s = await ensureSession();
-      const text = extractText(options.prompt);
-      const out = await s.prompt(text);
-      const inputTokens = estimateTokens(text);
-      const outputTokens = estimateTokens(out);
-      return {
-        content: [{ type: "text", text: out }],
-        finishReason: "stop",
-        // Estimated (the Prompt API reports no counts); zero-cost on-device.
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
-        warnings: [],
-      };
+      const system = extractSystemMessage(options);
+      const text = serializeMessages(options);
+      const s = await createSession(system);
+      try {
+        const out = await s.prompt(text);
+        const inputTokens = estimateTokens(system + text);
+        const outputTokens = estimateTokens(out);
+        return {
+          content: [{ type: "text", text: out }],
+          finishReason: "stop",
+          // Estimated (the Prompt API reports no counts); zero-cost on-device.
+          usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+          warnings: [],
+        };
+      } finally {
+        // Release the per-call session (the on-device model's context window
+        // is a real resource; a leaked session per run would exhaust it).
+        try { s.destroy?.(); } catch { /* best-effort */ }
+      }
     },
 
     async doStream(options) {
-      const s = await ensureSession();
-      const text = extractText(options.prompt);
-      const inputTokens = estimateTokens(text);
+      const system = extractSystemMessage(options);
+      const text = serializeMessages(options);
+      const inputTokens = estimateTokens(system + text);
+      const s = await createSession(system);
       const stream = s.promptStreaming(text);
       const id = `prompt-${crypto.randomUUID?.() ?? Math.random()}`;
       const readable = new ReadableStream({
@@ -126,21 +184,27 @@ export function createPromptApiModel() {
           controller.enqueue({ type: "text-start", id });
           let outText = "";
           const reader = stream.getReader();
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            outText += value ?? "";
-            controller.enqueue({ type: "text-delta", id, delta: value });
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              outText += value ?? "";
+              controller.enqueue({ type: "text-delta", id, delta: value });
+            }
+            controller.enqueue({ type: "text-end", id });
+            const outputTokens = estimateTokens(outText);
+            controller.enqueue({
+              type: "finish",
+              // Estimated (the Prompt API reports no counts); zero-cost on-device.
+              usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+              finishReason: "stop",
+            });
+            controller.close();
+          } catch (e) {
+            controller.error(e);
+          } finally {
+            try { s.destroy?.(); } catch { /* best-effort */ }
           }
-          controller.enqueue({ type: "text-end", id });
-          const outputTokens = estimateTokens(outText);
-          controller.enqueue({
-            type: "finish",
-            // Estimated (the Prompt API reports no counts); zero-cost on-device.
-            usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
-            finishReason: "stop",
-          });
-          controller.close();
         },
       });
       return { stream: readable };

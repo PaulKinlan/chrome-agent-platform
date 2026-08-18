@@ -13,7 +13,11 @@ import {
 } from "../extension/lib/models/prompt-api-model.js";
 
 type SessionOptions = { topK?: number; temperature?: number; systemPrompt?: string };
-type FakeSession = { prompt: (t: string) => Promise<string> };
+type FakeSession = {
+  prompt: (t: string) => Promise<string>;
+  promptStreaming?: (t: string) => ReadableStream<string>;
+  destroy?: () => void;
+};
 
 type FakeApi = {
   (): void;
@@ -72,4 +76,100 @@ Deno.test("isPromptApiAvailable reports false when the API is absent", async () 
   } finally {
     g.LanguageModel = saved;
   }
+});
+
+Deno.test("the session binds the EXACT AI-SDK system message — a fresh session per call (the attestation boundary)", async () => {
+  // The review's provider-bound capture blocker: what the run-bound
+  // attestation captures at the AI-SDK boundary must be byte-for-byte what
+  // the provider session receives. The session's systemPrompt IS the AI-SDK
+  // system message, and a changed composition gets a FRESH session (a
+  // session's systemPrompt is immutable — reuse would silently bind the
+  // wrong system prompt).
+  const seen: SessionOptions[] = [];
+  installPromptApi(async (opts) => {
+    seen.push(opts);
+    return { prompt: async () => "ok" };
+  });
+  const model = createPromptApiModel();
+  await model.doGenerate({
+    prompt: [
+      { role: "system", content: "SYSTEM-COMPOSITION-EXACT" },
+      { role: "user", content: "hello" },
+    ],
+  });
+  await model.doGenerate({
+    prompt: [
+      { role: "system", content: "SYSTEM-COMPOSITION-CHANGED" },
+      { role: "user", content: "hi" },
+    ],
+  });
+  assertEquals(seen.length, 2, "a fresh session per call — never a stale cached system prompt");
+  assertEquals(seen[0].systemPrompt, "SYSTEM-COMPOSITION-EXACT");
+  assertEquals(seen[1].systemPrompt, "SYSTEM-COMPOSITION-CHANGED");
+  // topK + temperature still ride together on every session.
+  assertEquals(typeof seen[0].topK, "number");
+  assertEquals(typeof seen[0].temperature, "number");
+});
+
+Deno.test("non-system messages keep their ROLES — no undifferentiated flattening into one user turn", async () => {
+  let prompted = "";
+  installPromptApi(async () => ({
+    prompt: async (t: string) => {
+      prompted = t;
+      return "ok";
+    },
+  }));
+  const model = createPromptApiModel();
+  await model.doGenerate({
+    prompt: [
+      { role: "system", content: "SYS-TEXT" },
+      { role: "user", content: "USER-TURN" },
+      { role: "assistant", content: "ASSISTANT-TURN" },
+      { role: "user", content: [{ type: "text", text: "MULTI-PART" }] },
+    ],
+  });
+  assert(prompted.includes("user:\nUSER-TURN"), `the user role is labelled: ${JSON.stringify(prompted)}`);
+  assert(prompted.includes("assistant:\nASSISTANT-TURN"), "the assistant role is labelled");
+  assert(prompted.includes("MULTI-PART"), "content parts are extracted");
+  assert(!prompted.includes("SYS-TEXT"), "the system message rides the session, never the user text");
+});
+
+Deno.test("doStream binds the EXACT system message + role transcript at the final Prompt API boundary", async () => {
+  const created: SessionOptions[] = [];
+  let streamed = "";
+  let destroyed = false;
+  installPromptApi(async (opts) => {
+    created.push(opts);
+    return {
+      prompt: async () => "unused",
+      promptStreaming: (text: string) => {
+        streamed = text;
+        return new ReadableStream<string>({
+          start(controller) {
+            controller.enqueue("streamed reply");
+            controller.close();
+          },
+        });
+      },
+      destroy: () => { destroyed = true; },
+    };
+  });
+  const model = createPromptApiModel();
+  const result = await model.doStream({
+    prompt: [
+      { role: "system", content: "STREAM-SYSTEM-EXACT" },
+      { role: "user", content: "STREAM-USER" },
+      { role: "assistant", content: "STREAM-ASSISTANT" },
+    ],
+  });
+  const reader = result.stream.getReader();
+  for (;;) {
+    const { done } = await reader.read();
+    if (done) break;
+  }
+  assertEquals(created[0]?.systemPrompt, "STREAM-SYSTEM-EXACT");
+  assert(streamed.includes("user:\nSTREAM-USER"), "streaming keeps the user role");
+  assert(streamed.includes("assistant:\nSTREAM-ASSISTANT"), "streaming keeps the assistant role");
+  assert(!streamed.includes("STREAM-SYSTEM-EXACT"), "the system text rides session creation, not promptStreaming");
+  assert(destroyed, "the per-call streaming session is released after the stream closes");
 });

@@ -24,9 +24,12 @@ run context) is proven per run by the **run-bound attestation** (below).
    `cap.constraints.core`). ALWAYS present, NEVER editable or replaceable,
    and ALWAYS the FINAL layer — it composes after every editable layer AND
    the skills layer, so no owner text, role, or site-origin skill can
-   override it with a later instruction. A mechanical drift test proves the
-   rendered layer contains every policy rule verbatim and that the editable
-   base carries none of them.
+   override it with a later instruction. `/skill:<id>` references contribute
+   their full prompt bodies here (not trailing run context). The agent boundary
+   also appends the policy to foreign/uncomposed system prompts, so every caller
+   is protected structurally. A mechanical drift test proves the rendered layer
+   contains every policy rule verbatim and that the editable base carries none
+   of the policy's permission/origin/security semantics.
 
 ## The registry (versioned built-ins)
 
@@ -80,20 +83,27 @@ id/version/hash/snapshot it was written against:
 
 Durability + concurrency + corruption:
 
-- **Revision CAS.** The store carries a monotonic `revision`; the Settings
-  editor echoes the revision it read as `expectedRevision`, and a stale
-  writer (a second Settings window) gets a conflict + reload instead of a
-  silent last-write-wins. All read-modify-writes serialize behind a mutex.
-- **Strict schema + quarantine.** Persisted records are validated on every
-  read (mode, text, base stamps, byte bounds, well-formed Unicode); malformed
-  records are moved to `cap:promptOverrides:quarantine` (visible,
-  recoverable) and never composed. Unknown extra fields are stripped.
+- **Mandatory revision CAS.** The store carries a monotonic `revision`; every
+  mutation (`set`, `reset`, and `keep`) must echo the revision it read as
+  `expectedRevision`. A missing revision is rejected, and a stale window gets
+  a conflict + reload instead of a silent last-write-wins. All prompt-store
+  read-modify-writes serialize behind a mutex.
+- **Strict store + record schema with quarantine.** Persisted records are
+  validated on every read (mode, text, base stamps, byte bounds, well-formed
+  Unicode). A future/foreign store version or malformed envelope is never
+  misread as a legacy map: the complete object is quarantined intact. Invalid
+  records move to `cap:promptOverrides:quarantine` (visible, recoverable) and
+  are never composed; unknown record fields are stripped.
 - **Key-specific authority.** The generic `kv.set`/`kv.remove` message routes
-  REFUSE the prompt-owned keys (the override store, the quarantine, the
-  attestation key) — only the `prompt.*` routes write them.
-- **Agent lifecycle.** `agent:<slug>` writes require the named agent to
-  exist; deleting an agent clears its override (no orphan state a recreated
-  same-slug agent would silently inherit).
+  REFUSE the prompt-owned keys. Generic `kv.get` also refuses an explicit
+  attestation-key read and strips key material from read-all — only `prompt.*`
+  operations can use it, and no route returns the bytes.
+- **Agent lifecycle.** `agent:<slug>` writes require the named agent to exist.
+  The named-agent registry lock is held across existence-check + prompt write,
+  in the same lock order used by deletion; deletion propagates prompt-cleanup
+  failure and preserves the agent for retry. A delete can therefore never
+  race a write into an orphan override that a recreated same-slug agent would
+  silently inherit.
 - **Durability.** chrome.storage needs the optional `storage` permission: the
   Settings Save gesture requests it, and `prompt.describe` reports
   `durable: false` while it is absent — the UI shows a Session-only badge
@@ -123,6 +133,12 @@ for every run type:
   protected layer), so the composition covers exactly the platform text the
   model receives.
 
+The Chrome Prompt API adapter binds at its true final boundary too: each call
+creates a session whose immutable `systemPrompt` is the exact AI-SDK system
+message, while the non-system transcript preserves message roles for both
+`doGenerate` and `doStream`. The demo model's streaming (`doStream`) boundary
+is covered explicitly, not inferred from the non-streaming method.
+
 `prompt.set` / `prompt.reset` / `prompt.keep` invalidate the cached
 orchestrator so the NEXT run picks up the new composition immediately.
 
@@ -142,22 +158,30 @@ parity.
 
 Two attestations, both content-free:
 
-- **Preview attestation** (`prompt.attest`) — the composition's public
-  SHA-256 (the same digest the owner's own Settings surface displays) plus
-  KEYED receipts (HMAC-SHA-256 with a per-install key that never leaves
-  storage) of the whole composition and each layer.
+- **Preview attestation** (`prompt.attest`) — KEYED receipts only
+  (HMAC-SHA-256). The route deliberately returns no unkeyed composition hash:
+  the Settings digest remains available through the owner-facing describe UI,
+  while the attestation cannot become a public dictionary oracle for custom
+  text.
 - **Run-bound attestation** (`prompt.attestRun`, journaled per run) — lib/agent.js
   wraps the LanguageModel and captures the EXACT system message observed at
   the provider/model boundary for a real run (hub, named, background,
-  scheduled, hook, and delegated site-worker runs alike). The captured public
-  digests are RE-KEYED in the service worker (HMAC with the per-install key)
-  before anything is recorded: the journaled/routed record carries the keyed
-  receipt of the exact wire message digest + the keyed receipt of the
-  composition digest, the UTF-8 byte counts, whether the wire message embeds
-  the composition byte-for-byte (`prefixMatch`), the provider/model identity,
-  and the runId. No prompt content and no public stable fingerprint of owner
-  text is ever journaled. A run proves it sent the previewed composition when
-  its `composedReceipt` equals `prompt.attest`'s `digestReceipt`.
+  scheduled, hook, and delegated site-worker runs alike). The captured digests
+  are RE-KEYED in the service worker before anything is recorded: the record
+  carries the keyed receipt of the exact wire-message digest + the keyed
+  receipt of the composition digest, UTF-8 byte counts, `prefixMatch`, and the
+  provider/model identity. Every attempt gets a unique immutable execution id;
+  reusable logical task/schedule ids remain separate, slots finalize at run
+  end, callbacks unbind in `finally`, and direct delegation binds its own
+  execution. Periodic ticks can therefore never mix attestations.
+
+The key is a versioned, deliberately rotatable envelope with bounded previous
+key history. Every receipt names its `keyVersion`; when optional `storage` is
+absent the service-worker-session key is honestly labelled `ephemeral: true`
+instead of being described as per-install durable. No prompt content, key
+bytes, or unkeyed stable fingerprint of owner text is ever routed/journaled. A
+run proves it sent the previewed composition when its `composedReceipt` equals
+`prompt.attest`'s `digestReceipt` for the same key version.
 
 ## Secrets + hidden reasoning
 
@@ -174,12 +198,14 @@ composition.
   protected layer; the editable base carries none of it), the registry, the
   composition order (protected LAST, after skills), the modes, persistence
   (versioned store, legacy migration, strict-schema quarantine, corruption),
-  the revision CAS + concurrent-writer serialization, agent existence +
-  deletion cleanup, per-agent/global precedence, built-in upgrades (incl. the
-  INHERITED upgrade keep/reset path), UTF-8 byte bounds + malformed-Unicode
-  rejection, the keyed-receipt attestation, and the RUN-BOUND attestation
-  through the real agent core (hub + delegated site-worker + scoped/hook
-  shapes).
+  mandatory mutation CAS + concurrent-writer serialization, coordinated agent
+  lifecycle, per-agent/global precedence, built-in upgrades (incl. inherited
+  keep/reset), UTF-8 byte bounds + malformed-Unicode sanitize/reject contracts,
+  FIPS/RFC SHA-256/HMAC known-answer vectors, versioned key rotation, and the
+  run-bound attestation through the real agent core (streaming demo, hub,
+  delegated site-worker, and scoped/hook shapes). `tests/prompt-api.test.ts`
+  covers exact final-boundary session/transcript binding for generation and
+  streaming.
 - `scripts/system-prompts-integration.ts` — the real-extension journey: the
   built extension in headless Chrome, driving the Settings → Advanced UI with
   REAL pointer/keyboard input (CDP mouse clicks + trusted text insertion), the

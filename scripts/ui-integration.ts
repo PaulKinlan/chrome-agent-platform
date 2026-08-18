@@ -196,15 +196,25 @@ try {
     check("the error console stays in-bounds", inBounds(consoleRect.rect, consoleRect.vw, consoleRect.vh), consoleRect.rect);
   }
 
-  // 5. The recent-activity rows (or its empty state) have horizontal padding
-  // (not flush against the panel border).
-  const padding = await cdp.eval(hub, `(() => {
-    const el = document.querySelector('.runlog .empty, .runlog .rl, #run-log .rl');
-    if (!el) return { note: 'no runlog row/empty found' };
-    const cs = getComputedStyle(el);
-    return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop) };
-  })()`);
-  check("the recent-activity panel has horizontal padding (not edge-to-edge)", (padding?.paddingLeft ?? 0) > 0, padding);
+  // 5. The recent-activity Web Component's rows (or empty state) have
+  // horizontal padding (not flush against the panel border). Wait for its
+  // async activity.list load, and inspect the component's real shadow-DOM
+  // surface — the legacy light-DOM .rl/.empty selectors predated the required
+  // componentization and could never find the current UI.
+  let padding = null;
+  for (let i = 0; i < 20 && !(padding?.found); i++) {
+    padding = await cdp.eval(hub, `(() => {
+      const explorer = document.querySelector('#run-log activity-explorer');
+      const root = explorer?.shadowRoot;
+      const el = root?.querySelector('.aex-entry summary, .aex-empty');
+      if (!el) return { found:false, note:'activity explorer still loading' };
+      const cs = getComputedStyle(el);
+      return { found:true, paddingLeft:parseFloat(cs.paddingLeft), paddingTop:parseFloat(cs.paddingTop) };
+    })()`);
+    if (!padding?.found) await sleep(100);
+  }
+  check("the recent-activity panel has horizontal padding (not edge-to-edge)",
+    padding?.found === true && (padding?.paddingLeft ?? 0) > 0, padding);
 
   // ---- Settings ----
   const settings = await openPage(`chrome-extension://${extId}/options/options.html`);

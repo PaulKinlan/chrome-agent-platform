@@ -87,6 +87,7 @@ import {
   setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
+  withNamedAgentsLock,
 } from "../lib/named-agents.js";
 import {
   appendThreadMessage,
@@ -104,14 +105,16 @@ import {
 } from "../lib/threads.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import {
+  ATTESTATION_KEY_STORE,
   attestComposition,
-  attestationKeyBytes,
+  attestationKeyState,
   clearPromptOverride,
   describePrompt,
   normalizeScope,
   PROMPT_OWNED_KEYS,
   resolveSystemPrompt,
   restampPromptOverride,
+  rotateAttestationKey,
   setPromptOverride,
 } from "../lib/system-prompts.js";
 import {
@@ -253,13 +256,6 @@ async function resolveSkillRefs(task) {
     if (skill) out.push(skill);
   }
   return out;
-}
-function skillContextBlock(skills) {
-  if (!skills?.length) return "";
-  const blocks = skills.map((s) =>
-    `## Skill: ${s.name}\n${s.prompt ?? s.description ?? ""}`,
-  );
-  return `\n\n--- Included skills ---\n${blocks.join("\n\n")}\n`;
 }
 import {
   checkHookAllowed,
@@ -540,22 +536,58 @@ let scopedOrchestrator = null;
 let scopedOrchestratorGen = -1;
 const MODEL_CACHE = { model: null, key: null, gen: -1 };
 
-// The run-bound prompt attestation ring: runId → [attestations] captured from
-// the EXACT system message observed at the provider/model boundary (see
-// lib/agent.js's setAttestation + runTask's binding). Bounded; the durable
-// copy is each run's journal `prompt-attestation` entry. Extension-only reads
-// via the prompt.attestRun route.
-const recentRunAttestations = new Map();
+// The run-bound prompt attestation ring: EXECUTION-id → { taskId, finalized,
+// events } captured from the EXACT system message observed at the
+// provider/model boundary (see lib/agent.js's setAttestation + runTask's
+// binding).
+//
+// EXECUTION IDS ARE IMMUTABLE + UNIQUE PER ATTEMPT: every runTask / direct
+// delegation generates a fresh `exec:<uuid>` for the attempt. The LOGICAL id
+// (the caller's task id, the schedule's alarm name, the thread) is recorded
+// alongside as `taskId` but is NEVER the ring key — a periodic schedule
+// reuses its alarm name every tick, and caller-supplied ids can repeat, so a
+// logical key would mix attestations across attempts. Bounded; the durable
+// copy is each run's journal `prompt-attestation` entry. Extension-only
+// reads via the prompt.attestRun route (by execution id, or by logical id →
+// the LATEST execution for it).
+const recentRunAttestations = new Map(); // execId → { taskId, at, finalized, events }
+const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
+const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
+function newExecutionId() {
+  const uuid = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `exec:${uuid}`;
+}
+function beginExecution(execId, taskId) {
+  activeExecutions.add(execId);
+  recentRunAttestations.set(execId, { taskId, at: Date.now(), finalized: false, events: [] });
+  latestExecutionByTask.set(taskId, execId);
+  // FIFO-bound both maps (Map preserves insertion order).
+  while (recentRunAttestations.size > MAX_RUN_ATTESTATIONS) {
+    const oldest = recentRunAttestations.keys().next().value;
+    activeExecutions.delete(oldest);
+    recentRunAttestations.delete(oldest);
+  }
+  while (latestExecutionByTask.size > MAX_RUN_ATTESTATIONS) {
+    latestExecutionByTask.delete(latestExecutionByTask.keys().next().value);
+  }
+}
+function finalizeExecution(execId) {
+  // The attempt is over: its slot is sealed (a late/duplicate emission is
+  // dropped, never appended into a REUSED slot) and the callback is unbound
+  // by the caller's finally. The recorded events stay readable.
+  activeExecutions.delete(execId);
+  const slot = recentRunAttestations.get(execId);
+  if (slot) slot.finalized = true;
+}
 function recordRunAttestation(att) {
   if (!att?.runId) return;
-  const list = recentRunAttestations.get(att.runId) ?? [];
-  list.push(att);
-  recentRunAttestations.set(att.runId, list.slice(-8));
-  // FIFO-bound the ring (Map preserves insertion order).
-  while (recentRunAttestations.size > MAX_RUN_ATTESTATIONS) {
-    recentRunAttestations.delete(recentRunAttestations.keys().next().value);
-  }
+  if (!activeExecutions.has(att.runId)) return; // not a live execution — drop
+  const slot = recentRunAttestations.get(att.runId);
+  if (!slot || slot.finalized) return;
+  slot.events.push(att);
+  slot.events = slot.events.slice(-8);
 }
 let generation = 0;
 
@@ -1044,42 +1076,57 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // OPAQUE receipts — never a public stable fingerprint of owner text that
     // could be dictionary-tested (the review's privacy finding). NO prompt
     // content is recorded.
-    const attestKey = await attestationKeyBytes();
-    orch.setAttestation?.((att) => {
-      const bound = {
-        runId: taskId,
-        agentId: att.agentId,
-        provider: att.provider,
-        model: att.model,
-        at: att.at,
-        bytes: att.bytes,
-        composedBytes: att.composedBytes,
-        prefixMatch: att.prefixMatch,
-        // Opaque keyed receipts of the exact wire digest + the composition
-        // digest (compare composedReceipt against prompt.attest's
-        // digestReceipt to prove a run sent the previewed composition).
-        receipt: hmacSha256Hex(attestKey, String(att.digest ?? "")),
-        composedReceipt: hmacSha256Hex(attestKey, String(att.composedDigest ?? "")),
-      };
-      recordRunAttestation(bound);
-      journalAppend(mem, { type: "prompt-attestation", ...bound }).catch(() => {});
-    });
-    // Thread the fence's abort signal into the RUNNING agent AND every
-    // side-effecting tool (via the shared run-fence module): if ownership or
-    // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
-    // block open/navigate/close/delegate from committing stale side effects.
+    //
+    // The attempt gets an IMMUTABLE, UNIQUE execution id (never the
+    // caller-supplied/logical task id — a periodic schedule reuses its alarm
+    // name every tick, so a logical key would mix attestations across
+    // attempts). The callback is bound for THIS execution, UNBOUND in the
+    // finally, and its slot is FINALIZED so a late emission can never leak
+    // into a later run's records.
+    const executionId = newExecutionId();
+    beginExecution(executionId, taskId);
+    // Everything after beginExecution is inside this try: key establishment or
+    // callback binding can fail too, and even that pre-model failure must seal
+    // the slot + unbind any prior callback (never leave a ghost-live attempt).
     let abortNow = null;
-    if (fence?.signal) {
-      setRunFence(fence);
-      abortNow = () => {
-        try {
-          orch.abort?.();
-        } catch { /* already aborted */ }
-      };
-      fence.signal.addEventListener("abort", abortNow);
-      if (fence.signal.aborted) abortNow();
-    }
     try {
+      const attestKeyState = await attestationKeyState();
+      orch.setAttestation?.((att) => {
+        const bound = {
+          runId: executionId, // the immutable per-attempt execution id
+          taskId, // the LOGICAL id (task/schedule/thread) — kept separate
+          agentId: att.agentId,
+          provider: att.provider,
+          model: att.model,
+          at: att.at,
+          bytes: att.bytes,
+          composedBytes: att.composedBytes,
+          prefixMatch: att.prefixMatch,
+          keyVersion: attestKeyState.version,
+          ephemeral: !attestKeyState.durable,
+          // Opaque keyed receipts of the exact wire digest + the composition
+          // digest (compare composedReceipt against prompt.attest's
+          // digestReceipt to prove a run sent the previewed composition).
+          receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
+          composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
+        };
+        recordRunAttestation(bound);
+        journalAppend(mem, { type: "prompt-attestation", ...bound }).catch(() => {});
+      });
+      // Thread the fence's abort signal into the RUNNING agent AND every
+      // side-effecting tool (via the shared run-fence module): if ownership or
+      // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
+      // block open/navigate/close/delegate from committing stale side effects.
+      if (fence?.signal) {
+        setRunFence(fence);
+        abortNow = () => {
+          try {
+            orch.abort?.();
+          } catch { /* already aborted */ }
+        };
+        fence.signal.addEventListener("abort", abortNow);
+        if (fence.signal.aborted) abortNow();
+      }
       // Every durable/destructive boundary is FENCED when a scheduled run owns an
       // in-flight lock: a stale owner aborts before committing the task journal,
       // the result journal, or the completion notification.
@@ -1115,19 +1162,22 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // awaited commit, never after).
       await fence?.assertOwned?.();
       const context = attachmentContext(attachments);
-      // Include any /skill:<id> references from the task string: the skill's
-      // prompt is injected into the run context so the model actually executes
-      // the skill's behaviour. The /skill:<id> tokens stay in the user's task
-      // text (for the thread display), but the SKILLS' instructions ride along
-      // in the context so a referenced skill is never a no-op.
-      const skillContext = skillContextBlock(await resolveSkillRefs(task));
+      // Include any /skill:<id> references from the task string: each
+      // referenced skill's FULL prompt body is composed into the run's system
+      // prompt as a skills layer BEFORE the protected runtime policy (the
+      // agent boundary recomposes — the protected block is structurally LAST,
+      // so an included skill can never override the platform invariants).
+      // The /skill:<id> tokens stay in the user's task text (for the thread
+      // display); the skill instructions ride in the system composition, not
+      // as trailing context after the protected layer.
+      const runSkills = await resolveSkillRefs(task);
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
       // agent sees what came before).
       let result;
       try {
-        result = await orch.run(buildMultimodalTask(task, attachments), context + skillContext, Array.isArray(history) ? history : []);
+        result = await orch.run(buildMultimodalTask(task, attachments), context, Array.isArray(history) ? history : [], runSkills);
         recordProviderSuccess();
       } catch (e) {
         // Only a PROVIDER failure (network/config/credential) trips the
@@ -1172,6 +1222,14 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
       return { ok: true, result };
     } finally {
+      // Seal THIS execution: unbind the attestation callback from the (cached)
+      // orchestrator and finalize the execution slot, so no late/duplicate
+      // emission can be recorded against this — or a later — run (the ring
+      // drops emissions for non-live executions).
+      try {
+        orch.setAttestation?.(null);
+      } catch { /* best-effort */ }
+      finalizeExecution(executionId);
       clearRunFence();
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
@@ -1415,8 +1473,22 @@ const handlers = {
   // split-authority finding: Settings said granted while the worker said no).
   async "kv.get"(m) {
     const keys = m?.keys;
-    if (keys == null) return await kvGet(null);
-    return await kvGet(Array.isArray(keys) ? keys : [keys]);
+    // KEY-MATERIAL SECRECY (the review's route-secrecy blocker): the
+    // attestation key is never exposed by ANY message route — a generic
+    // read-all strips it, and an explicit read of it is refused outright.
+    if (keys == null) {
+      const all = await kvGet(null);
+      delete all[ATTESTATION_KEY_STORE];
+      return all;
+    }
+    const list = Array.isArray(keys) ? keys : [keys];
+    if (list.includes(ATTESTATION_KEY_STORE)) {
+      return {
+        ok: false,
+        error: `${ATTESTATION_KEY_STORE} is key material managed by the prompt.* routes — never exposed by a generic read`,
+      };
+    }
+    return await kvGet(list);
   },
   async "kv.set"(m) {
     if (!m?.values || typeof m.values !== "object") {
@@ -2435,14 +2507,24 @@ const handlers = {
     return await describePrompt(s, { role });
   },
   async "prompt.set"({ scope, mode, text, expectedRevision }) {
-    const r = await setPromptOverride(scope, { mode, text }, {
-      // CAS: the Settings editor echoes the revision it read; a stale writer
-      // (a second Settings window) gets a conflict instead of silently
-      // last-write-wins.
+    const doSet = () => setPromptOverride(scope, { mode, text }, {
+      // MANDATORY CAS: the Settings editor echoes the revision it read; a
+      // stale writer (a second Settings window) gets a conflict instead of
+      // silently last-write-wins. The library rejects a missing revision —
+      // there is no unguarded mutation path.
       expectedRevision: Number.isSafeInteger(expectedRevision) ? expectedRevision : null,
       // Agent scopes must reference a REAL named agent — no orphan overrides.
       agentExists: async (slug) => Boolean(await getNamedAgent(slug)),
     });
+    // RACE-SAFE vs agent deletion (the review's lifecycle blocker): for an
+    // agent:<slug> scope, hold the AGENT REGISTRY lock across the whole
+    // existence-check + override-write (lock order agents → overrides — the
+    // same order deleteNamedAgent uses), so a deletion can never land between
+    // the check and the write and leave an orphan override.
+    const s = normalizeScope(scope);
+    const r = s?.startsWith("agent:")
+      ? await withNamedAgentsLock(doSet)
+      : await doSet();
     if (r?.ok) {
       // Rebuild the cached orchestrators so the NEXT run picks up the new
       // composition immediately (the same invalidation a provider change uses).
@@ -2450,20 +2532,34 @@ const handlers = {
     }
     return r;
   },
-  async "prompt.reset"({ scope, effective }) {
+  async "prompt.reset"({ scope, effective, expectedRevision }) {
     // effective: the release-update banner's Reset targets the override that
     // ACTUALLY applies (the inherited hub record for an agent scope).
-    const r = await clearPromptOverride(scope, { target: effective ? "effective" : "exact" });
+    // MANDATORY CAS — a stale window must never delete a newer write.
+    const r = await clearPromptOverride(scope, {
+      target: effective ? "effective" : "exact",
+      expectedRevision: Number.isSafeInteger(expectedRevision) ? expectedRevision : null,
+    });
     if (r?.ok) invalidateAgent();
     return r;
   },
-  async "prompt.keep"({ scope }) {
+  async "prompt.keep"({ scope, expectedRevision }) {
     // "Keep my customization" after a built-in update: re-stamp the override
     // onto the CURRENT base (the explicit, owner-driven conflict resolution —
-    // never a silent overwrite).
-    const r = await restampPromptOverride(scope);
+    // never a silent overwrite). MANDATORY CAS — a stale banner must never
+    // re-stamp over a newer write.
+    const r = await restampPromptOverride(scope, {
+      expectedRevision: Number.isSafeInteger(expectedRevision) ? expectedRevision : null,
+    });
     if (r?.ok) invalidateAgent();
     return r;
+  },
+  async "prompt.rotateAttestationKey"() {
+    // Deliberate, owner-driven attestation-key rotation: a fresh key + a
+    // bumped version (every receipt carries its keyVersion), with the
+    // outgoing key retained in the bounded previous-key history so older
+    // receipts remain verifiable. Key material itself never crosses a route.
+    return await rotateAttestationKey();
   },
   async "prompt.attest"({ scope }) {
     // The PREVIEW attestation: keyed receipts of the CURRENT composition (the
@@ -2477,13 +2573,14 @@ const handlers = {
       role = agent?.role ?? "";
     }
     const composed = await resolveSystemPrompt(s, { role });
+    // Keyed receipts ONLY (the review's oracle blocker): the unkeyed
+    // composition hash is NOT returned — a stable unkeyed digest of
+    // owner-customized text is a public fingerprint/dictionary oracle. Parity
+    // with a run is proven by comparing the keyed digestReceipt against the
+    // run-bound composedReceipt. The attestation identifies its key epoch
+    // (keyVersion) and labels session-key receipts ephemeral.
     return {
       ok: true,
-      // The public SHA-256 of the composition (the same digest the Settings UI
-      // displays — the owner's own surface) for preview parity checks…
-      compositionHash: composed.hash,
-      // …plus the keyed receipts (the parity proof that is NOT a public
-      // fingerprint of owner text).
       ...await attestComposition(composed, s),
     };
   },
@@ -2491,18 +2588,30 @@ const handlers = {
     // The RUN-BOUND attestation: the digest captured from the EXACT system
     // message the provider/model adapter received for a real run (hub, named,
     // background, scheduled, hook, or a delegated site worker), tagged with
-    // the runId + the provider/model identity. In-memory ring (bounded) — the
-    // durable copy is the run's journal `prompt-attestation` entry.
+    // the immutable per-attempt execution id + the provider/model identity.
+    // Lookup accepts an execution id directly, or a LOGICAL task/schedule id
+    // (resolved to its LATEST execution — a periodic schedule's ticks each
+    // get their own execution, never a mixed bag). In-memory ring (bounded)
+    // — the durable copy is the run's journal `prompt-attestation` entry.
     const id = String(runId ?? "");
     if (!id) return { ok: false, error: "prompt.attestRun needs a runId" };
-    const list = recentRunAttestations.get(id);
-    if (!list?.length) {
+    const execId = recentRunAttestations.has(id)
+      ? id
+      : latestExecutionByTask.get(id) ?? null;
+    const slot = execId ? recentRunAttestations.get(execId) : null;
+    if (!slot?.events?.length) {
       return {
         ok: false,
         error: "no attestation captured for that runId (the run predates this worker, or no model call was made)",
       };
     }
-    return { ok: true, runId: id, attestations: list };
+    return {
+      ok: true,
+      runId: execId,
+      taskId: slot.taskId,
+      finalized: slot.finalized,
+      attestations: slot.events,
+    };
   },
 
   // ---- background agents are INDEPENDENT agents (item 61) ----
@@ -2910,10 +3019,46 @@ const handlers = {
           `origin ${canonical} was disenrolled before delegation`,
         );
       }
-      // Thread the captured generation into a.run so the worker's memory/usage
-      // commits revalidate THAT immutable identity (the round-22 ABA blocker: a
-      // delete→re-enroll lets a stale run write into the new enrollment).
-      return await a.run(task, "", [], gen);
+      // Bind THIS delegation's own immutable execution id + attestation sink
+      // (a direct delegation is its own attempt — it must never record
+      // against a prior hub run's callback or leak into a later one). The
+      // sink is UNBOUND + the execution FINALIZED in the finally.
+      const execId = newExecutionId();
+      const logicalId = `delegate:${canonical}:${Date.now()}`;
+      beginExecution(execId, logicalId);
+      // Key establishment + callback binding are inside the same finally-sealed
+      // attempt as the model run; a setup failure cannot leave a live slot or a
+      // callback inherited by the next direct delegation.
+      try {
+        const attestKeyState = await attestationKeyState();
+        a.setAttestation?.((att) => {
+          const bound = {
+            runId: execId,
+            taskId: logicalId,
+            agentId: att.agentId,
+            provider: att.provider,
+            model: att.model,
+            at: att.at,
+            bytes: att.bytes,
+            composedBytes: att.composedBytes,
+            prefixMatch: att.prefixMatch,
+            keyVersion: attestKeyState.version,
+            ephemeral: !attestKeyState.durable,
+            receipt: hmacSha256Hex(attestKeyState.bytes, String(att.digest ?? "")),
+            composedReceipt: hmacSha256Hex(attestKeyState.bytes, String(att.composedDigest ?? "")),
+          };
+          recordRunAttestation(bound);
+        });
+        // Thread the captured generation into a.run so the worker's memory/usage
+        // commits revalidate THAT immutable identity (the round-22 ABA blocker: a
+        // delete→re-enroll lets a stale run write into the new enrollment).
+        return await a.run(task, "", [], gen);
+      } finally {
+        try {
+          a.setAttestation?.(null);
+        } catch { /* best-effort */ }
+        finalizeExecution(execId);
+      }
     });
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the

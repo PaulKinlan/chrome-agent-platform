@@ -48,11 +48,17 @@ export function normalizeCoreAssets(assets) {
 }
 
 let agentsMutex = Promise.resolve();
+// Exported (as withNamedAgentsLock) so the service worker's prompt.set route
+// can hold the agent registry across a prompt-override write for an
+// agent:<slug> scope — the SAME lock order deleteNamedAgent uses (agents →
+// prompt-overrides), so an agent deletion can never interleave between the
+// override's existence check and its write (no orphan/ABA override).
 function withAgentsLock(fn) {
   const run = agentsMutex.then(fn, fn);
   agentsMutex = run.then(() => {}, () => {});
   return run;
 }
+export { withAgentsLock as withNamedAgentsLock };
 
 /** Normalize an agent id to a kebab-case slug. */
 export function slugifyAgentId(value) {
@@ -219,22 +225,32 @@ export async function setNamedAgentProvider(id, config) {
 
 /** Delete a named agent + its OPFS sandbox + its system-prompt override
  * (lifecycle cleanup: a deleted agent must never leave an orphan override
- * that a later same-slug agent would silently inherit). Idempotent. */
+ * that a later same-slug agent would silently inherit). Idempotent.
+ * The prompt-override cleanup runs FIRST inside the same registry-lock
+ * transaction and its failure PROPAGATES (the deletion reports failure and
+ * the agent is preserved, so the owner can retry) — never silently swallowed
+ * while the agent row disappears. */
 export async function deleteNamedAgent(id) {
   const slug = slugifyAgentId(id);
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const existing = map[slug];
+    if (!existing) return { ok: true };
+    // Prompt cleanup first: a failure aborts the deletion honestly (the
+    // agent row stays, the override stays consistent with it).
+    const cleanup = await deleteAgentPromptOverride(slug)
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (cleanup?.ok === false) {
+      return {
+        ok: false,
+        retryable: true,
+        error: `prompt-override cleanup failed (${cleanup.error ?? "unknown"}) — the agent was NOT deleted; retry`,
+      };
+    }
     delete map[slug];
     await writeAgents(map);
-    if (existing) {
-      const mem = namedAgentMemory(slug);
-      await mem.clear().catch(() => {});
-      // The agent's prompt override lives in the prompt store — clear it
-      // atomically with the deletion (best-effort: a failure here is
-      // reported, never silently swallowed, but must not resurrect the agent).
-      await deleteAgentPromptOverride(slug).catch(() => {});
-    }
+    const mem = namedAgentMemory(slug);
+    await mem.clear().catch(() => {});
     return { ok: true };
   });
 }

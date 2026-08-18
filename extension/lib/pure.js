@@ -594,13 +594,28 @@ export function hasLoneSurrogates(text) {
 
 /** Truncate to at most `maxBytes` of UTF-8 WITHOUT splitting a code point
  * (iterates code points, so a surrogate pair is never halved — the review's
- * UTF-16 slice finding). */
+ * UTF-16 slice finding).
+ *
+ * MALFORMED-INPUT CONTRACT (sanitize, never propagate): a lone surrogate can
+ * never round-trip through UTF-8 (TextEncoder silently rewrites it to U+FFFD),
+ * so truncateUtf8 DROPS lone-surrogate code units instead of re-appending the
+ * malformed original. The output is ALWAYS well-formed Unicode:
+ * hasLoneSurrogates(truncateUtf8(x, n)) === false for every input. Callers
+ * that must REJECT malformed input outright (owner-entered override text) use
+ * hasLoneSurrogates fail-closed BEFORE this helper; this helper guarantees it
+ * never manufactures or propagates malformed output. */
 export function truncateUtf8(text, maxBytes) {
   const s = String(text ?? "");
   const enc = new TextEncoder();
   let bytes = 0;
   let out = "";
   for (const ch of s) {
+    // A single-code-unit iteration value in the surrogate range is a LONE
+    // surrogate (a valid pair iterates as one two-unit code point) — drop it.
+    if (ch.length === 1) {
+      const c = ch.charCodeAt(0);
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+    }
     bytes += enc.encode(ch).byteLength;
     if (bytes > maxBytes) break;
     out += ch;

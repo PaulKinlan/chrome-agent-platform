@@ -1410,6 +1410,14 @@ async function renderPrompts() {
           }
         }
       } catch { /* a denied/unavailable request falls through to the save */ }
+    }
+    // MANDATORY CAS (the review's race-safety blocker): EVERY prompt-store
+    // mutation — set, reset, keep — carries the revision this window read,
+    // so a stale window conflicts instead of silently deleting/re-stamping a
+    // newer write it never saw. A null revision is rejected by the route
+    // (the describe failed — the honest error is flashed, never a silent
+    // unguarded write).
+    if (type === "prompt.set" || type === "prompt.reset" || type === "prompt.keep") {
       payload = { ...payload, expectedRevision: currentRevision };
     }
     editor.setAttribute("busy", "");

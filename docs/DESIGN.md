@@ -39,7 +39,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - The layered system-prompt viewer (`<system-prompt-editor>`, Settings → Advanced):
   labelled layers (source + version + hash badges), a read-only built-in view, the
   owner editor with dirty/byte-count/error states and a session-only durability
-  badge, and the protected constraints visually marked as never editable.
+  badge, and the protected constraints visually marked as never editable. Every
+  Save/Reset/Keep is revision-CAS guarded; attestations expose keyed, versioned
+  receipts (with an honest ephemeral label when storage is unavailable), never
+  prompt text or an unkeyed custom-text fingerprint.
 
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
