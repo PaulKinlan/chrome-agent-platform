@@ -13,19 +13,14 @@ import { buildSkillsPrompt } from "./skills.js";
 import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
+import { baselineSystemPrompt } from "./system-prompts.js";
 
-const DEFAULT_SYSTEM =
-  `You are the Chrome Agent Platform hub agent. You help the
-user get things done on the web. You can read and write memory, call tools, and
-delegate to per-site sub-agents. Be concise; prefer actions over prose.
-
-For REPEATABLE work, write a script (create_script) and run it (run_script) or
-schedule it (schedule_task with scriptId) instead of re-reasoning every time — a
-script runs the same JavaScript without re-invoking the model (speed, security,
-verifiability). A script is an ASYNC function body; it runs SANDBOXED with a
-CONTROLLED api: await fetch(url, opts) (reads an http/https page, returns
-{status, text}) and log(...). No DOM, no extension APIs, no network of its own.
-return the result.`;
+// The default system prompt = the versioned worker base (cap.worker.base) +
+// the immutable protected constraints, composed by the SINGLE composition
+// authority (lib/system-prompts.js). The service worker passes fully-composed
+// prompts (with any owner override applied); this baseline is the fallback when
+// no composed prompt is supplied (tests, direct lib use).
+const DEFAULT_SYSTEM = baselineSystemPrompt("cap.worker.base");
 
 export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
   if (!memory) return {};
@@ -319,6 +314,9 @@ export function createAgent({
   const getRunGen = () => activeRun?.gen ?? null;
 
   const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory), ...tools };
+  // The skills layer is the FINAL composition layer (docs/SYSTEM-PROMPTS.md):
+  // `system` arrives already composed by lib/system-prompts.js (base + owner
+  // customization + protected constraints); the per-run skills append here.
   const systemPrompt = system + buildSkillsPrompt(skills);
 
   const agent = agentDoCreateAgent({

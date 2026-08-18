@@ -43,6 +43,7 @@ what's landed vs what's next.
 - [x] The component design system (20+ Web Components, the gallery) + the impeccable design (paper/teal, PRODUCT.md + DESIGN.md) — landed
 - [x] Chaos-style semver (a post-commit hook auto-bumps the patch version after each commit) — landed
 - [x] The BeautifulUI AI-native primitives (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar) — landed 6adcfe6
+- [x] The layered, versioned system-prompt architecture (lib/system-prompts.js — the single composition authority for every run type; Settings → Advanced with the built-in viewer, per-scope append/prepend/replace customization, the protected constraints, the built-in-updated keep/reset/diff flow, and the byte-identical effective preview) — docs/SYSTEM-PROMPTS.md
 
 ## In flight (2026-08-17)
 - (none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)

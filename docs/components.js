@@ -3364,6 +3364,529 @@ class ActivityExplorer extends Component {
 }
 customElements.define("activity-explorer", ActivityExplorer);
 
+/* <system-prompt-editor> — the layered system-prompt viewer + owner-override
+ * editor (Settings → Advanced). ONE reusable component: the read-only built-in
+ * viewer (id + version + hash), the persistent override editor (append /
+ * prepend / replace modes, dirty/saved/error states, save/cancel/reset), the
+ * built-in-changed release banner with an old-vs-new diff + keep/reset, and
+ * the effective composed preview with every layer labelled (source + version +
+ * hash). Untrusted/user text is rendered with textContent only. All dynamic
+ * state arrives via the `data` property (the SW prompt.describe payload);
+ * mutations leave via CustomEvents (prompt-save / prompt-reset / prompt-keep)
+ * so the page stays the backend bridge.
+ *
+ *   const ed = document.createElement("system-prompt-editor");
+ *   ed.data = await sendMessage({ type: "prompt.describe", scope: "hub" });
+ *   ed.addEventListener("prompt-save", (e) => …);
+ */
+class SystemPromptEditor extends Component {
+  static get observedAttributes() { return ["scope-label", "busy"]; }
+  constructor() {
+    super();
+    this._data = null;
+    this._tab = "custom"; // "builtin" | "custom" | "effective"
+    this._draftText = null; // null = not editing yet (follow data)
+    this._draftMode = null;
+    this._diffOpen = false;
+    this._dataRev = 0;      // bumped on each set data — drafts re-seed on change
+    this._draftRev = -1;
+  }
+  set data(v) {
+    this._data = v && typeof v === "object" ? v : null;
+    this._dataRev++;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get data() { return this._data; }
+
+  /* ── draft state (survives re-renders; re-seeds when fresh data lands) ── */
+  _draft() {
+    const d = this._data;
+    if (this._draftRev !== this._dataRev) {
+      this._draftRev = this._dataRev;
+      this._draftText = d?.override?.text ?? "";
+      this._draftMode = d?.override?.mode ?? "append";
+      this._diffOpen = false;
+    }
+    return {
+      text: this._draftText ?? d?.override?.text ?? "",
+      mode: this._draftMode ?? d?.override?.mode ?? "append",
+    };
+  }
+  _dirty() {
+    const d = this._data;
+    const draft = this._draft();
+    const savedText = d?.override?.text ?? "";
+    const savedMode = d?.override?.mode ?? "append";
+    return draft.text !== savedText || draft.mode !== savedMode;
+  }
+  _valid() {
+    const max = this._data?.limits?.maxOverrideChars ?? 16000;
+    const t = this._draft().text.trim();
+    return t.length > 0 && t.length <= max;
+  }
+
+  _render() {
+    const d = this._data;
+    const scopeLabel = this.getAttribute("scope-label") || "Hub";
+    const busy = this.hasAttribute("busy");
+    const css = `
+      :host { display:block; }
+      .spe { border:1px solid var(--border,#e3e0d9); border-radius:12px;
+        background:var(--panel,#fff); overflow:hidden; }
+      .spe-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+        padding:12px 16px; border-bottom:1px solid var(--border,#e3e0d9); }
+      .spe-scope { font-weight:600; font-size:14px; }
+      .spe-badge { font-size:11px; font-weight:600; padding:2px 8px;
+        border-radius:999px; border:1px solid var(--border,#e3e0d9);
+        color:var(--muted,#6e6a62); background:var(--bg,#f7f6f3); }
+      .spe-badge.custom { color:var(--accent,#0e6e63);
+        border-color:var(--accent,#0e6e63); }
+      .spe-badge.update { color:var(--warning,#9a6700);
+        border-color:var(--warning,#9a6700); }
+      .spe-status { margin-left:auto; font-size:12px; color:var(--muted,#6e6a62); }
+      .spe-status.dirty { color:var(--warning,#9a6700); }
+      .spe-banner { padding:12px 16px; border-bottom:1px solid var(--border,#e3e0d9);
+        background:var(--bg,#f7f6f3); }
+      .spe-banner p { margin:0 0 8px; font-size:13px; }
+      .spe-banner .spe-row { display:flex; gap:8px; flex-wrap:wrap; }
+      .spe-tabs { display:flex; gap:2px; padding:8px 16px 0;
+        border-bottom:1px solid var(--border,#e3e0d9); }
+      .spe-tab { border:0; background:none; font:inherit; font-size:13px;
+        padding:8px 12px; cursor:pointer; color:var(--muted,#6e6a62);
+        border-bottom:2px solid transparent; }
+      .spe-tab[aria-selected="true"] { color:var(--text,#1d1b18);
+        border-bottom-color:var(--accent,#0e6e63); font-weight:600; }
+      .spe-tab:focus-visible { outline:2px solid var(--accent,#0e6e63);
+        outline-offset:-2px; }
+      .spe-panel { padding:16px; }
+      .spe-meta { display:flex; gap:12px; flex-wrap:wrap; align-items:center;
+        font-size:12px; color:var(--muted,#6e6a62); margin-bottom:8px; }
+      .spe-meta code { font-size:11px; background:var(--bg,#f7f6f3);
+        border:1px solid var(--border,#e3e0d9); border-radius:6px;
+        padding:1px 6px; }
+      .spe-pre { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:pre-wrap; word-break:break-word; margin:0;
+        background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
+        border-radius:8px; padding:12px; max-height:320px; overflow:auto; }
+      .spe-layer { border:1px solid var(--border,#e3e0d9); border-radius:8px;
+        margin-bottom:8px; overflow:hidden; }
+      .spe-layer-head { display:flex; gap:8px; align-items:center;
+        flex-wrap:wrap; padding:8px 12px; background:var(--bg,#f7f6f3);
+        border-bottom:1px solid var(--border,#e3e0d9); font-size:12px; }
+      .spe-layer-head .name { font-weight:600; }
+      .spe-layer .spe-pre { border:0; border-radius:0; max-height:240px; }
+      .spe-layer.omitted .spe-pre { color:var(--muted,#6e6a62); }
+      .spe-field { display:block; margin-bottom:12px; }
+      .spe-label { display:block; font-size:13px; font-weight:600;
+        margin-bottom:6px; }
+      .spe-modes { display:flex; flex-direction:column; gap:6px; margin:0 0 12px;
+        padding:0; border:0; }
+      .spe-mode { display:flex; gap:8px; align-items:flex-start; font-size:13px;
+        cursor:pointer; }
+      .spe-mode input { margin-top:3px; accent-color:var(--accent,#0e6e63); }
+      .spe-mode .muted { display:block; font-size:12px; }
+      textarea.spe-text { width:100%; box-sizing:border-box; font:13px/1.5
+        ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text,#1d1b18);
+        background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
+        border-radius:8px; padding:10px 12px; resize:vertical; min-height:140px; }
+      textarea.spe-text:focus-visible { outline:2px solid
+        var(--accent,#0e6e63); outline-offset:1px; }
+      .spe-count { font-size:12px; color:var(--muted,#6e6a62); text-align:right;
+        margin-top:4px; }
+      .spe-count.over { color:var(--danger,#b3261e); font-weight:600; }
+      .spe-error { color:var(--danger,#b3261e); font-size:13px; margin:8px 0 0; }
+      .spe-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+      .spe-btn { font:inherit; font-size:13px; font-weight:600; border-radius:8px;
+        padding:8px 14px; cursor:pointer; border:1px solid transparent;
+        background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); }
+      .spe-btn:disabled { opacity:.55; cursor:not-allowed; }
+      .spe-btn.ghost { background:transparent; color:var(--text,#1d1b18);
+        border-color:var(--border,#e3e0d9); }
+      .spe-btn.danger { background:transparent; color:var(--danger,#b3261e);
+        border-color:var(--danger,#b3261e); }
+      .spe-btn:focus-visible { outline:2px solid var(--accent,#0e6e63);
+        outline-offset:2px; }
+      .spe-note { font-size:12px; color:var(--muted,#6e6a62); margin:8px 0 0; }
+      .spe-diff { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+        max-height:280px; overflow:auto; border:1px solid var(--border,#e3e0d9);
+        border-radius:8px; margin-top:8px; }
+      .spe-diff .row { padding:0 10px; white-space:pre-wrap;
+        word-break:break-word; }
+      .spe-diff .add { background:color-mix(in srgb, var(--success,#1a7f37) 12%, transparent);
+        color:var(--success,#1a7f37); }
+      .spe-diff .del { background:color-mix(in srgb, var(--danger,#b3261e) 10%, transparent);
+        color:var(--danger,#b3261e); }
+      .muted { color:var(--muted,#6e6a62); }
+      [hidden] { display:none !important; }
+    `;
+
+    if (!d) {
+      mountTemplate(this, css, `<div class="spe"><div class="spe-panel">
+        <p class="muted" role="status">Loading the system prompt…</p>
+      </div></div>`);
+      return;
+    }
+    if (d.ok === false) {
+      mountTemplate(this, css, `<div class="spe"><div class="spe-panel">
+        <p class="spe-error" role="alert">${escapeHtml(d.error ?? "The prompt could not be loaded.")}</p>
+      </div></div>`);
+      return;
+    }
+
+    const draft = this._draft();
+    const dirty = this._dirty();
+    const hasOverride = Boolean(d.override);
+    const changed = Boolean(d.builtinChanged && d.override);
+    const max = d.limits?.maxOverrideChars ?? 16000;
+    const stateBadge = changed
+      ? `<span class="spe-badge update">Built-in updated</span>`
+      : hasOverride
+        ? `<span class="spe-badge custom">Customized${d.inherited ? " (inherited)" : ""}</span>`
+        : `<span class="spe-badge">Default</span>`;
+    const statusText = busy ? "Saving…"
+      : dirty ? "Unsaved changes"
+      : hasOverride ? "Saved" : "";
+
+    const tabs = [
+      ["builtin", "Built-in default"],
+      ["custom", "Your customization"],
+      ["effective", "Effective prompt"],
+    ].map(([id, label]) =>
+      `<button class="spe-tab" type="button" role="tab" data-tab="${id}"
+        id="spe-tab-${id}" aria-controls="spe-panel-${id}"
+        aria-selected="${this._tab === id}" tabindex="${this._tab === id ? "0" : "-1"}">${label}</button>`
+    ).join("");
+
+    const banner = changed ? `
+      <div class="spe-banner" role="alert">
+        <p><strong>The built-in prompt changed since your customization</strong>
+        (v${escapeHtml(d.override.baseVersion ?? "?")} → v${escapeHtml(d.base?.version ?? "?")}).
+        Your ${escapeHtml(d.override.mode)} customization still applies — nothing was overwritten.
+        ${d.override.mode === "replace"
+          ? "You replace the built-in prompt, so review the changes and edit your text to merge anything new you want."
+          : "Review what changed, then keep your customization (it will apply to the new built-in) or reset to the new default."}</p>
+        <div class="spe-row">
+          <button class="spe-btn ghost spe-diff-toggle" type="button" aria-expanded="${this._diffOpen}">${this._diffOpen ? "Hide changes" : "View changes"}</button>
+          <button class="spe-btn spe-keep" type="button" ${busy ? "disabled" : ""}>Keep my customization</button>
+          <button class="spe-btn danger spe-reset" type="button" ${busy ? "disabled" : ""}>Reset to the new default</button>
+        </div>
+        <div class="spe-diff" ${this._diffOpen ? "" : "hidden"}></div>
+      </div>` : "";
+
+    const builtinMeta = d.base ? `
+      <div class="spe-meta">
+        <code>${escapeHtml(d.base.id)}</code>
+        <span>v${escapeHtml(d.base.version)}</span>
+        <span>release ${escapeHtml(d.base.release ?? "—")}</span>
+        <span>hash <code>${escapeHtml(d.base.hash)}</code></span>
+        <button class="spe-btn ghost spe-copy-builtin" type="button">Copy</button>
+      </div>` : "";
+
+    const panelBuiltin = `
+      <div class="spe-panel" role="tabpanel" id="spe-panel-builtin"
+        aria-labelledby="spe-tab-builtin" ${this._tab === "builtin" ? "" : "hidden"}>
+        ${builtinMeta}
+        <pre class="spe-pre spe-builtin-text" tabindex="0"></pre>
+        <p class="spe-note">Read-only. This is the product-authored built-in prompt for this scope —
+        exactly what ships in this release. The protected safety constraints (below in the
+        Effective prompt tab) always apply and are never editable.</p>
+      </div>`;
+
+    const inheritedNote = d.inherited
+      ? `<p class="spe-note">This agent currently inherits the hub's customization.
+        Saving here creates an agent-specific override; Reset removes it and returns to inheriting.</p>`
+      : "";
+    const panelCustom = `
+      <div class="spe-panel" role="tabpanel" id="spe-panel-custom"
+        aria-labelledby="spe-tab-custom" ${this._tab === "custom" ? "" : "hidden"}>
+        ${inheritedNote}
+        <fieldset class="spe-modes">
+          <legend class="spe-label">Composition mode</legend>
+          <label class="spe-mode"><input type="radio" name="spe-mode" value="append" ${draft.mode === "append" ? "checked" : ""}>
+            <span>Append<span class="muted">Your instructions are added after the built-in prompt (recommended).</span></span></label>
+          <label class="spe-mode"><input type="radio" name="spe-mode" value="prepend" ${draft.mode === "prepend" ? "checked" : ""}>
+            <span>Prepend<span class="muted">Your instructions are added before the built-in prompt.</span></span></label>
+          <label class="spe-mode"><input type="radio" name="spe-mode" value="replace" ${draft.mode === "replace" ? "checked" : ""}>
+            <span>Replace<span class="muted">Your instructions replace the built-in prompt. The protected safety constraints still apply and can never be removed.</span></span></label>
+        </fieldset>
+        <label class="spe-field">
+          <span class="spe-label">Custom instructions</span>
+          <textarea class="spe-text" rows="9" maxlength="${max * 2}"
+            aria-describedby="spe-count spe-status"
+            placeholder="e.g. Always answer in British English. Prefer tables for comparisons."></textarea>
+        </label>
+        <div class="spe-count" id="spe-count"></div>
+        <p class="spe-note">Never paste API keys, passwords, or other secrets — these instructions are sent to your configured provider with every run.</p>
+        <p class="spe-error" role="alert" hidden></p>
+        <div class="spe-actions">
+          <button class="spe-btn spe-save" type="button" ${busy || !dirty || !this._valid() ? "disabled" : ""}>Save</button>
+          <button class="spe-btn ghost spe-cancel" type="button" ${busy || !dirty ? "disabled" : ""}>Cancel</button>
+          ${hasOverride && !d.inherited
+            ? `<button class="spe-btn danger spe-reset" type="button" ${busy ? "disabled" : ""}>Reset to default</button>`
+            : ""}
+        </div>
+      </div>`;
+
+    const effHash = d.effective?.hash ?? "";
+    const effBytes = String(d.effective?.text ?? "").length;
+    const panelEffective = `
+      <div class="spe-panel" role="tabpanel" id="spe-panel-effective"
+        aria-labelledby="spe-tab-effective" ${this._tab === "effective" ? "" : "hidden"}>
+        <div class="spe-meta">
+          <span>Effective hash <code>${escapeHtml(effHash)}</code></span>
+          <span>${effBytes.toLocaleString()} chars</span>
+          <button class="spe-btn ghost spe-copy-effective" type="button">Copy effective prompt</button>
+          <button class="spe-btn ghost spe-export" type="button">Export (.md)</button>
+        </div>
+        <div class="spe-layers"></div>
+        <p class="spe-note">This is exactly what is sent to the model for this scope — every layer
+        labelled with its source + version. Layers marked “not sent” are replaced by your
+        customization. Per-run skills append after these layers.</p>
+      </div>`;
+
+    mountTemplate(this, css, `
+      <div class="spe">
+        <div class="spe-head">
+          <span class="spe-scope">${escapeHtml(scopeLabel)}</span>
+          ${stateBadge}
+          <span class="spe-status ${dirty ? "dirty" : ""}" id="spe-status" role="status" aria-live="polite">${escapeHtml(statusText)}</span>
+        </div>
+        ${banner}
+        <div class="spe-tabs" role="tablist" aria-label="System prompt views">${tabs}</div>
+        ${panelBuiltin}${panelCustom}${panelEffective}
+      </div>`);
+
+    // Untrusted/long text is filled with textContent (never innerHTML).
+    const builtinPre = this._root.querySelector(".spe-builtin-text");
+    if (builtinPre) builtinPre.textContent = d.base?.content ?? "";
+    const ta = this._root.querySelector("textarea.spe-text");
+    if (ta) ta.value = draft.text;
+    this._updateCount();
+
+    // The layered effective preview.
+    const layersHost = this._root.querySelector(".spe-layers");
+    if (layersHost) {
+      for (const layer of d.effective?.layers ?? []) {
+        const box = document.createElement("div");
+        box.className = "spe-layer" + (layer.omitted ? " omitted" : "");
+        const head = document.createElement("div");
+        head.className = "spe-layer-head";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = layer.label ?? layer.id;
+        head.append(name);
+        const src = document.createElement("span");
+        src.className = "spe-badge" + (layer.source === "protected" ? " update" : layer.source === "owner" ? " custom" : "");
+        src.textContent = layer.source === "protected" ? "protected — always applied"
+          : layer.source === "owner" ? "your customization"
+          : layer.source === "agent" ? "agent role"
+          : layer.source === "skills" ? "skills"
+          : "built-in";
+        head.append(src);
+        if (layer.version) {
+          const v = document.createElement("span");
+          v.className = "muted";
+          v.textContent = `v${layer.version}`;
+          head.append(v);
+        }
+        if (layer.hash) {
+          const h = document.createElement("code");
+          h.textContent = String(layer.hash).slice(0, 12);
+          head.append(h);
+        }
+        if (layer.omitted) {
+          const om = document.createElement("span");
+          om.className = "muted";
+          om.textContent = "not sent (replaced)";
+          head.append(om);
+        }
+        box.append(head);
+        if (!layer.omitted) {
+          const pre = document.createElement("pre");
+          pre.className = "spe-pre";
+          pre.tabIndex = 0;
+          pre.textContent = layer.text ?? "";
+          box.append(pre);
+        }
+        layersHost.append(box);
+      }
+    }
+
+    // The release-update diff (lazy — only when open).
+    if (changed && this._diffOpen) this._fillDiff();
+  }
+
+  _fillDiff() {
+    const host = this._root.querySelector(".spe-diff");
+    const d = this._data;
+    if (!host || !d?.override) return;
+    host.replaceChildren();
+    // The diff rows arrive IN the describe payload (computed by the single
+    // composition authority in the SW) — override snapshot vs the current base.
+    const rows = Array.isArray(d.diff) ? d.diff : [];
+    if (!rows.length) {
+      const p = document.createElement("div");
+      p.className = "row muted";
+      p.textContent = "(no line-level changes to show)";
+      host.append(p);
+      return;
+    }
+    for (const r of rows.slice(0, 800)) {
+      const row = document.createElement("div");
+      row.className = "row " + (r.type === "add" ? "add" : r.type === "del" ? "del" : "same");
+      row.textContent = (r.type === "add" ? "+ " : r.type === "del" ? "− " : "  ") + r.text;
+      host.append(row);
+    }
+  }
+
+  _updateCount() {
+    const max = this._data?.limits?.maxOverrideChars ?? 16000;
+    const count = this._root.querySelector(".spe-count");
+    const len = this._draft().text.length;
+    if (count) {
+      count.textContent = `${len.toLocaleString()} / ${max.toLocaleString()}`;
+      count.classList.toggle("over", len > max);
+    }
+  }
+
+  _refreshButtons() {
+    const busy = this.hasAttribute("busy");
+    const dirty = this._dirty();
+    const valid = this._valid();
+    const save = this._root.querySelector(".spe-save");
+    const cancel = this._root.querySelector(".spe-cancel");
+    const status = this._root.querySelector(".spe-status");
+    if (save) save.disabled = busy || !dirty || !valid;
+    if (cancel) cancel.disabled = busy || !dirty;
+    if (status) {
+      status.textContent = busy ? "Saving…" : dirty ? "Unsaved changes"
+        : this._data?.override ? "Saved" : "";
+      status.classList.toggle("dirty", dirty && !busy);
+    }
+    const err = this._root.querySelector(".spe-error");
+    if (err) {
+      const over = this._draft().text.length > (this._data?.limits?.maxOverrideChars ?? 16000);
+      err.hidden = !over;
+      err.textContent = over ? "Custom instructions are too long — trim below the limit to save." : "";
+    }
+  }
+
+  _switchTab(id) {
+    if (this._tab === id) return;
+    this._tab = id;
+    this._render();
+    this._wire();
+    // Keep focus on the newly-selected tab (keyboard continuity).
+    this._root.querySelector(`.spe-tab[data-tab="${id}"]`)?.focus();
+  }
+
+  async _copy(text, btn) {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      // Fallback: a hidden textarea + execCommand (older/non-secure contexts).
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.append(ta);
+        ta.select();
+        ok = document.execCommand?.("copy") === true;
+        ta.remove();
+      } catch { ok = false; }
+    }
+    if (btn) {
+      const old = btn.textContent;
+      btn.textContent = ok ? "Copied" : "Copy failed";
+      setTimeout(() => { btn.textContent = old; }, 1500);
+    }
+  }
+
+  _export() {
+    const d = this._data;
+    if (!d) return;
+    const lines = [
+      `# System prompt — ${this.getAttribute("scope-label") || d.scope}`,
+      ``,
+      `Scope: ${d.scope}`,
+      `Effective hash: ${d.effective?.hash ?? ""}`,
+      ``,
+    ];
+    for (const l of d.effective?.layers ?? []) {
+      lines.push(`## ${l.label}${l.omitted ? " (not sent — replaced)" : ""}`);
+      if (l.version) lines.push(`(${l.id} v${l.version}${l.hash ? ", hash " + l.hash : ""})`);
+      lines.push("", l.omitted ? "" : (l.text ?? ""), "");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `system-prompt-${String(d.scope).replace(/[^a-z0-9]+/gi, "-")}.md`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  _wire() {
+    const $ = (sel) => this._root.querySelector(sel);
+    // Tabs (click + arrow-key tablist behaviour).
+    const tabs = [...this._root.querySelectorAll(".spe-tab")];
+    for (const t of tabs) {
+      t.addEventListener("click", () => this._switchTab(t.dataset.tab));
+      t.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+        e.preventDefault();
+        const ids = tabs.map((x) => x.dataset.tab);
+        const i = ids.indexOf(this._tab);
+        const next = ids[(i + (e.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length];
+        this._switchTab(next);
+      });
+    }
+    // The editor draft.
+    const ta = $("textarea.spe-text");
+    ta?.addEventListener("input", () => {
+      this._draftText = ta.value;
+      this._updateCount();
+      this._refreshButtons();
+    });
+    for (const radio of this._root.querySelectorAll('input[name="spe-mode"]')) {
+      radio.addEventListener("change", () => {
+        this._draftMode = radio.value;
+        this._refreshButtons();
+      });
+    }
+    $(".spe-save")?.addEventListener("click", () => {
+      if (!this._valid() || !this._dirty()) return;
+      const draft = this._draft();
+      this._emit("prompt-save", { mode: draft.mode, text: draft.text.trim() });
+    });
+    $(".spe-cancel")?.addEventListener("click", () => {
+      this._draftRev = -1; // re-seed from the saved data
+      this._render();
+      this._wire();
+    });
+    for (const btn of this._root.querySelectorAll(".spe-reset")) {
+      btn.addEventListener("click", () => this._emit("prompt-reset", {}));
+    }
+    $(".spe-keep")?.addEventListener("click", () => this._emit("prompt-keep", {}));
+    $(".spe-diff-toggle")?.addEventListener("click", () => {
+      this._diffOpen = !this._diffOpen;
+      this._render();
+      this._wire();
+    });
+    $(".spe-copy-builtin")?.addEventListener("click", (e) =>
+      this._copy(this._data?.base?.content ?? "", e.currentTarget));
+    $(".spe-copy-effective")?.addEventListener("click", (e) =>
+      this._copy(this._data?.effective?.text ?? "", e.currentTarget));
+    $(".spe-export")?.addEventListener("click", () => this._export());
+  }
+}
+customElements.define("system-prompt-editor", SystemPromptEditor);
+
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs
  * showcase both call this.

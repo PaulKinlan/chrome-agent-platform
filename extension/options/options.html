@@ -33,6 +33,9 @@
         <a href="#hooks" class="nav-item" data-section="hooks">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
         Hooks</a>
+        <a href="#prompts" class="nav-item" data-section="prompts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        Advanced</a>
         <a href="#usage" class="nav-item" data-section="usage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Usage</a>
@@ -134,6 +137,17 @@
         <p
           class="muted">Every chrome.* event an agent can listen to + respond to. <strong>Deny</strong> a hook to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook also needs its optional permission before it can run.</p>
         <div id="hook-list" class="hook-list"></div>
+      </section>
+
+      <section id="prompts" class="panel">
+        <h2>Advanced — system prompts</h2>
+        <p
+          class="muted">The exact system prompt each agent runs with, layer by layer: the versioned built-in prompt, your persistent customization, and the protected safety constraints (never editable). What you preview here is byte-identical to what the model is sent.</p>
+        <label class="field prompt-scope-field"><span class="field-label">Agent scope</span>
+          <select id="prompt-scope" aria-label="System prompt scope"></select>
+        </label>
+        <p class="muted" id="prompt-scope-hint"></p>
+        <system-prompt-editor id="prompt-editor"></system-prompt-editor>
       </section>
 
       <section id="usage" class="panel">

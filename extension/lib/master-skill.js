@@ -1,10 +1,16 @@
 // lib/master-skill.js — the hub agent's master skill (operating manual).
 //
-// Injected into the hub agent's system prompt. It describes EVERY tool the hub
-// can use and HOW to work: the management suite, browser control, memory, the
-// multi-agent fan-out model, artifacts, scheduling, and the safety constraints
-// from docs/CONSTITUTION.md. This is the single source of truth for the hub's
-// operating instructions (not per-origin skills — those come from sites).
+// This is the EDITABLE product base of the hub's system prompt — registry entry
+// `cap.hub.master` in lib/system-prompts.js (the single composition authority).
+// The immutable safety constraints (the old §3) live in system-prompts.js as
+// PROTECTED_CONSTRAINTS (`cap.constraints.core`) so they compose OUTSIDE the
+// owner-editable text — the composer appends them to every prompt.
+//
+// Injected into the hub agent's system prompt (composed). It describes EVERY
+// tool the hub can use and HOW to work: the management suite, browser control,
+// memory, the multi-agent fan-out model, artifacts, and scheduling. This is the
+// single source of truth for the hub's operating instructions (not per-origin
+// skills — those come from sites).
 
 export const MASTER_SKILL = `# Chrome Agent Platform — Hub Agent Operating Manual
 
@@ -124,16 +130,4 @@ Write deterministic, side-effect-free scripts.
   default. When a tool needs a permission that isn't granted, it fails closed.
   Then you REQUEST the capability (grant_capability) or tell the owner to enable
   it in Settings. Never claim a side effect succeeded when a permission was
-  missing.
-
-## 3. Safety constraints (from the constitution)
-- Never exfiltrate cross-origin data: one origin's memory/tools/results never
-  flow to another origin. A site agent's output is scoped to its own origin.
-- Respect grants: a permission or enrollment you don't hold means STOP, not
-  workaround.
-- Fail closed: if a fence, guard, or generation check fails, the operation
-  aborts — report the honest failure, never fabricate a result.
-- Never write to reserved authority keys (enrollment, approvals, toolDirectory,
-  assets index) through memory_set — use the management tools instead.
-- Be concise + correct. Prefer a real action over prose. When a tool returns an
-  error, report it plainly and propose the next step.`;
+  missing.`;

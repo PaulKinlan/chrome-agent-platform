@@ -242,6 +242,14 @@
         <p class="caption">search by text, filter by agent (seeded demo entries — the real surface queries <code>activity.list</code> across master + named + background + site agents).</p>
       </div>
 
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;system-prompt-editor&gt;</code> — the layered system-prompt viewer + override editor</h3>
+        <div class="stage column" style="max-width:720px">
+          <system-prompt-editor id="prompt-demo" scope-label="Hub agent (default)"></system-prompt-editor>
+        </div>
+        <p class="caption">the SAME component Settings → Advanced uses. Seeded demo data below (the real surface bridges the SW <code>prompt.describe</code>/<code>prompt.set</code> routes). Emits <code>prompt-save</code> / <code>prompt-reset</code> / <code>prompt-keep</code>.</p>
+      </div>
+
       <!-- ── Composed ───────────────────────────────────────────── -->
       <h2 class="section">Composed — a mini hub</h2>
       <div class="grid-2">
@@ -363,6 +371,46 @@
         { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
         { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
       ];
+
+      // <system-prompt-editor> example — a seeded describe payload showing the
+      // customized state WITH a built-in update pending (the update banner +
+      // diff + keep/reset), so every visual state is exercised in isolation.
+      const promptDemo = document.getElementById("prompt-demo");
+      if (promptDemo) {
+        const baseText = "# Hub Agent Operating Manual\n\nYou are the hub agent. Prefer action over prose.\n\n## Tools\n- create_agent(origin, name)\n- delegate_task(agentId, task)";
+        promptDemo.data = {
+          ok: true,
+          scope: "hub",
+          base: { id: "cap.hub.master", title: "Hub agent operating manual", version: "1.1.0", release: "0.3.0", hash: "9f02c4aa77d31e02", content: baseText + "\n- schedule_task(scriptId, periodInMinutes)" },
+          override: { mode: "append", text: "Always answer in British English. Prefer tables for comparisons.", baseId: "cap.hub.master", baseVersion: "1.0.0", baseHash: "1a2b3c4d5e6f7788", baseSnapshot: baseText, updatedAt: Date.now() },
+          overrideScope: "hub",
+          inherited: false,
+          builtinChanged: true,
+          diff: [
+            { type: "same", text: "# Hub Agent Operating Manual" },
+            { type: "same", text: "" },
+            { type: "same", text: "You are the hub agent. Prefer action over prose." },
+            { type: "same", text: "" },
+            { type: "same", text: "## Tools" },
+            { type: "same", text: "- create_agent(origin, name)" },
+            { type: "same", text: "- delegate_task(agentId, task)" },
+            { type: "add", text: "- schedule_task(scriptId, periodInMinutes)" },
+          ],
+          effective: {
+            text: "…",
+            hash: "deadbeeff00dcafe",
+            layers: [
+              { id: "cap.hub.master", label: "Hub agent operating manual", source: "built-in", version: "1.1.0", hash: "9f02c4aa77d31e02", text: baseText + "\n- schedule_task(scriptId, periodInMinutes)" },
+              { id: "owner-append", label: "Your custom instructions", source: "owner", text: "## Owner custom instructions\nAlways answer in British English. Prefer tables for comparisons." },
+              { id: "cap.constraints.core", label: "Protected safety constraints", source: "protected", version: "1.0.0", hash: "0badc0de12345678", text: "## 3. Safety constraints (from the constitution)\n- Never exfiltrate cross-origin data.\n- Respect grants.\n- Fail closed." },
+            ],
+          },
+          limits: { maxOverrideChars: 16000 },
+        };
+        for (const ev of ["prompt-save", "prompt-reset", "prompt-keep"]) {
+          promptDemo.addEventListener(ev, (e) => log("#hub-log", `${ev}: ${JSON.stringify(e.detail).slice(0, 80)}`));
+        }
+      }
     </script>
   </body>
 </html>

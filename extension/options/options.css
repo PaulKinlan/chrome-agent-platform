@@ -834,3 +834,13 @@ input:focus, select:focus, textarea:focus {
 .agent-provider-select {
   min-width: 170px;
 }
+
+/* Advanced — system prompts */
+.prompt-scope-field { max-width: 360px; margin-bottom: var(--space-2); }
+.prompt-scope-field select {
+  width: 100%; font: inherit; font-size: var(--text-sm, 13px);
+  padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--panel); color: var(--text);
+}
+.prompt-scope-field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#prompt-scope-hint { margin: 0 0 var(--space-3); }

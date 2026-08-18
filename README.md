@@ -68,13 +68,25 @@ extension/
   sidepanel/                    the driven-page surface (chrome.sidePanel)
   chat/                         the conversation surface
   options/                      the settings (providers, agents, appearance, permissions,
-                                hooks, usage, data & memory)
+                                hooks, advanced system prompts, usage, data & memory)
   artifacts/                    the artifact gallery
   content/                      the WebMCP bridge + window.* tool inference (MAIN + isolated)
   shared/                       the single-source Web Components (the design system)
   lib/                          provider, memory, named-agents, skills, hooks, artifacts,
-                                script-host, management-tools, scheduler, ...
+                                script-host, management-tools, scheduler, system-prompts, ...
 ```
+
+## System prompts (Settings → Advanced)
+
+Every system prompt the platform sends is composed by ONE authority
+(`extension/lib/system-prompts.js` — see **docs/SYSTEM-PROMPTS.md**): the versioned
+built-in base + the owner's persistent per-scope customization (append/prepend/replace)
++ the agent role + the immutable protected safety constraints + the per-run skills.
+Hub, named-agent, background, scheduled, hook, and site-worker runs all resolve through
+it, so the Settings → Advanced preview is byte-identical to what the model receives. A
+product update to a built-in prompt never silently overwrites a customization — the UI
+flags it with an old-vs-new diff and explicit keep/edit/reset choices.
+
 
 ## The design system
 

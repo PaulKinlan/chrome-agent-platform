@@ -14,6 +14,7 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 - The per-provider model selector (current model lists per provider + an OpenAI-compatible + a working Custom… text input).
 - The "Test connection" button per provider (a real round-trip + the specific error).
 - Chaos-style semver (scripts/bump-version.mjs + the post-commit auto-bump).
+- Settings → Advanced: the layered, versioned system-prompt surface — the read-only built-in viewer (id/version/hash), the persistent per-scope customization editor (append/prepend/replace, save/cancel/reset, dirty + char-count states), the built-in-updated banner with an old-vs-new diff + keep/reset, and the effective composed preview (every layer labelled; the protected constraints never editable). The reusable `<system-prompt-editor>` component (single-source components.js + the gallery); the preview IS the sent prompt (one composition authority, lib/system-prompts.js — docs/SYSTEM-PROMPTS.md). Verified: 23 unit tests (tests/system-prompts.test.ts) + the real-extension journey (scripts/system-prompts-integration.ts) with screenshots.
 
 ### Hub / sidebar / task list
 - The task sidebar (expand/collapse to an icon rail, tooltips, the + new-task button).
@@ -69,7 +70,11 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 3. **WebMCP discovery** — the site agents still don't pick up the inferred/known WebMCP tools (Paul: not working). IN FLIGHT (scripts/webmcp-diag.ts); needs the fix + a real-browser integration test (a WebMCP page → the tools discovered), not a mock.
 
 ## Evidence
-- `npm test` — 298 passed.
+- `npm test` — 344 passed (incl. the 23 system-prompts tests).
+- `npm run test:components` — the gallery smoke incl. the seeded `<system-prompt-editor>` specimen.
+- `deno run -A scripts/system-prompts-integration.ts` — the real-extension Advanced-settings journey (driven UI + SW prompt.* routes + preview/attestation parity + screenshots), 30/30.
+- `npm test` (earlier baseline) — 298 passed.
+- `npm run test:ui` — 12/13; the one failure ("recent-activity panel has horizontal padding — no runlog row/empty found") reproduces IDENTICALLY on the clean base commit (verified via stash → build → re-run): a pre-existing NTP flake, NOT a regression from the system-prompts work (which touches no NTP code).
 - `npm run test:chrome` — 111/120 (9 journeys failing due to the IN-FLIGHT uncommitted work from the running workers; not a committed-state regression — re-check once those workers land).
 - `npm run test:components` / `test:security` / `test:opfs` — green in the committed state.
 

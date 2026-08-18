@@ -1329,6 +1329,92 @@ async function renderData() {
   }
 }
 
+// ── Advanced — system prompts (the layered prompt architecture) ──────────
+// The scope selector picks WHICH agent's system prompt is shown: the hub
+// (also the default for background/hook/scheduled runs), the site sub-agents
+// (the "worker" scope), or a specific named agent (agent:<slug>, which
+// inherits the hub's customization until it has its own). The
+// <system-prompt-editor> component renders the describe payload; saves/resets
+// route through the SW prompt.* handlers (the SAME composition authority the
+// run path uses — the preview IS the sent prompt).
+const PROMPT_SCOPES = [
+  { id: "hub", label: "Hub agent (default)", hint: "Applies to the hub and, unless a named agent has its own customization, to every named/background/hook/scheduled run." },
+  { id: "worker", label: "Site sub-agents", hint: "The base prompt every enrolled site's sub-agent runs with. Per-origin skills are appended at run time." },
+];
+
+async function renderPrompts() {
+  const scopeSelect = $("#prompt-scope");
+  const hint = $("#prompt-scope-hint");
+  const editor = $("#prompt-editor");
+  if (!scopeSelect || !editor) return;
+
+  // Populate the scope selector: the two global scopes + one entry per named agent.
+  scopeSelect.replaceChildren();
+  for (const s of PROMPT_SCOPES) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = s.label;
+    scopeSelect.append(opt);
+  }
+  let agents = [];
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "named-agent.list" });
+    agents = Array.isArray(r?.agents) ? r.agents : [];
+  } catch { agents = []; }
+  for (const a of agents) {
+    const opt = document.createElement("option");
+    opt.value = `agent:${a.id}`;
+    opt.textContent = `Agent: ${a.name}`;
+    scopeSelect.append(opt);
+  }
+
+  async function load() {
+    const scope = scopeSelect.value || "hub";
+    const preset = PROMPT_SCOPES.find((s) => s.id === scope);
+    hint.textContent = preset?.hint
+      ?? (scope.startsWith("agent:")
+        ? "This named agent's system prompt. It inherits the hub customization until you save an agent-specific one; its role rides as a labelled layer."
+        : "");
+    const label = preset?.label
+      ?? (scope.startsWith("agent:")
+        ? `Agent: ${agents.find((a) => `agent:${a.id}` === scope)?.name ?? scope.slice(6)}`
+        : scope);
+    editor.setAttribute("scope-label", label);
+    editor.data = null; // loading state
+    const d = await chrome.runtime
+      .sendMessage({ type: "prompt.describe", scope })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    editor.data = d;
+  }
+
+  async function mutate(type, payload = {}) {
+    const scope = scopeSelect.value || "hub";
+    editor.setAttribute("busy", "");
+    const r = await chrome.runtime
+      .sendMessage({ type, scope, ...payload })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    editor.removeAttribute("busy");
+    if (r?.ok === false) {
+      saveFlash(`Prompt not saved: ${r.error ?? "unknown error"}`);
+    } else {
+      saveFlash(
+        type === "prompt.set" ? "System prompt customization saved."
+        : type === "prompt.keep" ? "Customization kept — now based on the latest built-in prompt."
+        : "Reset to the built-in default.",
+      );
+    }
+    await load();
+  }
+
+  scopeSelect.addEventListener("change", load);
+  editor.addEventListener("prompt-save", (e) =>
+    mutate("prompt.set", { mode: e.detail.mode, text: e.detail.text }));
+  editor.addEventListener("prompt-reset", () => mutate("prompt.reset"));
+  editor.addEventListener("prompt-keep", () => mutate("prompt.keep"));
+
+  await load();
+}
+
 // ── helpers ──
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
@@ -1355,6 +1441,7 @@ const sections = [
   "browser",
   "permissions",
   "hooks",
+  "prompts",
   "usage",
   "data",
 ];
@@ -1388,6 +1475,7 @@ await renderAppearance();
 await renderBrowser();
 await renderPermissions();
 await renderHooks();
+await renderPrompts();
 await renderUsage();
 await renderData();
 await renderMemoryExplorer();

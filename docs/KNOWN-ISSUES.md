@@ -20,6 +20,7 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 - **MAIN cancel tombstones bounded:** bounded now; verify eviction under load.
 
 ### Acceptance-coverage gaps (test/evidence depth)
+- **System-prompts surface (feat/system-prompt-settings, awaiting independent review):** the layered/versioned system-prompt architecture + Settings → Advanced UI landed with 23 unit tests (tests/system-prompts.test.ts), the gallery specimen, and a real-extension journey (scripts/system-prompts-integration.ts). The standing independent review (a different model) must still confirm the diff + evidence before this is considered cleared.
 - **No headed-browser screenshot success path** (headless can't grant arbitrary-tab capture; the active-tab path is documented). Needs a headed-browser test.
 - **No full real-enrollment lifecycle journey** (enroll → discover → invoke → cleanup → Retry) as a single headed acceptance.
 - **[CLOSED — scripts/capability-lifecycle.ts, 21 checks] Capability lifecycles** — grant→use→revoke acceptance for each optional capability (real CDP gestures), npm run test:capabilities.

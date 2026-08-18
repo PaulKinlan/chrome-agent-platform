@@ -103,7 +103,15 @@ import {
   setThreadStatus,
 } from "../lib/threads.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
-import { MASTER_SKILL } from "../lib/master-skill.js";
+import {
+  attestComposition,
+  clearPromptOverride,
+  describePrompt,
+  normalizeScope,
+  resolveSystemPrompt,
+  restampPromptOverride,
+  setPromptOverride,
+} from "../lib/system-prompts.js";
 import {
   createAsset,
   deleteAsset,
@@ -588,13 +596,15 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null) {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "") {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
-  // memory instead of the agent's own tier.
-  if (memoryOverride) {
-    return await buildOrchestrator(onProgress, scoped, memoryOverride, modelOverride);
+  // memory instead of the agent's own tier. A custom prompt scope (a named
+  // agent's own system-prompt customization) takes the same fresh-build path —
+  // the cached shared master carries the hub's composition, not the agent's.
+  if (memoryOverride || promptScope) {
+    return await buildOrchestrator(onProgress, scoped, memoryOverride ?? masterMemory(), modelOverride, promptScope, agentRole);
   }
   while (true) {
     const gen = generation;
@@ -628,12 +638,20 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
 
 // The orchestrator build (the memory, the workers, the tools). Shared by
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null) {
+// `promptScope`/`agentRole` select the system-prompt composition (the hub by
+// default; a named agent's own scope + role when it runs).
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "") {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
     // endpoint with another's credential.
     const model = modelOverride ?? await ensureModel();
+    // THE system-prompt composition authority (lib/system-prompts.js): the
+    // master's prompt composes the versioned built-in base + any owner override
+    // for the scope + the agent role + the immutable protected constraints.
+    // The SAME composition backs the Settings → Advanced preview, so the
+    // previewed prompt is byte-identical to what the model receives.
+    const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole });
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
@@ -647,10 +665,17 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null) 
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
       buildCells.set(origin, cell);
+      const skills = await getSkills(origin);
       return {
         origin,
         memory: siteMemory(origin),
-        skills: await getSkills(origin),
+        // The worker's FULLY-composed system prompt (the "worker" scope: base +
+        // owner override + protected constraints + THIS origin's skills). The
+        // skills ride inside the composition (skills: [] below) so the
+        // attestation hash covers exactly what the model receives — no
+        // double-append in the agent core.
+        system: (await resolveSystemPrompt("worker", { skills })).text,
+        skills: [],
         tools: await siteToolset(origin, cell),
       };
     }));
@@ -664,7 +689,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null) 
       masterMemory: mem,
       workers,
       multiAgent,
-      masterSystem: MASTER_SKILL,
+      // The composed effective prompt for this run's scope (see above).
+      masterSystem: masterComposed.text,
       // SCOPED (hook) runs: the read-only browser set (no open/navigate/close/schedule)
       // + read-only memory — untrusted browser event data must never drive a
       // browser mutation, a durable schedule, or a memory write (the wider-goal
@@ -700,6 +726,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null) 
       const cell = buildCells.get(origin);
       if (cell) cell.get = () => agent.getRunGen();
     }
+    // The effective-prompt attestation (hash-only, no content) — journaled at
+    // run start so a run can prove WHICH prompt it sent, and a debug/test path
+    // can verify the Settings preview matches the sent prompt byte-for-byte.
+    orch.promptInfo = attestComposition(masterComposed, promptScope ?? "hub");
     return orch;
 }
 
@@ -943,7 +973,7 @@ function attachmentContext(attachments) {
   return "Attachments:\n" + parts.join("\n");
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "" }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -982,7 +1012,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         journalAppend(mem, { type: "tool-result", id: taskId, tool: event.toolName ?? "tool", result }).catch(() => {});
       }
     };
-    const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride);
+    const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride, promptScope, agentRole);
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or
     // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
@@ -1017,6 +1047,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         task,
         scheduled,
         attachmentCount: attachments?.length ?? 0,
+        // The effective-prompt attestation (hash + per-layer hashes, NO content):
+        // which composed system prompt this run sent, provable against the
+        // Settings → Advanced preview without leaking the prompt text.
+        prompt: orch.promptInfo ?? undefined,
         attachments: Array.isArray(attachments) ? attachments.map((a) => ({
           name: a?.name ?? "attachment",
           type: a?.type ?? "",
@@ -1733,6 +1767,11 @@ const handlers = {
         attachments: attachments ?? [],
         memory: mem,
         modelOverride,
+        // The agent's OWN system-prompt scope (agent:<slug>) — a per-agent
+        // override composes over the hub base (inheriting the hub override when
+        // the agent has none), and its role rides as the agent-role layer.
+        promptScope: `agent:${slug}`,
+        agentRole: agent.role ?? "",
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
         },
@@ -2306,6 +2345,60 @@ const handlers = {
     await masterMemory().set("customRecipes", next);
     await cancelScheduledTask(`recipe:${id}`).catch(() => ({ ok: false }));
     return { ok: true };
+  },
+
+  // ── system prompts (Settings → Advanced) ─────────────────────────────────
+  // The Settings surface describes/saves/resets the layered system prompts
+  // through the SAME composition authority the run path uses
+  // (lib/system-prompts.js), so the preview IS what the model receives.
+  // Scopes: "hub" (hub + background/hook/scheduled runs), "worker" (site
+  // sub-agents), "agent:<slug>" (a named agent — inherits the hub override).
+  async "prompt.describe"({ scope }) {
+    const s = normalizeScope(scope);
+    if (!s) return { ok: false, error: "unknown prompt scope" };
+    // A named-agent scope composes its role layer too (parity with the run path).
+    let role = "";
+    if (s.startsWith("agent:")) {
+      const agent = await getNamedAgent(s.slice("agent:".length));
+      role = agent?.role ?? "";
+    }
+    return await describePrompt(s, { role });
+  },
+  async "prompt.set"({ scope, mode, text }) {
+    const r = await setPromptOverride(scope, { mode, text });
+    if (r?.ok) {
+      // Rebuild the cached orchestrators so the NEXT run picks up the new
+      // composition immediately (the same invalidation a provider change uses).
+      invalidateAgent();
+    }
+    return r;
+  },
+  async "prompt.reset"({ scope }) {
+    const r = await clearPromptOverride(scope);
+    if (r?.ok) invalidateAgent();
+    return r;
+  },
+  async "prompt.keep"({ scope }) {
+    // "Keep my customization" after a built-in update: re-stamp the override
+    // onto the CURRENT base (the explicit, owner-driven conflict resolution —
+    // never a silent overwrite).
+    const r = await restampPromptOverride(scope);
+    if (r?.ok) invalidateAgent();
+    return r;
+  },
+  async "prompt.attest"({ scope }) {
+    // The debug/test attestation: the effective prompt's hash + per-layer
+    // hashes, WITHOUT any prompt content — proves the preview matches the sent
+    // prompt without leaking it.
+    const s = normalizeScope(scope);
+    if (!s) return { ok: false, error: "unknown prompt scope" };
+    let role = "";
+    if (s.startsWith("agent:")) {
+      const agent = await getNamedAgent(s.slice("agent:".length));
+      role = agent?.role ?? "";
+    }
+    const composed = await resolveSystemPrompt(s, { role });
+    return { ok: true, ...attestComposition(composed, s) };
   },
 
   // ---- background agents are INDEPENDENT agents (item 61) ----
