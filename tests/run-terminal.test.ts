@@ -1,13 +1,17 @@
 // tests/run-terminal.test.ts — the runConversationTurn TERMINAL ARBITRATION
-// (the ordering blocker): BOTH channel orderings must settle in-flight tool
-// cards exactly once, on the AUTHORITATIVE final event. Driven at the REAL
-// runConversationTurn boundary with a scripted chrome.runtime mock + a
-// recording container + injected grace — deterministic, no wall-clock waits.
+// (the ordering blockers): the run RESPONSE carries the FINAL outcome (ok +
+// aborted — the SW propagates it), so the arbiter settles IMMEDIATELY on the
+// first authoritative terminal (response or port done/error) — NO timing
+// dependency. Abort controls the OVERALL outcome: an aborted run must never
+// append a successful assistant result or report done. Port disconnect
+// settles fail-closed; every retry attempt gets a UNIQUE runId (stale events
+// from the failed attempt are rejected); the listener + cards are cleaned up.
 // @ts-nocheck — the chrome mock + the container are intentionally dynamic.
 import { assert, assertEquals } from "jsr:@std/assert";
 
 function installChromeMock() {
   let portListener = null;
+  let disconnectListener = null;
   const sent = [];
   const held = [];
   globalThis.chrome = {
@@ -25,7 +29,7 @@ function installChromeMock() {
       },
       connect: () => ({
         onMessage: { addListener(fn) { portListener = fn; } },
-        onDisconnect: { addListener() {} },
+        onDisconnect: { addListener(fn) { disconnectListener = fn; } },
         postMessage() {},
       }),
     },
@@ -33,10 +37,13 @@ function installChromeMock() {
   return {
     sent, held,
     emit: (event) => { if (portListener) portListener({ type: "progress", event }); },
-    resolveRun(ok, result = "") {
+    disconnect() { if (disconnectListener) disconnectListener(); },
+    resolveRun(ok, result = "", opts = {}) {
       const h = held.shift();
       if (!h) throw new Error("no held run message");
-      h.done(ok ? { ok, result } : { ok, error: "boom" });
+      h.done(ok
+        ? { ok, result, aborted: opts.aborted === true }
+        : { ok, error: "boom", aborted: opts.aborted === true });
     },
     runId() { return held[held.length - 1]?.msg?.runId ?? null; },
   };
@@ -80,10 +87,10 @@ async function waitFor(cond, label, timeoutMs = 2000) {
   }
 }
 
+const freshConv = () => import("../extension/shared/conversation.js?t=" + Math.random());
+
 Deno.test("run-terminal: PORT-before-response — an ok:false tool-result marks the card error; the late response is a no-op", async () => {
-  const conv = await import("../extension/shared/conversation.js?t=" + Math.random());
-  const prev = conv.RUN_TERMINAL_GRACE_MS;
-  conv.setRunTerminalGraceMs(2000);
+  const conv = await freshConv();
   const mock = installChromeMock();
   const container = makeContainer();
   const runP = conv.runConversationTurn(container, { text: "t" });
@@ -96,114 +103,138 @@ Deno.test("run-terminal: PORT-before-response — an ok:false tool-result marks 
   mock.emit({ type: "done", runId });
   mock.resolveRun(true, "done"); // the response arrives LAST — a no-op
   const res = await runP;
-  conv.setRunTerminalGraceMs(prev);
   assert(res?.ok === true);
   assertEquals(container.cards.length, 1, "one card");
   assertEquals(container.cards[0].getAttribute("tool-status"), "error", "the ok:false result wins");
 });
 
-Deno.test("run-terminal: RESPONSE-before-port — a delayed done{aborted:true} still settles the cards (error), not success", async () => {
-  const conv = await import("../extension/shared/conversation.js?t=" + Math.random());
-  const prev = conv.RUN_TERMINAL_GRACE_MS;
-  conv.setRunTerminalGraceMs(2000);
+Deno.test("run-terminal: an ABORTED response never appends a success result or reports done", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const container = makeContainer();
+  const runP = conv.runConversationTurn(container, { text: "t" });
+  await waitFor(() => mock.held.length > 0, "agent.run sent");
+  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId: mock.runId() });
+  // the SW response carries the aborted state — the authoritative outcome
+  mock.resolveRun(true, "partial", { aborted: true });
+  const res = await runP;
+  assert(res?.ok === true && res?.aborted === true);
+  const hasAgentResult = container.calls.some((c) => c[0] === "agent");
+  assert(hasAgentResult === false, "an aborted run must NOT append a successful assistant result");
+  const errors = container.calls.filter((c) => c[0] === "error");
+  assert(errors.length >= 1, "the abort surfaced as an error, not done");
+});
+
+Deno.test("run-terminal: an aborted PORT done (before the response) gates the outcome — no result append", async () => {
+  const conv = await freshConv();
   const mock = installChromeMock();
   const container = makeContainer();
   const runP = conv.runConversationTurn(container, { text: "t" });
   await waitFor(() => mock.held.length > 0, "agent.run sent");
   const runId = mock.runId();
-  mock.emit({ type: "tool-call", toolName: "memory_get", toolArgs: { key: "x" }, runId });
-  mock.resolveRun(true, "ok"); // the response BEATS the port final
-  await sleep(30);
-  // during the grace the AUTHORITATIVE aborted-done arrives
+  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId });
+  // the port's aborted done arrives FIRST — the authoritative terminal
   mock.emit({ type: "done", aborted: true, runId });
+  await sleep(10);
+  mock.resolveRun(true, "ok"); // the late response is a no-op (already settled error)
+  await runP;
+  const hasAgentResult = container.calls.some((c) => c[0] === "agent");
+  assert(hasAgentResult === false, "no success result after an aborted port done");
+  const errors = container.calls.filter((c) => c[0] === "error");
+  assert(errors.length >= 1, "the abort surfaced, not done");
+});
+
+Deno.test("run-terminal: RESPONSE-before-port — a late tool-result is DROPPED after settle (no duplicate, no misapply)", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const container = makeContainer();
+  const runP = conv.runConversationTurn(container, { text: "t" });
+  await waitFor(() => mock.held.length > 0, "agent.run sent");
+  const runId = mock.runId();
+  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId });
+  mock.resolveRun(true, "ok"); // the response settles immediately
+  await sleep(20);
+  // a LATE tool-result after the settle is dropped (the listener is removed) —
+  // the card keeps the response's terminal status + no duplicate is created
+  mock.emit({ type: "tool-result", toolName: "memory_set", result: "late", ok: false, runId });
   await sleep(20);
   await runP;
-  conv.setRunTerminalGraceMs(prev);
-  // the in-flight card was flushed by the arbiter with error (aborted)
-  assertEquals(container.cards.length, 1);
-  assertEquals(container.cards[0].getAttribute("tool-status"), "error", "aborted done wins over the ok:true response");
+  assertEquals(container.cards.length, 1, "no duplicate card from the late event");
 });
 
-Deno.test("run-terminal: RESPONSE-before-port — a delayed tool-result ok:false updates the SAME card (never a duplicate)", async () => {
-  const conv = await import("../extension/shared/conversation.js?t=" + Math.random());
-  const prev = conv.RUN_TERMINAL_GRACE_MS;
-  conv.setRunTerminalGraceMs(2000);
+Deno.test("run-terminal: RESPONSE {ok:false} with NO port final settles immediately as error", async () => {
+  const conv = await freshConv();
   const mock = installChromeMock();
   const container = makeContainer();
   const runP = conv.runConversationTurn(container, { text: "t" });
   await waitFor(() => mock.held.length > 0, "agent.run sent");
-  const runId = mock.runId();
-  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId });
-  mock.resolveRun(true, "ok"); // response first
-  await sleep(30);
-  mock.emit({ type: "tool-result", toolName: "memory_set", result: "failed: denied", ok: false, durationMs: 12, runId });
-  await sleep(10);
-  mock.emit({ type: "done", runId });
-  await runP;
-  conv.setRunTerminalGraceMs(prev);
-  assertEquals(container.cards.length, 1, "one card — the delayed result updated the in-flight card, no duplicate");
-  assertEquals(container.cards[0].getAttribute("tool-status"), "error");
-});
-
-Deno.test("run-terminal: RESPONSE {ok:false} with NO port final — the grace expiry settles as error", async () => {
-  const conv = await import("../extension/shared/conversation.js?t=" + Math.random());
-  const prev = conv.RUN_TERMINAL_GRACE_MS;
-  conv.setRunTerminalGraceMs(60);
-  const mock = installChromeMock();
-  const container = makeContainer();
-  const runP = conv.runConversationTurn(container, { text: "t" });
-  await waitFor(() => mock.held.length > 0, "agent.run sent");
-  const runId = mock.runId();
-  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId });
+  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId: mock.runId() });
   mock.resolveRun(false, ""); // {ok:false} and NO port events at all
   const res = await runP;
   assert(res?.ok === false);
-  await sleep(120); // grace expires → the arbiter settles
-  conv.setRunTerminalGraceMs(prev);
   const errors = container.calls.filter((c) => c[0] === "error");
   assert(errors.length >= 1, "the failure surfaced");
 });
 
-Deno.test("run-terminal: the arbiter settles EXACTLY once (both orderings together, idempotent)", async () => {
-  const { createRunTerminal } = await import("../extension/shared/conversation.js?t=" + Math.random());
+Deno.test("run-terminal: a PORT DISCONNECT settles fail-closed + removes the listener", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const container = makeContainer();
+  const runP = conv.runConversationTurn(container, { text: "t" });
+  await waitFor(() => mock.held.length > 0, "agent.run sent");
+  mock.emit({ type: "tool-call", toolName: "memory_set", toolArgs: { key: "x" }, runId: mock.runId() });
+  // the port dies before the response — the run must settle (error) + clean up
+  mock.disconnect();
+  await sleep(10);
+  mock.resolveRun(true, "ok"); // the late response is a no-op (already settled)
+  const res = await runP;
+  assert(res?.ok === true);
+  // after settle the listener is removed: a late event is dropped (no new card)
+  const cardsBefore = container.cards.length;
+  mock.emit({ type: "tool-result", toolName: "memory_set", result: "late", ok: true, runId: "stale" });
+  await sleep(10);
+  assertEquals(container.cards.length, cardsBefore, "no stale events after the disconnect settle");
+});
+
+Deno.test("run-terminal: a RETRY gets a UNIQUE runId — stale events from the failed attempt are rejected", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const container = makeContainer();
+  // FIRST attempt: send a tool-call + let it fail (the provider-grant retry path)
+  const runP1 = conv.runConversationTurn(container, { text: "t" });
+  await waitFor(() => mock.held.length > 0, "first attempt sent");
+  const firstRunId = mock.runId();
+  mock.emit({ type: "tool-call", toolName: "memory_get", toolArgs: { key: "x" }, runId: firstRunId });
+  mock.resolveRun(false, ""); // the first attempt fails
+  await runP1;
+  // SECOND attempt: a fresh turn (the grant retry) — its runId must differ
+  const runP2 = conv.runConversationTurn(container, { text: "t" });
+  await waitFor(() => mock.held.length > 0, "second attempt sent");
+  const secondRunId = mock.runId();
+  assert(secondRunId !== firstRunId, "each attempt has a UNIQUE runId");
+  // a STALE event tagged with the FIRST attempt's runId must be rejected
+  const cardsBefore = container.cards.length;
+  mock.emit({ type: "tool-result", toolName: "memory_get", result: "stale", ok: true, runId: firstRunId });
+  await sleep(10);
+  assertEquals(container.cards.length, cardsBefore, "the stale attempt's event is rejected");
+  mock.resolveRun(true, "ok");
+  await runP2;
+});
+
+Deno.test("run-terminal: the arbiter settles EXACTLY once + the cleanup is immediate (no timers pending)", async () => {
+  const { createRunTerminal } = await freshConv();
   let settles = 0;
-  let fire = null;
-  const arb = createRunTerminal({
-    graceMs: 1000,
-    timers: { setTimeout: (fn) => { fire = fn; return 1; }, clearTimeout: () => {} },
-    onSettle: () => { settles += 1; },
-  });
-  arb.onPortDone(false); // the port final first
-  arb.onPortDone(true);
+  const arb = createRunTerminal({ onSettle: () => { settles += 1; } });
+  arb.onResponse(true, false); // the response first
+  arb.onResponse(true, false);
+  arb.onPortDone(false);
   arb.onPortError();
-  arb.onResponse(true); // the late response arms the grace (already settled → no-op)
   assert(settles === 1, "settled exactly once");
-  assert(fire === null, "no grace timer armed after settlement");
-
-  const arb2 = createRunTerminal({
-    graceMs: 1000,
-    timers: { setTimeout: (fn) => { fire = fn; return 2; }, clearTimeout: () => {} },
-    onSettle: (st) => { settles += 1; last = st; },
-  });
+  assert(arb.status === "success");
+  const arb2 = createRunTerminal({ onSettle: (st) => { last = st; } });
   let last = null;
-  arb2.onResponse(true); // response first → arms the grace
-  assert(fire !== null, "grace armed");
-  // the port's aborted-done arrives DURING the grace → wins
-  arb2.onPortDone(true);
-  assert(last === "error", "the aborted done wins over the pending response");
-  assert(settles === 2, "still exactly once");
-  fire && (fire = null);
-
-  const arb3 = createRunTerminal({
-    graceMs: 1000,
-    timers: { setTimeout: (fn) => { fire = fn; return 3; }, clearTimeout: () => {} },
-    onSettle: (st) => { last3 = st; },
-  });
-  let last3 = null;
-  arb3.onResponse(true);
-  assert(fire !== null, "grace armed");
-  // grace EXPIRES with no port event → the response's ok decides
-  const f = fire; fire = null;
-  f();
-  assert(last3 === "success", "grace expiry settles from the response");
+  arb2.onPortDone(true); // the aborted port final first
+  arb2.onResponse(true, false); // the late response is a no-op
+  assert(last === "error", "the aborted port final wins");
+  assert(settles === 1, "still exactly once across arbiters");
 });

@@ -462,6 +462,10 @@ export function createAgent({
     // Rebind the live progress callback without rebuilding the cached agent.
     // The SW calls this per-run (the orchestrator is reused across runs).
     setProgress: (cb) => { progressCb = cb; },
+    // Whether THIS agent's run was aborted (a disposable pre-start abort or a
+    // mid-run controller abort) — the SW propagates it in the run response so
+    // an aborted run can never be reported as a successful outcome.
+    isAborted: () => aborted || (activeRun?.controller?.signal?.aborted === true),
   };
 }
 
@@ -613,6 +617,9 @@ export function createOrchestrator({
     abort() {
       master.abort();
     },
+    // Whether the CURRENT run was aborted (the master's controller) — the SW
+    // propagates it in the run response.
+    isAborted: () => (typeof master.isAborted === "function" ? master.isAborted() : false),
     // Rebind the live progress callback on the master + every worker. The SW
     // calls this per-run; the cached orchestrator's agents are reused.
     setProgress(cb) {

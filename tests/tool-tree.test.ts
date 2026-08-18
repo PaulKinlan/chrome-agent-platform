@@ -165,9 +165,16 @@ Deno.test("tool-tree: subtreeJson copies a bounded subtree for copy-JSON", () =>
   if (!items) throw new Error("items row missing");
   const json = subtreeJson(value, items.segments);
   const parsed = JSON.parse(json);
-  assert(parsed.length <= TOOL_TREE_CONTAINER_CAP, "the copied JSON is bounded");
-  assert(parsed[0].i === 0);
-  assertEquals(subtreeJson(value, "", t.rows).startsWith("{"), true, "root copy starts with {");
+  // a container-cap omission ALWAYS carries explicit truncation metadata
+  if (parsed.__gvs_truncated__ === true) {
+    const preview = JSON.parse(parsed.preview);
+    assert(preview.length <= TOOL_TREE_CONTAINER_CAP, "the bounded preview respects the cap");
+    assert(preview[0].i === 0);
+  } else {
+    assert(parsed.length <= TOOL_TREE_CONTAINER_CAP, "the copied JSON is bounded");
+    assert(parsed[0].i === 0);
+  }
+  assertEquals(subtreeJson(value, []).startsWith("{"), true, "root copy starts with {");
 });
 
 Deno.test("tool-tree: looksJsonish only accepts clear JSON value starts", () => {

@@ -1564,6 +1564,10 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
       // execCommand returning FALSE must report failure, never success
       btn.textContent = ok ? "copied" : "copy failed";
       restore();
+    } else {
+      // NEITHER the Clipboard API nor execCommand exists — report failure
+      btn.textContent = "copy failed";
+      restore();
     }
   });
 

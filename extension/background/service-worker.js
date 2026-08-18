@@ -88,6 +88,7 @@ import {
   slugifyAgentId,
   updateNamedAgent,
 } from "../lib/named-agents.js";
+import { pairToolJournal } from "../shared/conversation.js";
 import {
   appendThreadMessage,
   continueThread,
@@ -419,6 +420,7 @@ async function handleAlarm(alarm) {
     if (task.scriptId) {
       await fence.assertOwned();
       const got = await getScript("master", task.scriptId);
+      const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       if (got.ok) {
         const run = await runScriptSandboxed(got.script.source);
         let result = run?.result ?? null;
@@ -427,13 +429,22 @@ async function handleAlarm(alarm) {
         }
         await recordScriptRun("master", task.scriptId, { ok: run?.ok, result, error: run?.error }).catch(() => {});
         await fence.assertOwned();
+        // The scheduled-script journal row matches the tool-journal schema:
+        // run instance + callId + ok — a replay restores a FAILED script as an
+        // error card (the absent-ok heuristic previously passed "script not
+        // found" / arbitrary error text as success).
         journalAppend(backgroundAgentMemory(alarm.name), {
-          type: "tool-result", id: alarm.name, tool: `script:${task.scriptId}`,
+          type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
+          tool: `script:${task.scriptId}`,
           result: run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed"),
+          ok: run?.ok === true,
         }).catch(() => {});
       } else {
         await fence.assertOwned();
-        journalAppend(backgroundAgentMemory(alarm.name), { type: "tool-result", id: alarm.name, tool: "script", result: `script ${task.scriptId} not found` }).catch(() => {});
+        journalAppend(backgroundAgentMemory(alarm.name), {
+          type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
+          tool: "script", result: `script ${task.scriptId} not found`, ok: false,
+        }).catch(() => {});
       }
     } else {
       await runTask({
@@ -1079,6 +1090,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         if (isProviderError(e)) recordProviderFailure(formatError(e));
         throw e;
       }
+      // An ABORTED run must never be reported as a successful outcome: the
+      // response propagates the aborted/cancelled state (the page gates its
+      // result append + done status on it).
+      if ((fence?.signal?.aborted === true) || (typeof orch.isAborted === "function" && orch.isAborted())) {
+        return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
+      }
       await fence?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
       await fence?.assertOwned?.();
@@ -1523,19 +1540,19 @@ const handlers = {
     // Track the last tool the run attempted, so a failure can name the tool
     // that was in flight (the per-task error view shows WHY it failed).
     let lastTool = null;
+    // The thread's OWN tool-row persistence: after the run, the run's REAL
+    // tool rows are read from the JOURNAL (the production writer — reliable)
+    // and paired into ONE terminal card per call appended to the thread, so a
+    // reopened thread restores the tool cards (the persisted-history boundary).
+    const threadRunInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       result = await runTask({
         id: m.id,
         task: m.task,
         attachments: bounded,
-        // The live progress stream: every run (interactive or a follow-up nudge)
-        // broadcasts its thinking/tool/text/done events to the connected UI ports.
-        // Events are TAGGED with a per-run runId + the threadId so each listener
-        // renders ONLY its own run — the wider-goal review found the untagged
-        // global broadcast leaked/misattributed tool data across threads/pages.
         onProgress: (event) => {
           if (event?.type === "tool-call") lastTool = event.toolName ?? null;
-          broadcastProgress({
+                    broadcastProgress({
             ...event,
             runId: m.runId ?? threadId ?? m.id,
             threadId: threadId ?? null,
@@ -1575,6 +1592,34 @@ const handlers = {
     // BOTH the success + failure paths, including the throw path above, so a
     // failed run is never stuck "running".
     if (threadId) {
+      // The run's REAL tool rows, PAIRED into ONE terminal card per call
+      // (callId + ok persisted — a failed/blocked result restores as error),
+      // appended to the thread once — the reopened thread replays them.
+      // The run's REAL tool rows from the JOURNAL (the production writer),
+      // PAIRED into ONE terminal card per call (callId + ok persisted — a
+      // failed/blocked result restores as error), appended to the thread once.
+      try {
+        const journal = (await masterMemory().get("journal").catch(() => null)) ?? [];
+        const rows = Array.isArray(journal) ? journal : [];
+        const toolRows = rows
+          .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result") && r.id === m.id)
+          .slice(-50);
+        if (toolRows.length) {
+          const pairs = pairToolJournal(toolRows);
+          for (const p of pairs) {
+            await appendThreadMessage(threadId, {
+              role: "tool",
+              toolName: p.tool,
+              toolStatus: p.status,
+              toolArgs: p.args ?? null,
+              toolResult: p.result ?? null,
+              toolOk: p.ok ?? null,
+              toolDuration: p.durationMs ?? null,
+              toolCallId: `replay:${threadRunInstance}:${p.tool}`,
+            }).catch(() => {});
+          }
+        }
+      } catch { /* a thread tool-card write must never fail the run */ }
       if (result && typeof result.result === "string" && result.result) {
         await appendThreadMessage(threadId, { role: "assistant", content: result.result }).catch(() => {});
       }

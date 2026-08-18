@@ -562,9 +562,31 @@ async function openThread(id) {
   const thread = res.ok ? res.thread : null;
   threadTitle.textContent = thread?.name || "Task";
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-  threadConversation.setMessages?.(
-    messages.map((m) => ({ role: m.role, content: m.content, ts: m.ts ?? null, reason: m.reason ?? null, action: m.action ?? null })),
+  // The thread's TOOL rows (persisted by the SW with callId + ok) replay as
+  // ONE TERMINAL card per call via the same pairing the journal surfaces use —
+  // a reopened thread restores the tool cards, never a stale running card.
+  const toolRows = pairToolJournal(
+    messages
+      .filter((m) => m.role === "tool")
+      .map((m) => ({
+        type: m.toolStatus === "running" ? "tool-call" : "tool-result",
+        callId: m.toolCallId ?? null,
+        run: null,
+        tool: m.toolName ?? "tool",
+        args: m.toolArgs ?? null,
+        result: m.toolResult ?? null,
+        ok: m.toolOk ?? null,
+        ts: typeof m.ts === "number" ? m.ts : null,
+      })),
   );
+  const toolCards = toolRows.map((t) => ({ role: "tool", name: t.tool, status: t.status, args: t.args ?? null, result: t.result ?? null, ts: t.ts ?? null }));
+  const rendered = [
+    ...messages
+      .filter((m) => m.role !== "tool")
+      .map((m) => ({ role: m.role, content: m.content, ts: m.ts ?? null, reason: m.reason ?? null, action: m.action ?? null })),
+    ...toolCards,
+  ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  threadConversation.setMessages?.(rendered);
   showThreadView();
   renderRunStatus({ state: "idle" });
   renderTasks(id);

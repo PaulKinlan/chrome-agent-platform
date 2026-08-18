@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.82] — 2026-08-18
+- fix(tool-calls): final acceptance — abort-authoritative outcome, no-grace terminal, atomic/UTF-8/redacted serializer, deterministic demo tool provider + REAL persisted-thread evidence
+
 ## [0.2.81] — 2026-08-18
 - chore: keep package-lock version in sync with the post-commit bump
 

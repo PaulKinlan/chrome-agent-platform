@@ -43,6 +43,14 @@ function ensurePort() {
   });
   port.onDisconnect.addListener(() => {
     port = null;
+    // A port DISCONNECT is a terminal signal: the SW's final event can no
+    // longer arrive, so every still-subscribed run settles fail-closed (error)
+    // + removes its listener + clears its cards — no listener/card leak.
+    const fns = [...listeners];
+    listeners.clear();
+    for (const fn of fns) {
+      try { fn({ type: "disconnect" }); } catch { /* a listener error must not kill the dispatch */ }
+    }
   });
   return port;
 }
@@ -250,32 +258,28 @@ export function isToolErrorEvent(ev) {
  *     grace so late current-run events are never dropped.
  * Deterministic: `timers` (setTimeout/clearTimeout) can be injected for tests.
  */
-// The production grace (mutable for deterministic boundary tests).
-export let RUN_TERMINAL_GRACE_MS = 1500;
-export function setRunTerminalGraceMs(ms) { RUN_TERMINAL_GRACE_MS = ms; }
-
-export function createRunTerminal({ graceMs = RUN_TERMINAL_GRACE_MS, timers = null, onSettle = null } = {}) {
-  const setTimeoutFn = timers?.setTimeout ?? setTimeout;
-  const clearTimeoutFn = timers?.clearTimeout ?? clearTimeout;
+export function createRunTerminal({ onSettle = null } = {}) {
+  // NO timing dependency: the terminal settles IMMEDIATELY on the first
+  // AUTHORITATIVE event — the port's done/error, or the run RESPONSE (which
+  // now carries the final outcome, including aborted). Either channel alone is
+  // sufficient; the other is an idempotent no-op. Settling unsubscribes the
+  // listener, so a late event is never misapplied.
   let settled = false;
-  let graceTimer = null;
-  const settle = (status) => {
+  let status = null;
+  const settle = (st) => {
     if (settled) return;
     settled = true;
-    if (graceTimer != null) clearTimeoutFn(graceTimer);
-    onSettle?.(status);
+    status = st;
+    onSettle?.(st);
   };
   return {
     get settled() { return settled; },
+    get status() { return status; },
     /** the port's final event is authoritative */
     onPortDone(aborted) { settle(aborted ? "error" : "success"); },
     onPortError() { settle("error"); },
-    /** the request response arrived → arm the grace; a port final that beats
-     *  the timer still wins; otherwise the response's ok decides */
-    onResponse(ok) {
-      if (settled) return;
-      graceTimer = setTimeoutFn(() => settle(ok ? "success" : "error"), graceMs);
-    },
+    /** the request response carries the FINAL run outcome (ok + aborted) */
+    onResponse(ok, aborted = false) { settle(ok && !aborted ? "success" : "error"); },
     /** force-settle now (tests / a hard abort) */
     force(status) { settle(status); },
   };
@@ -318,13 +322,23 @@ export function pairToolJournal(entries) {
   for (const r of rows) {
     if (!r || typeof r !== "object") continue;
     if (r.type === "tool-call" || r.type === "tool-result") {
-      const id = typeof r.callId === "string" && r.callId ? r.callId : legacyId(r);
-      if (!byCall.has(id)) {
-        byCall.set(id, { call: null, result: null, ts: typeof r.ts === "number" ? r.ts : null });
+      // The pairing key includes the persisted RUN instance — a corrupt or
+      // duplicate row from ANOTHER run (or a replayed schedule) can never
+      // collapse into this run's cards.
+      const id = typeof r.callId === "string" && r.callId
+        ? `${r.run ?? ""}::${r.callId}`
+        : legacyId(r);
+      const entry = byCall.get(id);
+      if (!entry) {
+        byCall.set(id, { call: null, result: null, ts: typeof r.ts === "number" ? r.ts : null, duplicate: false });
         order.push(id);
+      } else {
+        // a DUPLICATE call/result row must not silently overwrite — keep the
+        // first + flag the card (the duplicate is never lost)
+        entry.duplicate = true;
       }
-      if (r.type === "tool-call") byCall.get(id).call = r;
-      else byCall.get(id).result = r;
+      if (!byCall.get(id).call && r.type === "tool-call") byCall.get(id).call = r;
+      else if (!byCall.get(id).result && r.type === "tool-result") byCall.get(id).result = r;
     }
   }
   const out = [];
@@ -349,6 +363,7 @@ export function pairToolJournal(entries) {
       result: result?.result ?? null,
       ok: result?.ok ?? null,
       ts,
+      duplicate: byCall.get(id)?.duplicate === true,
     });
   }
   return out;
@@ -423,15 +438,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
     c.append(row);
     if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
   };
-  const runId = newRunId();
-
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   appendBubble(c, "user", text, attachments);
 
   // The run + result rendering, factored so the host-permission "Grant network
   // access" button can RE-RUN the same turn after the permission is granted
-  // (the dynamic-permission-on-need retry).
+  // (the dynamic-permission-on-need retry). EVERY ATTEMPT gets its own runId +
+  // queue + arbiter + listener: a provider-grant retry must never accept the
+  // failed attempt's stale events, and each attempt settles its own cards.
   const executeTurn = async () => {
+  const runId = newRunId();
 
   // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
   //    trace when reasoning arrives).
@@ -448,9 +464,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
     thinking?.remove();
     thinking = null;
   };
-  // The terminal arbiter: settles the queue exactly once on the AUTHORITATIVE
-  // final event (a port done/error, or the response after a grace window) so
-  // BOTH channel orderings are correct.
+  // The terminal arbiter: settles the queue + unsubscribes EXACTLY ONCE on the
+  // first authoritative terminal (the port's done/error or the run response —
+  // which carries the final outcome incl. aborted). No timing dependency.
   const terminal = createRunTerminal({
     onSettle: (status) => {
       toolCards.flush(status);
@@ -458,14 +474,18 @@ export async function runConversationTurn(container, { text, attachments = [], h
     },
   });
 
-  // 3. subscribe to the live progress for THIS turn. The port broadcast is
-  //    global, so we FILTER by runId — events for another thread/page are
-  //    ignored (never mis-attributed). We unsubscribe in the finally.
+  // 3. subscribe to the live progress for THIS attempt. The port broadcast is
+  //    global, so we FILTER by runId — events for another thread/page/attempt
+  //    are ignored (never mis-attributed). We unsubscribe at settle.
   const unsubscribe = subscribeProgress((ev) => {
     if (!ev || typeof ev !== "object") return;
-    // Only render THIS run's events — FAIL-CLOSED on the exact runId (the SW
-    // tags every progress event with the run's runId; an untagged event never
-    // renders here, so another thread/page's tool data cannot leak in).
+    // a port DISCONNECT settles fail-closed (the terminal can no longer arrive)
+    if (ev.type === "disconnect") {
+      clearThinking();
+      terminal.onPortError();
+      return;
+    }
+    // Only render THIS attempt's events — FAIL-CLOSED on the exact runId.
     if (ev.runId !== runId) return;
     switch (ev.type) {
       case "thinking": {
@@ -515,9 +535,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
       case "done":
         clearThinking();
         // The port's done is AUTHORITATIVE (aborted → error): settles the
-        // queue once; a later response is a no-op.
+        // queue once; a later response is a no-op. An ABORTED run must never
+        // report a successful "done" status.
         terminal.onPortDone(ev.aborted === true);
-        onStatus?.({ state: "done" });
+        if (ev.aborted === true) {
+          onStatus?.({ state: "error", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
+        } else {
+          onStatus?.({ state: "done" });
+        }
         break;
       case "error":
         clearThinking();
@@ -572,20 +597,21 @@ export async function runConversationTurn(container, { text, attachments = [], h
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {
-    // The response arrived — arm the GRACE window. The listener STAYS
-    // subscribed: a delayed current-run tool-result {ok:false} or done
-    // {aborted:true} still wins (the arbiter settles with the true status);
-    // only on grace expiry does the response's own ok decide. Either way the
-    // queue settles exactly once + unsubscribes — never a permanently running
-    // card, and never a success marked from a response that raced ahead of a
-    // legitimate error/abort final (the ordering blocker).
-    terminal.onResponse(res?.ok === true);
+    // The response IS the terminal handshake: it carries the FINAL run outcome
+    // (ok + aborted — the SW propagates the aborted/cancelled state), so the
+    // arbiter settles immediately — NO timing dependency, and an aborted run
+    // can never be mislabelled by a later port event (which is now a no-op).
+    terminal.onResponse(res?.ok === true, res?.aborted === true);
   }
 
   // 5. the final result (the journal is the source of truth; append the result
-  //    bubble locally so the user sees the outcome without a refresh).
+  //    bubble locally so the user sees the outcome without a refresh). The
+  //    TERMINAL outcome is authoritative: an aborted/failed run must NEVER
+  //    append a successful assistant result or report a done status — the
+  //    abort controls the OVERALL run outcome, not just the card colours.
   clearThinking();
-  if (res?.ok) {
+  const outcome = terminal.status ?? (res?.ok === true ? "success" : "error");
+  if (outcome === "success" && res?.ok) {
     onStatus?.({ state: "done" });
     if (typeof res.result === "string" && res.result) {
       appendBubble(c, "agent", res.result);
@@ -594,10 +620,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
     // A provider/config failure must be CLEAR + ACTIONABLE, not a generic
     // "Error: …" — surface the UNWRAPPED reason + the "what to do" + a
     // "Fix in Settings" button (the category drives the button).
-    const reason = res?.errorReason ?? null;
-    const action = res?.errorAction ?? null;
-    const category = res?.errorCategory ?? null;
-    const msg = res?.error ?? "unknown error";
+    const reason = res?.errorReason ?? (res?.aborted ? "the run was aborted" : null);
+    const action = res?.errorAction ?? (res?.aborted ? "the run stopped before completing" : null);
+    const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
+    const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
     onStatus?.({
       state: "error",
       message: reason ?? msg,
