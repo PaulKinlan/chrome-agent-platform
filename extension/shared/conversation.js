@@ -324,10 +324,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
         if (card) {
           card.setAttribute?.("tool-status", "success");
+          if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status: "success", result: summary, detail: raw !== summary ? raw : null });
+          c.appendTool({ name: ev.toolName, status: "success", result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }

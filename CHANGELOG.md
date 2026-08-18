@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.75] — 2026-08-18
+- feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree
+
+## [0.2.74] — 2026-08-18
+- feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree
+
+## [0.2.73] — 2026-08-18
+- feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree
+
 ## [0.2.72] — 2026-08-17
 - fix(review): GLM + DeepSeek findings — script double-execution claim protocol (one host runs), UTF-8-safe initialAvatar (no btoa crash on CJK/emoji), bounded skill-import (64KiB + http(s) + walk cap), mark buildScriptSrcdoc test-only + constitution sandbox-page exemption, the missing optional_permissions (bookmarks/history/webNavigation/contextMenus/idle/downloads), the constitution sender-check wording, favicons on every page, the light-DOM size smoke assertion
 
