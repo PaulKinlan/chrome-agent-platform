@@ -27,6 +27,7 @@
       display: none;
     }
     .side {
+      --side-width: 240px;
       width: 240px;
       flex: 0 0 240px;
       border-right: 1px solid var(--border);
@@ -42,20 +43,43 @@
       transition: width .18s ease, flex-basis .18s ease;
     }
     /* collapsed → a narrow icon rail */
-    .side.collapsed { width: 60px; flex-basis: 60px; padding-left: 10px; padding-right: 10px; }
+    .side.collapsed { --side-width: 60px; width: 60px; flex-basis: 60px; padding-left: 10px; padding-right: 10px; }
     .brand-row { display: flex; align-items: center; gap: 6px; }
     .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
-    .side-toggle { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
-      border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--muted);
-      cursor: pointer; padding: 0; flex: 0 0 auto; }
-    .side-toggle:hover { color: var(--text); border-color: var(--accent); }
+    /* The collapse/expand control is an edge NUB protruding from the sidebar's
+       right boundary — attached to the panel, discoverable, min 44×44 hit
+       target (the visible tab is smaller). position:fixed keeps it outside the
+       sidebar's overflow clip; --side-width tracks the rail so the nub follows
+       the collapse transition. */
+    .side-toggle { display: inline-flex; align-items: center; justify-content: center;
+      position: fixed; left: var(--side-width, 240px); top: 50%; transform: translate(-50%, -50%);
+      width: 44px; height: 44px; border: 0; background: transparent; color: var(--muted);
+      cursor: pointer; padding: 0; z-index: 40; transition: left .18s ease; }
+    .side-toggle .nub { display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 36px; border: 1px solid var(--border); border-left: 0;
+      border-radius: 0 9px 9px 0; background: var(--panel);
+      transition: background .15s ease, color .15s ease, border-color .15s ease; }
+    .side-toggle:hover .nub, .side-toggle:focus-visible .nub {
+      color: var(--text); border-color: var(--accent); background: var(--panel-2, #efede8); }
+    .side-toggle:focus-visible { outline: none; }
+    .side-toggle:focus-visible .nub { box-shadow: 0 0 0 2px var(--accent); }
     .side-toggle svg { display: block; transition: transform .18s ease; }
     .side.collapsed .side-toggle svg { transform: rotate(180deg); }
+    @media (prefers-reduced-motion: reduce) {
+      .side-toggle, .side-toggle .nub, .side-toggle svg { transition: none; }
+    }
+    /* RTL: the rail sits on the right — mirror the nub to the left edge. */
+    [dir="rtl"] .side-toggle { left: auto; right: var(--side-width, 240px); }
+    [dir="rtl"] .side-toggle .nub { border-left: 1px solid var(--border); border-right: 0; border-radius: 9px 0 0 9px; }
     .side-label-row { display: flex; align-items: center; gap: 4px; }
     .side-label-row .side-label { flex: 1; min-width: 0; }
+    /* Rail action buttons (new-task / new-agent) share the icon scale with the
+       foot buttons: 28px inline next to the label, 34px centred icon when the
+       rail is collapsed. Inline SVG, currentColor — no text glyph. */
     .new-task { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
       border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--accent);
-      cursor: pointer; padding: 0; font-size: 18px; line-height: 1; flex: 0 0 auto; }
+      cursor: pointer; padding: 0; flex: 0 0 auto; }
+    .new-task svg { width: 16px; height: 16px; display: block; }
     .new-task:hover { border-color: var(--accent); background: var(--on-accent-muted, #d7f0ea); }
     /* hide the text labels when collapsed (icon rail) */
     .side.collapsed .brand, .side.collapsed .side-label,
@@ -152,7 +176,10 @@
     }
     .side.collapsed .agent-item { padding: 8px; justify-content: center; }
     .side.collapsed .agent-item .a-name { display: none; }
-    .side.collapsed .side-agents .side-label-row { justify-content: center; }
+    /* Every rail row centres its single remaining icon when collapsed (Tasks,
+       Agents — one convention, not a per-section special case). */
+    .side.collapsed .side-label-row { justify-content: center; }
+    .side.collapsed .new-task { width: 34px; height: 34px; }
     /* the live run status banner (item: the user must see it is working). */
     .run-status {
       display: flex;
@@ -287,15 +314,7 @@
       flex-direction: column;
       gap: 6px;
     }
-    /* the collapse chevron lives at the BOTTOM of the sidebar (item 26) — the
-       brand row at the top was overlapping the heading; a dedicated foot row is
-       cleaner. */
-    .side-collapse-row {
-      display: flex;
-      justify-content: flex-end;
-      padding-top: 2px;
-    }
-    .side.collapsed .side-collapse-row { justify-content: center; }
+    /* (the collapse control is now the edge nub, not a foot row) */
     .foot-btn {
       display: flex;
       align-items: center;
@@ -503,13 +522,13 @@
       </div>
       <div class="side-label-row">
         <span class="side-label">Tasks</span>
-        <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task">+</button>
+        <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
       </div>
       <nav class="thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
       <div class="side-agents">
         <div class="side-label-row">
           <span class="side-label">Agents</span>
-          <button class="new-task" id="new-agent" type="button" aria-label="Create agent" title="Create agent">+</button>
+          <button class="new-task" id="new-agent" type="button" aria-label="Create agent" title="Create agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
         <div class="agent-list" id="side-agents" aria-label="Named agents"></div>
       </div>
@@ -522,11 +541,9 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           <span class="btn-label">Directory</span>
         </button>
-        <div class="side-collapse-row">
-          <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-        </div>
+      <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+        <span class="nub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></span>
+      </button>
         <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="btn-label">Settings</span>

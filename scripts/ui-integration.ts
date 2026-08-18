@@ -155,6 +155,38 @@ try {
   check("sidebar collapse hides the empty-state text (no 'No tasks yet' leak)", collapse && !/No tasks yet/i.test(collapsedText?.visibleText ?? ""), collapsedText);
   check("sidebar collapses to a narrow icon rail", collapsedText?.sidebarWidth != null && collapsedText.sidebarWidth < 120, collapsedText);
 
+  // 2b. Collapsed-rail geometry: every action icon is the SAME size + centred on
+  //     the rail (new-task / new-agent / Skills / Directory / Settings), and the
+  //     collapse control is an edge NUB with a ≥44×44 hit target, in-bounds.
+  const railGeom = await cdp.eval(hub, `(() => {
+    const box = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { cx: Math.round(r.left + r.width/2), w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom) }; };
+    const side = document.querySelector('#side');
+    const sideW = side ? side.getBoundingClientRect().width : 0;
+    const nub = document.querySelector('#side-toggle .nub');
+    const nubBox = nub ? nub.getBoundingClientRect() : null;
+    return { sideW, vw: innerWidth, vh: innerHeight,
+      items: { newTask: box('#new-task'), newAgent: box('#new-agent'), skills: box('#open-recipes'), directory: box('#open-directory'), settings: box('#open-settings') },
+      togg: box('#side-toggle'),
+      nub: nubBox ? { w: Math.round(nubBox.width), h: Math.round(nubBox.height), left: Math.round(nubBox.left), right: Math.round(nubBox.right) } : null };
+  })()`);
+  const itemCxs = Object.values(railGeom?.items ?? {}).filter((i: any) => i && i.cx).map((i: any) => i.cx);
+  const cxSpread = itemCxs.length ? Math.max(...itemCxs) - Math.min(...itemCxs) : Infinity;
+  const all34 = Object.values(railGeom?.items ?? {}).filter((i: any) => i).every((i: any) => i.w === 34 && i.h === 34);
+  check("collapsed rail icons share ONE centre (≤2px spread)", railGeom?.sideW < 120 && cxSpread <= 2, { cxSpread, itemCxs });
+  check("collapsed rail action buttons are uniformly 34×34", all34 === true, railGeom?.items);
+  check("collapse control is a ≥44×44 nub hit target", railGeom?.togg && railGeom.togg.w >= 44 && railGeom.togg.h >= 44, railGeom?.togg);
+  check("nub straddles the sidebar edge + stays in-bounds", railGeom?.nub && railGeom.nub.left < railGeom.sideW && railGeom.nub.right > railGeom.sideW && railGeom.nub.right <= railGeom.vw, railGeom?.nub);
+
+  // 2c. Keyboard Enter toggles + aria-expanded/label/title track the state.
+  const keyBefore = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); t.focus(); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title, focused: document.activeElement === t }; })()`);
+  await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, hub);
+  await cdp.send("Input.dispatchKeyEvent", { type: "char", text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, hub);
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, hub);
+  await sleep(500); // let the View Transition settle
+  const keyAfter = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title }; })()`);
+  check("Enter toggles the sidebar (collapsed ↔ expanded)", keyBefore && keyAfter && keyBefore.collapsed !== keyAfter.collapsed, { keyBefore, keyAfter });
+  check("aria-expanded + label + title track the state", keyAfter && keyAfter.collapsed === false && keyAfter.expanded === "true" && keyAfter.label === "Collapse sidebar" && keyAfter.title === "Collapse sidebar", keyAfter);
+
   // 3. The + menu opens AND stays in-bounds.
   const attach = await cdp.eval(hub, `(() => {
     const ab = document.querySelector('attach-button');
@@ -199,7 +231,8 @@ try {
   // 5. The recent-activity rows (or its empty state) have horizontal padding
   // (not flush against the panel border).
   const padding = await cdp.eval(hub, `(() => {
-    const el = document.querySelector('.runlog .empty, .runlog .rl, #run-log .rl');
+    const ae = document.querySelector('#run-log activity-explorer');
+    const el = ae && ae.shadowRoot ? (ae.shadowRoot.querySelector('.aex-empty') || ae.shadowRoot.querySelector('.aex-entry summary')) : null;
     if (!el) return { note: 'no runlog row/empty found' };
     const cs = getComputedStyle(el);
     return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop) };

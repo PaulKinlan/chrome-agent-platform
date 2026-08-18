@@ -1190,6 +1190,7 @@ function setSidebarCollapsed(collapsed) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+  sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
 }
 sideToggle?.addEventListener("click", () => {

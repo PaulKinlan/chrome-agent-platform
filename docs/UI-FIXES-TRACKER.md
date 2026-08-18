@@ -17,6 +17,7 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 ### Hub / sidebar / task list
 - The task sidebar (expand/collapse to an icon rail, tooltips, the + new-task button).
+- **Collapsed-rail geometry (2026-08-18)** — the `new-task`/`create-agent`/Skills/Directory/Settings rail icons now share ONE size + icon convention (inline SVG plus, 34×34 centred when collapsed — previously `new-task` was 28×28 left-aligned at x=16 while `create-agent` was centred at x=13). The collapse control is now an edge **nub** (rounded tab on the sidebar boundary, 44×44 hit target, chevron flips on collapse, RTL + reduced-motion handled) instead of the undersized 28×28 chevron. Verified in the real extension: collapsed rail centre spread ≤2px, all buttons 34×34, nub 44×44 + in-bounds, Enter toggles + aria/title track. (branch fix/collapsed-sidebar-nub, scripts/ui-integration.ts)
 - The collapsed-rail task X (visible on hover + deletes) + the 24px hit target.
 - The task title single-line ellipsis + click-to-rename.
 - The unified Agents area (Background + Site groupings; only ACTIVE background agents shown + a Configure link).
