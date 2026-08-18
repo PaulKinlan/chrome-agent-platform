@@ -6,6 +6,12 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 ## Done (verified in the committed code)
 
+### WebMCP discovery (Paul 2026-08-18 — "where is the content script?")
+- **Paul's exact observable failure:** "Where is the WebMCP content script that looks at the page and determines which functions/tools it can register? It is not visible in Chrome DevTools Sources and there are no logs proving it runs."
+- **Root cause:** the discovery scripts (`extension/content/main-world.js` MAIN world + `extension/content/content-script.js` isolated relay) are registered DYNAMICALLY (no static `content_scripts` entry — by design, per-origin privacy) only after an owner-gesture enrollment, and they emitted ZERO console output, so there was no visible evidence in DevTools Sources or the console that they ever ran.
+- **Fix:** structured, gated `[WebMCP:main]` / `[WebMCP:bridge]` / `[WebMCP:sw]` logs (start, injection success/failure, declared/inferred counts, tool names, origin, registration result) behind a Settings → Site agents → Diagnostics toggle; a `webmcp.status` route + a Settings/Hub status surface (last discovery time, origin, script status, tool count); the current-tab injection now records success/failure instead of swallowing it; idempotent `tools.upsert` confirmed.
+- **Proof (real extension):** `scripts/webmcp-integration.ts` drives the REAL content scripts in a REAL page — 17/17 (declared + inferred + async-registered discovery, `[WebMCP:main]` start/discover logs, MAIN-world invoke returns the page fn result, idempotent upsert, `webmcp.diagnostics.*` + `webmcp.status`). `npm test` 323/323; `scripts/chrome-journeys.ts` 119/119.
+
 ### Settings
 - Duplicate back buttons removed (a single back path).
 - The "Multiple agents" + "Browser control" + hooks toggles use the shared `<switch-toggle>` Web Component (the root cause was a hand-rolled `<label class="switch">` colliding with theme.css — fixed).
@@ -65,8 +71,6 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 1. **Browser-control toggle/grant persistence** — Paul flagged "STILL not working" after the item-51 fix; re-verify the toggle stays ON + the grant persists across a reload in the real extension, and fix the actual cause. (The grant-storage read/write is present; the persistence needs a real-browser proof.)
 
 2. **Remove the Chrome Prompt API (Gemini nano) + Demo (local) from the settings provider picker** — both are for internal/testing use only. The picker filtering is IN FLIGHT (uncommitted); verify it lands + only the real chat providers show.
-
-3. **WebMCP discovery** — the site agents still don't pick up the inferred/known WebMCP tools (Paul: not working). IN FLIGHT (scripts/webmcp-diag.ts); needs the fix + a real-browser integration test (a WebMCP page → the tools discovered), not a mock.
 
 ## Evidence
 - `npm test` — 298 passed.

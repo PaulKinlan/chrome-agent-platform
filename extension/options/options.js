@@ -355,6 +355,7 @@ async function renderEnroll() {
       saveFlash(`Enrolled ${origin}${res.scriptsRegistered ? " (scripts registered)" : ""}.`);
       renderData();
       renderEnrolledSites();
+      renderWebmcpStatus();
     } else {
       saveFlash("Enroll failed: " + (res?.error ?? "unknown"));
     }
@@ -397,11 +398,77 @@ async function renderEnrolledSites() {
       }
       renderEnrolledSites();
       renderData();
+      renderWebmcpStatus();
     });
     row.appendChild(disenroll);
 
     el.appendChild(row);
   }
+}
+
+// ── WebMCP discovery status + diagnostics toggle (Paul 2026-08-18) ──
+// A small, honest status surface: when did discovery last run, for which origin,
+// what is the script/injection state, and how many tools were found — plus the
+// diagnostics toggle that gates the [WebMCP] content-script console logs.
+let webmcpDiagWired = false;
+async function renderWebmcpStatus() {
+  const body = $("#webmcp-status-body");
+  const toggle = $("#webmcp-diagnostics");
+  if (!body || !toggle) return;
+
+  if (!webmcpDiagWired) {
+    webmcpDiagWired = true;
+    toggle.addEventListener("toggle", async (e) => {
+      const checked = e.detail.checked === true;
+      await chrome.runtime
+        .sendMessage({ type: "webmcp.diagnostics.set", enabled: checked })
+        .catch(() => {});
+      saveFlash(checked ? "WebMCP diagnostics logs enabled." : "WebMCP diagnostics logs disabled.");
+    });
+  }
+  let diag = { enabled: false };
+  try { diag = await chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }); } catch { /* SW not ready */ }
+  toggle.checked = diag?.enabled === true;
+
+  const status = await chrome.runtime
+    .sendMessage({ type: "webmcp.status" })
+    .catch(() => null);
+  body.replaceChildren();
+  const s = status?.status;
+  if (!s) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No discovery yet — enroll a site above to scan it for WebMCP tools.";
+    body.appendChild(p);
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "webmcp-row";
+  const lines = [
+    `Last discovery: ${new Date(s.at).toLocaleString()}`,
+    `Origin: ${s.origin}`,
+    `Script status: ${s.scriptStatus}`,
+    `Tools discovered: ${s.toolCount ?? 0} (${s.declaredCount ?? 0} declared, ${s.inferredCount ?? 0} inferred)`,
+  ];
+  for (const line of lines) {
+    const p = document.createElement("div");
+    p.className = "webmcp-line";
+    p.textContent = line; // textContent — the origin/status are untrusted data
+    row.appendChild(p);
+  }
+  if (Array.isArray(s.toolNames) && s.toolNames.length) {
+    const names = document.createElement("div");
+    names.className = "webmcp-tools muted";
+    names.textContent = s.toolNames.join(", ");
+    row.appendChild(names);
+  }
+  if (s.error) {
+    const err = document.createElement("div");
+    err.className = "webmcp-line error";
+    err.textContent = "Error: " + s.error;
+    row.appendChild(err);
+  }
+  body.appendChild(row);
 }
 
 // ── Agents ──
@@ -1392,6 +1459,7 @@ await renderUsage();
 await renderData();
 await renderMemoryExplorer();
 await renderEnrolledSites();
+await renderWebmcpStatus();
 
 // The version in the footer (chaos-style semantic versioning — read from the
 // manifest so it always matches the installed build).

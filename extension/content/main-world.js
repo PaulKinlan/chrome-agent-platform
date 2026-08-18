@@ -9,7 +9,17 @@
 
 (() => {
   const CHANNEL = "__cairn_bridge";
+  const TAG = "[WebMCP:main]";
   let nonce = null;
+  // Developer diagnostics (gated): when the isolated bridge signals
+  // `diagnostics: true`, emit structured [WebMCP] logs so the discovery
+  // pipeline is observable in the page DevTools console. Off by default (no
+  // console noise); enabled from Settings → Site agents → Diagnostics.
+  let diagnostics = false;
+  function log(...args) {
+    if (!diagnostics) return;
+    try { console.log(TAG, ...args); } catch { /* never throw from a logger */ }
+  }
 
   // In-flight invocations (requestId) + the set the bridge has CANCELLED. The
   // MAIN world is the PAGE's world (untrusted) — the isolated content script is
@@ -277,15 +287,31 @@
     if (!data || typeof data !== "object" || data[CHANNEL] !== true) return;
     if (data.type === "init") {
       nonce = data.nonce;
+      diagnostics = data.diagnostics === true;
       cancelledAll = false; // a fresh bridge/nonce resets the cancel epoch
+      log("start", JSON.stringify({ origin: location.origin, role: "main-world" }));
       collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools }));
     } else if (data.type === "collect") {
-      collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools }));
+      diagnostics = data.diagnostics === true;
+      collectTools().then((tools) => {
+        const declared = tools.filter((t) => t.source === "declared").length;
+        const inferred = tools.filter((t) => t.source === "inferred").length;
+        log("discover", JSON.stringify({
+          origin: location.origin,
+          declaredCount: declared,
+          inferredCount: inferred,
+          toolCount: tools.length,
+          toolNames: tools.map((t) => t.name),
+        }));
+        post({ type: "tools", origin: location.origin, tools });
+      });
     } else if (data.type === "resume") {
+      diagnostics = data.diagnostics === true;
       // Re-enrollment: clear the cancel epoch so NEW invokes are allowed again.
       // In-flight ids cancelled by the prior disenrollment stay cancelled (their
       // results remain discarded) — only the epoch is cleared.
       cancelledAll = false;
+      log("resume", JSON.stringify({ origin: location.origin }));
     } else if (data.type === "cancel") {
       // Disenrollment cancellation: (1) set the cancel EPOCH so any NEW invoke
       // is rejected before it starts (round-23 blocker 1: a cancel that arrived
@@ -293,8 +319,9 @@
       // currently in-flight invoke as cancelled so its result is discarded.
       cancelledAll = true;
       for (const id of inFlight) markCancelled(id);
+      log("cancel", JSON.stringify({ origin: location.origin }));
     } else if (data.type === "invoke" && data.nonce === nonce) {
-      inFlight.add(data.requestId);
+      log("invoke", JSON.stringify({ name: data.name, requestId: data.requestId }));
       // Bound the in-flight set: a hung page function must not leave its request
       // id resident forever (the content-script drops the response at 15s, but
       // this world's promise could otherwise linger).
@@ -318,11 +345,13 @@
               post({ type: "result", nonce, requestId: data.requestId, ok: false, error: "invocation cancelled" });
               return;
             }
+            log("result", JSON.stringify({ name: data.name, requestId: data.requestId, ok: true }));
             post({ type: "result", nonce, requestId: data.requestId, ok: true, result });
           })
           .catch((e) => {
             inFlight.delete(data.requestId);
             cancelled.delete(data.requestId);
+            log("result", JSON.stringify({ name: data.name, requestId: data.requestId, ok: false, error: String(e?.message ?? e) }));
             post({ type: "result", nonce, requestId: data.requestId, ok: false, error: String(e?.message ?? e) });
           });
       }, 0);

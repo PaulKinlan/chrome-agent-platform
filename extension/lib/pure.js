@@ -533,6 +533,7 @@ export const PAGE_ALLOWED_ROUTES = new Set([
   "tools.list",
   "tools.upsert",
   "tools.pending",
+  "webmcp.diagnostics.get", // read-only owner toggle (a page's script may read its own diagnostics gate)
 ]);
 
 /** Parse an omnibox-entered string into an intent.

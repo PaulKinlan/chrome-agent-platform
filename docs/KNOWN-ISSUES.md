@@ -22,6 +22,7 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 ### Acceptance-coverage gaps (test/evidence depth)
 - **No headed-browser screenshot success path** (headless can't grant arbitrary-tab capture; the active-tab path is documented). Needs a headed-browser test.
 - **No full real-enrollment lifecycle journey** (enroll → discover → invoke → cleanup → Retry) as a single headed acceptance.
+- **[FIXED 2026-08-18] WebMCP discovery observability** — Paul's "where is the content script / no logs proving it runs" gap. The discovery scripts now emit gated `[WebMCP]` logs + a `webmcp.status` route + a Settings/Hub status surface; `scripts/webmcp-integration.ts` (17/17) drives the REAL scripts in a REAL page (discovery + invoke + idempotent upsert + diagnostics/status). The remaining headed-only piece is the full host-permission enrollment (headless auto-denies optional host permissions — documented above).
 - **[CLOSED — scripts/capability-lifecycle.ts, 21 checks] Capability lifecycles** — grant→use→revoke acceptance for each optional capability (real CDP gestures), npm run test:capabilities.
 - **[CLOSED — scripts/a11y-audit.ts, 17 checks] No accessibility audit run** — an automated a11y-tree acceptance (labels/roles/contrast/focus/landmarks across the hub/chat/settings), npm run test:a11y.
 - **[CLOSED — scripts/perf-leak-trace.ts, 8 checks] No performance/leak traces** — an automated perf/leak trace (SW register/render budgets, the SW heap + OPFS + hub DOM bounded across a write loop), npm run test:perf.

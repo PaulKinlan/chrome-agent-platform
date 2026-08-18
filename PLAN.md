@@ -44,12 +44,13 @@ what's landed vs what's next.
 - [x] Chaos-style semver (a post-commit hook auto-bumps the patch version after each commit) — landed
 - [x] The BeautifulUI AI-native primitives (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar) — landed 6adcfe6
 
+- [x] **WebMCP discovery observability (Paul 2026-08-18)** — the discovery content scripts emit gated `[WebMCP]` logs (start/injection/declared-inferred counts/tool names/origin/registration result), a `webmcp.status` route + a Settings/Hub status surface (last discovery, origin, script status, tool count), and current-tab injection now reports success/failure. Real-browser proof: `scripts/webmcp-integration.ts` 17/17 (declared + inferred + async-registered discovery, MAIN-world invoke, idempotent upsert, diagnostics/status routes).
+
 ## In flight (2026-08-17)
 - (none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)
 
 ## Remaining work (the proactive backlog)
 - Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only) — see the task backlog.
-- Fix the WebMCP discovery (the inferred + known endpoints) + a real-browser integration test.
 - The screenshot / media-capture permission flows (ask-on-need, not fail).
 - The UI polish + the review backlog (see docs/UI-FIXES-TRACKER.md + docs/KNOWN-ISSUES.md).
 - The extension rename/packaging (still "Chrome Agent Platform").
@@ -67,5 +68,4 @@ Artifacts are origin-keyed (per-agent) with a master index. Types: generated pag
 
 ## Task backlog (Paul 2026-08-17)
 - Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only).
-- Fix the WebMCP discovery (the inferred + known endpoints) + integration tests.
 - (The UI-FIXES-TRACKER.md has the full UI batch.)

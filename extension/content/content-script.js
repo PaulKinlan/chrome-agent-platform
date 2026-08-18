@@ -9,11 +9,27 @@
 //             → postMessage("result") → here → sendResponse
 
 const CHANNEL = "__cairn_bridge";
+const TAG = "[WebMCP:bridge]";
 
 // A nonce the MAIN-world bridge must echo back, so a page script cannot spoof
 // invoke results.
 const nonce = crypto.randomUUID();
 let initialized = false;
+// Developer diagnostics (gated): mirrors the MAIN world's [WebMCP] logs from the
+// isolated relay side. Off by default; the SW reports the owner's toggle via
+// `webmcp.diagnostics.get` (see Settings → Site agents → Diagnostics).
+let diagnostics = false;
+function log(...args) {
+  if (!diagnostics) return;
+  try { console.log(TAG, ...args); } catch { /* never throw from a logger */ }
+}
+async function refreshDiagnostics() {
+  try {
+    const r = await chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" });
+    if (r && typeof r.enabled === "boolean") diagnostics = r.enabled;
+  } catch { /* SW not ready yet — diagnostics stays off */ }
+  return diagnostics;
+}
 
 // The enrollment generation the service worker has told us is CURRENT for this
 // origin. A delete/disenroll tombstones + bumps the generation in the worker, so
@@ -52,8 +68,16 @@ function normalizeGen(message) {
 function ensureMainWorld() {
   if (initialized) return;
   initialized = true;
-  // Pass the nonce to the MAIN world over the same postMessage channel.
-  window.postMessage({ [CHANNEL]: true, type: "init", nonce }, "*");
+  // Post the nonce handshake SYNCHRONOUSLY first (preserving the original
+  // no-race init so an invoke that arrives immediately is never stranded), then
+  // re-post it once the REAL diagnostics gate is known (same nonce → idempotent:
+  // MAIN just re-collects + re-logs its "start" with the correct gate).
+  const sendInit = () => window.postMessage({ [CHANNEL]: true, type: "init", nonce, diagnostics }, "*");
+  sendInit();
+  refreshDiagnostics().then(() => {
+    sendInit();
+    log("start", JSON.stringify({ origin: location.origin, role: "isolated-bridge", diagnostics }));
+  });
 }
 
 // A pending invoke request, keyed by requestId → sendResponse.
@@ -68,8 +92,15 @@ window.addEventListener("message", (event) => {
   if (data.type === "tools") {
     const tools = Array.isArray(data.tools) ? data.tools : [];
     const origin = location.origin; // never trust a message-supplied origin (cross-origin spoof)
+    const declared = tools.filter((t) => t.source === "declared").length;
+    const inferred = tools.filter((t) => t.source === "inferred").length;
+    log("tools-reported", JSON.stringify({ origin, toolCount: tools.length, declaredCount: declared, inferredCount: inferred, toolNames: tools.map((t) => t.name) }));
     if (tools.length) {
-      chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools }).catch(() => {});
+      chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools }).then((res) => {
+        log("registration", JSON.stringify({ origin, ok: res?.ok === true, result: res }));
+      }).catch((e) => {
+        log("registration", JSON.stringify({ origin, ok: false, error: String(e?.message ?? e) }));
+      });
     }
   } else if (data.type === "result" && data.nonce === nonce) {
     const send = pending.get(data.requestId);
@@ -105,10 +136,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     maxGen = Math.max(maxGen, gen);
     currentGen = gen;
     disenrolled = false;
+    log("enrollment-sync", JSON.stringify({ origin: location.origin, gen }));
     // Re-enrollment clears the MAIN world's cancel epoch so NEW invokes are
     // allowed again (a delete→re-enroll must not leave the page bridge
     // permanently cancelled — the round-23 blocker 1 fix).
-    window.postMessage({ [CHANNEL]: true, type: "resume", nonce }, "*");
+    window.postMessage({ [CHANNEL]: true, type: "resume", nonce, diagnostics }, "*");
     sendResponse({ ok: true });
     return true;
   }
@@ -140,6 +172,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     maxGen = Math.max(maxGen, gen);
     disenrolled = true;
     currentGen = null;
+    log("disenrollment", JSON.stringify({ origin: location.origin, gen }));
     for (const [requestId, send] of pending) {
       pending.delete(requestId);
       try {
@@ -190,6 +223,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     ensureMainWorld();
     const requestId = String(++reqSeq);
     pending.set(requestId, sendResponse);
+    log("invoke-tool", JSON.stringify({ origin: location.origin, name: message.name, requestId, gen: message.gen }));
     window.postMessage({
       [CHANNEL]: true,
       type: "invoke",
@@ -210,7 +244,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "collect-tools") {
     ensureMainWorld();
-    window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*");
+    collectNow();
     sendResponse({ ok: true });
     return true;
   }
@@ -223,7 +257,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // registered). Each re-collect is idempotent (the SW upsert replaces the origin's
 // tool set), so a late registration is picked up without duplicating.
 function collectNow() {
-  window.postMessage({ [CHANNEL]: true, type: "collect", nonce }, "*");
+  window.postMessage({ [CHANNEL]: true, type: "collect", nonce, diagnostics }, "*");
 }
 ensureMainWorld();
 if (document.readyState === "complete") collectNow();

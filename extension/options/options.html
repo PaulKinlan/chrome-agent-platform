@@ -82,6 +82,19 @@
           </div>
           <div id="enrolled-sites" class="origin-list"></div>
         </div>
+        <div class="webmcp-status">
+          <h3>WebMCP discovery</h3>
+          <p
+            class="muted">The content scripts that scan a page for WebMCP tools (declared <code>document.modelContext.getTools()</code> + inferred <code>window.*</code> functions) live at <code>content/main-world.js</code> (page world) and <code>content/content-script.js</code> (isolated relay) — visible in the page's DevTools Sources once the origin is enrolled.</p>
+          <div class="toggle-field">
+            <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
+            <div class="toggle-text">
+              <span class="toggle-name">Diagnostics logs</span>
+              <span class="muted">Emit structured <code>[WebMCP]</code> logs from the discovery content scripts into the page DevTools console.</span>
+            </div>
+          </div>
+          <div id="webmcp-status-body" class="origin-list" aria-live="polite"></div>
+        </div>
         <div id="per-agent-provider" class="per-agent" hidden>
           <h3>Per-agent providers</h3>
           <p

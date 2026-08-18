@@ -96,6 +96,23 @@ async function renderSiteAgents() {
   refreshAgentCount();
 }
 
+// ── WebMCP discovery hub status (Paul 2026-08-18) ────────────────────────
+// A one-line honest status under the Site agents section: when discovery last
+// ran, for which origin, how many tools it found, and the script state — so the
+// discovery pipeline is never opaque from the hub.
+async function renderWebmcpHubStatus() {
+  const el = document.getElementById("webmcp-hub-status");
+  if (!el) return;
+  const status = await send("webmcp.status").catch(() => null);
+  const s = status?.status;
+  if (!s) {
+    el.textContent = "Site tools are discovered when you enroll a page — use Discover this page.";
+    return;
+  }
+  const when = new Date(s.at).toLocaleTimeString();
+  el.textContent = `WebMCP discovery: ${s.origin} · ${s.toolCount ?? 0} tools (${s.declaredCount ?? 0} declared / ${s.inferredCount ?? 0} inferred) · ${s.scriptStatus} · ${when}`;
+}
+
 // ── "Discover this page" (the active-tab tool discovery) ─────────────────
 // Browsing a page must be discoverable without typing the origin into Settings
 // (the dynamic-permission-on-need principle). The flow: query the active tab's
@@ -147,12 +164,14 @@ async function discoverActivePage() {
     // appear without a manual refresh.
     renderSiteAgents();
     refreshAgentCount();
+    renderWebmcpHubStatus();
     // The discovery scripts re-poll asynchronously (800ms/2s/4s) — refresh again
     // after they report so the tool count lands.
     for (const delay of [1200, 3200]) {
       setTimeout(() => {
         renderSiteAgents();
         refreshAgentCount();
+        renderWebmcpHubStatus();
       }, delay);
     }
   } else {
@@ -1146,6 +1165,7 @@ function startTitleEdit() {
 threadTitle.addEventListener("click", () => { if (currentThreadId) startTitleEdit(); });
 
 renderSiteAgents();
+renderWebmcpHubStatus();
 renderNamedAgents();
 renderBackgroundAgents();
 renderArtifacts();

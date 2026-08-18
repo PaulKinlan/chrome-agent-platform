@@ -80,30 +80,58 @@ async function main() {
     const ps = (await send("Target.attachToTarget", { targetId: t.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, ps); await sleep(1500);
 
-    // Evaluate the REAL discovery script in the page + capture the posted tools.
+    // Evaluate the REAL discovery script in the page + capture the posted tools
+    // AND the [WebMCP] diagnostics logs AND the MAIN-world invoke result (the
+    // same handshake the isolated bridge drives: init(diagnostics:true) → collect).
     const SRC = Deno.readTextFileSync(`${ROOT}extension/content/main-world.js`);
     const discovery = await evalIn(ps, `(async () => {
       window.__posted = [];
+      window.__webmcpLogs = [];
       const origPost = window.postMessage.bind(window);
       window.postMessage = (msg, target) => { window.__posted.push(msg); return origPost(msg, target); };
+      const origLog = window.console.log.bind(window.console);
+      window.console.log = (...args) => { window.__webmcpLogs.push(args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')); return origLog(...args); };
       ${SRC}
-      // Collect twice — the fixture registers shop.coupon ASYNC at ~700ms, so a
-      // single collect misses it; the content script re-polls (800ms/2s/4s) and
-      // the second collect here mirrors that to prove the re-poll catches it.
-      const collect = () => window.postMessage({ __cairn_bridge: true, type: 'collect', nonce: 'probe' }, '*');
+      // init with diagnostics ON so the [WebMCP:main] logs are emitted, then
+      // collect twice — the fixture registers shop.coupon ASYNC at ~700ms, so a
+      // single collect misses it; the content script re-polls (800ms/2s/4s).
+      window.postMessage({ __cairn_bridge: true, type: 'init', nonce: 'probe', diagnostics: true }, '*');
+      const collect = () => window.postMessage({ __cairn_bridge: true, type: 'collect', nonce: 'probe', diagnostics: true }, '*');
+      await new Promise(r => setTimeout(r, 600));
       collect();
       await new Promise(r => setTimeout(r, 1000));
       collect();
       await new Promise(r => setTimeout(r, 600));
       const toolsMsgs = window.__posted.filter(m => m && m.type === 'tools');
       const last = toolsMsgs[toolsMsgs.length - 1];
-      return last?.tools ?? [];
+      const tools = last?.tools ?? [];
+      // Invoke the inferred page function through the REAL MAIN-world invoke
+      // handler (the agent's invoke-tool path reaches this same code).
+      const invokeResult = await new Promise((resolve) => {
+        const rq = 'inv1';
+        const onMsg = (ev) => {
+          if (ev.source !== window) return;
+          const d = ev.data;
+          if (d && d.__cairn_bridge === true && d.type === 'result' && d.requestId === rq) { window.removeEventListener('message', onMsg); resolve(d); }
+        };
+        window.addEventListener('message', onMsg);
+        window.postMessage({ __cairn_bridge: true, type: 'invoke', nonce: 'probe', requestId: rq, name: 'greet', args: { name: 'paul' } }, '*');
+        setTimeout(() => resolve(null), 3000);
+      });
+      return { tools, logs: window.__webmcpLogs, invokeResult };
     })()`);
-    const names = (discovery ?? []).map((x: any) => x.name);
+    const tools = (discovery?.tools ?? []);
+    const names = tools.map((x: any) => x.name);
     check("REAL browser: declared WebMCP tools discovered (shop.total + shop.catalog)", names.includes("shop.total") && names.includes("shop.catalog"), names);
     check("REAL browser: inferred page function discovered (greet)", names.includes("greet"), names);
     // The async-registered tool (shop.coupon) must be picked up by the re-poll.
     check("REAL browser: async-registered tool discovered (shop.coupon)", names.includes("shop.coupon"), names);
+    // The [WebMCP:main] diagnostics logs must be emitted (start + discover) when
+    // the diagnostics gate is on — the "no logs proving it runs" fix.
+    const logs = Array.isArray(discovery?.logs) ? discovery.logs : [];
+    check("REAL browser: [WebMCP:main] start log emitted", logs.some((l: string) => l.includes("[WebMCP:main]") && l.includes("start")), logs);
+    check("REAL browser: [WebMCP:main] discover log emits declared/inferred counts + tool names", logs.some((l: string) => l.includes("discover") && l.includes("declaredCount") && l.includes("shop.total")), logs);
+    check("REAL browser: MAIN-world invoke returns the page function result", discovery?.invokeResult?.ok === true && discovery?.invokeResult?.result === "hello paul", discovery?.invokeResult);
 
     // 2. The tools round-trip to the SW (tools.upsert → list_agents). Enroll the
     //    page's REAL origin in memory (agent.create — no host permission needed)
@@ -111,12 +139,30 @@ async function main() {
     //    the listing shows them.
     const created = await sendMsg({ type: "agent.create", origin: PAGE_ORIGIN, name: "webmcp worker" });
     check("agent.create enrolled the page origin", created?.v?.ok === true, created);
-    const upsert = await sendMsg({ type: "tools.upsert", origin: PAGE_ORIGIN, tools: discovery ?? [] });
+    const upsert = await sendMsg({ type: "tools.upsert", origin: PAGE_ORIGIN, tools });
     check("discovered tools upsert to the worker", upsert?.v?.ok === true, upsert);
+    // Idempotent registration: upserting the SAME set again must not duplicate.
+    const upsert2 = await sendMsg({ type: "tools.upsert", origin: PAGE_ORIGIN, tools });
+    check("tools.upsert is idempotent (second upsert ok)", upsert2?.v?.ok === true, upsert2);
+    const toolList = await sendMsg({ type: "tools.list", origin: PAGE_ORIGIN });
+    const listed = Array.isArray(toolList?.v) ? toolList.v : [];
+    const uniqueNames = [...new Set(tools.map((x: any) => x.name))];
+    check("idempotent upsert keeps a single tool per name (no duplicates)", listed.length === uniqueNames.length, { listed: listed.length, expected: uniqueNames.length, listed });
     const list = await sendMsg({ type: "agent.directory" });
     const site = Array.isArray(list?.v?.agents) ? list.v.agents.find((a: any) => a.origin === PAGE_ORIGIN) : null;
     const siteTools = Array.isArray(site?.tools) ? site.tools : [];
     check("the listed site agent shows the discovered tools", siteTools.includes("shop.total") && siteTools.includes("greet"), siteTools);
+
+    // 2b. The diagnostics toggle + the status surface route (the observability fix).
+    const diagSet = await sendMsg({ type: "webmcp.diagnostics.set", enabled: true });
+    check("webmcp.diagnostics.set enables the gate", diagSet?.v?.enabled === true, diagSet);
+    const diagGet = await sendMsg({ type: "webmcp.diagnostics.get" });
+    check("webmcp.diagnostics.get reports enabled", diagGet?.v?.enabled === true, diagGet);
+    const wstatus = await sendMsg({ type: "webmcp.status" });
+    check("webmcp.status reflects the last discovery (origin + counts + script status)",
+      wstatus?.v?.status?.origin === PAGE_ORIGIN &&
+      wstatus?.v?.status?.scriptStatus === "discovered" &&
+      (wstatus?.v?.status?.toolCount ?? 0) >= uniqueNames.length, wstatus);
 
     // 3. The agent.discover-active route resolves the active tab's origin (the
     //    hub "Discover this page" button's first step). Without the `tabs`

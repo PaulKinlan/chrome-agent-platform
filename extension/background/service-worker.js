@@ -763,11 +763,18 @@ async function siteToolset(origin, runGenCell) {
 // so discovery happens immediately, without a reload. Best-effort (a missing
 // scripting permission or a closed tab must not fail the enroll).
 async function injectScriptsIntoOpenTabs(canonical) {
+  let injected = 0;
+  let failed = 0;
+  let targetCount = 0;
   try {
     const hasScripting = await chrome.permissions
       .contains({ permissions: ["scripting"] })
       .catch(() => false);
-    if (!hasScripting) return;
+    if (!hasScripting) {
+      await recordWebmcpStatus(canonical, { scriptStatus: "no-scripting-permission" });
+      swWebmcpLog("inject", JSON.stringify({ origin: canonical, ok: false, error: "scripting permission not granted" }));
+      return { injected: 0, failed: 0, error: "scripting permission not granted" };
+    }
     const tabs = await chrome.tabs.query({ url: `${canonical}/*` });
     const targets = tabs.filter((t) => {
       try {
@@ -776,27 +783,39 @@ async function injectScriptsIntoOpenTabs(canonical) {
         return false;
       }
     });
+    targetCount = targets.length;
     for (const t of targets) {
       // MAIN-world first (it registers its message listener), then the isolated
       // relay (its ensureMainWorld posts the nonce handshake that triggers the
-      // discovery collect).
-      await chrome.scripting
-        .executeScript({
-          target: { tabId: t.id },
-          files: ["content/main-world.js"],
-          world: "MAIN",
-        })
-        .catch(() => {});
-      await chrome.scripting
-        .executeScript({
-          target: { tabId: t.id },
-          files: ["content/content-script.js"],
-          world: "ISOLATED",
-        })
-        .catch(() => {});
+      // discovery collect). Each injection's success/failure is recorded so the
+      // discovery pipeline is never silent about a failed injection.
+      for (const [files, world] of [
+        [["content/main-world.js"], "MAIN"],
+        [["content/content-script.js"], "ISOLATED"],
+      ]) {
+        const ok = await chrome.scripting
+          .executeScript({
+            target: { tabId: t.id },
+            files,
+            world,
+          })
+          .then(() => true)
+          .catch((e) => {
+            failed++;
+            swWebmcpLog("inject", JSON.stringify({ origin: canonical, tabId: t.id, world, ok: false, error: String(e?.message ?? e) }));
+            return false;
+          });
+        if (ok) injected++;
+      }
     }
-  } catch {
-    /* best-effort */
+    const scriptStatus = injected > 0 ? "injected" : (targetCount > 0 ? "injection-failed" : "no-open-tabs");
+    await recordWebmcpStatus(canonical, { scriptStatus });
+    swWebmcpLog("inject", JSON.stringify({ origin: canonical, injected, failed, targets: targetCount, scriptStatus }));
+    return { injected, failed, targets: targetCount, scriptStatus };
+  } catch (e) {
+    await recordWebmcpStatus(canonical, { scriptStatus: "injection-error", error: String(e?.message ?? e) });
+    swWebmcpLog("inject", JSON.stringify({ origin: canonical, ok: false, error: String(e?.message ?? e) }));
+    return { injected, failed, error: String(e?.message ?? e) };
   }
 }
 
@@ -1162,6 +1181,60 @@ async function agentInfo(origin) {
     memoryKeys: memKeys,
     memoryKeyCount: memKeys.length,
   };
+}
+
+// ── WebMCP discovery diagnostics + status (Paul 2026-08-18) ─────────────
+// The discovery content scripts emit structured [WebMCP]-prefixed console logs
+// when the owner enables Diagnostics (Settings → Site agents). This stores (a)
+// the owner's diagnostics toggle and (b) a BOUNDED per-origin "last discovery"
+// status so the Settings/Hub surfaces show WHEN discovery last ran, for which
+// origin, how many tools it found, and the script/injection state — rather than
+// the pipeline being opaque (Paul's observable failure: no logs, no visible
+// script). The status is a single latest entry (never an unbounded log).
+const WEBMCP_DIAG_KEY = "cap:webmcpDiagnostics";
+const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
+
+// Cached diagnostics toggle so SW-side injection/enrollment logging can gate
+// synchronously (refreshed whenever the flag is read or set).
+let webmcpDiagnosticsCache = false;
+function swWebmcpLog(...args) {
+  if (!webmcpDiagnosticsCache) return;
+  try { console.log("[WebMCP:sw]", ...args); } catch { /* never throw from a logger */ }
+}
+
+async function webmcpDiagnosticsEnabled() {
+  const s = await kvGet(WEBMCP_DIAG_KEY);
+  webmcpDiagnosticsCache = s[WEBMCP_DIAG_KEY] === true;
+  return webmcpDiagnosticsCache;
+}
+
+async function setWebmcpDiagnostics(enabled) {
+  webmcpDiagnosticsCache = enabled === true;
+  await kvSet({ [WEBMCP_DIAG_KEY]: enabled === true });
+  return { enabled: enabled === true };
+}
+
+async function webmcpStatus() {
+  const s = await kvGet(WEBMCP_STATUS_KEY);
+  const status = s[WEBMCP_STATUS_KEY] ?? null;
+  return { diagnostics: await webmcpDiagnosticsEnabled(), status };
+}
+
+/** Record the latest discovery outcome for an origin (bounded to one entry). */
+async function recordWebmcpStatus(origin, fields) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  const status = {
+    origin: canonical,
+    at: Date.now(),
+    scriptStatus: fields?.scriptStatus ?? "unknown",
+    declaredCount: fields?.declaredCount ?? 0,
+    inferredCount: fields?.inferredCount ?? 0,
+    toolCount: fields?.toolCount ?? 0,
+    toolNames: Array.isArray(fields?.toolNames) ? fields.toolNames.slice(0, 50) : [],
+    error: fields?.error ?? null,
+  };
+  await kvSet({ [WEBMCP_STATUS_KEY]: status });
 }
 
 const handlers = {
@@ -1914,6 +1987,17 @@ const handlers = {
         return { ok: false, error: "origin not enrolled — enroll it in Settings" };
       }
       await upsertTools(canonical, tools);
+      // Record the LAST discovery outcome so the Settings/Hub status surface can
+      // show when discovery ran, for which origin, and how many tools it found
+      // (the pipeline is no longer opaque — Paul's observable failure).
+      const list = Array.isArray(tools) ? tools : [];
+      await recordWebmcpStatus(canonical, {
+        scriptStatus: "discovered",
+        declaredCount: list.filter((t) => t.source === "declared").length,
+        inferredCount: list.filter((t) => t.source === "inferred").length,
+        toolCount: list.length,
+        toolNames: list.map((t) => t.name),
+      });
       // New tools/sites must reach the running orchestrator — rebuild it.
       invalidateAgent();
       return { ok: true };
@@ -1928,6 +2012,15 @@ const handlers = {
   },
   async "tools.allOrigins"() {
     return await listOrigins();
+  },
+  async "webmcp.diagnostics.get"() {
+    return { enabled: await webmcpDiagnosticsEnabled() };
+  },
+  async "webmcp.diagnostics.set"({ enabled }) {
+    return await setWebmcpDiagnostics(enabled);
+  },
+  async "webmcp.status"() {
+    return await webmcpStatus();
   },
 
   // ---- side-panel driven-page surface ----
@@ -2524,6 +2617,9 @@ const handlers = {
         };
       }
       invalidateAgent();
+      // Record the registration outcome so the status surface shows the scripts
+      // are registered (the discovery pipeline is observable end-to-end).
+      await recordWebmcpStatus(canonical, { scriptStatus: "registered" });
       // Inject the discovery scripts into the ALREADY-OPEN tabs for this origin
       // (dynamic content scripts only run on the next navigation — without this,
       // an enrolled-but-open tab discovers nothing until reloaded).
