@@ -1,10 +1,7 @@
 # Changelog
 
-## [0.2.97] — 2026-08-18
-- fix(tool-calls): successor-7 — run-read deep-equality at the tool boundary (no detached calls), tracker ancestry to the final successor + exact 83, changelog version wording 0.2.95
-
-## [0.2.96] — 2026-08-18
-- fix(tool-calls): successor-7 — run-read deep-equality at the tool boundary (no detached calls), tracker ancestry to the final successor + exact 83, changelog version wording 0.2.95
+## [0.2.99] — 2026-08-18
+- docs(tool-calls): tracker chain lists only actual ancestors + a self-reference-safe <this frozen tip> label (the exact SHA lives in the external evidence), changelog consolidated to one factual entry, versions aligned 0.2.99
 
 ## [0.2.95] — 2026-08-18
 - fix(tool-calls): successor-6 — every ownership fence typed, run-local continuation, original-error preservation, REAL AI SDK content test, probative deep-equality, tracker ancestry, versions 0.2.95
