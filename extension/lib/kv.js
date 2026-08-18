@@ -26,8 +26,7 @@
 // `kv.remove` message routes), so the SW's session Map is the single authority
 // when storage is absent. Pages must NEVER call kv* directly for shared state.
 
-const session = new Map();
-let warned = false;
+import { session, warned, setWarned, migrated, setMigrated } from "./kv-internal.js";
 
 // ---- storage-mode state machine (round-18 blocker 3) ----
 // Snapshot→remove→re-enable-migrate must be ATOMIC with respect to every
@@ -80,7 +79,7 @@ function clone(v) {
 
 function warnOnce() {
   if (!warned) {
-    warned = true;
+    setWarned(true);
     console.warn(
       "storage permission not granted — changes are session-only until enabled in Settings",
     );
@@ -169,13 +168,6 @@ export async function kvRemove(keys) {
   });
 }
 
-/** Test hook: reset the in-memory fallback (unit tests). */
-export function __resetSessionForTest() {
-  session.clear();
-  warned = false;
-}
-
-let migrated = false;
 let migrationInFlight = null;
 
 /** Await any in-flight session→storage migration so a concurrent KV operation
@@ -218,7 +210,7 @@ export async function snapshotPersistentToSessionLocked() {
  * re-migrates them (the round-17 blocker: `migrated` never reset → re-enable
  * restored only the old persistent values). */
 export function resetStorageTransition() {
-  migrated = false;
+  setMigrated(false);
 }
 
 /** Migrate the SW's session fallback into chrome.storage.local when the optional
@@ -248,7 +240,7 @@ export async function migrateSessionToStorage() {
       const entries = {};
       for (const [k, v] of session) entries[k] = clone(v);
       if (Object.keys(entries).length === 0) {
-        migrated = true;
+        setMigrated(true);
         return;
       }
       // Write session values to the persistent store. A write failure REJECTS (the
@@ -256,7 +248,7 @@ export async function migrateSessionToStorage() {
       try {
         await chrome.storage.local.set(entries);
         session.clear();
-        migrated = true;
+        setMigrated(true);
       } catch (e) {
         throw new StorageBackendError("set", e);
       }
@@ -265,9 +257,4 @@ export async function migrateSessionToStorage() {
     });
   }
   await migrationInFlight;
-}
-
-/** Test hook: reset the migration flag (unit tests). */
-export function __resetMigrationForTest() {
-  migrated = false;
 }

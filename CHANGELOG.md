@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.83] — 2026-08-18
+- fix(sidebar): move test hooks to test-only modules, structural build scan, ViewTransition finally, version sync
+
+## [0.2.82] — 2026-08-18
+- fix(sidebar): move test hooks to test-only modules, structural build scan, ViewTransition finally, version sync
+
+## [0.2.81] — 2026-08-18
+- fix(sidebar): move test hooks to test-only modules, structural build scan, ViewTransition finally, version sync
+
 ## [0.2.80] — 2026-08-18
 - fix(sidebar): recursive build scan, real CDP composer typing, Tab focus, reduced-motion full, durability resolution
 

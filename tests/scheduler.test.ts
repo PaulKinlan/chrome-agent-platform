@@ -6,7 +6,6 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   INFLIGHT_LEASE_MS,
-  __resetBootForTest,
   cancelScheduledTask,
   clearStaleInflight,
   heartbeatInflight,
@@ -18,6 +17,8 @@ import {
   scheduleTask,
   tryAcquireInflight,
 } from "../extension/lib/scheduler.js";
+import { resetBootForTest } from "./test-hooks.js";
+
 
 // ---- in-memory chrome mock (mirrors chrome.storage.local serialization) ----
 const store = new Map();
@@ -91,7 +92,7 @@ Deno.test("a previous worker instance's lock is re-acquired after a simulated re
 
   // Simulate the worker being killed: a fresh SW instance has no in-memory run
   // and a new boot instant, but the dead owner's persisted lock remains.
-  __resetBootForTest();
+  resetBootForTest();
 
   const b = await tryAcquireInflight("lease-b2");
   assertEquals(b.acquired, true, "a previous worker's lock is re-acquired");
@@ -144,7 +145,7 @@ Deno.test("ownsInflight is true for the owner and false after a restart re-acqui
   assert(await ownsInflight("lease-e", a.token), "owner must own the lock");
 
   // Simulate a worker restart: the dead owner A's lock is re-acquired by B.
-  __resetBootForTest();
+  resetBootForTest();
   const b = await tryAcquireInflight("lease-e");
   assertEquals(b.acquired, true);
   assert(!(await ownsInflight("lease-e", a.token)), "stale owner A no longer owns");
@@ -159,7 +160,7 @@ Deno.test("markScheduledDone is fenced: a stale owner cannot delete a later owne
   assertEquals(a.acquired, true);
 
   // Simulate a worker restart: owner A's worker died; B re-acquires.
-  __resetBootForTest();
+  resetBootForTest();
   const b = await tryAcquireInflight(name);
   assertEquals(b.acquired, true);
 

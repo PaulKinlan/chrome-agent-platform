@@ -16,7 +16,9 @@ import {
   setNamedAgentProvider,
 } from "../extension/lib/named-agents.js";
 import { getModelForAgent, resolveModelFromConfig } from "../extension/lib/provider.js";
-import { __resetSessionForTest, kvSet } from "../extension/lib/kv.js";
+import { kvSet } from "../extension/lib/kv.js";
+import { resetSessionForTest } from "./test-hooks.js";
+
 
 const store = new Map();
 function clone(v) {
@@ -71,7 +73,7 @@ Deno.test("per-agent provider: redactAgentProvider strips the apiKey", () => {
 });
 
 Deno.test("per-agent provider: set + clear round-trips, and list/get are redacted", async () => {
-  __resetSessionForTest();
+  resetSessionForTest();
   store.clear();
   // Seed the registry directly (no OPFS needed for the provider path).
   await kvSet({ "cap:namedAgents": { paul: { id: "paul", name: "Paul", role: "reader", createdAt: 1, updatedAt: 1 } } });

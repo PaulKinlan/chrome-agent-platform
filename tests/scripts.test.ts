@@ -9,13 +9,13 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   SCRIPT_BOUNDS,
   SCRIPT_FRAME_CSP,
-  buildScriptSrcdoc,
   createScript,
   deleteScript,
   getScript,
   listScripts,
   updateScript,
 } from "../extension/lib/scripts.js";
+import { buildScriptSrcdoc } from "./test-hooks.js";
 
 // ---- minimal in-memory OPFS fake (same shape as tests/artifacts.test.ts) ----
 function dirNode() {

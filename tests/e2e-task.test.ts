@@ -12,7 +12,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createAgent } from "../extension/lib/agent.js";
 import { createDemoModel } from "../extension/lib/models/demo-model.js";
 import { getUsage } from "../extension/lib/usage.js";
-import { __resetSessionForTest } from "../extension/lib/kv.js";
+import { resetSessionForTest } from "./test-hooks.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
 
 // ---- chrome.storage mock (the usage ledger writes here) ----
@@ -68,7 +68,7 @@ function fakeMemory() {
 }
 
 Deno.test("e2e: a task runs end-to-end — result + usage recorded + done event", async () => {
-  __resetSessionForTest();
+  resetSessionForTest();
   clearRunFence();
   store.clear();
 

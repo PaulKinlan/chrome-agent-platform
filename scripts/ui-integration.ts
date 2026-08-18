@@ -265,17 +265,22 @@ try {
   //     to its prior state, and the ViewTransition completes (observed via a
   //     TEST-INJECTED patch of document.startViewTransition — not a production
   //     oracle; the patch lives only in this test, never in the shipped ntp.js).
-  await cdp.eval(hub, `(() => { window.__vtOrig = document.startViewTransition; window.__vtCap = null; document.startViewTransition = (cb) => { const vt = window.__vtOrig.call(document, cb); window.__vtCap = vt; return vt; }; })()`);
-  const rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
-  await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
-  const vtOutcome = await cdp.eval(hub, `(async () => { const vt = window.__vtCap; if (!vt) return 'none'; await vt.finished; return 'finished'; })()`);
-  await sleep(300);
-  const rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width) }; })()`);
-  check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter.collapsed === rapidBefore, { rapidBefore, rapidAfter });
+  //     The patch + await + assertions run in a try/finally so the original
+  //     startViewTransition is RESTORED + the cap globals DELETED even on failure.
+  let rapidBefore, rapidAfter, vtOutcome;
+  try {
+    await cdp.eval(hub, `(() => { window.__vtOrig = document.startViewTransition; window.__vtCap = null; document.startViewTransition = (cb) => { const vt = window.__vtOrig.call(document, cb); window.__vtCap = vt; return vt; }; })()`);
+    rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
+    await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
+    vtOutcome = await cdp.eval(hub, `(async () => { const vt = window.__vtCap; if (!vt) return 'none'; await vt.finished; return 'finished'; })()`);
+    await sleep(300);
+    rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width) }; })()`);
+  } finally {
+    await cdp.eval(hub, `(() => { if (window.__vtOrig) document.startViewTransition = window.__vtOrig; delete window.__vtOrig; delete window.__vtCap; })()`);
+  }
+  check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter?.collapsed === rapidBefore, { rapidBefore, rapidAfter });
   check("ViewTransition.finished awaited (test-injected patch)", vtOutcome === 'finished', vtOutcome);
-  check("width matches the final state after the transition", rapidAfter.width === (rapidAfter.collapsed ? 60 : 240), rapidAfter);
-  // Clean up the test-injected patch (restore the original + delete the cap).
-  await cdp.eval(hub, `(() => { if (window.__vtOrig) document.startViewTransition = window.__vtOrig; delete window.__vtOrig; delete window.__vtCap; })()`);
+  check("width matches the final state after the transition", rapidAfter?.width === (rapidAfter?.collapsed ? 60 : 240), rapidAfter);
 
   // 3. The + menu opens AND stays in-bounds.
   const attach = await cdp.eval(hub, `(() => {

@@ -45,11 +45,10 @@ export const CANCEL_TERMINATION_TIMEOUT_MS = 5000;
 // can NEVER be overlapped by a later alarm firing. The persisted lock fences
 // ACROSS worker boots (a killed SW instance's lock is re-acquirable because the
 // dead instance's run is gone; this map is empty on a fresh boot).
-const activeRuns = new Map();
+import { activeRuns, BOOT_AT, advanceBoot } from "./scheduler-internal.js";
 
 // This worker lifetime's boot instant (module-eval time). A persisted lock whose
 // `at` predates this instant was acquired by a previous, now-dead worker instance.
-let BOOT_AT = Date.now();
 
 let lockSeq = 0;
 function newToken() {
@@ -506,14 +505,6 @@ export async function releaseInflight(name, token) {
       }
     }
   });
-}
-
-/** Test hook (Deno unit tests): simulate a worker restart by clearing the
- * in-memory run map + advancing the boot instant, leaving the persisted lock
- * in place (as a killed worker would). */
-export function __resetBootForTest() {
-  activeRuns.clear();
-  BOOT_AT = Date.now();
 }
 
 /**

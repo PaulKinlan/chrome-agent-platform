@@ -56,6 +56,17 @@ manifest.version_name = next;
 writeJson(pkgPath, pkg);
 writeJson(manifestPath, manifest);
 
+// Keep package-lock.json in sync (the root version + the "" packages entry),
+// otherwise every bump drifts the lockfile from the manifest (the round-
+// repeated version-drift review finding).
+const lockPath = join(ROOT, "package-lock.json");
+if (existsSync(lockPath)) {
+  const lock = readJson(lockPath);
+  lock.version = next;
+  if (lock.packages && lock.packages[""]) lock.packages[""].version = next;
+  writeJson(lockPath, lock);
+}
+
 // Prepend a CHANGELOG entry ONLY when we have a message (the commit message).
 const changelogPath = join(ROOT, "CHANGELOG.md");
 if (existsSync(changelogPath) && message) {

@@ -108,12 +108,16 @@ async function walkJs(dir, out = []) {
 const FORBIDDEN_NAMES = [
   "__setkvfaultfortest", "kv.fault", "cap-kv-fault-test", "injected test fault",
   "__sidebarpersistence", "__lastviewtransition",
+  "__resetsessionfortest", "__resetmigrationfortest", "__resetbootfortest",
+  "buildscriptsrcdoc", "test-only",
 ];
 // Test oracles live on the PAGE globals (window/self), never on globalThis
 // (whose __zod_* / __vite_* names are legitimate library internals, not
 // oracles). The specific FORBIDDEN_NAMES above are still scanned case-
 // insensitively EVERYWHERE, so a renamed oracle on globalThis is caught by name.
 const ORACLE_RE = /(?:window|self)\s*(?:\.|\[)\s*["']?__/g;
+// Structural: any EXPORTED identifier beginning with __ is a shipped test seam.
+const EXPORTED_TEST_SEAM_RE = /export\s+(?:const|let|function|class|async\s+function)\s+__[A-Za-z0-9_$]+/g;
 const shippedJs = await walkJs("extension");
 for (const file of shippedJs) {
   const text = await readFile(file, "utf8");
@@ -125,6 +129,9 @@ for (const file of shippedJs) {
   }
   if (ORACLE_RE.test(text)) {
     throw new Error(`shipped ${file} contains a window/globalThis/self.__* test oracle — remove it from production`);
+  }
+  if (EXPORTED_TEST_SEAM_RE.test(text)) {
+    throw new Error(`shipped ${file} exports a __-prefixed test seam — move test hooks to tests/test-hooks.js`);
   }
 }
 console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files`);
