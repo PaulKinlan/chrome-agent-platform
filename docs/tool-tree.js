@@ -184,13 +184,21 @@ export function buildTree(value, opts = {}) {
  * Cycle-vs-alias: only an ANCESTOR is "[cyclic]" — shared refs serialize in
  * full each time they are reached.
  */
-const SECRET_KEY = /^(api[_-]?key|apikey|token|secret|password|passwd|authorization|client[_-]?secret|private[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token)$/i;
+const SECRET_KEY = /^(api[_-]?key|apikey|credential|credentials|bearer|access[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|token|secret|password|passwd|authorization|client[_-]?secret|private[_-]?key)$/i;
+
+/** The smallest maxBytes the serializer can honor (the fixed envelope + a
+ * preview must fit) — a smaller cap is a caller contract violation (RangeError),
+ * never a silently-oversized result. */
+export const SAFE_JSON_MIN_MAX_BYTES = 64;
 
 export function safeJsonStringify(value, opts = {}) {
   const maxDepth = opts.maxDepth ?? 8;
   const maxNodes = opts.maxNodes ?? 500;
   const maxBytes = opts.maxBytes ?? 32 * 1024;
   const maxString = opts.maxString ?? 400;
+  if (!Number.isFinite(maxBytes) || maxBytes < SAFE_JSON_MIN_MAX_BYTES) {
+    throw new RangeError(`safeJsonStringify maxBytes must be >= ${SAFE_JSON_MIN_MAX_BYTES} (got ${maxBytes})`);
+  }
   let nodes = 0;
   let truncated = false;
   const encoder = new TextEncoder();
@@ -256,7 +264,7 @@ export function safeJsonStringify(value, opts = {}) {
     return '"[value]"';
   };
 
-  if (typeof value === "string") return value; // a plain string passes through
+  if (typeof value === "string") return esc(value); // a VALID JSON string literal
   let json = visit(value, 0, new Set()) ?? '"[unserializable]"';
   const bytes = encoder.encode(json);
   if (bytes.length > maxBytes) {

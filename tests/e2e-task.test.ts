@@ -83,11 +83,14 @@ Deno.test("e2e: a task runs end-to-end — result + usage recorded + done event"
     onProgress: (e) => events.push(e),
   });
 
-  const result = await agent.run("Summarise the page and save the summary to memory");
+  const outcome = await agent.run("Summarise the page and save the summary to memory");
 
-  // 1. The run produces a result (a string, not an error object).
-  assert(typeof result === "string", `result must be a string, got ${typeof result}`);
-  assert(result.length > 0, "result must be non-empty");
+  // 1. The run produces a result (the per-run outcome object carries .text —
+  //    a string, never an error object) + the outcome is not aborted.
+  assert(outcome && typeof outcome === "object", "the run returns the per-run outcome");
+  assert(typeof outcome.text === "string", `result must be a string, got ${typeof outcome.text}`);
+  assert(outcome.text.length > 0, "result must be non-empty");
+  assert(outcome.aborted === false, "a normal run is not aborted");
 
   // 2. The progress stream reached "done" with the text (what the thread renders).
   const done = events.find((e) => e.type === "done");

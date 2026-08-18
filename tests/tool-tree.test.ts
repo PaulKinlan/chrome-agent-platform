@@ -272,7 +272,7 @@ Deno.test("tool-tree: safeJsonStringify never throws at the PUBLIC boundary (cyc
   assertEquals(safeJsonStringify({ n: 10n }), '{"n":"10n"}', "BigInt → suffixed string");
   const g = { get boom() { throw new Error("getter"); } };
   assert(typeof safeJsonStringify(g) === "string", "a throwing getter falls back, never throws");
-  assertEquals(safeJsonStringify("plain"), "plain");
+  assertEquals(safeJsonStringify("plain"), '"plain"'); // a VALID JSON string literal
   assertEquals(safeJsonStringify(null), "null");
   assertEquals(safeJsonStringify({ key: "x", items: [1, 2] }), '{"key":"x","items":[1,2]}');
 });
@@ -334,7 +334,7 @@ Deno.test("tool-tree: a HOSTILE ARRAY PROXY (throwing length getter) never emits
 
 Deno.test("tool-tree: the UTF-8 truncation envelope is VALID JSON and BYTE-bounded for every maxBytes", () => {
   const content = Array.from({ length: 60 }, (_, i) => ({ i, q: 'quote"back\\slash"', u: "日本語".repeat(20) }));
-  for (const mb of [60, 120, 300, 1000, 5000]) {
+  for (const mb of [64, 120, 300, 1000, 5000]) {
     const out = safeJsonStringify(content, { maxBytes: mb });
     const bytes = new TextEncoder().encode(out).length;
     let parsed;
@@ -363,4 +363,36 @@ Deno.test("tool-tree: secret-like fields are REDACTED before serialization", () 
   assertEquals(parsed.nested.label, "keep");
   assert(!out.includes("sk-secret"), "the secret value never reaches the output");
   assert(!out.includes("abc"), "the token never reaches the output");
+});
+
+// ── the frozen-tip acceptance: tiny caps, broad secrets, JSON-string contract ──
+
+Deno.test("tool-tree: safeJsonStringify returns a VALID JSON string literal for a plain string", () => {
+  const out = safeJsonStringify("plain");
+  assertEquals(out, '"plain"', "the string is QUOTED — valid JSON");
+  assertEquals(JSON.parse(out), "plain");
+});
+
+Deno.test("tool-tree: maxBytes below the documented MINIMUM throws an explicit RangeError (never oversized)", () => {
+  for (const tiny of [8, 20, 27, 63]) {
+    let threw = null;
+    try { safeJsonStringify({ a: "x".repeat(50) }, { maxBytes: tiny }); } catch (e) { threw = e; }
+    assert(threw instanceof RangeError, `maxBytes=${tiny} must throw a RangeError`);
+  }
+  // at the minimum the envelope always fits
+  const out = safeJsonStringify({ a: "x".repeat(200) }, { maxBytes: 64 });
+  assert(new TextEncoder().encode(out).length <= 64, "the minimum cap is honored");
+  JSON.parse(out);
+});
+
+Deno.test("tool-tree: canonical credential keys (credential/bearer/accessKey/access_key) are REDACTED", () => {
+  const out = safeJsonStringify({ credential: "c1", bearer: "b1", accessKey: "ak1", access_key: "ak2", apiKey: "k", ok: 1 });
+  const parsed = JSON.parse(out);
+  assertEquals(parsed.credential, "[redacted]");
+  assertEquals(parsed.bearer, "[redacted]");
+  assertEquals(parsed.accessKey, "[redacted]");
+  assertEquals(parsed.access_key, "[redacted]");
+  assertEquals(parsed.apiKey, "[redacted]");
+  assertEquals(parsed.ok, 1);
+  assert(!out.includes("c1") && !out.includes("b1") && !out.includes("ak1") && !out.includes("ak2"), "no secret value reaches the output");
 });

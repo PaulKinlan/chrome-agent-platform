@@ -61,8 +61,10 @@ Deno.test("agent-abort: a REAL mid-run abort is DURABLY observable after orch.ru
   // the DURABLE flag (read AFTER the run resolves — activeRun is cleared by
   // then) must still report aborted — the SW reads it via orch.isAborted()
   assert(agent.isAborted() === true, `isAborted must be true after a mid-run abort (got ${agent.isAborted()})`);
+  // the PER-RUN outcome is RETURNED with the run (never a singleton race)
+  assert(result && typeof result === "object" && result.aborted === true, "the returned outcome reports aborted");
   // the response shape the SW builds from this: {ok:false, aborted:true}
-  const swResponse = agent.isAborted()
+  const swResponse = (result?.aborted === true || agent.isAborted())
     ? { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorCategory: "aborted" }
     : { ok: true, result: String(result) };
   assertEquals(swResponse.ok, false);
@@ -81,7 +83,8 @@ Deno.test("agent-abort: an UN-aborted run reports NOT aborted (no false positive
   });
   const result = await agent.run("hello", "", []);
   assert(agent.isAborted() === false, "a normal run is not aborted");
-  assert(typeof result === "string" && result.length > 0, "the run produced a result");
+  assert(result && typeof result === "object" && result.aborted === false, "the outcome reports not aborted");
+  assert(typeof result.text === "string" && result.text.length > 0, "the run produced a result");
 });
 
 Deno.test("agent-abort: a PRE-START abort never starts a run + is reported aborted", async () => {
@@ -99,4 +102,48 @@ Deno.test("agent-abort: a PRE-START abort never starts a run + is reported abort
   const result = await agent.run("hello", "", []);
   assert(agent.isAborted() === true);
   assertEquals(String(result?.error ?? result).includes("aborted"), true, "the pre-start abort surfaces");
+});
+
+
+Deno.test("agent-abort: an aborted run followed by a SUCCESSFUL RETRY on the SAME reusable agent", async () => {
+  const events = [];
+  const agent = createAgent({
+    model: { model: slowModel(500), modelId: "demo-local", providerName: "demo" },
+    id: "retry-test", name: "retry-test", system: "sys", memory: fakeMemory(), taskId: "t",
+    onProgress: (ev) => events.push(ev?.type),
+  });
+  const run1 = agent.run("run @demo-tools please", "", []);
+  const t0 = Date.now();
+  while (!events.includes("thinking")) { if (Date.now() - t0 > 5000) throw new Error("never started"); await sleep(5); }
+  await sleep(80); // inside the slow first step
+  agent.abort(); // run 1 aborted mid-run
+  const out1 = await run1;
+  assert(out1.aborted === true, "run 1 reports aborted");
+  // the SAME agent retries a normal task — the retry must succeed + NOT inherit
+  // the prior abort
+  const out2 = await agent.run("hello", "", []);
+  assert(out2.aborted === false, "the retry is not aborted");
+  assert(typeof out2.text === "string" && out2.text.length > 0, "the retry produced a result");
+  assert(agent.isAborted() === false, "the durable flag reflects the LATEST run (the retry)");
+});
+
+Deno.test("agent-abort: QUEUED concurrent runs — run 1's abort never corrupts run 2's outcome", async () => {
+  const events = [];
+  const agent = createAgent({
+    model: { model: slowModel(400), modelId: "demo-local", providerName: "demo" },
+    id: "queue-test", name: "queue-test", system: "sys", memory: fakeMemory(), taskId: "t",
+    onProgress: (ev) => events.push(ev?.type),
+  });
+  // two CONCURRENT runs on the same agent — the runQueue serializes them
+  const run1 = agent.run("run @demo-tools please", "", []);
+  const run2 = agent.run("hello", "", []);
+  const t0 = Date.now();
+  while (!events.includes("thinking")) { if (Date.now() - t0 > 5000) throw new Error("run1 never started"); await sleep(5); }
+  await sleep(60);
+  agent.abort(); // run 1 aborted mid-run
+  const out1 = await run1;
+  const out2 = await run2;
+  assert(out1.aborted === true, "run 1 reports aborted");
+  assert(out2.aborted === false, "run 2 (queued behind the abort) is NOT aborted");
+  assert(typeof out2.text === "string" && out2.text.length > 0, "run 2 still produced its result");
 });

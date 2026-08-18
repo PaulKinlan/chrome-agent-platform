@@ -244,3 +244,19 @@ Deno.test("tool-lifecycle: a persisted terminal row (with its own args) restores
   assertEquals(card.status, "success");
   assert(card.args !== null && card.args.includes("shopping"), "the terminal row's own args restore on replay");
 });
+
+// ── the frozen-tip acceptance: the ORIGINAL immutable callId survives ───────
+
+Deno.test("tool-lifecycle: the pair outputs the ORIGINAL immutable callId (never the composite run::callId key)", () => {
+  const rows = [
+    { type: "tool-call", id: "r1", run: "runX", callId: "r1:runX:memory_get:1", tool: "memory_get", args: "{}" },
+    { type: "tool-result", id: "r1", run: "runX", callId: "r1:runX:memory_get:1", tool: "memory_get", result: "ok", ok: true },
+  ];
+  const [pair] = pairToolJournal(rows);
+  assertEquals(pair.callId, "r1:runX:memory_get:1", "the ORIGINAL callId is preserved verbatim");
+  // a reload re-pairs the persisted callId — it must NOT grow another prefix
+  const [round2] = pairToolJournal([
+    { type: "tool-result", id: "r1", run: null, callId: pair.callId, tool: "memory_get", args: "{}", result: "ok", ok: true },
+  ]);
+  assertEquals(round2.callId, pair.callId, "the id is IMMUTABLE across a reload round-trip");
+});

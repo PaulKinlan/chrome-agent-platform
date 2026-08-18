@@ -444,7 +444,10 @@ export function createAgent({
             return { error: "origin re-enrolled during run — result discarded" };
           }
         }
-        return result;
+        // The PER-RUN outcome is RETURNED with the text — a queued next run can
+        // never overwrite THIS caller's observable abort state (the singleton
+        // lastRunAborted is only a fallback for the SW's isAborted() check).
+        return { text: result, aborted: controller.signal.aborted };
       } finally {
         // DURABLE per-run outcome: capture the abort state BEFORE activeRun is
         // cleared (the SW's isAborted() check runs after orch.run resolves —
@@ -594,7 +597,9 @@ export function createOrchestrator({
               };
             }
           }
-          return { agentId, result };
+          // the worker's per-run outcome object → the delegation's TEXT result
+          const workerResult = (result && typeof result === "object" && typeof result.text === "string") ? result.text : result;
+          return { agentId, result: workerResult };
         },
       }),
     }

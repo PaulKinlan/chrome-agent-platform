@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.86] — 2026-08-18
+- fix(tool-calls): frozen-tip acceptance — JSON-string contract, tiny-cap RangeError, canonical redaction, immutable callIds, per-run returned outcome, external evidence
+
 ## [0.2.85] — 2026-08-18
 - docs(ui-fixes): record the acceptance round-2 commit hash + exact-HEAD evidence manifest/log
 

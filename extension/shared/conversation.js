@@ -363,7 +363,10 @@ export function pairToolJournal(entries) {
       type: "tool",
       tool,
       status,
-      callId: id,
+      // the ORIGINAL immutable callId (the composite ${run}::${callId} stays
+      // the INTERNAL pairing key only — persisting it would re-prefix on every
+      // reload)
+      callId: call?.callId ?? result?.callId ?? id,
       args: call?.args ?? result?.args ?? null,
       result: result?.result ?? null,
       ok: result?.ok ?? null,

@@ -142,10 +142,14 @@ async function writeEvidence(name: string, bytes: Uint8Array) {
 }
 
 let pass = 0, fail = 0;
+const transcript: Array<{ name: string; pass: boolean; detail?: unknown }> = [];
 function check(name: string, cond: boolean, detail?: unknown) {
+  transcript.push({ name, pass: cond, detail });
   if (cond) { pass++; console.log(`PASS: ${name}`); }
   else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
 }
+/** The EXTERNAL evidence output dir (never committed) — defaults to /tmp. */
+const EVIDENCE_OUT = Deno.env.get("GVS_EVIDENCE_OUT") ?? `/tmp/gvs-evidence-${Date.now()}`;
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
@@ -613,10 +617,13 @@ async function main() {
         checks: `${pass}/${pass + fail}`,
         screenshots: ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"],
       };
-      await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-      await Deno.writeTextFile(`${ROOT}test-artifacts/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
-      await Deno.writeTextFile(`${ROOT}test-artifacts/tool-call/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
-      console.log("manifest HEAD:", head, `(${pass}/${pass + fail})`);
+      // the EXTERNAL evidence artifact (CI/review, never committed): the
+      // manifest + the FULL execution transcript (every assertion name+result)
+      await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
+      await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
+      await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
+      await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
+      console.log("manifest HEAD:", head, `(${pass}/${pass + fail}) → ${EVIDENCE_OUT}`);
     } catch { /* git unavailable */ }
 
     console.log(`tool-call evidence (${MODE}): ${pass}/${pass + fail} passed`);
