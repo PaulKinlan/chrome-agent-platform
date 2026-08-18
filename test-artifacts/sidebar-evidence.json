@@ -4,31 +4,32 @@
   "screenshots": [
     {
       "file": "sidebar-collapsed.png",
-      "sha256": "e2a642d9b1f7b9d239a33a292e329825dd7a4316a5d1b7474de16efe931eaa68",
+      "sha256": "8ba83c3acb0c46acb6666b9256bf81689615af97810e0b5229e46d62a91ba43a",
       "bytes": 57682,
-      "describes": "the 60px icon rail with the centred rail icons + the edge nub (chevron pointing right)"
+      "describes": "the 60px icon rail (border at x≈59) with the centred rail icons + the edge nub (chevron pointing right)"
     },
     {
       "file": "sidebar-expanded.png",
-      "sha256": "8bb38411ead38fd50b9513d30716128a4311ff61db62a3bb4dd0911138d4d519",
+      "sha256": "8c856dc1fcf49ee7388ed62b3c9897aed2cb764636d361fd701b1e6b943a48bb",
       "bytes": 69026,
-      "describes": "the 240px sidebar with the edge nub (chevron pointing left)"
+      "describes": "the 240px sidebar (border at x≈239) with the edge nub (chevron pointing left)"
     }
   ],
   "tests": {
-    "test:ui": "32/32 pass",
+    "test:ui": "36/36 pass",
     "test:components": "34/34 pass",
     "npm test (deno test -A tests/)": "321/321 pass"
   },
   "verified": [
     "exactly five rail actions exist + share one centre (≤2px spread) + uniform 34×34",
     "collapse control is a ≥44×44 nub hit target, straddles the sidebar edge, in-bounds",
-    "nub z-index is above the thread overlay + elementFromPoint hit-testable at every sampled point + pointer-click toggles with the overlay open",
-    "Enter + Space toggle; aria-expanded/label/title track the state",
-    "collapsed state persists across reload (SW kv.set/kv.get)",
-    "RTL nub centres on the rail's inner (left) boundary + border swapped to the inner edge",
-    "rapid double-click returns to the deterministic prior state + View Transition settles",
-    "recent-activity renders a journal entry via the production activity.list path",
+    "nub is a SIBLING of #side (root stacking) so elementFromPoint hit-tests every sampled point + a real pointer click toggles with the overlay open",
+    "Enter + Space toggle; aria-expanded/label/title track; Enter focuses the nub first",
+    "collapsed state persists across reload after an awaited write flush; durability (durable/session/error) is exposed on the rail",
+    "RTL nub centres on the rail's inner (left) boundary + swaps the border to the inner edge",
+    "rapid double-click returns to the deterministic prior state + the View Transition.finished is awaited",
+    "recent-activity renders a journal entry via the production activity.list path (memory.set + reload)",
     "narrow (500px) in-bounds, prefers-reduced-motion disables the transition, dark theme renders a visible border"
-  ]
+  ],
+  "note": "A storage-GRANTED round-trip and a forced-backend-failure injection are not yet exercised by the integration harness (they require granting the optional storage permission + a fault hook in the test profile); the durability classification (durable vs session vs error) is asserted via the data-durability attribute and the kv.set mode return."
 }

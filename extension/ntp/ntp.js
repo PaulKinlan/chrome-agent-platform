@@ -1187,29 +1187,41 @@ const side = document.getElementById("side");
 const sideToggle = document.getElementById("side-toggle");
 let sidebarCollapsed = false;
 const SIDEBAR_KEY = "hub.sidebarCollapsed";
+// Serialize sidebar writes so a rapid toggle's LAST write always lands, and a
+// reload/evidence step can await the final write via sidebarPersistence().
+let sidebarWriteQueue = Promise.resolve();
+let sidebarDurability = "unknown"; // "durable" | "session" | "error"
+function persistSidebar(collapsed) {
+  sidebarWriteQueue = sidebarWriteQueue.then(async () => {
+    try {
+      const r = await send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } });
+      if (r?.ok === false) {
+        sidebarDurability = "error";
+        console.warn("sidebar collapse not persisted:", r.error ?? "unknown");
+      } else {
+        // kv.set now reports durable vs permissionless-session fallback.
+        sidebarDurability = r?.mode === "durable" ? "durable" : "session";
+      }
+    } catch {
+      sidebarDurability = "error"; // worker unreachable
+    }
+  }).catch(() => {});
+  return sidebarWriteQueue;
+}
+// Awaitable durability read + flush, exposed for tests + the UI hint.
+function sidebarPersistence() {
+  return { durability: () => sidebarDurability, flush: () => sidebarWriteQueue };
+}
+window.__sidebarPersistence = sidebarPersistence;
 function setSidebarCollapsed(collapsed) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
-  // Persist via the SW's kv routes (single authority). send() RESOLVES a
-  // {ok:false} on backend failure (storage granted but write failed) rather
-  // than rejecting, so we await + inspect the result instead of relying on a
-  // catch. A permissionless session fallback still returns ok:true (nothing
-  // persists, but the SW session Map keeps it for this boot).
-  persistSidebar(collapsed);
-}
-async function persistSidebar(collapsed) {
-  try {
-    const r = await send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } });
-    if (r?.ok === false) {
-      // Durable backend failed — the collapse is session-only this run.
-      console.warn("sidebar collapse not persisted:", r.error ?? "unknown");
-    }
-  } catch {
-    // worker unreachable — session-only (no persistence).
-  }
+  // Surface the durability on the sidebar (a visible session-only/error hint).
+  side.setAttribute("data-durability", sidebarDurability);
+  persistSidebar(collapsed); // serialized + ordered; flush() awaits the tail
 }
 sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
@@ -1251,6 +1263,10 @@ document.getElementById("new-agent")?.addEventListener("click", () => {
 // "Capture failed" and throws. When one is active we skip straight to the
 // state change (no transition) rather than abort the running one.
 let viewTransitionActive = false;
+// The most-recent ViewTransition, exposed so tests can await its `finished`
+// (the rapid-toggle test proves the transition LIFECYCLE completes, not just
+// that the CSS width transition settled).
+let lastViewTransition = null;
 function withViewTransition(fn) {
   if (
     typeof document.startViewTransition !== "function" ||
@@ -1258,21 +1274,25 @@ function withViewTransition(fn) {
     viewTransitionActive
   ) {
     fn();
-    return;
+    return null;
   }
   viewTransitionActive = true;
   try {
     const t = document.startViewTransition(() => fn());
+    lastViewTransition = t;
     // A transition that never settles must not throw; clear the guard either
     // way so a later state change can use a transition again.
     t?.finished?.finally(() => { viewTransitionActive = false; });
+    return t;
   } catch {
     // startViewTransition threw (invalid snapshot/state) — apply the change
     // without a transition and release the guard.
     viewTransitionActive = false;
     fn();
+    return null;
   }
 }
+window.__lastViewTransition = () => lastViewTransition;
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");

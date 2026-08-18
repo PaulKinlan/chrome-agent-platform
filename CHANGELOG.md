@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.76] — 2026-08-18
+- fix(sidebar): resolve third review — durability contract, real overlay, evidence, matrix
+
 ## [0.2.75] — 2026-08-18
 - fix(sidebar): resolve second review blockers — nub sibling stacking, hit-testing, persistence contract, activity path, matrix
 

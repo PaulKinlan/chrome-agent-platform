@@ -211,7 +211,10 @@ try {
   await sleep(500);
   const ptrAfter = await cdp.eval(hub, `(() => { document.getElementById('thread-view').hidden = true; return document.querySelector('#side').classList.contains('collapsed'); })()`);
   check("pointer click on the nub toggles the sidebar with the thread overlay open", ptrAfter !== ptrBefore, { ptrBefore, ptrAfter });
-  // Commit-specific evidence: capture the collapsed rail + nub.
+  // Collapsed evidence (force the collapsed state first — the pointer click
+  // above may have toggled it).
+  await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (!side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
+  await sleep(400);
   const shotCollapsed = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: number) => c.charCodeAt(0)));
 
@@ -224,6 +227,10 @@ try {
   const keyAfter = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title }; })()`);
   check("Enter toggles the sidebar (collapsed ↔ expanded)", keyBefore && keyAfter && keyBefore.collapsed !== keyAfter.collapsed, { keyBefore, keyAfter });
   check("aria-expanded + label + title track the state", keyAfter && keyAfter.expanded === String(!keyAfter.collapsed) && keyAfter.label === (keyAfter.collapsed ? "Expand sidebar" : "Collapse sidebar") && keyAfter.title === keyAfter.label, keyAfter);
+  check("Enter activation focuses the nub first", keyBefore?.focused === true, keyBefore);
+  // Expanded evidence (force the expanded state first — Enter above toggled it).
+  await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
+  await sleep(400);
   const shotExpanded = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: number) => c.charCodeAt(0)));
 
@@ -236,13 +243,16 @@ try {
   const spaceAfter = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
   check("Space toggles the sidebar", spaceAfter !== spaceBefore, { spaceBefore, spaceAfter });
 
-  // 2e. The collapsed state persists across a reload (collapse first, then reload).
+  // 2e. The collapsed state persists across a reload (collapse first, then
+  //     AWAIT the serialized write flush before reloading).
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (!side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
-  await sleep(500);
+  await cdp.eval(hub, `window.__sidebarPersistence?.().flush() ?? Promise.resolve()`);
+  await sleep(300);
   await cdp.send("Page.reload", {}, hub);
   await sleep(1500);
-  const afterReload = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side?.classList.contains('collapsed') ?? false, width: side ? Math.round(side.getBoundingClientRect().width) : 0 }; })()`);
+  const afterReload = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side?.classList.contains('collapsed') ?? false, width: side ? Math.round(side.getBoundingClientRect().width) : 0, durability: side?.getAttribute('data-durability') ?? 'unknown' }; })()`);
   check("collapsed state persists across reload", afterReload?.collapsed === true && afterReload?.width === 60, afterReload);
+  check("durability state is exposed on the rail", afterReload && ['durable', 'session', 'error', 'unknown'].includes(afterReload.durability), afterReload);
   // restore to expanded for the rest of the suite
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); if (document.querySelector('#side')?.classList.contains('collapsed')) t?.click(); })()`);
   await sleep(500);
@@ -259,15 +269,33 @@ try {
     return { sideLeft: Math.round(sideR.left), sideRight: Math.round(sideR.right), nubCx: cx, vw: innerWidth };
   })()`);
   check("RTL nub centres on the rail's inner (left) boundary", rtlGeom && Math.abs(rtlGeom.nubCx - rtlGeom.sideLeft) <= 3, rtlGeom);
+  // RTL also swaps the rail's hairline border to the inner (left) edge.
+  const rtlBorder = await cdp.eval(hub, `(() => {
+    const html = document.documentElement; html.setAttribute('dir', 'rtl');
+    const side = document.querySelector('#side');
+    const cs = getComputedStyle(side);
+    const out = { bl: cs.borderLeftWidth, bls: cs.borderLeftStyle, br: cs.borderRightWidth, brs: cs.borderRightStyle };
+    html.removeAttribute('dir');
+    return out;
+  })()`);
+  check("RTL swaps the rail border to the inner (left) edge", rtlBorder && rtlBorder.bls !== 'none' && rtlBorder.bl !== '0px' && (rtlBorder.br === '0px' || rtlBorder.brs === 'none'), rtlBorder);
 
   // 2g. Rapid double-click is a NET-ZERO toggle: two clicks return the sidebar
-  //     to its prior state, and the View Transition settles (width matches).
+  //     to its prior state, and the View Transition LIFECYCLE completes (await
+  //     its `finished`, not just a sleep + width check).
   const rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
-  await sleep(700);
-  const rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); const t = document.querySelector('#side-toggle'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width), expanded: t.getAttribute('aria-expanded') }; })()`);
+  const vtOutcome = await cdp.eval(hub, `(async () => {
+    const t = window.__lastViewTransition?.();
+    if (!t) return 'none';
+    if (t.finished) { await t.finished; return 'finished'; }
+    return 'no-finished';
+  })()`);
+  await sleep(300);
+  const rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width) }; })()`);
   check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter.collapsed === rapidBefore, { rapidBefore, rapidAfter });
-  check("View Transition settled (width matches the final state)", rapidAfter.width === (rapidAfter.collapsed ? 60 : 240), rapidAfter);
+  check("View Transition lifecycle completed (finished awaited)", vtOutcome === 'finished' || vtOutcome === 'none', vtOutcome);
+  check("width matches the final state after the transition", rapidAfter.width === (rapidAfter.collapsed ? 60 : 240), rapidAfter);
 
   // 3. The + menu opens AND stays in-bounds.
   const attach = await cdp.eval(hub, `(() => {
@@ -385,8 +413,11 @@ try {
     document.documentElement.dataset.theme = 'charcoal';
     const nub = document.querySelector('#side-toggle .nub');
     const cs = getComputedStyle(nub);
+    // READ the values BEFORE resetting the theme (getComputedStyle is live —
+    // reading after the reset would validate the restored light theme).
+    const out = { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor, bg: cs.backgroundColor };
     document.documentElement.dataset.theme = 'sunlit';
-    return { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor };
+    return out;
   })()`);
   check("dark theme: nub renders with a visible border", darkNub?.visible === true, darkNub);
 

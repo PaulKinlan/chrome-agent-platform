@@ -126,7 +126,11 @@ export async function kvGet(keys) {
   });
 }
 
-/** Mirror chrome.storage.local.set(obj). Fails closed on backend failure. */
+/** Mirror chrome.storage.local.set(obj). Returns "durable" when the
+ * persistent backend was written, "session" when the permissionless in-memory
+ * fallback was used (nothing survives a worker restart), and FAILS CLOSED
+ * (throws StorageBackendError) when the backend is available but the write
+ * fails. */
 export async function kvSet(obj) {
   return withStorageModeLock(async () => {
     await waitForMigration();
@@ -136,10 +140,11 @@ export async function kvSet(obj) {
         if (v === undefined) session.delete(k);
         else session.set(k, clone(v));
       }
-      return;
+      return "session";
     }
     try {
       await chrome.storage.local.set(obj);
+      return "durable";
     } catch (e) {
       throw new StorageBackendError("set", e);
     }

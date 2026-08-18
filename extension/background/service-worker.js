@@ -1337,8 +1337,12 @@ const handlers = {
     if (!m?.values || typeof m.values !== "object") {
       return { ok: false, error: "kv.set needs a values object" };
     }
-    await kvSet(m.values);
-    return { ok: true };
+    try {
+      const mode = await kvSet(m.values);
+      return { ok: true, mode };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
   },
   async "kv.remove"(m) {
     if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };
