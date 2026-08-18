@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.76] — 2026-08-18
+- docs(ui-fixes): record the final renderer commit hash in the tracker
+
 ## [0.2.75] — 2026-08-18
 - feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree
 
