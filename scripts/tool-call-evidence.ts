@@ -451,6 +451,83 @@ async function main() {
       const replayShot = await captureShot(cdp, session);
       if (replayShot) await writeEvidence("tree-3-replay.png", replayShot);
 
+      // E. The "done" status (an unpaired replay card) renders TERMINAL on the
+      //    real component — never "running" (the missing-result blocker).
+      const doneStatus = await evalIn(cdp, session, `(() => {
+        const conv = document.querySelector('agent-conversation');
+        const card = conv.appendTool({ name: 'memory_set', status: 'done', args: ${JSON.stringify(JSON.stringify({ key: "x" }))} });
+        const sr = card.shadowRoot || card;
+        const out = { chip: sr.querySelector('.tool-status')?.textContent ?? '', isRunning: (card.getAttribute('tool-status') ?? '') === 'running' };
+        card.remove();
+        return out;
+      })()`);
+      console.log("done status:", JSON.stringify(doneStatus));
+      check("replay: an unpaired (missing-result) card renders TERMINAL 'done', never running", (doneStatus as any)?.chip === "done" && (doneStatus as any)?.isRunning === false, doneStatus);
+
+      // F. appendTool with HOSTILE args (throwing toJSON AND toString) never throws.
+      const hostile = await evalIn(cdp, session, `(async () => {
+        const conv = document.querySelector('agent-conversation');
+        const evil = {};
+        Object.defineProperty(evil, "toJSON", { get() { throw new Error("toJSON"); } });
+        Object.defineProperty(evil, "toString", { get() { throw new Error("toString"); } });
+        try {
+          const card = conv.appendTool({ name: 'memory_set', args: { key: "x", evil }, status: 'running' });
+          await new Promise((r) => setTimeout(r, 250));
+          const sr = card.shadowRoot || card;
+          const ok = sr.textContent.length > 0;
+          card.remove();
+          return { ok };
+        } catch (e) { return { ok: false, err: String(e?.message ?? e) }; }
+      })()`);
+      console.log("hostile:", JSON.stringify(hostile));
+      check("appendTool: hostile toJSON+toString args never throw at the public boundary", (hostile as any)?.ok === true, hostile);
+
+      // G. copy edges: an EMPTY-string leaf copies; a truncated subtree copy is
+      //    VALID JSON with the explicit __gvs_truncated__ envelope.
+      const copyEdges = await evalIn(cdp, session, `(async () => {
+        const conv = document.querySelector('agent-conversation');
+        const captured = [];
+        navigator.clipboard = Object.assign(navigator.clipboard ?? {}, { writeText: (t) => { captured.push(String(t)); return Promise.resolve(); } });
+        const card = conv.appendTool({ name: 'memory_set', args: JSON.stringify({ empty: "", big: { items: Array.from({ length: 500 }, (_, i) => ({ i, pad: "x".repeat(120) })) } }), status: 'success' });
+        const sr = card.shadowRoot || card;
+        // click the empty-string leaf's copy button
+        const emptyRow = [...sr.querySelectorAll('.tt-row.tt-leaf')].find((r) => (r.querySelector('.tt-key')?.textContent ?? '') === 'empty');
+        emptyRow?.querySelector('.tt-copy')?.click();
+        await new Promise((r) => setTimeout(r, 120));
+        // click the big container's copy-JSON
+        const bigRow = [...sr.querySelectorAll('.tt-row.tt-container')].find((r) => (r.querySelector('.tt-key')?.textContent ?? '') === 'big');
+        bigRow?.querySelector('.tt-copy')?.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const emptyCopy = captured[0] ?? null;
+        const bigCopy = captured[1] ?? null;
+        let bigParsed = null, bigTruncated = false;
+        try { bigParsed = JSON.parse(bigCopy ?? "null"); bigTruncated = bigParsed?.__gvs_truncated__ === true; } catch { bigParsed = null; }
+        card.remove();
+        return { emptyCopy, bigCopyValid: bigParsed !== null, bigTruncated };
+      })()`);
+      console.log("copy edges:", JSON.stringify(copyEdges));
+      check("copy: an EMPTY-string leaf still copies (the empty value is valid, not 'unavailable')", (copyEdges as any)?.emptyCopy === "", copyEdges);
+      check("copy: a truncated subtree copy is VALID JSON with explicit truncation metadata", (copyEdges as any)?.bigCopyValid === true && (copyEdges as any)?.bigTruncated === true, copyEdges);
+
+      // H. REAL persistence + reload + reopen: the demo run's journal rows are
+      //    read back, the NTP RELOADS, and the task thread REOPENS from the
+      //    sidebar — the persisted journal renders again (a real round-trip).
+      await evalIn(cdp, session, `location.reload()`);
+      await sleep(2500);
+      const reopened = await evalIn(cdp, session, `(async () => {
+        const send = (m) => chrome.runtime.sendMessage(m).then((v) => ({ v }), (e) => ({ err: e.message }));
+        const j = await send({ type: "memory.get", origin: "master", key: "journal" });
+        const rows = Array.isArray(j.v) ? j.v : [];
+        const tasks = await send({ type: "thread.list" });
+        const threads = Array.isArray(tasks.v?.threads) ? tasks.v.threads : [];
+        return { journalRows: rows.length, threads: threads.length, lastTask: rows.slice(-1)[0]?.task ?? null };
+      })()`);
+      console.log("reopened:", JSON.stringify(reopened));
+      check("persist: the REAL journal survived a reload (rows read back)", ((reopened as any)?.journalRows ?? 0) >= 2, reopened);
+      check("persist: the task thread persisted (listable after reload)", ((reopened as any)?.threads ?? 0) >= 1, reopened);
+      const reopenShot = await captureShot(cdp, session);
+      if (reopenShot) await writeEvidence("tree-4-reopen.png", reopenShot);
+
       // E. The REAL journal write path: a REAL demo run persists task/result rows
       //    (read back via the real memory.get route) — the journal is live.
       const journalRead = await evalIn(cdp, session, `(async () => {

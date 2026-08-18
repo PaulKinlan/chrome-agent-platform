@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.78] — 2026-08-18
+- fix(tool-calls): final-sol blockers — terminal arbitration, replay isolation/legacy, bounded never-throws serializer, copy edges
+
 ## [0.2.77] — 2026-08-18
 - docs(ui-fixes): correct the tool-tree test count (25) — the targeted total is 36 (25 + 11)
 

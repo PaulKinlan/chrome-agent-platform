@@ -1527,13 +1527,19 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
     const row = btn._row; // the explicit button → row mapping
     if (!row) return;
     const label = btn.textContent;
-    let text = "";
+    let text;
     try {
       text = isJson
         ? (subtreeJson(value, row.segments) ?? "")
         : (row.full ?? row.text ?? "");
-    } catch { text = ""; }
-    if (!text) { btn.textContent = "unavailable"; setTimeout(() => { btn.textContent = label; }, 1200); return; }
+    } catch { text = undefined; }
+    // An EMPTY STRING is a valid leaf value and MUST copy; only a genuinely
+    // unavailable row (no text at all) refuses.
+    if (text === undefined || text === null) {
+      btn.textContent = "unavailable";
+      setTimeout(() => { btn.textContent = label; }, 1200);
+      return;
+    }
     const restore = () => setTimeout(() => { btn.textContent = label; }, 1400);
     if (navigator.clipboard?.writeText) {
       // The button says "copied" ONLY on a resolved write — a rejection must
@@ -1552,8 +1558,11 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
       ta.style.opacity = "0";
       document.body.appendChild(ta);
       ta.select();
-      try { document.execCommand("copy"); btn.textContent = "copied"; } catch { btn.textContent = "copy failed"; }
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { ok = false; }
       ta.remove();
+      // execCommand returning FALSE must report failure, never success
+      btn.textContent = ok ? "copied" : "copy failed";
       restore();
     }
   });
@@ -1740,7 +1749,12 @@ class MessageBubble extends Component {
     if (role === "tool") {
       const name = this.getAttribute("tool-name") || "tool";
       const statusRaw = this.getAttribute("tool-status") || "running";
-      const status = statusRaw === "success" ? "done" : statusRaw === "error" ? "error" : "running";
+      // "done" (an unpaired replay card), "success" and "error" are terminal —
+      // anything else (running/absent) renders the running state. A missing
+      // result must never re-open a card as running (the replay blocker).
+      const status = statusRaw === "done" || statusRaw === "success"
+        ? "done"
+        : statusRaw === "error" ? "error" : "running";
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
       const detail = this.getAttribute("tool-detail");

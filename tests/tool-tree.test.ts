@@ -269,3 +269,47 @@ Deno.test("tool-tree: safeJsonStringify never throws at the PUBLIC boundary (cyc
   assertEquals(safeJsonStringify(null), "null");
   assertEquals(safeJsonStringify({ key: "x", items: [1, 2] }), '{"key":"x","items":[1,2]}');
 });
+
+// ── the sol-review serializer hardening (never throws, cycle-vs-alias, bounds) ──
+
+Deno.test("tool-tree: safeJsonStringify never throws on hostile toJSON/toString getters", () => {
+  const toJson = { get toJSON() { throw new Error("toJSON"); } };
+  let out;
+  try { out = safeJsonStringify(toJson); } catch (e) { throw new Error("threw: " + e.message); }
+  assert(typeof out === "string");
+  const toString = {};
+  Object.defineProperty(toString, "toString", { get() { throw new Error("toString"); } });
+  let out2;
+  try { out2 = safeJsonStringify({ k: toString }); } catch (e) { throw new Error("threw: " + e.message); }
+  assert(typeof out2 === "string");
+  // both toJSON AND toString hostile
+  const evil = { get toJSON() { throw new Error("j"); } };
+  Object.defineProperty(evil, "toString", { get() { throw new Error("s"); } });
+  let out3;
+  try { out3 = safeJsonStringify({ a: evil }); } catch (e) { throw new Error("threw: " + e.message); }
+  assert(typeof out3 === "string");
+});
+
+Deno.test("tool-tree: safeJsonStringify distinguishes CYCLES from ALIASES", () => {
+  const a = { n: 1 };
+  a.self = a;
+  assertEquals(safeJsonStringify(a), '{"n":1,"self":"[cyclic]"}', "a true cycle → [cyclic]");
+  const shared = { n: 1 };
+  const withAlias = { a: shared, b: shared };
+  const aliasJson = safeJsonStringify(withAlias);
+  const parsed = JSON.parse(aliasJson);
+  assertEquals(parsed.a.n, 1, "the alias serializes in full the first time");
+  assertEquals(parsed.b.n, 1, "a shared ref is NOT labelled [cyclic]");
+  assert(!aliasJson.includes("[cyclic]"), "no false [cyclic] for aliases");
+});
+
+Deno.test("tool-tree: safeJsonStringify is BOUNDED (depth/node/byte caps) + always valid JSON", () => {
+  let deep = "x";
+  for (let i = 0; i < 60; i++) deep = { deep };
+  const d = safeJsonStringify(deep);
+  assert(JSON.parse(d) !== null, "deep output is valid JSON (in-band marker or envelope)");
+  const big = Array.from({ length: 10000 }, (_, i) => ({ i, pad: "x".repeat(40) }));
+  const b = safeJsonStringify(big);
+  assert(JSON.parse(b) !== null, "huge output is valid JSON");
+  assert(b.length < 40_000, "bounded output size");
+});

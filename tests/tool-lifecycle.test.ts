@@ -148,3 +148,54 @@ Deno.test("tool-lifecycle: task/result rows pass through untouched", () => {
   ]);
   assertEquals(pairs.length, 1, "only the tool rows pair");
 });
+
+// ── the sol-review replay fixes: legacy pairing, ok-heuristics, run isolation ──
+
+Deno.test("tool-lifecycle: LEGACY rows (no callId) pair by (id, tool, occurrence)", () => {
+  const entries = [
+    { type: "tool-call", id: "r1", tool: "memory_set", args: "{}" },
+    { type: "tool-result", id: "r1", tool: "memory_set", result: "stored", ok: true },
+  ];
+  const pairs = pairToolJournal(entries);
+  assertEquals(pairs.length, 1, "the legacy call + result PAIR into one card");
+  assertEquals(pairs[0].status, "success");
+});
+
+Deno.test("tool-lifecycle: legacy absent-ok uses the TEXT heuristic (failed restores as error)", () => {
+  const [failed] = pairToolJournal([
+    { type: "tool-result", id: "r1", tool: "memory_get", result: "failed: origin re-enrolled" },
+  ]);
+  assertEquals(failed.status, "error", "legacy failed text → error, not a blanket success");
+  const [ok] = pairToolJournal([
+    { type: "tool-result", id: "r1", tool: "memory_get", result: "read 1 key" },
+  ]);
+  assertEquals(ok.status, "success");
+  const [denied] = pairToolJournal([
+    { type: "tool-result", id: "r1", tool: "memory_set", result: "[memory_set] DENIED by hook — quota" },
+  ]);
+  assertEquals(denied.status, "error");
+});
+
+Deno.test("tool-lifecycle: RUN-INSTANCE scoped callIds isolate repeated scheduled runs", () => {
+  // two runs of the SAME taskId (a scheduled alarm.name) with distinct run
+  // instances — each renders its own terminal card, never collapsed
+  const entries = [
+    { type: "tool-call", id: "schedule", run: "a1", callId: "schedule:a1:memory_set:1", tool: "memory_set", args: "{\"k\":1}" },
+    { type: "tool-result", id: "schedule", run: "a1", callId: "schedule:a1:memory_set:1", tool: "memory_set", result: "one", ok: true },
+    { type: "tool-call", id: "schedule", run: "b2", callId: "schedule:b2:memory_set:1", tool: "memory_set", args: "{\"k\":2}" },
+    { type: "tool-result", id: "schedule", run: "b2", callId: "schedule:b2:memory_set:1", tool: "memory_set", result: "two", ok: true },
+  ];
+  const pairs = pairToolJournal(entries);
+  assertEquals(pairs.length, 2, "two runs → two cards");
+  assert(pairs[0].args.includes("1") || pairs[0].args.includes("2"));
+});
+
+Deno.test("tool-lifecycle: an UNMATCHED result gets a unique id (no repeated :1 collapse)", () => {
+  const pairs = pairToolJournal([
+    { type: "tool-result", id: "r1", tool: "memory_get", result: "one", ok: true },
+    { type: "tool-result", id: "r1", tool: "memory_get", result: "two", ok: false },
+  ]);
+  assertEquals(pairs.length, 2, "two unmatched results → two distinct cards");
+  assertEquals(pairs[0].status, "success");
+  assertEquals(pairs[1].status, "error");
+});

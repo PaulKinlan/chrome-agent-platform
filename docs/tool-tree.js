@@ -174,53 +174,133 @@ export function buildTree(value, opts = {}) {
 }
 
 /**
- * A CYCLE-/BigInt-/getter-safe JSON serializer for the PUBLIC appendTool
- * boundary (the card attr must never throw on a hostile args value — the
- * tree core's own cycle guard is for display; this makes the ATTR itself
- * safe to build). Never throws: cyclic values render "[cyclic]", BigInt
- * renders "123n", throwing getters fall back to a marker.
+ * A MANUAL, bounded, never-throws JSON serializer for the PUBLIC appendTool
+ * boundary. Unlike JSON.stringify + a replacer, the traversal is ours:
+ *   - cycles are distinguished from ALIASES (only an ANCESTOR is "[cyclic]";
+ *     a shared reference serializes in full each time it is reached)
+ *   - every property access + string coercion is try/catch guarded (throwing
+ *     toJSON/toString getters can never escape — the "never throws" contract)
+ *   - depth / node / byte / string caps are enforced WHILE serializing, and a
+ *     byte-cap breach returns an explicit VALID envelope
+ *     {"__gvs_truncated__":true,"preview":<bounded-valid-json>} — never a
+ *     dangling ellipsis
  */
-export function safeJsonStringify(value) {
-  if (value == null) return String(value);
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const stack = [];
-  try {
-    // JSON.stringify itself triggers getters (a throwing getter lands in the
-    // catch → a safe fallback); the ancestor stack catches cycles. BigInt
-    // serializes as "123n" so the attr never throws.
-    const s = JSON.stringify(value, function (k, v) {
-      if (v !== null && typeof v === "object") {
-        if (stack.includes(v)) return "[cyclic]";
-        stack.push(v);
-        return v;
+export function safeJsonStringify(value, opts = {}) {
+  const maxDepth = opts.maxDepth ?? 8;
+  const maxNodes = opts.maxNodes ?? 500;
+  const maxBytes = opts.maxBytes ?? 32 * 1024;
+  const maxString = opts.maxString ?? 400;
+  let nodes = 0;
+  let bytes = 0;
+  let truncated = false;
+  const out = [];
+  const budgetBytes = (s) => {
+    out.push(s);
+    bytes += s.length;
+    if (bytes > maxBytes) { truncated = true; return false; }
+    return true;
+  };
+  const esc = (str) => JSON.stringify(str) ?? JSON.stringify(String(str));
+
+  const str = (v) => {
+    // a bounded + safe string coercion (a hostile toString cannot throw)
+    let s;
+    try { s = String(v); } catch { s = "[unserializable]"; }
+    if (s.length > maxString) { truncated = true; s = s.slice(0, maxString - 1) + "…"; }
+    return esc(s);
+  };
+
+  const visit = (v, depth, chain) => {
+    if (nodes >= maxNodes) { truncated = true; return false; }
+    nodes += 1;
+    if (v === null || v === undefined) { return budgetBytes("null"); }
+    const t = typeof v;
+    if (t === "string") return budgetBytes(str(v));
+    if (t === "number") { if (!Number.isFinite(v)) { return budgetBytes("null"); } return budgetBytes(String(v)); }
+    if (t === "boolean") return budgetBytes(String(v));
+    if (t === "bigint") return budgetBytes(esc(String(v) + "n")); // "10n" inside the quotes — valid JSON
+    if (t === "object") {
+      if (chain.has(v)) return budgetBytes('"[cyclic]"'); // an ANCESTOR only
+      chain.add(v);
+      let ok = true;
+      try {
+        if (Array.isArray(v)) {
+          if (depth >= maxDepth) {
+            ok = budgetBytes('"[depth capped]"'); // in-band marker — still valid JSON
+          } else {
+            ok = budgetBytes("[");
+            const cap = Math.min(v.length, 100);
+            for (let i = 0; i < cap && ok && !truncated; i++) {
+              if (i > 0) ok = budgetBytes(",");
+              let item;
+              try { item = v[i]; } catch { item = "[unreadable]"; }
+              ok = visit(item, depth + 1, chain);
+            }
+            if (ok && v.length > cap) ok = budgetBytes(`,"[${v.length - cap} more items]"`);
+            if (ok) ok = budgetBytes("]");
+          }
+        } else {
+          if (depth >= maxDepth) {
+            ok = budgetBytes('"[depth capped]"'); // in-band marker — still valid JSON
+          } else {
+            let keys;
+            try { keys = Object.keys(v); } catch { keys = []; }
+            ok = budgetBytes("{");
+            const cap = Math.min(keys.length, 100);
+            for (let i = 0; i < cap && ok && !truncated; i++) {
+              if (i > 0) ok = budgetBytes(",");
+              const k = keys[i];
+              ok = budgetBytes(esc(k) + ":");
+              let val;
+              try { val = v[k]; } catch { val = "[unreadable]"; }
+              ok = visit(val, depth + 1, chain);
+            }
+            if (ok && keys.length > cap) ok = budgetBytes(`,"[${keys.length - cap} more keys]"`);
+            if (ok) ok = budgetBytes("}");
+          }
+        }
+      } catch {
+        ok = budgetBytes('"[unserializable]"');
       }
-      if (typeof v === "bigint") return String(v) + "n";
-      return v;
-    });
-    if (typeof s === "string") return s;
-    return String(value);
-  } catch {
-    return String(value);
+      chain.delete(v);
+      return ok;
+    }
+    // function/symbol
+    return budgetBytes('"[value]"');
+  };
+
+  if (typeof value === "string") return value; // a plain string passes through
+  visit(value, 0, new Set());
+  let json = out.join("");
+  if (truncated) {
+    // the explicit truncation envelope (VALID JSON, never a dangling "…")
+    json = `{"__gvs_truncated__":true,"preview":${esc(json.length > 16000 ? json.slice(0, 16000) : json)}}`;
   }
+  return json;
 }
 
 /** The subtree JSON for a row addressed by its SEGMENT array. Bounded +
- * never throws (a cyclic/BigInt/getter value falls back to a marker). */
+ * never throws (a cyclic/BigInt/getter value falls back to a marker). A copy
+ * that exceeds the preview budget returns an EXPLICIT truncation envelope —
+ * always VALID JSON: {"__gvs_truncated__":true,"bytes":N,"preview":<json>}
+ * (never a dangling ellipsis that would paste as broken JSON). */
 export function subtreeJson(value, segments, containerCap = TOOL_TREE_CONTAINER_CAP) {
   let cur = value;
   for (const s of segments) {
-    if (cur == null) return "";
+    if (cur == null) return "null";
     try {
       cur = Array.isArray(cur) ? cur[Number(s)] : cur[s];
-    } catch { return "[unreadable value]"; }
+    } catch { return '"[unreadable value]"'; }
   }
   const bound = boundSubtree(cur, containerCap);
   try {
     const s = JSON.stringify(bound);
-    return s && s.length > 4096 ? s.slice(0, 4096) + "…" : s;
+    if (s == null) return "null";
+    if (s.length <= 4096) return s;
+    // the explicit truncation envelope (the preview is a JSON string — valid)
+    return `{"__gvs_truncated__":true,"bytes":${s.length},"preview":${JSON.stringify(s.slice(0, 4096))}}`;
   } catch {
-    return String(cur);
+    return '"[unserializable subtree]"';
   }
 }
 

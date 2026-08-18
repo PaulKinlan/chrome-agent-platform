@@ -237,20 +237,88 @@ export function isToolErrorEvent(ev) {
   return /^\s*failed\b/i.test(s) || /^\s*\[[^\]]+\]\s*DENIED/i.test(s);
 }
 
+/** The run TERMINAL arbiter: settles the in-flight tool-card queue exactly
+ * once, on the AUTHORITATIVE final event, whichever channel arrives last.
+ *
+ * Both orderings must be correct:
+ *   - port-before-response: the port's done/error settles immediately; the
+ *     later request response is a no-op.
+ *   - response-before-port: the response arms a GRACE window; a delayed
+ *     tool-result {ok:false} or done {aborted:true} still wins (it settles
+ *     the queue with the true status), and only when the grace expires does
+ *     the response's own ok decide. The listener stays subscribed through the
+ *     grace so late current-run events are never dropped.
+ * Deterministic: `timers` (setTimeout/clearTimeout) can be injected for tests.
+ */
+// The production grace (mutable for deterministic boundary tests).
+export let RUN_TERMINAL_GRACE_MS = 1500;
+export function setRunTerminalGraceMs(ms) { RUN_TERMINAL_GRACE_MS = ms; }
+
+export function createRunTerminal({ graceMs = RUN_TERMINAL_GRACE_MS, timers = null, onSettle = null } = {}) {
+  const setTimeoutFn = timers?.setTimeout ?? setTimeout;
+  const clearTimeoutFn = timers?.clearTimeout ?? clearTimeout;
+  let settled = false;
+  let graceTimer = null;
+  const settle = (status) => {
+    if (settled) return;
+    settled = true;
+    if (graceTimer != null) clearTimeoutFn(graceTimer);
+    onSettle?.(status);
+  };
+  return {
+    get settled() { return settled; },
+    /** the port's final event is authoritative */
+    onPortDone(aborted) { settle(aborted ? "error" : "success"); },
+    onPortError() { settle("error"); },
+    /** the request response arrived → arm the grace; a port final that beats
+     *  the timer still wins; otherwise the response's ok decides */
+    onResponse(ok) {
+      if (settled) return;
+      graceTimer = setTimeoutFn(() => settle(ok ? "success" : "error"), graceMs);
+    },
+    /** force-settle now (tests / a hard abort) */
+    force(status) { settle(status); },
+  };
+}
+
 /** Pair persisted journal tool rows into ONE terminal card per tool call.
- * The SW persists a per-call `callId` on BOTH the tool-call and tool-result
- * rows (FIFO per tool name within a run); a replay must render ONE card with
- * the call's args + a terminal status (success / error for failed-blocked
- * results / done when the result is missing — never a permanently running
- * card). Pure — unit-tested; used by the agent-history surfaces (ntp.js). */
+ * The SW persists a per-call `callId` (run-instance scoped) on BOTH rows; a
+ * replay must render ONE card with the call's args + a TERMINAL status:
+ *   - ok:false → "error" (failed/blocked)
+ *   - ok:true  → "success"
+ *   - ok ABSENT (legacy rows) → the result TEXT heuristic (a "failed"/"DENIED"
+ *     result restores as error, not a blanket success)
+ *   - no result at all → "done" (terminal — the component maps done → done,
+ *     never running)
+ * LEGACY rows without a callId pair by (id, tool, occurrence index) — the Nth
+ * call pairs with the Nth result of the same (id, tool), independent of the
+ * row order bookkeeping (the old `order.length` fallback gave different ids to
+ * a call and its result). Pure — unit-tested; used by the agent-history
+ * surfaces (ntp.js). */
 export function pairToolJournal(entries) {
   const rows = Array.isArray(entries) ? entries : [];
-  const byCall = new Map(); // callId -> { call, result }
+  const byCall = new Map(); // callId -> { call, result, ts }
   const order = [];
+  // Legacy (no callId) pairing: the Nth CALL of an (id, tool) pairs with the
+  // Nth RESULT of the same (id, tool) — separate counters, shared indexes (the
+  // old single counter gave a call and its result DIFFERENT indexes).
+  const legacyCallSeq = new Map();
+  const legacyResultSeq = new Map();
+  const legacyId = (r) => {
+    const k = `${r.id ?? ""}::${r.tool ?? ""}`;
+    if (r.type === "tool-call") {
+      const n = legacyCallSeq.get(k) ?? 0;
+      legacyCallSeq.set(k, n + 1);
+      return `legacy:${k}:${n}`;
+    }
+    const n = legacyResultSeq.get(k) ?? 0;
+    legacyResultSeq.set(k, n + 1);
+    return `legacy:${k}:${n}`;
+  };
   for (const r of rows) {
     if (!r || typeof r !== "object") continue;
     if (r.type === "tool-call" || r.type === "tool-result") {
-      const id = r.callId ?? `${r.id ?? ""}:${r.tool ?? ""}:${r.seq ?? order.length}`;
+      const id = typeof r.callId === "string" && r.callId ? r.callId : legacyId(r);
       if (!byCall.has(id)) {
         byCall.set(id, { call: null, result: null, ts: typeof r.ts === "number" ? r.ts : null });
         order.push(id);
@@ -264,14 +332,22 @@ export function pairToolJournal(entries) {
     const { call, result, ts } = byCall.get(id);
     const tool = call?.tool ?? result?.tool ?? "tool";
     const ok = result?.ok;
-    const status = result ? (ok === false ? "error" : "success") : "done";
+    let status;
+    if (!result) status = "done";
+    else if (ok === false) status = "error";
+    else if (ok === true) status = "success";
+    else {
+      // legacy: ok absent → the text heuristic (failed/DENIED restores as error)
+      const s = String(result.result ?? "");
+      status = /^\s*failed\b/i.test(s) || /^\s*\[[^\]]+\]\s*DENIED/i.test(s) ? "error" : "success";
+    }
     out.push({
       type: "tool",
       tool,
       status,
       args: call?.args ?? null,
       result: result?.result ?? null,
-      ok,
+      ok: result?.ok ?? null,
       ts,
     });
   }
@@ -372,6 +448,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
     thinking?.remove();
     thinking = null;
   };
+  // The terminal arbiter: settles the queue exactly once on the AUTHORITATIVE
+  // final event (a port done/error, or the response after a grace window) so
+  // BOTH channel orderings are correct.
+  const terminal = createRunTerminal({
+    onSettle: (status) => {
+      toolCards.flush(status);
+      unsubscribe();
+    },
+  });
 
   // 3. subscribe to the live progress for THIS turn. The port broadcast is
   //    global, so we FILTER by runId — events for another thread/page are
@@ -429,14 +514,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       case "done":
         clearThinking();
-        // Resolve any still-in-flight tool cards (an abort or a run that ended
-        // without a tool-result must never leave a card permanently running).
-        toolCards.flush(ev.aborted ? "error" : "success");
+        // The port's done is AUTHORITATIVE (aborted → error): settles the
+        // queue once; a later response is a no-op.
+        terminal.onPortDone(ev.aborted === true);
         onStatus?.({ state: "done" });
         break;
       case "error":
         clearThinking();
-        toolCards.flush("error");
+        terminal.onPortError();
         onStatus?.({
           state: "error",
           message: ev.reason ?? ev.message ?? "error",
@@ -487,12 +572,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {
-    // Settle any still-in-flight tool cards on EVERY request path (idempotent —
-    // the queue clears once). A run that returned {ok:false} without a port
-    // broadcast, or whose response beat the port's final event, must never
-    // leave a card permanently running.
-    toolCards.flush(res?.ok ? "success" : "error");
-    unsubscribe();
+    // The response arrived — arm the GRACE window. The listener STAYS
+    // subscribed: a delayed current-run tool-result {ok:false} or done
+    // {aborted:true} still wins (the arbiter settles with the true status);
+    // only on grace expiry does the response's own ok decide. Either way the
+    // queue settles exactly once + unsubscribes — never a permanently running
+    // card, and never a success marked from a response that raced ahead of a
+    // legitimate error/abort final (the ordering blocker).
+    terminal.onResponse(res?.ok === true);
   }
 
   // 5. the final result (the journal is the source of truth; append the result

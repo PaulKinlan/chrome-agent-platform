@@ -344,6 +344,10 @@ async function registerAlarm(task) {
     delayMs: task.delayMs,
     periodInMinutes: task.periodInMinutes,
     attachments: task.attachments ?? [],
+    // ROUTE PARITY with the schedule_task tool: the owner-facing register-task
+    // route accepts a script-backed schedule too (runs the script sandboxed,
+    // no model re-invocation).
+    scriptId: task.scriptId,
   });
 }
 
@@ -965,6 +969,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // what an agent did — even a background agent with no live UI. The journal
     // is bounded (count + bytes); a journal failure never kills the run
     // (best-effort telemetry), and the live broadcast still flows through.
+    const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const journalingProgress = (event) => {
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
@@ -972,16 +977,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         let args;
         try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
         if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
-        // A per-call correlation id (FIFO per tool name within THIS run) lets a
-        // replay PAIR each tool-call with its result + render ONE terminal card
-        // (the persisted-history blocker — the old rows had no pairing key).
+        // A per-call correlation id (FIFO per tool name within THIS run,
+        // RUN-INSTANCE scoped — a scheduled run reusing taskId/alarm.name must
+        // never regenerate colliding ids) lets a replay PAIR each tool-call
+        // with its result + render ONE terminal card.
         const n = (callSeq.get(event.toolName) ?? 0) + 1;
         callSeq.set(event.toolName, n);
-        const callId = `${taskId}:${event.toolName ?? "tool"}:${n}`;
+        const callId = `${taskId}:${runInstance}:${event.toolName ?? "tool"}:${n}`;
         const cq = callQueue.get(event.toolName) ?? [];
         cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
         callQueue.set(event.toolName, cq);
-        journalAppend(mem, { type: "tool-call", id: taskId, callId, tool: event.toolName ?? "tool", args }).catch(() => {});
+        journalAppend(mem, { type: "tool-call", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", args }).catch(() => {});
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
@@ -993,12 +999,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // restore failed/blocked results as ERROR cards (the journal discarded
         // ok before — failed results reopened as success).
         const q = callQueue.get(event.toolName) ?? [];
-        const callId = q.shift() ?? `${taskId}:${event.toolName ?? "tool"}:1`;
-        journalAppend(mem, { type: "tool-result", id: taskId, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
+        const orphanN = (orphanSeq.get(event.toolName) ?? 0) + 1;
+        orphanSeq.set(event.toolName, orphanN);
+        // An unmatched result gets a UNIQUE id (never a repeated ":1" that
+        // would collapse multiple orphan results into one card).
+        const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
+        journalAppend(mem, { type: "tool-result", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
       }
     };
     const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
+    const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
     const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride);
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or
