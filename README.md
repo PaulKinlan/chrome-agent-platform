@@ -80,12 +80,16 @@ extension/
 
 Every system prompt the platform sends is composed by ONE authority
 (`extension/lib/system-prompts.js` — see **docs/SYSTEM-PROMPTS.md**): the versioned
-built-in base + the owner's persistent per-scope customization (append/prepend/replace)
-+ the agent role + the immutable protected safety constraints + the per-run skills.
-Hub, named-agent, background, scheduled, hook, and site-worker runs all resolve through
-it, so the Settings → Advanced preview is byte-identical to what the model receives. A
-product update to a built-in prompt never silently overwrites a customization — the UI
-flags it with an old-vs-new diff and explicit keep/edit/reset choices.
+built-in base + the owner's per-scope customization (append/prepend/replace)
++ the agent role + the per-run skills + the immutable protected runtime policy
+(lib/runtime-policy.js, always the FINAL layer). Hub, named-agent, background,
+scheduled, hook, and site-worker runs all resolve through it, so the Settings →
+Advanced preview is the exact platform composition a run is built with — and
+every run records a run-bound attestation (the SHA-256 digest + UTF-8 bytes of
+the exact provider-bound system message, keyed receipts, never content) proving
+the wire message embeds that composition. A product update to a built-in prompt
+never silently overwrites a customization — the UI flags it with an old-vs-new
+diff and explicit keep/edit/reset choices.
 
 
 ## The design system

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.74] — 2026-08-18
+- fix(system-prompts): the review-blocker correction — one authoritative runtime policy + run-bound attestation + hardened persistence
+
 ## [0.2.73] — 2026-08-18
 - feat(system-prompts): the layered, versioned system-prompt architecture + Settings → Advanced — lib/system-prompts.js is the single composition authority for every run type (hub/named/background/scheduled/hook/site-worker): the versioned built-in base + persistent per-scope owner customization (append/prepend/replace, fail-closed bounded validation, base version/hash/snapshot stamps) + the immutable protected constraints (moved out of the editable master skill) + per-run skills. Built-in upgrades never silently overwrite: the override keeps applying and the UI surfaces an old-vs-new diff with explicit keep/edit/reset. The reusable <system-prompt-editor> (single-source components.js + gallery specimen) renders the built-in viewer, the editor, and the byte-identical effective preview (preview == sent, provable via the hash-only attestation journaled at run start). 23 unit tests (incl. real-orchestrator what-the-model-receives), a 30-check real-extension journey (scripts/system-prompts-integration.ts) with screenshot evidence, docs/SYSTEM-PROMPTS.md + README/PLAN/DESIGN/KNOWN-ISSUES/UI-FIXES-TRACKER updates. ui-integration's NTP runlog flake verified pre-existing on the clean base.
 

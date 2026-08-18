@@ -1,0 +1,19 @@
+
+> chrome-agent-platform@0.2.72 test:ui
+> deno run -A scripts/ui-integration.ts
+
+PASS: extension loaded (a service worker exists)
+PASS: NTP composer renders (input + mic + attach + run)
+PASS: sidebar collapse hides the empty-state text (no 'No tasks yet' leak)
+PASS: sidebar collapses to a narrow icon rail
+PASS: the + menu opens on click
+PASS: the + menu stays in-bounds
+PASS: the error console opens
+PASS: the error console stays in-bounds
+FAIL: the recent-activity panel has horizontal padding (not edge-to-edge) — {"note":"no runlog row/empty found"}
+PASS: all settings sections render
+PASS: settings toggles render a visible switch
+PASS: the provider Test-connection button renders
+PASS: chat composer renders (input + send)
+
+RESULT: 12 passed, 1 failed

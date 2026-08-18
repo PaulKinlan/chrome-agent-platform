@@ -14,7 +14,7 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 - The per-provider model selector (current model lists per provider + an OpenAI-compatible + a working Custom… text input).
 - The "Test connection" button per provider (a real round-trip + the specific error).
 - Chaos-style semver (scripts/bump-version.mjs + the post-commit auto-bump).
-- Settings → Advanced: the layered, versioned system-prompt surface — the read-only built-in viewer (id/version/hash), the persistent per-scope customization editor (append/prepend/replace, save/cancel/reset, dirty + char-count states), the built-in-updated banner with an old-vs-new diff + keep/reset, and the effective composed preview (every layer labelled; the protected constraints never editable). The reusable `<system-prompt-editor>` component (single-source components.js + the gallery); the preview IS the sent prompt (one composition authority, lib/system-prompts.js — docs/SYSTEM-PROMPTS.md). Verified: 23 unit tests (tests/system-prompts.test.ts) + the real-extension journey (scripts/system-prompts-integration.ts) with screenshots.
+- Settings → Advanced: the layered, versioned system-prompt surface — the read-only built-in viewer (id/version/hash), the per-scope customization editor (append/prepend/replace, save/cancel/reset, dirty + UTF-8 byte-count states, the session-only durability badge), the built-in-updated banner with an old-vs-new diff + keep/reset (acting on the EFFECTIVE override), and the effective composed preview (every layer labelled; the protected runtime policy never editable, always last). The reusable `<system-prompt-editor>` component (single-source components.js + the gallery); the preview is the exact platform composition, and every run records a run-bound attestation of the exact provider-bound message (lib/system-prompts.js — docs/SYSTEM-PROMPTS.md). Verified: 37 unit tests (tests/system-prompts.test.ts) + the 42-check real-extension journey (scripts/system-prompts-integration.ts) with real pointer/keyboard input + screenshots.
 
 ### Hub / sidebar / task list
 - The task sidebar (expand/collapse to an icon rail, tooltips, the + new-task button).
@@ -70,13 +70,13 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 3. **WebMCP discovery** — the site agents still don't pick up the inferred/known WebMCP tools (Paul: not working). IN FLIGHT (scripts/webmcp-diag.ts); needs the fix + a real-browser integration test (a WebMCP page → the tools discovered), not a mock.
 
 ## Evidence
-- `npm test` — 344 passed (incl. the 23 system-prompts tests).
-- `npm run test:components` — the gallery smoke incl. the seeded `<system-prompt-editor>` specimen.
-- `deno run -A scripts/system-prompts-integration.ts` — the real-extension Advanced-settings journey (driven UI + SW prompt.* routes + preview/attestation parity + screenshots), 30/30.
-- `npm test` (earlier baseline) — 298 passed.
-- `npm run test:ui` — 12/13; the one failure ("recent-activity panel has horizontal padding — no runlog row/empty found") reproduces IDENTICALLY on the clean base commit (verified via stash → build → re-run): a pre-existing NTP flake, NOT a regression from the system-prompts work (which touches no NTP code).
-- `npm run test:chrome` — 111/120 (9 journeys failing due to the IN-FLIGHT uncommitted work from the running workers; not a committed-state regression — re-check once those workers land).
-- `npm run test:components` / `test:security` / `test:opfs` — green in the committed state.
+- `npm test` — 358 passed (incl. the 37 system-prompts tests: the policy drift guard, CAS/quarantine/corruption, inherited-upgrade, UTF-8 bounds, and the run-bound attestation over the real agent core).
+- `npm run test:components` — 34/34, the gallery smoke incl. the seeded `<system-prompt-editor>` specimen.
+- `deno run -A scripts/system-prompts-integration.ts` — the real-extension Advanced-settings journey, 42/42: REAL pointer/keyboard input (CDP Input.dispatchMouseEvent + Input.insertText), the dirty-scope confirm dialog, the fail-closed/key-authority/CAS routes, the preview attestation parity, and a REAL run-task run whose run-bound attestation matches the previewed composition. Screenshots: test-artifacts/system-prompts/.
+- `npm run test:chrome` — 119/119 on the feature head (test-artifacts/chrome-journeys-feature.log).
+- `npm run test:ui` — 12/13; the one failure ("recent-activity panel … no runlog row/empty found") reproduces IDENTICALLY on the clean base bdbe1f3 from a scratch worktree — the paired logs are retained: test-artifacts/ui-logs/base-bdbe1f3.log + test-artifacts/ui-logs/feature-head.log. A pre-existing NTP flake, NOT a regression (the system-prompts work touches no NTP code).
+- `npm run test:security` / `npm run check:gallery` — green.
+- The earlier "111/120 Chrome" figure measured a tree with other workers' IN-FLIGHT uncommitted edits; the committed feature head is 119/119.
 
 ## Notes
 - The "Open" list is short (3 items) — the bulk of the backlog is done + verified.

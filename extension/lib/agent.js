@@ -9,11 +9,11 @@ import { createAgent as agentDoCreateAgent } from "agent-do";
 import { tool } from "ai";
 import { z } from "zod";
 import { recordUsage } from "./usage.js";
-import { buildSkillsPrompt } from "./skills.js";
 import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
-import { baselineSystemPrompt } from "./system-prompts.js";
+import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
+import { sha256Hex, utf8ByteLength } from "./pure.js";
 
 // The default system prompt = the versioned worker base (cap.worker.base) +
 // the immutable protected constraints, composed by the SINGLE composition
@@ -21,6 +21,25 @@ import { baselineSystemPrompt } from "./system-prompts.js";
 // prompts (with any owner override applied); this baseline is the fallback when
 // no composed prompt is supplied (tests, direct lib use).
 const DEFAULT_SYSTEM = baselineSystemPrompt("cap.worker.base");
+
+/** Extract the EXACT system message a provider/model adapter is about to
+ * receive (AI-SDK LanguageModel options carry it either as `system` or as
+ * role:"system" prompt messages). This is the attestation boundary: what is
+ * captured here is byte-for-byte what crosses to the provider. */
+export function extractBoundSystemMessage(options) {
+  if (typeof options?.system === "string" && options.system) return options.system;
+  const msgs = Array.isArray(options?.prompt) ? options.prompt : [];
+  return msgs
+    .filter((m) => m?.role === "system")
+    .map((m) =>
+      typeof m.content === "string"
+        ? m.content
+        : Array.isArray(m.content)
+          ? m.content.map((p) => p?.text ?? "").join("")
+          : ""
+    )
+    .join("\n");
+}
 
 export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
   if (!memory) return {};
@@ -313,16 +332,75 @@ export function createAgent({
 
   const getRunGen = () => activeRun?.gen ?? null;
 
+  // The RUN-BOUND prompt attestation sink (mutable per run — the orchestrator
+  // is cached across runs, so the SW rebinds this per run like setProgress).
+  // The wrapped model below captures the EXACT system message observed at the
+  // provider/model boundary and reports a content-free attestation: the
+  // SHA-256 digest + UTF-8 byte count of the exact wire message, the digest of
+  // the platform composition this agent was built with, whether the wire
+  // message begins byte-for-byte with that composition (agent-do appends its
+  // own fixed loop-instruction + the run context AFTER it), and the
+  // provider/model identity. NO prompt content crosses the sink.
+  let attestationCb = null;
+  let lastAttestedDigest = null; // dedupe: the system message is stable per run
+  const emitAttestation = (options) => {
+    if (!attestationCb) return;
+    try {
+      const sent = extractBoundSystemMessage(options);
+      if (!sent) return;
+      const digest = sha256Hex(sent);
+      if (digest === lastAttestedDigest) return;
+      lastAttestedDigest = digest;
+      attestationCb({
+        agentId: id,
+        provider: model.providerName,
+        model: model.modelId,
+        // The exact provider-bound system message (digest + bytes only).
+        digest,
+        bytes: utf8ByteLength(sent),
+        // The platform composition this agent was built with, and whether the
+        // wire message EMBEDS it byte-for-byte as its prefix.
+        composedDigest: sha256Hex(systemPrompt),
+        composedBytes: utf8ByteLength(systemPrompt),
+        prefixMatch: sent.startsWith(systemPrompt),
+        at: Date.now(),
+      });
+    } catch { /* attestation is telemetry — never break a run */ }
+  };
+  // Wrap the LanguageModel with a Proxy so doGenerate/doStream are observed at
+  // the provider boundary (prototype methods + every other property untouched).
+  const boundModel = new Proxy(model.model, {
+    get(target, prop, receiver) {
+      if (prop === "doGenerate" && typeof target.doGenerate === "function") {
+        return (options) => {
+          emitAttestation(options);
+          return target.doGenerate(options);
+        };
+      }
+      if (prop === "doStream" && typeof target.doStream === "function") {
+        return (options) => {
+          emitAttestation(options);
+          return target.doStream(options);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+
   const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory), ...tools };
-  // The skills layer is the FINAL composition layer (docs/SYSTEM-PROMPTS.md):
-  // `system` arrives already composed by lib/system-prompts.js (base + owner
-  // customization + protected constraints); the per-run skills append here.
-  const systemPrompt = system + buildSkillsPrompt(skills);
+  // The skills layer composes BEFORE the protected constraints (the
+  // protected-last invariant, docs/SYSTEM-PROMPTS.md): `system` arrives
+  // already composed by lib/system-prompts.js (base + owner customization +
+  // protected constraints LAST); any caller-supplied skills are inserted
+  // ahead of the protected block by the composition authority — never
+  // concatenated after it, so a mutable/site-origin skill can never override
+  // the runtime policy.
+  const systemPrompt = appendSkillsLayer(system, skills);
 
   const agent = agentDoCreateAgent({
     id,
     name,
-    model: model.model,
+    model: boundModel,
     systemPrompt,
     tools: allTools,
     maxIterations,
@@ -459,6 +537,10 @@ export function createAgent({
     // Rebind the live progress callback without rebuilding the cached agent.
     // The SW calls this per-run (the orchestrator is reused across runs).
     setProgress: (cb) => { progressCb = cb; },
+    // Rebind the run-bound prompt attestation sink (per run, like setProgress).
+    // The SW binds a sink tagged with the runId so the attestation journaled
+    // for a run is captured from THAT run's actual provider-bound message.
+    setAttestation: (cb) => { attestationCb = cb; lastAttestedDigest = null; },
   };
 }
 
@@ -615,6 +697,13 @@ export function createOrchestrator({
     setProgress(cb) {
       master.setProgress?.(cb);
       for (const a of workerAgents.values()) a.setProgress?.(cb);
+    },
+    // Rebind the run-bound prompt attestation sink on the master + every
+    // worker (a delegated site run's attestation flows to the SAME run's
+    // sink, tagged with the worker's agentId).
+    setAttestation(cb) {
+      master.setAttestation?.(cb);
+      for (const a of workerAgents.values()) a.setAttestation?.(cb);
     },
     addWorker(config) {
       const a = createAgent({

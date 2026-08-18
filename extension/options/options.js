@@ -1336,7 +1336,7 @@ async function renderData() {
 // inherits the hub's customization until it has its own). The
 // <system-prompt-editor> component renders the describe payload; saves/resets
 // route through the SW prompt.* handlers (the SAME composition authority the
-// run path uses — the preview IS the sent prompt).
+// run path uses — the preview is the exact platform composition).
 const PROMPT_SCOPES = [
   { id: "hub", label: "Hub agent (default)", hint: "Applies to the hub and, unless a named agent has its own customization, to every named/background/hook/scheduled run." },
   { id: "worker", label: "Site sub-agents", hint: "The base prompt every enrolled site's sub-agent runs with. Per-origin skills are appended at run time." },
@@ -1347,6 +1347,11 @@ async function renderPrompts() {
   const hint = $("#prompt-scope-hint");
   const editor = $("#prompt-editor");
   if (!scopeSelect || !editor) return;
+
+  // The store revision from the LAST describe (echoed back on save as the CAS
+  // guard — a second Settings window's save can never silently overwrite).
+  let currentRevision = null;
+  let loadedScope = "hub";
 
   // Populate the scope selector: the two global scopes + one entry per named agent.
   scopeSelect.replaceChildren();
@@ -1384,32 +1389,73 @@ async function renderPrompts() {
     const d = await chrome.runtime
       .sendMessage({ type: "prompt.describe", scope })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    currentRevision = Number.isSafeInteger(d?.revision) ? d.revision : null;
+    loadedScope = scope;
     editor.data = d;
   }
 
   async function mutate(type, payload = {}) {
     const scope = scopeSelect.value || "hub";
+    // On the owner's SAVE gesture, request the optional `storage` permission
+    // so the customization is DURABLE (never silently session-only — the
+    // review's persistence blocker). Denied → still save, but the UI says
+    // "session-only" (the describe payload's durable flag drives the badge).
+    if (type === "prompt.set") {
+      try {
+        const has = await chrome.permissions.contains({ permissions: ["storage"] });
+        if (!has) {
+          const granted = await chrome.permissions.request({ permissions: ["storage"] });
+          if (!granted) {
+            saveFlash("Storage not granted — this customization is session-only until storage is enabled.");
+          }
+        }
+      } catch { /* a denied/unavailable request falls through to the save */ }
+      payload = { ...payload, expectedRevision: currentRevision };
+    }
     editor.setAttribute("busy", "");
     const r = await chrome.runtime
       .sendMessage({ type, scope, ...payload })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     editor.removeAttribute("busy");
     if (r?.ok === false) {
-      saveFlash(`Prompt not saved: ${r.error ?? "unknown error"}`);
+      if (r.conflict) {
+        // CAS conflict: another window saved first — reload the fresh state.
+        saveFlash("Changed in another window — the latest state was reloaded; retry your edit.");
+      } else {
+        saveFlash(`Prompt not saved: ${r.error ?? "unknown error"}`);
+      }
+    } else if (type === "prompt.set") {
+      // Never claim "saved" when the backend is session-only (the optional
+      // storage permission is still absent after the Save-gesture request).
+      const durableNow = await chrome.permissions
+        .contains({ permissions: ["storage"] })
+        .catch(() => true);
+      saveFlash(durableNow
+        ? "System prompt customization saved."
+        : "Saved for THIS SESSION only — enable storage in Settings to persist across restarts.");
     } else {
       saveFlash(
-        type === "prompt.set" ? "System prompt customization saved."
-        : type === "prompt.keep" ? "Customization kept — now based on the latest built-in prompt."
+        type === "prompt.keep" ? "Customization kept — now based on the latest built-in prompt."
         : "Reset to the built-in default.",
       );
     }
     await load();
   }
 
-  scopeSelect.addEventListener("change", load);
+  scopeSelect.addEventListener("change", () => {
+    // Switching scopes reloads the editor (re-seeding the draft) — confirm
+    // before discarding unsaved edits (the review's dirty-switch finding).
+    if (editor.dirty && !globalThis.confirm("Discard the unsaved prompt edits and switch scope?")) {
+      // Restore the selector to the scope the editor still shows.
+      scopeSelect.value = loadedScope;
+      return;
+    }
+    load();
+  });
   editor.addEventListener("prompt-save", (e) =>
     mutate("prompt.set", { mode: e.detail.mode, text: e.detail.text }));
-  editor.addEventListener("prompt-reset", () => mutate("prompt.reset"));
+  editor.addEventListener("prompt-reset", (e) =>
+    mutate("prompt.reset", { effective: e.detail?.effective === true }));
   editor.addEventListener("prompt-keep", () => mutate("prompt.keep"));
 
   await load();

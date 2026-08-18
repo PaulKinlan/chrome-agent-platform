@@ -3367,9 +3367,11 @@ customElements.define("activity-explorer", ActivityExplorer);
 /* <system-prompt-editor> — the layered system-prompt viewer + owner-override
  * editor (Settings → Advanced). ONE reusable component: the read-only built-in
  * viewer (id + version + hash), the persistent override editor (append /
- * prepend / replace modes, dirty/saved/error states, save/cancel/reset), the
- * built-in-changed release banner with an old-vs-new diff + keep/reset, and
- * the effective composed preview with every layer labelled (source + version +
+ * prepend / replace modes, dirty/saved/error states, UTF-8 byte bound,
+ * session-only durability badge, save/cancel/reset), the built-in-changed
+ * release banner with an old-vs-new diff + keep/reset (acting on the EFFECTIVE
+ * override — the inherited hub record when this scope inherits), and the
+ * effective composed preview with every layer labelled (source + version +
  * hash). Untrusted/user text is rendered with textContent only. All dynamic
  * state arrives via the `data` property (the SW prompt.describe payload);
  * mutations leave via CustomEvents (prompt-save / prompt-reset / prompt-keep)
@@ -3397,6 +3399,9 @@ class SystemPromptEditor extends Component {
     if (this._rendered) { this._render(); this._wire(); }
   }
   get data() { return this._data; }
+  /** Public: are there unsaved draft edits? (The page confirms before a
+   * scope switch discards them.) */
+  get dirty() { return this._rendered ? this._dirty() : false; }
 
   /* ── draft state (survives re-renders; re-seeds when fresh data lands) ── */
   _draft() {
@@ -3419,10 +3424,15 @@ class SystemPromptEditor extends Component {
     const savedMode = d?.override?.mode ?? "append";
     return draft.text !== savedText || draft.mode !== savedMode;
   }
+  _maxBytes() {
+    return this._data?.limits?.maxOverrideBytes ?? 16384;
+  }
+  _draftBytes() {
+    return new TextEncoder().encode(this._draft().text).byteLength;
+  }
   _valid() {
-    const max = this._data?.limits?.maxOverrideChars ?? 16000;
     const t = this._draft().text.trim();
-    return t.length > 0 && t.length <= max;
+    return t.length > 0 && this._draftBytes() <= this._maxBytes();
   }
 
   _render() {
@@ -3537,12 +3547,16 @@ class SystemPromptEditor extends Component {
     const dirty = this._dirty();
     const hasOverride = Boolean(d.override);
     const changed = Boolean(d.builtinChanged && d.override);
-    const max = d.limits?.maxOverrideChars ?? 16000;
+    const max = this._maxBytes();
+    const sessionOnly = d.durable === false;
     const stateBadge = changed
       ? `<span class="spe-badge update">Built-in updated</span>`
       : hasOverride
         ? `<span class="spe-badge custom">Customized${d.inherited ? " (inherited)" : ""}</span>`
         : `<span class="spe-badge">Default</span>`;
+    const durableBadge = sessionOnly
+      ? `<span class="spe-badge update">Session-only</span>`
+      : "";
     const statusText = busy ? "Saving…"
       : dirty ? "Unsaved changes"
       : hasOverride ? "Saved" : "";
@@ -3600,6 +3614,7 @@ class SystemPromptEditor extends Component {
       <div class="spe-panel" role="tabpanel" id="spe-panel-custom"
         aria-labelledby="spe-tab-custom" ${this._tab === "custom" ? "" : "hidden"}>
         ${inheritedNote}
+        ${sessionOnly ? `<p class="spe-note" role="status"><strong>Session-only:</strong> the optional storage permission is not granted, so customizations last until the browser restarts. Saving asks for the storage permission so they persist.</p>` : ""}
         <fieldset class="spe-modes">
           <legend class="spe-label">Composition mode</legend>
           <label class="spe-mode"><input type="radio" name="spe-mode" value="append" ${draft.mode === "append" ? "checked" : ""}>
@@ -3611,7 +3626,7 @@ class SystemPromptEditor extends Component {
         </fieldset>
         <label class="spe-field">
           <span class="spe-label">Custom instructions</span>
-          <textarea class="spe-text" rows="9" maxlength="${max * 2}"
+          <textarea class="spe-text" rows="9"
             aria-describedby="spe-count spe-status"
             placeholder="e.g. Always answer in British English. Prefer tables for comparisons."></textarea>
         </label>
@@ -3628,20 +3643,24 @@ class SystemPromptEditor extends Component {
       </div>`;
 
     const effHash = d.effective?.hash ?? "";
-    const effBytes = String(d.effective?.text ?? "").length;
+    const effBytes = new TextEncoder().encode(d.effective?.text ?? "").byteLength;
     const panelEffective = `
       <div class="spe-panel" role="tabpanel" id="spe-panel-effective"
         aria-labelledby="spe-tab-effective" ${this._tab === "effective" ? "" : "hidden"}>
         <div class="spe-meta">
-          <span>Effective hash <code>${escapeHtml(effHash)}</code></span>
-          <span>${effBytes.toLocaleString()} chars</span>
+          <span>Effective digest <code>${escapeHtml(effHash)}</code></span>
+          <span>${effBytes.toLocaleString()} bytes (UTF-8)</span>
           <button class="spe-btn ghost spe-copy-effective" type="button">Copy effective prompt</button>
           <button class="spe-btn ghost spe-export" type="button">Export (.md)</button>
         </div>
         <div class="spe-layers"></div>
-        <p class="spe-note">This is exactly what is sent to the model for this scope — every layer
+        <p class="spe-note">This is the platform composition sent for this scope — every layer
         labelled with its source + version. Layers marked “not sent” are replaced by your
-        customization. Per-run skills append after these layers.</p>
+        customization. The protected runtime policy always composes LAST, after skills.
+        The runtime adds its fixed agent-loop instructions after this composition; a run's
+        exact provider-bound message is proven by the run-bound attestation journaled with
+        the run (digest + bytes, never content).</p>
+        ${d.context?.note ? `<p class="spe-note">${escapeHtml(d.context.note)}</p>` : ""}
       </div>`;
 
     mountTemplate(this, css, `
@@ -3649,6 +3668,7 @@ class SystemPromptEditor extends Component {
         <div class="spe-head">
           <span class="spe-scope">${escapeHtml(scopeLabel)}</span>
           ${stateBadge}
+          ${durableBadge}
           <span class="spe-status ${dirty ? "dirty" : ""}" id="spe-status" role="status" aria-live="polite">${escapeHtml(statusText)}</span>
         </div>
         ${banner}
@@ -3740,12 +3760,12 @@ class SystemPromptEditor extends Component {
   }
 
   _updateCount() {
-    const max = this._data?.limits?.maxOverrideChars ?? 16000;
+    const max = this._maxBytes();
     const count = this._root.querySelector(".spe-count");
-    const len = this._draft().text.length;
+    const bytes = this._draftBytes();
     if (count) {
-      count.textContent = `${len.toLocaleString()} / ${max.toLocaleString()}`;
-      count.classList.toggle("over", len > max);
+      count.textContent = `${bytes.toLocaleString()} / ${max.toLocaleString()} bytes`;
+      count.classList.toggle("over", bytes > max);
     }
   }
 
@@ -3765,9 +3785,9 @@ class SystemPromptEditor extends Component {
     }
     const err = this._root.querySelector(".spe-error");
     if (err) {
-      const over = this._draft().text.length > (this._data?.limits?.maxOverrideChars ?? 16000);
+      const over = this._draftBytes() > this._maxBytes();
       err.hidden = !over;
-      err.textContent = over ? "Custom instructions are too long — trim below the limit to save." : "";
+      err.textContent = over ? "Custom instructions are too long — trim below the byte limit to save." : "";
     }
   }
 
@@ -3870,7 +3890,10 @@ class SystemPromptEditor extends Component {
       this._wire();
     });
     for (const btn of this._root.querySelectorAll(".spe-reset")) {
-      btn.addEventListener("click", () => this._emit("prompt-reset", {}));
+      // The banner reset targets the EFFECTIVE override (the inherited hub
+      // record when this scope inherits); the editor-tab reset is exact-scope.
+      const effective = btn.closest(".spe-banner") != null;
+      btn.addEventListener("click", () => this._emit("prompt-reset", { effective }));
     }
     $(".spe-keep")?.addEventListener("click", () => this._emit("prompt-keep", {}));
     $(".spe-diff-toggle")?.addEventListener("click", () => {

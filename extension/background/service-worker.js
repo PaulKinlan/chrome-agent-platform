@@ -105,9 +105,11 @@ import {
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import {
   attestComposition,
+  attestationKeyBytes,
   clearPromptOverride,
   describePrompt,
   normalizeScope,
+  PROMPT_OWNED_KEYS,
   resolveSystemPrompt,
   restampPromptOverride,
   setPromptOverride,
@@ -294,6 +296,7 @@ import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import {
   authorizeToolReport,
+  hmacSha256Hex,
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
   redactSecrets,
@@ -536,6 +539,24 @@ let orchestratorGen = -1;
 let scopedOrchestrator = null;
 let scopedOrchestratorGen = -1;
 const MODEL_CACHE = { model: null, key: null, gen: -1 };
+
+// The run-bound prompt attestation ring: runId → [attestations] captured from
+// the EXACT system message observed at the provider/model boundary (see
+// lib/agent.js's setAttestation + runTask's binding). Bounded; the durable
+// copy is each run's journal `prompt-attestation` entry. Extension-only reads
+// via the prompt.attestRun route.
+const recentRunAttestations = new Map();
+const MAX_RUN_ATTESTATIONS = 100;
+function recordRunAttestation(att) {
+  if (!att?.runId) return;
+  const list = recentRunAttestations.get(att.runId) ?? [];
+  list.push(att);
+  recentRunAttestations.set(att.runId, list.slice(-8));
+  // FIFO-bound the ring (Map preserves insertion order).
+  while (recentRunAttestations.size > MAX_RUN_ATTESTATIONS) {
+    recentRunAttestations.delete(recentRunAttestations.keys().next().value);
+  }
+}
 let generation = 0;
 
 function invalidateAgent() {
@@ -650,7 +671,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // master's prompt composes the versioned built-in base + any owner override
     // for the scope + the agent role + the immutable protected constraints.
     // The SAME composition backs the Settings → Advanced preview, so the
-    // previewed prompt is byte-identical to what the model receives.
+    // preview IS the platform composition the run is built with (the exact
+    // wire message is proven per run by the run-bound attestation).
     const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole });
     // Workers = enrolled site origins, each with its own memory + skills.
     const origins = await listOrigins();
@@ -726,10 +748,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       const cell = buildCells.get(origin);
       if (cell) cell.get = () => agent.getRunGen();
     }
-    // The effective-prompt attestation (hash-only, no content) — journaled at
-    // run start so a run can prove WHICH prompt it sent, and a debug/test path
-    // can verify the Settings preview matches the sent prompt byte-for-byte.
-    orch.promptInfo = attestComposition(masterComposed, promptScope ?? "hub");
+    // The effective-prompt attestation (keyed receipts, no content) — journaled
+    // at run start so a run can prove WHICH composition it was built with, and
+    // a debug/test path can verify the Settings preview matches it.
+    orch.promptInfo = await attestComposition(masterComposed, promptScope ?? "hub");
     return orch;
 }
 
@@ -1013,6 +1035,35 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
     };
     const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride, promptScope, agentRole);
+    // Bind the RUN-BOUND prompt attestation: lib/agent.js captures the EXACT
+    // system message observed at the provider/model boundary (as public
+    // SHA-256 digests) for THIS run — hub, named, background, scheduled,
+    // hook, and every delegated site worker alike. The raw digests are
+    // re-keyed HERE (HMAC with the per-install attestation key) before they
+    // are recorded or journaled, so the durable/live record carries only
+    // OPAQUE receipts — never a public stable fingerprint of owner text that
+    // could be dictionary-tested (the review's privacy finding). NO prompt
+    // content is recorded.
+    const attestKey = await attestationKeyBytes();
+    orch.setAttestation?.((att) => {
+      const bound = {
+        runId: taskId,
+        agentId: att.agentId,
+        provider: att.provider,
+        model: att.model,
+        at: att.at,
+        bytes: att.bytes,
+        composedBytes: att.composedBytes,
+        prefixMatch: att.prefixMatch,
+        // Opaque keyed receipts of the exact wire digest + the composition
+        // digest (compare composedReceipt against prompt.attest's
+        // digestReceipt to prove a run sent the previewed composition).
+        receipt: hmacSha256Hex(attestKey, String(att.digest ?? "")),
+        composedReceipt: hmacSha256Hex(attestKey, String(att.composedDigest ?? "")),
+      };
+      recordRunAttestation(bound);
+      journalAppend(mem, { type: "prompt-attestation", ...bound }).catch(() => {});
+    });
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or
     // heartbeat renewal fails mid-run, abort the in-flight model/tool loop AND
@@ -1369,14 +1420,33 @@ const handlers = {
   },
   async "kv.set"(m) {
     if (!m?.values || typeof m.values !== "object") {
-      return { ok: false, error: "kv.set needs a values object" };
+      return { ok: false, error: "kv.set needs a values object" }
+    }
+    // Key-specific storage authority: the prompt-override store (its
+    // quarantine + the attestation key) is owned by the prompt.* routes — a
+    // generic kv.set must never mutate it outside the overrides mutex, the
+    // strict schema, and the CAS guard (the review's bypass finding).
+    const owned = Object.keys(m.values).filter((k) => PROMPT_OWNED_KEYS.includes(k));
+    if (owned.length) {
+      return {
+        ok: false,
+        error: `${owned.join(", ")} is managed by the prompt.* routes — direct kv writes are refused`,
+      };
     }
     await kvSet(m.values);
     return { ok: true };
   },
   async "kv.remove"(m) {
     if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };
-    await kvRemove(Array.isArray(m.keys) ? m.keys : [m.keys]);
+    const list = Array.isArray(m.keys) ? m.keys : [m.keys];
+    const owned = list.filter((k) => PROMPT_OWNED_KEYS.includes(k));
+    if (owned.length) {
+      return {
+        ok: false,
+        error: `${owned.join(", ")} is managed by the prompt.* routes — direct kv removes are refused`,
+      };
+    }
+    await kvRemove(list);
     return { ok: true };
   },
   async "provider.get"() {
@@ -2364,8 +2434,15 @@ const handlers = {
     }
     return await describePrompt(s, { role });
   },
-  async "prompt.set"({ scope, mode, text }) {
-    const r = await setPromptOverride(scope, { mode, text });
+  async "prompt.set"({ scope, mode, text, expectedRevision }) {
+    const r = await setPromptOverride(scope, { mode, text }, {
+      // CAS: the Settings editor echoes the revision it read; a stale writer
+      // (a second Settings window) gets a conflict instead of silently
+      // last-write-wins.
+      expectedRevision: Number.isSafeInteger(expectedRevision) ? expectedRevision : null,
+      // Agent scopes must reference a REAL named agent — no orphan overrides.
+      agentExists: async (slug) => Boolean(await getNamedAgent(slug)),
+    });
     if (r?.ok) {
       // Rebuild the cached orchestrators so the NEXT run picks up the new
       // composition immediately (the same invalidation a provider change uses).
@@ -2373,8 +2450,10 @@ const handlers = {
     }
     return r;
   },
-  async "prompt.reset"({ scope }) {
-    const r = await clearPromptOverride(scope);
+  async "prompt.reset"({ scope, effective }) {
+    // effective: the release-update banner's Reset targets the override that
+    // ACTUALLY applies (the inherited hub record for an agent scope).
+    const r = await clearPromptOverride(scope, { target: effective ? "effective" : "exact" });
     if (r?.ok) invalidateAgent();
     return r;
   },
@@ -2387,9 +2466,9 @@ const handlers = {
     return r;
   },
   async "prompt.attest"({ scope }) {
-    // The debug/test attestation: the effective prompt's hash + per-layer
-    // hashes, WITHOUT any prompt content — proves the preview matches the sent
-    // prompt without leaking it.
+    // The PREVIEW attestation: keyed receipts of the CURRENT composition (the
+    // describe path) — compared against a run's bound attestation to prove a
+    // run sent exactly the previewed composition. No prompt content crosses.
     const s = normalizeScope(scope);
     if (!s) return { ok: false, error: "unknown prompt scope" };
     let role = "";
@@ -2398,7 +2477,32 @@ const handlers = {
       role = agent?.role ?? "";
     }
     const composed = await resolveSystemPrompt(s, { role });
-    return { ok: true, ...attestComposition(composed, s) };
+    return {
+      ok: true,
+      // The public SHA-256 of the composition (the same digest the Settings UI
+      // displays — the owner's own surface) for preview parity checks…
+      compositionHash: composed.hash,
+      // …plus the keyed receipts (the parity proof that is NOT a public
+      // fingerprint of owner text).
+      ...await attestComposition(composed, s),
+    };
+  },
+  async "prompt.attestRun"({ runId }) {
+    // The RUN-BOUND attestation: the digest captured from the EXACT system
+    // message the provider/model adapter received for a real run (hub, named,
+    // background, scheduled, hook, or a delegated site worker), tagged with
+    // the runId + the provider/model identity. In-memory ring (bounded) — the
+    // durable copy is the run's journal `prompt-attestation` entry.
+    const id = String(runId ?? "");
+    if (!id) return { ok: false, error: "prompt.attestRun needs a runId" };
+    const list = recentRunAttestations.get(id);
+    if (!list?.length) {
+      return {
+        ok: false,
+        error: "no attestation captured for that runId (the run predates this worker, or no model call was made)",
+      };
+    }
+    return { ok: true, runId: id, attestations: list };
   },
 
   // ---- background agents are INDEPENDENT agents (item 61) ----

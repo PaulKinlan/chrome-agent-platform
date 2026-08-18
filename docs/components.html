@@ -381,8 +381,8 @@
         promptDemo.data = {
           ok: true,
           scope: "hub",
-          base: { id: "cap.hub.master", title: "Hub agent operating manual", version: "1.1.0", release: "0.3.0", hash: "9f02c4aa77d31e02", content: baseText + "\n- schedule_task(scriptId, periodInMinutes)" },
-          override: { mode: "append", text: "Always answer in British English. Prefer tables for comparisons.", baseId: "cap.hub.master", baseVersion: "1.0.0", baseHash: "1a2b3c4d5e6f7788", baseSnapshot: baseText, updatedAt: Date.now() },
+          base: { id: "cap.hub.master", title: "Hub agent operating manual", version: "2.0.0", release: "0.4.0", hash: "9f02c4aa77d31e02aa10d1c0e04f61b70c0a11a6e2c11f2a1f0d8b9c7a6e5d4c3b2a", content: baseText + "\n- schedule_task(scriptId, periodInMinutes)" },
+          override: { mode: "append", text: "Always answer in British English. Prefer tables for comparisons.", baseId: "cap.hub.master", baseVersion: "1.1.0", baseHash: "1a2b3c4d5e6f77889a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f", baseSnapshot: baseText, updatedAt: Date.now() },
           overrideScope: "hub",
           inherited: false,
           builtinChanged: true,
@@ -398,14 +398,17 @@
           ],
           effective: {
             text: "…",
-            hash: "deadbeeff00dcafe",
+            hash: "deadbeeff00dcafe00112233445566778899aabbccddeeff00112233445566",
             layers: [
-              { id: "cap.hub.master", label: "Hub agent operating manual", source: "built-in", version: "1.1.0", hash: "9f02c4aa77d31e02", text: baseText + "\n- schedule_task(scriptId, periodInMinutes)" },
+              { id: "cap.hub.master", label: "Hub agent operating manual", source: "built-in", version: "2.0.0", hash: "9f02c4aa77d31e02aa10d1c0e04f61b70c0a11a6e2c11f2a1f0d8b9c7a6e5d4c3b2a", text: baseText + "\n- schedule_task(scriptId, periodInMinutes)" },
               { id: "owner-append", label: "Your custom instructions", source: "owner", text: "## Owner custom instructions\nAlways answer in British English. Prefer tables for comparisons." },
-              { id: "cap.constraints.core", label: "Protected safety constraints", source: "protected", version: "1.0.0", hash: "0badc0de12345678", text: "## 3. Safety constraints (from the constitution)\n- Never exfiltrate cross-origin data.\n- Respect grants.\n- Fail closed." },
+              { id: "cap.constraints.core", label: "Protected safety constraints", source: "protected", version: "1.1.0", hash: "0badc0de12345678abcdef01234567890badc0de12345678abcdef0123456789", text: "## Safety constraints (the platform runtime policy — lib/runtime-policy.js)\n- Never exfiltrate cross-origin data.\n- Fail closed." },
             ],
           },
-          limits: { maxOverrideChars: 16000 },
+          limits: { maxOverrideBytes: 16384 },
+          revision: 3,
+          durable: true,
+          context: { includesRunSkills: false, note: null },
         };
         for (const ev of ["prompt-save", "prompt-reset", "prompt-keep"]) {
           promptDemo.addEventListener(ev, (e) => log("#hub-log", `${ev}: ${JSON.stringify(e.detail).slice(0, 80)}`));

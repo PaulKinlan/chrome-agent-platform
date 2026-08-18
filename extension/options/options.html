@@ -142,7 +142,7 @@
       <section id="prompts" class="panel">
         <h2>Advanced — system prompts</h2>
         <p
-          class="muted">The exact system prompt each agent runs with, layer by layer: the versioned built-in prompt, your persistent customization, and the protected safety constraints (never editable). What you preview here is byte-identical to what the model is sent.</p>
+          class="muted">The system prompt each agent runs with, layer by layer: the versioned built-in prompt, your customization, and the protected runtime policy (never editable, always applied last). The preview is the exact platform composition; every run also records a run-bound attestation of the exact provider-bound system message (digest + bytes, never content).</p>
         <label class="field prompt-scope-field"><span class="field-label">Agent scope</span>
           <select id="prompt-scope" aria-label="System prompt scope"></select>
         </label>

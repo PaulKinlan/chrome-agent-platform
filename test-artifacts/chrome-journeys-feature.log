@@ -1,0 +1,126 @@
+
+> chrome-agent-platform@0.2.73 test:chrome
+> deno run -A scripts/chrome-journeys.ts
+
+Listening on http://127.0.0.1:39069/
+PASS: SW auto-attach configured (waitForDebuggerOnStart)
+PASS: extension loaded
+PASS: SW attach returned a session id
+PASS: SW Runtime.enable succeeded
+PASS: manifest: permissions list is empty (all optional)
+PASS: manifest: debugger absent everywhere
+PASS: initial SW closed for a pre-attached restart
+PASS: SW woken for the pre-attached restart
+PASS: initial SW boot observed via pre-attached restart
+PASS: NTP: task input present
+PASS: NTP: typed a task via Input events
+PASS: NTP: textarea reflects the typed text
+PASS: NTP: clicked Run task via a real click
+PASS: NTP: retained a driven-UI screenshot
+PASS: NTP: the typed task reached the agent journal
+PASS: Settings: Permissions panel present
+PASS: permissions: all seven capabilities start ungranted
+PASS: permissions: enabled storage (granted)
+PASS: permissions: enabled alarms (granted)
+PASS: permissions: enabled activeTab (granted)
+PASS: permissions: enabled scripting (granted)
+PASS: permissions: enabled sidePanel (granted)
+PASS: permissions: tabs denied in headless (fail closed)
+PASS: permissions: notifications denied in headless (fail closed)
+PASS: permissions: storage Disable returns revoked (capability.revoke route)
+PASS: permissions: provider survives storage Disable (session snapshot)
+PASS: permissions: storage re-enabled + provider survived (migration)
+PASS: Settings: OpenAI provider card rendered
+PASS: Settings: Clear key button present for the keyed provider
+PASS: Settings: clicked Clear key via a real click
+PASS: Settings: Clear key removed only the key (endpoint/model preserved)
+PASS: Settings: clicked Update via a real click
+PASS: Settings: Update preserved endpoint/model + empty key
+PASS: Settings: demo + prompt-api absent from the provider picker
+PASS: Settings: provider restored to demo
+PASS: Settings: demo still resolvable via the SW (testing only)
+PASS: Settings: Enroll input present
+PASS: Settings: typed a loopback origin into the Enroll field
+PASS: Settings: clicked Enroll via a real click
+PASS: enrollment: denied host permission → origin NOT enrolled (fail closed)
+PASS: Settings: retained a driven-UI screenshot
+PASS: warm run 1 returns a concrete demo result
+PASS: warm run 2 (after re-save) returns a concrete demo result
+PASS: real red tab resolved (active tab id)
+PASS: screenshot: denied after revoke (secondary probe)
+PASS: screenshot: capture denied in headless (fail closed)
+PASS: screenshot: wrong-origin grant is denied (secondary probe)
+PASS: screenshot: expired grant is denied (secondary probe)
+PASS: Settings: browser-grant checkbox present
+PASS: screenshot: clicked the browser-grant checkbox
+PASS: screenshot: granted browser control via a real checkbox click
+PASS: screenshot: typed the red origin into the allowed-origins field
+PASS: screenshot: grant scoped to the red origin via the UI
+PASS: screenshot: UI-granted capture denied in headless (fail closed)
+PASS: screenshot: revoked via a real checkbox click
+PASS: screenshot: revoked → capture denied
+PASS: per-origin clear leaves B intact
+PASS: memory: version tokens are monotonic + never reused (round-27 CAS)
+PASS: attachment count cap (12 → 4 over-count dropped, journal records 8)
+PASS: attachment: declared/image vs text/plain MIME mismatch is dropped
+PASS: alarm scheduled (name returned)
+PASS: one-shot alarm fired + journaled task AND result
+PASS: reconcile task scheduled
+PASS: alarm cleared (persisted task remains)
+PASS: persisted task payload survives the clear
+PASS: old worker target closed (closeTarget success)
+PASS: worker woken after restart
+PASS: worker restarted (execution context recreated)
+PASS: recreated alarm observed before fire
+PASS: restarted worker reconciled + ran the persisted task
+PASS: cancel: task registered
+PASS: cancel: task listed for the owner
+PASS: cancel: cancelled the task (alarm absent)
+PASS: cancel: task gone after cancel
+PASS: agent.create returns ok
+PASS: agent.create created a discoverable worker (list includes it)
+PASS: orchestrator: multi-agent ON + delegation tools present
+PASS: orchestrator: worker fanned out (workerCount >= 1)
+PASS: worker delegated task ran (worker result journaled)
+PASS: Settings: multi-agent toggle present
+PASS: Settings: clicked the multi-agent toggle OFF
+PASS: Settings: multi-agent setting persisted OFF
+PASS: orchestrator: solo mode drops delegation tools
+PASS: orchestrator: generation advanced after rebuild
+PASS: solo mode still runs a task
+PASS: Settings: clicked the multi-agent toggle ON
+PASS: Settings: multi-agent setting persisted ON
+PASS: orchestrator: delegation tools restored
+PASS: agent.delete removed the worker from the list
+PASS: delete-race: upsert on a deleted origin is rejected
+PASS: delete-race: listOrigins excludes the deleted origin after racing upsert
+PASS: Settings: Disenroll button present for an enrolled agent
+PASS: Settings: clicked Disenroll via a real click
+PASS: disenroll: agent removed from list + enrollment tombstoned
+PASS: scripting Disable: two origins enrolled before the revoke
+PASS: scripting Disable: capability revoked
+PASS: scripting Disable: BOTH origins tombstoned (no lost update)
+PASS: mgmt: orchestrator exposes the management tool suite
+PASS: mgmt: create_agent returned ok
+PASS: mgmt: agent.directory lists it with enrollment state
+PASS: mgmt: get_agent inspects it (tools + memory keys)
+PASS: mgmt: update_agent changed the name
+PASS: mgmt: create_asset succeeded (hub asset)
+PASS: mgmt: list_assets lists the asset (no content)
+PASS: mgmt: get_asset round-trips content
+PASS: mgmt: update_asset patched the asset
+PASS: mgmt: delete_asset removed it
+PASS: mgmt: asset gone after delete
+PASS: mgmt: delete_agent removed the agent
+PASS: mgmt: agent gone from the directory after delete
+PASS: no service-worker console errors
+PASS: no SW Runtime.enable errors (auto-attach)
+PASS: no NTP/Settings console errors
+PASS: no fatal CDP lifecycle events
+PASS: profile removed (no leak)
+PASS: cleanup hard-failed on descendants (none survived)
+PASS: no leftover temporary evidence dir
+PASS: assertion set exact (no missing/extra checks)
+PASS: assertion order matches EXPECTED
+
+chrome journeys: 119/119 passed

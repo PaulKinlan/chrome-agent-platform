@@ -38,8 +38,8 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   right-aligned action) — aligned by construction.
 - The layered system-prompt viewer (`<system-prompt-editor>`, Settings → Advanced):
   labelled layers (source + version + hash badges), a read-only built-in view, the
-  owner editor with dirty/char-count/error states, and the protected constraints
-  visually marked as never editable.
+  owner editor with dirty/byte-count/error states and a session-only durability
+  badge, and the protected constraints visually marked as never editable.
 
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No

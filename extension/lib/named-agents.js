@@ -15,6 +15,7 @@
 
 import { kvGet, kvSet } from "./kv.js";
 import { namedAgentMemory } from "./memory.js";
+import { deleteAgentPromptOverride } from "./system-prompts.js";
 
 const AGENTS_KEY = "cap:namedAgents";
 
@@ -216,7 +217,9 @@ export async function setNamedAgentProvider(id, config) {
   return { ok: true, agent: r.agent };
 }
 
-/** Delete a named agent + its OPFS sandbox. Returns { ok } (idempotent). */
+/** Delete a named agent + its OPFS sandbox + its system-prompt override
+ * (lifecycle cleanup: a deleted agent must never leave an orphan override
+ * that a later same-slug agent would silently inherit). Idempotent. */
 export async function deleteNamedAgent(id) {
   const slug = slugifyAgentId(id);
   return await withAgentsLock(async () => {
@@ -227,6 +230,10 @@ export async function deleteNamedAgent(id) {
     if (existing) {
       const mem = namedAgentMemory(slug);
       await mem.clear().catch(() => {});
+      // The agent's prompt override lives in the prompt store — clear it
+      // atomically with the deletion (best-effort: a failure here is
+      // reported, never silently swallowed, but must not resurrect the agent).
+      await deleteAgentPromptOverride(slug).catch(() => {});
     }
     return { ok: true };
   });
