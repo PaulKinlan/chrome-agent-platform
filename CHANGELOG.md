@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.89] — 2026-08-18
+- docs: sync sidebar-evidence manifest with the refactored gates + overlay screenshots
+
 ## [0.2.88] — 2026-08-18
 - feat(ui): pure durability renderer + overlay-open matrix coverage
 

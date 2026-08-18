@@ -1,45 +1,65 @@
 {
-  "scope": "collapsed-sidebar-nub fix (branch fix/collapsed-sidebar-nub)",
+  "scope": "collapsed-sidebar-nub fix + test-isolation/AST-scan/durability-UI/overlay-matrix refactor (branch fix/collapsed-sidebar-nub)",
   "capturedFrom": "the built MV3 extension loaded in headless Chrome (scripts/ui-integration.ts)",
   "screenshots": [
     {
       "file": "sidebar-collapsed.png",
       "sha256": "90b9f05cee55a316efc80009b74e25cf86999271cb4cbc5a4c2fe74538a5b37a",
       "bytes": 57682,
-      "describes": "the 60px icon rail (border at x\u224859) with the centred rail icons + the edge nub (chevron pointing right)"
+      "describes": "the 60px icon rail (border at x\u224859) with the centred rail icons + the edge nub (chevron pointing right); the durability hint is hidden in the collapsed rail so it cannot wrap"
     },
     {
       "file": "sidebar-expanded.png",
       "sha256": "c46f9e4a8e853f9a88632bb48b4fe2b16d3200d57d6619fa55d5ffdae35df4e4",
-      "bytes": 69026,
+      "bytes": 72933,
       "describes": "the 240px sidebar (border at x\u2248239) with the edge nub (chevron pointing left)"
+    },
+    {
+      "file": "overlay-open.png",
+      "sha256": "4ab70db1bbc1811d21554658b8483bd69f8a0c54a219f6f5bda7e74b14e36a37",
+      "bytes": 50966,
+      "describes": "the real thread overlay OPEN in default light/LTR with the sidebar + nub still reachable"
+    },
+    {
+      "file": "overlay-rtl.png",
+      "sha256": "b26fc5e59c1e48ec101b481e16cdc11ae7ce3adad0fbef75fe602ff75fce7f56",
+      "bytes": 33938,
+      "describes": "the thread overlay OPEN in RTL: the rail + nub flip to the right, the nub centres on the rail's inner (left) boundary"
+    },
+    {
+      "file": "overlay-dark.png",
+      "sha256": "3aa2ae40511b1f16edee6971e0ec0412b0755bf2f703e8fa8c0bebbb42f98312",
+      "bytes": 51227,
+      "describes": "the thread overlay OPEN in the charcoal theme: the nub keeps a visible border + the overlay stays legible"
     }
   ],
   "tests": {
-    "test:ui": "43/43 pass",
+    "test:ui": "56/56 pass",
     "test:components": "34/34 pass",
-    "npm test (deno test -A tests/)": "322/322 pass",
-    "build assertion": "no test controls/oracles in any shipped JS (window.__*, __sidebarPersistence, __lastViewTransition, __setKvFaultForTest, kv.fault, cap-kv-fault-test absent from every shipped script + SW bundle)"
+    "npm test (deno test -A tests/)": "330/330 pass",
+    "build assertion": "no test controls/oracles in 62 shipped JS files (acorn AST export + oracle walk: export declarations/lists/aliases/default + window/self/globalThis __* access, excluding __zod_*/__vite_*)"
   },
   "verified": [
     "exactly five rail actions exist + share one centre (\u22642px spread) + uniform 34\u00d734",
     "collapse control is a \u226544\u00d744 nub hit target, straddles the sidebar edge, in-bounds",
     "nub is a SIBLING of #side (root stacking) so elementFromPoint hit-tests every sampled point + a real pointer click toggles with the overlay open",
-    "REAL thread via production UI: typing into #task-input + clicking #run-task (the composer's production path) runs the demo provider \u2192 a thread appears \u2192 clicking the sidebar thread opens the surface \u2192 a DENSE elementFromPoint grid + a real pointer toggle work with the thread overlay open (no forced hidden)",
+    "REAL thread via production UI: typing into #task-input + clicking #run-task runs the demo provider \u2192 a thread appears \u2192 clicking the sidebar thread opens the surface \u2192 a DENSE elementFromPoint grid + a real pointer toggle work with the thread overlay open (no forced hidden)",
     "Enter + Space toggle; aria-expanded/label/title track; Enter focuses the nub first",
     "collapsed state persists across reload after the durability write settles (public data-durability, no window oracle)",
-    "a VISIBLE + accessible durability hint (role=status aria-live, session-only text) is shown when persistence is session-only; data-durability carries the machine state",
+    "durability UI contract: the REAL #sidebar-durability-hint + #side are driven session\u2192error\u2192durable through the production pure renderer (lib/durability-ui.js), asserting the session/error text, the visibility, the data-durability attribute, and the stale-text clear; unit-tested in tests/durability-ui.test.ts",
     "kvSet reports durable vs session mode (unit-tested); the durable write path + the backend-failure reject are unit-tested",
+    "production owns KV/scheduler state in module CLOSURE (no exported Maps/setters/reset/advance); tests reset via cache-busted fresh module imports (tests/test-hooks.js freshKv/freshScheduler)",
+    "build assertion uses a real JS parser (acorn) AST export + oracle walk (not regex)",
+    "overlay-OPEN matrix: sidebar+overlay+nub asserted across RTL / dark / narrow / reduced-motion / focus while the real thread overlay stays open, with overlay-open/overlay-rtl/overlay-dark screenshots",
     "RTL nub centres on the rail's inner (left) boundary + swaps the border to the inner edge",
     "rapid double-click returns to the deterministic prior state; the ViewTransition.finished is awaited via a TEST-INJECTED patch of document.startViewTransition (never shipped)",
     "recent-activity renders a journal entry via the production activity.list path (memory.set + reload)",
     "narrow (500px) in-bounds, prefers-reduced-motion disables the sidebar/overlay/nub transitions, dark theme renders a visible border",
     "nub is reachable by keyboard Tab (focus the preceding control + Tab, not programmatic .focus())",
-    "prefers-reduced-motion disables the sidebar, overlay AND nub transitions (asserted on all three)",
     "durability resolves to durable/session/error after reload (unknown is not accepted)"
   ],
   "limitations": [
     "A storage-GRANTED durable round-trip across a SERVICE-WORKER restart is NOT exercised by the integration harness: the optional storage permission requires a headed owner gesture (chrome.permissions.request) that a headless profile cannot grant. The durable WRITE path itself is unit-tested (kvSet returns 'durable' when the backend is present + healthy, and throws StorageBackendError when the backend write fails).",
-    "Only default light/LTR collapsed and expanded screenshots are retained; the real open-thread overlay, RTL, dark, narrow, reduced-motion, and focus states are asserted programmatically (computed style / elementFromPoint / transition), not captured as separate PNGs."
+    "The error durability state is exercised by calling the production pure renderer (lib/durability-ui.js) directly on the real element — there is deliberately no shipped fault global/route to force a backend write failure in the browser (the reviewer's no-shipped-fault-seam requirement). The backend-failure REJECT path is unit-tested at the KV level."
   ]
 }
