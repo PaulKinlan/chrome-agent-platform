@@ -9,6 +9,7 @@ import { send } from "../lib/messages.js";
 import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/conversation.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
+import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
 
@@ -592,23 +593,49 @@ async function openBackgroundAgentChat(id, name) {
 // Opens the thread surface scoped to ONE named agent: the conversation shows
 // the agent's OWN run history (its journal from its OPFS), and the composer
 // starts tasks DIRECTLY in that agent (named-agent.run → its own memory/skills).
-async function openAgentChat(id) {
+
+/** Load an agent's OWN run history (its journal), most-recent-first, for ANY
+ * kind: named (named-agent.history), background (background-agent.history),
+ * site (the enrolled origin's journal in its own OPFS store). */
+async function loadAgentHistoryEntries(kind, id) {
+  if (kind === "named") {
+    const r = await send("named-agent.history", { id }).catch(() => ({ entries: [] }));
+    return Array.isArray(r.entries) ? r.entries : [];
+  }
+  if (kind === "background") {
+    const r = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
+    return Array.isArray(r.entries) ? r.entries : [];
+  }
+  if (kind === "site") {
+    const journal = await send("memory.get", { origin: id, key: "journal" }).catch(() => []);
+    return Array.isArray(journal) ? journal.slice(-200).reverse() : [];
+  }
+  return [];
+}
+
+/** Open the thread surface scoped to ONE agent of ANY kind (the unified agent
+ * access, CAP-FB-20260818-AGENT-ACCESS-01): the agent's own history + a
+ * composer whose sends run DIRECTLY in that agent (its own memory/skills). */
+async function openAgentSurface({ kind, id, name }) {
   currentAgentId = id;
-  currentAgentKind = "named";
+  currentAgentKind = kind;
   currentThreadId = null;
-  editAgentBtn.hidden = false;
-  editAgentBtn.setAttribute("aria-label", "Edit agent");
+  // Only named agents have the owner-facing config dialog (named-agent.update).
+  editAgentBtn.hidden = kind !== "named";
+  if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
   syncComposerScope();
-  const [aRes, hRes] = await Promise.all([
-    send("named-agent.get", { id }).catch(() => ({ ok: false })),
-    send("named-agent.history", { id }).catch(() => ({ entries: [] })),
-  ]);
-  const agent = aRes.ok ? aRes.agent : null;
-  threadTitle.textContent = agent?.name || id || "Agent";
-  renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
+  const entries = await loadAgentHistoryEntries(kind, id);
+  threadTitle.textContent = name || id || "Agent";
+  renderAgentHistory(threadConversation, entries);
   showThreadView();
   renderRunStatus({ state: "idle" });
   threadComposer.focus();
+}
+
+async function openAgentChat(id) {
+  const aRes = await send("named-agent.get", { id }).catch(() => ({ ok: false }));
+  const agent = aRes.ok ? aRes.agent : null;
+  await openAgentSurface({ kind: "named", id, name: agent?.name || id });
 }
 
 // Render an agent's run history (its journal) as a conversation: task → user
@@ -621,6 +648,7 @@ function renderAgentHistory(container, entries) {
     (r) =>
       (r?.type === "task" && typeof r.task === "string" && r.task.trim()) ||
       (r?.type === "result" && typeof r.result === "string" && r.result.trim()) ||
+      (r?.type === "delegated-result" && (typeof r.task === "string" || typeof r.result === "string")) ||
       r?.type === "tool-call" ||
       r?.type === "tool-result",
   );
@@ -634,6 +662,12 @@ function renderAgentHistory(container, entries) {
     const ts = typeof r.ts === "number" ? r.ts : null;
     if (r.type === "task") appendBubble(container, "user", r.task, undefined, ts);
     else if (r.type === "result") appendBubble(container, "agent", r.result, undefined, ts);
+    else if (r.type === "delegated-result") {
+      // A site agent's journal entry (a delegated run): the task + its result.
+      if (typeof r.task === "string" && r.task.trim()) appendBubble(container, "user", r.task, undefined, ts);
+      const out = typeof r.result === "string" ? r.result : (r.result != null ? JSON.stringify(r.result) : "");
+      if (out.trim()) appendBubble(container, "agent", out, undefined, ts);
+    }
     else if (r.type === "tool-call") {
       if (typeof container.appendTool === "function") {
         container.appendTool({ name: r.tool ?? "tool", status: "running", ts });
@@ -1083,11 +1117,20 @@ async function runThreadTurn(text, attachments = []) {
 
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
-  const { text: task, attachments } = ev.detail;
+  const { text: task, attachments, agent } = ev.detail;
   currentThreadId = null; // a new task → a new thread
+  threadConversation.clear?.();
+  if (agent?.ref) {
+    // The unified agent routing (CAP-FB-20260818-AGENT-ACCESS-01): the + menu's
+    // Choose agent chip / a committed /agent: option carries the CANONICAL ref;
+    // the run goes DIRECTLY to that agent (its own memory/skills), never
+    // resolved by name. Open its surface so the run is visible in context.
+    await openAgentSurface({ kind: agent.kind, id: agent.id, name: agent.name });
+    await runThreadTurn(task, attachments);
+    return;
+  }
   currentAgentId = null; // the hub composer is the MASTER agent, not a named-agent chat
   currentAgentKind = null;
-  threadConversation.clear?.();
   threadTitle.textContent = "New task";
   await runThreadTurn(task, attachments);
 });
@@ -1096,7 +1139,12 @@ composer.addEventListener("status", (ev) => {
 });
 
 threadComposer.addEventListener("send", async (ev) => {
-  const { text, attachments } = ev.detail;
+  const { text, attachments, agent } = ev.detail;
+  if (agent?.ref) {
+    // Direct THIS message to the chosen agent: the surface switches to that
+    // agent's own conversation (its journal), and the run routes by ID.
+    await openAgentSurface({ kind: agent.kind, id: agent.id, name: agent.name });
+  }
   await runThreadTurn(text, attachments);
 });
 document.getElementById("thread-back")?.addEventListener("click", hideThreadView);
@@ -1180,7 +1228,40 @@ document.getElementById("provider-status")?.addEventListener("click", () => {
 // chrome.storage.onChanged may never fire).
 subscribeProgress((ev) => {
   if (ev?.type === "named-agent-changed") renderNamedAgents();
+  if (ev?.type === "agent-registry-changed") {
+    // The unified registry changed (named/background/site) — refresh every
+    // agent surface + revalidate any composer's selected-agent chip live
+    // (a deleted/disabled agent clears its chip; a rename updates it).
+    renderNamedAgents();
+    renderBackgroundAgents();
+    renderSiteAgents();
+    composer.revalidateSelectedAgent?.();
+    threadComposer.revalidateSelectedAgent?.();
+    revalidateOpenAgent();
+  }
 });
+
+/** If the agent the thread surface is scoped to was deleted (or a background
+ * agent disabled), leave its conversation — chatting with a ghost must not be
+ * possible. A rename just updates the title. */
+async function revalidateOpenAgent() {
+  if (!currentAgentId) return;
+  const kind = currentAgentKind; // capture — the surface may change mid-await
+  const id = currentAgentId;
+  const res = await send("agent.registry").catch(() => null);
+  if (!res || res.ok === false || !Array.isArray(res.groups)) return;
+  if (currentAgentId !== id || currentAgentKind !== kind) return;
+  const ref = canonicalRef(kind, id);
+  const found = ref ? findAgentByRef(res.groups, ref) : null;
+  if (!found || (found.kind === "background" && found.enabled !== true)) {
+    hideThreadView();
+    setStatus("That agent is no longer available — its conversation was closed.", false);
+    return;
+  }
+  if (found.name && threadTitle.textContent !== found.name) {
+    threadTitle.textContent = found.name;
+  }
+}
 
 // ── the task sidebar: collapse/expand + new-task (item 6/7) ──────────────
 const side = document.getElementById("side");

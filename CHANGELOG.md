@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.73] — 2026-08-18
+- feat(agent-access): unified agent picker + access everywhere (CAP-FB-20260818-AGENT-ACCESS-01) — the canonical agent ref (named:/background:/site:), the redacted grouped agent.registry route + agent-registry-changed broadcast, the ONE shared <agent-picker> component, the side panel's first-class Agents view (browse/search/select → history → direct a task, per-session restore, live create/rename/delete updates), every composer's + menu Choose agent (top-layer anchored popover + removable chip + ID routing), the grouped /agent slash command (full keyboard contract, Escape revert, stale rejection), 65 real-Chrome journey checks + unit/gallery/evidence
+
 ## [0.2.72] — 2026-08-17
 - fix(review): GLM + DeepSeek findings — script double-execution claim protocol (one host runs), UTF-8-safe initialAvatar (no btoa crash on CJK/emoji), bounded skill-import (64KiB + http(s) + walk cap), mark buildScriptSrcdoc test-only + constitution sandbox-page exemption, the missing optional_permissions (bookmarks/history/webNavigation/contextMenus/idle/downloads), the constitution sender-check wording, favicons on every page, the light-DOM size smoke assertion
 

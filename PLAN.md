@@ -43,6 +43,7 @@ what's landed vs what's next.
 - [x] The component design system (20+ Web Components, the gallery) + the impeccable design (paper/teal, PRODUCT.md + DESIGN.md) — landed
 - [x] Chaos-style semver (a post-commit hook auto-bumps the patch version after each commit) — landed
 - [x] The BeautifulUI AI-native primitives (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar) — landed 6adcfe6
+- [x] Unified agent access (CAP-FB-20260818-AGENT-ACCESS-01) — the canonical agent ref (named:/background:/site:), the redacted grouped `agent.registry` route + `agent-registry-changed` broadcast, the ONE shared `<agent-picker>`, the side panel's first-class Agents view (browse/select/history/direct-a-task, per-session restore, live updates), the + menu "Choose agent" (popover + removable chip, routing by ID), the grouped /agent slash command — landed 2026-08-18 (scripts/agent-access-journeys.ts, 65 real-Chrome checks)
 
 ## In flight (2026-08-17)
 - (none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)

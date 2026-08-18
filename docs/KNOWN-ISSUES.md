@@ -12,6 +12,24 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 
 ## Open (as of round 27)
 
+### Unified agent access (CAP-FB-20260818-AGENT-ACCESS-01) — residuals
+- **Site-agent delegation is text-only.** `agent.delegate` runs the enrolled
+  origin's worker with the task text only: no attachments, and no live per-run
+  progress stream (the run returns a single result; the composer says so when
+  attachments were dropped). A live-progress + attachment path for site agents
+  is a follow-up.
+- **Enabling a background agent still requires the `alarms` optional
+  permission** (by design — fail closed). The side panel shows disabled
+  background agents with a "disabled" status; enabling remains a Settings /
+  hub gesture.
+- **The hub's three agent summary rows** (sidebar + main Named/Background/Site
+  lists) predate `<agent-picker>` and still use `capability-row` — they open
+  the same agent surfaces, but a future pass could re-express them as the
+  shared picker for full consistency.
+- **The side panel page view is unchanged** — the Agents view sits alongside
+  it as a tab; the driven-page orchestration (URL bar, tools, iframe preview)
+  is exactly as before (verified by the journeys).
+
 ### Concurrency edge-cases (deep, low-likelihood)
 - **Cooperative-cancellation limit (fundamental):** an already-started page/WebMCP side effect cannot be unwound — the result is discarded but the effect runs. This is a browser constraint (a running page function can't be cancelled). Documented in DESIGN.md. *Mitigations in place: pre-start cancellation, minimized window.*
 - **CAS version-scoping refinements:** the version-scoped CAS landed (round 27) but the reviewer may find further ABA edge-cases in the memory/journal compensation.

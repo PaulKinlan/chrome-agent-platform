@@ -60,6 +60,9 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 - The error console: the per-line Copy + Copy-all + Clear buttons work (the shadow-root outside-click fix) + the panels close-others + they anchor to the trigger.
 - The security shield: the granted permissions are removable.
 
+### Unified agent access
+- **CAP-FB-20260818-AGENT-ACCESS-01 — FIXED (2026-08-18, worktree feat/agent-access-picker).** ONE reusable `<agent-picker>` (grouped Named/Background/Site, search, avatar/role/status/skills, selected/Current, empty/loading/error) consumes the redacted `agent.registry` SW route; the side panel has a first-class Agents view (select → the agent's conversation/history → direct a task → back to page orchestration; per-session restore; live create/rename/delete updates); every composer's + menu has "Choose agent" (top-layer popover anchored to +, removable chip, routing by canonical ID); `/agent` + `/agent:query` open the same grouped data UI (full keyboard contract, Escape revert, no URL hijack); stale/deleted selections are rejected live + at send; @mention unchanged + the distinction documented in docs/AGENT-MODEL.md. Evidence: before/after screenshot packs (before-01..05, after-01..09) + scripts/agent-access-journeys.ts (65 real-Chrome checks, all green; full chrome-journeys 119/119; unit 328; gallery smoke 35; security 7; a11y 17; opfs 6). Residuals tracked in KNOWN-ISSUES (site-agent delegation is text-only; the hub's three summary rows still use capability-row).
+
 ## Open (genuinely remaining — action these)
 
 1. **Browser-control toggle/grant persistence** — Paul flagged "STILL not working" after the item-51 fix; re-verify the toggle stays ON + the grant persists across a reload in the real extension, and fix the actual cause. (The grant-storage read/write is present; the persistence needs a real-browser proof.)
