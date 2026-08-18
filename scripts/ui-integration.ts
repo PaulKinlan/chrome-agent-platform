@@ -509,16 +509,19 @@ try {
   await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
 
   const darkNub = await cdp.eval(hub, `(() => {
-    document.documentElement.dataset.theme = 'charcoal';
+    document.documentElement.dataset.theme = 'midnight';
+    const lum = (c) => { const m = c.match(/\\d+(?:\\.\\d+)?/g); if (!m) return 0; const [r,g,b] = m.map(Number).map(v => v/255).map(v => v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)); return 0.2126*r + 0.7152*g + 0.0722*b; };
     const nub = document.querySelector('#side-toggle .nub');
-    const cs = getComputedStyle(nub);
+    const side = document.querySelector('#side');
+    const cs = getComputedStyle(nub); const scs = getComputedStyle(side);
     // READ the values BEFORE resetting the theme (getComputedStyle is live —
     // reading after the reset would validate the restored light theme).
-    const out = { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor, bg: cs.backgroundColor };
+    const out = { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor, nubBg: cs.backgroundColor, sideBg: scs.backgroundColor, sideText: scs.color, sideBgLum: lum(scs.backgroundColor), sideTextLum: lum(scs.color) };
     document.documentElement.dataset.theme = 'sunlit';
     return out;
   })()`);
   check("dark theme: nub renders with a visible border", darkNub?.visible === true, darkNub);
+  check("dark theme (midnight): the sidebar applies dark tokens (dark bg + light text)", darkNub && darkNub.sideBgLum < 0.2 && darkNub.sideTextLum > 0.6, darkNub);
 
   // 9. Overlay-OPEN matrix (the reviewer's D blocker): the real thread overlay
   //    must stay OPEN while sidebar + overlay + nub are asserted across RTL /
@@ -552,48 +555,61 @@ try {
   })()`);
   check("overlay-open matrix: overlay + nub are in-bounds", overlayGeom && overlayGeom.overlay && overlayGeom.nub && overlayGeom.overlay.left >= 0 && overlayGeom.overlay.right <= overlayGeom.vw && overlayGeom.nub.right <= overlayGeom.vw && overlayGeom.nub.left >= 0, overlayGeom);
 
-  // RTL (overlay open): the rail + nub flip to the right; the nub centres on the
-  // rail's inner (left) boundary and the overlay remains in-bounds.
+  // RTL (overlay open): the rail + nub flip to the right; the overlay reserves
+  // space on the right so the sidebar + nub stay visible (no overlap). Wait for
+  // the overlay's left/right transition to settle before measuring.
+  await cdp.eval(hub, `document.documentElement.setAttribute('dir', 'rtl')`);
+  await sleep(1000);
   const overlayRtl = await cdp.eval(hub, `(() => {
-    document.documentElement.setAttribute('dir', 'rtl');
     const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), cx: Math.round(b.left + b.width/2) }; };
     const side = r(document.querySelector('#side')); const nub = r(document.querySelector('#side-toggle')); const overlay = r(document.getElementById('thread-view'));
-    const out = { sideLeft: side.left, nubCx: nub.cx, nubOnInner: Math.abs(nub.cx - side.left) <= 3, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, vw: innerWidth };
-    document.documentElement.removeAttribute('dir');
-    return out;
+    return { sideLeft: side.left, sideRight: side.right, nubCx: nub.cx, nubOnInner: Math.abs(nub.cx - side.left) <= 3, overlayLeft: overlay.left, overlayRight: overlay.right, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, noOverlap: overlay.right <= side.left, vw: innerWidth };
   })()`);
   check("overlay-open RTL: nub centres on the rail's inner boundary", overlayRtl?.nubOnInner === true, overlayRtl);
   check("overlay-open RTL: overlay stays in-bounds", overlayRtl?.overlayInBounds === true, overlayRtl);
-  await cdp.eval(hub, `document.documentElement.setAttribute('dir', 'rtl')`);
+  check("overlay-open RTL: overlay does NOT cover the sidebar/nub (no overlap)", overlayRtl?.noOverlap === true, overlayRtl);
   const shotOverlayRtl = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/overlay-rtl.png`, Uint8Array.from(atob(shotOverlayRtl.data), (c: number) => c.charCodeAt(0)));
   await cdp.eval(hub, `document.documentElement.removeAttribute('dir')`);
+  await sleep(1000);
 
   // Dark (overlay open): nub keeps a visible border + the overlay text is legible.
   const overlayDark = await cdp.eval(hub, `(() => {
-    document.documentElement.dataset.theme = 'charcoal';
+    document.documentElement.dataset.theme = 'midnight';
+    const lum = (c) => { const m = c.match(/\\d+(?:\\.\\d+)?/g); if (!m) return 0; const [r,g,b] = m.map(Number).map(v => v/255).map(v => v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)); return 0.2126*r + 0.7152*g + 0.0722*b; };
     const nub = document.querySelector('#side-toggle .nub');
     const cs = getComputedStyle(nub);
-    const overlay = document.getElementById('thread-view');
-    const ov = getComputedStyle(overlay);
-    const out = { nubBorder: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', overlayVisible: ov.display !== 'none' && overlay.hidden === false };
+    const side = document.querySelector('#side'); const scs = getComputedStyle(side);
+    const overlay = document.getElementById('thread-view'); const ov = getComputedStyle(overlay);
+    const out = {
+      nubBorder: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px',
+      overlayVisible: ov.display !== 'none' && overlay.hidden === false,
+      sideDark: lum(scs.backgroundColor) < 0.2 && lum(scs.color) > 0.6,
+      overlayDark: lum(ov.backgroundColor) < 0.2 && lum(ov.color) > 0.6,
+    };
     document.documentElement.dataset.theme = 'sunlit';
     return out;
   })()`);
-  check("overlay-open dark: nub keeps a visible border + overlay visible", overlayDark?.nubBorder === true && overlayDark?.overlayVisible === true, overlayDark);
-  await cdp.eval(hub, `document.documentElement.dataset.theme = 'charcoal'`);
+  check("overlay-open dark (midnight): nub keeps a visible border + overlay visible", overlayDark?.nubBorder === true && overlayDark?.overlayVisible === true, overlayDark);
+  check("overlay-open dark (midnight): sidebar applies dark tokens (dark bg + light text)", overlayDark?.sideDark === true, overlayDark);
+  check("overlay-open dark (midnight): overlay applies dark tokens (dark bg + light text)", overlayDark?.overlayDark === true, overlayDark);
+  await cdp.eval(hub, `document.documentElement.dataset.theme = 'midnight'`);
+  await sleep(200);
   const shotOverlayDark = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/overlay-dark.png`, Uint8Array.from(atob(shotOverlayDark.data), (c: number) => c.charCodeAt(0)));
   await cdp.eval(hub, `document.documentElement.dataset.theme = 'sunlit'`);
+  await sleep(200);
 
   // Narrow (overlay open): overlay + nub remain in-bounds at 500px.
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);
   const overlayNarrow = await cdp.eval(hub, `(() => {
-    const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right) }; };
-    const overlay = r(document.getElementById('thread-view')); const nub = r(document.querySelector('#side-toggle'));
-    return { overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, nubInBounds: nub.left >= 0 && nub.right <= innerWidth, vw: innerWidth };
+    const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), w: Math.round(b.width) }; };
+    const overlay = r(document.getElementById('thread-view')); const nub = r(document.querySelector('#side-toggle')); const side = r(document.querySelector('#side'));
+    const inb = (x) => x.left >= 0 && x.right <= innerWidth;
+    return { overlayInBounds: inb(overlay), nubInBounds: inb(nub), sideInBounds: inb(side), overlayW: overlay.w, sideW: side.w, vw: innerWidth };
   })()`);
-  check("overlay-open narrow: overlay + nub stay in-bounds", overlayNarrow?.overlayInBounds === true && overlayNarrow?.nubInBounds === true, overlayNarrow);
+  check("overlay-open narrow: overlay + nub + sidebar all stay in-bounds", overlayNarrow?.overlayInBounds === true && overlayNarrow?.nubInBounds === true && overlayNarrow?.sideInBounds === true, overlayNarrow);
+  check("overlay-open narrow: overlay + sidebar coexist (no cover)", overlayNarrow && overlayNarrow.overlayW + overlayNarrow.sideW <= overlayNarrow.vw, overlayNarrow);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, hub);
 
   // Reduced-motion (overlay open): sidebar + overlay + nub transitions disabled.
@@ -612,8 +628,12 @@ try {
   await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 }, hub);
   await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 }, hub);
   await sleep(200);
-  const overlayFocus = await cdp.eval(hub, `document.activeElement?.id === 'side-toggle'`);
-  check("overlay-open focus: the nub is Tab-reachable above the overlay", overlayFocus === true, { overlayFocus });
+  const overlayFocus = await cdp.eval(hub, `(() => {
+    const r = (el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; };
+    return { nubFocused: document.activeElement?.id === 'side-toggle', sidebarVisible: r(document.querySelector('#side')), overlayVisible: document.getElementById('thread-view').hidden === false && r(document.getElementById('thread-view')) };
+  })()`);
+  check("overlay-open focus: the nub is Tab-reachable above the overlay", overlayFocus?.nubFocused === true, overlayFocus);
+  check("overlay-open focus: sidebar + overlay are both visible while the nub holds focus", overlayFocus?.sidebarVisible === true && overlayFocus?.overlayVisible === true, overlayFocus);
   // Restore: close the overlay for a clean end state.
   await cdp.eval(hub, `document.getElementById('thread-back')?.click()`);
   await sleep(300);

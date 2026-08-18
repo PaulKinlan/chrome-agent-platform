@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.90] — 2026-08-18
+- fix(review): adversarial AST scan, midnight theme, RTL overlay inset, full matrix, API rename
+
 ## [0.2.89] — 2026-08-18
 - docs: sync sidebar-evidence manifest with the refactored gates + overlay screenshots
 

@@ -108,7 +108,13 @@ async function walkJs(dir, out = []) {
 }
 const { scanShippedJs } = await import("./scripts/scan-shipped.mjs");
 const shippedJs = await walkJs("extension");
-const violations = await scanShippedJs(shippedJs);
+// The __zod_*/__vite_* oracle exemption applies ONLY inside the generated
+// dependency bundles (esbuild inlines the zod/vite source there) — never in
+// shipped source files.
+const violations = await scanShippedJs(shippedJs, {
+  generatedBundles: new Set([OUT, OPTIONS_OUT]),
+  readText: (f) => readFile(f, "utf8"),
+});
 if (violations.length > 0) {
   throw new Error(
     `shipped-code scan failed (${violations.length} violation(s)):\n` +

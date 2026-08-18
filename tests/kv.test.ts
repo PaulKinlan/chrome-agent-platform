@@ -14,13 +14,13 @@ import { freshKv } from "./test-hooks.js";
 // exports, so the bare `kvGet`/`kvSet`/... references below stay stable.
 let kvGet, kvSet, kvRemove, storageAvailable, StorageBackendError,
   migrateSessionToStorage, snapshotPersistentToSession,
-  snapshotPersistentToSessionLocked, resetStorageTransition, withStorageModeLock;
+  snapshotPersistentToSessionLocked, onStoragePermissionTransition, withStorageModeLock;
 async function resetKv() {
   const m = await freshKv();
   ({
     kvGet, kvSet, kvRemove, storageAvailable, StorageBackendError,
     migrateSessionToStorage, snapshotPersistentToSession,
-    snapshotPersistentToSessionLocked, resetStorageTransition, withStorageModeLock,
+    snapshotPersistentToSessionLocked, onStoragePermissionTransition, withStorageModeLock,
   } = m);
 }
 
@@ -212,7 +212,7 @@ Deno.test("snapshotPersistentToSession copies the persistent backend into the se
   assertEquals((await kvGet("providerConfig"))["providerConfig"].provider, "openai");
 });
 
-Deno.test("resetStorageTransition allows re-migration after a Disable→Enable cycle (round-17)", async () => {
+Deno.test("onStoragePermissionTransition (storage-permission transition) allows re-migration after a Disable→Enable cycle (round-17)", async () => {
   await resetKv();
   store.clear();
   // First grant: session → storage migration.
@@ -224,7 +224,7 @@ Deno.test("resetStorageTransition allows re-migration after a Disable→Enable c
 
   // Disable: snapshot the persistent state back into session, reset migration.
   makeChrome({ present: false });
-  resetStorageTransition();
+  onStoragePermissionTransition();
   // During the disabled period the owner changes the provider (session-only).
   await kvSet({ providerConfig: { provider: "anthropic" } });
 

@@ -210,12 +210,13 @@ export async function snapshotPersistentToSessionLocked() {
   }
 }
 
-/** Reset the migration state on every storage-permission TRANSITION (grant or
- * removal). After a Disable→Enable cycle the session fallback holds changes made
- * during the disabled period; `migrated` must be cleared so the next grant
- * re-migrates them (the round-17 blocker: `migrated` never reset → re-enable
- * restored only the old persistent values). */
-export function resetStorageTransition() {
+/** Hook invoked on every storage-permission TRANSITION (grant or removal):
+ * invalidate the migration flag so a Disable→Enable cycle re-migrates the
+ * session-fallback changes made during the disabled period (the round-17
+ * blocker: `migrated` never cleared → re-enable restored only the old
+ * persistent values). This is a PRODUCTION state-transition hook (the SW calls
+ * it around the storage permission change), not a test reset API. */
+export function onStoragePermissionTransition() {
   migrated = false;
 }
 

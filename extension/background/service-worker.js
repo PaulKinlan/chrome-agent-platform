@@ -39,7 +39,7 @@ import {
   kvSet,
   kvRemove,
   migrateSessionToStorage,
-  resetStorageTransition,
+  onStoragePermissionTransition,
   snapshotPersistentToSession,
   snapshotPersistentToSessionLocked,
   withStorageModeLock,
@@ -507,7 +507,7 @@ chrome.permissions?.onRemoved?.addListener((perms) => {
     // during the disabled period; reset the migration flag so the next grant
     // re-migrates them (never restore stale persistent values — the round-17
     // storage-Disable blocker).
-    resetStorageTransition();
+    onStoragePermissionTransition();
   }
 });
 
@@ -1236,7 +1236,7 @@ const handlers = {
           return { ok: false, error: String(e?.message ?? e) };
         }
         const res = await revokeCapability(id);
-        resetStorageTransition();
+        onStoragePermissionTransition();
         return res;
       });
     }
@@ -1318,7 +1318,7 @@ const handlers = {
     }
     const res = await revokeCapability(id);
     if (id === "storage") {
-      resetStorageTransition();
+      onStoragePermissionTransition();
     }
     return res;
   },
