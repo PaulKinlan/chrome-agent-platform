@@ -27,22 +27,24 @@
       display: none;
     }
     .side {
-      width: 240px;
+      inline-size: 240px;
       flex: 0 0 240px;
-      border-right: 1px solid var(--border);
+      min-inline-size: 0;
+      min-block-size: 0;
+      border-inline-end: 1px solid var(--border);
       background: var(--panel);
       display: flex;
       flex-direction: column;
       padding: 16px 12px;
       gap: 4px;
       position: sticky;
-      top: 0;
-      height: 100vh;
-      overflow-y: auto;
-      transition: width .18s ease, flex-basis .18s ease;
+      inset-block-start: 0;
+      block-size: 100vh;
+      overflow: clip;
+      transition: inline-size .18s ease, flex-basis .18s ease;
     }
     /* collapsed → a narrow icon rail */
-    .side.collapsed { width: 60px; flex-basis: 60px; padding-left: 10px; padding-right: 10px; }
+    .side.collapsed { inline-size: 60px; flex-basis: 60px; padding-inline: 10px; }
     .brand-row { display: flex; align-items: center; gap: 6px; }
     .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
     /* The collapse/expand control is an edge NUB protruding from the sidebar's
@@ -78,40 +80,67 @@
     [dir="rtl"] .side-toggle svg { transform: scaleX(-1); }
     [dir="rtl"] #side.collapsed ~ .side-toggle svg { transform: scaleX(-1) rotate(180deg); }
     /* RTL: the rail's hairline border belongs on the INNER (left) edge. */
-    [dir="rtl"] .side { border-right: 0; border-left: 1px solid var(--border); }
+    [dir="rtl"] .side { border-inline-end: 1px solid var(--border); }
     /* RTL: the thread overlay must reserve space on the RIGHT (where the rail
        sits), mirroring the LTR left-inset, so the sidebar + nub stay visible
        beside the open overlay instead of being covered by it. */
     [dir="rtl"] #thread-view.view-overlay { left: 0; right: 240px; }
     [dir="rtl"] #side.collapsed ~ #thread-view.view-overlay { right: 60px; }
-    .side-label-row { display: flex; align-items: center; gap: 4px; }
-    .side-label-row .side-label { flex: 1; min-width: 0; }
-    /* Rail action buttons (new-task / new-agent) share the icon scale with the
-       foot buttons: 28px inline next to the label, 34px centred icon when the
-       rail is collapsed. Inline SVG, currentColor — no text glyph. */
-    .new-task { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+    /* Tasks and Agents are one layout primitive: the header never scrolls, while
+       each intrinsic list owns its overflow. Stable, symmetric gutters keep row
+       content still when a scrollbar appears without moving either + action. */
+    .side-section {
+      display: flex;
+      flex: 1 1 0;
+      flex-direction: column;
+      min-inline-size: 0;
+      min-block-size: 0;
+      overflow: clip;
+      border-block-start: 1px solid var(--border);
+      padding-block-start: 6px;
+    }
+    .side-label-row { display: flex; align-items: center; gap: 4px; min-inline-size: 0; }
+    .side-label-row .side-label { flex: 1 1 auto; min-inline-size: 0; }
+    /* Rail action buttons (new-task / new-agent) share one icon scale. */
+    .new-task { display: inline-flex; align-items: center; justify-content: center; inline-size: 28px; block-size: 28px;
       border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--accent);
-      cursor: pointer; padding: 0; flex: 0 0 auto; }
-    .new-task svg { width: 16px; height: 16px; display: block; }
+      cursor: pointer; padding: 0; flex: 0 0 auto; margin-inline-start: auto; }
+    .new-task svg { inline-size: 16px; block-size: 16px; display: block; }
     .new-task:hover { border-color: var(--accent); background: var(--on-accent-muted, #d7f0ea); }
+    .side-list {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      gap: 2px;
+      min-inline-size: 0;
+      min-block-size: 0;
+      overflow-x: clip;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable both-edges;
+    }
     /* hide the text labels when collapsed (icon rail) */
     .side.collapsed .brand, .side.collapsed .side-label,
     .side.collapsed .thread-item .t-name, .side.collapsed .thread-item .t-preview,
     .side.collapsed .thread-item .t-meta,
     .side.collapsed .thread-empty,
     .side.collapsed .foot-btn .btn-label { display: none; }
-    .side.collapsed .thread-item { padding: 8px; align-items: center; justify-content: center; min-height: 34px; }
+    .side.collapsed .side-section { flex-basis: 0; padding-block-start: 4px; }
+    .side.collapsed .side-list { scrollbar-gutter: auto; }
+    .side.collapsed .side-list::-webkit-scrollbar { inline-size: 0; block-size: 0; }
+    .side.collapsed .thread-item { padding: 8px; align-items: center; justify-content: center; min-block-size: 34px; }
     .side.collapsed .side-foot { align-items: center; }
-    .side.collapsed .side-foot .foot-btn { width: 34px; height: 34px; padding: 0; justify-content: center; }
-    .side.collapsed .side-foot .foot-btn svg { width: 16px; height: 16px; }
+    .side.collapsed .side-foot .foot-btn { inline-size: 34px; block-size: 34px; padding: 0; justify-content: center; }
+    .side.collapsed .side-foot .foot-btn svg { inline-size: 16px; block-size: 16px; }
     /* the collapsed thread item is a centred status dot with a hover tooltip */
     .thread-item .t-dot { display: none; }
     .side.collapsed .thread-item .t-dot {
-      display: block; width: 8px; height: 8px; border-radius: 50%;
+      display: block; inline-size: 8px; block-size: 8px; border-radius: 50%;
       background: var(--muted); flex: 0 0 auto;
     }
-    /* when hovering a collapsed item, the dot hides so the delete X is clear */
-    .side.collapsed .thread-item:hover .t-dot { display: none; }
+    /* when hovering a collapsed item, the dot hides so the centred delete X is clear */
+    .side.collapsed .thread-item:hover .t-dot,
+    .side.collapsed .thread-item:focus-within .t-dot { visibility: hidden; }
     .side.collapsed .thread-item .t-dot.running { background: var(--accent2); }
     .side.collapsed .thread-item .t-dot.error { background: var(--danger); }
     .brand {
@@ -123,46 +152,27 @@
     .side-label {
       font-size: 12px;
       color: var(--muted);
-      padding: 8px 12px 6px;
-    }
-    .thread-list {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      flex: 1;
-      overflow-y: auto;
-    }
-    /* Named agents in the sidebar: a compact list below the tasks (item: a
-       created agent must be visible here, not just in the main area). */
-    .side-agents {
-      border-top: 1px solid var(--border);
-      padding-top: 6px;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      flex: 0 0 auto;
-      max-height: 32%;
-      overflow-y: auto;
+      padding: 8px 10px 6px;
     }
     .agent-item {
       display: flex;
       align-items: center;
       gap: 8px;
-      text-align: left;
-      padding: 6px 12px;
+      text-align: start;
+      padding: 8px 10px;
       border-radius: var(--radius-sm);
       border: 0;
       background: transparent;
       color: var(--text);
       cursor: pointer;
       font: inherit;
-      min-width: 0;
-      width: 100%;
+      min-inline-size: 0;
+      inline-size: 100%;
     }
-    .agent-item:hover { background: var(--bg); }
+    .agent-item:hover { background: var(--panel-2); }
     .agent-item .a-avatar {
-      width: 24px;
-      height: 24px;
+      inline-size: 24px;
+      block-size: 24px;
       border-radius: 50%;
       object-fit: cover;
       flex: 0 0 auto;
@@ -171,12 +181,12 @@
     }
     .agent-item .a-name {
       flex: 1;
-      min-width: 0;
+      min-inline-size: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       font-weight: 600;
-      font-size: 13px;
+      font-size: 14px;
     }
     .agent-item .a-role {
       display: block;
@@ -187,12 +197,11 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .side.collapsed .agent-item { padding: 8px; justify-content: center; }
+    .side.collapsed .agent-item { padding: 8px; justify-content: center; min-block-size: 40px; }
     .side.collapsed .agent-item .a-name { display: none; }
-    /* Every rail row centres its single remaining icon when collapsed (Tasks,
-       Agents — one convention, not a per-section special case). */
+    /* Every rail row centres its single remaining icon when collapsed. */
     .side.collapsed .side-label-row { justify-content: center; }
-    .side.collapsed .new-task { width: 34px; height: 34px; }
+    .side.collapsed .new-task { inline-size: 34px; block-size: 34px; margin-inline-start: 0; }
     /* the live run status banner (item: the user must see it is working). */
     .run-status {
       display: flex;
@@ -244,42 +253,51 @@
       flex-direction: column;
       align-items: stretch;
       gap: 2px;
-      text-align: left;
-      padding: 8px 12px;
+      text-align: start;
+      padding: 8px 10px;
       border-radius: var(--radius-sm);
       border: 0;
       background: transparent;
       color: var(--text);
       cursor: pointer;
       font: inherit;
-      min-width: 0;
+      min-inline-size: 0;
       position: relative;
     }
-    .thread-item:hover { background: var(--bg); }
-    .thread-item[aria-current="true"] {
-      background: var(--bg);
-    }
+    .thread-item:hover { background: var(--panel-2); }
+    .thread-item[aria-current="true"] { background: var(--on-accent-muted); }
     .thread-item .t-delete {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      inset-block-start: 50%;
+      inset-inline-end: 6px;
       z-index: 1;
-      display: none;
-      width: 24px;
-      height: 24px;
+      display: inline-flex;
+      inline-size: 28px;
+      block-size: 28px;
+      transform: translateY(-50%);
       align-items: center;
       justify-content: center;
       border: 0;
-      border-radius: 6px;
-      background: transparent;
+      border-radius: var(--radius-sm);
+      background: var(--panel);
       color: var(--muted);
       cursor: pointer;
       font: inherit;
       line-height: 1;
+      opacity: 0;
+      pointer-events: none;
     }
     .thread-item:hover .t-delete,
-    .thread-item .t-delete:focus-visible { display: inline-flex; }
-    .thread-item .t-delete:hover { color: var(--danger); background: var(--panel-2); }
+    .thread-item:focus-within .t-delete {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .thread-item .t-delete:hover { color: var(--danger); background: var(--bg); }
+    .side.collapsed .thread-item .t-delete {
+      inset-inline-start: 50%;
+      inset-inline-end: auto;
+      transform: translate(-50%, -50%);
+    }
     .thread-item .t-name {
       font-weight: 600;
       font-size: 14px;
@@ -540,18 +558,20 @@
       <div class="brand-row">
         <div class="brand">Chrome <span>Agent</span> Platform</div>
       </div>
-      <div class="side-label-row">
-        <span class="side-label">Tasks</span>
-        <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-      </div>
-      <nav class="thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
-      <div class="side-agents">
+      <section class="side-section side-tasks" aria-labelledby="tasks-label">
         <div class="side-label-row">
-          <span class="side-label">Agents</span>
+          <span class="side-label" id="tasks-label">Tasks</span>
+          <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        </div>
+        <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads"></nav>
+      </section>
+      <section class="side-section side-agents" aria-labelledby="agents-label">
+        <div class="side-label-row">
+          <span class="side-label" id="agents-label">Agents</span>
           <button class="new-task" id="new-agent" type="button" aria-label="Create agent" title="Create agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
-        <div class="agent-list" id="side-agents" aria-label="Named agents"></div>
-      </div>
+        <div class="side-list agent-list" id="side-agents" aria-label="Named agents"></div>
+      </section>
       <div class="side-foot">
         <span id="sidebar-durability-hint" role="status" aria-live="polite" hidden></span>
         <button class="btn ghost foot-btn" id="open-recipes" type="button" title="Skills">

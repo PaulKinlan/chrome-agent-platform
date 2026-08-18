@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.96] — 2026-08-18
+- merge(sidebar): integrate reviewed Tasks/Agents side-panel parity with the structured tool renderer; preserve both feature streams, align shared panel/list geometry and actions, keep collapsed scrolling gutter-free, center pointer/keyboard delete affordances, and add populated real-MV3 parity acceptance
+
 ## [0.2.95] — 2026-08-18
 - merge(tool-calls): integrate the frozen structured tool-call renderer with system prompts, unified agent access, production WebMCP discovery, and the collapsed sidebar; preserve safe bounded/redacted collapsible trees, immutable call IDs, SDK tool-error semantics, and abort-authoritative terminal handling
 
