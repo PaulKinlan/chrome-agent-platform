@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.91] — 2026-08-18
+- docs: sync evidence manifest + recaptured overlay-rtl/overlay-dark hashes
+
 ## [0.2.90] — 2026-08-18
 - fix(review): adversarial AST scan, midnight theme, RTL overlay inset, full matrix, API rename
 

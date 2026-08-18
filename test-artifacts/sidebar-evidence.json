@@ -22,22 +22,24 @@
     },
     {
       "file": "overlay-rtl.png",
-      "sha256": "b26fc5e59c1e48ec101b481e16cdc11ae7ce3adad0fbef75fe602ff75fce7f56",
+      "sha256": "6a9f7f959cfd5ec3080472bfc08ec7df5ac60d6afccfc05aec558b6e2694634c",
       "bytes": 33938,
-      "describes": "the thread overlay OPEN in RTL: the rail + nub flip to the right, the nub centres on the rail's inner (left) boundary"
+      "describes": "the thread overlay OPEN in RTL: the rail + nub flip right, the overlay reserves space on the right, and the sidebar + nub stay visible (no overlap)"
     },
     {
       "file": "overlay-dark.png",
-      "sha256": "3aa2ae40511b1f16edee6971e0ec0412b0755bf2f703e8fa8c0bebbb42f98312",
+      "sha256": "cd5ef65007558fabb8939e2bdd40381cad25a24d1558cccbe30101d6941e3011",
       "bytes": 51227,
-      "describes": "the thread overlay OPEN in the charcoal theme: the nub keeps a visible border + the overlay stays legible"
+      "describes": "the thread overlay OPEN in the midnight (Charcoal) theme: dark bg + light text on sidebar + overlay, nub keeps a visible border"
     }
   ],
   "tests": {
-    "test:ui": "56/56 pass",
+    "test:ui": "62/62 pass",
     "test:components": "34/34 pass",
-    "npm test (deno test -A tests/)": "330/330 pass",
-    "build assertion": "no test controls/oracles in 62 shipped JS files (acorn AST export + oracle walk: export declarations/lists/aliases/default + window/self/globalThis __* access, excluding __zod_*/__vite_*)"
+    "npm test (deno test -A tests/)": "342/342 pass",
+    "test:security": "7/7 pass",
+    "test:chrome": "119/119 pass",
+    "build assertion": "no test controls/oracles in 62 shipped JS files (acorn AST export + oracle walk, __zod/__vite exemption scoped to generated bundles)"
   },
   "verified": [
     "exactly five rail actions exist + share one centre (\u22642px spread) + uniform 34\u00d734",
@@ -60,6 +62,6 @@
   ],
   "limitations": [
     "A storage-GRANTED durable round-trip across a SERVICE-WORKER restart is NOT exercised by the integration harness: the optional storage permission requires a headed owner gesture (chrome.permissions.request) that a headless profile cannot grant. The durable WRITE path itself is unit-tested (kvSet returns 'durable' when the backend is present + healthy, and throws StorageBackendError when the backend write fails).",
-    "The error durability state is exercised by calling the production pure renderer (lib/durability-ui.js) directly on the real element — there is deliberately no shipped fault global/route to force a backend write failure in the browser (the reviewer's no-shipped-fault-seam requirement). The backend-failure REJECT path is unit-tested at the KV level."
+    "The error durability state is exercised by calling the production pure renderer (lib/durability-ui.js) directly on the real element \u2014 there is deliberately no shipped fault global/route to force a backend write failure in the browser (the reviewer's no-shipped-fault-seam requirement). The backend-failure REJECT path is unit-tested at the KV level."
   ]
 }
