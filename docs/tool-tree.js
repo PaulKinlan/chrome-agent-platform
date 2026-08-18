@@ -184,7 +184,11 @@ export function buildTree(value, opts = {}) {
  * Cycle-vs-alias: only an ANCESTOR is "[cyclic]" — shared refs serialize in
  * full each time they are reached.
  */
-const SECRET_KEY = /^(api[_-]?key|apikey|credential|credentials|bearer|access[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|token|secret|password|passwd|authorization|client[_-]?secret|private[_-]?key)$/i;
+// The CANONICAL secret-key matcher (shared with lib/pure.js — one semantic,
+// never a divergent anchored copy): any key matching it is redacted before it
+// reaches the UI/serializer or a truncation preview.
+import { SECRET_KEY_RE } from "./pure.js";
+const SECRET_KEY = SECRET_KEY_RE;
 
 /** The smallest maxBytes the serializer can honor (the fixed envelope + a
  * preview must fit) — a smaller cap is a caller contract violation (RangeError),
@@ -264,7 +268,20 @@ export function safeJsonStringify(value, opts = {}) {
     return '"[value]"';
   };
 
-  if (typeof value === "string") return esc(value); // a VALID JSON string literal
+  if (typeof value === "string") {
+    // a VALID JSON string literal — BOUNDED to maxBytes (a huge root string
+    // must never exceed the cap): shrink the string (byte-aware) until the
+    // escaped output fits; an impossible cap yields the minimal envelope.
+    let str = value.length > maxString ? value.slice(0, maxString - 1) + "…" : value;
+    let jsonStr = esc(str);
+    let guard = 0;
+    while (encoder.encode(jsonStr).length > maxBytes && str.length > 1 && guard++ < 32) {
+      str = str.slice(0, Math.max(1, Math.floor(str.length / 2)));
+      jsonStr = esc(str);
+    }
+    if (encoder.encode(jsonStr).length > maxBytes) return '{"__gvs_truncated__":true}';
+    return jsonStr;
+  }
   let json = visit(value, 0, new Set()) ?? '"[unserializable]"';
   const bytes = encoder.encode(json);
   if (bytes.length > maxBytes) {

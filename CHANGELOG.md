@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.87] — 2026-08-18
+- fix(tool-calls): successor acceptance — byte-bound root strings, canonical redaction, delegation unwrap, no [object Object], complete external evidence
+
 ## [0.2.86] — 2026-08-18
 - fix(tool-calls): frozen-tip acceptance — JSON-string contract, tiny-cap RangeError, canonical redaction, immutable callIds, per-run returned outcome, external evidence
 

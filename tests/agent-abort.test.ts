@@ -147,3 +147,39 @@ Deno.test("agent-abort: QUEUED concurrent runs — run 1's abort never corrupts 
   assert(out2.aborted === false, "run 2 (queued behind the abort) is NOT aborted");
   assert(typeof out2.text === "string" && out2.text.length > 0, "run 2 still produced its result");
 });
+
+// ── the successor review: delegation unwraps {text, aborted} → string + failure ──
+
+Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string result + aborted → failed delegation", async () => {
+  const events = [];
+  const worker = createAgent({
+    model: { model: slowModel(400), modelId: "demo-local", providerName: "demo" },
+    id: "site-worker", name: "site-worker", system: "sys", memory: fakeMemory(), taskId: "t",
+    onProgress: (ev) => events.push(ev?.type),
+  });
+  // a normal delegated run → the outcome unwraps to a STRING (the contract the
+  // chrome-journeys assert)
+  const out1 = await worker.run("hello", "", []);
+  const result1 = (out1 && typeof out1 === "object" && typeof out1.text === "string") ? out1.text : out1;
+  assert(typeof result1 === "string" && result1.length > 0, "the delegation result is a string");
+  assert(out1.aborted === false, "the outcome is not aborted");
+  // an ABORTED delegated run → the SW maps it to a FAILED delegation (a FRESH
+  // worker so the slow-model delay is in flight for the abort)
+  const events2 = [];
+  const worker2 = createAgent({
+    model: { model: slowModel(400), modelId: "demo-local", providerName: "demo" },
+    id: "site-worker-2", name: "site-worker-2", system: "sys", memory: fakeMemory(), taskId: "t2",
+    onProgress: (ev) => events2.push(ev?.type),
+  });
+  const runP = worker2.run("run @demo-tools please", "", []);
+  const t0 = Date.now();
+  while (!events2.includes("thinking")) { if (Date.now() - t0 > 5000) throw new Error("never started"); await sleep(5); }
+  await sleep(60);
+  worker2.abort();
+  const out2 = await runP;
+  const delegatedResponse = (out2?.aborted === true)
+    ? { ok: false, aborted: true, error: "delegation aborted", errorCategory: "aborted" }
+    : { ok: true, result: String(out2) };
+  assertEquals(delegatedResponse.ok, false, "an aborted delegation FAILS");
+  assertEquals(delegatedResponse.aborted, true, "the abort is propagated");
+});

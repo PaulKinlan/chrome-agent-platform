@@ -151,14 +151,16 @@ export async function loadJournal() {
  * "[object Object]" (the wider-goal review's finding): objects/arrays become
  * bounded JSON; strings pass through; anything else is String()'d. Bounded to
  * keep a huge result from blowing up the DOM. */
-function safeToolResult(value) {
+export function safeToolResult(value) {
   if (value == null) return "";
   if (typeof value === "string") return value;
+  // Route hostile/cyclic objects through the BOUNDED safe serializer — never
+  // a raw String(object) "[object Object]" in a live tool result.
   try {
-    const s = JSON.stringify(value);
-    if (typeof s === "string") return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
-  } catch { /* fall through */ }
-  return String(value);
+    return safeJsonStringify(value, { maxBytes: 2000, maxNodes: 50, maxString: 400 });
+  } catch {
+    return '"[unserializable value]"';
+  }
 }
 
 /** A per-run client id so the live progress listener renders ONLY its own run

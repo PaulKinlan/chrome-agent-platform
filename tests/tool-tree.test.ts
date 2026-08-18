@@ -396,3 +396,41 @@ Deno.test("tool-tree: canonical credential keys (credential/bearer/accessKey/acc
   assertEquals(parsed.ok, 1);
   assert(!out.includes("c1") && !out.includes("b1") && !out.includes("ak1") && !out.includes("ak2"), "no secret value reaches the output");
 });
+
+// ── the successor review: root-string byte caps + canonical matcher aliases ──
+
+Deno.test("tool-tree: ROOT STRINGS are byte-bounded for every supported maxBytes (huge ASCII/non-ASCII/escaping)", () => {
+  const cases = [
+    ["x".repeat(1000), 64],
+    ["日本語".repeat(500), 64],
+    ["quote\"back\\slash\"".repeat(200), 128],
+    ["x".repeat(5000), 200],
+    ["mixed ünïçødé \\\" quotes".repeat(300), 100],
+  ];
+  for (const [s, mb] of cases) {
+    const out = safeJsonStringify(s, { maxBytes: mb });
+    const bytes = new TextEncoder().encode(out).length;
+    let parsed;
+    try { parsed = JSON.parse(out); } catch (e) { throw new Error(`mb=${mb}: invalid JSON — ${e.message}`); }
+    assert(bytes <= mb, `mb=${mb}: root string output is ${bytes} bytes (over the cap)`);
+    assert(typeof parsed === "string" || parsed.__gvs_truncated__ === true, "the result is a JSON string or the minimal envelope");
+  }
+});
+
+Deno.test("tool-tree: redaction uses the CANONICAL matcher — exhaustive aliases incl x-api-key", () => {
+  const payload = {
+    api_key: "1", apikey: "2", token: "3", secret: "4", password: "5", authorization: "6",
+    credential: "7", bearer: "8", access_key: "9", accesskey: "10", "x-api-key": "11",
+    ok: 1, label: "keep",
+  };
+  const out = safeJsonStringify(payload);
+  const parsed = JSON.parse(out);
+  for (const k of ["api_key", "apikey", "token", "secret", "password", "authorization", "credential", "bearer", "access_key", "accesskey", "x-api-key"]) {
+    assertEquals(parsed[k], "[redacted]", `${k} is redacted`);
+  }
+  assertEquals(parsed.ok, 1);
+  assertEquals(parsed.label, "keep");
+  for (const v of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]) {
+    assert(!out.includes(":" + JSON.stringify(v)), `the secret value ${v} never reaches the output`);
+  }
+});

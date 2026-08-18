@@ -260,3 +260,17 @@ Deno.test("tool-lifecycle: the pair outputs the ORIGINAL immutable callId (never
   ]);
   assertEquals(round2.callId, pair.callId, "the id is IMMUTABLE across a reload round-trip");
 });
+
+// ── the successor review: hostile tool results never become [object Object] ──
+
+Deno.test("tool-lifecycle: a CYCLIC/hostile tool result never renders [object Object]", async () => {
+  const { safeToolResult } = await import("../extension/shared/conversation.js?t=" + Math.random());
+  const cyclic = { n: 1 };
+  cyclic.self = cyclic;
+  const out = safeToolResult(cyclic);
+  assert(!out.includes("[object Object]"), "no [object Object] fallback");
+  assert(typeof out === "string" && out.length > 0, "a readable bounded serialization");
+  const hostile = { get toJSON() { throw new Error("x"); } };
+  const out2 = safeToolResult(hostile);
+  assert(!out2.includes("[object Object]"), "no [object Object] for a hostile object");
+});

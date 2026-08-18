@@ -2785,7 +2785,7 @@ const handlers = {
     if (runAborted()) {
       return { ok: false, error: "run aborted — delegation not started" };
     }
-    const result = await withRunLock(async () => {
+    const outcome = await withRunLock(async () => {
       if (runAborted()) {
         throw new Error("run aborted — delegation not started");
       }
@@ -2804,6 +2804,11 @@ const handlers = {
       // delete→re-enroll lets a stale run write into the new enrollment).
       return await a.run(task, "", [], gen);
     });
+    // The worker's PER-RUN outcome: unwrap the text for the string contract +
+    // map an aborted delegation to a FAILED delegation (never a success with an
+    // object result).
+    const delegatedAborted = !!(outcome && typeof outcome === "object" && outcome.aborted === true);
+    const result = (outcome && typeof outcome === "object" && typeof outcome.text === "string") ? outcome.text : outcome;
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the
     // journalAppend and resurrect the tombstoned directory (the round-16
@@ -2844,7 +2849,9 @@ const handlers = {
           );
         }
       });
-      return { ok: true, origin: canonical, result };
+      return delegatedAborted
+        ? { ok: false, aborted: true, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted" }
+        : { ok: true, origin: canonical, result };
     });
   },
   async "agent.listAll"() {

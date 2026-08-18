@@ -9,7 +9,7 @@
 // Wired into `npm run build` (build.mjs) so every build re-syncs, and into
 // `npm run check:gallery` + the component-gallery smoke test as a drift guard.
 
-import { readFile, copyFile } from "node:fs/promises";
+import { readFile, copyFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 // src (canonical) → dst (generated deploy copy), both relative to the repo root.
@@ -18,6 +18,8 @@ const FILES = [
   ["extension/shared/theme.css", "docs/theme.css"],
   ["extension/shared/agent-candidates.js", "docs/agent-candidates.js"],
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
+  // the canonical secret matcher (tool-tree.js imports it — the gallery must resolve it)
+  ["extension/lib/pure.js", "docs/pure.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -35,6 +37,13 @@ export async function syncGallery({ check = false } = {}) {
       }
     } else {
       await copyFile(srcUrl, dstUrl);
+      // The gallery sits one directory shallower than extension/shared/, so a
+      // components/tool-tree import of "../lib/..." must resolve to the synced
+      // docs copy (./pure.js) — never a broken ../lib/pure.js.
+      if (dst === "docs/tool-tree.js") {
+        const txt = await readFile(dstUrl, "utf8");
+        await writeFile(dstUrl, txt.replace('../lib/pure.js', './pure.js'));
+      }
       console.log(`synced ${dst} ← ${src}`);
     }
   }

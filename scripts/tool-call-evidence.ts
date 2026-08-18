@@ -617,12 +617,43 @@ async function main() {
         checks: `${pass}/${pass + fail}`,
         screenshots: ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"],
       };
-      // the EXTERNAL evidence artifact (CI/review, never committed): the
-      // manifest + the FULL execution transcript (every assertion name+result)
+      // the EXTERNAL evidence artifact (CI/review, never committed): the 7
+      // screenshots + the manifest + the FULL execution transcript + a
+      // metadata file (full SHA, clean git status, the exact command, the
+      // assertion/script hash, tool versions)
       await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
+      for (const shot of ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"]) {
+        try { await Deno.copyFile(`${EVIDENCE_DIR}/${shot}`, `${EVIDENCE_OUT}/${shot}`); } catch { /* absent in raw mode */ }
+      }
       await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
+      // the metadata: exact command, clean status, script hash, tool versions
+      let cleanStatus = "unknown";
+      try {
+        const st = new Deno.Command("git", { args: ["status", "--porcelain=v1"], stdout: "piped", stderr: "null" }).outputSync();
+        cleanStatus = new TextDecoder().decode(st.stdout).trim() === "" ? "clean" : "DIRTY: " + new TextDecoder().decode(st.stdout).trim();
+      } catch { /* git unavailable */ }
+      let scriptHash = "unknown";
+      try { scriptHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await Deno.readFile(new URL(import.meta.url).pathname)))].map((b) => b.toString(16).padStart(2, "0")).join(""); } catch { /* ignore */ }
+      let denoVersion = "unknown", chromiumVersion = "unknown";
+      try { denoVersion = Deno.version.deno; } catch { /* ignore */ }
+      try {
+        const ch = new Deno.Command("chromium", { args: ["--version"], stdout: "piped", stderr: "null" }).outputSync();
+        chromiumVersion = new TextDecoder().decode(ch.stdout).trim();
+      } catch { /* ignore */ }
+      const meta = {
+        commit: head,
+        generated: new Date().toISOString(),
+        mode: MODE,
+        checks: `${pass}/${pass + fail}`,
+        gitStatus: cleanStatus,
+        command: `GVS_EVIDENCE_OUT=${EVIDENCE_OUT} deno run -A scripts/tool-call-evidence.ts --mode=${MODE}`,
+        scriptSha256: scriptHash,
+        denoVersion,
+        chromiumVersion,
+      };
+      await Deno.writeTextFile(`${EVIDENCE_OUT}/metadata.json`, JSON.stringify(meta, null, 2) + "\n");
       console.log("manifest HEAD:", head, `(${pass}/${pass + fail}) → ${EVIDENCE_OUT}`);
     } catch { /* git unavailable */ }
 
