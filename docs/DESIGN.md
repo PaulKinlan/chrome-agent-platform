@@ -36,9 +36,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - SVG line-art icons, one stroke weight, currentColor. No emoji.
 - Capability rows: `28px | 1fr | auto` grid (icon | stacked name+description |
   right-aligned action) — aligned by construction.
-- `<agent-picker>` (2026-08-18) — the ONE agent picker (side panel, every
-  composer's + menu, the /agent command's data): grouped Named/Background/Site
-  rows (28px avatar | name+role | status), 44px option targets, a search
+- `<agent-picker>` (2026-08-18) — the ONE agent picker renderer used by the side
+  panel, every composer's + menu, and the strict-position `/agent` command:
+  grouped Named/Background/Site rows (28px avatar | name+role | status), 44px
+  option targets, a search
   combobox → grouped listbox contract, explicit empty/loading/error states,
   popover top-layer presentation anchored with logical `position-area` +
   `position-try-fallbacks` (JS `placeFloating` fallback). The selected agent

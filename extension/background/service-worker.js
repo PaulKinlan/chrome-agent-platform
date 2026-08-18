@@ -328,11 +328,17 @@ function broadcastProgress(event) {
   }
 }
 // The unified agent registry changed (a named agent created/renamed/deleted, a
-// background agent enabled/disabled, a site agent enrolled/removed). The shared
-// <agent-picker> + the surfaces hosting it re-fetch `agent.registry` on this
-// event so every view updates live without duplicating registry state.
+// background agent enabled/disabled/duplicated/updated/deleted, a site agent
+// enrolled/removed). The shared <agent-picker> + the surfaces hosting it
+// re-fetch `agent.registry` on this event so every view updates live without
+// duplicating registry state. The REVISION is a monotonic per-worker counter
+// seeded from the wall clock (rather than restarting from a small sequence):
+// every registry response + broadcast carries it, and consumers fence stale
+// reads with it (a late older snapshot never regresses the UI).
+let registryRevision = Date.now();
 function broadcastRegistryChanged() {
-  broadcastProgress({ type: "agent-registry-changed" });
+  registryRevision += 1;
+  broadcastProgress({ type: "agent-registry-changed", revision: registryRevision });
 }
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-progress") return;
@@ -1895,7 +1901,8 @@ const handlers = {
   // no credentials, and site agents expose only the origin + tool NAMES — never
   // provider keys, internal OPFS paths, or master-only operations. The `ref` is
   // the canonical, unambiguous agent id (`named:<id>` / `background:<id>` /
-  // `site:<origin>`) that flows composer → run request.
+  // `site:<origin>`) that flows composer → run request. The `revision` is the
+  // registry's monotonic version — the consumers fence stale reads with it.
   async "agent.registry"() {
     const [named, tasks, custom, origins] = await Promise.all([
       listNamedAgents().catch(() => []),
@@ -1930,6 +1937,7 @@ const handlers = {
     }
     return {
       ok: true,
+      revision: registryRevision,
       groups: [
         {
           id: "named",
@@ -2051,6 +2059,32 @@ const handlers = {
       toolCount: info?.toolCount ?? 0,
       memoryKeys: info?.memoryKeys ?? [],
     };
+  },
+  // The ONE navigation authority for the side panel's page view. The panel
+  // itself NEVER calls chrome.tabs.create — the open request crosses THIS
+  // sender-authenticated dispatcher (a content-script sender is denied by the
+  // page-route allowlist; only trusted extension-page code can reach here).
+  // The extension page must also attest a CURRENT owner activation: the panel's
+  // button/Enter path sets it synchronously, while an agent-opened panel cannot
+  // turn its stored target into a tab mutation. http(s) only, validated here —
+  // never a message-supplied javascript:/data: URL.
+  async "sidepanel.openPage"({ url, ownerGesture = false }) {
+    if (ownerGesture !== true) {
+      return { ok: false, error: "opening a page requires an owner gesture" };
+    }
+    const raw = String(url ?? "").trim();
+    if (!raw) return { ok: false, error: "url is required" };
+    let parsed;
+    try {
+      parsed = new URL(/^https?:\/\//.test(raw) ? raw : `https://${raw}`);
+    } catch {
+      return { ok: false, error: "invalid URL" };
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { ok: false, error: "only http(s) pages can be opened" };
+    }
+    const tab = await chrome.tabs.create({ url: parsed.href });
+    return { ok: true, tabId: tab?.id ?? null, url: parsed.href, origin: parsed.origin };
   },
 
   async "skills.set"({ origin, skills }) {
@@ -2265,7 +2299,12 @@ const handlers = {
     // required an authoritative cancel route, not just a reconcile-side skip).
     const name = String(m?.name ?? "");
     if (!name) return { ok: false, error: "task name is required" };
-    return await cancelScheduledTask(name);
+    const r = await cancelScheduledTask(name);
+    // Cancelling a recipe:<id> schedule DISABLES that background agent in the
+    // live registry (the enabled state derives from the schedule store) —
+    // broadcast so the pickers/conversations revalidate.
+    if (r?.ok !== false && name.startsWith("recipe:")) broadcastRegistryChanged();
+    return r;
   },
 
   async "recipe.list"() {
@@ -2387,6 +2426,9 @@ const handlers = {
     };
     custom.push(copy);
     await masterMemory().set("customRecipes", custom);
+    // A duplicated recipe ENTERS the live registry (a new background agent) —
+    // broadcast so every picker/slash surface updates live.
+    broadcastRegistryChanged();
     return { ok: true, recipe: copy };
   },
   async "recipe.update"({ id, prompt, name, description }) {
@@ -2397,6 +2439,8 @@ const handlers = {
     if (name !== undefined) custom[idx].name = String(name);
     if (description !== undefined) custom[idx].description = String(description);
     await masterMemory().set("customRecipes", custom);
+    // A rename/description edit mutates the live registry entry — broadcast.
+    broadcastRegistryChanged();
     return { ok: true, recipe: custom[idx] };
   },
   async "recipe.delete"({ id }) {
@@ -2404,6 +2448,10 @@ const handlers = {
     const next = custom.filter((r) => r.id !== id);
     await masterMemory().set("customRecipes", next);
     await cancelScheduledTask(`recipe:${id}`).catch(() => ({ ok: false }));
+    // The deleted custom recipe LEAVES the live registry — broadcast so the
+    // open pickers/conversations revalidate (a selected deleted agent is
+    // rejected, never routed to a ghost).
+    broadcastRegistryChanged();
     return { ok: true };
   },
 

@@ -18,6 +18,7 @@ const FILES = [
   ["extension/shared/theme.css", "docs/theme.css"],
   ["extension/shared/agent-candidates.js", "docs/agent-candidates.js"],
   ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
+  ["extension/shared/command-parser.js", "docs/command-parser.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {

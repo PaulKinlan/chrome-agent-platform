@@ -52,6 +52,26 @@ export function findAgentByRef(groups = [], ref) {
   return null;
 }
 
+/** Decide whether an async registry response is safe to apply.
+ * Both fences are required: only the latest request may win, and a response
+ * carrying a lower service-worker revision may never replace a newer snapshot.
+ * Missing revisions remain compatible with older/static registries; request
+ * ordering still fences them. Exported so the race contract is unit-testable. */
+export function shouldApplyRegistrySnapshot(
+  requestSeq,
+  latestRequestSeq,
+  responseRevision,
+  appliedRevision,
+) {
+  if (requestSeq !== latestRequestSeq) return false;
+  const response = Number(responseRevision);
+  const applied = Number(appliedRevision);
+  if (Number.isFinite(response) && appliedRevision != null && Number.isFinite(applied)) {
+    return response >= applied;
+  }
+  return true;
+}
+
 /** Is this agent currently callable? (A disabled background agent is visible
  * in browse views but is NOT callable — matching the /agent command rule.) */
 export function isCallable(agent) {
@@ -95,8 +115,10 @@ export function filterGroups(groups = [], query = "", opts = {}) {
  *   ref       — the canonical routing ref (named:<id> / background:<id> / site:<origin>)
  *   kind      — named | background | site
  *   agentId   — the bare id (slug / recipe id / origin)
- *   id        — the TEXTUAL reference inserted by the / command (`agent:<agentId>`,
- *               the existing grammar the master agent understands)
+ *   id        — the TEXTUAL reference inserted by the / command:
+ *               `agent:<canonical-ref>` (e.g. `agent:named:reader`), so the
+ *               inserted `/agent:…` text is the UNAMBIGUOUS canonical form —
+ *               never a bare id that could collide across kinds.
  *   label     — the display name
  *   description — role / status / tool summary
  *   group     — the group label (for grouped rendering)
@@ -112,7 +134,7 @@ export function candidatesFromGroups(groups = [], opts = {}) {
         ref,
         kind: a.kind,
         agentId: a.id,
-        id: `agent:${a.id}`,
+        id: `agent:${ref}`, // the canonical textual form (agent:named:<id>…)
         label: a.name || a.id,
         description: a.summary || "",
         avatar: a.avatar || null,

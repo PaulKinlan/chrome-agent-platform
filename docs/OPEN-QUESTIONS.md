@@ -10,11 +10,9 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 4. **Memory persistence** — RESOLVED: origin-keyed OPFS (per-origin, one site can never read another). A sync/export (cloud backup) path is a FUTURE option, not in scope now.
 5. **MHTML vs screenshots** — RESOLVED: both. Screenshots for the chat strip; MHTML for full-page archives, kept until the user deletes. (Paul decided.)
 6. **WASM tool integration** — RESOLVED (direction): start with the WebMCP (window.*) tool inference + approval flow. A minimal WASM tool set with an owner upload mechanism is a FUTURE option (the wasm-vs-js work informs it).
+8. **co-do double-iframe generative UI** — RESOLVED (built): generated HTML artifacts render inside the sandboxed double-iframe with CSP/network and navigation guards.
 
 ## Open
 
 7. **Extension name/packaging** — "Chrome Agent Platform" is a placeholder. Rename + package for distribution later (low priority; decide before any public release).
-
-## New open questions (from the wider-goal work)
-8. **co-do double-iframe generative UI** — the full generative-UI surface (the agent generates HTML artifacts rendered in a sandboxed double-iframe) is queued. Scope + priority?
 9. **The model for the hub** — Gemini Nano is weak for tool-calling; which provider should be the recommended default for the best experience?

@@ -60,10 +60,12 @@ and access to them from every surface:
    background-agent.run, site → agent.delegate — each with its OWN OPFS
    sandbox). A stale (deleted/disabled) selection is rejected at send and on
    the registry broadcast.
-5. **`/agent` + `/agent:query`** — the same grouped/filtering data UI in the
-   composer popup. Committing inserts the canonical textual reference exactly
-   once AND selects the agent chip (the message routes to that agent). Escape
-   closes/reverts; URLs and ordinary text containing "/agent:" are untouched.
+5. **`/agent` + `/agent:query`** — the composer opens the SAME shared
+   `<agent-picker>` renderer as the + menu (not a parallel popup). A slash
+   command is recognized only at input index 0; ordinary prose, URLs, and a
+   leading-space `/agent:` remain text. Committing inserts the canonical
+   textual reference exactly once AND selects the agent chip; Escape keeps the
+   typed text and commits nothing.
 
 **The @mention vs /agent distinction.** `@` inserts an INLINE reference inside
 a task for the MASTER agent (mention several agents/skills/artifacts; the

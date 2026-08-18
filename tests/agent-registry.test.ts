@@ -13,6 +13,7 @@ import {
   flattenGroups,
   isCallable,
   parseAgentRef,
+  shouldApplyRegistrySnapshot,
 } from "../extension/shared/agent-registry.js";
 import { assertEquals } from "jsr:@std/assert@1";
 
@@ -74,6 +75,17 @@ Deno.test("findAgentByRef resolves a live agent and exposes a stale one", () => 
   assertEquals(findAgentByRef(groups, "background:no-such"), null);
 });
 
+Deno.test("shouldApplyRegistrySnapshot fences request-order and revision races", () => {
+  // A late response from an older request can never overwrite the latest one.
+  assertEquals(shouldApplyRegistrySnapshot(4, 5, 12, 11), false);
+  // Even the latest request cannot regress to a lower SW revision.
+  assertEquals(shouldApplyRegistrySnapshot(5, 5, 10, 11), false);
+  assertEquals(shouldApplyRegistrySnapshot(5, 5, 11, 11), true);
+  assertEquals(shouldApplyRegistrySnapshot(5, 5, 12, 11), true);
+  // Legacy/static responses without a revision still use request ordering.
+  assertEquals(shouldApplyRegistrySnapshot(5, 5, undefined, 11), true);
+});
+
 Deno.test("isCallable: only ENABLED background agents are callable", () => {
   assertEquals(isCallable(groups[1].agents[0]), true); // enabled
   assertEquals(isCallable(groups[1].agents[1]), false); // disabled
@@ -107,7 +119,9 @@ Deno.test("candidatesFromGroups: picker/slash items carry the canonical ref + gr
   const items = candidatesFromGroups(groups, {});
   assertEquals(items.length, 4); // callableOnly defaults to true
   const reader = items.find((i) => i.ref === "named:reader");
-  assertEquals(reader.id, "agent:reader"); // the textual / command reference
+  // The textual / command reference is the UNAMBIGUOUS canonical form
+  // (`agent:<canonical-ref>`) — never a bare id that collides across kinds.
+  assertEquals(reader.id, "agent:named:reader");
   assertEquals(reader.kind, "named");
   assertEquals(reader.group, "Named agents");
   assertEquals(reader.label, "Reader");

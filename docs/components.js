@@ -14,11 +14,12 @@
 
 import {
   canonicalRef,
-  candidatesFromGroups,
   filterGroups,
   findAgentByRef,
   flattenGroups,
+  shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
+import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -456,20 +457,12 @@ async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKin
         .filter((r) => matches(r.name) || matches(r.id))
         .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
     }
-    case "agent": {
-      // The /agent command consumes the ONE redacted live registry (the
-      // `agent.registry` route) through the same grouping/filtering helpers as
-      // the shared <agent-picker> — the slash list and the picker can never
-      // drift. Only the callable agents are listed (enabled background +
-      // created named + enrolled site), the current agent excluded.
-      const res = RUNTIME_SEND ? await RUNTIME_SEND("agent.registry").catch(() => null) : null;
-      if (!res || res.ok === false || !Array.isArray(res.groups)) return [];
-      return candidatesFromGroups(res.groups, {
-        query: arg,
-        callableOnly: true,
-        excludeId: currentAgentId,
-      });
-    }
+    case "agent":
+      // The /agent sub-items are NOT rendered here: /agent opens the ONE shared
+      // <agent-picker> (see AgentComposer._openSlashAgentPicker), so the slash
+      // list and every other picker surface share the single renderer + a11y
+      // contract and can never drift.
+      return [];
     case "model": {
       const res = RUNTIME_SEND ? await RUNTIME_SEND("provider.models").catch(() => ({})) : {};
       return (res.choices || [])
@@ -1897,11 +1890,22 @@ class AgentComposer extends Component {
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
+    this._slashAgentToken = null; // { start, end } while /agent: drives the picker
   }
   _wire() {
     this._run?.addEventListener("click", () => this._send());
     this._input?.addEventListener("input", () => this._onComposerInput());
     this._input?.addEventListener("keydown", (e) => {
+      // The /agent slash picker: the composer text is the query source, so the
+      // navigation keys are FORWARDED to the shared <agent-picker> (its one
+      // keyboard contract) while ordinary typing flows through the input event.
+      if (this._slashAgentToken) {
+        if (["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab", "Escape"].includes(e.key)) {
+          e.preventDefault();
+          this._agentPick?.navigate?.(e.key);
+        }
+        return;
+      }
       if (this._popupOpen) {
         if (e.key === "ArrowDown") { e.preventDefault(); this._moveSelection(1); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); this._moveSelection(-1); return; }
@@ -1933,12 +1937,21 @@ class AgentComposer extends Component {
     // popover anchored to the + button.
     this._attach?.addEventListener("choose-agent", () => this._openAgentPicker());
     this._agentPick?.addEventListener("agent-select", (e) => {
-      this._closeAgentPicker(false);
-      this._setSelectedAgent(e.detail ?? {});
+      const detail = e.detail ?? {};
+      // Slash mode: replace the /agent:… token with the CANONICAL textual
+      // reference (/agent:named:<id> — never the ambiguous bare-id form).
+      const token = this._slashAgentToken;
+      this._closeAgentPicker(token ? "input" : false);
+      if (token && this._input && detail.ref) {
+        this._input.setRangeText(`/agent:${detail.ref}`, token.start, token.end, "end");
+      }
+      this._setSelectedAgent(detail);
       this._input?.focus();
     });
     this._agentPick?.addEventListener("agent-cancel", () => {
-      this._closeAgentPicker(true);
+      // Escape: close + revert — the typed text stays, nothing commits; focus
+      // returns to the input in slash mode, to the + trigger otherwise.
+      this._closeAgentPicker(this._slashAgentToken ? "input" : true);
     });
   }
 
@@ -2030,7 +2043,32 @@ class AgentComposer extends Component {
 
   // ── the Choose agent popover (manual popover, top layer; anchored to the +
   //    button via CSS anchor positioning with the placeFloating JS fallback) ──
+  //    ONE popover + ONE <agent-picker> instance serves both entry points:
+  //    the + menu's "Choose agent" (chip only) and the /agent: slash command
+  //    (chip + the canonical textual reference inserted). `this._slashAgentToken`
+  //    is null in + menu mode and { start, end } in slash mode.
   _openAgentPicker() {
+    this._slashAgentToken = null; // the + menu flow never rewrites the text
+    this._presentAgentPopover();
+    this._agentPick?.focusSearch?.();
+  }
+
+  /** /agent[:query] — the SAME shared picker + popover as the + menu, driven
+   * by the composer text: the typed arg is synced into the picker's query on
+   * every keystroke; the navigation keys are forwarded (the keydown handler);
+   * the text stays put until a commit replaces the token with the canonical
+   * /agent:<kind>:<id> reference (Escape reverts, nothing commits). */
+  _openSlashAgentPicker(token) {
+    const reopen = !this._slashAgentToken;
+    this._slashAgentToken = { start: token.start, end: token.end };
+    if (reopen) this._presentAgentPopover();
+    this._input?.setAttribute("aria-expanded", "true");
+    // The typed arg filters the picker; the composer input KEEPS focus so the
+    // user can keep typing the reference (or a space to end the token).
+    this._agentPick?.setQuery?.(token.arg || "");
+  }
+
+  _presentAgentPopover() {
     if (!this._agentPop || !this._agentPick) return;
     if (this._selectedAgent) this._agentPick.setAttribute("selected", this._selectedAgent.ref);
     else this._agentPick.removeAttribute("selected");
@@ -2043,7 +2081,6 @@ class AgentComposer extends Component {
     }
     // Live data on every open (the SW registry is the authority).
     this._agentPick.refresh?.();
-    this._agentPick.focusSearch?.();
     this._agentDocClose = (e) => {
       if (!this._agentPop.contains(e.target) && !this._attach?.contains(e.target)) {
         this._closeAgentPicker(false);
@@ -2051,7 +2088,11 @@ class AgentComposer extends Component {
     };
     document.addEventListener("pointerdown", this._agentDocClose);
   }
+
+  /** Close the picker popover. `returnFocus`: "input" refocuses the composer
+   *  (the slash flow), true refocuses the + trigger, false moves no focus. */
   _closeAgentPicker(returnFocus) {
+    this._slashAgentToken = null;
     if (this._agentDocClose) {
       document.removeEventListener("pointerdown", this._agentDocClose);
       this._agentDocClose = null;
@@ -2061,7 +2102,12 @@ class AgentComposer extends Component {
       try { this._agentPop.hidePopover(); } catch { /* already hidden */ }
     }
     this._agentPop.hidden = true;
-    if (returnFocus) {
+    // The slash picker's aria-expanded is owned here (the items popup manages
+    // its own via _showPopup/_hidePopup).
+    if (this._popup?.hidden) this._input?.setAttribute("aria-expanded", "false");
+    if (returnFocus === "input") {
+      this._input?.focus();
+    } else if (returnFocus) {
       // Focus returns to the + button (the trigger), falling back to the input.
       const plus = this._attach?.shadowRoot?.querySelector?.(".plus");
       (plus ?? this._input)?.focus?.();
@@ -2319,16 +2365,32 @@ class AgentComposer extends Component {
     if (!input) return;
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
-    const before = text.slice(0, caret);
 
-    // / command — a slash beginning the current token.
-    const slash = before.match(/(?:^|\s)\/([a-z]*)(?::([a-z0-9._ -]*))?$/i);
+    // / command — STRICT command position only (shared/command-parser.js): the
+    // "/" must be the FIRST character of the input and the token up to the
+    // caret must be whitespace-free. Ordinary prose ("please inspect
+    // /agent:pr"), URLs ("https://example.com/agent:foo"), and a leading-space
+    // " /agent" NEVER open the command UI (the review's free-text false
+    // positive); the token ends at the first space, so the task text after
+    // "/agent:<ref> " is plain text again.
+    const slash = parseSlashCommand(text, caret);
+    if (slash && slash.hasColon && slash.ns === "agent") {
+      // /agent[:query] — the ONE shared <agent-picker> (the same renderer +
+      // a11y contract as the + menu's Choose agent), driven by the composer
+      // text: the typed arg is the picker's query; Arrow/Home/End/Enter/Tab/
+      // Escape are forwarded to it (see the keydown handler).
+      this._hidePopup();
+      this._openSlashAgentPicker({ start: slash.start, end: slash.end, arg: slash.arg });
+      return;
+    }
+    // Any non-/agent parse result closes the slash picker if it was open (e.g.
+    // the user backspaced over the ":" or typed a space after the token).
+    if (this._slashAgentToken) this._closeAgentPicker(false);
     if (slash) {
-      const slashPos = text[slash.index] === "/" ? slash.index : slash.index + 1;
-      const ns = (slash[1] || "").toLowerCase();
-      const arg = (slash[2] || "").trim();
-      const hasColon = String(slash[0]).includes(":");
-      if (!hasColon) {
+      const slashPos = slash.start;
+      const ns = slash.ns;
+      const arg = slash.arg.trim();
+      if (!slash.hasColon) {
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
         const items = COMMAND_NAMESPACES
@@ -2355,12 +2417,12 @@ class AgentComposer extends Component {
       return;
     }
 
-    // @ mention.
-    const at = before.match(/(?:^|\s)@([^\s@]*)$/);
+    // @ mention — legal anywhere a fresh token begins (a /agent-targeted task
+    // can still mention agents inline); parseMentionToken is the ONE tokenizer.
+    const at = parseMentionToken(text, caret);
     if (at) {
-      const atPos = text[at.index] === "@" ? at.index : at.index + 1;
-      const items = await mentionCandidates(at[1] || "", this._currentAgentId, this._currentAgentKind);
-      this._showPopup(items, { type: "mention", start: atPos, end: caret });
+      const items = await mentionCandidates(at.query, this._currentAgentId, this._currentAgentKind);
+      this._showPopup(items, { type: "mention", start: at.start, end: at.end });
       return;
     }
 
@@ -2449,18 +2511,9 @@ class AgentComposer extends Component {
       // A concrete command item → insert its full reference (with the /).
       input.setRangeText(`/${item.id}`, token.start, token.end, "end");
       this._hidePopup();
-      // Committing an /agent:<…> option ALSO selects that agent (the canonical
-      // chip): the message is routed to it by ID on send (the documented
-      // "/agent:<name> <task> delegates to the agent" semantics). The inserted
-      // text reference remains visible as the display of where it goes.
-      if (item.ns === "agent" && item.ref) {
-        this._setSelectedAgent({
-          ref: item.ref,
-          kind: item.kind,
-          id: item.agentId,
-          name: item.label,
-        });
-      }
+      // NOTE: /agent items never reach this path — /agent: opens the shared
+      // <agent-picker> (_openSlashAgentPicker), whose agent-select handler both
+      // inserts the canonical reference AND selects the agent chip.
       this._emit("command", { namespace: item.ns, item });
       input.focus();
       return;
@@ -2898,8 +2951,9 @@ customElements.define("agent-dialog", AgentDialog);
 
 /* <agent-picker> — THE ONE unified agent picker (CAP-FB-20260818-AGENT-ACCESS-01).
  * Every agent-choosing surface uses THIS component: the side panel's Agents
- * view, every composer's + menu "Choose agent" action, and (through the same
- * registry data + filtering helpers) the /agent slash command.
+ * view, every composer's + menu "Choose agent" action, AND the /agent slash
+ * command (the composer drives this same picker via setQuery + navigate, so
+ * the slash UI shares the one renderer + a11y contract — no parallel popup).
  *
  * Data: consumes the REDACTED live registry. With no `agents` attribute and an
  * extension runtime present, it fetches `agent.registry` itself (the SW is the
@@ -2940,6 +2994,8 @@ class AgentPicker extends Component {
     this._active = -1; // the active option's flat index
     this._flat = []; // the currently-rendered flat option list
     this._countTimer = null;
+    this._fetchSeq = 0; // last-request-wins fence (out-of-order responses)
+    this._appliedRevision = null; // last APPLIED registry revision (staleness fence)
   }
   get _auto() { return !this.hasAttribute("agents") && !!RUNTIME_SEND; }
   get _callableOnly() { return this.hasAttribute("callable-only"); }
@@ -2952,20 +3008,34 @@ class AgentPicker extends Component {
   }
 
   /** Re-fetch the live registry (auto mode). Safe to call on every open +
-   * on the agent-registry-changed broadcast. */
+   * on the agent-registry-changed broadcast. FENCED twice so a rapid mutation
+   * burst can never regress the UI to an older snapshot: (1) only the LATEST
+   * request's response is applied (out-of-order completion is discarded),
+   * (2) a response whose registry `revision` is OLDER than the last applied
+   * one is discarded (a slow stale read never overwrites a fresher one). */
   async refresh() {
     if (!this._auto) { this._renderList(); return; }
-    this._fetchState = "loading";
+    const seq = ++this._fetchSeq;
+    // Keep an already-applied snapshot visible during a live refresh; only the
+    // first load needs the blocking loading state. This also means a rejected
+    // lower-revision response cannot strand a fresher list behind "Loading…".
+    if (this._groups == null) this._fetchState = "loading";
     this._renderList();
     try {
       const res = await RUNTIME_SEND("agent.registry").catch(() => null);
       if (!res || res.ok === false || !Array.isArray(res.groups)) {
         throw new Error(res?.error || "registry unavailable");
       }
+      const rev = Number(res.revision);
+      if (!shouldApplyRegistrySnapshot(seq, this._fetchSeq, rev, this._appliedRevision)) {
+        return; // superseded request or stale revision — keep the fresher snapshot
+      }
       this._groups = res.groups;
+      if (Number.isFinite(rev)) this._appliedRevision = rev;
       this._fetchState = "ready";
       this._fetchError = "";
     } catch (e) {
+      if (seq !== this._fetchSeq) return; // superseded while failing — discard
       this._fetchState = "error";
       this._fetchError = String(e?.message ?? e);
     }
@@ -3199,6 +3269,36 @@ class AgentPicker extends Component {
   focusSearch() { this._search?.focus(); }
   /** Public: the canonical ref of the current selection ("" when none). */
   get value() { return this.getAttribute("selected") || ""; }
+
+  /** Public: set the filter query EXTERNALLY (the /agent slash command drives
+   * the picker from the composer text). The search row mirrors the query; the
+   * first option becomes active so Enter/Tab commits immediately. */
+  setQuery(q) {
+    this._query = String(q ?? "");
+    if (this._search) this._search.value = this._query;
+    this._active = -1;
+    this._renderList();
+    if (this._flat.length) this._setActive(0, { scroll: false });
+  }
+
+  /** Public: handle a navigation key forwarded by a host that KEEPS focus
+   * elsewhere (the /agent slash command forwards the composer keydown). The
+   * same contract as the search input's own keydown: ArrowUp/Down/Home/End
+   * move the active option, Enter/Tab commit, Escape cancels. Returns true
+   * when the key was consumed. */
+  navigate(key) {
+    if (key === "ArrowDown") { this._setActive(this._active + 1); return true; }
+    if (key === "ArrowUp") { this._setActive(this._active - 1); return true; }
+    if (key === "Home") { this._setActive(0); return true; }
+    if (key === "End") { this._setActive(this._flat.length - 1); return true; }
+    if (key === "Enter" || key === "Tab") {
+      if (this._active >= 0 && this._flat[this._active]) { this._commit(this._active); return true; }
+      if (key === "Enter" && this._flat.length === 1) { this._commit(0); return true; }
+      return true; // nothing to commit — still consumed (never a send)
+    }
+    if (key === "Escape") { this._emit("agent-cancel"); return true; }
+    return false;
+  }
 }
 customElements.define("agent-picker", AgentPicker);
 

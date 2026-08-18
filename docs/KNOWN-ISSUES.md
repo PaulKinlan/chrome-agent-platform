@@ -6,7 +6,7 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 
 ## Review process
 - 27 rounds of independent security/correctness review (sol, gpt-5.6-sol) against the Constitution.
-- Current state: **105/105 CDP journeys + 98/98 unit tests green; all permissions optional (manifest permissions = []); no debugger permission; extension loads + works with zero permissions granted.**
+- Current state: **119/119 general Chrome journeys + 333/333 unit tests green; unified agent access adds 88 fixed real-CDP checks with an external commit-bound manifest; all permissions optional (manifest permissions = []); no debugger permission.**
 - The core architecture is confirmed solid (all-optional permissions, enrollment lifecycle, alarm scheduler fencing, screenshot capture, memory/journal CAS).
 - The open findings are deep concurrency edge-cases + acceptance-coverage gaps, NOT basic-functionality bugs.
 
@@ -26,9 +26,11 @@ This tracks the open findings from the ongoing independent review (sol). The rev
   lists) predate `<agent-picker>` and still use `capability-row` — they open
   the same agent surfaces, but a future pass could re-express them as the
   shared picker for full consistency.
-- **The side panel page view is unchanged** — the Agents view sits alongside
-  it as a tab; the driven-page orchestration (URL bar, tools, iframe preview)
-  is exactly as before (verified by the journeys).
+- **The side-panel page view is control-only.** Cross-origin pages live in real
+  tabs; the misleading preview iframe and morph stub were removed. The panel's
+  Go/Enter path crosses the sender-authenticated SW route and requires a current
+  owner gesture; an agent-opened panel cannot turn its stored target into a tab
+  mutation.
 
 ### Concurrency edge-cases (deep, low-likelihood)
 - **Cooperative-cancellation limit (fundamental):** an already-started page/WebMCP side effect cannot be unwound — the result is discarded but the effect runs. This is a browser constraint (a running page function can't be cancelled). Documented in DESIGN.md. *Mitigations in place: pre-start cancellation, minimized window.*
