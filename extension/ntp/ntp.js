@@ -1205,6 +1205,8 @@ function persistSidebar(collapsed) {
     } catch {
       sidebarDurability = "error"; // worker unreachable
     }
+    // Update the exposed attribute AFTER the write resolves (not before).
+    side.setAttribute("data-durability", sidebarDurability);
   }).catch(() => {});
   return sidebarWriteQueue;
 }

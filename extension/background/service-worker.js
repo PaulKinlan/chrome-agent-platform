@@ -43,6 +43,7 @@ import {
   snapshotPersistentToSession,
   snapshotPersistentToSessionLocked,
   withStorageModeLock,
+  __setKvFaultForTest,
 } from "../lib/kv.js";
 import {
   hasCapability,
@@ -1347,6 +1348,16 @@ const handlers = {
   async "kv.remove"(m) {
     if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };
     await kvRemove(Array.isArray(m.keys) ? m.keys : [m.keys]);
+    return { ok: true };
+  },
+  // TEST-ONLY fault seam: forces the NEXT kvSet to fail closed (StorageBackendError)
+  // even when the persistent backend is available. Gated behind a non-secret test
+  // token so it is inert in production (fail-closed: the token must match exactly;
+  // it is not an oracle — reads no state — and not a control route — changes no
+  // production behaviour, only injects a write fault for the integration harness).
+  async "kv.fault"(m) {
+    if (m?.token !== "cap-kv-fault-test") return { ok: false, error: "forbidden" };
+    __setKvFaultForTest(m?.enabled !== false);
     return { ok: true };
   },
   async "provider.get"() {

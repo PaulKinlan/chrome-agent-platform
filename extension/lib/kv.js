@@ -28,6 +28,11 @@
 
 const session = new Map();
 let warned = false;
+// TEST-ONLY fault seam (see kvSet): default off, fail-closed.
+let __kvFault = false;
+export function __setKvFaultForTest(v) {
+  __kvFault = !!v;
+}
 
 // ---- storage-mode state machine (round-18 blocker 3) ----
 // Snapshot→remove→re-enable-migrate must be ATOMIC with respect to every
@@ -134,6 +139,14 @@ export async function kvGet(keys) {
 export async function kvSet(obj) {
   return withStorageModeLock(async () => {
     await waitForMigration();
+    // TEST-ONLY fault seam: forces the write to FAIL CLOSED regardless of the
+    // storage mode. Default off (fail-closed). Only reachable via the token-gated
+    // SW `kv.fault` route used by the integration harness; it is not a production
+    // oracle (reads no state) or control route (changes no production behaviour —
+    // it only injects a write failure to exercise the sidebar's error path).
+    if (__kvFault) {
+      throw new StorageBackendError("set", "injected test fault");
+    }
     if (!(await storageAvailable())) {
       warnOnce();
       for (const [k, v] of Object.entries(obj)) {

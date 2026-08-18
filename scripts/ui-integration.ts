@@ -358,6 +358,55 @@ try {
   check("recent-activity renders the journal entry via production activity.list", activity?.entryCount === 1 && activity?.empty === false && /Summarise the docs/.test(activity?.text ?? ""), activity);
   check("the recent-activity entry has horizontal padding (not edge-to-edge)", (activity?.paddingLeft ?? 0) > 0, activity);
 
+  // 7. REAL thread via production UI: run a demo-provider task (no key), which
+  //    creates a thread; then reopen it through the actual sidebar thread-item
+  //    and hit-test the nub with the thread overlay OPEN (not a forced hidden).
+  await cdp.eval(hub, `(() => { const c = document.querySelector('#composer'); c?.dispatchEvent(new CustomEvent('send', { detail: { text: 'Summarise the docs', attachments: [] } })); })()`);
+  await sleep(3500); // the agent loop runs (demo model is deterministic + fast)
+  const threadState = await cdp.eval(hub, `(() => ({ items: document.querySelectorAll('.thread-item').length, first: document.querySelector('.thread-item .t-name')?.textContent?.trim() ?? '' }))()`);
+  check("running a demo task creates a thread in the sidebar", threadState?.items >= 1, threadState);
+  await cdp.eval(hub, `document.querySelector('.thread-item')?.click()`);
+  await sleep(900);
+  const opened = await cdp.eval(hub, `(() => ({ hidden: document.getElementById('thread-view').hidden, title: document.getElementById('thread-title').textContent }))()`);
+  check("clicking the sidebar thread opens the thread surface", opened?.hidden === false, opened);
+  // Dense grid elementFromPoint across the 44×44 nub with the thread overlay open.
+  const dense = await cdp.eval(hub, `(() => {
+    const t = document.querySelector('#side-toggle');
+    const r = t.getBoundingClientRect();
+    let hits = 0, total = 0;
+    for (let dx = 2; dx < r.width; dx += 6) for (let dy = 2; dy < r.height; dy += 6) {
+      total++;
+      const el = document.elementFromPoint(r.left + dx, r.top + dy);
+      if (el && (el === t || t.contains(el))) hits++;
+    }
+    return { hits, total, all: hits === total };
+  })()`);
+  check("dense grid: every sampled point of the nub is hit-testable with the thread open", dense?.all === true, dense);
+  const realPtrBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
+  const realNubCtr = await cdp.eval(hub, `(() => { const r = document.querySelector('#side-toggle').getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: realNubCtr.x, y: realNubCtr.y, button: "left", clickCount: 1 }, hub);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: realNubCtr.x, y: realNubCtr.y, button: "left", clickCount: 1 }, hub);
+  await sleep(500);
+  const realPtrAfter = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
+  check("real pointer click toggles the sidebar with the thread open", realPtrAfter !== realPtrBefore, { realPtrBefore, realPtrAfter });
+  await cdp.eval(hub, `document.getElementById('thread-back')?.click()`);
+  await sleep(300);
+
+  // 7b. Persistence durability matrix via the kv.set mode return + the fault seam.
+  await cdp.eval(hub, `window.__sidebarPersistence?.().flush() ?? Promise.resolve()`);
+  const sessionDurability = await cdp.eval(hub, `document.querySelector('#side')?.getAttribute('data-durability') ?? 'unknown'`);
+  check("permissionless profile: sidebar durability is 'session'", sessionDurability === 'session', sessionDurability);
+  // Force a backend failure via the token-gated kv.fault seam (fail-closed).
+  await cdp.eval(hub, `(async () => { await chrome.runtime.sendMessage({ type: 'kv.fault', token: 'cap-kv-fault-test', enabled: true }); })()`);
+  await cdp.eval(hub, `document.querySelector('#side-toggle').click()`);
+  await sleep(600);
+  const faultDurability = await cdp.eval(hub, `document.querySelector('#side')?.getAttribute('data-durability') ?? 'unknown'`);
+  check("forced backend failure: sidebar durability is 'error'", faultDurability === 'error', faultDurability);
+  await cdp.eval(hub, `(async () => { await chrome.runtime.sendMessage({ type: 'kv.fault', token: 'cap-kv-fault-test', enabled: false }); })()`);
+  await cdp.eval(hub, `document.querySelector('#side-toggle').click()`);
+  await cdp.eval(hub, `window.__sidebarPersistence?.().flush() ?? Promise.resolve()`);
+  await sleep(400);
+
   // ---- Settings ----
   const settings = await openPage(`chrome-extension://${extId}/options/options.html`);
 

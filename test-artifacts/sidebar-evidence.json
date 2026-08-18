@@ -4,7 +4,7 @@
   "screenshots": [
     {
       "file": "sidebar-collapsed.png",
-      "sha256": "8ba83c3acb0c46acb6666b9256bf81689615af97810e0b5229e46d62a91ba43a",
+      "sha256": "d54f1bac15b25f6564922508147d982d97f618761315c5cdc9458b371931caa7",
       "bytes": 57682,
       "describes": "the 60px icon rail (border at x≈59) with the centred rail icons + the edge nub (chevron pointing right)"
     },
@@ -16,20 +16,22 @@
     }
   ],
   "tests": {
-    "test:ui": "36/36 pass",
+    "test:ui": "42/42 pass",
     "test:components": "34/34 pass",
-    "npm test (deno test -A tests/)": "321/321 pass"
+    "npm test (deno test -A tests/)": "323/323 pass"
   },
   "verified": [
     "exactly five rail actions exist + share one centre (≤2px spread) + uniform 34×34",
     "collapse control is a ≥44×44 nub hit target, straddles the sidebar edge, in-bounds",
     "nub is a SIBLING of #side (root stacking) so elementFromPoint hit-tests every sampled point + a real pointer click toggles with the overlay open",
+    "REAL thread via production UI: a demo-provider task run creates a thread; clicking the sidebar thread opens the surface; a DENSE elementFromPoint grid across the 44×44 nub + a real pointer toggle work with the thread overlay open (no forced hidden)",
     "Enter + Space toggle; aria-expanded/label/title track; Enter focuses the nub first",
-    "collapsed state persists across reload after an awaited write flush; durability (durable/session/error) is exposed on the rail",
+    "collapsed state persists across reload after an awaited write flush",
+    "durability matrix: permissionless profile → 'session'; token-gated kv.fault seam (fail-closed) → 'error'; the kvSet mode return (durable/session) is unit-tested + the sidebar exposes data-durability",
     "RTL nub centres on the rail's inner (left) boundary + swaps the border to the inner edge",
     "rapid double-click returns to the deterministic prior state + the View Transition.finished is awaited",
     "recent-activity renders a journal entry via the production activity.list path (memory.set + reload)",
     "narrow (500px) in-bounds, prefers-reduced-motion disables the transition, dark theme renders a visible border"
   ],
-  "note": "A storage-GRANTED round-trip and a forced-backend-failure injection are not yet exercised by the integration harness (they require granting the optional storage permission + a fault hook in the test profile); the durability classification (durable vs session vs error) is asserted via the data-durability attribute and the kv.set mode return."
+  "note": "A storage-GRANTED round-trip (durable across a SW restart) still requires the optional storage permission, which the headless profile does not grant (chrome.permissions.request needs a headed user gesture); the durable write path itself is unit-tested (tests/kv.test.ts: kvSet reports 'durable' when the backend is present+healthy)."
 }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.77] — 2026-08-18
+- fix(sidebar): close the final blockers — KV fault seam, real production thread, durability matrix
+
 ## [0.2.76] — 2026-08-18
 - fix(sidebar): resolve third review — durability contract, real overlay, evidence, matrix
 

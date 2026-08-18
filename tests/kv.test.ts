@@ -19,6 +19,7 @@ import {
   withStorageModeLock,
   __resetSessionForTest,
   __resetMigrationForTest,
+  __setKvFaultForTest,
 } from "../extension/lib/kv.js";
 
 const store = new Map();
@@ -96,6 +97,27 @@ Deno.test("kvSet persists to the backend when it is present and healthy", async 
   await kvSet({ "cap:x": { a: 1 } });
   // The value landed in the PERSISTENT store (not a session Map).
   assertEquals(store.get("cap:x"), { a: 1 });
+});
+
+Deno.test("kvSet reports durable vs session mode (the sidebar durability contract)", async () => {
+  __resetSessionForTest();
+  __resetMigrationForTest();
+  __setKvFaultForTest(false);
+  store.clear();
+  makeChrome({ present: false });
+  assertEquals(await kvSet({ "cap:x": 1 }), "session");
+  makeChrome({ present: true, fail: false });
+  assertEquals(await kvSet({ "cap:x": 2 }), "durable");
+});
+
+Deno.test("kvSet throws when the test fault seam is armed", async () => {
+  __resetSessionForTest();
+  __resetMigrationForTest();
+  __setKvFaultForTest(true);
+  store.clear();
+  makeChrome({ present: true, fail: false });
+  await assertRejects(() => kvSet({ "cap:x": 1 }), StorageBackendError);
+  __setKvFaultForTest(false);
 });
 
 Deno.test("migrateSessionToStorage moves session fallback into the backend on grant (round-16)", async () => {
