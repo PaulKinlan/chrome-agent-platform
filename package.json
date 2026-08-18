@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.78",
+  "version": "0.2.94",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -35,6 +35,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "acorn": "^8.18.0",
     "esbuild": "^0.25.0"
   }
 }

@@ -25,9 +25,14 @@
 // their key-value access through the service worker (the `kv.get`/`kv.set`/
 // `kv.remove` message routes), so the SW's session Map is the single authority
 // when storage is absent. Pages must NEVER call kv* directly for shared state.
-
+//
+// The storage-mode state below is OWNED in this module's closure — it is NOT
+// exported, and there is no reset/setter API (the unit-test harness resets by
+// re-importing a FRESH module instance via a cache-busted dynamic import, so no
+// shipped state/mutation surface exists for tests to reach).
 const session = new Map();
 let warned = false;
+let migrated = false;
 
 // ---- storage-mode state machine (round-18 blocker 3) ----
 // Snapshot→remove→re-enable-migrate must be ATOMIC with respect to every
@@ -126,7 +131,11 @@ export async function kvGet(keys) {
   });
 }
 
-/** Mirror chrome.storage.local.set(obj). Fails closed on backend failure. */
+/** Mirror chrome.storage.local.set(obj). Returns "durable" when the
+ * persistent backend was written, "session" when the permissionless in-memory
+ * fallback was used (nothing survives a worker restart), and FAILS CLOSED
+ * (throws StorageBackendError) when the backend is available but the write
+ * fails. */
 export async function kvSet(obj) {
   return withStorageModeLock(async () => {
     await waitForMigration();
@@ -136,10 +145,11 @@ export async function kvSet(obj) {
         if (v === undefined) session.delete(k);
         else session.set(k, clone(v));
       }
-      return;
+      return "session";
     }
     try {
       await chrome.storage.local.set(obj);
+      return "durable";
     } catch (e) {
       throw new StorageBackendError("set", e);
     }
@@ -164,13 +174,6 @@ export async function kvRemove(keys) {
   });
 }
 
-/** Test hook: reset the in-memory fallback (unit tests). */
-export function __resetSessionForTest() {
-  session.clear();
-  warned = false;
-}
-
-let migrated = false;
 let migrationInFlight = null;
 
 /** Await any in-flight session→storage migration so a concurrent KV operation
@@ -207,12 +210,13 @@ export async function snapshotPersistentToSessionLocked() {
   }
 }
 
-/** Reset the migration state on every storage-permission TRANSITION (grant or
- * removal). After a Disable→Enable cycle the session fallback holds changes made
- * during the disabled period; `migrated` must be cleared so the next grant
- * re-migrates them (the round-17 blocker: `migrated` never reset → re-enable
- * restored only the old persistent values). */
-export function resetStorageTransition() {
+/** Hook invoked on every storage-permission TRANSITION (grant or removal):
+ * invalidate the migration flag so a Disable→Enable cycle re-migrates the
+ * session-fallback changes made during the disabled period (the round-17
+ * blocker: `migrated` never cleared → re-enable restored only the old
+ * persistent values). This is a PRODUCTION state-transition hook (the SW calls
+ * it around the storage permission change), not a test reset API. */
+export function onStoragePermissionTransition() {
   migrated = false;
 }
 
@@ -260,9 +264,4 @@ export async function migrateSessionToStorage() {
     });
   }
   await migrationInFlight;
-}
-
-/** Test hook: reset the migration flag (unit tests). */
-export function __resetMigrationForTest() {
-  migrated = false;
 }

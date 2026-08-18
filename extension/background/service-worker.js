@@ -39,7 +39,7 @@ import {
   kvSet,
   kvRemove,
   migrateSessionToStorage,
-  resetStorageTransition,
+  onStoragePermissionTransition,
   snapshotPersistentToSession,
   snapshotPersistentToSessionLocked,
   withStorageModeLock,
@@ -535,7 +535,7 @@ chrome.permissions?.onRemoved?.addListener((perms) => {
     // during the disabled period; reset the migration flag so the next grant
     // re-migrates them (never restore stale persistent values — the round-17
     // storage-Disable blocker).
-    resetStorageTransition();
+    onStoragePermissionTransition();
   }
 });
 
@@ -1482,7 +1482,7 @@ async function issueBridgeNonce(tabId, documentId, diagnostics) {
           hook(n, d);
           return;
         }
-        g.__cairnMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
+        g.cairnMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
       },
       args: [nonce, diagnostics === true],
     });
@@ -1624,7 +1624,7 @@ const handlers = {
           return { ok: false, error: String(e?.message ?? e) };
         }
         const res = await revokeCapability(id);
-        resetStorageTransition();
+        onStoragePermissionTransition();
         return res;
       });
     }
@@ -1706,7 +1706,7 @@ const handlers = {
     }
     const res = await revokeCapability(id);
     if (id === "storage") {
-      resetStorageTransition();
+      onStoragePermissionTransition();
     }
     return res;
   },
@@ -1750,8 +1750,12 @@ const handlers = {
         error: `${owned.join(", ")} is managed by the prompt.* routes — direct kv writes are refused`,
       };
     }
-    await kvSet(m.values);
-    return { ok: true };
+    try {
+      const mode = await kvSet(m.values);
+      return { ok: true, mode };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
   },
   async "kv.remove"(m) {
     if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };

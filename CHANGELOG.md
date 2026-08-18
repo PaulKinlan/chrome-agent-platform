@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.94] — 2026-08-18
+- merge(sidebar): integrate the frozen collapsed-sidebar feature with system prompts, unified agent access, and production WebMCP discovery. The combined release preserves the 44-check system-prompt, 88-check agent-access, 35-check WebMCP, 119-check general Chrome, and 65-check sidebar journeys; adds the RTL-aware 44×44 edge nub, aligned collapsed actions, serialized persisted collapse state with visible durability, closure-private KV/scheduler state, and shipped-code test-control scanning.
+
 ## [0.2.78] — 2026-08-18
 - merge(webmcp): integrate frozen production discovery with unified agent access
 

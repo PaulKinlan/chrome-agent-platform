@@ -14,9 +14,6 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import {
   appendSkillsLayer,
-  attestComposition,
-  attestationKeyBytes,
-  attestationKeyForVersion,
   baseIdForScope,
   baselineSystemPrompt,
   clearPromptOverride,
@@ -36,11 +33,9 @@ import {
   registryEntry,
   resolveSystemPrompt,
   restampPromptOverride,
-  rotateAttestationKey,
   scopeChain,
   setPromptOverride,
   WORKER_BASE_PROMPT,
-  __resetAttestationKeyForTest,
 } from "../extension/lib/system-prompts.js";
 import { MASTER_SKILL } from "../extension/lib/master-skill.js";
 import {
@@ -55,7 +50,7 @@ import {
   truncateUtf8,
   utf8ByteLength,
 } from "../extension/lib/pure.js";
-import { __resetSessionForTest } from "../extension/lib/kv.js";
+import { freshSystemPrompts } from "./test-hooks.js";
 import { createAgent, createOrchestrator } from "../extension/lib/agent.js";
 import { createDemoModel } from "../extension/lib/models/demo-model.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
@@ -90,9 +85,14 @@ globalThis.chrome = {
 };
 
 function reset() {
-  __resetSessionForTest();
   clearRunFence();
   store.clear();
+}
+
+let attestComposition, attestationKeyBytes, attestationKeyForVersion, rotateAttestationKey;
+async function resetAttestationModule() {
+  const m = await freshSystemPrompts();
+  ({ attestComposition, attestationKeyBytes, attestationKeyForVersion, rotateAttestationKey } = m);
 }
 
 /* The mandatory-CAS discipline every caller follows: DESCRIBE the scope (read
@@ -791,7 +791,7 @@ Deno.test("diffLines: added/removed/unchanged lines; bounded on huge inputs", ()
 
 Deno.test("attestation: KEYED receipts — deterministic, key-dependent, content-free, UTF-8 bytes", async () => {
   reset();
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   assertEquals((await save("hub", { mode: "append", text: "SECRET-MARKER-XYZ" })).ok, true);
   const composed = await resolveSystemPrompt("hub");
   assertStringIncludes(composed.text, "SECRET-MARKER-XYZ", "the override ACTUALLY landed (the no-leak proof is live)");
@@ -812,7 +812,7 @@ Deno.test("attestation: KEYED receipts — deterministic, key-dependent, content
   const otherKey = new Uint8Array(32).fill(7);
   assert(att.receipt !== hmacSha256Hex(otherKey, composed.text), "keyed: not a public fingerprint");
   // Concurrent first calls share ONE key generation (no split-brain keys).
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   store.delete("cap:attestationKey");
   const [k1, k2] = await Promise.all([attestationKeyBytes(), attestationKeyBytes()]);
   assertEquals([...k1], [...k2], "one attestation key under concurrency");
@@ -1190,7 +1190,7 @@ Deno.test("truncateUtf8: MALFORMED input — lone surrogates are DROPPED, the ou
 
 Deno.test("attestation key: the VERSIONED envelope; receipts identify their key epoch + durability; NO unkeyed hash", async () => {
   reset();
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   const composed = await resolveSystemPrompt("hub");
   const att = await attestComposition(composed, "hub");
   assertEquals(att.keyVersion, 1, "the first key epoch");
@@ -1208,7 +1208,7 @@ Deno.test("attestation key: the VERSIONED envelope; receipts identify their key 
 
 Deno.test("attestation key ROTATION: a fresh key + bumped version; older receipts stay verifiable", async () => {
   reset();
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   const composed = await resolveSystemPrompt("hub");
   const before = await attestComposition(composed, "hub");
   assertEquals(before.keyVersion, 1);
@@ -1233,7 +1233,7 @@ Deno.test("attestation key ROTATION: a fresh key + bumped version; older receipt
 
 Deno.test("attestation key: a LEGACY raw key blob migrates to the versioned envelope (same key, version 1)", async () => {
   reset();
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   const legacy = Array.from({ length: 32 }, (_, i) => (i * 7) % 256);
   store.set("cap:attestationKey", legacy);
   const key = await attestationKeyBytes();
@@ -1246,7 +1246,7 @@ Deno.test("attestation key: a LEGACY raw key blob migrates to the versioned enve
 
 Deno.test("attestation key: a CORRUPT key blob is replaced, never composed from", async () => {
   reset();
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   store.set("cap:attestationKey", { v: 1, current: { version: 1, bytes: [1, 2, 3] }, previous: [] });
   const key = await attestationKeyBytes();
   assertEquals(key.length, 32, "a fresh 32-byte key replaces the corrupt blob");
@@ -1256,7 +1256,7 @@ Deno.test("attestation key: a CORRUPT key blob is replaced, never composed from"
 
 Deno.test("attestation: an EXPLICIT key attests without the install key state (external verification path)", async () => {
   reset();
-  __resetAttestationKeyForTest();
+  await resetAttestationModule();
   const key = new Uint8Array(32).fill(9);
   const att = await attestComposition(
     { text: "abc", hash: sha256Hex("abc"), layers: [] },

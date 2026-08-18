@@ -1,7 +1,8 @@
 // Build the MV3 service worker + shared agent-core modules with esbuild
 // (the AI SDK + zod need bundling for the service-worker environment).
 import { build } from "esbuild";
-import { readFile, writeFile, copyFile } from "node:fs/promises";
+import { readFile, writeFile, copyFile, readdir, stat } from "node:fs/promises";
+import { join, extname } from "node:path";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 
 const OUT = "extension/dist/background/service-worker.js";
@@ -88,6 +89,39 @@ if (remaining > 0) {
   throw new Error(`bundle still contains ${remaining} eval/new-Function sites after cleaning`);
 }
 console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Function-constructor probe site(s); ${remaining} remaining)`);
+
+// SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
+// shipped extension. RECURSIVELY discover every shipped .js under extension/,
+// then scan each with a REAL JavaScript parser (acorn):
+//   (a) a case-insensitive substring check for the known fault-seam/oracle names,
+//   (b) an AST export walk (declarations, export lists, `x as __y` aliases, and
+//       `export default <__id>`), and
+//   (c) an AST MemberExpression walk for `window|self|globalThis.__*` access
+//       (excluding legitimate __zod_*/__vite_* library internals).
+async function walkJs(dir, out = []) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) await walkJs(p, out);
+    else if (entry.isFile() && (extname(p) === ".js" || extname(p) === ".mjs")) out.push(p);
+  }
+  return out;
+}
+const { scanShippedJs } = await import("./scripts/scan-shipped.mjs");
+const shippedJs = await walkJs("extension");
+// The __zod_*/__vite_* oracle exemption applies ONLY inside the generated
+// dependency bundles (esbuild inlines the zod/vite source there) — never in
+// shipped source files.
+const violations = await scanShippedJs(shippedJs, {
+  generatedBundles: new Set([OUT, OPTIONS_OUT]),
+  readText: (f) => readFile(f, "utf8"),
+});
+if (violations.length > 0) {
+  throw new Error(
+    `shipped-code scan failed (${violations.length} violation(s)):\n` +
+    violations.map((v) => `  - ${v}`).join("\n"),
+  );
+}
+console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files (AST export + oracle walk)`);
 
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The

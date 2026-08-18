@@ -6,20 +6,24 @@
 // @ts-nocheck — the chrome mock is intentionally dynamic.
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import {
-  kvGet,
-  kvSet,
-  kvRemove,
-  storageAvailable,
-  StorageBackendError,
-  migrateSessionToStorage,
-  snapshotPersistentToSession,
-  snapshotPersistentToSessionLocked,
-  resetStorageTransition,
-  withStorageModeLock,
-  __resetSessionForTest,
-  __resetMigrationForTest,
-} from "../extension/lib/kv.js";
+import { freshKv } from "./test-hooks.js";
+
+// Module isolation: kv.js owns its session/migration state in CLOSURE, so each
+// test re-imports a FRESH module instance (cache-busted) rather than mutating
+// shipped state. The bindings below are re-bound to the fresh instance's
+// exports, so the bare `kvGet`/`kvSet`/... references below stay stable.
+let kvGet, kvSet, kvRemove, storageAvailable, StorageBackendError,
+  migrateSessionToStorage, snapshotPersistentToSession,
+  snapshotPersistentToSessionLocked, onStoragePermissionTransition, withStorageModeLock;
+async function resetKv() {
+  const m = await freshKv();
+  ({
+    kvGet, kvSet, kvRemove, storageAvailable, StorageBackendError,
+    migrateSessionToStorage, snapshotPersistentToSession,
+    snapshotPersistentToSessionLocked, onStoragePermissionTransition, withStorageModeLock,
+  } = m);
+}
+
 
 const store = new Map();
 function makeChrome({ present = true, fail = false } = {}) {
@@ -52,20 +56,20 @@ function makeChrome({ present = true, fail = false } = {}) {
 }
 
 Deno.test("kv reports storage unavailable when the backend is absent", async () => {
-  __resetSessionForTest();
+  await resetKv();
   makeChrome({ present: false });
   assertEquals(await storageAvailable(), false);
 });
 
 Deno.test("kvSet falls back to session ONLY when the backend is absent", async () => {
-  __resetSessionForTest();
+  await resetKv();
   makeChrome({ present: false });
   await kvSet({ "cap:x": 1 });
   assertEquals((await kvGet("cap:x"))["cap:x"], 1);
 });
 
 Deno.test("kvSet REJECTS on a backend failure (fail closed)", async () => {
-  __resetSessionForTest();
+  await resetKv();
   store.clear();
   makeChrome({ present: true, fail: true });
   await assertRejects(
@@ -75,22 +79,21 @@ Deno.test("kvSet REJECTS on a backend failure (fail closed)", async () => {
 });
 
 Deno.test("kvRemove REJECTS on a backend failure (fail closed)", async () => {
-  __resetSessionForTest();
+  await resetKv();
   store.clear();
   makeChrome({ present: true, fail: true });
   await assertRejects(() => kvRemove("cap:grant"), StorageBackendError);
 });
 
 Deno.test("kvGet REJECTS on a backend read failure (no stale session value)", async () => {
-  __resetSessionForTest();
+  await resetKv();
   store.clear();
   makeChrome({ present: true, fail: true });
   await assertRejects(() => kvGet("cap:grant"), StorageBackendError);
 });
 
 Deno.test("kvSet persists to the backend when it is present and healthy", async () => {
-  __resetSessionForTest();
-  __resetMigrationForTest();
+  await resetKv();
   store.clear();
   makeChrome({ present: true, fail: false });
   await kvSet({ "cap:x": { a: 1 } });
@@ -98,9 +101,17 @@ Deno.test("kvSet persists to the backend when it is present and healthy", async 
   assertEquals(store.get("cap:x"), { a: 1 });
 });
 
+Deno.test("kvSet reports durable vs session mode (the sidebar durability contract)", async () => {
+  await resetKv();
+  store.clear();
+  makeChrome({ present: false });
+  assertEquals(await kvSet({ "cap:x": 1 }), "session");
+  makeChrome({ present: true, fail: false });
+  assertEquals(await kvSet({ "cap:x": 2 }), "durable");
+});
+
 Deno.test("migrateSessionToStorage moves session fallback into the backend on grant (round-16)", async () => {
-  __resetSessionForTest();
-  __resetMigrationForTest();
+  await resetKv();
   store.clear();
   // Backend ABSENT → kvSet uses the session fallback.
   makeChrome({ present: false });
@@ -118,8 +129,7 @@ Deno.test("migrateSessionToStorage moves session fallback into the backend on gr
 });
 
 Deno.test("migrateSessionToStorage preserves the session Map on a backend failure", async () => {
-  __resetSessionForTest();
-  __resetMigrationForTest();
+  await resetKv();
   store.clear();
   makeChrome({ present: false });
   await kvSet({ "cap:theme": "midnight" });
@@ -168,7 +178,7 @@ function makeChromeWithPermissions({ storageGranted = true } = {}) {
 }
 
 Deno.test("storageAvailable uses permissions.contains as the authority (round-17 blocker)", async () => {
-  __resetSessionForTest();
+  await resetKv();
   store.clear();
   // chrome.storage.local is TRUTHY but the permission is absent (post-Disable).
   makeChromeWithPermissions({ storageGranted: false });
@@ -179,7 +189,7 @@ Deno.test("storageAvailable uses permissions.contains as the authority (round-17
 });
 
 Deno.test("kvSet uses the session fallback when storage is truthy-but-unavailable (round-17)", async () => {
-  __resetSessionForTest();
+  await resetKv();
   store.clear();
   makeChromeWithPermissions({ storageGranted: false });
   // Must NOT throw StorageBackendError — the permission is ABSENT, so this is
@@ -189,7 +199,7 @@ Deno.test("kvSet uses the session fallback when storage is truthy-but-unavailabl
 });
 
 Deno.test("snapshotPersistentToSession copies the persistent backend into the session Map", async () => {
-  __resetSessionForTest();
+  await resetKv();
   store.clear();
   makeChromeWithPermissions({ storageGranted: true });
   store.set("cap:theme", "midnight");
@@ -202,9 +212,8 @@ Deno.test("snapshotPersistentToSession copies the persistent backend into the se
   assertEquals((await kvGet("providerConfig"))["providerConfig"].provider, "openai");
 });
 
-Deno.test("resetStorageTransition allows re-migration after a Disable→Enable cycle (round-17)", async () => {
-  __resetSessionForTest();
-  __resetMigrationForTest();
+Deno.test("onStoragePermissionTransition (storage-permission transition) allows re-migration after a Disable→Enable cycle (round-17)", async () => {
+  await resetKv();
   store.clear();
   // First grant: session → storage migration.
   makeChrome({ present: false });
@@ -215,7 +224,7 @@ Deno.test("resetStorageTransition allows re-migration after a Disable→Enable c
 
   // Disable: snapshot the persistent state back into session, reset migration.
   makeChrome({ present: false });
-  resetStorageTransition();
+  onStoragePermissionTransition();
   // During the disabled period the owner changes the provider (session-only).
   await kvSet({ providerConfig: { provider: "anthropic" } });
 
@@ -227,8 +236,7 @@ Deno.test("resetStorageTransition allows re-migration after a Disable→Enable c
 });
 
 Deno.test("withStorageModeLock serializes a concurrent kvSet behind a held transition (round-18)", async () => {
-  __resetSessionForTest();
-  __resetMigrationForTest();
+  await resetKv();
   store.clear();
   makeChromeWithPermissions({ storageGranted: true });
   store.set("cap:x", "v1");

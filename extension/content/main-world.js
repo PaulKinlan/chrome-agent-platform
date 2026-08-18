@@ -450,9 +450,9 @@
   // The pending-bootstrap fallback: the SW's bootstrap may land BEFORE this
   // file executed (a document_start race). Consume + clear it immediately.
   try {
-    const pending = globalThis.__cairnMainWorldPendingBootstrap;
+    const pending = globalThis.cairnMainWorldPendingBootstrap;
     if (pending && typeof pending === "object") {
-      delete globalThis.__cairnMainWorldPendingBootstrap;
+      delete globalThis.cairnMainWorldPendingBootstrap;
       instance.bootstrap(pending.nonce, pending.diagnostics);
     }
   } catch { /* fail closed */ }

@@ -12,6 +12,7 @@ import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
+import { renderDurabilityState } from "../lib/durability-ui.js";
 
 import {
   installPageDiagnostics,
@@ -537,7 +538,7 @@ async function renderTasks(activeId = null) {
     del.type = "button";
     del.className = "t-delete";
     del.setAttribute("aria-label", `Delete task ${t.name || "Task"}`);
-    del.textContent = "×";
+    del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
     item.append(railDot, name, preview, meta, del);
     item.addEventListener("click", () => openThread(t.id));
     item.addEventListener("keydown", (e) => {
@@ -1339,16 +1340,58 @@ async function revalidateOpenAgent() {
 // ── the task sidebar: collapse/expand + new-task (item 6/7) ──────────────
 const side = document.getElementById("side");
 const sideToggle = document.getElementById("side-toggle");
+const durabilityHint = document.getElementById("sidebar-durability-hint");
 let sidebarCollapsed = false;
+const SIDEBAR_KEY = "hub.sidebarCollapsed";
+// Serialize sidebar writes so a rapid toggle's LAST write always lands. The
+// durability is surfaced through PUBLIC DOM (data-durability + a visible/ARIA
+// hint), never a window.* test oracle.
+let sidebarWriteQueue = Promise.resolve();
+let sidebarDurability = "unknown"; // "durable" | "session" | "error"
+function renderDurability() {
+  renderDurabilityState({ side, hint: durabilityHint }, sidebarDurability);
+}
+function persistSidebar(collapsed) {
+  sidebarWriteQueue = sidebarWriteQueue.then(async () => {
+    try {
+      const r = await send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } });
+      if (r?.ok === false) {
+        sidebarDurability = "error";
+        console.warn("sidebar collapse not persisted:", r.error ?? "unknown");
+      } else {
+        // kv.set now reports durable vs permissionless-session fallback.
+        sidebarDurability = r?.mode === "durable" ? "durable" : "session";
+      }
+    } catch {
+      sidebarDurability = "error"; // worker unreachable
+    }
+    // Update the PUBLIC durability surface AFTER the write resolves.
+    renderDurability();
+  }).catch(() => {});
+  return sidebarWriteQueue;
+}
 function setSidebarCollapsed(collapsed) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+  sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
+  renderDurability();
+  persistSidebar(collapsed); // serialized + ordered
 }
 sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
 });
+// Restore the persisted rail state on load (session or durable).
+async function restoreSidebar() {
+  try {
+    const s = await send("kv.get", { keys: SIDEBAR_KEY });
+    if (s?.[SIDEBAR_KEY] === true) setSidebarCollapsed(true);
+  } catch {
+    // worker unreachable — default expanded.
+  }
+}
+restoreSidebar();
 
 // The "+" new-task button returns to the hub + focuses the composer. When the
 // user is inside a task thread, it also closes the thread view so the composer
@@ -1383,7 +1426,7 @@ function withViewTransition(fn) {
     viewTransitionActive
   ) {
     fn();
-    return;
+    return null;
   }
   viewTransitionActive = true;
   try {
@@ -1391,11 +1434,13 @@ function withViewTransition(fn) {
     // A transition that never settles must not throw; clear the guard either
     // way so a later state change can use a transition again.
     t?.finished?.finally(() => { viewTransitionActive = false; });
+    return t;
   } catch {
     // startViewTransition threw (invalid snapshot/state) — apply the change
     // without a transition and release the guard.
     viewTransitionActive = false;
     fn();
+    return null;
   }
 }
 

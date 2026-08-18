@@ -1021,11 +1021,6 @@ export async function rotateAttestationKey() {
   return { ok: true, version: next.current.version, durable };
 }
 
-/** Test hook: forget the cached attestation key (unit tests). */
-export function __resetAttestationKeyForTest() {
-  cachedAttestationKey = null;
-}
-
 /**
  * A content-free attestation of the effective prompt: a KEYED receipt
  * (HMAC-SHA-256) of the composed text plus per-layer receipts and UTF-8 byte
