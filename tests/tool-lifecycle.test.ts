@@ -199,3 +199,48 @@ Deno.test("tool-lifecycle: an UNMATCHED result gets a unique id (no repeated :1 
   assertEquals(pairs[0].status, "success");
   assertEquals(pairs[1].status, "error");
 });
+
+// ── the final-sol acceptance: same-name isolation + duplicate semantics ─────
+
+Deno.test("tool-lifecycle: TWO same-name calls keep DISTINCT cards (original callIds preserved)", () => {
+  const rows = [
+    { type: "tool-call", id: "r1", run: "a", callId: "r1:a:memory_get:1", tool: "memory_get", args: "{\"k\":1}" },
+    { type: "tool-result", id: "r1", run: "a", callId: "r1:a:memory_get:1", tool: "memory_get", result: "one", ok: true },
+    { type: "tool-call", id: "r1", run: "a", callId: "r1:a:memory_get:2", tool: "memory_get", args: "{\"k\":2}" },
+    { type: "tool-result", id: "r1", run: "a", callId: "r1:a:memory_get:2", tool: "memory_get", result: "two", ok: true },
+  ];
+  const pairs = pairToolJournal(rows);
+  assertEquals(pairs.length, 2, "two cards, never collapsed");
+  assert(pairs[0].callId !== pairs[1].callId, "distinct original callIds survive");
+  assert(pairs[0].args.includes("1") && pairs[1].args.includes("2"), "each card keeps its own args");
+});
+
+Deno.test("tool-lifecycle: a NORMAL call+result pair is NOT flagged duplicate; a second same-type row IS", () => {
+  const normal = pairToolJournal([
+    { type: "tool-call", callId: "c1", tool: "memory_set", args: "{}" },
+    { type: "tool-result", callId: "c1", tool: "memory_set", result: "ok", ok: true },
+  ]);
+  assertEquals(normal.length, 1);
+  assertEquals(normal[0].duplicate, false, "the complementary result is NOT a duplicate");
+  const dupCall = pairToolJournal([
+    { type: "tool-call", callId: "c1", tool: "memory_set", args: "{}" },
+    { type: "tool-call", callId: "c1", tool: "memory_set", args: "{}" }, // a SECOND call
+    { type: "tool-result", callId: "c1", tool: "memory_set", result: "ok", ok: true },
+  ]);
+  assertEquals(dupCall.length, 1);
+  assertEquals(dupCall[0].duplicate, true, "a second same-type call IS flagged");
+  const dupResult = pairToolJournal([
+    { type: "tool-result", callId: "c1", tool: "memory_set", result: "a", ok: true },
+    { type: "tool-result", callId: "c1", tool: "memory_set", result: "b", ok: true }, // a SECOND result
+  ]);
+  assertEquals(dupResult.length, 1);
+  assertEquals(dupResult[0].duplicate, true, "a second same-type result IS flagged");
+});
+
+Deno.test("tool-lifecycle: a persisted terminal row (with its own args) restores the args on replay", () => {
+  const [card] = pairToolJournal([
+    { type: "tool-result", callId: "replay:run:memory_set", tool: "memory_set", args: '{"key":"shopping"}', result: "stored", ok: true },
+  ]);
+  assertEquals(card.status, "success");
+  assert(card.args !== null && card.args.includes("shopping"), "the terminal row's own args restore on replay");
+});

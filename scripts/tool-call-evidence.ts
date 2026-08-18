@@ -12,14 +12,12 @@
 // structured result). Screenshots + DOM assertions are written under
 // test-artifacts/tool-call/ for the tracker.
 //
-// NOTE (residual risk, documented): a FULLY live model-driven tool run is not
-// reproducible in headless Chrome — the extension's provider gate requires the
-// provider's host permission, and headless has no prompt UI to grant it
-// (verified: chrome.permissions.request hangs "pending"; Browser.grantPermissions
-// and Preferences-seeding are both ignored for extension host grants). The demo
-// provider (no grant needed) never calls tools. The render path exercised here
-// is therefore the REAL appendTool/attribute pipeline the live SW broadcast
-// drives, with REAL-format data.
+// The DEMO provider's deterministic @demo-tools mode issues REAL tool calls
+// (memory_set + memory_get) through the REAL AI-SDK tool loop, so the PRODUCTION
+// journal writer persists REAL tool rows — a genuine, model-driven persistence
+// path that needs no API key or host permission. (A non-demo network provider
+// run is still not reproducible in headless — the provider gate needs the
+// provider's host permission and headless has no prompt UI to grant it.)
 
 const ROOT = new URL("..", import.meta.url).pathname;
 import { pairToolJournal } from "../extension/shared/conversation.js";
@@ -543,14 +541,15 @@ async function main() {
         const tmsgs = t?.messages ?? [];
         return {
           toolRows: tools.map((r) => ({ t: r.type, tool: r.tool, ok: r.ok ?? null, callId: !!r.callId, run: !!r.run })),
-          threadTools: tmsgs.filter((m) => m.role === "tool").map((m) => ({ name: m.toolName, status: m.toolStatus })),
+          threadTools: tmsgs.filter((m) => m.role === "tool").map((m) => ({ name: m.toolName, status: m.toolStatus, callId: m.toolCallId ?? null })),
           threadId: first?.id ?? null,
         };
       })()`);
       console.log("REAL persisted:", JSON.stringify(realState, null, 1));
       const rs = realState as any;
-      check("persist: the REAL run wrote tool-call + tool-result JOURNAL rows (callId + run + ok)", Array.isArray(rs?.toolRows) && rs.toolRows.length === 4 && rs.toolRows.every((r: any) => r.callId && r.run) && rs.toolRows.filter((r: any) => r.t === "tool-result").every((r: any) => r.ok === true), realState);
-      check("persist: the SW appended the PAIRED terminal tool cards to the THREAD", Array.isArray(rs?.threadTools) && rs.threadTools.length === 2 && rs.threadTools.every((m: any) => m.status === "success"), realState);
+      check("persist: the REAL run wrote tool-call + tool-result JOURNAL rows (callId + run + ok)", Array.isArray(rs?.toolRows) && rs.toolRows.length === 6 && rs.toolRows.every((r: any) => r.callId && r.run) && rs.toolRows.filter((r: any) => r.t === "tool-result").every((r: any) => r.ok === true), realState);
+      check("persist: the SW appended the PAIRED terminal tool cards to the THREAD", Array.isArray(rs?.threadTools) && rs.threadTools.length === 3 && rs.threadTools.every((m: any) => m.status === "success"), realState);
+      check("persist: TWO same-name calls keep DISTINCT thread callIds", Array.isArray(rs?.threadTools) && rs.threadTools.filter((m: any) => m.name === "memory_get").length === 2 && new Set(rs.threadTools.filter((m: any) => m.name === "memory_get").map((m: any) => m.callId)).size === 2, realState);
       // RELOAD the page + CLICK the persisted task row → the restored tool cards
       await evalIn(cdp, session, `location.reload()`);
       await sleep(3000);
@@ -571,38 +570,26 @@ async function main() {
           const cards = [...document.querySelectorAll('#thread-conversation message-bubble[role="tool"]')];
           return cards.map((c) => {
             const sr = c.shadowRoot || c;
+            // the INPUTS block specifically (a labeled .tt-block with tree rows)
+            const inputsBlock = [...sr.querySelectorAll('.tt-block')].find((b) => (b.querySelector('.tt-block-label')?.textContent ?? '') === 'inputs');
             return {
               name: c.getAttribute('tool-name'),
               status: c.getAttribute('tool-status') ?? '',
               running: (c.getAttribute('tool-status') ?? 'running') === 'running',
-              hasArgsTree: sr.querySelectorAll('.tt-row').length >= 2,
+              hasInputsBlock: !!inputsBlock && inputsBlock.querySelectorAll('.tt-row').length >= 2,
             };
           });
         })()`);
         console.log("restored cards:", JSON.stringify(restored));
         const rc = restored as any;
-        check("reopen: the CLICKED thread restores ONE terminal card per call, NONE running", Array.isArray(rc) && rc.length === 2 && rc.every((c: any) => !c.running && (c.status === "success" || c.status === "error")), restored);
-        check("reopen: the restored cards carry their args trees", Array.isArray(rc) && rc.every((c: any) => c.hasArgsTree), restored);
+        check("reopen: the CLICKED thread restores ONE terminal card per call, NONE running", Array.isArray(rc) && rc.length === 3 && rc.every((c: any) => !c.running && (c.status === "success" || c.status === "error")), restored);
+        check("reopen: TWO same-name (memory_get) cards restore DISTINCTLY", Array.isArray(rc) && rc.filter((c: any) => c.name === "memory_get").length === 2, restored);
+        check("reopen: the restored cards carry their INPUTS blocks (args restored)", Array.isArray(rc) && rc.every((c: any) => c.hasInputsBlock), restored);
         const reopenShot = await captureShot(cdp, session);
         if (reopenShot) await writeEvidence("tree-5-reopen-thread.png", reopenShot);
       }
 
-      // HEAD-bound evidence manifest (the reviewer: identify the exact commit)
-      try {
-        const gitHead = new Deno.Command("git", { args: ["rev-parse", "HEAD"], stdout: "piped", stderr: "null" }).outputSync();
-        const head = new TextDecoder().decode(gitHead.stdout).trim();
-        const manifest = {
-          suite: "tool-call-evidence",
-          commit: head || "unknown",
-          generated: new Date().toISOString(),
-          screenshots: ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"],
-        };
-        await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-        await Deno.writeTextFile(`${ROOT}test-artifacts/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
-        console.log("manifest HEAD:", head);
-      } catch { /* git unavailable */ }
-
-      // E. The REAL journal write path:      // E. The REAL journal write path: a REAL demo run persists task/result rows
+      // E. The REAL journal write path: a REAL demo run persists task/result rows
       //    (read back via the real memory.get route) — the journal is live.
       const journalRead = await evalIn(cdp, session, `(async () => {
         const r = await chrome.runtime.sendMessage({ type: "memory.get", origin: "master", key: "journal" }).then((v) => ({ v }), (e) => ({ err: e.message }));
@@ -612,6 +599,25 @@ async function main() {
       console.log("master journal:", JSON.stringify(journalRead));
       check("journal: the REAL run persisted journal rows (the write path is live)", ((journalRead as any)?.count ?? 0) >= 2, journalRead);
     }
+
+    // HEAD-bound evidence manifest + the attestation log — generated AFTER every
+    // check, at the EXACT current git HEAD (the corrective commit being attested)
+    try {
+      const gitHead = new Deno.Command("git", { args: ["rev-parse", "HEAD"], stdout: "piped", stderr: "null" }).outputSync();
+      const head = new TextDecoder().decode(gitHead.stdout).trim();
+      const manifest = {
+        suite: "tool-call-evidence",
+        commit: head || "unknown",
+        generated: new Date().toISOString(),
+        mode: MODE,
+        checks: `${pass}/${pass + fail}`,
+        screenshots: ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"],
+      };
+      await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
+      await Deno.writeTextFile(`${ROOT}test-artifacts/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
+      await Deno.writeTextFile(`${ROOT}test-artifacts/tool-call/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
+      console.log("manifest HEAD:", head, `(${pass}/${pass + fail})`);
+    } catch { /* git unavailable */ }
 
     console.log(`tool-call evidence (${MODE}): ${pass}/${pass + fail} passed`);
     if (fail > 0) Deno.exit(1);

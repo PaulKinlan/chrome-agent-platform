@@ -320,3 +320,47 @@ Deno.test("tool-tree: safeJsonStringify is BOUNDED (depth/node/byte caps) + alwa
   assert(JSON.parse(b) !== null, "huge output is valid JSON");
   assert(b.length < 40_000, "bounded output size");
 });
+
+// ── the final-sol acceptance: atomic hostile-proxy, UTF-8 envelope, redaction ──
+
+Deno.test("tool-tree: a HOSTILE ARRAY PROXY (throwing length getter) never emits invalid JSON", () => {
+  const proxy = new Proxy([], { get(t, p) { if (p === "length") throw new Error("length"); return t[p]; } });
+  const out = safeJsonStringify({ items: proxy, ok: 1 });
+  let parsed;
+  try { parsed = JSON.parse(out); } catch (e) { throw new Error("invalid JSON: " + e.message); }
+  assertEquals(parsed.ok, 1, "the sibling key survives");
+  assert(typeof parsed.items === "string", "the hostile container falls back to a marker");
+});
+
+Deno.test("tool-tree: the UTF-8 truncation envelope is VALID JSON and BYTE-bounded for every maxBytes", () => {
+  const content = Array.from({ length: 60 }, (_, i) => ({ i, q: 'quote"back\\slash"', u: "日本語".repeat(20) }));
+  for (const mb of [60, 120, 300, 1000, 5000]) {
+    const out = safeJsonStringify(content, { maxBytes: mb });
+    const bytes = new TextEncoder().encode(out).length;
+    let parsed;
+    try { parsed = JSON.parse(out); } catch (e) { throw new Error(`maxBytes=${mb}: invalid JSON — ${e.message}`); }
+    assert(bytes <= mb, `maxBytes=${mb}: output is ${bytes} bytes (over the cap)`);
+    if (parsed.__gvs_truncated__ === true) {
+      // the minimal envelope (a maxBytes too small for a preview) is still
+      // valid; when a preview IS present it must be a JSON string
+      if (parsed.preview !== undefined) {
+        assertEquals(typeof parsed.preview, "string", "the preview is a JSON string");
+      }
+      if (parsed.bytes !== undefined) {
+        assertEquals(typeof parsed.bytes, "number", "the byte count is present");
+      }
+    }
+  }
+});
+
+Deno.test("tool-tree: secret-like fields are REDACTED before serialization", () => {
+  const out = safeJsonStringify({ apiKey: "sk-secret", token: "abc", password: "pw", ok: 1, nested: { access_token: "x", label: "keep" } });
+  const parsed = JSON.parse(out);
+  assertEquals(parsed.apiKey, "[redacted]");
+  assertEquals(parsed.token, "[redacted]");
+  assertEquals(parsed.password, "[redacted]");
+  assertEquals(parsed.nested.access_token, "[redacted]");
+  assertEquals(parsed.nested.label, "keep");
+  assert(!out.includes("sk-secret"), "the secret value never reaches the output");
+  assert(!out.includes("abc"), "the token never reaches the output");
+});

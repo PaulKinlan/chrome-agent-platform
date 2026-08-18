@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.84] — 2026-08-18
+- fix(tool-calls): acceptance round-2 — durable per-run abort, guaranteed UTF-8 envelope, distinct same-name callIds, correct duplicates, restored args, exact-HEAD evidence
+
 ## [0.2.83] — 2026-08-18
 - docs(ui-fixes): record the final-sol acceptance commit + evidence claims in the tracker
 

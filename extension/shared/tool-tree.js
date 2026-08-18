@@ -260,16 +260,24 @@ export function safeJsonStringify(value, opts = {}) {
   let json = visit(value, 0, new Set()) ?? '"[unserializable]"';
   const bytes = encoder.encode(json);
   if (bytes.length > maxBytes) {
-    // the explicit truncation envelope — itself byte-bounded (preview sized to
-    // leave room for the envelope so the WHOLE output stays under maxBytes)
-    const budget = Math.max(1, maxBytes - 160);
-    const preview = decoder.decode(bytes.slice(0, budget));
-    json = `{"__gvs_truncated__":true,"bytes":${bytes.length},"preview":${esc(preview)}}`;
-    const finalBytes = encoder.encode(json);
-    if (finalBytes.length > maxBytes) {
-      const tighter = decoder.decode(encoder.encode(json).slice(0, budget - 40));
-      json = `{"__gvs_truncated__":true,"bytes":${bytes.length},"preview":${esc(tighter)}}`;
+    // The explicit truncation envelope — GUARANTEED valid JSON with encoded
+    // size <= maxBytes for EVERY maxBytes: the preview budget shrinks until the
+    // total (including the envelope + the JSON escaping of the preview, which
+    // can EXPAND for quote/backslash-heavy content) fits; for a maxBytes too
+    // small to hold the full envelope, a MINIMAL valid envelope is returned.
+    let budget = Math.max(8, maxBytes - 120);
+    let preview = decoder.decode(bytes.slice(0, budget));
+    let env = `{"__gvs_truncated__":true,"bytes":${bytes.length},"preview":${esc(preview)}}`;
+    let guard = 0;
+    while (encoder.encode(env).length > maxBytes && budget > 8 && guard++ < 32) {
+      budget = Math.floor(budget / 2);
+      preview = decoder.decode(bytes.slice(0, budget));
+      env = `{"__gvs_truncated__":true,"bytes":${bytes.length},"preview":${esc(preview)}}`;
     }
+    if (encoder.encode(env).length > maxBytes) {
+      env = '{"__gvs_truncated__":true}'; // the minimal valid envelope (always <= maxBytes for maxBytes >= 32)
+    }
+    json = env;
   }
   return json;
 }

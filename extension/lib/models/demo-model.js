@@ -38,10 +38,14 @@ function wantsDemoTools(prompt) {
   return extractText([last]).toLowerCase().includes(TOOLS_MARKER);
 }
 
-/** Whether the conversation already carries tool RESULTS (the second model
- * step — after the demo tool calls executed, emit the final text). */
-function hasToolMessages(prompt) {
-  return (Array.isArray(prompt) ? prompt : []).some((m) => m?.role === "tool");
+/** How many tool RESULTS the conversation already carries. The demo tools run
+ * in SEQUENCED steps (the agent-do loop calls the model after each tool
+ * execution): step 1 memory_set, step 2 memory_get, step 3 a SECOND memory_get
+ * (two same-name calls — the persisted-replay evidence), step 4 the final
+ * text. Counting results keeps the sequence deterministic + independent (each
+ * step's tool result is a prerequisite for the next). */
+function toolResultCount(prompt) {
+  return (Array.isArray(prompt) ? prompt : []).filter((m) => m?.role === "tool").length;
 }
 
 // A deterministic, RICH tool-call payload (nested arrays/objects/unicode — the
@@ -68,16 +72,33 @@ export function createDemoModel() {
 
     doGenerate(options) {
       const text = extractText(options.prompt);
-      if (wantsDemoTools(options.prompt) && !hasToolMessages(options.prompt)) {
-        return Promise.resolve({
-          content: [
-            { type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) },
-            { type: "tool-call", toolCallId: "call_demo_get", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) },
-          ],
-          finishReason: "tool-calls",
-          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
-          warnings: [],
-        });
+      const results = toolResultCount(options.prompt);
+      if (wantsDemoTools(options.prompt)) {
+        if (results === 0) {
+          return Promise.resolve({
+            content: [{ type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) }],
+            finishReason: "tool-calls",
+            usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+            warnings: [],
+          });
+        }
+        if (results === 1) {
+          return Promise.resolve({
+            content: [{ type: "tool-call", toolCallId: "call_demo_get_1", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) }],
+            finishReason: "tool-calls",
+            usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+            warnings: [],
+          });
+        }
+        if (results === 2) {
+          // a SECOND same-name call — the persisted replay must keep them distinct
+          return Promise.resolve({
+            content: [{ type: "tool-call", toolCallId: "call_demo_get_2", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) }],
+            finishReason: "tool-calls",
+            usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+            warnings: [],
+          });
+        }
       }
       const response = `[demo model] I received "${text.slice(0, 120)}${text.length > 120 ? "…" : ""}". ` +
         `This is a deterministic demo response — configure a real provider (OpenAI-compatible endpoint) ` +
@@ -93,25 +114,37 @@ export function createDemoModel() {
     doStream(options) {
       const text = extractText(options.prompt);
       const wantsTools = wantsDemoTools(options.prompt);
-      const hasTools = hasToolMessages(options.prompt);
+      const results = toolResultCount(options.prompt);
       const id = `demo-${crypto.randomUUID?.() ?? Math.random()}`;
       const usage = { inputTokens: 8, outputTokens: 32, totalTokens: 40 };
       const stream = new ReadableStream({
         start(controller) {
           controller.enqueue({ type: "stream-start", warnings: [] });
-          if (wantsTools && !hasTools) {
-            // FIRST step: deterministically request the REAL demo tool calls
+          if (wantsTools && results === 0) {
+            // STEP 1: deterministically request the REAL demo memory_set
             controller.enqueue({ type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) });
-            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
+            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+            controller.close();
+            return;
+          }
+          if (wantsTools && results === 1) {
+            // STEP 2: read it back (the set completed — deterministic order)
+            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get_1", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
+            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+            controller.close();
+            return;
+          }
+          if (wantsTools && results === 2) {
+            // STEP 3: a SECOND same-name call — the replay keeps them distinct
+            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get_2", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
             controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
             controller.close();
             return;
           }
           let response;
-          if (hasTools) {
-            // SECOND step: the tools ran (the agent-do loop's continuation
-            // prompt may drop the marker) — emit the deterministic final summary
-            response = "[demo model] Tool calls executed deterministically: memory_set wrote the shopping list (2 items) and memory_get read it back. This ran through the REAL production tool loop.";
+          if (wantsTools) {
+            // STEP 4: the tools all ran — the deterministic final summary
+            response = "[demo model] Tool calls executed deterministically in sequence: memory_set wrote the shopping list (2 items), memory_get read it back (twice). This ran through the REAL production tool loop.";
           } else {
             response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
               `to get real completions. This demo response proves the agent loop runs end-to-end.`;

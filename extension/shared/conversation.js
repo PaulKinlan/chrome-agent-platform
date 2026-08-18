@@ -332,13 +332,17 @@ export function pairToolJournal(entries) {
       if (!entry) {
         byCall.set(id, { call: null, result: null, ts: typeof r.ts === "number" ? r.ts : null, duplicate: false });
         order.push(id);
-      } else {
-        // a DUPLICATE call/result row must not silently overwrite — keep the
-        // first + flag the card (the duplicate is never lost)
-        entry.duplicate = true;
       }
-      if (!byCall.get(id).call && r.type === "tool-call") byCall.get(id).call = r;
-      else if (!byCall.get(id).result && r.type === "tool-result") byCall.get(id).result = r;
+      // The expected complementary pair (a call + its result) is NOT a
+      // duplicate — only a SECOND same-type row (two calls or two results for
+      // the same key) flags the card; the duplicate is never silently dropped.
+      if (r.type === "tool-call") {
+        if (!byCall.get(id).call) byCall.get(id).call = r;
+        else byCall.get(id).duplicate = true;
+      } else {
+        if (!byCall.get(id).result) byCall.get(id).result = r;
+        else byCall.get(id).duplicate = true;
+      }
     }
   }
   const out = [];
@@ -359,7 +363,8 @@ export function pairToolJournal(entries) {
       type: "tool",
       tool,
       status,
-      args: call?.args ?? null,
+      callId: id,
+      args: call?.args ?? result?.args ?? null,
       result: result?.result ?? null,
       ok: result?.ok ?? null,
       ts,

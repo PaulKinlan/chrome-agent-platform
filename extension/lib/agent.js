@@ -300,6 +300,7 @@ export function createAgent({
   // ABA blocker).
   let activeRun = null; // { gen: number|null, controller: AbortController }
   let aborted = false;
+  let lastRunAborted = false; // the DURABLE per-run abort flag (read after activeRun is cleared)
   // A per-worker RUN QUEUE serializes concurrent `a.run` calls. The AI SDK
   // executes a step's tool calls with Promise.all, so two delegate_task calls
   // for the SAME worker can invoke the same a.run CONCURRENTLY. The shared
@@ -418,6 +419,7 @@ export function createAgent({
           agent.abort();
         } catch { /* no active run */ }
       };
+      lastRunAborted = false; // per-run reset
       controller.signal.addEventListener("abort", onAbort);
       try {
         // Provider execution boundary: re-validate the IMMUTABLE run-start
@@ -444,6 +446,10 @@ export function createAgent({
         }
         return result;
       } finally {
+        // DURABLE per-run outcome: capture the abort state BEFORE activeRun is
+        // cleared (the SW's isAborted() check runs after orch.run resolves —
+        // activeRun is null by then, so the controller signal alone is lost).
+        lastRunAborted = controller.signal.aborted;
         controller.signal.removeEventListener("abort", onAbort);
         activeRun = null;
       }
@@ -463,9 +469,10 @@ export function createAgent({
     // The SW calls this per-run (the orchestrator is reused across runs).
     setProgress: (cb) => { progressCb = cb; },
     // Whether THIS agent's run was aborted (a disposable pre-start abort or a
-    // mid-run controller abort) — the SW propagates it in the run response so
-    // an aborted run can never be reported as a successful outcome.
-    isAborted: () => aborted || (activeRun?.controller?.signal?.aborted === true),
+    // mid-run controller abort) — the DURABLE per-run flag survives the
+    // activeRun cleanup, so the SW can read it after orch.run resolves and
+    // propagate it in the run response (an aborted run is never a success).
+    isAborted: () => aborted || lastRunAborted,
   };
 }
 

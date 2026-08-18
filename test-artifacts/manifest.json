@@ -1,7 +1,9 @@
 {
   "suite": "tool-call-evidence",
-  "commit": "140cc299cbf97eb4dd91a9b20869fcd833ad5f8a",
-  "generated": "2026-08-18T13:48:53.820Z",
+  "commit": "b6d8e07f6e7f9b2bd6e604f6d81ac88e9f94b508",
+  "generated": "2026-08-18T14:42:05.196Z",
+  "mode": "tree",
+  "checks": "42/42",
   "screenshots": [
     "raw-1-running.png",
     "raw-2-done.png",

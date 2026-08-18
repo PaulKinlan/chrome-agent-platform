@@ -1088,11 +1088,18 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // circuit-breaker; a tool error or a fence abort must not pause the
         // agent. Re-throw so the caller's own error handling still runs.
         if (isProviderError(e)) recordProviderFailure(formatError(e));
+        // An ABORT mid-run (the fence signal or the agent controller) must
+        // surface as {ok:false, aborted:true} — never a generic provider error
+        // and never a success.
+        if ((fence?.signal?.aborted === true) || (typeof orch.isAborted === "function" && orch.isAborted())) {
+          return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
+        }
         throw e;
       }
       // An ABORTED run must never be reported as a successful outcome: the
       // response propagates the aborted/cancelled state (the page gates its
-      // result append + done status on it).
+      // result append + done status on it). The DURABLE per-run flag survives
+      // the agent's activeRun cleanup, so this is read AFTER orch.run resolves.
       if ((fence?.signal?.aborted === true) || (typeof orch.isAborted === "function" && orch.isAborted())) {
         return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
       }
@@ -1615,7 +1622,7 @@ const handlers = {
               toolResult: p.result ?? null,
               toolOk: p.ok ?? null,
               toolDuration: p.durationMs ?? null,
-              toolCallId: `replay:${threadRunInstance}:${p.tool}`,
+              toolCallId: p.callId ?? `replay:${threadRunInstance}:${p.tool}`,
             }).catch(() => {});
           }
         }
