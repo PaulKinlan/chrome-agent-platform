@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.80] — 2026-08-18
+- chore: reconcile package-lock.json version with package.json (pre-existing staleness flagged by the sol review)
+
 ## [0.2.79] — 2026-08-18
 - docs(ui-fixes): record the final-sol corrective commit hash in the tracker
 
