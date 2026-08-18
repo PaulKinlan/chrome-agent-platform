@@ -92,11 +92,12 @@ console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Fu
 
 // SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
 // shipped extension. RECURSIVELY discover every shipped .js under extension/,
-// then scan each with (a) a case-insensitive substring check for the known
-// fault-seam/oracle names and (b) a regex for dot OR bracket access to a
-// __-prefixed property on window/globalThis/self. This is robust to renamed/
-// case-varied symbols, bracket access, minification, generated outputs, and
-// newly added paths (new files are discovered, not enumerated).
+// then scan each with a REAL JavaScript parser (acorn):
+//   (a) a case-insensitive substring check for the known fault-seam/oracle names,
+//   (b) an AST export walk (declarations, export lists, `x as __y` aliases, and
+//       `export default <__id>`), and
+//   (c) an AST MemberExpression walk for `window|self|globalThis.__*` access
+//       (excluding legitimate __zod_*/__vite_* library internals).
 async function walkJs(dir, out = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
@@ -105,38 +106,16 @@ async function walkJs(dir, out = []) {
   }
   return out;
 }
-const FORBIDDEN_NAMES = [
-  "__setkvfaultfortest", "kv.fault", "cap-kv-fault-test", "injected test fault",
-  "__sidebarpersistence", "__lastviewtransition",
-  "__resetsessionfortest", "__resetmigrationfortest", "__resetbootfortest",
-  "buildscriptsrcdoc", "test-only",
-];
-// Test oracles are __-prefixed properties on window/self/globalThis, EXCEPT the
-// legitimate library internals (__zod_*, __vite_*). The specific FORBIDDEN_NAMES
-// above are still scanned case-insensitively EVERYWHERE, so a renamed oracle on
-// ANY object is caught by name.
-const ORACLE_RE = /(?:window|self|globalThis)\s*(?:\.|\[)\s*["']?__(?!(?:zod|vite))/g;
-// Structural: any EXPORTED __-prefixed identifier in any form — a declaration
-// (export function/const/let/class __x), an export LIST (export { __x },
-// export { x as __x }), or a default export of a __-named binding.
-const EXPORTED_TEST_SEAM_RE = /export\s+(?:(?:const|let|function|class|async\s+function)\s+__[A-Za-z0-9_$]+|default\s+__[A-Za-z0-9_$]+|\{[^}]*\b(?:__[A-Za-z0-9_$]+|[A-Za-z0-9_$]+\s+as\s+__[A-Za-z0-9_$]+)\b[^}]*\})/g;
+const { scanShippedJs } = await import("./scripts/scan-shipped.mjs");
 const shippedJs = await walkJs("extension");
-for (const file of shippedJs) {
-  const text = await readFile(file, "utf8");
-  const lower = text.toLowerCase();
-  for (const needle of FORBIDDEN_NAMES) {
-    if (lower.includes(needle)) {
-      throw new Error(`shipped ${file} contains the forbidden test control \`${needle}\` — test controls/oracles must live only in the unit-test/harness layer`);
-    }
-  }
-  if (ORACLE_RE.test(text)) {
-    throw new Error(`shipped ${file} contains a window/globalThis/self.__* test oracle — remove it from production`);
-  }
-  if (EXPORTED_TEST_SEAM_RE.test(text)) {
-    throw new Error(`shipped ${file} exports a __-prefixed test seam — move test hooks to tests/test-hooks.js`);
-  }
+const violations = await scanShippedJs(shippedJs);
+if (violations.length > 0) {
+  throw new Error(
+    `shipped-code scan failed (${violations.length} violation(s)):\n` +
+    violations.map((v) => `  - ${v}`).join("\n"),
+  );
 }
-console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files`);
+console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files (AST export + oracle walk)`);
 
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.87] — 2026-08-18
+- build: replace regex scan with an acorn AST export+oracle walk
+
 ## [0.2.86] — 2026-08-18
 - refactor: production owns KV/scheduler state in closure; tests use module isolation
 
