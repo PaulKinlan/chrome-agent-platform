@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.83] — 2026-08-18
+- docs(ui-fixes): record the final-sol acceptance commit + evidence claims in the tracker
+
 ## [0.2.82] — 2026-08-18
 - fix(tool-calls): final acceptance — abort-authoritative outcome, no-grace terminal, atomic/UTF-8/redacted serializer, deterministic demo tool provider + REAL persisted-thread evidence
 
