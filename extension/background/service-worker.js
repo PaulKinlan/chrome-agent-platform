@@ -295,6 +295,8 @@ import {
   parseOmniboxContent,
   redactSecrets,
   sanitizeToolName as safeToolName,
+  seedSnapshotGate,
+  syncSnapshotDocument,
   schemaToZod as buildSchema,
   summarizeInjection,
 } from "../lib/pure.js";
@@ -793,12 +795,14 @@ async function injectScriptsIntoOpenTabs(canonical) {
     const results = [];
     for (const t of targets) {
       const r = { tabId: t.id, main: false, bridge: false, error: null };
-      // MAIN-world first (it registers its message listener), then the isolated
-      // relay (its ensureMainWorld posts the nonce handshake that triggers the
-      // discovery collect).
+      // MAIN-world first (it installs the out-of-band bootstrap hook), then the
+      // isolated relay (its startup enrollment.status pull issues the MAC key,
+      // arms the MAIN world, and triggers the discovery collect). In EACH world
+      // content/bridge-auth.js runs first — it defines the shared MAC primitive
+      // (globalThis.CairnBridgeAuth) both later files depend on.
       for (const [files, world, key] of [
-        [["content/main-world.js"], "MAIN", "main"],
-        [["content/content-script.js"], "ISOLATED", "bridge"],
+        [["content/bridge-auth.js", "content/main-world.js"], "MAIN", "main"],
+        [["content/bridge-auth.js", "content/content-script.js"], "ISOLATED", "bridge"],
       ]) {
         try {
           await chrome.scripting.executeScript({
@@ -855,6 +859,22 @@ async function notifyOriginBridge(canonical, message) {
   } catch { /* best-effort */ }
 }
 
+/** Bind the snapshot gate at (re-)enrollment: the picker-approved tab becomes
+ * the ONLY tab whose discovery snapshots are accepted and the EXACT tab
+ * invocation targets (the round-30 tab-binding blocker). A null pick leaves
+ * the gate unbound so the first reporting tab binds. The monotonic navigation
+ * epoch ceiling (maxEpoch) is preserved across re-enrollments. Lock order:
+ * called while holding the per-origin lock → acquires the enrollment lock
+ * (same order as tools.upsert). */
+async function bindSnapshotGate(canonical, pickedTabId) {
+  await withEnrollmentLock(async () => {
+    const gate = await kvGet(SNAPSHOT_GATE_KEY);
+    const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+    map[canonical] = seedSnapshotGate(map[canonical], pickedTabId);
+    await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+  });
+}
+
 async function invokeSiteTool(origin, name, args, expectedGen = null) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
@@ -898,15 +918,35 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
   if (descriptor.source !== "declared" && descriptor.source !== "inferred") {
     return { error: `tool ${name} is not page-invocable (source ${descriptor.source})` };
   }
-  const tabs = await chrome.tabs.query({});
-  const tab = tabs.find((t) => {
-    try {
-      return t.url ? new URL(t.url).origin === canonical : false;
-    } catch {
-      return false;
-    }
-  });
-  if (!tab?.id) return { error: `no tab open for ${canonical}` };
+  // The EXACT approved tab + document identity (the round-30 tab-binding
+  // blocker): the picker's approved tab is bound in the snapshot gate at
+  // enrollment, and the gate tracks the CURRENT document on that tab (its
+  // accepted snapshots). Invocation NEVER falls back to a first same-origin
+  // tabs.query match — with several tabs on one origin the approved directory
+  // could come from one document while the invocation silently drove another.
+  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  const binding = gateMap[canonical] ?? null;
+  if (
+    !binding || binding.tabId == null ||
+    typeof binding.documentId !== "string" || binding.documentId.length === 0 ||
+    !Number.isInteger(binding.seq) || binding.seq < 0
+  ) {
+    return {
+      error: `no current approved tab/document snapshot is bound for ${canonical} — re-discover the page`,
+    };
+  }
+  const tab = await chrome.tabs.get(binding.tabId).catch(() => null);
+  let tabOrigin = null;
+  try {
+    tabOrigin = tab?.url ? canonicalOrigin(new URL(tab.url).origin) : null;
+  } catch {
+    tabOrigin = null;
+  }
+  if (!tab?.id || tabOrigin !== canonical) {
+    return {
+      error: `the approved tab for ${canonical} no longer shows that origin — re-discover the page`,
+    };
+  }
   // The site invocation is a SIDE-EFFECTING boundary (it drives a page function
   // on the origin) — it must be fenced like every other tool (the round-16 fence
   // coverage finding: site invocation called tabs.sendMessage without a run check).
@@ -928,13 +968,16 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
     }
   }
   try {
+    // Target the EXACT document the gate bound (Chrome 106+ documentId
+    // addressing): if the tab navigated away from the bound document, the send
+    // fails honestly instead of reaching a different document's bridge.
     const res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
       name,
       args,
       gen, // enrollment-scoped identity — the content script enforces it (round-20)
       source: descriptor.source, // descriptor identity — declared/inferred dispatch
-    });
+    }, { documentId: binding.documentId });
     // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
     // call (a single locked snapshot, not two unlocked reads).
     const after = await enrollmentSnapshot(canonical);
@@ -1224,8 +1267,74 @@ async function agentInfo(origin) {
 // script). The status is a single latest entry (never an unbounded log).
 const WEBMCP_DIAG_KEY = "cap:webmcpDiagnostics";
 const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
-// Per-origin discovery-snapshot ordering gate: { [origin]: { sessionId, seq } }.
+// Per-origin discovery-snapshot ordering gate: { [origin]: { tabId,
+// documentId, epoch, maxEpoch, seq } }. Ordered by SENDER-DERIVED tab/document
+// identity + a SW-assigned monotonic navigation epoch (lib/pure.js
+// acceptToolSnapshot/syncSnapshotDocument) — a second same-origin tab or a
+// stale document can never replace the bound tab's current snapshot.
 const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
+
+// Per-document bridge MAC keys (cross-world transport integrity, NOT page
+// attestation): the nonce authenticating MAIN↔isolated messages is ISSUED HERE and
+// delivered out-of-band — to the MAIN world via chrome.scripting.executeScript
+// func ARGS and to the isolated bridge via the enrollment.status response
+// (both extension-private). The nonce never transits the broadcast
+// window.postMessage channel, so a page script eavesdropping that channel sees
+// only HMAC tags it cannot recompute. Keyed by the browser-attested
+// documentId; mirrored to chrome.storage.session so an SW restart re-arms the
+// SAME key (the MAIN world keeps it across an SW restart).
+const BRIDGE_NONCE_KEY = "cap:webmcpBridgeNonces";
+const BRIDGE_NONCE_MAX = 256;
+const bridgeNonceMemory = new Map(); // documentId → nonce
+
+async function issueBridgeNonce(tabId, documentId, diagnostics) {
+  let nonce = bridgeNonceMemory.get(documentId) ?? null;
+  if (!nonce) {
+    try {
+      const stored = await chrome.storage.session.get(BRIDGE_NONCE_KEY);
+      nonce = stored?.[BRIDGE_NONCE_KEY]?.[documentId] ?? null;
+    } catch {
+      nonce = null;
+    }
+  }
+  if (!nonce) {
+    nonce = crypto.randomUUID();
+    try {
+      const stored = await chrome.storage.session.get(BRIDGE_NONCE_KEY);
+      const map = { ...(stored?.[BRIDGE_NONCE_KEY] ?? {}), [documentId]: nonce };
+      const keys = Object.keys(map);
+      while (keys.length > BRIDGE_NONCE_MAX) delete map[keys.shift()];
+      await chrome.storage.session.set({ [BRIDGE_NONCE_KEY]: map });
+    } catch { /* best-effort persistence — the memory copy still arms this run */ }
+  }
+  bridgeNonceMemory.set(documentId, nonce);
+  if (bridgeNonceMemory.size > BRIDGE_NONCE_MAX) {
+    bridgeNonceMemory.delete(bridgeNonceMemory.keys().next().value); // oldest-first bound
+  }
+  // Arm the MAIN world of the EXACT document out-of-band (idempotent: the same
+  // nonce is re-delivered on a re-pull, so a re-injected MAIN world picks it up
+  // and an already-armed one is undisturbed). A failure fails CLOSED: the
+  // bridge never receives a key, so no discovery or invocation happens.
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, documentIds: [documentId] },
+      world: "MAIN",
+      func: (n, d) => {
+        const g = globalThis;
+        const hook = g.__cairnMainWorldBootstrap;
+        if (typeof hook === "function") {
+          hook(n, d);
+          return;
+        }
+        g.__cairnMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
+      },
+      args: [nonce, diagnostics === true],
+    });
+    return nonce;
+  } catch {
+    return null;
+  }
+}
 
 // Cached diagnostics toggle so SW-side injection/enrollment logging can gate
 // synchronously (refreshed whenever the flag is read or set).
@@ -2042,7 +2151,29 @@ const handlers = {
     if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
     return await listTools(origin);
   },
-  async "tools.upsert"({ origin, tools, sessionId, seq }) {
+  // `tools.invoke` — the OWNER/extension-surface invocation of a site tool
+  // through the FULL production path: directory + dispatch-source resolution,
+  // the immutable generation requirement, run-abort fencing, the exact
+  // approved-tab/document binding, and pre/post enrollment revalidation all
+  // live in invokeSiteTool — this route adds nothing but the current
+  // enrollment generation as the expected generation (the same value a
+  // just-started run would capture). EXTENSION-ONLY: never in
+  // PAGE_ALLOWED_ROUTES — a page must never invoke its own tools through the
+  // trusted path. The model-facing run path (siteToolset) additionally gates
+  // on per-tool owner approval before reaching invokeSiteTool.
+  async "tools.invoke"({ origin, name, args }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    const snap = await enrollmentSnapshot(canonical);
+    if (!snap.enrolled) {
+      return { ok: false, error: `origin ${canonical} is not enrolled` };
+    }
+    const res = await invokeSiteTool(canonical, String(name ?? ""), args ?? {}, snap.gen);
+    if (res?.error) return { ok: false, error: res.error };
+    if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
+    return { ok: true, result: res?.result };
+  },
+  async "tools.upsert"({ origin, tools, seq, epoch, __sender }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     // Serialize the isEnrolled check + the OPFS write under the SAME origin
@@ -2057,19 +2188,29 @@ const handlers = {
       // A COMPLETE ORDERED REPLACEMENT SNAPSHOT (the stale-tools finding): the
       // report replaces the origin's discovered tool set wholesale — including
       // an EMPTY snapshot (a page that removed all its tools clears them) — so
-      // removed tools never linger listed/approvable. Session/sequence ordering
-      // drops stale same-session replays; a fresh session (reload/navigation)
-      // supersedes. The gate map is a shared cross-origin registry, so its
-      // read-modify-write runs under the GLOBAL enrollment lock (lock order
-      // origin → enrollment, the same as enroll/delete).
+      // removed tools never linger listed/approvable. The ordering gate is
+      // keyed by SENDER-DERIVED tab + document identity (the browser attests
+      // sender.tab.id + sender.documentId — the page cannot forge them) plus a
+      // SW-assigned MONOTONIC navigation epoch the bridge echoes: a report
+      // from a second same-origin tab, a stale document, a wrong epoch, or a
+      // replayed sequence is rejected (the round-30 ordering blocker: any new
+      // random session id used to supersede). The gate map is a shared
+      // cross-origin registry, so its read-modify-write runs under the GLOBAL
+      // enrollment lock (lock order origin → enrollment, same as enroll/delete).
       return await withEnrollmentLock(async () => {
         const gate = await kvGet(SNAPSHOT_GATE_KEY);
         const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
-        if (!acceptToolSnapshot(map[canonical], sessionId, seq)) {
+        const decision = acceptToolSnapshot(map[canonical], {
+          tabId: __sender?.tabId ?? null,
+          documentId: __sender?.documentId ?? null,
+          epoch,
+          seq,
+        });
+        if (!decision.accept) {
           return { ok: false, error: "stale or malformed snapshot — rejected", stale: true };
         }
         const accepted = await replaceTools(canonical, tools);
-        map[canonical] = { sessionId, seq };
+        map[canonical] = decision.gate;
         await kvSet({ [SNAPSHOT_GATE_KEY]: map });
         // Page-reported status from the SANITIZED accepted descriptors,
         // explicitly labeled page data (never an attested lifecycle state).
@@ -2085,13 +2226,57 @@ const handlers = {
   // enrollment generation for ITS OWN origin (the sender-derived origin — the
   // auth layer overwrites message.origin for page senders) instead of waiting
   // for a one-time enrollment push that a document created later can never
-  // receive. Read-only; the bridge applies the response through its monotonic
-  // lifecycle fence.
-  async "enrollment.status"({ origin }) {
+  // receive. Read-only w.r.t. enrollment; it ALSO observes the sender's
+  // document identity to assign the MONOTONIC navigation epoch the bridge must
+  // echo in its snapshots (the snapshot-ordering gate). The bridge applies the
+  // response through its monotonic lifecycle fence.
+  async "enrollment.status"({ origin, __sender }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     const snap = await enrollmentSnapshot(canonical);
-    return { ok: true, enrolled: snap.enrolled, gen: snap.gen };
+    // Assign/confirm the navigation epoch for the sender's (tab, document).
+    // Only the gate-BOUND tab's documents advance the gate; a second
+    // same-origin tab gets `epoch: null` (its snapshots are rejected anyway).
+    let epoch = null;
+    let nonce = null;
+    if (
+      __sender && __sender.tabId != null &&
+      typeof __sender.documentId === "string" &&
+      __sender.documentLifecycle === "active"
+    ) {
+      epoch = await withEnrollmentLock(async () => {
+        const gate = await kvGet(SNAPSHOT_GATE_KEY);
+        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const { gate: next, bound } = syncSnapshotDocument(
+          map[canonical],
+          __sender.tabId,
+          __sender.documentId,
+        );
+        if (!bound) return null;
+        if (!map[canonical] || next !== map[canonical]) {
+          map[canonical] = next;
+          await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        }
+        return next.epoch;
+      });
+      // The bridge MAC key is issued ONLY to an enrolled origin's gate-bound,
+      // ACTIVE document and delivered in this extension-private response (a
+      // page script cannot call chrome.runtime, so ordinary postMessage
+      // observation does not reveal the key). This authenticates transport,
+      // not page-owned tools/results or the shared MAIN realm.
+      // The SAME call arms that exact document's MAIN world out-of-band via
+      // chrome.scripting.executeScript func args. A second same-origin tab
+      // (unbound) or a failed arm gets no key — its bridge stays unarmed and
+      // every discovery/invocation message fails closed.
+      if (snap.enrolled && epoch != null) {
+        nonce = await issueBridgeNonce(
+          __sender.tabId,
+          __sender.documentId,
+          await webmcpDiagnosticsEnabled(),
+        );
+      }
+    }
+    return { ok: true, enrolled: snap.enrolled, gen: snap.gen, epoch, nonce };
   },
   async "tools.approve"({ origin, name, decision }) {
     return await approveTool(origin, name, decision);
@@ -2724,6 +2909,12 @@ const handlers = {
         };
       }
       invalidateAgent();
+      // Bind BEFORE immediate injection. The injected bridge's startup
+      // enrollment.status call must observe the picker-approved tab binding so
+      // the SW can assign THIS document its epoch + MAC key. Binding after
+      // injection races that startup call and can leave the newly injected
+      // bridge permanently unarmed until a reload.
+      await bindSnapshotGate(canonical, pickedTab);
       // Inject the discovery scripts into the ALREADY-OPEN tabs for this origin
       // (dynamic content scripts only run on the next navigation — without this,
       // an enrolled-but-open tab discovers nothing until reloaded). The result
@@ -3058,6 +3249,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Derive the origin for every permitted page route — never trust a
     // message-supplied origin (a page must not be able to act on another origin).
     message.origin = auth.origin;
+    // The BROWSER-ATTESTED sender identity (tab id + document id) for the
+    // snapshot-ordering gate + exact-tab invocation. A page script can put
+    // anything in the message BODY, but it cannot forge the sender — Chrome
+    // populates sender.tab.id + sender.documentId. Handlers treat these as
+    // the only trustworthy tab/document identity.
+    message.__sender = {
+      tabId: sender?.tab?.id ?? null,
+      documentId: typeof sender?.documentId === "string" ? sender.documentId : null,
+      // Chrome-attested lifecycle closes the late-old-document race: a
+      // back/forward-cache or superseded document on the same tab must never
+      // advance the current snapshot gate after the active navigation did.
+      documentLifecycle: typeof sender?.documentLifecycle === "string"
+        ? sender.documentLifecycle
+        : null,
+    };
   } else if (auth.kind === "unmatched") {
     securityEvent("cross-origin", `sender refused: ${auth.error}`);
     sendResponse({ ok: false, error: auth.error });

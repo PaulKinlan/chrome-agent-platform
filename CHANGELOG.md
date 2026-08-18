@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.78] — 2026-08-18
+- fix(webmcp): bind production discovery to exact documents
+
+## [0.2.77] — 2026-08-18
+- fix(webmcp): route real acceptance through production invocation; retain exact approved tab/active-document snapshots; replace expiring cancellation tombstones with immutable epochs; MAC/replay-fence cross-world transport without treating page-owned tools/results as trusted; redact diagnostics; and support exact-clean-commit external evidence.
+
 ## [0.2.76] — 2026-08-18
 - test(evidence): refresh the retained chrome-journeys manifest against the corrective commit (119/119)
 

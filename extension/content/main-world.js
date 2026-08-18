@@ -1,12 +1,23 @@
 // content/main-world.js — runs in the PAGE's world (world: "MAIN"), so it can
 // see the page's own exposed functions + document.modelContext (WebMCP). It
 // cannot use chrome.* APIs, so it talks to the isolated-world content script
-// over a window.postMessage channel authenticated with a nonce.
+// over window.postMessage — a BROADCAST channel every page script can observe.
+//
+// Transport integrity: the service worker delivers a per-document MAC key
+// out-of-band (chrome.scripting.executeScript args), never over postMessage.
+// HMAC-SHA256 + monotonic sequences reject unauthenticated/replayed transport
+// messages, including control messages the old design accepted bare.
+//
+// TRUST LIMIT: MAIN is the page realm. The MAC does not attest page tools,
+// side effects, return values, or realm integrity; all remain page-controlled.
+// A page that ran first or poisoned intrinsics can interfere with its own
+// bridge. The security boundary remains in the service worker: sender-derived
+// origin/tab/document, exact binding, generation fencing, and owner approval.
 //
 // Discovery: reads the page's POSITIVE opt-in exposure (window.webmcpExpose) +
 // document.modelContext tools, and posts them up. Blind window.* enumeration is
 // GONE (the round-28 review: enumerating every enumerable global function was
-// an unsafe eligibility policy). Invocation: on an authenticated "cairn-invoke"
+// an unsafe eligibility policy). Invocation: on an authenticated "invoke"
 // message, dispatches BY SOURCE — a declared WebMCP tool is only ever resolved
 // through document.modelContext, an inferred tool only through the captured
 // exposure registry (never window[name], so a global cannot hijack a declared
@@ -18,21 +29,28 @@
 // message listener, so one invoke would run the page function once per stale
 // listener (duplicate side effects). The previous execution is torn down
 // (listeners removed, timers cleared, in-flight results suppressed) before the
-// new one installs, so exactly ONE live MAIN-world bridge exists per tab.
-const MAIN_WORLD_VERSION = 2;
-const GUARD_KEY = "__cairnMainWorldBridge";
-{
-  const prev = window[GUARD_KEY];
-  if (prev && typeof prev === "object" && typeof prev.teardown === "function") {
-    try { prev.teardown(); } catch { /* a stale world must never block the new one */ }
-  }
-}
-
+// new one installs, so exactly ONE live MAIN-world bridge exists per tab. The
+// ENTIRE file is function-scoped: repeated executeScript injection in the same
+// realm must not fail on redeclaring top-level lexical `const` bindings before
+// the teardown guard gets a chance to run.
 (() => {
+  const MAIN_WORLD_VERSION = 3;
+  const GUARD_KEY = "__cairnMainWorldBridge";
+  {
+    const prev = window[GUARD_KEY];
+    if (prev && typeof prev === "object" && typeof prev.teardown === "function") {
+      try { prev.teardown(); } catch { /* a stale world must never block the new one */ }
+    }
+  }
+
   const CHANNEL = "__cairn_bridge";
   const TAG = "[WebMCP:main]";
+  const auth = globalThis.CairnBridgeAuth; // injected before this file
+  // The MAC key — set ONLY by the bootstrap hook (closure-captured, never
+  // posted, never exposed on any global). null = unarmed: this world stays
+  // silent and ignores every inbound message.
   let nonce = null;
-  // Developer diagnostics (gated): when the isolated bridge signals
+  // Developer diagnostics (gated): when the bootstrap delivers
   // `diagnostics: true`, emit structured [WebMCP] logs so the discovery
   // pipeline is observable in the page DevTools console. Off by default (no
   // console noise); enabled from Settings → Site agents → Diagnostics.
@@ -42,55 +60,25 @@ const GUARD_KEY = "__cairnMainWorldBridge";
     try { console.log(TAG, ...args); } catch { /* never throw from a logger */ }
   }
 
-  // In-flight invocations (requestId) + the set the bridge has CANCELLED. The
-  // MAIN world is the PAGE's world (untrusted) — the isolated content script is
-  // the trust boundary that validates enrollment generation before forwarding
-  // an invoke. This module's cancellation state is cooperative: when the bridge
-  // signals `cancel` (a disenrollment), every in-flight invoke's RESULT is
-  // discarded (never posted back) so a deleted origin's page function cannot
-  // surface its result — the round-21 blocker where the MAIN world ignored the
-  // generation entirely and kept reporting results after a delete.
-  const inFlight = new Set();
-  // Cancelled invocation tombstones, BOUNDED (the round-27 blocker 5): the old
-  // code used an unbounded `cancelled` Set — a never-settling page function's id
-  // stayed resident forever, and repeated cancels grew the set without limit
-  // (violating bounded-memory). A Map<id, timestamp> supports a hard cap with
-  // oldest-first eviction (Set insertion order is not exposed) AND a TTL sweep so
-  // a cancel tombstones a result long enough to cover the content-script's 15s
-  // timeout + this world's 20s in-flight timeout, then forgets it.
-  const cancelled = new Map();
-  // Hard cap on the tombstone map (a single page cannot accumulate unbounded
-  // never-settling cancellation tombstones).
-  const CANCELLED_MAX = 512;
-  // A cancelled id suppresses a late result for at most this long (well beyond the
-  // 15s content-script timeout and the 20s in-flight timeout).
-  const CANCELLED_TTL_MS = 60 * 1000;
-  function markCancelled(id) {
-    cancelled.set(id, Date.now());
-    if (cancelled.size > CANCELLED_MAX) {
-      // Evict the OLDEST tombstone (Map preserves insertion order) so the map
-      // stays bounded even under a flood of never-settling cancellations.
-      const oldest = cancelled.keys().next().value;
-      cancelled.delete(oldest);
-    }
-  }
-  function isCancelled(id) {
-    const at = cancelled.get(id);
-    if (at === undefined) return false;
-    if (Date.now() - at > CANCELLED_TTL_MS) {
-      cancelled.delete(id); // expired tombstone — no longer suppress
-      return false;
-    }
-    return true;
-  }
-  // A cancellation EPOCH flag (round-23 blocker 1): `cancelled` only marks IDs
-  // that were already in `inFlight` at cancel time, so a cancel that arrived
-  // BEFORE a new invoke could not mark that future ID (it was not yet in
-  // `inFlight`), and a cancel that arrived AFTER could not interleave because
-  // the invoke handler called invoke() synchronously. `cancelledAll` is set on
-  // EVERY cancel and blocks any NEW invoke until the bridge re-signals a
-  // re-enrollment (`resume`/`init`).
+  // ── Cancellation: an IMMUTABLE epoch, not expiring tombstones ────────────
+  // The round-30 blocker: the old per-id tombstones expired after 60s (or were
+  // evicted under a flood) and re-enrollment cleared `cancelledAll`, so a
+  // cancelled page promise settling AFTER expiry+resume could still surface
+  // its result. `cancelEpoch` is a monotonic counter that ONLY EVER INCREASES
+  // (on cancel, on (re-)arm, on teardown); every invocation captures it at
+  // dispatch and re-checks it before its result is posted. A cancel advances
+  // the epoch, so a cancelled invocation's captured epoch can NEVER match
+  // again — no TTL, no eviction, no resurrection across resume. Correctness
+  // no longer depends on retaining any tombstone. Bounded by construction
+  // (two numbers, no map). Cooperative: once a page function has begun, its
+  // own DOM / storage / network effects cannot be unwound — the result is
+  // discarded and the invocation marked cancelled, but the in-flight function
+  // itself runs to settlement.
+  let cancelEpoch = 0;
+  // `cancelledAll` blocks NEW invokes between a cancel and the next (re-)arm
+  // (bootstrap/resume). It is always paired with a cancelEpoch increment.
   let cancelledAll = false;
+  const inFlight = new Set();
 
   function isDomOwned(name) {
     const platform = new Set([
@@ -297,19 +285,22 @@ const GUARD_KEY = "__cairnMainWorldBridge";
     return [...declared, ...inferred].slice(0, 200);
   }
 
+  // Per-direction bridge sequences (replay suppression, per nonce).
+  let upSeq = 0; // MAIN → isolated
+  let downSeq = -1; // isolated → MAIN (last accepted)
+
   function post(msg) {
-    // Every message carries the bridge-issued nonce once known (the isolated
-    // bridge drops nonce-less reports, so a page script / a stale MAIN world
-    // cannot spoof a tools report or a result). Before the init handshake
-    // there is nothing trusted to say — stay silent.
-    if (!nonce) return;
-    window.postMessage({ [CHANNEL]: true, nonce, ...msg }, "*");
+    // Every outbound message is MAC'd with the SW-issued nonce (never itself
+    // posted). Before the bootstrap there is no key — stay silent rather than
+    // emit anything spoofable-looking.
+    if (!nonce || !auth) return;
+    window.postMessage({ [CHANNEL]: true, ...auth.seal(nonce, "up", upSeq++, msg) }, "*");
   }
 
   // Page-thrown exception text is attacker-controlled and may embed secrets —
-  // never surface it to the bridge/SW/model. Report only a bounded, allowlisted
-  // error NAME (the full text stays in the page's own console via the gated log,
-  // where the page already had it).
+  // never surface it to the bridge/SW/model, not even in the DIAGNOSTICS log
+  // (the round-30 redaction finding: the gated log used to mirror the raw page
+  // exception text). Report only a bounded, allowlisted error NAME.
   const SAFE_ERROR_NAMES = new Set([
     "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError",
     "EvalError", "URIError", "AggregateError", "DOMException",
@@ -330,17 +321,13 @@ const GUARD_KEY = "__cairnMainWorldBridge";
     return `tool failed (${redactError(e)})`;
   }
 
-  async function invoke(requestId, name, args, source) {
+  async function invoke(isStale, name, args, source) {
     // PRE-START cancellation check (the round-22 blocker: cancel only discarded
     // the RESULT, so a page function whose side effect had already executed kept
     // running). This synchronous check runs BEFORE the page function is invoked,
-    // so a request that was already marked cancelled (or arrived after a cancel
-    // epoch — round-23 blocker 1) never STARTS its side effect. It is
-    // cooperative: once a page function has begun, its own DOM / storage /
-    // network effects cannot be unwound — the result is discarded and the
-    // invocation is marked cancelled, but the in-flight function itself runs
-    // to settlement.
-    if (cancelledAll || isCancelled(requestId)) {
+    // so a request captured under a superseded cancel epoch never STARTS its
+    // side effect.
+    if (isStale()) {
       throw internalError("invocation cancelled");
     }
     if (!validToolName(name)) {
@@ -355,7 +342,7 @@ const GUARD_KEY = "__cairnMainWorldBridge";
     if (source === "inferred") {
       const entry = exposedRegistry.get(name);
       if (entry && typeof entry.fn === "function") {
-        if (cancelledAll || isCancelled(requestId)) {
+        if (isStale()) {
           throw internalError("invocation cancelled");
         }
         const params = paramNames(entry.fn);
@@ -371,7 +358,7 @@ const GUARD_KEY = "__cairnMainWorldBridge";
       const raw = await getRawTools();
       const tool = raw.find((t) => t && t.name === name);
       if (tool) {
-        if (cancelledAll || isCancelled(requestId)) {
+        if (isStale()) {
           throw internalError("invocation cancelled");
         }
         if (typeof mc?.executeTool === "function") {
@@ -381,13 +368,13 @@ const GUARD_KEY = "__cairnMainWorldBridge";
         if (typeof tool._execute === "function") return await tool._execute(args ?? {});
       }
       if (typeof mc?.callTool === "function") {
-        if (cancelledAll || isCancelled(requestId)) {
+        if (isStale()) {
           throw internalError("invocation cancelled");
         }
         return await mc.callTool(name, args ?? {});
       }
       if (typeof mc?.invoke === "function") {
-        if (cancelledAll || isCancelled(requestId)) {
+        if (isStale()) {
           throw internalError("invocation cancelled");
         }
         return await mc.invoke(name, args ?? {});
@@ -403,18 +390,86 @@ const GUARD_KEY = "__cairnMainWorldBridge";
     return id;
   }
 
+  // The instance API the stable bootstrap hook forwards to.
+  const instance = {
+    dead: false,
+    bootstrap(n, diag) {
+      if (this.dead) return;
+      if (typeof n !== "string" || n.length < 16 || n.length > 128) return;
+      if (nonce !== n) {
+        nonce = n;
+        upSeq = 0;
+        downSeq = -1;
+      }
+      diagnostics = diag === true;
+      // A (re-)arm is an enrollment boundary: NEW invokes are allowed again,
+      // and the epoch advances so nothing captured before this arm can post.
+      cancelledAll = false;
+      cancelEpoch++;
+      log("start", JSON.stringify({ origin: location.origin, role: "main-world" }));
+      collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools }));
+    },
+  };
+
+  // The STABLE bootstrap hook: installed at most once per document as a
+  // non-writable, non-configurable global (a page script that runs after us
+  // cannot replace it; a page that pre-seized the name makes our install throw
+  // and we fail CLOSED). The SW delivers the nonce by calling this hook via
+  // chrome.scripting.executeScript func args — never over the broadcast
+  // channel. Re-injection RE-TARGETS the same hook at the new instance (the
+  // hook itself stays). A page calling the hook with a guessed value only
+  // arms this world with the WRONG key — its messages fail MAC verification
+  // at the isolated relay (fail closed, self-impact only).
+  const HOOK_KEY = "__cairnMainWorldBootstrap";
+  {
+    const existing = globalThis[HOOK_KEY];
+    if (typeof existing === "function" && existing.__cairnHook === true) {
+      existing.adopt(instance);
+    } else {
+      let current = instance;
+      const hook = function (n, d) {
+        if (current && !current.dead) current.bootstrap(n, d);
+      };
+      Object.defineProperty(hook, "__cairnHook", { value: true });
+      hook.adopt = (inst) => {
+        current = inst && typeof inst.bootstrap === "function" ? inst : null;
+      };
+      Object.freeze(hook);
+      try {
+        Object.defineProperty(globalThis, HOOK_KEY, {
+          value: hook,
+          writable: false,
+          configurable: false,
+        });
+      } catch {
+        // A hostile page pre-seized the hook name — fail closed (discovery
+        // stays silent); never throw out of a content script.
+      }
+    }
+  }
+  // The pending-bootstrap fallback: the SW's bootstrap may land BEFORE this
+  // file executed (a document_start race). Consume + clear it immediately.
+  try {
+    const pending = globalThis.__cairnMainWorldPendingBootstrap;
+    if (pending && typeof pending === "object") {
+      delete globalThis.__cairnMainWorldPendingBootstrap;
+      instance.bootstrap(pending.nonce, pending.diagnostics);
+    }
+  } catch { /* fail closed */ }
+
   function onMessage(event) {
     if (event.source !== window) return; // only same-window messages
     const data = event.data;
     if (!data || typeof data !== "object" || data[CHANNEL] !== true) return;
-    if (data.type === "init") {
-      nonce = typeof data.nonce === "string" ? data.nonce : null;
-      diagnostics = data.diagnostics === true;
-      cancelledAll = false; // a fresh bridge/nonce resets the cancel epoch
-      log("start", JSON.stringify({ origin: location.origin, role: "main-world" }));
-      collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools }));
-    } else if (data.type === "collect") {
-      diagnostics = data.diagnostics === true;
+    // MAC gate FIRST (the round-30 blocker: init/resume/cancel/collect/invoke
+    // were accepted UNAUTHENTICATED). An unkeyed, wrongly-keyed, or replayed
+    // message is dropped before any dispatch.
+    const opened = auth ? auth.open(nonce, "down", downSeq, data) : { ok: false };
+    if (!opened.ok) return;
+    downSeq = opened.seq;
+    const msg = opened.msg;
+    if (msg.type === "collect") {
+      diagnostics = msg.diagnostics === true;
       collectTools().then((tools) => {
         const declared = tools.filter((t) => t.source === "declared").length;
         const inferred = tools.filter((t) => t.source === "inferred").length;
@@ -427,26 +482,29 @@ const GUARD_KEY = "__cairnMainWorldBridge";
         }));
         post({ type: "tools", origin: location.origin, tools });
       });
-    } else if (data.type === "resume") {
-      diagnostics = data.diagnostics === true;
-      // Re-enrollment: clear the cancel epoch so NEW invokes are allowed again.
-      // In-flight ids cancelled by the prior disenrollment stay cancelled (their
-      // results remain discarded) — only the epoch is cleared.
+    } else if (msg.type === "resume") {
+      diagnostics = msg.diagnostics === true;
+      // Re-enrollment: NEW invokes are allowed again; the epoch advances so
+      // invocations captured BEFORE the cancel stay cancelled forever (the
+      // round-30 immutable-epoch fix — their results can never resurface).
       cancelledAll = false;
+      cancelEpoch++;
       log("resume", JSON.stringify({ origin: location.origin }));
-    } else if (data.type === "cancel") {
-      // Disenrollment cancellation: (1) set the cancel EPOCH so any NEW invoke
-      // is rejected before it starts (round-23 blocker 1: a cancel that arrived
-      // before a future invoke could not mark that future ID), and (2) mark every
-      // currently in-flight invoke as cancelled so its result is discarded.
+    } else if (msg.type === "cancel") {
+      // Disenrollment cancellation: block NEW invokes and advance the epoch so
+      // every in-flight invocation's captured epoch is permanently stale — its
+      // result is discarded no matter when the page function settles.
       cancelledAll = true;
-      for (const id of inFlight) markCancelled(id);
+      cancelEpoch++;
       log("cancel", JSON.stringify({ origin: location.origin }));
-    } else if (data.type === "invoke" && nonce && data.nonce === nonce) {
-      log("invoke", JSON.stringify({ name: data.name, requestId: data.requestId }));
-      const requestId = data.requestId;
+    } else if (msg.type === "invoke") {
+      log("invoke", JSON.stringify({ name: msg.name, requestId: msg.requestId }));
+      const requestId = msg.requestId;
+      // Capture the cancellation epoch AT DISPATCH (immutable fencing).
+      const epoch = cancelEpoch;
+      const isStale = () => cancelledAll || epoch !== cancelEpoch;
       // REGISTER the in-flight id BEFORE the deferral (the round-28 regression:
-      // without inFlight.add, a cancel could never tombstone a running invoke).
+      // without inFlight.add, a teardown could never bound a running invoke).
       inFlight.add(requestId);
       // Bound the in-flight set: a hung page function must not leave its request
       // id resident forever (the content-script drops the response at 15s, but
@@ -454,44 +512,44 @@ const GUARD_KEY = "__cairnMainWorldBridge";
       trackTimer(setTimeout(() => { inFlight.delete(requestId); }, 20000));
       // Defer the page-function invocation by ONE macrotask so a `cancel`
       // delivered in the same turn (a disenrollment that raced this invoke)
-      // can run FIRST and mark the request cancelled BEFORE the page function
-      // starts (the round-23 blocker: invoking synchronously meant a later
-      // cancel could never interleave between inFlight.add and the call).
+      // can run FIRST and advance the epoch BEFORE the page function starts
+      // (the round-23 blocker: invoking synchronously meant a later cancel
+      // could never interleave between inFlight.add and the call).
       trackTimer(setTimeout(() => {
-        if (cancelledAll || isCancelled(requestId)) {
+        if (isStale()) {
           inFlight.delete(requestId);
           post({ type: "result", requestId, ok: false, error: "invocation cancelled" });
           return;
         }
-        invoke(requestId, data.name, data.args, data.source)
+        invoke(isStale, msg.name, msg.args, msg.source)
           .then((result) => {
             inFlight.delete(requestId);
-            // Check BOTH the per-id tombstone AND the cancel epoch (the round-28
-            // regression: the success path only checked the tombstone, so a
-            // cancel-all during the await let the result through).
-            if (cancelledAll || isCancelled(requestId)) {
-              cancelled.delete(requestId);
+            // Re-check the epoch at SETTLEMENT (the round-28 regression checked
+            // only a per-id tombstone; the round-30 fix makes the fence an
+            // immutable epoch so a post-resume late settlement can NEVER post).
+            if (isStale()) {
               post({ type: "result", requestId, ok: false, error: "invocation cancelled" });
               return;
             }
-            log("result", JSON.stringify({ name: data.name, requestId, ok: true }));
+            log("result", JSON.stringify({ name: msg.name, requestId, ok: true }));
             post({ type: "result", requestId, ok: true, result });
           })
           .catch((e) => {
             inFlight.delete(requestId);
-            cancelled.delete(requestId);
-            log("result", JSON.stringify({ name: data.name, requestId, ok: false, error: String(e?.message ?? e) }));
-            // Redact the page-thrown body — only our own internal messages or
-            // an allowlisted error NAME cross the bridge boundary.
-            post({ type: "result", requestId, ok: false, error: resultError(e) });
+            // Redact the page-thrown body EVERYWHERE — the bridged error AND
+            // the diagnostics log carry only our own internal messages or an
+            // allowlisted error NAME (the round-30 redaction finding).
+            const safe = isStale() ? "invocation cancelled" : resultError(e);
+            log("result", JSON.stringify({ name: msg.name, requestId, ok: false, error: safe }));
+            post({ type: "result", requestId, ok: false, error: safe });
           });
       }, 0));
     }
   }
   window.addEventListener("message", onMessage);
 
-  // First pass after the page settles (the bridge's init also triggers a
-  // collect; this covers a bridge that started later than this world).
+  // First pass after the page settles (the bootstrap also triggers a collect;
+  // this covers an arming that happened after the load event).
   let loadTimer = null;
   const discoverAfterLoad = () => {
     loadTimer = trackTimer(setTimeout(() => collectTools().then((tools) => post({ type: "tools", origin: location.origin, tools })), 300));
@@ -506,10 +564,12 @@ const GUARD_KEY = "__cairnMainWorldBridge";
   window[GUARD_KEY] = {
     version: MAIN_WORLD_VERSION,
     teardown() {
-      // Suppress every in-flight + future result, remove the listeners, and
-      // clear the pending timers so nothing from this instance can fire again.
+      // Suppress every in-flight + future result (the epoch advance makes every
+      // captured epoch permanently stale), remove the listeners, and clear the
+      // pending timers so nothing from this instance can fire again.
+      instance.dead = true;
       cancelledAll = true;
-      for (const id of inFlight) markCancelled(id);
+      cancelEpoch++;
       for (const t of inflightTimers) clearTimeout(t);
       inflightTimers.clear();
       window.removeEventListener("message", onMessage);

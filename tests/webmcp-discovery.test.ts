@@ -6,16 +6,26 @@
 //  - source-threaded dispatch: declared tools resolve via document.modelContext
 //    (never a colliding window global), inferred tools via the captured
 //    exposure registry (never a reassigned global)
-//  - cancellation fencing: inFlight registration, cancel-all epoch, disenroll
-//    while a promise-returning tool runs discards the result
+//  - the MAC bridge gate: messages are HMAC-authenticated with the SW-issued
+//    key delivered via the out-of-band bootstrap hook; a forged/wrongly-keyed
+//    message is dropped
+//  - cancellation fencing: inFlight registration, the IMMUTABLE cancel epoch
+//    (a result settling after cancel+resume can never resurface)
 //  - versioned singleton teardown: re-execution leaves exactly one listener
 // @ts-nocheck — the content script runs in the page world; mocks are dynamic.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
+// The MAC primitive the production injection loads BEFORE main-world.js.
+await import("../extension/content/bridge-auth.js");
+const bridgeAuth = globalThis.CairnBridgeAuth;
+
 const SRC = Deno.readTextFileSync(
   new URL("../extension/content/main-world.js", import.meta.url).pathname,
 );
+
+// The SW-issued bridge key the test arms each world with (>= 16 chars).
+const NONCE = "test-bridge-key-0123456789abcdef";
 
 // A minimal mock modelContext implementing the webmcp-tools polyfill shape:
 // getTools() is ASYNC + returns an array whose inputSchema is a STRINGIFIED JSON.
@@ -60,27 +70,43 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   };
   const documentObj = { modelContext, readyState: "complete" };
   const locationObj = { origin: "https://example.com" };
-  const fn = new Function(
-    "window", "document", "location", "setTimeout", "clearTimeout", "crypto",
-    SRC + "\n;",
-  );
-  fn(
-    windowObj, documentObj, locationObj,
-    (cb, delay) => { if (!delay) cb(); return 0; },
-    () => {},
-    { randomUUID: () => "test-nonce" },
-  );
+  // bridge-auth.js is injected BEFORE this file in production — expose it on
+  // the mocked realm (the script reads globalThis.CairnBridgeAuth, and the
+  // harness shadows globalThis with the mocked window so the bootstrap hook
+  // installs per-world, not on the test runner's global).
+  windowObj.CairnBridgeAuth = bridgeAuth;
+  const evaluate = () => {
+    const fn = new Function(
+      "window", "document", "location", "setTimeout", "clearTimeout", "crypto", "globalThis",
+      SRC + "\n;",
+    );
+    fn(
+      windowObj, documentObj, locationObj,
+      (cb, delay) => { if (!delay) cb(); return 0; },
+      () => {},
+      { randomUUID: () => "test-nonce" },
+      windowObj,
+    );
+  };
+  evaluate();
   const emit = (data) => {
     for (const l of [...messageListeners]) l({ source: windowObj, data });
   };
-  const init = () => emit({ __cairn_bridge: true, type: "init", nonce: "test-nonce", diagnostics: false });
+  // Out-of-band arming (the production path: the SW calls the bootstrap hook
+  // via chrome.scripting.executeScript func args — never over postMessage).
+  const arm = () => windowObj.__cairnMainWorldBootstrap(NONCE, false);
+  // Sealed isolated→MAIN control messages (the production relay MACs every
+  // message; a bare emit() simulates a page-script forgery).
+  let downSeq = 0;
+  const send = (msg) => emit({ __cairn_bridge: true, ...bridgeAuth.seal(NONCE, "down", downSeq++, msg) });
+  const sealWith = (key, msg) => ({ __cairn_bridge: true, ...bridgeAuth.seal(key, "down", downSeq++, msg) });
   const liveListeners = () => messageListeners.length;
-  return { posted, emit, init, windowObj, liveListeners };
+  return { posted, emit, send, sealWith, arm, reevaluate: evaluate, windowObj, liveListeners };
 }
 
 async function collectTools(modelContext, pageGlobals = {}) {
   const world = makeWorld({ modelContext, pageGlobals });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   const toolsMsg = world.posted.find((m) => m?.type === "tools");
   return { world, tools: toolsMsg?.tools ?? [] };
@@ -88,10 +114,7 @@ async function collectTools(modelContext, pageGlobals = {}) {
 
 // Drive an invoke through the real message handler and await its result post.
 async function invokeTool(world, { name, args = {}, source, requestId = "r1" }) {
-  world.emit({
-    __cairn_bridge: true, type: "invoke", nonce: "test-nonce",
-    requestId, name, args, source,
-  });
+  world.send({ type: "invoke", requestId, name, args, source });
   await new Promise((r) => setTimeout(r, 30));
   return world.posted.filter((m) => m?.type === "result" && m?.requestId === requestId);
 }
@@ -209,7 +232,7 @@ Deno.test("webmcp invoke: a DECLARED tool dispatches via modelContext, never a c
     modelContext: mc,
     pageGlobals: { "shop.total": () => ({ total: 999 }) }, // the collision hijack attempt
   });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   const results = await invokeTool(world, { name: "shop.total", source: "declared" });
   assertEquals(results.length, 1);
@@ -221,7 +244,7 @@ Deno.test("webmcp invoke: an INFERRED tool calls the captured exposure, never a 
   let called = "";
   function greet(name) { called = "original"; return "hi " + name; }
   const world = makeWorld({ pageGlobals: { greet, webmcpExpose: [greet] } });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   // Reassign the global AFTER discovery — the invocation must still call the
   // CAPTURED function (descriptor identity), not the hijacker.
@@ -237,7 +260,7 @@ Deno.test("webmcp invoke: a missing/invalid source is rejected (no window-global
   const world = makeWorld({
     pageGlobals: { greet: function greet() { return "hi"; }, webmcpExpose: [] },
   });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   const noSource = await invokeTool(world, { name: "greet", requestId: "r-nosrc" });
   assertEquals(noSource[0]?.ok, false);
@@ -247,7 +270,7 @@ Deno.test("webmcp invoke: a missing/invalid source is rejected (no window-global
 Deno.test("webmcp invoke: page exception bodies are REDACTED from the result", async () => {
   function leak() { throw new Error("api_key=sk-secret-value-123"); }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [leak] } });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   const results = await invokeTool(world, { name: "leak", source: "inferred" });
   assertEquals(results.length, 1);
@@ -260,13 +283,13 @@ Deno.test("webmcp cancellation: disenroll while a promise tool runs discards the
   let resolveTool;
   function slow() { return new Promise((res) => { resolveTool = res; }); }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [slow] } });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   // Start the invoke (deferred one macrotask, then the tool pends).
-  world.emit({ __cairn_bridge: true, type: "invoke", nonce: "test-nonce", requestId: "r-slow", name: "slow", args: {}, source: "inferred" });
+  world.send({ type: "invoke", requestId: "r-slow", name: "slow", args: {}, source: "inferred" });
   await new Promise((r) => setTimeout(r, 10)); // the deferred invoke has STARTED (in-flight)
   // Disenroll: cancel-all while the tool promise is pending.
-  world.emit({ __cairn_bridge: true, type: "cancel", nonce: "test-nonce" });
+  world.send({ type: "cancel" });
   resolveTool("late-result");
   await new Promise((r) => setTimeout(r, 30));
   const results = world.posted.filter((m) => m?.type === "result" && m?.requestId === "r-slow");
@@ -276,20 +299,68 @@ Deno.test("webmcp cancellation: disenroll while a promise tool runs discards the
   assert(!world.posted.some((m) => m?.type === "result" && m?.ok === true && m?.result === "late-result"), "the cancelled tool's result never surfaces");
 });
 
+Deno.test("webmcp cancellation: a result settling AFTER cancel+resume can never resurface (immutable epoch)", async () => {
+  // The round-30 blocker: the old per-id tombstones expired/evicted and
+  // re-enrollment cleared the cancel flag, so a promise settling after
+  // resume could surface its result. The immutable epoch must fence it.
+  let resolveTool;
+  function slow() { return new Promise((res) => { resolveTool = res; }); }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [slow] } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  world.send({ type: "invoke", requestId: "r-late", name: "slow", args: {}, source: "inferred" });
+  await new Promise((r) => setTimeout(r, 10)); // in-flight
+  world.send({ type: "cancel" });
+  world.send({ type: "resume" }); // re-enrollment BEFORE the promise settles
+  resolveTool("late-result");
+  await new Promise((r) => setTimeout(r, 30));
+  const results = world.posted.filter((m) => m?.type === "result" && m?.requestId === "r-late");
+  assertEquals(results.length, 1, "exactly one terminal result");
+  assertEquals(results[0].ok, false, "the post-resume settlement stays discarded");
+  assert(String(results[0].error).includes("cancelled"), "marked as cancelled");
+  assert(!world.posted.some((m) => m?.type === "result" && m?.ok === true && m?.result === "late-result"), "the cancelled result never resurfaces across resume");
+});
+
 Deno.test("webmcp cancellation: the cancel epoch blocks NEW invokes; resume clears it", async () => {
   let calls = 0;
   function tool() { calls++; return "ran"; }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [tool] } });
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
-  world.emit({ __cairn_bridge: true, type: "cancel", nonce: "test-nonce" });
+  world.send({ type: "cancel" });
   const blocked = await invokeTool(world, { name: "tool", source: "inferred", requestId: "r-blocked" });
   assertEquals(calls, 0, "a post-cancel invoke never starts the page function");
   assertEquals(blocked[0]?.ok, false);
   // Re-enrollment (resume) clears the epoch — a new invoke runs again.
-  world.emit({ __cairn_bridge: true, type: "resume", nonce: "test-nonce" });
+  world.send({ type: "resume" });
   const allowed = await invokeTool(world, { name: "tool", source: "inferred", requestId: "r-allowed" });
   assertEquals(calls, 1, "after resume the invoke runs");
+  assertEquals(allowed[0]?.ok, true);
+});
+
+Deno.test("webmcp bridge auth: a page-forged (unauthenticated or wrongly-keyed) message is dropped", async () => {
+  // The round-30 blocker: the old design posted the shared nonce over the
+  // broadcast channel, so a page script could eavesdrop it and forge invokes.
+  // Now every message must carry a valid HMAC keyed by the out-of-band nonce.
+  let calls = 0;
+  function tool() { calls++; return "ran"; }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [tool] } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  // A page script forges a bridge message WITHOUT the MAC (the old nonce-echo
+  // shape — even echoing a correctly-guessed nonce field no longer helps).
+  world.emit({ __cairn_bridge: true, type: "invoke", nonce: NONCE, requestId: "r-forge", name: "tool", args: {}, source: "inferred" });
+  await new Promise((r) => setTimeout(r, 30));
+  assertEquals(calls, 0, "an unMAC'd forged invoke never runs the page function");
+  assert(!world.posted.some((m) => m?.type === "result" && m?.requestId === "r-forge"), "no result for a forged invoke");
+  // A message sealed with a GUESSED (wrong) key is equally dropped.
+  world.emit(world.sealWith("guessed-key-0000000000000000", { type: "invoke", requestId: "r-forge2", name: "tool", args: {}, source: "inferred" }));
+  await new Promise((r) => setTimeout(r, 30));
+  assertEquals(calls, 0, "a wrongly-keyed invoke never runs the page function");
+  // Forged control messages are dropped too (cancel/resume were unauthenticated).
+  world.emit({ __cairn_bridge: true, type: "cancel" });
+  const allowed = await invokeTool(world, { name: "tool", source: "inferred", requestId: "r-real" });
+  assertEquals(calls, 1, "the forged cancel never landed — the real invoke still runs");
   assertEquals(allowed[0]?.ok, true);
 });
 
@@ -300,17 +371,11 @@ Deno.test("webmcp singleton: re-execution tears down the old listener (one resul
   let calls = 0;
   function tool() { calls++; return "ran"; }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [tool] } });
-  // Second execution (re-injection) — the guard block tears down instance 1.
-  const fn = new Function(
-    "window", "document", "location", "setTimeout", "clearTimeout", "crypto",
-    SRC + "\n;",
-  );
-  fn(
-    world.windowObj, { modelContext: null, readyState: "complete" }, { origin: "https://example.com" },
-    (cb, delay) => { if (!delay) cb(); return 0; }, () => {}, { randomUUID: () => "test-nonce" },
-  );
+  // Second execution (re-injection) — the guard block tears down instance 1
+  // and the stable bootstrap hook re-targets the new instance.
+  world.reevaluate();
   assertEquals(world.liveListeners(), 1, "exactly one live message listener after re-injection");
-  world.init();
+  world.arm();
   await new Promise((r) => setTimeout(r, 30));
   const results = await invokeTool(world, { name: "tool", source: "inferred" });
   assertEquals(calls, 1, "exactly one side effect — the torn-down instance never fires");

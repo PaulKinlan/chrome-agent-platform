@@ -4,7 +4,9 @@
 //  - a complete snapshot REPLACES the discovered set (stale tools removed)
 //  - an EMPTY snapshot clears the discovered set
 //  - malformed/out-of-bounds descriptors are rejected, never stored
-//  - snapshot session/seq ordering (acceptToolSnapshot)
+//  - snapshot ordering by sender-derived tab/document + SW-issued monotonic
+//    navigation epoch (seedSnapshotGate / syncSnapshotDocument /
+//    acceptToolSnapshot — the round-30 gate)
 //  - per-tab per-role injection summarization (summarizeInjection)
 //  - status bounding + SW-attested vs page-reported separation
 // @ts-nocheck — lib modules run against the mocked browser shims.
@@ -114,17 +116,68 @@ Deno.test("snapshot: malformed + out-of-bounds + non-page descriptors are reject
   assertEquals(listed.length, 1, "the directory holds only the accepted descriptor");
 });
 
-Deno.test("snapshot ordering: new sessions supersede; same-session stale/replay is rejected", async () => {
-  const p = pure.acceptToolSnapshot;
-  assertEquals(p(null, "s1", 1), true, "first snapshot accepted");
-  assertEquals(p({ sessionId: "s1", seq: 1 }, "s1", 2), true, "advancing seq accepted");
-  assertEquals(p({ sessionId: "s1", seq: 2 }, "s1", 2), false, "a replayed seq rejected");
-  assertEquals(p({ sessionId: "s1", seq: 2 }, "s1", 1), false, "a stale seq rejected");
-  assertEquals(p({ sessionId: "s1", seq: 9 }, "s2", 1), true, "a new session (navigation) supersedes");
-  assertEquals(p(null, "", 1), false, "empty session id rejected");
-  assertEquals(p(null, "s1", -1), false, "negative seq rejected");
-  assertEquals(p(null, "s1", 1.5), false, "fractional seq rejected");
-  assertEquals(p(null, "s1", "1"), false, "string seq rejected");
+Deno.test("snapshot gate: sender-derived tab/document + monotonic navigation epoch ordering", async () => {
+  const { seedSnapshotGate, syncSnapshotDocument, acceptToolSnapshot } = pure;
+  // Enrollment seed binds the picker-approved tab.
+  let gate = seedSnapshotGate(null, 7);
+  assertEquals(gate, { tabId: 7, documentId: null, epoch: -1, maxEpoch: -1, seq: -1 });
+  // The bridge startup sync binds the current document on the bound tab with a fresh epoch.
+  let sync = syncSnapshotDocument(gate, 7, "doc-A");
+  assertEquals(sync.bound, true);
+  assertEquals(sync.gate.documentId, "doc-A");
+  assertEquals(sync.gate.epoch, 0);
+  gate = sync.gate;
+  // A snapshot from the bound (tab, document) with the echoed epoch + advancing seq accepts.
+  let acc = acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-A", epoch: 0, seq: 1 });
+  assertEquals(acc.accept, true);
+  gate = acc.gate;
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-A", epoch: 0, seq: 2 }).accept, true, "advancing seq accepted");
+  // Replay / stale sequences are rejected.
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-A", epoch: 0, seq: 1 }).accept, false, "a replayed seq rejected");
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-A", epoch: 0, seq: 0 }).accept, false, "a stale seq rejected");
+  // A SECOND same-origin tab never replaces the bound tab's snapshot…
+  assertEquals(acceptToolSnapshot(gate, { tabId: 9, documentId: "doc-X", epoch: 0, seq: 99 }).accept, false, "a second same-origin tab is rejected");
+  // …and never advances the gate at startup sync.
+  assertEquals(syncSnapshotDocument(gate, 9, "doc-X").bound, false, "a second tab never binds");
+  // A navigation on the bound tab advances the epoch; the stale document's late
+  // report — or the OLD epoch echoed by a stale bridge — is rejected.
+  sync = syncSnapshotDocument(gate, 7, "doc-B");
+  assertEquals(sync.bound, true);
+  assertEquals(sync.gate.epoch, 1, "a navigation issues a fresh monotonic epoch");
+  gate = sync.gate;
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-A", epoch: 0, seq: 99 }).accept, false, "the stale document's late report rejected");
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-B", epoch: 0, seq: 1 }).accept, false, "the old epoch echoed by a stale bridge rejected");
+  acc = acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-B", epoch: 1, seq: 1 });
+  assertEquals(acc.accept, true, "the current (tab, document, epoch) accepted");
+  gate = acc.gate;
+  // Malformed identity is rejected.
+  assertEquals(acceptToolSnapshot(gate, { tabId: null, documentId: "doc-B", epoch: 1, seq: 2 }).accept, false, "missing tab id rejected");
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "", epoch: 1, seq: 2 }).accept, false, "empty document id rejected");
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-B", epoch: 1, seq: -1 }).accept, false, "negative seq rejected");
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-B", epoch: 1, seq: 1.5 }).accept, false, "fractional seq rejected");
+  assertEquals(acceptToolSnapshot(gate, { tabId: 7, documentId: "doc-B", epoch: 1, seq: "2" }).accept, false, "string seq rejected");
+  // Re-enrollment RESEEDS the tab binding but NEVER reissues a stale epoch.
+  const reseeded = seedSnapshotGate(gate, 7);
+  assertEquals(reseeded.maxEpoch, gate.maxEpoch, "maxEpoch survives re-enrollment");
+  assertEquals(reseeded.epoch, -1);
+  const resynced = syncSnapshotDocument(reseeded, 7, "doc-C");
+  assertEquals(resynced.gate.epoch, gate.maxEpoch + 1, "the next epoch is strictly greater than any issued one");
+  // A null picker leaves the gate unbound until enrollment.status observes an
+  // active browser-attested document. A snapshot report may never bind itself.
+  const unbound = seedSnapshotGate(null, null);
+  assertEquals(unbound.tabId, null);
+  assertEquals(
+    acceptToolSnapshot(unbound, { tabId: 3, documentId: "doc-1", epoch: 0, seq: 1 }).accept,
+    false,
+    "a snapshot cannot choose its own tab/document identity",
+  );
+  const firstSync = syncSnapshotDocument(unbound, 3, "doc-1");
+  assertEquals(firstSync.bound, true, "startup status binds the first active reporting tab");
+  assertEquals(
+    acceptToolSnapshot(firstSync.gate, { tabId: 3, documentId: "doc-1", epoch: 0, seq: 1 }).accept,
+    true,
+  );
+  assertEquals(syncSnapshotDocument(firstSync.gate, 4, "doc-2").bound, false, "a second tab can never replace the first-bound tab");
 });
 
 Deno.test("injection summary: a tab is ready only when BOTH worlds injected", async () => {

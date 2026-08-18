@@ -85,7 +85,7 @@
         <div class="webmcp-status">
           <h3>WebMCP discovery</h3>
           <p
-            class="muted">The content scripts that scan a page for WebMCP tools (declared <code>document.modelContext.getTools()</code> + inferred <code>window.*</code> functions) live at <code>content/main-world.js</code> (page world) and <code>content/content-script.js</code> (isolated relay) — visible in the page's DevTools Sources once the origin is enrolled.</p>
+            class="muted">The content scripts that scan a page for WebMCP tools (declared <code>document.modelContext.getTools()</code> + functions explicitly opted in through <code>window.webmcpExpose</code>) live at <code>content/main-world.js</code> (page world) and <code>content/content-script.js</code> (isolated relay) — visible in the page's DevTools Sources once the origin is enrolled.</p>
           <div class="toggle-field">
             <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
             <div class="toggle-text">

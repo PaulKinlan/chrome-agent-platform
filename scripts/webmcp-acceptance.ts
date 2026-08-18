@@ -16,14 +16,17 @@
 //   6. discovery WITHOUT a reload (immediate injection), then AFTER a reload
 //      (dynamic registration + the bridge startup enrollment sync) and after a
 //      cross-document navigation;
-//   7. SW → isolated → MAIN invocation with the real generation + source
-//      threading, a VISIBLE page side effect (DOM mutation + counter), the
-//      declared-vs-global collision assertion, and negative (missing gen /
-//      source) rejections;
+//   7. PRODUCTION invocation: the extension-only `tools.invoke` route →
+//      invokeSiteTool (directory + dispatch-source resolution, immutable
+//      generation fencing, the exact approved-tab/document binding, pre/post
+//      enrollment revalidation) → isolated → MAIN, with a VISIBLE page side
+//      effect (DOM mutation + counter), the declared-vs-global collision
+//      assertion, production negatives (unknown tool) and bridge-layer
+//      fencing negatives (missing gen / source rejected at the relay);
 //   8. re-enrollment singleton: repeated enrollment yields exactly ONE live
 //      bridge (one side effect per invoke);
-//   9. screenshots + a machine-verifiable manifest (test-artifacts/
-//      webmcp-acceptance-manifest.json).
+//   9. screenshots + a machine-verifiable manifest (test-artifacts/ by
+//      default, or WEBMCP_ARTIFACT_DIR for exact-clean-commit external evidence).
 //
 // THE PERMISSION GESTURE. Headless Chromium auto-denies optional HOST
 // permissions (probed 2026-08-18: real click + --enable-automation both deny),
@@ -112,7 +115,11 @@ async function main() {
   const scriptParsedUrls: string[] = [];
   const consoleEvents: string[] = [];
   const screenshots: { name: string; sha256: string; bytes: number }[] = [];
-  const artifactDir = `${ROOT}test-artifacts`;
+  // Evidence may be kept outside the source tree so a post-commit run can
+  // attest an EXACT clean commit without dirtying it. The in-repo directory is
+  // retained as the convenient default for local/manual runs.
+  const configuredArtifactDir = Deno.env.get("WEBMCP_ARTIFACT_DIR")?.trim();
+  const artifactDir = (configuredArtifactDir || `${ROOT}test-artifacts`).replace(/\/$/, "");
   await Deno.mkdir(artifactDir, { recursive: true });
 
   try {
@@ -242,6 +249,7 @@ async function main() {
       return row ? true : null;
     })()`), 8000);
     check("hub: the tab picker lists the fixture tab (explicit tab identity)", pickerHasFixture === true);
+    await screenshot(ns, "webmcp-acceptance-tab-picker.png");
 
     // 6. Pick the fixture tab (real click on the row's action) — this requests
     //    the origin host permission (headed: the second manual prompt).
@@ -304,28 +312,53 @@ async function main() {
     }, 12000);
     check("async-registered tool picked up by the re-poll (shop.coupon)", !!withCoupon, withCoupon);
 
-    // 11. SW → isolated → MAIN invocation with a VISIBLE side effect.
+    // Open a SECOND same-origin document after enrollment. Dynamic content
+    // scripts run there too, but the snapshot gate must refuse to bind it: only
+    // the picker-approved tab/document may report or receive production calls.
+    const decoyT = await send("Target.createTarget", { url: `${PAGE_ORIGIN}/index.html?decoy=1` });
+    const decoySession = (await send("Target.attachToTarget", { targetId: decoyT.targetId, flatten: true })).sessionId;
+    await send("Runtime.enable", {}, decoySession);
+    await send("Page.enable", {}, decoySession);
+    await until(() => evalIn(decoySession, `document.readyState === "complete" ? true : null`), 8000);
+    await evalIn(decoySession, `document.title = "Decoy same-origin tab"`);
+
+    // 11. PRODUCTION invocation: the extension-only tools.invoke route (the
+    //     same invokeSiteTool path the model's siteToolset reaches after owner
+    //     approval — directory/source resolution, the immutable generation
+    //     requirement, run fencing, the EXACT approved-tab/document binding,
+    //     pre/post enrollment revalidation) with a VISIBLE side effect.
     const gen = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.directory" }).then(d => d?.agents?.find(a => a.origin === ${JSON.stringify(PAGE_ORIGIN)})?.gen ?? null)`);
     check("the enrollment generation is readable (agent.directory.gen)", typeof gen === "number" && gen > 0, gen);
-    const invoke = (name: string, args: any, source: string, g: any = gen) =>
-      evalIn(sws, `chrome.tabs.sendMessage(${fixtureTabId}, { type: "invoke-tool", name: ${JSON.stringify(name)}, args: ${JSON.stringify(args)}, gen: ${JSON.stringify(g)}, source: ${JSON.stringify(source)} })`);
-    const greetRes = await invoke("greet", { name: "paul" }, "inferred");
-    check("invoke: SW→isolated→MAIN returns the page function result", greetRes?.ok === true && greetRes?.result === "hello paul", greetRes);
+    const invoke = (name: string, args: any) =>
+      evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: ${JSON.stringify(name)}, args: ${JSON.stringify(args)} })`);
+    const greetRes = await invoke("greet", { name: "paul" });
+    check("production tools.invoke: directory → exact approved tab/document → MAIN returns the page function result", greetRes?.ok === true && greetRes?.result === "hello paul", greetRes);
     const sideEffect = await evalIn(wsess, `({ msg: document.getElementById("msg")?.textContent, calls: window.__greetCalls })`);
-    check("invoke: VISIBLE side effect on the page (DOM + counter, exactly once)",
+    const decoyEffect = await evalIn(decoySession, `({ msg: document.getElementById("msg")?.textContent, calls: window.__greetCalls })`);
+    check("invoke: VISIBLE side effect occurs exactly once in the approved tab/document",
       sideEffect?.msg === "greeted paul (#1)" && sideEffect?.calls === 1, sideEffect);
+    check("invoke: the second same-origin tab is NOT invoked", decoyEffect?.calls === 0, decoyEffect);
     await screenshot(wsess, "webmcp-acceptance-side-effect.png");
 
-    // 12. The declared/global collision: source "declared" must hit modelContext.
-    const totalRes = await invoke("shop.total", {}, "declared");
-    check("invoke: declared shop.total resolves via modelContext (42.5), never the colliding global (999)",
+    // 12. The declared/global collision: the DIRECTORY-resolved source
+    //     ("declared") must hit modelContext, never the colliding global.
+    const totalRes = await invoke("shop.total", {});
+    check("production tools.invoke: declared shop.total resolves via modelContext (42.5), never the colliding global (999)",
       totalRes?.ok === true && totalRes?.result?.total === 42.5, totalRes);
 
-    // 13. Negative: missing gen / missing source are rejected at the bridge.
+    // 12b. Production negatives: the directory + route reject what must be rejected.
+    const unknownTool = await invoke("no.such.tool", {});
+    check("production tools.invoke: an unknown tool is rejected at the directory", unknownTool?.ok === false, unknownTool);
+    const unenrolled = await evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: "http://127.0.0.1:9999", name: "greet", args: {} })`);
+    check("production tools.invoke: an unenrolled origin is rejected", unenrolled?.ok === false, unenrolled);
+
+    // 13. Bridge-layer fencing negatives (the isolated relay itself, NOT the
+    //     production route): a generationless / source-less invoke-tool
+    //     message is rejected even when sent straight to the tab.
     const noGen = await evalIn(sws, `chrome.tabs.sendMessage(${fixtureTabId}, { type: "invoke-tool", name: "greet", args: {}, source: "inferred" }).then(r => r, e => ({ err: e.message }))`);
-    check("invoke: a generationless invoke is rejected", noGen?.ok === false, noGen);
+    check("bridge fencing: a generationless invoke is rejected at the relay", noGen?.ok === false, noGen);
     const noSource = await evalIn(sws, `chrome.tabs.sendMessage(${fixtureTabId}, { type: "invoke-tool", name: "greet", args: {}, gen: ${gen} }).then(r => r, e => ({ err: e.message }))`);
-    check("invoke: a source-less invoke is rejected", noSource?.ok === false, noSource);
+    check("bridge fencing: a source-less invoke is rejected at the relay", noSource?.ok === false, noSource);
 
     // 14. Re-enrollment singleton: Discover the same tab again → exactly ONE
     //     live bridge (one side effect per invoke).
@@ -334,14 +367,23 @@ async function main() {
     const reRow = await clickSelector(ns, `(() => {
       const dlg = document.querySelector("agent-dialog");
       const rows = dlg ? [...dlg.querySelectorAll("capability-row")] : [];
-      const row = rows.find((r) => r.getAttribute("description") === ${JSON.stringify(PAGE_ORIGIN)});
+      const row = rows.find((r) =>
+        r.getAttribute("description") === ${JSON.stringify(PAGE_ORIGIN)} &&
+        r.getAttribute("name") !== "Decoy same-origin tab"
+      );
       return row?.shadowRoot?.querySelector("button.run") ?? null;
     })()`);
     check("re-enrollment: picked the same tab again", reRow);
-    await sleep(1500);
+    await sleep(500);
     const gen2 = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.directory" }).then(d => d?.agents?.find(a => a.origin === ${JSON.stringify(PAGE_ORIGIN)})?.gen ?? null)`);
     check("re-enrollment advanced the generation", typeof gen2 === "number" && gen2 > gen, { gen, gen2 });
-    const greet2 = await invoke("greet", { name: "again" }, "inferred", gen2);
+    // Enrollment completion precedes the page's asynchronous replacement
+    // snapshot. Poll the PRODUCTION invocation until that exact document is
+    // ready; failed pre-ready attempts are rejected before any page side effect.
+    const greet2 = await until(async () => {
+      const r = await invoke("greet", { name: "again" });
+      return r?.ok === true ? r : null;
+    }, 12000);
     const calls2 = await evalIn(wsess, `window.__greetCalls`);
     check("re-enrollment singleton: exactly ONE side effect per invoke (no duplicate listeners)",
       greet2?.ok === true && calls2 === 2, { greet2, calls2 });
@@ -360,7 +402,7 @@ async function main() {
     const resynced = await until(() => consoleEvents.some((e) => e.includes("[WebMCP:bridge]") && e.includes("enrollment-sync")) ? true : null, 10000);
     check("reload: the fresh bridge startup-synced its enrollment generation (console lifecycle)", resynced === true, consoleEvents.slice(0, 6));
     const greet3 = await until(async () => {
-      const r = await invoke("greet", { name: "reload" }, "inferred", gen2);
+      const r = await invoke("greet", { name: "reload" });
       return r?.ok === true ? r : null;
     }, 12000);
     const calls3 = await evalIn(wsess, `window.__greetCalls`);
@@ -374,7 +416,7 @@ async function main() {
     await send("Page.navigate", { url: `${PAGE_ORIGIN}/index.html?nav=2` }, wsess);
     await sleep(2500);
     const greet4 = await until(async () => {
-      const r = await invoke("greet", { name: "nav" }, "inferred", gen2);
+      const r = await invoke("greet", { name: "nav" });
       return r?.ok === true ? r : null;
     }, 12000);
     check("navigation: invocation works after a cross-document navigation (no re-enrollment)",
@@ -397,7 +439,9 @@ async function main() {
   ).trim();
   const manifest = {
     testedSourceCommit: commit,
-    evidenceCommitNote: "run against the working tree that became the corrective commit (a tracked manifest cannot contain its own commit hash)",
+    evidenceCommitNote: dirty
+      ? "working-tree run; worktreeDirtyFiles lists every difference from testedSourceCommit"
+      : "exact clean testedSourceCommit; evidence was written separately from source when WEBMCP_ARTIFACT_DIR was set",
     worktreeDirtyFiles: dirty ? dirty.split("\n").filter(Boolean) : [],
     runId: `webmcp-acceptance-${Date.now()}`,
     ts: new Date().toISOString(),
@@ -419,7 +463,7 @@ async function main() {
     },
   };
   await Deno.writeTextFile(
-    `${ROOT}test-artifacts/webmcp-acceptance-manifest.json`,
+    `${artifactDir}/webmcp-acceptance-manifest.json`,
     JSON.stringify(manifest, null, 2) + "\n",
   );
   console.log(`\nRESULT: ${pass} passed, ${fail} failed — status: ${manifest.overallStatus}`);

@@ -662,21 +662,100 @@ export function summarizeInjection(results) {
   return { targets: list.length, ready, partial, failed, scriptStatus };
 }
 
-/** Complete-snapshot ordering for discovery reports. Each bridge session (a
- * page load / navigation) has a fresh random session id and a monotonically
- * increasing sequence. Accept a snapshot when the session is NEW (a reload /
- * navigation supersedes any prior session) or the sequence ADVANCES within
- * the same session; reject same-session replays/stale sequences and malformed
- * session/seq values. */
-export function acceptToolSnapshot(last, sessionId, seq) {
-  if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 64) {
-    return false;
+// ── Discovery-snapshot ordering: origin / tab / document / navigation epoch ──
+// The round-30 blocker: the old gate accepted ANY new random session id
+// unconditionally, so a late report from an older session — or from a SECOND
+// same-origin tab — could replace a newer snapshot. The gate is now keyed by
+// the origin and ordered by BROWSER-ATTESTED identity the page cannot forge:
+// the service worker derives `tabId` + `documentId` from the message SENDER
+// (never from the message body) and assigns a MONOTONIC navigation epoch per
+// origin. A snapshot is accepted only from the bound tab's CURRENT document
+// with an advancing per-document sequence.
+
+/** The empty per-origin snapshot gate. `maxEpoch` is monotonic and survives
+ * re-enrollment seeding, so a navigation epoch is never reissued. */
+export function emptySnapshotGate() {
+  return { tabId: null, documentId: null, epoch: -1, maxEpoch: -1, seq: -1 };
+}
+
+function validTabId(tabId) {
+  return typeof tabId === "number" && Number.isInteger(tabId) && tabId >= 0;
+}
+function validDocumentId(documentId) {
+  return typeof documentId === "string" && documentId.length > 0 && documentId.length <= 128;
+}
+function validSeq(seq) {
+  return typeof seq === "number" && Number.isInteger(seq) && seq >= 0 && seq <= 1e9;
+}
+
+/** Seed/rebind the gate at (re-)enrollment. A picker-approved tab becomes the
+ * ONLY tab whose reports are accepted (`pickedTabId`); a null pick leaves the
+ * gate unbound so the first reporting tab binds. `maxEpoch` is preserved — a
+ * re-enrollment must never reissue a stale navigation epoch. */
+export function seedSnapshotGate(prev, pickedTabId) {
+  const maxEpoch = Number.isInteger(prev?.maxEpoch) ? prev.maxEpoch : -1;
+  return {
+    tabId: validTabId(pickedTabId) ? pickedTabId : null,
+    documentId: null,
+    epoch: -1,
+    maxEpoch,
+    seq: -1,
+  };
+}
+
+/** A bridge startup sync observed a document on a tab. Advances the gate to
+ * that document with a fresh monotonic epoch when the document is NEW on the
+ * bound tab (a navigation). Returns { gate, bound } — `bound` is false when
+ * the sender is NOT the authoritative tab (a second same-origin tab never
+ * displaces the bound tab's document). Pure. */
+export function syncSnapshotDocument(prev, tabId, documentId) {
+  const gate = prev ?? emptySnapshotGate();
+  if (!validTabId(tabId) || !validDocumentId(documentId)) {
+    return { gate, bound: false };
   }
-  if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0 || seq > 1e9) {
-    return false;
+  if (gate.tabId == null) {
+    const epoch = gate.maxEpoch + 1;
+    return { gate: { tabId, documentId, epoch, maxEpoch: epoch, seq: -1 }, bound: true };
   }
-  if (!last || last.sessionId !== sessionId) return true;
-  return seq > last.seq;
+  if (tabId !== gate.tabId) return { gate, bound: false };
+  if (documentId === gate.documentId) return { gate, bound: true };
+  const epoch = gate.maxEpoch + 1;
+  return { gate: { tabId, documentId, epoch, maxEpoch: epoch, seq: -1 }, bound: true };
+}
+
+/** Accept a complete replacement snapshot ONLY from the current
+ * (tab, document, epoch) with an advancing per-document sequence. `report` is
+ * { tabId, documentId, epoch, seq } where tabId/documentId are
+ * SENDER-DERIVED by the service worker and `epoch` is the epoch the SW issued
+ * to that document at its startup sync (echoed by the bridge — a stale
+ * document can only echo its own older epoch and is rejected). Returns
+ * { accept, gate }. Pure. */
+export function acceptToolSnapshot(prev, report) {
+  const gate = prev ?? emptySnapshotGate();
+  const { tabId, documentId, epoch, seq } = report ?? {};
+  if (!validTabId(tabId) || !validDocumentId(documentId) || !validSeq(seq)) {
+    return { accept: false, gate };
+  }
+  // Snapshot reports NEVER establish identity. Only enrollment.status from an
+  // active, browser-attested document may bind/advance the gate through
+  // syncSnapshotDocument; otherwise a report that raced startup could choose
+  // its own identity/epoch.
+  if (gate.tabId == null || gate.documentId == null || gate.epoch < 0) {
+    return { accept: false, gate };
+  }
+  if (tabId !== gate.tabId) {
+    return { accept: false, gate }; // a second same-origin tab never replaces
+  }
+  if (documentId !== gate.documentId) {
+    return { accept: false, gate }; // a stale document's late report
+  }
+  if (epoch !== gate.epoch) {
+    return { accept: false, gate }; // a wrong/older navigation epoch
+  }
+  if (seq <= gate.seq) {
+    return { accept: false, gate }; // a same-document replay/stale sequence
+  }
+  return { accept: true, gate: { ...gate, seq } };
 }
 
 /** Parse an omnibox-entered string into an intent.

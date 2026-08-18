@@ -2,25 +2,39 @@
 // bridge (content/main-world.js) and the extension background worker.
 //
 // The isolated world cannot see the page's globals, and the MAIN world cannot
-// use chrome.* APIs — so this file relays across a nonce-authenticated
-// window.postMessage channel:
-//   MAIN world → postMessage("tools") → here → chrome.runtime "tools.upsert"
-//   background → "invoke-tool" → here → postMessage("invoke") → MAIN world → call
-//             → postMessage("result") → here → sendResponse
+// use chrome.* APIs — so this file relays across window.postMessage, a
+// BROADCAST channel every page script can observe. Message authentication (the
+// round-30 bridge-forgery blocker): the MAC key (nonce) is ISSUED BY THE
+// SERVICE WORKER and reaches this bridge via the enrollment.status RESPONSE
+// (an extension-private channel — a page script cannot call chrome.runtime)
+// and the MAIN world via chrome.scripting.executeScript func ARGS. The nonce
+// NEVER transits the broadcast channel; bridge messages carry only an
+// HMAC-SHA256 tag + monotonic sequence (content/bridge-auth.js), so a page
+// script that only observes/injects postMessage traffic cannot forge/replay the
+// cross-world transport. This does NOT attest page-owned tools/results: MAIN
+// shares the page realm and those values remain explicitly untrusted.
+//   MAIN world → postMessage("tools", MAC'd) → here → chrome.runtime "tools.upsert"
+//   background → "invoke-tool" → here → postMessage("invoke", MAC'd) → MAIN world
+//             → call → postMessage("result", MAC'd) → here → sendResponse
 //
 // On EVERY startup (reload / cross-document navigation re-injects this script)
-// the bridge pulls the CURRENT enrollment generation from the service worker
-// (`enrollment.status`) — a one-time enrollment push can never cover a document
-// that did not exist yet, so without the startup pull a fresh bridge would
-// reject every invoke forever (fail-closed without recovery).
+// the bridge pulls the CURRENT enrollment generation + the SW-issued MAC key +
+// the navigation epoch from the service worker (`enrollment.status`) — a
+// one-time enrollment push can never cover a document that did not exist yet,
+// so without the startup pull a fresh bridge would reject every invoke forever
+// (fail-closed without recovery).
 
 // Versioned singleton guard (the repeated-enrollment finding): an immediate
 // re-injection (re-enroll while the tab is open) re-executes this file in the
 // SAME isolated world. Without a guard each execution would install ANOTHER
 // pair of listeners, so one invoke would be forwarded once per stale listener
 // (duplicate side effects). The previous execution is torn down before the new
-// one installs, so exactly ONE live bridge exists per tab.
-const BRIDGE_VERSION = 2;
+// one installs, so exactly ONE live bridge exists per tab. The ENTIRE file is
+// function-scoped: chrome.scripting.executeScript may execute it repeatedly in
+// the same world, and top-level lexical `const` declarations would otherwise
+// make the second injection fail before the teardown guard could run.
+(() => {
+const BRIDGE_VERSION = 3;
 const BRIDGE_GUARD_KEY = "__cairnIsolatedBridge";
 {
   const prev = globalThis[BRIDGE_GUARD_KEY];
@@ -29,24 +43,28 @@ const BRIDGE_GUARD_KEY = "__cairnIsolatedBridge";
   }
 }
 
-(() => {
 const CHANNEL = "__cairn_bridge";
 const TAG = "[WebMCP:bridge]";
+const auth = globalThis.CairnBridgeAuth; // injected before this file
 
-// A nonce the MAIN-world bridge must echo back, so a page script cannot spoof
-// invoke results or tool reports.
-const nonce = crypto.randomUUID();
-// The discovery-snapshot session identity: fresh per bridge execution (per
-// page load / navigation), with a monotonically increasing sequence per tools
-// report, so the SW can order complete replacement snapshots and drop stale
-// same-session replays.
-const sessionId = crypto.randomUUID();
+// The SW-issued bridge MAC key + navigation epoch. Both arrive via the
+// enrollment.status response; the nonce is NEVER posted over the broadcast
+// channel (only HMAC tags keyed by it cross). null = unarmed: no message is
+// forwarded in either direction (fail closed).
+let bridgeNonce = null;
+let bridgeEpoch = null; // echoed in every tools.upsert (the snapshot gate)
+// Per-direction bridge sequences (replay suppression, reset when the key rotates).
+let downSeq = 0; // isolated → MAIN
+let upSeq = -1; // MAIN → isolated (last accepted)
+// The discovery-snapshot sequence: monotonically increasing per tools report
+// within this document (the SW orders complete replacement snapshots by it,
+// scoped by the sender-derived tab/document + the echoed epoch).
 let collectSeq = 0;
 
-let initialized = false;
 // Developer diagnostics (gated): mirrors the MAIN world's [WebMCP] logs from the
 // isolated relay side. Off by default; the SW reports the owner's toggle via
-// `webmcp.diagnostics.get` (see Settings → Site agents → Diagnostics).
+// `webmcp.diagnostics.get` (see Settings → Site agents → Diagnostics) and the
+// bootstrap delivers it to the MAIN world.
 let diagnostics = false;
 function log(...args) {
   if (!diagnostics) return;
@@ -87,6 +105,17 @@ function normalizeGen(gen) {
     : null;
 }
 
+// Seal + post an isolated→MAIN control message. Returns false when the bridge
+// is unarmed (no SW-issued key yet) — the message is simply not sent.
+function sendDown(msg) {
+  if (!bridgeNonce || !auth) return false;
+  window.postMessage(
+    { [CHANNEL]: true, ...auth.seal(bridgeNonce, "down", downSeq++, msg) },
+    "*",
+  );
+  return true;
+}
+
 // The monotonic lifecycle application, shared by the SW-pushed messages AND
 // the startup pull (enrollment.status). Returns an error string on rejection.
 function applyEnrollmentSync(gen, via) {
@@ -103,10 +132,10 @@ function applyEnrollmentSync(gen, via) {
   currentGen = gen;
   disenrolled = false;
   log("enrollment-sync", JSON.stringify({ origin: location.origin, gen, via }));
-  // (Re-)enrollment clears the MAIN world's cancel epoch so NEW invokes are
-  // allowed again (a delete→re-enroll must not leave the page bridge
-  // permanently cancelled — the round-23 blocker 1 fix).
-  window.postMessage({ [CHANNEL]: true, type: "resume", nonce, diagnostics }, "*");
+  // (Re-)enrollment clears the MAIN world's cancel state so NEW invokes are
+  // allowed again; the MAIN world's immutable epoch fence keeps anything
+  // cancelled before this resume permanently cancelled.
+  sendDown({ type: "resume", diagnostics });
   return null;
 }
 
@@ -131,42 +160,41 @@ function applyDisenrollment(gen, via) {
       send({ ok: false, error: "origin disenrolled — invocation cancelled" });
     } catch { /* sendResponse already consumed */ }
   }
-  window.postMessage({ [CHANNEL]: true, type: "cancel", nonce }, "*");
+  sendDown({ type: "cancel" });
   return null;
 }
 
 // STARTUP SYNC (the reload/navigation fix): a freshly injected bridge has
 // never seen the one-time enrollment push, so it pulls the CURRENT enrollment
-// generation from the SW (sender-origin-derived server-side) and applies it
-// through the same monotonic fence. Until this resolves, invokes fail closed.
+// generation — and with it the SW-issued MAC key + navigation epoch — from the
+// SW (sender-origin-derived server-side) and applies it through the same
+// monotonic fence. Until this resolves, invokes + reports fail closed.
+// Returns the promise so the initial discovery collect can be gated on it (the
+// first tools.upsert must carry the epoch the SW just assigned).
 function syncEnrollmentAtStartup() {
-  chrome.runtime.sendMessage({ type: "enrollment.status" }).then((res) => {
+  return chrome.runtime.sendMessage({ type: "enrollment.status" }).then((res) => {
     if (!res || res.ok !== true) {
       log("enrollment-sync", JSON.stringify({ origin: location.origin, via: "startup", ok: false }));
       return; // fail closed — currentGen stays null
     }
     const gen = normalizeGen(res.gen);
     if (res.enrolled === true) {
+      // Arm the bridge: the SW-issued MAC key + the navigation epoch for THIS
+      // document (sender-derived server-side). A missing key (the bootstrap
+      // executeScript failed) leaves the bridge unarmed — fail closed.
+      if (typeof res.nonce === "string" && res.nonce.length >= 16) {
+        if (bridgeNonce !== res.nonce) {
+          bridgeNonce = res.nonce;
+          downSeq = 0;
+          upSeq = -1;
+        }
+      }
+      bridgeEpoch = typeof res.epoch === "number" && Number.isInteger(res.epoch) ? res.epoch : null;
       applyEnrollmentSync(gen, "startup");
     } else {
       applyDisenrollment(gen, "startup");
     }
   }).catch(() => { /* SW not ready — fail closed */ });
-}
-
-function ensureMainWorld() {
-  if (initialized) return;
-  initialized = true;
-  // Post the nonce handshake SYNCHRONOUSLY first (preserving the original
-  // no-race init so an invoke that arrives immediately is never stranded), then
-  // re-post it once the REAL diagnostics gate is known (same nonce → idempotent:
-  // MAIN just re-collects + re-logs its "start" with the correct gate).
-  const sendInit = () => window.postMessage({ [CHANNEL]: true, type: "init", nonce, diagnostics }, "*");
-  sendInit();
-  refreshDiagnostics().then(() => {
-    sendInit();
-    log("start", JSON.stringify({ origin: location.origin, role: "isolated-bridge", diagnostics }));
-  });
 }
 
 // A pending invoke request, keyed by requestId → sendResponse.
@@ -183,29 +211,34 @@ function onWindowMessage(event) {
   if (event.source !== window) return;
   const data = event.data;
   if (!data || typeof data !== "object" || data[CHANNEL] !== true) return;
+  // MAC gate FIRST: an unkeyed / wrongly-keyed / replayed message (a page
+  // script that eavesdropped the broadcast, or a torn-down stale MAIN world)
+  // is dropped before any dispatch (the round-30 blocker).
+  const opened = auth ? auth.open(bridgeNonce, "up", upSeq, data) : { ok: false };
+  if (!opened.ok) return;
+  upSeq = opened.seq;
+  const msg = opened.msg;
 
-  if (data.type === "tools") {
-    // Nonce-gated: a page script (or a torn-down stale MAIN world) cannot
-    // spoof a tool report — only the MAIN world that completed THIS bridge's
-    // init handshake echoes the nonce.
-    if (!nonce || data.nonce !== nonce) return;
-    const tools = Array.isArray(data.tools) ? data.tools : [];
+  if (msg.type === "tools") {
+    const tools = Array.isArray(msg.tools) ? msg.tools : [];
     const origin = location.origin; // never trust a message-supplied origin (cross-origin spoof)
     const declared = tools.filter((t) => t.source === "declared").length;
     const inferred = tools.filter((t) => t.source === "inferred").length;
     log("tools-reported", JSON.stringify({ origin, toolCount: tools.length, declaredCount: declared, inferredCount: inferred, toolNames: tools.map((t) => t.name) }));
     // A COMPLETE replacement snapshot — forwarded even when EMPTY, so a page
     // that removed all its tools gets them removed from the directory too.
-    chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools, sessionId, seq: ++collectSeq }).then((res) => {
+    // The epoch is the SW-assigned navigation identity of THIS document; the
+    // gate rejects a report whose (tab, document, epoch) is not current.
+    chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools, epoch: bridgeEpoch, seq: ++collectSeq }).then((res) => {
       log("registration", JSON.stringify({ origin, ok: res?.ok === true, accepted: res?.accepted ?? null }));
     }).catch((e) => {
       log("registration", JSON.stringify({ origin, ok: false, error: String(e?.message ?? e) }));
     });
-  } else if (data.type === "result" && data.nonce === nonce) {
-    const send = pending.get(data.requestId);
+  } else if (msg.type === "result") {
+    const send = pending.get(msg.requestId);
     if (send) {
-      pending.delete(data.requestId);
-      send(data.ok ? { ok: true, result: data.result } : { ok: false, error: data.error });
+      pending.delete(msg.requestId);
+      send(msg.ok ? { ok: true, result: msg.result } : { ok: false, error: msg.error });
     }
   }
 }
@@ -273,20 +306,23 @@ function onRuntimeMessage(message, _sender, sendResponse) {
       });
       return true;
     }
-    ensureMainWorld();
+    if (!bridgeNonce) {
+      // Unarmed (the SW bootstrap failed) — fail closed rather than posting an
+      // unauthenticatable invoke.
+      sendResponse({ ok: false, error: "bridge not armed — invocation rejected" });
+      return true;
+    }
     const requestId = String(++reqSeq);
     pending.set(requestId, sendResponse);
     log("invoke-tool", JSON.stringify({ origin: location.origin, name: message.name, requestId, gen, source: message.source }));
-    window.postMessage({
-      [CHANNEL]: true,
+    sendDown({
       type: "invoke",
-      nonce,
       requestId,
       name: message.name,
       args: message.args,
       source: message.source,
       gen,
-    }, "*");
+    });
     // Timeout so a hung page function doesn't leak the sendResponse.
     trackTimer(setTimeout(() => {
       if (pending.has(requestId)) {
@@ -297,7 +333,6 @@ function onRuntimeMessage(message, _sender, sendResponse) {
     return true;
   }
   if (message?.type === "collect-tools") {
-    ensureMainWorld();
     collectNow();
     sendResponse({ ok: true });
     return true;
@@ -306,31 +341,37 @@ function onRuntimeMessage(message, _sender, sendResponse) {
 }
 chrome.runtime.onMessage.addListener(onRuntimeMessage);
 
-// Kick off discovery once on load, then RE-POLL a few times for sites that
-// register their WebMCP tools ASYNCHRONOUSLY (aifoc.us resolves dynamic packs
-// after `load`, so a single collect can read `getTools()` before the tools are
-// registered). Each re-collect is a complete, idempotent replacement snapshot,
-// so a late registration is picked up without duplicating.
+// Kick off discovery once the bridge is armed, then RE-POLL a few times for
+// sites that register their WebMCP tools ASYNCHRONOUSLY (aifoc.us resolves
+// dynamic packs after `load`, so a single collect can read `getTools()` before
+// the tools are registered). Each re-collect is a complete, idempotent
+// replacement snapshot, so a late registration is picked up without
+// duplicating. Every collect is gated on the startup sync so the first report
+// already carries the SW-issued MAC key + navigation epoch.
 const timers = new Set();
 function trackTimer(id) {
   timers.add(id);
   return id;
 }
 function collectNow() {
-  window.postMessage({ [CHANNEL]: true, type: "collect", nonce, diagnostics }, "*");
+  sendDown({ type: "collect", diagnostics });
 }
-ensureMainWorld();
-syncEnrollmentAtStartup();
-if (document.readyState === "complete") collectNow();
-else window.addEventListener("load", collectNow);
-// Re-poll at 800ms / 2s / 4s after load to catch async-registered tools.
-for (const delay of [800, 2000, 4000]) {
-  trackTimer(setTimeout(collectNow, delay));
-}
+const startupSync = Promise.all([syncEnrollmentAtStartup(), refreshDiagnostics()]);
+startupSync.then(() => {
+  // The bridge's own start lifecycle event, logged only when the SW issued a
+  // MAC key (an unarmed bridge is silent) and AFTER the diagnostics gate is
+  // known (the acceptance observes this event).
+  if (bridgeNonce) {
+    log("start", JSON.stringify({ origin: location.origin, role: "isolated-bridge", diagnostics }));
+  }
+  collectNow(); // armed initial collect (the SW bootstrap also kicks one)
+  for (const delay of [800, 2000, 4000]) {
+    trackTimer(setTimeout(collectNow, delay));
+  }
+});
 
 // Register the versioned singleton so a re-injection tears THIS bridge down
 // instead of stacking duplicate listeners (exactly one live bridge per tab).
-const onLoadCollect = collectNow;
 globalThis[BRIDGE_GUARD_KEY] = {
   version: BRIDGE_VERSION,
   teardown() {
@@ -344,8 +385,8 @@ globalThis[BRIDGE_GUARD_KEY] = {
     }
     for (const t of timers) clearTimeout(t);
     timers.clear();
+    bridgeNonce = null; // the MAC gate goes closed even if a stale closure fires
     window.removeEventListener("message", onWindowMessage);
-    window.removeEventListener("load", onLoadCollect);
     try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch { /* already detached */ }
   },
 };
