@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.79] — 2026-08-18
+- docs(ui-fixes): record the final-sol corrective commit hash in the tracker
+
 ## [0.2.78] — 2026-08-18
 - fix(tool-calls): final-sol blockers — terminal arbitration, replay isolation/legacy, bounded never-throws serializer, copy edges
 
