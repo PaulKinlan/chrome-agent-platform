@@ -158,6 +158,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 /** The EXTERNAL evidence output dir (never committed) — defaults to /tmp. */
 const EVIDENCE_OUT = Deno.env.get("GVS_EVIDENCE_OUT") ?? `/tmp/gvs-evidence-${Date.now()}`;
 const invocationStartedAt = Date.now();
+const invocationEndedAt = () => Date.now(); // the upper bound captured at validation
 // FAIL-CLOSED fresh output dir: the recursive cleanup only IGNORES a
 // NotFound (nothing to clear); ANY other removal failure ABORTS the run
 // (a stale dir must never be silently reused). The new dir is then created
@@ -630,103 +631,102 @@ async function main() {
     }
 
     // HEAD-bound evidence manifest + the attestation log — generated AFTER every
-    // check, at the EXACT current git HEAD (the corrective commit being attested).
-    // EACH mode's run GENERATES + sources ONLY its own screenshots (a tree-mode
-    // run never inherits raw-mode images — nothing unauthenticated), and every
-    // image's SHA-256 is recorded in the manifest.
+    // check. The ONLY try/catch wraps the OPTIONAL Git metadata (the revision +
+    // clean status); the manifest + ALL validation writes are OUTSIDE any broad
+    // catch, so a validation/read/write failure is FATAL (fail closed).
+    let head = "unknown";
+    let cleanStatus = "unknown";
+    try {
+      const gitHead = new Deno.Command("git", { args: ["rev-parse", "HEAD"], stdout: "piped", stderr: "null" }).outputSync();
+      head = new TextDecoder().decode(gitHead.stdout).trim() || "unknown";
+      const st = new Deno.Command("git", { args: ["status", "--porcelain=v1"], stdout: "piped", stderr: "null" }).outputSync();
+      cleanStatus = new TextDecoder().decode(st.stdout).trim() === "" ? "clean" : "DIRTY: " + new TextDecoder().decode(st.stdout).trim();
+    } catch { /* git metadata is optional — the validation below still runs */ }
+
     const shotList = MODE === "raw"
       ? ["raw-1-running.png", "raw-2-done.png"]
       : ["tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"];
+    const manifest: Record<string, unknown> = {
+      suite: "tool-call-evidence",
+      commit: head,
+      generated: new Date().toISOString(),
+      mode: MODE,
+      checks: `${pass}/${pass + fail}`,
+      screenshots: shotList,
+    };
+    // EVERY listed image must have been CAPTURED in THIS invocation (never
+    // inherited): a missing capture FAILS the run.
+    const missing = shotList.filter((shot: string) => !capturedImages[shot]);
+    if (missing.length) {
+      console.error("evidence FAIL: images never captured this run:", missing.join(", "));
+      for (const shot of missing) {
+        transcript.push({ name: `evidence: ${shot} captured in THIS invocation`, pass: false, detail: "never captured" });
+      }
+      fail += missing.length;
+    }
+    manifest.images = Object.fromEntries(shotList.map((shot: string) => [shot, capturedImages[shot]?.sha256 ?? "missing"]));
+    manifest.captureProvenance = capturedImages;
+    // VALIDATION (fail closed — every failure is FATAL, nothing is swallowed):
+    // (a) capture timestamps must be WITHIN [invocationStartedAt, endedAt]
+    const endedAt = Date.now();
+    for (const [shot, prov] of Object.entries(capturedImages)) {
+      const at = new Date(prov.at).getTime();
+      if (!Number.isFinite(at) || at < invocationStartedAt || at > endedAt) {
+        console.error(`evidence FAIL: ${shot} captured outside THIS invocation (stale/future)`);
+        transcript.push({ name: `evidence: ${shot} captured within THIS invocation`, pass: false, detail: prov });
+        fail += 1;
+      }
+    }
+    // (b) hashes RECOMPUTED from the written files must match — a
+    //     missing/unreadable file is FATAL
+    for (const shot of shotList) {
+      let bytes;
+      try {
+        bytes = await Deno.readFile(`${EVIDENCE_OUT}/${shot}`);
+      } catch (e) {
+        console.error(`evidence FAIL: ${shot} missing/unreadable: ${e?.message ?? e}`);
+        transcript.push({ name: `evidence: ${shot} readable + hash matches`, pass: false, detail: { error: e?.message } });
+        fail += 1;
+        continue;
+      }
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (hash !== capturedImages[shot]?.sha256) {
+        console.error(`evidence FAIL: ${shot} hash mismatch after write`);
+        transcript.push({ name: `evidence: ${shot} hash matches the captured bytes`, pass: false, detail: { manifest: capturedImages[shot]?.sha256, file: hash } });
+        fail += 1;
+      }
+    }
+    // (c) NO unexpected files/PNGs in the output dir
+    for (const entry of Deno.readDirSync(EVIDENCE_OUT)) {
+      const allowed = entry.name.endsWith(".png") ? shotList.includes(entry.name) : ["manifest.json", "evidence.log", "transcript.jsonl", "metadata.json"].includes(entry.name);
+      if (!allowed) {
+        console.error(`evidence FAIL: unexpected file in the output dir: ${entry.name}`);
+        transcript.push({ name: `evidence: no unexpected files in the output dir (${entry.name})`, pass: false, detail: null });
+        fail += 1;
+      }
+    }
+    // the writes (fatal on failure — no broad catch)
+    await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
+    await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
+    await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
+    let scriptHash = "unknown";
+    try { scriptHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await Deno.readFile(new URL(import.meta.url).pathname)))].map((b) => b.toString(16).padStart(2, "0")).join(""); } catch { /* ignore */ }
+    const meta = {
+      commit: head,
+      generated: new Date().toISOString(),
+      mode: MODE,
+      checks: `${pass}/${pass + fail}`,
+      gitStatus: cleanStatus,
+      command: `GVS_EVIDENCE_OUT=${EVIDENCE_OUT} deno run -A scripts/tool-call-evidence.ts --mode=${MODE}`,
+      scriptSha256: scriptHash,
+    };
     try {
-      const gitHead = new Deno.Command("git", { args: ["rev-parse", "HEAD"], stdout: "piped", stderr: "null" }).outputSync();
-      const head = new TextDecoder().decode(gitHead.stdout).trim();
-      const manifest: Record<string, unknown> = {
-        suite: "tool-call-evidence",
-        commit: head || "unknown",
-        generated: new Date().toISOString(),
-        mode: MODE,
-        checks: `${pass}/${pass + fail}`,
-        screenshots: shotList,
-      };
-      // EVERY listed image must have been CAPTURED in THIS invocation (never
-      // inherited): a missing capture FAILS the run; the manifest records each
-      // capture's provenance (time + content SHA-256 from the write).
-      const missing = shotList.filter((shot: string) => !capturedImages[shot]);
-      if (missing.length) {
-        console.error("evidence FAIL: images never captured this run:", missing.join(", "));
-        for (const shot of missing) {
-          transcript.push({ name: `evidence: ${shot} captured in THIS invocation`, pass: false, detail: "never captured" });
-        }
-        fail += missing.length;
-      }
-      manifest.images = Object.fromEntries(shotList.map((shot: string) => [shot, capturedImages[shot]?.sha256 ?? "missing"]));
-      manifest.captureProvenance = capturedImages; // name → { at, sha256 } — every capture recorded
-      // VALIDATION (fail closed):
-      // (a) every capture timestamp must be WITHIN this invocation (no stale
-      //     image can pass — the dir was freshly created above, so a stale
-      //     timestamp means a concurrent writer)
-      for (const [shot, prov] of Object.entries(capturedImages)) {
-        const at = new Date(prov.at).getTime();
-        if (!Number.isFinite(at) || at < invocationStartedAt) {
-          console.error(`evidence FAIL: ${shot} captured BEFORE this invocation (stale)`);
-          transcript.push({ name: `evidence: ${shot} captured within THIS invocation`, pass: false, detail: prov });
-          fail += 1;
-        }
-      }
-      // (b) the hashes are RECOMPUTED from the written files and must match the
-      //     manifest (a tampered/missing file fails)
-      for (const shot of shotList) {
-        try {
-          const bytes = await Deno.readFile(`${EVIDENCE_OUT}/${shot}`);
-          const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-          if (hash !== capturedImages[shot]?.sha256) {
-            console.error(`evidence FAIL: ${shot} hash mismatch after write`);
-            transcript.push({ name: `evidence: ${shot} hash matches the captured bytes`, pass: false, detail: { manifest: capturedImages[shot]?.sha256, file: hash } });
-            fail += 1;
-          }
-        } catch { /* a missing file fails the count below */ }
-      }
-      // (c) NO unexpected files/PNGs in the dir (only the listed images + the
-      //     manifest/transcript/metadata/log are allowed)
-      for (const entry of Deno.readDirSync(EVIDENCE_OUT)) {
-        const allowed = entry.name.endsWith(".png") ? shotList.includes(entry.name) : ["manifest.json", "evidence.log", "transcript.jsonl", "metadata.json"].includes(entry.name);
-        if (!allowed) {
-          console.error(`evidence FAIL: unexpected file in the output dir: ${entry.name}`);
-          transcript.push({ name: `evidence: no unexpected files in the output dir (${entry.name})`, pass: false, detail: null });
-          fail += 1;
-        }
-      }
-      await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
-      await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
-      await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
-      // the metadata: exact command, clean status, script hash, tool versions
-      let cleanStatus = "unknown";
-      try {
-        const st = new Deno.Command("git", { args: ["status", "--porcelain=v1"], stdout: "piped", stderr: "null" }).outputSync();
-        cleanStatus = new TextDecoder().decode(st.stdout).trim() === "" ? "clean" : "DIRTY: " + new TextDecoder().decode(st.stdout).trim();
-      } catch { /* git unavailable */ }
-      let scriptHash = "unknown";
-      try { scriptHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await Deno.readFile(new URL(import.meta.url).pathname)))].map((b) => b.toString(16).padStart(2, "0")).join(""); } catch { /* ignore */ }
-      let denoVersion = "unknown", chromiumVersion = "unknown";
-      try { denoVersion = Deno.version.deno; } catch { /* ignore */ }
-      try {
-        const ch = new Deno.Command("chromium", { args: ["--version"], stdout: "piped", stderr: "null" }).outputSync();
-        chromiumVersion = new TextDecoder().decode(ch.stdout).trim();
-      } catch { /* ignore */ }
-      const meta = {
-        commit: head,
-        generated: new Date().toISOString(),
-        mode: MODE,
-        checks: `${pass}/${pass + fail}`,
-        gitStatus: cleanStatus,
-        command: `GVS_EVIDENCE_OUT=${EVIDENCE_OUT} deno run -A scripts/tool-call-evidence.ts --mode=${MODE}`,
-        scriptSha256: scriptHash,
-        denoVersion,
-        chromiumVersion,
-      };
-      await Deno.writeTextFile(`${EVIDENCE_OUT}/metadata.json`, JSON.stringify(meta, null, 2) + "\n");
-      console.log("manifest HEAD:", head, `(${pass}/${pass + fail}) → ${EVIDENCE_OUT}`);
-    } catch { /* git unavailable */ }
+      const ch = new Deno.Command("chromium", { args: ["--version"], stdout: "piped", stderr: "null" }).outputSync();
+      meta.chromiumVersion = new TextDecoder().decode(ch.stdout).trim();
+    } catch { /* ignore */ }
+    try { meta.denoVersion = Deno.version.deno; } catch { /* ignore */ }
+    await Deno.writeTextFile(`${EVIDENCE_OUT}/metadata.json`, JSON.stringify(meta, null, 2) + "\n");
+    console.log("manifest HEAD:", head, `(${pass}/${pass + fail}) → ${EVIDENCE_OUT}`);
 
     console.log(`tool-call evidence (${MODE}): ${pass}/${pass + fail} passed`);
     if (fail > 0) Deno.exit(1);

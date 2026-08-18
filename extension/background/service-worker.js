@@ -50,7 +50,7 @@ import {
   requestCapability,
   revokeCapability,
 } from "../lib/capabilities.js";
-import { createAgent, createOrchestrator } from "../lib/agent.js";
+import { createAgent, createOrchestrator, RunAbortedError, isAbortShape } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   diagnosticClear,
@@ -1098,10 +1098,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // circuit-breaker; a tool error or a fence abort must not pause the
         // agent. Re-throw so the caller's own error handling still runs.
         if (isProviderError(e)) recordProviderFailure(formatError(e));
-        // An ABORT mid-run (the fence signal or the agent controller) must
-        // surface as {ok:false, aborted:true} — never a generic provider error
-        // and never a success.
-        if ((fence?.signal?.aborted === true) || runOutcome?.aborted === true || (typeof orch.isAborted === "function" && orch.isAborted())) {
+        // An ABORT mid-run — the typed RunAbortedError, the fence signal, or
+        // the agent controller — must surface as {ok:false, aborted:true},
+        // never a generic provider error and never a success.
+        if ((e instanceof RunAbortedError) || isAbortShape(e) || (fence?.signal?.aborted === true) || (typeof orch.isAborted === "function" && orch.isAborted())) {
           return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
         }
         throw e;
@@ -2796,9 +2796,11 @@ const handlers = {
     if (runAborted()) {
       return { ok: false, error: "run aborted — delegation not started" };
     }
-    const outcome = await withRunLock(async () => {
+    let outcome;
+    try {
+      outcome = await withRunLock(async () => {
       if (runAborted()) {
-        throw new Error("run aborted — delegation not started");
+        throw new RunAbortedError("run aborted — delegation not started");
       }
       // Re-check the SAME generation IMMEDIATELY before a.run: a delete while
       // this delegation was waiting on the run mutex must not start a stale
@@ -2826,7 +2828,15 @@ const handlers = {
       } finally {
         try { a.setProgress?.(null); } catch { /* best-effort */ }
       }
-    });
+      });
+    } catch (e) {
+      // A typed abort (pre-start, fence, mid-run) → the failed delegation
+      if (e instanceof RunAbortedError || isAbortShape(e)) {
+        outcome = { error: "delegation aborted", aborted: true };
+      } else {
+        outcome = { error: `delegation failed: ${e?.message ?? e}` };
+      }
+    }
     // The worker's PER-RUN outcome: unwrap the text for the string contract +
     // map an aborted delegation to a FAILED delegation (never a success with an
     // object result).

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.93] — 2026-08-18
+- fix(tool-calls): successor-5 — run NEVER resolves an abort, run-local demo derivation, structural SDK parsing, fail-closed evidence, tracker ancestry
+
 ## [0.2.91] — 2026-08-18
 - fix(tool-calls): successor-4 — typed RunAbortedError for EVERY abort shape, stateless run-scoped demo, output-part parsing, fail-closed evidence, tracker counts
 

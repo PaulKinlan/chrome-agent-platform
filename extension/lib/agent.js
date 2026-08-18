@@ -469,10 +469,16 @@ export function createAgent({
             return { error: "origin re-enrolled during run — result discarded" };
           }
         }
-        // The PER-RUN outcome is RETURNED with the text — a queued next run can
-        // never overwrite THIS caller's observable abort state (the singleton
-        // lastRunAborted is only a fallback for the SW's isAborted() check).
-        return { text: result, aborted: controller.signal.aborted };
+        // An ABORTED run NEVER resolves: the mid-run abort THROWS the single
+        // typed RunAbortedError (with the partial text as `partialText`) — the
+        // SW + the direct-delegation callers catch the typed error. A queued
+        // next run can never overwrite this caller's observable abort state.
+        if (controller.signal.aborted) {
+          const err = new RunAbortedError("run aborted mid-run");
+          err.partialText = result;
+          throw err;
+        }
+        return result;
       } finally {
         // DURABLE per-run outcome: capture the abort state BEFORE activeRun is
         // cleared (the SW's isAborted() check runs after orch.run resolves —
@@ -616,21 +622,34 @@ export function createOrchestrator({
           try {
             result = await a.run(task, undefined, undefined, gen);
           } catch (e) {
-            // A THROWN abort/rejection → a REAL AI SDK tool-error via the typed
-            // error (never a successful {error} tool-result).
-            throw new RunAbortedError(
-              `delegation aborted — the worker for ${agentId} failed mid-run (${e?.message ?? "aborted"})`,
-            );
+            // ONLY an ABORT-shaped worker rejection becomes the typed error (a
+            // REAL tool-error); any UNRELATED worker error (a tool failure, a
+            // provider error) is PRESERVED unchanged — the delegation surfaces
+            // it as its own error, never mislabelled as an abort.
+            if (isAbortShape(e)) {
+              throw new RunAbortedError(
+                `delegation aborted — the worker for ${agentId} was aborted mid-run`,
+              );
+            }
+            throw new Error(`delegation failed — the worker for ${agentId} errored: ${e?.message ?? e}`);
           }
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded
           // rather than returned to the model (the round-17 blocker: delegateGuard
-          // returned {gen} but delegate_task ignored it).
+          // returned {gen} but delegate_task ignored it). An ownership loss is
+          // an ABORT-shaped failure → the typed error.
           if (delegateGuard && gen) {
             const after = await delegateGuard(agentId);
             if (!after?.ok || (after.gen ?? 0) !== gen) {
-              throw new Error(`agent ${agentId} was disenrolled during the task`);
+              throw new RunAbortedError(`agent ${agentId} was disenrolled during the task`);
             }
+          }
+          // The SECOND ownership fence (re-check before the run's own start):
+          // an abort here is also the typed error.
+          try {
+            await assertRunOwned();
+          } catch {
+            throw new RunAbortedError("run aborted — delegation ownership lost");
           }
           // An ABORT-shaped outcome — the pre-start {error:'run aborted…'} OR a
           // mid-run {aborted:true} — must FAIL the delegation with a REAL

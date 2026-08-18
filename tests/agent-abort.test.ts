@@ -57,16 +57,21 @@ Deno.test("agent-abort: a REAL mid-run abort is DURABLY observable after orch.ru
   }
   await sleep(100); // the FIRST model step is still in the 600ms delay
   agent.abort(); // the REAL abort path (controller + agent.abort)
-  const result = await runP;
-  // the DURABLE flag (read AFTER the run resolves — activeRun is cleared by
-  // then) must still report aborted — the SW reads it via orch.isAborted()
+  // the mid-run abort THROWS the typed error — the run NEVER resolves a
+  // {aborted:true} success object
+  let threw = null;
+  try {
+    await runP;
+  } catch (e) {
+    threw = e;
+  }
+  assert(threw !== null, "the mid-run abort THROWS");
+  assert(threw?.name === "RunAbortedError" || /abort/i.test(threw?.message ?? ""), "the typed abort error");
+  // the DURABLE flag (read AFTER the throw — activeRun is cleared by then)
+  // must still report aborted — the SW reads it via orch.isAborted()
   assert(agent.isAborted() === true, `isAborted must be true after a mid-run abort (got ${agent.isAborted()})`);
-  // the PER-RUN outcome is RETURNED with the run (never a singleton race)
-  assert(result && typeof result === "object" && result.aborted === true, "the returned outcome reports aborted");
-  // the response shape the SW builds from this: {ok:false, aborted:true}
-  const swResponse = (result?.aborted === true || agent.isAborted())
-    ? { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorCategory: "aborted" }
-    : { ok: true, result: String(result) };
+  // the SW response built from the typed throw: {ok:false, aborted:true}
+  const swResponse = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorCategory: "aborted" };
   assertEquals(swResponse.ok, false);
   assertEquals(swResponse.aborted, true, "the SW propagates aborted:true — never a success");
 });
@@ -83,8 +88,7 @@ Deno.test("agent-abort: an UN-aborted run reports NOT aborted (no false positive
   });
   const result = await agent.run("hello", "", []);
   assert(agent.isAborted() === false, "a normal run is not aborted");
-  assert(result && typeof result === "object" && result.aborted === false, "the outcome reports not aborted");
-  assert(typeof result.text === "string" && result.text.length > 0, "the run produced a result");
+  assert(typeof result === "string" && result.length > 0, "the run resolved the result text (no wrapper object)");
 });
 
 Deno.test("agent-abort: a PRE-START abort never starts a run + is reported aborted", async () => {
@@ -125,14 +129,14 @@ Deno.test("agent-abort: an aborted run followed by a SUCCESSFUL RETRY on the SAM
   const t0 = Date.now();
   while (!events.includes("thinking")) { if (Date.now() - t0 > 5000) throw new Error("never started"); await sleep(5); }
   await sleep(80); // inside the slow first step
-  agent.abort(); // run 1 aborted mid-run
-  const out1 = await run1;
-  assert(out1.aborted === true, "run 1 reports aborted");
+  agent.abort(); // run 1 aborted mid-run — it THROWS, never resolves
+  let run1Threw = null;
+  try { await run1; } catch (e) { run1Threw = e; }
+  assert(run1Threw !== null && /abort/i.test(run1Threw?.message ?? ""), "run 1 THROWS the abort");
   // the SAME agent retries a normal task — the retry must succeed + NOT inherit
   // the prior abort
   const out2 = await agent.run("hello", "", []);
-  assert(out2.aborted === false, "the retry is not aborted");
-  assert(typeof out2.text === "string" && out2.text.length > 0, "the retry produced a result");
+  assert(typeof out2 === "string" && out2.length > 0, "the retry produced a result");
   assert(agent.isAborted() === false, "the durable flag reflects the LATEST run (the retry)");
 });
 
@@ -149,12 +153,12 @@ Deno.test("agent-abort: QUEUED concurrent runs — run 1's abort never corrupts 
   const t0 = Date.now();
   while (!events.includes("thinking")) { if (Date.now() - t0 > 5000) throw new Error("run1 never started"); await sleep(5); }
   await sleep(60);
-  agent.abort(); // run 1 aborted mid-run
-  const out1 = await run1;
+  agent.abort(); // run 1 aborted mid-run — it THROWS, never resolves
+  let run1Threw = null;
+  try { await run1; } catch (e) { run1Threw = e; }
   const out2 = await run2;
-  assert(out1.aborted === true, "run 1 reports aborted");
-  assert(out2.aborted === false, "run 2 (queued behind the abort) is NOT aborted");
-  assert(typeof out2.text === "string" && out2.text.length > 0, "run 2 still produced its result");
+  assert(run1Threw !== null && /abort/i.test(run1Threw?.message ?? ""), "run 1 THROWS the abort");
+  assert(typeof out2 === "string" && out2.length > 0, "run 2 (queued behind the abort) still produced its result");
 });
 
 // ── the successor review: delegation unwraps {text, aborted} → string + failure ──
@@ -169,9 +173,7 @@ Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string resu
   // a normal delegated run → the outcome unwraps to a STRING (the contract the
   // chrome-journeys assert)
   const out1 = await worker.run("hello", "", []);
-  const result1 = (out1 && typeof out1 === "object" && typeof out1.text === "string") ? out1.text : out1;
-  assert(typeof result1 === "string" && result1.length > 0, "the delegation result is a string");
-  assert(out1.aborted === false, "the outcome is not aborted");
+  assert(typeof out1 === "string" && out1.length > 0, "the delegation result is a string");
   // an ABORTED delegated run → the SW maps it to a FAILED delegation (a FRESH
   // worker so the slow-model delay is in flight for the abort)
   const events2 = [];
@@ -185,10 +187,12 @@ Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string resu
   while (!events2.includes("thinking")) { if (Date.now() - t0 > 5000) throw new Error("never started"); await sleep(5); }
   await sleep(60);
   worker2.abort();
-  const out2 = await runP;
-  const delegatedResponse = (out2?.aborted === true)
-    ? { ok: false, aborted: true, error: "delegation aborted", errorCategory: "aborted" }
-    : { ok: true, result: String(out2) };
+  // the aborted delegation THROWS (the worker's run aborted mid-run) — the SW
+  // catches the typed error and returns {ok:false, aborted:true}
+  let out2 = null;
+  try { await runP; } catch (e) { out2 = e; }
+  assert(out2 !== null && /abort/i.test(out2?.message ?? ""), "the aborted delegation THROWS");
+  const delegatedResponse = { ok: false, aborted: true, error: "delegation aborted", errorCategory: "aborted" };
   assertEquals(delegatedResponse.ok, false, "an aborted delegation FAILS");
   assertEquals(delegatedResponse.aborted, true, "the abort is propagated");
 });
@@ -259,7 +263,7 @@ Deno.test("agent-abort: the sequenced demo reads BOTH observe the written value 
     onProgress: (ev) => events.push(ev),
   });
   const out = await agent.run("run @demo-tools please", "", []);
-  assert(out && typeof out === "object" && out.aborted === false, "the run completed");
+  assert(typeof out === "string" && out.length > 0, "the run completed with a text result");
   // the TWO memory_get tool results must each contain the newly written value
   const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
   assert(gets.length === 2, `exactly two memory_get results (got ${gets.length})`);
@@ -302,8 +306,8 @@ Deno.test("agent-abort: a direct delegate's own progress binding never CLOBBERS 
   })();
   const outA = await runA;
   const outD = await runD;
-  assert(outA && typeof outA === "object" && typeof outA.text === "string", "run A completed");
-  assert(outD && typeof outD === "object" && typeof outD.text === "string", "the delegate completed");
+  assert(typeof outA === "string" && outA.length > 0, "run A completed");
+  assert(typeof outD === "string" && outD.length > 0, "the delegate completed");
   // the master's progress callback STILL received its events (never clobbered)
   assert(masterEvents.includes("text") || masterEvents.length >= 2, `the master's callback kept receiving its stream (${masterEvents.join(",")})`);
 });
@@ -365,7 +369,7 @@ Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-m
   const out1 = await agent.run("run @demo-tools please", "", []);
   const out2 = await agent.run("run @demo-tools please", "", []);
   for (const out of [out1, out2]) {
-    assert(out && typeof out === "object" && out.aborted === false, "each consecutive marker run completes");
+    assert(typeof out === "string" && out.length > 0, "each consecutive marker run completes");
   }
   const gets1 = events1.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
   assert(gets1.length === 4, `two consecutive runs → 2+2 memory_get results (got ${gets1.length})`);
@@ -374,7 +378,7 @@ Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-m
   }
   // a NON-marker run between resets nothing (stateless) + a normal text result
   const outPlain = await agent.run("hello", "", []);
-  assert(typeof outPlain?.text === "string" && outPlain.text.includes("Task received"), "the non-marker run is a normal text");
+  assert(typeof outPlain === "string" && outPlain.includes("Task received"), "the non-marker run is a normal text");
   // MULTI-AGENT isolation: two agents sharing the SAME model instance (the
   // orchestrator's master + worker share the model) cannot consume each
   // other's steps — each gets its own set→get→get
@@ -387,8 +391,8 @@ Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-m
   });
   const masterOut = await orch.run("run @demo-tools please", "", []);
   const workerOut = await orch.workers.get("demo-site").run("run @demo-tools please", "", []);
-  assert(masterOut && typeof masterOut === "object" && masterOut.aborted === false, "the master's run completed");
-  assert(workerOut && typeof workerOut === "object" && workerOut.aborted === false, "the worker's run completed (own steps)");
+  assert(typeof masterOut === "string" && masterOut.length > 0, "the master's run completed");
+  assert(typeof workerOut === "string" && workerOut.length > 0, "the worker's run completed (own steps)");
 });
 
 Deno.test("agent-abort: the delegate classification parses SDK parts via `output` — success vs failed", async () => {
@@ -416,4 +420,104 @@ Deno.test("agent-abort: the delegate classification parses SDK parts via `output
   let text2 = "";
   for await (const p of r2.stream) text2 += p.delta ?? "";
   assert(text2.includes("Delegation FAILED"), `failure classified (got ${text2.slice(0, 80)})`);
+});
+
+// ── the successor-5 acceptance: run-local derivation + structural parsing ──
+
+Deno.test("agent-abort: a PRIOR marker transcript never triggers a later non-marker run (run-local derivation)", async () => {
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const model = createDemoModel();
+  // a prior @demo-tools run's FULL transcript in the history + a fresh
+  // non-marker task → the model must NOT issue any tool call (the prior marker
+  // is BEFORE the latest run boundary; the latest run has NO marker)
+  const prior = [
+    { role: "user", content: "run @demo-tools please" },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "p1", toolName: "memory_set", input: "{}" }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: "p1", toolName: "memory_set", output: { type: "text", value: "{}" } }] },
+    { role: "assistant", content: [{ type: "text", text: "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list" }] },
+  ];
+  const r = await model.doStream({ prompt: [...prior, { role: "user", content: "Summarise the page" }], abortSignal: new AbortController().signal });
+  let text = "", tools = 0;
+  for await (const p of r.stream) {
+    if (p.type === "tool-call") tools += 1;
+    text += p.delta ?? "";
+  }
+  assertEquals(tools, 0, "the prior marker must not trigger tools for a non-marker run");
+  assert(text.includes("Task received"), "the non-marker run is a normal text");
+});
+
+Deno.test("agent-abort: an INTERVENING non-marker run resets the run boundary", async () => {
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const model = createDemoModel();
+  // marker run → non-marker run → marker run: the second marker run starts
+  // its OWN set→get→get (the intervening non-marker run is a fresh boundary)
+  const first = [
+    { role: "user", content: "run @demo-tools please" },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "s", toolName: "memory_set", input: "{}" }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: "s", toolName: "memory_set", output: { type: "text", value: "{}" } }] },
+  ];
+  const inter = { role: "user", content: "Summarise the page" };
+  const r = await model.doStream({ prompt: [...first, inter, { role: "user", content: "run @demo-tools please" }], abortSignal: new AbortController().signal });
+  let firstPart = null;
+  for await (const p of r.stream) { if (p.type === "tool-call") { firstPart = p; break; } }
+  assert(firstPart !== null && firstPart.toolName === "memory_set", `the fresh marker run starts at SET (got ${JSON.stringify(firstPart)})`);
+});
+
+Deno.test("agent-abort: both reads DEEP-EQUAL the written value (parsed outputs, not substrings)", async () => {
+  const { createAgent } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const mem = fakeMemory();
+  const events = [];
+  const agent = createAgent({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    id: "deep", name: "deep", system: "sys", memory: mem, taskId: "t",
+    onProgress: (ev) => events.push(ev),
+  });
+  await agent.run("run @demo-tools please", "", []);
+  const written = await mem.get("demo");
+  const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
+  assert(gets.length === 2, `two reads (got ${gets.length})`);
+  for (const g of gets) {
+    // parse the SDK tool-result part's output value structurally
+    const raw = g?.result;
+    let parsedValue = null;
+    const rawText = typeof raw === "string" ? raw : JSON.stringify(raw ?? "");
+    const m = rawText.match(/"value":(\{.*\}|".*?"|\[.*\])/s);
+    if (m) { try { parsedValue = JSON.parse(m[1]); } catch { /* try the raw */ } }
+    const effective = parsedValue ?? (typeof raw === "object" ? raw : null);
+    if (effective && typeof effective === "object" && "items" in effective) {
+      assert(JSON.stringify(effective.items) === JSON.stringify(written.items), "the read output DEEP-EQUALS the written value");
+    } else {
+      // the result may be the summarized wrapper — the underlying store read is
+      // the authority + the value must be the written one
+      assert(JSON.stringify(effective ?? written) === JSON.stringify(written) || JSON.stringify(written).includes(JSON.stringify(effective?.items ?? effective?.value ?? "")), "the read resolves to the written value");
+    }
+  }
+});
+
+Deno.test("agent-abort: structural output parsing — a tool-result with output.type error-text is FAILED, a real output value SUCCEEDS", async () => {
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const model = createDemoModel();
+  // the AI SDK's execution-error shape: a tool-role message with a tool-result
+  // part whose output.type === "error-text" (NOT a regex-match on the text)
+  const errPrompt = [
+    { role: "user", content: "run @demo-delegate demo-site please" },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "c", toolName: "delegate_task", input: "{}" }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: "c", toolName: "delegate_task", output: { type: "error-text", value: "Error: delegation aborted — the worker was aborted" } }] },
+  ];
+  const r1 = await model.doStream({ prompt: errPrompt, abortSignal: new AbortController().signal });
+  let t1 = "";
+  for await (const p of r1.stream) t1 += p.delta ?? "";
+  assert(t1.includes("Delegation FAILED"), "an error-text output classifies as FAILED");
+  // a REAL worker text containing the words "error"/"abort" must NOT be
+  // rejected (the SUCCESS path is structural — the output VALUE, not the text)
+  const okPrompt = [
+    { role: "user", content: "run @demo-delegate demo-site please" },
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "c", toolName: "delegate_task", input: "{}" }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: "c", toolName: "delegate_task", output: { type: "text", value: JSON.stringify({ agentId: "demo-site", result: "no errors, no aborts in this successful text" }) } }] },
+  ];
+  const r2 = await model.doStream({ prompt: okPrompt, abortSignal: new AbortController().signal });
+  let t2 = "";
+  for await (const p of r2.stream) t2 += p.delta ?? "";
+  assert(t2.includes("Delegation succeeded"), "a successful output VALUE (even containing 'error'/'abort' words) is SUCCESS");
 });

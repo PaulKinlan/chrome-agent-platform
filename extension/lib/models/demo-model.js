@@ -23,8 +23,7 @@ const DELEGATE_MARKER = "@demo-delegate";
 const SLOW_MARKER = "@demo-slow";
 
 function wantsDelegate(prompt) {
-  const msgs = Array.isArray(prompt) ? prompt : [];
-  return msgs.some((m) => m?.role === "user" && extractText([m]).toLowerCase().includes(DELEGATE_MARKER));
+  return !!latestRunSlice(prompt)?.marker?.delegate;
 }
 
 function delegateAgentId(prompt) {
@@ -59,10 +58,10 @@ function extractText(prompt) {
 /** The demo tool-calling mode is requested when the LAST user turn contains the
  * marker (deterministic + explicit — never accidentally triggered). */
 function wantsDemoTools(prompt) {
-  // the marker is on the ORIGINAL task — scan ALL user turns (the agent-do
-  // continuation prompts drop it, but the task stays in the history)
-  const msgs = Array.isArray(prompt) ? prompt : [];
-  return msgs.some((m) => m?.role === "user" && extractText([m]).toLowerCase().includes(TOOLS_MARKER));
+  // the marker is on the ORIGINAL task of the CURRENT run — scope to the
+  // LATEST user turn carrying any marker (a prior run's marker must never
+  // trigger a later non-marker run; an intervening non-marker run resets)
+  return !!latestRunSlice(prompt)?.marker?.tools;
 }
 
 /** STATELESS, run-scoped demo sequencing: the step is derived from the CURRENT
@@ -76,19 +75,54 @@ function wantsDemoTools(prompt) {
  * the summary and the loop breaks. This is the only deterministic ordering —
  * the AI SDK executes same-step tools concurrently with Promise.all, so
  * same-step set+get could read the pre-write value. */
+/** The CURRENT run's scope: the boundary is the LATEST user message — the
+ * CURRENT run's marker is ONLY that message's marker (a PRIOR run's marker in
+ * the history can never trigger the current run). The slice is everything
+ * from that boundary onward, so the step derives ONLY from the current run's
+ * messages — a prior run's tool/summary transcript never interferes. */
+/** The agent-do loop's SYNTHETIC continuation prompt (it repeats every
+ * iteration after a tool step) is NOT a new run boundary — the run's real
+ * task is the last NON-continuation user message. */
+const AGENTDO_CONTINUATION = "continue working on the task";
+
+function isAgentDoContinuation(msg) {
+  return msg?.role === "user" && /^continue working on the task/i.test(extractText([msg]).trim());
+}
+
+function latestRunSlice(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  let lastIdx = -1;
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i]?.role === "user" && !isAgentDoContinuation(msgs[i])) lastIdx = i;
+  }
+  if (lastIdx === -1) return null;
+  const lastUser = extractText([msgs[lastIdx]]).toLowerCase();
+  return {
+    slice: msgs.slice(lastIdx),
+    marker: {
+      tools: lastUser.includes(TOOLS_MARKER),
+      delegate: lastUser.includes(DELEGATE_MARKER),
+    },
+  };
+}
+
+function runSlice(prompt) {
+  return latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []);
+}
+
 function toolResultCount(prompt) {
-  return (Array.isArray(prompt) ? prompt : []).filter((m) => m?.role === "tool").length;
+  return runSlice(prompt).filter((m) => m?.role === "tool").length;
 }
 
 function demoAlreadyFinal(prompt) {
-  return (Array.isArray(prompt) ? prompt : []).some((m) =>
+  return runSlice(prompt).some((m) =>
     m?.role === "assistant" &&
     Array.isArray(m?.content) &&
     m.content.some((p) => p?.type === "text" && /\[demo model\] Tool calls executed in sequence/.test(p.text ?? "")));
 }
 
 function delegateAlreadyFinal(prompt) {
-  return (Array.isArray(prompt) ? prompt : []).some((m) =>
+  return runSlice(prompt).some((m) =>
     m?.role === "assistant" &&
     Array.isArray(m?.content) &&
     m.content.some((p) => p?.type === "text" && /\[demo model\] Delegation/.test(p.text ?? "")));
@@ -209,22 +243,33 @@ export function createDemoModel() {
             // The SDK's tool-error message may be EMPTY (the error rides the
             // run's rejection, not the tool message), so the absence of any
             // SUCCESSFUL delegate result is the signal.
-            const lastTool = [...(options.prompt ?? [])].reverse().find((m) => m?.role === "tool");
-            const toolText = typeof lastTool?.content === "string" ? lastTool.content : JSON.stringify(lastTool?.content ?? "");
-            const allText = toolText + " " + JSON.stringify(lastTool ?? {});
-            // Parse the AI SDK tool PARTS via their `output` field (the SDK's
-            // tool messages carry { type:'tool-result'|'tool-error', output } —
-            // not `result`). SUCCESS only when a tool-result part with a real
-            // output value is present; a tool-error / error-text / empty output
-            // means FAILED (the throw path emits a tool-error, so a successful
-            // delegation is the ONLY way a result part appears).
-            const succeeded = /"type":"tool-result"/.test(allText)
-              && /"output":/.test(allText)
-              && !/error-text|abort|delegation aborted|tool-error|"error"/i.test(allText);
+            const lastTool = [...runSlice(options.prompt)].reverse().find((m) => m?.role === "tool");
+            // STRUCTURAL parsing of the AI SDK tool PARTS: the tool message's
+            // content is an array of { type:'tool-result'|'tool-error', output }
+            // parts (NOT `result`). A result part whose output.type ===
+            // "error-text" is FAILED; a result part with a REAL output value is
+            // SUCCESS — the worker text's WORDS never matter (a successful text
+            // mentioning 'error'/'abort' must not be rejected).
+            const parts = Array.isArray(lastTool?.content) ? lastTool.content : [];
+            let succeeded = false;
+            for (const part of parts) {
+              if (part?.type === "tool-result" && part?.output) {
+                if (part.output.type === "error-text") {
+                  succeeded = false;
+                  break;
+                }
+                succeeded = true;
+              } else if (part?.type === "tool-error") {
+                succeeded = false;
+                break;
+              }
+            }
             const failed = !succeeded;
+            // the SUCCESS response uses the STRUCTURALLY parsed output value
+            const outValue = parts.find((pt) => pt?.type === "tool-result" && pt?.output && pt.output.type !== "error-text")?.output?.value ?? "";
             response = failed
               ? "[demo model] Delegation FAILED — the delegated worker was aborted mid-run."
-              : `[demo model] Delegation succeeded. Worker response: ${toolText.slice(0, 160)}`;
+              : `[demo model] Delegation succeeded. Worker response: ${typeof outValue === "string" ? outValue.slice(0, 160) : JSON.stringify(outValue ?? "").slice(0, 160)}`;
             controller.enqueue({ type: "text-start", id });
             const chunks = response.match(/.{1,24}/g) ?? [response];
             for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
