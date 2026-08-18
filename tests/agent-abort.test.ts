@@ -553,10 +553,23 @@ Deno.test("agent-abort: the ACTUAL AI SDK result contains EXACTLY ONE delegate_t
   assert(/abort|aborted/i.test(delegateErrors[0]?.error?.message ?? ""), "the tool-error carries the abort");
 });
 
-Deno.test("agent-abort: the deep-equality test parses BOTH actual read outputs (a parse failure FAILS) + compares the COMPLETE written value", async () => {
+Deno.test("agent-abort: BOTH of the run's reads' parsed outputs deep-equal the COMPLETE written value (captured at the tool boundary — no fallback, no detached calls)", async () => {
   const { createAgent } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  // Capture the run's ACTUAL read outputs AT THE TOOL BOUNDARY: the memory_get
+  // tool calls mem.get during the run — the returned { key, value } is the
+  // complete read output (the progress event carries only a 300-char bounded
+  // summary, so the full value can only be attested here, where the tool's own
+  // execute produced it). Recorded IN ORDER, exactly the two reads the demo
+  // makes. A detached post-run memory_get call would NOT prove these values.
   const mem = fakeMemory();
+  const readReturns = [];
+  const origGet = mem.get.bind(mem);
+  mem.get = async (k) => {
+    const r = await origGet(k);
+    readReturns.push(r); // the run's read, complete + in order
+    return r;
+  };
   const events = [];
   const agent = createAgent({
     model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
@@ -564,21 +577,30 @@ Deno.test("agent-abort: the deep-equality test parses BOTH actual read outputs (
     onProgress: (ev) => events.push(ev),
   });
   await agent.run("run @demo-tools please", "", []);
+  // restore the ORIGINAL get BEFORE reading `written` — the post-run read must
+  // not leak into the run's captured reads (it is not a run output)
+  mem.get = origGet;
   const written = await mem.get("demo");
   assert(written && typeof written === "object", "the write landed");
+  // the run itself made EXACTLY TWO value-carrying reads (never fewer/more):
+  // the two memory_get executions the events attest. (The store's set-internal
+  // probe returns undefined and is not a read of the value.)
+  const valueReads = readReturns.filter((r) => r != null);
+  assert(valueReads.length === 2, `the run made exactly two value-carrying reads (got ${valueReads.length})`);
+  for (const [i, r] of valueReads.entries()) {
+    // the memory_get tool wraps the store value as { key, value } — the value
+    // the model received is `value`; the raw read is the complete object
+    assert(r && typeof r === "object", `read ${i + 1} returned a complete value object`);
+    // compare the COMPLETE written value (deep equality — no partial/items-only
+    // comparison)
+    assertEquals(JSON.stringify(r), JSON.stringify(written), `read ${i + 1}'s parsed output DEEP-EQUALS the complete written value`);
+  }
+  // the run ALSO emitted exactly two memory_get tool-result events (the
+  // bounded summaries — they cannot carry the full value, but the reads they
+  // report happened, in the same count, with the same key)
   const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
-  assert(gets.length === 2, `two reads (got ${gets.length})`);
-  // the demo made TWO memory_get reads (asserted); their ACTUAL read outputs
-  // are verified by executing the REAL production memory_get tool against the
-  // same store — the parsed output must DEEP-EQUAL the complete written value
-  // (a parse failure FAILS; no fallback/partial comparison).
-  const { memoryToolset } = await import("../extension/lib/agent.js");
-  const getTool = memoryToolset(mem).memory_get;
-  assert(getTool && typeof getTool.execute === "function", "the production memory_get tool is reachable");
-  const readOut = await getTool.execute({ key: "demo" });
-  assert(readOut && typeof readOut === "object" && "value" in readOut, "the real memory_get returned {key, value}");
-  assertEquals(JSON.stringify(readOut.value), JSON.stringify(written), "the real read output DEEP-EQUALS the complete written value");
-  // the SECOND read (same-name call) returns the identical complete value
-  const readOut2 = await getTool.execute({ key: "demo" });
-  assertEquals(JSON.stringify(readOut2.value), JSON.stringify(written), "the second read also DEEP-EQUALS the written value");
+  assert(gets.length === 2, `two memory_get tool-result events (got ${gets.length})`);
+  for (const g of gets) {
+    assert(/memory_get/.test(JSON.stringify(g)) && (g?.toolName === "memory_get" || /memory_get/.test(JSON.stringify(g?.result ?? ""))), "the event names the memory_get read");
+  }
 });
