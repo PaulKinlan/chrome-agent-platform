@@ -1203,6 +1203,8 @@ function renderDurability() {
     durabilityHint.textContent = "Couldn't save the sidebar state (storage failed).";
     durabilityHint.hidden = false;
   } else {
+    // Durable (or unknown): clear the stale text AND hide the live region.
+    durabilityHint.textContent = "";
     durabilityHint.hidden = true;
   }
 }

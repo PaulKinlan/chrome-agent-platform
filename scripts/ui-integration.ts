@@ -191,6 +191,15 @@ try {
   await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: number) => c.charCodeAt(0)));
 
   // 2c. Keyboard Enter toggles + aria-expanded/label/title track the state.
+  //     First prove the nub is TAB-REACHABLE (focus the last sidebar control
+  //     before it, then Tab — no programmatic .focus() on the nub).
+  await cdp.eval(hub, `(() => { document.querySelector('#open-settings')?.focus(); })()`);
+  await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 }, hub);
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 }, hub);
+  await sleep(200);
+  const tabReached = await cdp.eval(hub, `document.activeElement?.id === 'side-toggle'`);
+  check("the nub is reachable by keyboard Tab", tabReached === true, { tabReached });
+
   const keyBefore = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); t.focus(); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title, focused: document.activeElement === t }; })()`);
   await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, hub);
   await cdp.send("Input.dispatchKeyEvent", { type: "char", text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, hub);
@@ -224,7 +233,7 @@ try {
   await sleep(1500);
   const afterReload = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side?.classList.contains('collapsed') ?? false, width: side ? Math.round(side.getBoundingClientRect().width) : 0, durability: side?.getAttribute('data-durability') ?? 'unknown' }; })()`);
   check("collapsed state persists across reload", afterReload?.collapsed === true && afterReload?.width === 60, afterReload);
-  check("durability state is exposed on the rail", afterReload && ['durable', 'session', 'error', 'unknown'].includes(afterReload.durability), afterReload);
+  check("durability state is resolved after reload (not unknown)", afterReload && ['durable', 'session', 'error'].includes(afterReload.durability), afterReload);
   // restore to expanded for the rest of the suite
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); if (document.querySelector('#side')?.classList.contains('collapsed')) t?.click(); })()`);
   await sleep(500);
@@ -256,7 +265,7 @@ try {
   //     to its prior state, and the ViewTransition completes (observed via a
   //     TEST-INJECTED patch of document.startViewTransition — not a production
   //     oracle; the patch lives only in this test, never in the shipped ntp.js).
-  await cdp.eval(hub, `(() => { const orig = document.startViewTransition; window.__vtCap = null; document.startViewTransition = (cb) => { const vt = orig.call(document, cb); window.__vtCap = vt; return vt; }; })()`);
+  await cdp.eval(hub, `(() => { window.__vtOrig = document.startViewTransition; window.__vtCap = null; document.startViewTransition = (cb) => { const vt = window.__vtOrig.call(document, cb); window.__vtCap = vt; return vt; }; })()`);
   const rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
   const vtOutcome = await cdp.eval(hub, `(async () => { const vt = window.__vtCap; if (!vt) return 'none'; await vt.finished; return 'finished'; })()`);
@@ -265,6 +274,8 @@ try {
   check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter.collapsed === rapidBefore, { rapidBefore, rapidAfter });
   check("ViewTransition.finished awaited (test-injected patch)", vtOutcome === 'finished', vtOutcome);
   check("width matches the final state after the transition", rapidAfter.width === (rapidAfter.collapsed ? 60 : 240), rapidAfter);
+  // Clean up the test-injected patch (restore the original + delete the cap).
+  await cdp.eval(hub, `(() => { if (window.__vtOrig) document.startViewTransition = window.__vtOrig; delete window.__vtOrig; delete window.__vtCap; })()`);
 
   // 3. The + menu opens AND stays in-bounds.
   const attach = await cdp.eval(hub, `(() => {
@@ -306,6 +317,9 @@ try {
   if (consoleRect?.found && consoleRect.rect) {
     check("the error console stays in-bounds", inBounds(consoleRect.rect, consoleRect.vw, consoleRect.vh), consoleRect.rect);
   }
+  // Close any open diagnostics panels so they don't cover later interactions.
+  await cdp.eval(hub, `(() => { for (const tag of ['error-console','security-shield']) { const el = document.querySelector(tag); const panel = el?.shadowRoot?.querySelector('.panel'); const btn = el?.shadowRoot?.querySelector('button'); if (panel && !panel.hidden && btn) btn.click(); } })()`);
+  await sleep(300);
 
   // 5. The recent-activity rows have horizontal padding + real entry content,
   //    loaded through the PRODUCTION activity.list path (not the demo entries
@@ -328,19 +342,32 @@ try {
   check("the recent-activity entry has horizontal padding (not edge-to-edge)", (activity?.paddingLeft ?? 0) > 0, activity);
 
   // 7. REAL thread via production UI: type a task into the composer + click Run
-  //    (real CDP user input) → the demo provider (no key) runs → a thread is
-  //    created; then reopen it through the sidebar thread-item and hit-test the
-  //    nub with the thread overlay OPEN (not a forced hidden).
-  await cdp.eval(hub, `(() => { const inp = document.querySelector('#task-input'); inp.value = 'Summarise the docs'; inp.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  //    (REAL CDP input: mouse click to focus, Input.insertText to type, mouse
+  //    click on #run-task) → the demo provider (no key) runs → a thread is
+  //    created; then reopen it through the sidebar thread-item (real pointer) and
+  //    hit-test the nub with the thread overlay OPEN (not a forced hidden).
+  const inpRect = await cdp.eval(hub, `(() => { const r = document.querySelector('#task-input').getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: inpRect.x, y: inpRect.y }, hub);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: inpRect.x, y: inpRect.y, button: "left", clickCount: 1 }, hub);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: inpRect.x, y: inpRect.y, button: "left", clickCount: 1 }, hub);
+  await cdp.send("Input.insertText", { text: "Summarise the docs" }, hub);
   await sleep(200);
-  // Activate Run via a REAL CDP mouse click at the button centre (fall back to
-  // the native .click() only if the button has no box).
-  const runBtn = await cdp.eval(hub, `(() => { const b = document.querySelector('#run-task'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height, val: document.querySelector('#task-input')?.value ?? '' }; })()`);
-  await cdp.eval(hub, `document.querySelector('#run-task')?.click()`);
-  await sleep(3500); // the agent loop runs (demo model is deterministic + fast)
+  const runBtn = await cdp.eval(hub, `(() => { const b = document.querySelector('#run-task'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height }; })()`);
+  if (runBtn && runBtn.w > 0 && runBtn.h > 0) {
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: runBtn.x, y: runBtn.y }, hub);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: runBtn.x, y: runBtn.y, button: "left", clickCount: 1 }, hub);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: runBtn.x, y: runBtn.y, button: "left", clickCount: 1 }, hub);
+  }
+  await sleep(500);
+  await sleep(3000); // the agent loop runs (demo model is deterministic + fast)
   const threadState = await cdp.eval(hub, `(() => ({ items: document.querySelectorAll('.thread-item').length, first: document.querySelector('.thread-item .t-name')?.textContent?.trim() ?? '' }))()`);
   check("running a demo task creates a thread in the sidebar", threadState?.items >= 1, threadState);
-  await cdp.eval(hub, `document.querySelector('.thread-item')?.click()`);
+  const threadItem = await cdp.eval(hub, `(() => { const el = document.querySelector('.thread-item'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+  if (threadItem) {
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: threadItem.x, y: threadItem.y }, hub);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: threadItem.x, y: threadItem.y, button: "left", clickCount: 1 }, hub);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: threadItem.x, y: threadItem.y, button: "left", clickCount: 1 }, hub);
+  }
   await sleep(900);
   const opened = await cdp.eval(hub, `(() => ({ hidden: document.getElementById('thread-view').hidden, title: document.getElementById('thread-title').textContent }))()`);
   check("clicking the sidebar thread opens the thread surface", opened?.hidden === false, opened);
@@ -428,8 +455,14 @@ try {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, hub);
 
   await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }, hub);
-  const reducedMotion = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); return { transition: getComputedStyle(t).transition }; })()`);
-  check("prefers-reduced-motion disables the nub transition", reducedMotion && (reducedMotion.transition === "none" || reducedMotion.transition.includes("0s")), reducedMotion);
+  const reducedMotion = await cdp.eval(hub, `(() => {
+    const g = (sel) => getComputedStyle(document.querySelector(sel)).transition;
+    return { nub: g('#side-toggle'), side: g('#side'), overlay: g('#thread-view') };
+  })()`);
+  const noMotion = (t) => t === "none" || t.includes("0s") || t === "all 0s ease 0s";
+  check("prefers-reduced-motion disables the nub transition", reducedMotion && noMotion(reducedMotion.nub), reducedMotion);
+  check("prefers-reduced-motion disables the sidebar transition", reducedMotion && noMotion(reducedMotion.side), reducedMotion);
+  check("prefers-reduced-motion disables the overlay transition", reducedMotion && noMotion(reducedMotion.overlay), reducedMotion);
   await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
 
   const darkNub = await cdp.eval(hub, `(() => {

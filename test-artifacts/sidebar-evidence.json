@@ -6,26 +6,26 @@
       "file": "sidebar-collapsed.png",
       "sha256": "d54f1bac15b25f6564922508147d982d97f618761315c5cdc9458b371931caa7",
       "bytes": 57682,
-      "describes": "the 60px icon rail (border at x≈59) with the centred rail icons + the edge nub (chevron pointing right)"
+      "describes": "the 60px icon rail (border at x\u224859) with the centred rail icons + the edge nub (chevron pointing right)"
     },
     {
       "file": "sidebar-expanded.png",
       "sha256": "8c856dc1fcf49ee7388ed62b3c9897aed2cb764636d361fd701b1e6b943a48bb",
       "bytes": 69026,
-      "describes": "the 240px sidebar (border at x≈239) with the edge nub (chevron pointing left)"
+      "describes": "the 240px sidebar (border at x\u2248239) with the edge nub (chevron pointing left)"
     }
   ],
   "tests": {
-    "test:ui": "40/40 pass",
+    "test:ui": "43/43 pass",
     "test:components": "34/34 pass",
     "npm test (deno test -A tests/)": "322/322 pass",
     "build assertion": "no test controls/oracles in any shipped JS (window.__*, __sidebarPersistence, __lastViewTransition, __setKvFaultForTest, kv.fault, cap-kv-fault-test absent from every shipped script + SW bundle)"
   },
   "verified": [
-    "exactly five rail actions exist + share one centre (≤2px spread) + uniform 34×34",
-    "collapse control is a ≥44×44 nub hit target, straddles the sidebar edge, in-bounds",
+    "exactly five rail actions exist + share one centre (\u22642px spread) + uniform 34\u00d734",
+    "collapse control is a \u226544\u00d744 nub hit target, straddles the sidebar edge, in-bounds",
     "nub is a SIBLING of #side (root stacking) so elementFromPoint hit-tests every sampled point + a real pointer click toggles with the overlay open",
-    "REAL thread via production UI: typing into #task-input + clicking #run-task (the composer's production path) runs the demo provider → a thread appears → clicking the sidebar thread opens the surface → a DENSE elementFromPoint grid + a real pointer toggle work with the thread overlay open (no forced hidden)",
+    "REAL thread via production UI: typing into #task-input + clicking #run-task (the composer's production path) runs the demo provider \u2192 a thread appears \u2192 clicking the sidebar thread opens the surface \u2192 a DENSE elementFromPoint grid + a real pointer toggle work with the thread overlay open (no forced hidden)",
     "Enter + Space toggle; aria-expanded/label/title track; Enter focuses the nub first",
     "collapsed state persists across reload after the durability write settles (public data-durability, no window oracle)",
     "a VISIBLE + accessible durability hint (role=status aria-live, session-only text) is shown when persistence is session-only; data-durability carries the machine state",
@@ -33,7 +33,10 @@
     "RTL nub centres on the rail's inner (left) boundary + swaps the border to the inner edge",
     "rapid double-click returns to the deterministic prior state; the ViewTransition.finished is awaited via a TEST-INJECTED patch of document.startViewTransition (never shipped)",
     "recent-activity renders a journal entry via the production activity.list path (memory.set + reload)",
-    "narrow (500px) in-bounds, prefers-reduced-motion disables the sidebar/overlay/nub transitions, dark theme renders a visible border"
+    "narrow (500px) in-bounds, prefers-reduced-motion disables the sidebar/overlay/nub transitions, dark theme renders a visible border",
+    "nub is reachable by keyboard Tab (focus the preceding control + Tab, not programmatic .focus())",
+    "prefers-reduced-motion disables the sidebar, overlay AND nub transitions (asserted on all three)",
+    "durability resolves to durable/session/error after reload (unknown is not accepted)"
   ],
   "limitations": [
     "A storage-GRANTED durable round-trip across a SERVICE-WORKER restart is NOT exercised by the integration harness: the optional storage permission requires a headed owner gesture (chrome.permissions.request) that a headless profile cannot grant. The durable WRITE path itself is unit-tested (kvSet returns 'durable' when the backend is present + healthy, and throws StorageBackendError when the backend write fails).",

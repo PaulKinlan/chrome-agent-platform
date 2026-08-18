@@ -67,7 +67,7 @@
     .side-toggle svg { display: block; transition: transform .18s ease; }
     #side.collapsed ~ .side-toggle svg { transform: rotate(180deg); }
     @media (prefers-reduced-motion: reduce) {
-      .side-toggle, .side-toggle .nub, .side-toggle svg, .side, #thread-view { transition: none; }
+      .side-toggle, .side-toggle .nub, .side-toggle svg, .side, #thread-view.view-overlay, #view.view-overlay { transition: none !important; }
     }
     /* RTL: the rail sits on the right — mirror the nub to the left edge, flip
        the horizontal translate (the nub protrudes LEFT now), and mirror the

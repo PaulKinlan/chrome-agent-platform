@@ -1,7 +1,8 @@
 // Build the MV3 service worker + shared agent-core modules with esbuild
 // (the AI SDK + zod need bundling for the service-worker environment).
 import { build } from "esbuild";
-import { readFile, writeFile, copyFile } from "node:fs/promises";
+import { readFile, writeFile, copyFile, readdir, stat } from "node:fs/promises";
+import { join, extname } from "node:path";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 
 const OUT = "extension/dist/background/service-worker.js";
@@ -90,24 +91,43 @@ if (remaining > 0) {
 console.log(`built ${OUT} (removed ${occurrences} new-Function + ${zodProbes} Function-constructor probe site(s); ${remaining} remaining)`);
 
 // SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
-// shipped extension. Scan EVERY shipped JS file (the SW bundle + every static
-// extension script) for the fault-seam symbols AND for any window.__* test
-// oracle, and FAIL the build if any appear.
-const FORBIDDEN_SEAMS = [
-  "__setKvFaultForTest", "kv.fault", "cap-kv-fault-test", "injected test fault",
-  "__sidebarPersistence", "__lastViewTransition", "window.__sidebarPersistence", "window.__lastViewTransition",
+// shipped extension. RECURSIVELY discover every shipped .js under extension/,
+// then scan each with (a) a case-insensitive substring check for the known
+// fault-seam/oracle names and (b) a regex for dot OR bracket access to a
+// __-prefixed property on window/globalThis/self. This is robust to renamed/
+// case-varied symbols, bracket access, minification, generated outputs, and
+// newly added paths (new files are discovered, not enumerated).
+async function walkJs(dir, out = []) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) await walkJs(p, out);
+    else if (entry.isFile() && (extname(p) === ".js" || extname(p) === ".mjs")) out.push(p);
+  }
+  return out;
+}
+const FORBIDDEN_NAMES = [
+  "__setkvfaultfortest", "kv.fault", "cap-kv-fault-test", "injected test fault",
+  "__sidebarpersistence", "__lastviewtransition",
 ];
-const SHIPPED_JS = [OUT, "extension/ntp/ntp.js", "extension/shared/components.js", "extension/shared/composer.js", "extension/shared/conversation.js", "extension/shared/apply-theme.js", "extension/options/options.js", "extension/sidepanel/sidepanel.js"];
-for (const file of SHIPPED_JS) {
-  let text;
-  try { text = await readFile(file, "utf8"); } catch { continue; } // optional file
-  for (const needle of FORBIDDEN_SEAMS) {
-    if (text.includes(needle)) {
-      throw new Error(`shipped ${file} contains the forbidden test control \`${needle}\` — test controls/oracles must live only in the unit-test/harness layer, never in the production bundle or a shipped script`);
+// Test oracles live on the PAGE globals (window/self), never on globalThis
+// (whose __zod_* / __vite_* names are legitimate library internals, not
+// oracles). The specific FORBIDDEN_NAMES above are still scanned case-
+// insensitively EVERYWHERE, so a renamed oracle on globalThis is caught by name.
+const ORACLE_RE = /(?:window|self)\s*(?:\.|\[)\s*["']?__/g;
+const shippedJs = await walkJs("extension");
+for (const file of shippedJs) {
+  const text = await readFile(file, "utf8");
+  const lower = text.toLowerCase();
+  for (const needle of FORBIDDEN_NAMES) {
+    if (lower.includes(needle)) {
+      throw new Error(`shipped ${file} contains the forbidden test control \`${needle}\` — test controls/oracles must live only in the unit-test/harness layer`);
     }
   }
+  if (ORACLE_RE.test(text)) {
+    throw new Error(`shipped ${file} contains a window/globalThis/self.__* test oracle — remove it from production`);
+  }
 }
-console.log("build assertion: no test controls/oracles in any shipped JS");
+console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files`);
 
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The

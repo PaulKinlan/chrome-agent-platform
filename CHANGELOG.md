@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.80] — 2026-08-18
+- fix(sidebar): recursive build scan, real CDP composer typing, Tab focus, reduced-motion full, durability resolution
+
 ## [0.2.79] — 2026-08-18
 - fix(sidebar): remove shipped test oracles, add visible durability hint, real composer path, broad build scan
 
