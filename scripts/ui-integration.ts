@@ -87,6 +87,11 @@ class Cdp {
       { expression, returnByValue: true, awaitPromise: true },
       sessionId,
     );
+    if (r?.exceptionDetails) {
+      throw new Error(
+        r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? "page evaluation failed",
+      );
+    }
     return r.result?.value;
   }
 }
@@ -276,7 +281,11 @@ try {
     await sleep(300);
     rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width) }; })()`);
   } finally {
-    await cdp.eval(hub, `(() => { if (window.__vtOrig) document.startViewTransition = window.__vtOrig; delete window.__vtOrig; delete window.__vtCap; })()`);
+    // Separate restoration + each delete so one failing step can't skip the
+    // others (the reviewer's nested-cleanup requirement).
+    try { await cdp.eval(hub, `(() => { if (window.__vtOrig) document.startViewTransition = window.__vtOrig; })()`); } catch { /* restore failed — continue */ }
+    try { await cdp.eval(hub, `(() => { delete window.__vtOrig; })()`); } catch { /* delete failed */ }
+    try { await cdp.eval(hub, `(() => { delete window.__vtCap; })()`); } catch { /* delete failed */ }
   }
   check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter?.collapsed === rapidBefore, { rapidBefore, rapidAfter });
   check("ViewTransition.finished awaited (test-injected patch)", vtOutcome === 'finished', vtOutcome);

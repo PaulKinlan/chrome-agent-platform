@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.85] — 2026-08-18
+- fix(sidebar): hide collapsed durability hint, nested cleanup, Cdp.eval throws, structural scan, hash sync
+
+## [0.2.84] — 2026-08-18
+- fix(sidebar): hide collapsed durability hint, nested cleanup, Cdp.eval throws, structural scan, hash sync
+
 ## [0.2.83] — 2026-08-18
 - fix(sidebar): move test hooks to test-only modules, structural build scan, ViewTransition finally, version sync
 

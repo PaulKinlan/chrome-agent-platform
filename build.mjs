@@ -111,13 +111,15 @@ const FORBIDDEN_NAMES = [
   "__resetsessionfortest", "__resetmigrationfortest", "__resetbootfortest",
   "buildscriptsrcdoc", "test-only",
 ];
-// Test oracles live on the PAGE globals (window/self), never on globalThis
-// (whose __zod_* / __vite_* names are legitimate library internals, not
-// oracles). The specific FORBIDDEN_NAMES above are still scanned case-
-// insensitively EVERYWHERE, so a renamed oracle on globalThis is caught by name.
-const ORACLE_RE = /(?:window|self)\s*(?:\.|\[)\s*["']?__/g;
-// Structural: any EXPORTED identifier beginning with __ is a shipped test seam.
-const EXPORTED_TEST_SEAM_RE = /export\s+(?:const|let|function|class|async\s+function)\s+__[A-Za-z0-9_$]+/g;
+// Test oracles are __-prefixed properties on window/self/globalThis, EXCEPT the
+// legitimate library internals (__zod_*, __vite_*). The specific FORBIDDEN_NAMES
+// above are still scanned case-insensitively EVERYWHERE, so a renamed oracle on
+// ANY object is caught by name.
+const ORACLE_RE = /(?:window|self|globalThis)\s*(?:\.|\[)\s*["']?__(?!(?:zod|vite))/g;
+// Structural: any EXPORTED __-prefixed identifier in any form — a declaration
+// (export function/const/let/class __x), an export LIST (export { __x },
+// export { x as __x }), or a default export of a __-named binding.
+const EXPORTED_TEST_SEAM_RE = /export\s+(?:(?:const|let|function|class|async\s+function)\s+__[A-Za-z0-9_$]+|default\s+__[A-Za-z0-9_$]+|\{[^}]*\b(?:__[A-Za-z0-9_$]+|[A-Za-z0-9_$]+\s+as\s+__[A-Za-z0-9_$]+)\b[^}]*\})/g;
 const shippedJs = await walkJs("extension");
 for (const file of shippedJs) {
   const text = await readFile(file, "utf8");

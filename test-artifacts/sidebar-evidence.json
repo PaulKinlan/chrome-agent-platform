@@ -4,13 +4,13 @@
   "screenshots": [
     {
       "file": "sidebar-collapsed.png",
-      "sha256": "d54f1bac15b25f6564922508147d982d97f618761315c5cdc9458b371931caa7",
+      "sha256": "90b9f05cee55a316efc80009b74e25cf86999271cb4cbc5a4c2fe74538a5b37a",
       "bytes": 57682,
       "describes": "the 60px icon rail (border at x\u224859) with the centred rail icons + the edge nub (chevron pointing right)"
     },
     {
       "file": "sidebar-expanded.png",
-      "sha256": "8c856dc1fcf49ee7388ed62b3c9897aed2cb764636d361fd701b1e6b943a48bb",
+      "sha256": "c46f9e4a8e853f9a88632bb48b4fe2b16d3200d57d6619fa55d5ffdae35df4e4",
       "bytes": 69026,
       "describes": "the 240px sidebar (border at x\u2248239) with the edge nub (chevron pointing left)"
     }

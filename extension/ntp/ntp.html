@@ -324,6 +324,11 @@
     }
     #sidebar-durability-hint { font-size: 11px; line-height: 1.4; color: var(--warning, #9a6700); padding: 4px 8px; }
     #sidebar-durability-hint[hidden] { display: none; }
+    /* The 60px icon rail is too narrow for the session/error text — hide the
+       inline hint when collapsed so it can't wrap vertically and corrupt the
+       rail layout (the status is still announced via the role=status live
+       region, and reappears on expand). */
+    .side.collapsed #sidebar-durability-hint { display: none; }
     /* (the collapse control is now the edge nub, not a foot row) */
     .foot-btn {
       display: flex;
