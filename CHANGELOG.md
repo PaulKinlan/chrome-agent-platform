@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.77] — 2026-08-18
+- docs(ui-fixes): correct the tool-tree test count (25) — the targeted total is 36 (25 + 11)
+
 ## [0.2.76] — 2026-08-18
 - docs(ui-fixes): record the sol-review fix commit hash in the tracker
 
