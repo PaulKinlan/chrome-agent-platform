@@ -1,5 +1,5 @@
 {
-  "scope": "collapsed-sidebar-nub fix + test-isolation/AST-scan/durability-UI/overlay-matrix refactor (branch fix/collapsed-sidebar-nub)",
+  "scope": "NON-AUTHORITATIVE historical metadata (branch fix/collapsed-sidebar-nub). The authoritative, commit-bound evidence is the external artifact at /home/paulkinlan/journal/.pi-subagents/artifacts/sidebar-final-evidence.json (frozen head a48fc8a45d62acf1b487bdf4a0adcfb817bb65dd). This in-repo file is retained only as a human-readable summary and must not be treated as the acceptance record.",
   "capturedFrom": "the built MV3 extension loaded in headless Chrome (scripts/ui-integration.ts)",
   "screenshots": [
     {
@@ -34,7 +34,7 @@
     }
   ],
   "tests": {
-    "test:ui": "62/62 pass",
+    "test:ui": "65/65 pass",
     "test:components": "34/34 pass",
     "npm test (deno test -A tests/)": "342/342 pass",
     "test:security": "7/7 pass",
@@ -63,5 +63,7 @@
   "limitations": [
     "A storage-GRANTED durable round-trip across a SERVICE-WORKER restart is NOT exercised by the integration harness: the optional storage permission requires a headed owner gesture (chrome.permissions.request) that a headless profile cannot grant. The durable WRITE path itself is unit-tested (kvSet returns 'durable' when the backend is present + healthy, and throws StorageBackendError when the backend write fails).",
     "The error durability state is exercised by calling the production pure renderer (lib/durability-ui.js) directly on the real element \u2014 there is deliberately no shipped fault global/route to force a backend write failure in the browser (the reviewer's no-shipped-fault-seam requirement). The backend-failure REJECT path is unit-tested at the KV level."
-  ]
+  ],
+  "frozenHead": "a48fc8a45d62acf1b487bdf4a0adcfb817bb65dd",
+  "authoritativeEvidence": "/home/paulkinlan/journal/.pi-subagents/artifacts/sidebar-final-evidence.json"
 }

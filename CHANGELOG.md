@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.93] — 2026-08-18
+- docs: sync tracked evidence to 65/65 UI + mark it non-authoritative historical metadata
+
 ## [0.2.92] — 2026-08-18
 - fix(ui): assert midnight nub background luminance/contrast; sync generated changelog
 
