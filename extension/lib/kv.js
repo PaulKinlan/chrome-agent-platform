@@ -25,8 +25,14 @@
 // their key-value access through the service worker (the `kv.get`/`kv.set`/
 // `kv.remove` message routes), so the SW's session Map is the single authority
 // when storage is absent. Pages must NEVER call kv* directly for shared state.
-
-import { session, warned, setWarned, migrated, setMigrated } from "./kv-internal.js";
+//
+// The storage-mode state below is OWNED in this module's closure — it is NOT
+// exported, and there is no reset/setter API (the unit-test harness resets by
+// re-importing a FRESH module instance via a cache-busted dynamic import, so no
+// shipped state/mutation surface exists for tests to reach).
+const session = new Map();
+let warned = false;
+let migrated = false;
 
 // ---- storage-mode state machine (round-18 blocker 3) ----
 // Snapshot→remove→re-enable-migrate must be ATOMIC with respect to every
@@ -79,7 +85,7 @@ function clone(v) {
 
 function warnOnce() {
   if (!warned) {
-    setWarned(true);
+    warned = true;
     console.warn(
       "storage permission not granted — changes are session-only until enabled in Settings",
     );
@@ -210,7 +216,7 @@ export async function snapshotPersistentToSessionLocked() {
  * re-migrates them (the round-17 blocker: `migrated` never reset → re-enable
  * restored only the old persistent values). */
 export function resetStorageTransition() {
-  setMigrated(false);
+  migrated = false;
 }
 
 /** Migrate the SW's session fallback into chrome.storage.local when the optional
@@ -240,7 +246,7 @@ export async function migrateSessionToStorage() {
       const entries = {};
       for (const [k, v] of session) entries[k] = clone(v);
       if (Object.keys(entries).length === 0) {
-        setMigrated(true);
+        migrated = true;
         return;
       }
       // Write session values to the persistent store. A write failure REJECTS (the
@@ -248,7 +254,7 @@ export async function migrateSessionToStorage() {
       try {
         await chrome.storage.local.set(entries);
         session.clear();
-        setMigrated(true);
+        migrated = true;
       } catch (e) {
         throw new StorageBackendError("set", e);
       }

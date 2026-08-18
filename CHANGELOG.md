@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.86] — 2026-08-18
+- refactor: production owns KV/scheduler state in closure; tests use module isolation
+
 ## [0.2.85] — 2026-08-18
 - fix(sidebar): hide collapsed durability hint, nested cleanup, Cdp.eval throws, structural scan, hash sync
 

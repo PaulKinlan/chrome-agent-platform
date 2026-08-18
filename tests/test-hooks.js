@@ -1,26 +1,26 @@
-// test-hooks.js — the Deno unit-test harness's reset helpers. Lives in tests/
-// (NEVER shipped): the shipped modules expose their in-memory state via the
-// *_internal.js shared-state modules, and this harness clears that state
-// directly between tests. No __*ForTest export exists anywhere in extension/.
-import { session, setWarned, setMigrated } from "../extension/lib/kv-internal.js";
-import { activeRuns, advanceBoot } from "../extension/lib/scheduler-internal.js";
+// test-hooks.js — the Deno unit-test harness's helpers. Lives in tests/
+// (NEVER shipped). The shipped modules (lib/kv.js, lib/scheduler.js) OWN their
+// in-memory state in module CLOSURE and expose no map/setter/reset/advance API,
+// so the harness resets state by re-importing a FRESH module instance with a
+// cache-busted dynamic import (Deno treats each distinct URL query as a distinct
+// module instance). No __*ForTest export exists anywhere in extension/.
 import { SCRIPT_FRAME_CSP } from "../extension/lib/scripts.js";
 
-/** Reset the kv session fallback (session Map + warned flag). */
-export function resetSessionForTest() {
-  session.clear();
-  setWarned(false);
+let seq = 0;
+function bust() {
+  return `${Date.now()}_${++seq}_${Math.random().toString(36).slice(2)}`;
 }
 
-/** Reset the kv migration flag. */
-export function resetMigrationForTest() {
-  setMigrated(false);
+/** Import a FRESH instance of lib/kv.js (fresh session Map + warned/migrated
+ * flags). Used by tests that exercise the session fallback / migration state. */
+export function freshKv() {
+  return import(`../extension/lib/kv.js?fresh=${bust()}`);
 }
 
-/** Simulate a scheduler worker restart (clear runs + advance the boot instant). */
-export function resetBootForTest() {
-  activeRuns.clear();
-  advanceBoot();
+/** Import a FRESH instance of lib/scheduler.js (fresh activeRuns + BOOT_AT).
+ * Used to simulate a service-worker restart. */
+export function freshScheduler() {
+  return import(`../extension/lib/scheduler.js?fresh=${bust()}`);
 }
 
 
@@ -97,4 +97,3 @@ export function buildScriptSrcdoc(source, { runId, nonce } = {}) {
     `<script data-cap-user>${runner}</script>`
   );
 }
-

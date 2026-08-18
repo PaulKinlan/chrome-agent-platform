@@ -6,7 +6,6 @@
 
 import { assert } from "jsr:@std/assert@1";
 import { recordUsage, getUsage, clearUsage } from "../extension/lib/usage.js";
-import { resetSessionForTest } from "./test-hooks.js";
 
 
 const store = new Map();
@@ -41,7 +40,6 @@ globalThis.chrome = {
 };
 
 Deno.test("concurrent recordUsage appends do not lose rows (round-24 usage-RMW blocker)", async () => {
-  resetSessionForTest();
   store.clear();
   delayMs = 5; // widen the read-modify-write window so the race would be observable
   try {
@@ -65,7 +63,6 @@ Deno.test("concurrent recordUsage appends do not lose rows (round-24 usage-RMW b
 });
 
 Deno.test("clearUsage serializes against a concurrent append (round-25 blocker)", async () => {
-  resetSessionForTest();
   store.clear();
   // A controllable gate: once armed, the next storage READ blocks until released,
   // so we can deterministically hold the append inside the usage mutex while a
@@ -110,7 +107,6 @@ Deno.test("clearUsage serializes against a concurrent append (round-25 blocker)"
 });
 
 Deno.test("getUsage aggregates by provider/model/agent/task/day", async () => {
-  resetSessionForTest();
   store.clear();
   try {
     await recordUsage({ agentId: "agent-a", taskId: "task-1", provider: "gemini", model: "gemini-3.7-flash", inputTokens: 100, outputTokens: 10, estimatedCost: 0.001 });

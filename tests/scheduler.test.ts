@@ -4,20 +4,26 @@
 // @ts-nocheck — the chrome mock is intentionally dynamic (no chrome.* types in Deno).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import {
-  INFLIGHT_LEASE_MS,
-  cancelScheduledTask,
-  clearStaleInflight,
-  heartbeatInflight,
-  listScheduledTasks,
-  markScheduledDone,
-  ownsInflight,
-  reconcileScheduledTasks,
-  releaseInflight,
-  scheduleTask,
-  tryAcquireInflight,
-} from "../extension/lib/scheduler.js";
-import { resetBootForTest } from "./test-hooks.js";
+import { INFLIGHT_LEASE_MS } from "../extension/lib/scheduler.js";
+import { freshScheduler } from "./test-hooks.js";
+
+// Module isolation: scheduler.js owns `activeRuns` + `BOOT_AT` in CLOSURE, so a
+// simulated worker restart is a FRESH module instance (cache-busted), not a
+// mutation of shipped state. The functions below are re-bound to the fresh
+// instance's exports by initScheduler(), so bare references stay stable across
+// the mid-test `await initScheduler()` restarts.
+let cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
+  markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight,
+  scheduleTask, tryAcquireInflight;
+async function initScheduler() {
+  const m = await freshScheduler();
+  ({
+    cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
+    markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight,
+    scheduleTask, tryAcquireInflight,
+  } = m);
+}
+await initScheduler(); // initial binding (fresh module for the first test)
 
 
 // ---- in-memory chrome mock (mirrors chrome.storage.local serialization) ----
@@ -92,7 +98,7 @@ Deno.test("a previous worker instance's lock is re-acquired after a simulated re
 
   // Simulate the worker being killed: a fresh SW instance has no in-memory run
   // and a new boot instant, but the dead owner's persisted lock remains.
-  resetBootForTest();
+  await initScheduler();
 
   const b = await tryAcquireInflight("lease-b2");
   assertEquals(b.acquired, true, "a previous worker's lock is re-acquired");
@@ -145,7 +151,7 @@ Deno.test("ownsInflight is true for the owner and false after a restart re-acqui
   assert(await ownsInflight("lease-e", a.token), "owner must own the lock");
 
   // Simulate a worker restart: the dead owner A's lock is re-acquired by B.
-  resetBootForTest();
+  await initScheduler();
   const b = await tryAcquireInflight("lease-e");
   assertEquals(b.acquired, true);
   assert(!(await ownsInflight("lease-e", a.token)), "stale owner A no longer owns");
@@ -160,7 +166,7 @@ Deno.test("markScheduledDone is fenced: a stale owner cannot delete a later owne
   assertEquals(a.acquired, true);
 
   // Simulate a worker restart: owner A's worker died; B re-acquires.
-  resetBootForTest();
+  await initScheduler();
   const b = await tryAcquireInflight(name);
   assertEquals(b.acquired, true);
 
