@@ -186,6 +186,54 @@ export function friendlyActivityLabel(toolName, args) {
   }
 }
 
+// ── the tool-card lifecycle (pure, unit-testable) ───────────────────────────
+// The live progress path keeps a FIFO queue of in-flight tool cards per tool
+// NAME (parallel same-name calls resolve in order); the run lifecycle MUST
+// resolve every queued card (done / error / abort) so no card stays
+// permanently "running".
+
+/** A per-tool-name FIFO queue of tool-card elements. */
+export function createToolCardQueue() {
+  const map = new Map();
+  return {
+    push(name, card) {
+      const q = map.get(name) ?? [];
+      q.push(card);
+      map.set(name, q);
+    },
+    take(name) {
+      const q = map.get(name);
+      if (!q || !q.length) return null;
+      return q.shift();
+    },
+    pendingCount() {
+      let n = 0;
+      for (const q of map.values()) n += q.length;
+      return n;
+    },
+    /** Resolve every still-in-flight card (never left permanently running). */
+    flush(status) {
+      let n = 0;
+      for (const q of map.values()) {
+        for (const card of q) {
+          card?.setAttribute?.("tool-status", status);
+          n += 1;
+        }
+      }
+      map.clear();
+      return n;
+    },
+  };
+}
+
+/** Whether a live tool-result event signals FAILURE (the SW tags `ok`; the
+ * fallback inspects the summarized result text for denial/error markers). */
+export function isToolErrorEvent(ev) {
+  if (ev?.ok === false) return true;
+  const s = String(ev?.result ?? "");
+  return /^\s*failed\b/i.test(s) || /^\s*\[[^\]]+\]\s*DENIED/i.test(s);
+}
+
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
   const c = container;
 
@@ -275,15 +323,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // are matched in order and a completed card is never duplicated (the
   // wider-goal review's finding that a single `lastTool` left A's card running
   // and created a duplicate completed card when calls interleave).
-  const inFlightTools = new Map(); // toolName -> Element[]
+  const toolCards = createToolCardQueue();
   const clearThinking = () => {
     thinking?.remove();
     thinking = null;
-  };
-  const takeInFlight = (toolName) => {
-    const q = inFlightTools.get(toolName);
-    if (!q || !q.length) return null;
-    return q.shift();
   };
 
   // 3. subscribe to the live progress for THIS turn. The port broadcast is
@@ -310,25 +353,25 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const card = typeof c.appendTool === "function"
           ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
-        const q = inFlightTools.get(ev.toolName) ?? [];
-        q.push(card);
-        inFlightTools.set(ev.toolName, q);
+        toolCards.push(ev.toolName, card);
         break;
       }
       case "tool-result": {
         // Match the OLDEST in-flight card for this tool name (FIFO — handles
-        // parallel same-name calls in order), mark it done; fall back to a fresh
-        // done card only when no in-flight card exists.
-        const card = takeInFlight(ev.toolName);
+        // parallel same-name calls in order); mark it done on success, error on
+        // a FAILED result (the SW tags `ok:false` — never a blanket success).
+        const card = toolCards.take(ev.toolName);
         const raw = safeToolResult(ev.result);
         const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
+        const err = isToolErrorEvent(ev);
+        const status = err ? "error" : "success";
         if (card) {
-          card.setAttribute?.("tool-status", "success");
+          card.setAttribute?.("tool-status", status);
           if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status: "success", result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
@@ -340,10 +383,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       case "done":
         clearThinking();
+        // Resolve any still-in-flight tool cards (an abort or a run that ended
+        // without a tool-result must never leave a card permanently running).
+        toolCards.flush(ev.aborted ? "error" : "success");
         onStatus?.({ state: "done" });
         break;
       case "error":
         clearThinking();
+        toolCards.flush("error");
         onStatus?.({
           state: "error",
           message: ev.reason ?? ev.message ?? "error",

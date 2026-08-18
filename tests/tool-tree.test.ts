@@ -48,11 +48,11 @@ Deno.test("tool-tree: the DEFENSIVE SECOND decode handles a double-encoded JSON 
 Deno.test("tool-tree: nested arrays + objects expand into a full tree", () => {
   const value = { items: [{ name: "A", tags: ["kitchen", "appliance"] }, { name: "B" }], meta: { deep: { ratio: 0.75 } } };
   const t = buildTree(value);
-  const paths = new Set(t.rows.map((r) => r.path));
-  assert(paths.has("items.0.name"));
-  assert(paths.has("items.0.tags.1"));
-  assert(paths.has("meta.deep.ratio"));
-  assert(t.rows.find((r) => r.path === "meta.deep.ratio").text === "0.75");
+  const segs = new Set(t.rows.map((r) => r.segments.join(".")));
+  assert(segs.has("items.0.name"));
+  assert(segs.has("items.0.tags.1"));
+  assert(segs.has("meta.deep.ratio"));
+  assert(t.rows.find((r) => r.segments.join(".") === "meta.deep.ratio").text === "0.75");
 });
 
 Deno.test("tool-tree: escaped JSON (quotes, backslashes, newlines) decodes + renders cleanly", () => {
@@ -160,9 +160,9 @@ Deno.test("tool-tree: safeParse never throws on adversarial input", () => {
 Deno.test("tool-tree: subtreeJson copies a bounded subtree for copy-JSON", () => {
   const value = { items: Array.from({ length: 200 }, (_, i) => ({ i, v: "x" })), meta: { n: 1 } };
   const t = buildTree(value);
-  const items = t.rows.find((r) => r.path === "items");
+  const items = t.rows.find((r) => r.segments.join(".") === "items");
   if (!items) throw new Error("items row missing");
-  const json = subtreeJson(value, items.path, t.rows);
+  const json = subtreeJson(value, items.segments);
   const parsed = JSON.parse(json);
   assert(parsed.length <= TOOL_TREE_CONTAINER_CAP, "the copied JSON is bounded");
   assert(parsed[0].i === 0);
@@ -176,4 +176,82 @@ Deno.test("tool-tree: looksJsonish only accepts clear JSON value starts", () => 
   assert(!looksJsonish("42"));
   assert(!looksJsonish("null"));
   assert(!looksJsonish(""));
+});
+
+// ── the k3 review's path/a11y-safety regressions ───────────────────────────
+
+Deno.test("tool-tree: a DOTTED key is ONE segment (expansion + copy stay correct)", () => {
+  const value = { "a.b": { "c.d": 42 }, plain: 1 };
+  const t = buildTree(value);
+  const row = t.rows.find((r) => r.key === "a.b");
+  assert(row && !row.leaf, "a.b is a container");
+  assert(JSON.stringify(row.segments) === JSON.stringify(["a.b"]), "ONE segment, never split on '.'");
+  const deep = t.rows.find((r) => r.key === "c.d");
+  assert(deep && deep.text === "42", "the nested dotted key is one segment too");
+  // copy-JSON of the dotted-key subtree addresses by segment array
+  const json = subtreeJson(value, ["a.b"]);
+  const parsed = JSON.parse(json);
+  assertEquals(parsed["c.d"], 42);
+  const root = subtreeJson(value, []);
+  assert(root.startsWith("{"));
+});
+
+Deno.test("tool-tree: EMPTY + numeric-looking keys keep their identity", () => {
+  const value = { "": "empty-key", "0": "zero", "01": "leading", "1.5": "decimal" };
+  const t = buildTree(value);
+  // the EMPTY key is a real row addressed by its SEGMENT ([""]) — the lookup
+  // must not rely on `key` (an empty key is falsy, and the root row also has
+  // key ""), so address rows by their segment arrays.
+  const emptyRow = t.rows.find((r) => r.segments.length === 1 && r.segments[0] === "");
+  assert(emptyRow && emptyRow.text === "empty-key", "the empty-string key is ONE segment");
+  const byKey = Object.fromEntries(t.rows.filter((r) => r.key).map((r) => [r.key, r]));
+  assertEquals(byKey["0"].text, "zero");
+  assertEquals(byKey["01"].text, "leading");
+  assertEquals(byKey["1.5"].text, "decimal");
+  assertEquals(subtreeJson(value, ["0"]), '"zero"');
+  assertEquals(subtreeJson(value, ["01"]), '"leading"');
+  assertEquals(subtreeJson(value, ["1.5"]), '"decimal"');
+  assertEquals(subtreeJson(value, [""]), '"empty-key"');
+});
+
+Deno.test("tool-tree: __proto__ is retained as DATA (never mutates the prototype)", () => {
+  // JSON.parse creates a REAL "__proto__" DATA key (an object literal's
+  // __proto__ special form would set the prototype instead — the model must
+  // handle the data-key case).
+  const value = JSON.parse("{\"safe\":{\"__proto__\":{\"polluted\":true},\"x\":1}}");
+  const t = buildTree(value);
+  assert(t.rows.some((r) => r.key === "__proto__"), "the __proto__ key is a normal row");
+  const json = subtreeJson(value, ["safe"]);
+  const parsed = JSON.parse(json);
+  assertEquals(parsed["__proto__"].polluted, true, "the key round-trips as data");
+  assertEquals(Object.prototype.polluted, undefined, "the global Object prototype is untouched");
+  assertEquals({}.polluted, undefined, "plain objects are unpolluted");
+});
+
+Deno.test("tool-tree: a CYCLIC object renders a bounded leaf (never an infinite recursion)", () => {
+  const a = { name: "loop" };
+  a.self = a;
+  const t = buildTree(a);
+  const cyclic = t.rows.find((r) => r.cyclic === true || r.text === "[cyclic]");
+  assert(cyclic, "the cycle is rendered as a bounded leaf");
+  assert(t.rows.length < 20, "bounded rows (no recursion blowup)");
+});
+
+Deno.test("tool-tree: subtreeJson never throws (cyclic / BigInt / unreadable values)", () => {
+  const a = { n: 1 };
+  a.self = a;
+  assertEquals(typeof subtreeJson(a, []), "string", "a cyclic root copy falls back");
+  const big = { n: 10n };
+  assertEquals(typeof subtreeJson(big, []), "string", "a BigInt copy falls back");
+  const getter = { get boom() { throw new Error("getter"); } };
+  assertEquals(typeof subtreeJson(getter, ["boom"]), "string");
+});
+
+Deno.test("tool-tree: buildTree survives getter throws + symbol keys", () => {
+  const evil = {
+    get boom() { throw new Error("getter"); },
+    ok: 1,
+  };
+  const t = buildTree(evil);
+  assert(t.rows.some((r) => r.key === "ok" && r.text === "1"));
 });

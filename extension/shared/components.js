@@ -1369,8 +1369,11 @@ customElements.define("code-block", CodeBlock);
  * The tree is a flat row list inside one <details> per block — keyboard
  * accessible (<button> toggles + copy buttons), no emoji (SVG caret). */
 function formatToolDurationMs(ms) {
+  // Only a REAL duration is shown — null/""/0/NaN must never render "0ms"
+  // (the phantom-timing finding: Number(null) === 0).
+  if (ms == null || ms === "") return "";
   const n = Number(ms);
-  if (!Number.isFinite(n) || n < 0) return "";
+  if (!Number.isFinite(n) || n <= 0) return "";
   if (n < 1000) return `${Math.round(n)}ms`;
   return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}s`;
 }
@@ -1385,8 +1388,15 @@ function toolKindLabel(row) {
   return label;
 }
 
-/** A collapsible tree BLOCK (<details> + bounded flat rows) for a parsed value. */
-function buildToolTreeBlock(label, value, rows, maxNodes) {
+/** The canonical key for a segment address (unambiguous — never a dotted join). */
+function segKey(segments) {
+  return JSON.stringify(segments);
+}
+
+/** A collapsible tree BLOCK (<details> + bounded flat rows) for a parsed value.
+ * The expansion state PERSISTS across re-renders (attribute updates rebuild
+ * the bubble): `expandedState` is a Map label → Set of segment-address keys. */
+function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
   const details = document.createElement("details");
   details.className = "tt-block";
   details.open = true;
@@ -1405,20 +1415,23 @@ function buildToolTreeBlock(label, value, rows, maxNodes) {
 
   const tree = document.createElement("div");
   tree.className = "tt-tree";
-  tree.setAttribute("role", "tree");
 
-  // Initial expansion: containers at depth < 2 are open, deeper ones collapsed
-  // (the bounded rows are all in the DOM; toggles reveal/hide them).
+  // Initial expansion: the PERSISTED state for this label when present (the
+  // card re-renders on tool-status/result/duration attribute updates — the
+  // owner's collapsed/expanded choices survive), else containers at depth < 2.
+  const saved = expandedState?.get(label);
   const expanded = new Set();
   for (const r of rows) {
-    if (!r.leaf && r.depth < 2) expanded.add(r.path);
+    if (!r.leaf) {
+      const k = segKey(r.segments);
+      if (saved && saved.has(k)) expanded.add(k);
+      else if (!saved && r.depth < 2) expanded.add(k);
+    }
   }
   const isVisible = (r) => {
-    if (!r.path) return true; // the root row is always visible
-    const segs = r.path.split(".");
-    // every ancestor container (including the ROOT "") must be expanded
-    for (let i = 0; i < segs.length; i++) {
-      if (!expanded.has(segs.slice(0, i).join("."))) return false;
+    // every ancestor container (including the root []) must be expanded
+    for (let i = 0; i < r.segments.length; i++) {
+      if (!expanded.has(segKey(r.segments.slice(0, i)))) return false;
     }
     return true;
   };
@@ -1426,28 +1439,40 @@ function buildToolTreeBlock(label, value, rows, maxNodes) {
   const applyVisibility = () => {
     for (const [r, el] of rowEls) el.hidden = !isVisible(r);
   };
+  const persist = () => {
+    if (!expandedState) return;
+    const next = new Set();
+    for (const r of rows) {
+      if (!r.leaf && expanded.has(segKey(r.segments))) next.add(segKey(r.segments));
+    }
+    expandedState.set(label, next);
+  };
 
   for (const r of rows) {
     const row = document.createElement("div");
     row.className = r.leaf ? "tt-row tt-leaf" : "tt-row tt-container";
-    row.dataset.path = r.path;
+    row.dataset.path = segKey(r.segments);
     row.dataset.depth = String(r.depth);
     row.dataset.kind = r.kind;
+    row.dataset.cyclic = r.cyclic ? "1" : undefined;
     if (r.full) row.title = r.full;
 
     if (!r.leaf) {
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "tt-toggle";
-      const open = expanded.has(r.path);
+      const segs = r.segments;
+      const open = expanded.has(segKey(segs));
       toggle.setAttribute("aria-expanded", open ? "true" : "false");
       toggle.setAttribute("aria-label", `${open ? "Collapse" : "Expand"} ${r.key || "root"} (${r.kind})`);
       toggle.innerHTML = `<svg class="tt-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>`;
       toggle.addEventListener("click", () => {
-        if (expanded.has(r.path)) expanded.delete(r.path); else expanded.add(r.path);
-        toggle.setAttribute("aria-expanded", expanded.has(r.path) ? "true" : "false");
-        toggle.setAttribute("aria-label", `${expanded.has(r.path) ? "Collapse" : "Expand"} ${r.key || "root"} (${r.kind})`);
+        const k = segKey(segs);
+        if (expanded.has(k)) expanded.delete(k); else expanded.add(k);
+        toggle.setAttribute("aria-expanded", expanded.has(k) ? "true" : "false");
+        toggle.setAttribute("aria-label", `${expanded.has(k) ? "Collapse" : "Expand"} ${r.key || "root"} (${r.kind})`);
         applyVisibility();
+        persist();
       });
       row.appendChild(toggle);
       const key = document.createElement("span");
@@ -1478,10 +1503,10 @@ function buildToolTreeBlock(label, value, rows, maxNodes) {
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "tt-copy";
-    copy.dataset.path = r.path;
     copy.dataset.copy = r.leaf ? "value" : "json";
     copy.textContent = r.leaf ? "copy" : "copy json";
-    copy.setAttribute("aria-label", r.leaf ? `Copy value of ${r.path || "root"}` : `Copy JSON for ${r.path || "root"}`);
+    const copyName = r.key || (r.leaf ? "value" : "root");
+    copy.setAttribute("aria-label", r.leaf ? `Copy value of ${copyName}` : `Copy JSON for ${copyName}`);
     row.appendChild(copy);
     tree.appendChild(row);
     rowEls.push([r, row]);
@@ -1490,20 +1515,22 @@ function buildToolTreeBlock(label, value, rows, maxNodes) {
   applyVisibility();
 
   // Delegated copy handling (one listener per block): a leaf copies its scalar
-  // value; a container copies its (bounded) subtree JSON.
+  // value; a container copies its (bounded) subtree JSON. Failures are caught.
   tree.addEventListener("click", (e) => {
     const btn = e.target.closest?.(".tt-copy");
     if (!btn) return;
     e.stopPropagation();
-    const path = btn.dataset.path ?? "";
     const isJson = btn.dataset.copy === "json";
-    const row = rows.find((r) => r.path === path);
+    const row = rows.find((r) => r === btn.closest(".tt-row"));
     if (!row) return;
-    const text = isJson
-      ? (subtreeJson(value, path, rows) ?? "")
-      : (row.full ?? row.text ?? "");
-    if (!text) return;
     const label = btn.textContent;
+    let text = "";
+    try {
+      text = isJson
+        ? (subtreeJson(value, row.segments) ?? "")
+        : (row.full ?? row.text ?? "");
+    } catch { text = ""; }
+    if (!text) { btn.textContent = "unavailable"; setTimeout(() => { btn.textContent = label; }, 1200); return; }
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).catch(() => {});
     } else if (document.execCommand) {
@@ -1526,10 +1553,12 @@ function buildToolTreeBlock(label, value, rows, maxNodes) {
 
 /** Build the whole tool card as DOM. args/result/detail become structured,
  * bounded trees when they parse; otherwise a readable plain-text fallback. */
-function buildToolCardDom({ name, status, args, result, detail, duration }) {
+function buildToolCardDom({ name, status, args, result, detail, duration, expandedState }) {
+  // The card is NOT a live region: re-rendering a 200-row tree would announce
+  // the whole card on every attribute update (the a11y finding). The COMPACT
+  // status chip is the live region — it carries the compact state text only.
   const card = document.createElement("div");
   card.className = "tool";
-  card.setAttribute("role", "status");
 
   const head = document.createElement("div");
   head.className = "tool-head";
@@ -1539,6 +1568,7 @@ function buildToolCardDom({ name, status, args, result, detail, duration }) {
   head.appendChild(nameEl);
   const statusEl = document.createElement("span");
   statusEl.className = `tool-status ${status}`;
+  statusEl.setAttribute("role", "status");
   statusEl.textContent = status === "done" ? "done" : status === "error" ? "error" : "running";
   head.appendChild(statusEl);
   const dur = formatToolDurationMs(duration);
@@ -1556,7 +1586,7 @@ function buildToolCardDom({ name, status, args, result, detail, duration }) {
     if (parsed.kind === "json") {
       const tree = buildTree(parsed.value);
       if (tree.rows.length >= 1) {
-        card.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes));
+        card.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, expandedState));
         return;
       }
     }
@@ -1727,6 +1757,7 @@ class MessageBubble extends Component {
         // bounded, collapsible tree when they parse; readable plain text
         // otherwise. Built as DOM (textContent — never unsafe innerHTML).
         markup = "";
+        if (!this._ttExpanded) this._ttExpanded = new Map();
         this._cardDom = buildToolCardDom({
           name,
           status,
@@ -1734,6 +1765,7 @@ class MessageBubble extends Component {
           result,
           detail,
           duration: this.getAttribute("tool-duration"),
+          expandedState: this._ttExpanded,
         });
       }
     } else if (role === "thinking") {

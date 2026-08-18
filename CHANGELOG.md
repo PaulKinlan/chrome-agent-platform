@@ -1,13 +1,7 @@
 # Changelog
 
-## [0.2.76] — 2026-08-18
-- docs(ui-fixes): record the final renderer commit hash in the tracker
-
-## [0.2.75] — 2026-08-18
-- feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree
-
 ## [0.2.74] — 2026-08-18
-- feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree
+- fix(tool-calls): k3 MEDIUM findings — phantom duration, error lifecycle, segment paths, a11y roles, defensive safety
 
 ## [0.2.73] — 2026-08-18
 - feat(tool-calls): structured tool-call renderer — safe bounded parse + collapsible key/value tree

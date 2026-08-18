@@ -306,6 +306,38 @@ async function main() {
       check("tree: collapsing hides children + re-expanding restores them", (collapse as any)?.expanded > (collapse as any)?.collapsed, collapse);
     }
 
+    // k3 findings: no phantom duration on a RUNNING card (only a real value),
+    // and a FAILED tool result renders the error status + the error tree.
+    const runningState = await evalIn(cdp, session, `(() => {
+      // a FRESH running card (no tool-duration yet) must not render a "0ms" chip
+      const conv = document.querySelector('agent-conversation');
+      const card = conv.appendTool({ name: 'memory_get', args: ${JSON.stringify(JSON.stringify({ key: "shopping" }))}, status: 'running' });
+      const sr = card.shadowRoot || card;
+      const dur = sr.querySelector('.tool-duration');
+      const out = { hasDuration: !!dur, status: sr.querySelector('.tool-status')?.textContent ?? '' };
+      card.remove();
+      return out;
+    })()`);
+    check("lifecycle: the RUNNING card has NO phantom duration chip", (runningState as any)?.hasDuration === false && (runningState as any)?.status === 'running', runningState);
+    const errCard = await evalIn(cdp, session, `(async () => {
+      const conv = document.querySelector('agent-conversation');
+      const card = conv.appendTool({ name: 'memory_set', args: ${JSON.stringify(JSON.stringify({ key: "x", value: 1 }))}, status: 'running' });
+      await new Promise((r) => setTimeout(r, 200));
+      card.setAttribute('tool-status', 'error');
+      card.setAttribute('tool-result', 'failed: origin re-enrolled — memory not written');
+      card.setAttribute('tool-detail', ${JSON.stringify(JSON.stringify({ ok: false, error: "origin re-enrolled — memory not written" }))});
+      await new Promise((r) => setTimeout(r, 200));
+      const sr = card.shadowRoot || card;
+      return {
+        statusChip: sr.querySelector('.tool-status')?.textContent ?? '',
+        hasErrorTree: sr.querySelectorAll('.tt-row[data-kind="string"], .tt-row[data-kind="boolean"]').length > 0,
+        errorText: (sr.textContent || '').includes('failed: origin re-enrolled'),
+      };
+    })()`);
+    console.log("error card:", JSON.stringify(errCard));
+    check("lifecycle: a FAILED tool result renders the error status", (errCard as any)?.statusChip === 'error', errCard);
+    check("lifecycle: the failed result stays readable (no raw-JSON flash)", (errCard as any)?.errorText === true, errCard);
+
     console.log(`tool-call evidence (${MODE}): ${pass}/${pass + fail} passed`);
     if (fail > 0) Deno.exit(1);
   } finally {

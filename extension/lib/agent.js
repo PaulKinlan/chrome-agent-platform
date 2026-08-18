@@ -13,6 +13,7 @@ import { buildSkillsPrompt } from "./skills.js";
 import { grepAgentMemory } from "./named-agents.js";
 import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
+import { isToolResultFailure } from "./tool-summary.js";
 
 const DEFAULT_SYSTEM =
   `You are the Chrome Agent Platform hub agent. You help the
@@ -344,7 +345,7 @@ export function createAgent({
         try { progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step }); } catch { /* ignore */ }
       },
       onPostToolUse: async (e) => {
-        try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result) }); } catch { /* ignore */ }
+        try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result), ok: !isToolResultFailure(e.result) }); } catch { /* ignore */ }
       },
       onComplete: async (e) => {
         try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }

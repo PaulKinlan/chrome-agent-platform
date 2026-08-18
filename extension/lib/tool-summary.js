@@ -7,6 +7,27 @@
 // per-tool renderer so list/create/schedule/browser/memory tools read naturally.
 // The raw detail stays available separately (the tool card's `details` expand).
 
+/**
+ * Whether a raw tool result signals FAILURE (for the tool-card lifecycle):
+ * a returned { ok:false } / { error } / blocked object, or a denial / error
+ * summary string. Pure — the SW uses it to tag the live tool-result event
+ * with `ok`, so the UI can mark the card error instead of always success.
+ */
+export function isToolResultFailure(raw) {
+  const d = unwrapToolResult(raw);
+  if (d && typeof d === "object" && !Array.isArray(d)) {
+    if (d.ok === false) return true;
+    if (d.blocked === true) return true;
+    if (typeof d.error === "string" && d.error.trim()) return true;
+    if (typeof d.reason === "string" && /denied|aborted|failed/i.test(d.reason)) return true;
+    // a ToolResult envelope carries the human summary + the model-facing text
+    if (typeof d.userSummary === "string" && /denied|^\s*error:|^\s*failed/i.test(d.userSummary)) return true;
+    if (typeof d.modelContent === "string" && /^\s*error:/i.test(d.modelContent)) return true;
+  }
+  const s = String(d ?? "");
+  return /^\s*\[[^\]]+\]\s*DENIED/i.test(s) || /^error:/i.test(s) || /^\s*failed\b/i.test(s);
+}
+
 /** Turn a raw tool result into a readable one-line summary. */
 export function summarizeToolResult(name, raw) {
   const data = unwrapToolResult(raw);
