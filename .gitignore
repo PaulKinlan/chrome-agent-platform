@@ -5,3 +5,4 @@ extension/dist/
 extension/**/*.bundle.js
 dist/
 extension/CHANGELOG.md
+node_modules

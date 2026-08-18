@@ -51,6 +51,7 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 - The live run-status banner (Working… / Done / Failed + the live tool activity) at the BOTTOM of the thread.
 - The subtle timestamps (a muted divider at ≥5m gaps / the first message).
 - The readable tool-result summaries (not raw JSON).
+- **Structured tool-call renderer (2026-08-18)** — fixed the live raw/double-encoded JSON card with the shared `<message-bubble>` renderer and `extension/shared/tool-tree.js`: bounded never-throw parsing/serialization, canonical secret redaction, UTF-8 byte caps, accessible collapsible key/value rows, copy controls, timing, and terminal error/abort states. Immutable per-run call IDs pair persisted calls/results across reload; failed SDK tool results remain errors; typed aborts stay authoritative and prevent partial success journaling. The deterministic demo provider exercises genuine production tool calls in an actually loaded MV3 extension. The targeted contract is 83 checks (36 tool-tree + 20 lifecycle + 8 terminal + 19 abort); full feature history is preserved by the integration merge, while exact integration-commit commands, screenshots, hashes, and clean-tree state are retained externally for review.
 - The comprehensive + actionable error reporting (the underlying reason + category + what-to-do).
 - The thinking box at the bottom of the chat (the spinner).
 - The task error logging (a failed task shows WHY, per-task + centralized).

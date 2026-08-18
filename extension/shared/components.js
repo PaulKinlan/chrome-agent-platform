@@ -20,6 +20,7 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -1370,6 +1371,272 @@ class CodeBlock extends Component {
 }
 customElements.define("code-block", CodeBlock);
 
+/* ── the structured tool-call renderer (UI-FIXES-TRACKER item 4) ─────────
+ * Recognizes structured tool inputs/results, parses safely (objects + bounded
+ * JSON-string decodes — lib/tool-tree.js), and renders an accessible,
+ * collapsible, bounded key/value tree. No unsafe innerHTML (the tree is built
+ * with createElement/textContent); a readable plain-text fallback when parsing
+ * fails; depth/size bounds prevent a huge or deep payload from hanging the UI.
+ * The tree is a flat row list inside one <details> per block — keyboard
+ * accessible (<button> toggles + copy buttons), no emoji (SVG caret). */
+function formatToolDurationMs(ms) {
+  // Only a REAL duration is shown — null/""/0/NaN must never render "0ms"
+  // (the phantom-timing finding: Number(null) === 0).
+  if (ms == null || ms === "") return "";
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n < 1000) return `${Math.round(n)}ms`;
+  return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}s`;
+}
+
+function toolKindLabel(row) {
+  if (!row) return "";
+  let label = row.kind;
+  if ((row.kind === "array" || row.kind === "object") && row.count != null) {
+    label += ` · ${row.count}`;
+  }
+  if (row.capped) label += " · capped";
+  return label;
+}
+
+/** The canonical key for a segment address (unambiguous — never a dotted join). */
+function segKey(segments) {
+  return JSON.stringify(segments);
+}
+
+/** A collapsible tree BLOCK (<details> + bounded flat rows) for a parsed value.
+ * The expansion state PERSISTS across re-renders (attribute updates rebuild
+ * the bubble): `expandedState` is a Map label → Set of segment-address keys. */
+function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
+  const details = document.createElement("details");
+  details.className = "tt-block";
+  details.open = true;
+
+  const summary = document.createElement("summary");
+  const l = document.createElement("span");
+  l.className = "tt-block-label";
+  l.textContent = label;
+  summary.appendChild(l);
+  const meta = document.createElement("span");
+  meta.className = "tt-block-meta";
+  meta.textContent = rows.length ? toolKindLabel(rows[0]) : "";
+  if (rows.length >= maxNodes) meta.textContent += " · truncated";
+  if (meta.textContent) summary.appendChild(meta);
+  details.appendChild(summary);
+
+  const tree = document.createElement("div");
+  tree.className = "tt-tree";
+
+  // Initial expansion: the PERSISTED state for this label when present (the
+  // card re-renders on tool-status/result/duration attribute updates — the
+  // owner's collapsed/expanded choices survive), else containers at depth < 2.
+  const saved = expandedState?.get(label);
+  const expanded = new Set();
+  for (const r of rows) {
+    if (!r.leaf) {
+      const k = segKey(r.segments);
+      if (saved && saved.has(k)) expanded.add(k);
+      else if (!saved && r.depth < 2) expanded.add(k);
+    }
+  }
+  const isVisible = (r) => {
+    // every ancestor container (including the root []) must be expanded
+    for (let i = 0; i < r.segments.length; i++) {
+      if (!expanded.has(segKey(r.segments.slice(0, i)))) return false;
+    }
+    return true;
+  };
+  const rowEls = [];
+  const applyVisibility = () => {
+    for (const [r, el] of rowEls) el.hidden = !isVisible(r);
+  };
+  const persist = () => {
+    if (!expandedState) return;
+    const next = new Set();
+    for (const r of rows) {
+      if (!r.leaf && expanded.has(segKey(r.segments))) next.add(segKey(r.segments));
+    }
+    expandedState.set(label, next);
+  };
+
+  for (const r of rows) {
+    const row = document.createElement("div");
+    row.className = r.leaf ? "tt-row tt-leaf" : "tt-row tt-container";
+    row.dataset.path = segKey(r.segments);
+    row.dataset.depth = String(r.depth);
+    row.dataset.kind = r.kind;
+    row.dataset.cyclic = r.cyclic ? "1" : undefined;
+    if (r.full) row.title = r.full;
+
+    if (!r.leaf) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "tt-toggle";
+      const segs = r.segments;
+      const open = expanded.has(segKey(segs));
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.setAttribute("aria-label", `${open ? "Collapse" : "Expand"} ${r.key || "root"} (${r.kind})`);
+      toggle.innerHTML = `<svg class="tt-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>`;
+      toggle.addEventListener("click", () => {
+        const k = segKey(segs);
+        if (expanded.has(k)) expanded.delete(k); else expanded.add(k);
+        toggle.setAttribute("aria-expanded", expanded.has(k) ? "true" : "false");
+        toggle.setAttribute("aria-label", `${expanded.has(k) ? "Collapse" : "Expand"} ${r.key || "root"} (${r.kind})`);
+        applyVisibility();
+        persist();
+      });
+      row.appendChild(toggle);
+      const key = document.createElement("span");
+      key.className = "tt-key";
+      key.textContent = r.key || (r.kind === "array" ? "[items]" : "{keys}");
+      row.appendChild(key);
+      const kind = document.createElement("span");
+      kind.className = "tt-kind";
+      kind.textContent = toolKindLabel(r);
+      row.appendChild(kind);
+    } else {
+      const ic = document.createElement("span");
+      ic.className = "tt-ic";
+      ic.setAttribute("aria-hidden", "true");
+      row.appendChild(ic);
+      if (r.key !== "") {
+        const key = document.createElement("span");
+        key.className = "tt-key";
+        key.textContent = r.key;
+        row.appendChild(key);
+      }
+      const val = document.createElement("span");
+      val.className = `tt-val tt-val-${r.kind}`;
+      val.textContent = r.text ?? "";
+      row.appendChild(val);
+    }
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "tt-copy";
+    copy.dataset.copy = r.leaf ? "value" : "json";
+    copy.textContent = r.leaf ? "copy" : "copy json";
+    const copyName = r.key || (r.leaf ? "value" : "root");
+    copy.setAttribute("aria-label", r.leaf ? `Copy value of ${copyName}` : `Copy JSON for ${copyName}`);
+    // Explicit button → row mapping (a delegated closest() lookup against the
+    // model array could never match — the k3 blocker: `rows.find(r => r === el)`).
+    copy._row = r;
+    row.appendChild(copy);
+    tree.appendChild(row);
+    rowEls.push([r, row]);
+  }
+
+  applyVisibility();
+
+  // Delegated copy handling (one listener per block): a leaf copies its scalar
+  // value; a container copies its (bounded) subtree JSON. Failures are caught.
+  tree.addEventListener("click", (e) => {
+    const btn = e.target.closest?.(".tt-copy");
+    if (!btn) return;
+    e.stopPropagation();
+    const isJson = btn.dataset.copy === "json";
+    const row = btn._row; // the explicit button → row mapping
+    if (!row) return;
+    const label = btn.textContent;
+    let text;
+    try {
+      text = isJson
+        ? (subtreeJson(value, row.segments) ?? "")
+        : (row.full ?? row.text ?? "");
+    } catch { text = undefined; }
+    // An EMPTY STRING is a valid leaf value and MUST copy; only a genuinely
+    // unavailable row (no text at all) refuses.
+    if (text === undefined || text === null) {
+      btn.textContent = "unavailable";
+      setTimeout(() => { btn.textContent = label; }, 1200);
+      return;
+    }
+    const restore = () => setTimeout(() => { btn.textContent = label; }, 1400);
+    if (navigator.clipboard?.writeText) {
+      // The button says "copied" ONLY on a resolved write — a rejection must
+      // NOT claim success (the k3 clipboard finding).
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = "copied";
+        restore();
+      }).catch(() => {
+        btn.textContent = "copy failed";
+        restore();
+      });
+    } else if (document.execCommand) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { ok = false; }
+      ta.remove();
+      // execCommand returning FALSE must report failure, never success
+      btn.textContent = ok ? "copied" : "copy failed";
+      restore();
+    } else {
+      // NEITHER the Clipboard API nor execCommand exists — report failure
+      btn.textContent = "copy failed";
+      restore();
+    }
+  });
+
+  details.appendChild(tree);
+  return details;
+}
+
+/** Build the whole tool card as DOM. args/result/detail become structured,
+ * bounded trees when they parse; otherwise a readable plain-text fallback. */
+function buildToolCardDom({ name, status, args, result, detail, duration, expandedState }) {
+  // The card is NOT a live region: re-rendering a 200-row tree would announce
+  // the whole card on every attribute update (the a11y finding). The COMPACT
+  // status chip is the live region — it carries the compact state text only.
+  const card = document.createElement("div");
+  card.className = "tool";
+
+  const head = document.createElement("div");
+  head.className = "tool-head";
+  const nameEl = document.createElement("span");
+  nameEl.className = "tool-name";
+  nameEl.textContent = name || "tool";
+  head.appendChild(nameEl);
+  const statusEl = document.createElement("span");
+  statusEl.className = `tool-status ${status}`;
+  statusEl.setAttribute("role", "status");
+  statusEl.textContent = status === "done" ? "done" : status === "error" ? "error" : "running";
+  head.appendChild(statusEl);
+  const dur = formatToolDurationMs(duration);
+  if (dur) {
+    const durEl = document.createElement("span");
+    durEl.className = "tool-duration";
+    durEl.textContent = dur;
+    head.appendChild(durEl);
+  }
+  card.appendChild(head);
+
+  const addBlock = (label, raw) => {
+    if (raw == null || raw === "") return;
+    const parsed = safeParse(raw);
+    if (parsed.kind === "json") {
+      const tree = buildTree(parsed.value);
+      if (tree.rows.length >= 1) {
+        card.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, expandedState));
+        return;
+      }
+    }
+    const div = document.createElement("div");
+    div.className = `tool-plain tool-plain-${label}`;
+    div.textContent = String(parsed.value ?? raw ?? "");
+    card.appendChild(div);
+  };
+
+  addBlock("inputs", args);
+  if (result != null && result !== "") addBlock("result", result);
+  if (detail != null && detail !== "") addBlock("detail", detail);
+  return card;
+}
+
 /* <message-bubble role="user|agent|system|thinking|tool|error" content="…">
  * A single conversation turn. The ROLE is carried by the bubble's styling
  * (alignment + surface), never by a literal text label:
@@ -1383,7 +1650,7 @@ customElements.define("code-block", CodeBlock);
  * fallback), so the gallery can populate it declaratively. */
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "step", "total-steps", "error-reason", "error-action", "error-category"];
+    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category"];
   }
   _attachments() {
     const raw = this.getAttribute("attachments");
@@ -1461,12 +1728,48 @@ class MessageBubble extends Component {
       .tool .tool-detail summary::-webkit-details-marker { display:none; }
       .tool .tool-detail summary:hover { color:var(--text,#1d1b18); }
       .tool .tool-detail .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
+      /* the structured tool-call tree (tracker item 4) */
+      .tool .tool-duration { margin-left:auto; font-size:11px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
+      .tool .tool-status + .tool-duration { margin-left:8px; }
+      .tool .tt-block { border-top:1px solid var(--border,#e3e0d9); }
+      .tool .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:6px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
+      .tool .tt-block summary::-webkit-details-marker { display:none; }
+      .tool .tt-block summary:hover { color:var(--text,#1d1b18); }
+      .tool .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
+      .tool .tt-block-meta { color:var(--muted,#635e56); }
+      .tool .tt-tree { padding:2px 6px 8px; max-height:260px; overflow:auto; }
+      .tool .tt-row { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; min-height:22px; }
+      .tool .tt-row:hover { background:var(--panel-2,#efede8); }
+      .tool .tt-row[hidden] { display:none; }
+      .tool .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
+      .tool .tt-toggle:hover { color:var(--ink,#1d1b18); background:var(--panel-2,#efede8); }
+      .tool .tt-toggle:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+      .tool .tt-toggle .tt-caret { transition:transform .15s ease; }
+      .tool .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
+      .tool .tt-ic { width:18px; height:18px; flex:0 0 auto; }
+      .tool .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
+      .tool .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
+      .tool .tt-val-string { color:var(--ink,#1d1b18); }
+      .tool .tt-val-number, .tool .tt-val-boolean { color:var(--accent,#0e6e63); }
+      .tool .tt-val-null { color:var(--muted,#635e56); font-style:italic; }
+      .tool .tt-kind { color:var(--muted,#635e56); font-size:11px; margin-left:2px; }
+      .tool .tt-copy { margin-left:auto; flex:0 0 auto; font:inherit; font-size:11px; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; opacity:0; transition:opacity .12s ease; }
+      .tool .tt-row:hover .tt-copy, .tool .tt-copy:focus-visible { opacity:1; }
+      .tool .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+      .tool .tt-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+      .tool .tool-plain { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
+      @media (prefers-reduced-motion: reduce) { .tool .tt-toggle .tt-caret { transition:none; } .tool .tt-copy { transition:none; } }
     `;
     let markup;
     if (role === "tool") {
       const name = this.getAttribute("tool-name") || "tool";
       const statusRaw = this.getAttribute("tool-status") || "running";
-      const status = statusRaw === "success" ? "done" : statusRaw === "error" ? "error" : "running";
+      // "done" (an unpaired replay card), "success" and "error" are terminal —
+      // anything else (running/absent) renders the running state. A missing
+      // result must never re-open a card as running (the replay blocker).
+      const status = statusRaw === "done" || statusRaw === "success"
+        ? "done"
+        : statusRaw === "error" ? "error" : "running";
       const args = this.getAttribute("tool-args");
       const result = this.getAttribute("tool-result");
       const detail = this.getAttribute("tool-detail");
@@ -1490,12 +1793,20 @@ class MessageBubble extends Component {
           ${renderHtmlFrame(genHtml)}
         </div>`;
       } else {
-        markup = `<div class="tool" role="status">
-          <div class="tool-head"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-status ${status}">${status === "done" ? "done" : status === "error" ? "error" : "running"}</span></div>
-          ${args != null ? `<div class="tool-args">${escapeHtml(args)}</div>` : ""}
-          ${result != null ? `<div class="tool-result">${escapeHtml(result)}</div>` : ""}
-          ${detail != null ? `<details class="tool-detail"><summary>details</summary><div class="tool-detail-raw">${escapeHtml(detail)}</div></details>` : ""}
-        </div>`;
+        // The structured tool-call renderer: args/result/detail become a
+        // bounded, collapsible tree when they parse; readable plain text
+        // otherwise. Built as DOM (textContent — never unsafe innerHTML).
+        markup = "";
+        if (!this._ttExpanded) this._ttExpanded = new Map();
+        this._cardDom = buildToolCardDom({
+          name,
+          status,
+          args,
+          result,
+          detail,
+          duration: this.getAttribute("tool-duration"),
+          expandedState: this._ttExpanded,
+        });
       }
     } else if (role === "thinking") {
       const step = this.getAttribute("step");
@@ -1549,6 +1860,10 @@ class MessageBubble extends Component {
       markup = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div></div>`;
     }
     mountTemplate(this, style, markup);
+    if (this._cardDom) {
+      this._root.appendChild(this._cardDom);
+      this._cardDom = null;
+    }
   }
   _wire() {
     // The "Fix in Settings" button on a provider/config error: open the options
@@ -1673,13 +1988,15 @@ class AgentConversation extends Component {
     const args = m.args ?? m["tool-args"];
     const result = m.result ?? m["tool-result"];
     const detail = m.detail ?? m["tool-detail"];
+    const durationMs = m.durationMs ?? m["tool-duration"];
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
     return this._bubble("tool", null, {
       "tool-name": name,
       "tool-status": status || "running",
-      "tool-args": args != null ? (typeof args === "string" ? args : JSON.stringify(args)) : null,
+      "tool-args": args != null ? (typeof args === "string" ? args : safeJsonStringify(args)) : null,
       "tool-result": result != null ? String(result) : null,
       "tool-detail": detail != null ? String(detail) : null,
+      "tool-duration": durationMs != null ? String(durationMs) : null,
     });
   }
   clear() { this.replaceChildren(); this._lastTs = null; }

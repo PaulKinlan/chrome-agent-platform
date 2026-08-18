@@ -4,6 +4,41 @@
 // downloaded model. It is CLEARLY labelled "demo mode" — never claimed to be a
 // real model. The real providers (OpenAI-compatible, Prompt API) plug in over
 // the same interface.
+//
+// DEMO TOOL-CALLING MODE: a task containing the marker "@demo-tools" makes the
+// demo model deterministically issue REAL tool calls (memory_set + memory_get)
+// on the first model step, then read the tool results and emit a final text.
+// This is a deterministic LOCAL path for real-extension evidence: the PRODUCTION
+// journal writer (journalingProgress) persists the resulting tool-call/
+// tool-result rows exactly as it would for a real provider, so a reload +
+// reopen can assert the restored terminal cards — no API key, no host grant.
+
+const TOOLS_MARKER = "@demo-tools";
+// @demo-delegate <agentId>: the demo model issues a REAL delegate_task tool
+// call (the production model-facing delegate) — the delegated worker runs
+// "@demo-tools" and the final text reflects the delegation result.
+const DELEGATE_MARKER = "@demo-delegate";
+// @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
+// for abort tests).
+const SLOW_MARKER = "@demo-slow";
+
+function wantsDelegate(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.delegate;
+}
+
+function delegateAgentId(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  const last = [...msgs].reverse().find((m) => m?.role === "user");
+  const text = extractText([last]);
+  const m = text.match(new RegExp(DELEGATE_MARKER + "\\s+([\\w.-]+)"));
+  return m ? m[1] : "demo-site";
+}
+
+function wantsSlow(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  const last = [...msgs].reverse().find((m) => m?.role === "user");
+  return extractText([last]).toLowerCase().includes(SLOW_MARKER);
+}
 
 function extractText(prompt) {
   // prompt is a LanguageModelV2Prompt: array of { role, content } messages.
@@ -20,6 +55,94 @@ function extractText(prompt) {
   return out;
 }
 
+/** The demo tool-calling mode is requested when the LAST user turn contains the
+ * marker (deterministic + explicit — never accidentally triggered). */
+function wantsDemoTools(prompt) {
+  // the marker is on the ORIGINAL task of the CURRENT run — scope to the
+  // LATEST user turn carrying any marker (a prior run's marker must never
+  // trigger a later non-marker run; an intervening non-marker run resets)
+  return !!latestRunSlice(prompt)?.marker?.tools;
+}
+
+/** STATELESS, run-scoped demo sequencing: the step is derived from the CURRENT
+ * prompt's tool history — never from counters on a shared model (which would
+ * leak across concurrent/multi-agent runs and consecutive marker runs). With
+ * ONE dependent tool call per model step (@demo-tools: set → get → get →
+ * final; @demo-delegate: delegate → final), the tool history accumulates
+ * across the current run's steps. The agent-do continuation step strips the
+ * tool history, so the demo's OWN emitted final summary (which persists in the
+ * assistant history) marks "already final" — the continuation then re-emits
+ * the summary and the loop breaks. This is the only deterministic ordering —
+ * the AI SDK executes same-step tools concurrently with Promise.all, so
+ * same-step set+get could read the pre-write value. */
+/** The CURRENT run's scope: the boundary is the LATEST user message — the
+ * CURRENT run's marker is ONLY that message's marker (a PRIOR run's marker in
+ * the history can never trigger the current run). The slice is everything
+ * from that boundary onward, so the step derives ONLY from the current run's
+ * messages — a prior run's tool/summary transcript never interferes. */
+/** The agent-do loop's SYNTHETIC continuation prompt (it repeats every
+ * iteration after a tool step) is NOT a new run boundary — the run's real
+ * task is the last NON-continuation user message. */
+const AGENTDO_CONTINUATION = "continue working on the task";
+
+function isAgentDoContinuation(msg) {
+  return msg?.role === "user" && /^continue working on the task/i.test(extractText([msg]).trim());
+}
+
+function latestRunSlice(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  let lastIdx = -1;
+  for (let i = 0; i < msgs.length; i++) {
+    if (msgs[i]?.role === "user" && !isAgentDoContinuation(msgs[i])) lastIdx = i;
+  }
+  if (lastIdx === -1) return null;
+  const lastUser = extractText([msgs[lastIdx]]).toLowerCase();
+  return {
+    slice: msgs.slice(lastIdx),
+    marker: {
+      tools: lastUser.includes(TOOLS_MARKER),
+      delegate: lastUser.includes(DELEGATE_MARKER),
+    },
+  };
+}
+
+function runSlice(prompt) {
+  return latestRunSlice(prompt)?.slice ?? (Array.isArray(prompt) ? prompt : []);
+}
+
+function toolResultCount(prompt) {
+  return runSlice(prompt).filter((m) => m?.role === "tool").length;
+}
+
+function demoAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Tool calls executed in sequence/.test(p.text ?? "")));
+}
+
+function delegateAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && /\[demo model\] Delegation/.test(p.text ?? "")));
+}
+
+// A deterministic, RICH tool-call payload (nested arrays/objects/unicode — the
+// structured renderer's showcase + the journal's real persisted rows).
+const DEMO_ARGS = {
+  key: "demo",
+  value: {
+    items: [
+      { name: "Espresso machine", qty: 1, tags: ["kitchen", "appliance"], note: "ünïçødé 日本語" },
+      { name: "AeroPress", qty: 2, tags: ["kitchen"] },
+    ],
+    total: 3.5,
+    active: true,
+    meta: { nested: { deep: [1, [2, [3]]], ratio: 0.75 } },
+  },
+};
+
 export function createDemoModel() {
   return {
     specificationVersion: "v2",
@@ -29,6 +152,40 @@ export function createDemoModel() {
 
     doGenerate(options) {
       const text = extractText(options.prompt);
+      if (wantsDelegate(options.prompt) && toolResultCount(options.prompt) === 0) {
+        return Promise.resolve({
+          content: [{ type: "tool-call", toolCallId: "call_demo_delegate", toolName: "delegate_task", input: JSON.stringify({ agentId: delegateAgentId(options.prompt), task: "run @demo-tools @demo-slow please" }) }],
+          finishReason: "tool-calls",
+          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+          warnings: [],
+        });
+      }
+      if (wantsDemoTools(options.prompt) && toolResultCount(options.prompt) === 0 && !demoAlreadyFinal(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) }],
+          finishReason: "tool-calls",
+          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+          warnings: [],
+        });
+      }
+      if (wantsDemoTools(options.prompt) && toolResultCount(options.prompt) === 1 && !demoAlreadyFinal(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "tool-call", toolCallId: "call_demo_get_1", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) }],
+          finishReason: "tool-calls",
+          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+          warnings: [],
+        });
+      }
+      if (wantsDemoTools(options.prompt) && toolResultCount(options.prompt) === 2 && !demoAlreadyFinal(options.prompt)) {
+        return Promise.resolve({
+          content: [{ type: "tool-call", toolCallId: "call_demo_get_2", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) }],
+          finishReason: "tool-calls",
+          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
+          warnings: [],
+        });
+      }
+      if (!wantsDemoTools(options.prompt) && !wantsDelegate(options.prompt)) {
+      }
       const response = `[demo model] I received "${text.slice(0, 120)}${text.length > 120 ? "…" : ""}". ` +
         `This is a deterministic demo response — configure a real provider (OpenAI-compatible endpoint) ` +
         `in Settings to get real completions.`;
@@ -40,17 +197,121 @@ export function createDemoModel() {
       });
     },
 
-    doStream(options) {
+    async doStream(options) {
+      if (wantsSlow(options.prompt) && !options._slowUsed) {
+        options._slowUsed = true;
+        await new Promise((r) => setTimeout(r, 500));
+      }
       const text = extractText(options.prompt);
-      const response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
-        `to get real completions. This demo response proves the agent loop runs end-to-end.`;
+      const wantsTools = wantsDemoTools(options.prompt);
+      const wantsDel = wantsDelegate(options.prompt);
       const id = `demo-${crypto.randomUUID?.() ?? Math.random()}`;
       const usage = { inputTokens: 8, outputTokens: 32, totalTokens: 40 };
       const stream = new ReadableStream({
         start(controller) {
           controller.enqueue({ type: "stream-start", warnings: [] });
+          let response = "";
+          if (wantsDel && toolResultCount(options.prompt) === 0) {
+            // STEP 1 (delegate): a REAL delegate_task call (the production
+            // model-facing path)
+            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_delegate", toolName: "delegate_task", input: JSON.stringify({ agentId: delegateAgentId(options.prompt), task: "run @demo-tools @demo-slow please" }) });
+            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+            controller.close();
+            return;
+          }
+          if (wantsDel && delegateAlreadyFinal(options.prompt)) {
+            // the continuation step (tool history stripped) re-emits the EXACT
+            // summary the model already produced (the final text stays the
+            // authoritative outcome — FAILED or succeeded, never a neutral
+            // rewrite that could mask a failed delegation)
+            // scope to the CURRENT run's slice ONLY — a prior run's success in
+            // the broader history can never be replayed onto the current failure
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && /\[demo model\] Delegation/.test(p2.text ?? ""));
+            response = prior?.text ?? "[demo model] Delegation finished.";
+            controller.enqueue({ type: "text-start", id });
+            const chunks = response.match(/.{1,24}/g) ?? [response];
+            for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+            controller.close();
+            return;
+          }
+          if (wantsDel) {
+            // STEP 2 (delegate): reflect the delegation outcome (an aborted /
+            // failed delegation is a REAL tool-error — the run reports it).
+            // The SDK's tool-error message may be EMPTY (the error rides the
+            // run's rejection, not the tool message), so the absence of any
+            // SUCCESSFUL delegate result is the signal.
+            const lastTool = [...runSlice(options.prompt)].reverse().find((m) => m?.role === "tool");
+            // STRUCTURAL parsing of the AI SDK tool PARTS: the tool message's
+            // content is an array of { type:'tool-result'|'tool-error', output }
+            // parts (NOT `result`). A result part whose output.type ===
+            // "error-text" is FAILED; a result part with a REAL output value is
+            // SUCCESS — the worker text's WORDS never matter (a successful text
+            // mentioning 'error'/'abort' must not be rejected).
+            const parts = Array.isArray(lastTool?.content) ? lastTool.content : [];
+            let succeeded = false;
+            for (const part of parts) {
+              if (part?.type === "tool-result" && part?.output) {
+                if (part.output.type === "error-text") {
+                  succeeded = false;
+                  break;
+                }
+                succeeded = true;
+              } else if (part?.type === "tool-error") {
+                succeeded = false;
+                break;
+              }
+            }
+            const failed = !succeeded;
+            // the SUCCESS response uses the STRUCTURALLY parsed output value
+            const outValue = parts.find((pt) => pt?.type === "tool-result" && pt?.output && pt.output.type !== "error-text")?.output?.value ?? "";
+            response = failed
+              ? "[demo model] Delegation FAILED — the delegated worker was aborted mid-run."
+              : `[demo model] Delegation succeeded. Worker response: ${typeof outValue === "string" ? outValue.slice(0, 160) : JSON.stringify(outValue ?? "").slice(0, 160)}`;
+            controller.enqueue({ type: "text-start", id });
+            const chunks = response.match(/.{1,24}/g) ?? [response];
+            for (const chunk of chunks) controller.enqueue({ type: "text-delta", id, delta: chunk });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+            controller.close();
+            return;
+          }
+              if (wantsTools && toolResultCount(options.prompt) === 0 && !demoAlreadyFinal(options.prompt)) {
+            // STEP 1 (tools): the WRITE — one call this step
+            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) });
+            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+            controller.close();
+            return;
+          }
+          if (wantsTools && toolResultCount(options.prompt) === 1 && !demoAlreadyFinal(options.prompt)) {
+            // STEP 2 (tools): the FIRST read — the write is committed
+            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get_1", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
+            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+            controller.close();
+            return;
+          }
+          if (wantsTools && toolResultCount(options.prompt) === 2 && !demoAlreadyFinal(options.prompt)) {
+            // STEP 3 (tools): the SECOND read — same-name calls stay distinct
+            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get_2", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
+            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
+            controller.close();
+            return;
+          }
+          if (wantsTools && (toolResultCount(options.prompt) >= 3 || demoAlreadyFinal(options.prompt))) {
+            // STEP 4 (tools): the final summary — the reads' VALUES speak for
+            // themselves (the run's tool results are the assertion target). The
+            // continuation step (tool history stripped) re-emits the same
+            // summary, so the loop ends on the text-only step.
+            response = "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
+          } else {
+            response = `[demo model] Task received (${text.length} chars). Configure a real provider in Settings ` +
+              `to get real completions. This demo response proves the agent loop runs end-to-end.`;
+          }
           controller.enqueue({ type: "text-start", id });
-          // emit the response in a few deltas so streaming is observable
           const chunks = response.match(/.{1,24}/g) ?? [response];
           for (const chunk of chunks) {
             controller.enqueue({ type: "text-delta", id, delta: chunk });

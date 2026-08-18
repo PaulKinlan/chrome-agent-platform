@@ -229,11 +229,25 @@ export async function appendThreadMessage(id, message) {
   const { role = "assistant", content = "" } = message ?? {};
   thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
   const att = sanitizeAttachments(message?.attachments);
+  // TOOL rows pass through their structured fields (toolName/toolStatus/args/
+  // result/ok/duration + the pairing callId) so a reopened thread can replay
+  // them as ONE terminal card per call — the thread is not just text.
   thread.messages.push({
     role,
     content: boundText(content),
     ts: Date.now(),
     ...(att ? { attachments: att } : {}),
+    ...(message?.toolName
+      ? {
+        toolName: message.toolName,
+        toolStatus: message.toolStatus ?? "running",
+        toolArgs: message.toolArgs ?? null,
+        toolResult: message.toolResult ?? null,
+        toolOk: message.toolOk ?? null,
+        toolDuration: message.toolDuration ?? null,
+        toolCallId: message.toolCallId ?? null,
+      }
+      : {}),
   });
   thread.messages = trimMessages(thread.messages);
   thread.updatedAt = Date.now();

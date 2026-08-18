@@ -83,7 +83,8 @@ Deno.test("e2e: a task runs end-to-end — result + usage recorded + done event"
 
   const result = await agent.run("Summarise the page and save the summary to memory");
 
-  // 1. The run produces a result (a string, not an error object).
+  // 1. The run produces a TEXT result (a string, never an error object — an
+  //    aborted run THROWS instead of resolving).
   assert(typeof result === "string", `result must be a string, got ${typeof result}`);
   assert(result.length > 0, "result must be non-empty");
 

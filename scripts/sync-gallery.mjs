@@ -9,7 +9,7 @@
 // Wired into `npm run build` (build.mjs) so every build re-syncs, and into
 // `npm run check:gallery` + the component-gallery smoke test as a drift guard.
 
-import { readFile, copyFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 // src (canonical) → dst (generated deploy copy), both relative to the repo root.
@@ -19,6 +19,9 @@ const FILES = [
   ["extension/shared/agent-candidates.js", "docs/agent-candidates.js"],
   ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
   ["extension/shared/command-parser.js", "docs/command-parser.js"],
+  ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
+  // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).
+  ["extension/lib/pure.js", "docs/pure.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -26,16 +29,24 @@ export async function syncGallery({ check = false } = {}) {
   for (const [src, dst] of FILES) {
     const srcUrl = new URL(`../${src}`, import.meta.url);
     const dstUrl = new URL(`../${dst}`, import.meta.url);
+    let expected = await readFile(srcUrl);
+    // The gallery sits one directory shallower than extension/shared/, so the
+    // tool-tree import must resolve to the synced docs copy. Apply the same
+    // deterministic transform in write and check modes so drift checks compare
+    // against the generated artifact rather than the untransformed source.
+    if (dst === "docs/tool-tree.js") {
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+    }
     if (check) {
-      const [a, b] = await Promise.all([readFile(srcUrl), readFile(dstUrl)]);
-      if (a.length !== b.length || Buffer.compare(a, b) !== 0) {
+      const actual = await readFile(dstUrl);
+      if (expected.length !== actual.length || Buffer.compare(expected, actual) !== 0) {
         drifted = true;
         console.error(
           `DRIFT: ${dst} differs from ${src} — run \`npm run sync:gallery\` (single source of truth is ${src}).`
         );
       }
     } else {
-      await copyFile(srcUrl, dstUrl);
+      await writeFile(dstUrl, expected);
       console.log(`synced ${dst} ← ${src}`);
     }
   }

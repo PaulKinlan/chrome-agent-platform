@@ -14,6 +14,7 @@ import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
 import { sha256Hex, utf8ByteLength } from "./pure.js";
+import { isToolResultFailure } from "./tool-summary.js";
 
 // The default system prompt = the versioned worker base (cap.worker.base) +
 // the immutable protected constraints, composed by the SINGLE composition
@@ -39,6 +40,30 @@ export function extractBoundSystemMessage(options) {
           : ""
     )
     .join("\n");
+}
+
+/**
+ * The SINGLE typed abort error for the tool/delegation boundary. Every abort
+ * shape — the initial run fence, a pre-start disposable worker, or a mid-run
+ * controller abort — throws THIS type, so the AI SDK emits a real tool-error
+ * and an abort can never masquerade as a successful {error} tool-result.
+ */
+export class RunAbortedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "RunAbortedError";
+  }
+}
+
+/** A single abort predicate: true for EVERY abort-shaped outcome (a typed
+ * RunAbortedError, an {error: 'run aborted…'} return, or {aborted:true}). */
+export function isAbortShape(value) {
+  if (value instanceof RunAbortedError) return true;
+  if (value && typeof value === "object") {
+    if (value.aborted === true) return true;
+    if (typeof value.error === "string" && /^run aborted|abort/.test(value.error)) return true;
+  }
+  return false;
 }
 
 export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, readOnly = false) {
@@ -313,6 +338,7 @@ export function createAgent({
   // ABA blocker).
   let activeRun = null; // { gen: number|null, controller: AbortController }
   let aborted = false;
+  let lastRunAborted = false; // the DURABLE per-run abort flag (read after activeRun is cleared)
   // A per-worker RUN QUEUE serializes concurrent `a.run` calls. The AI SDK
   // executes a step's tool calls with Promise.all, so two delegate_task calls
   // for the SAME worker can invoke the same a.run CONCURRENTLY. The shared
@@ -434,7 +460,7 @@ export function createAgent({
         try { progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step }); } catch { /* ignore */ }
       },
       onPostToolUse: async (e) => {
-        try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result) }); } catch { /* ignore */ }
+        try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result), ok: !isToolResultFailure(e.result) }); } catch { /* ignore */ }
       },
       onComplete: async (e) => {
         try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }
@@ -497,13 +523,14 @@ export function createAgent({
       // PRE-START abort check: abort() may have been called while the guard await
       // above was in flight (agent.delete → abortWorker), and agent-do's own
       // abort() before run() is a no-op (its controller is null until run starts).
-      // A disposable worker that was aborted must never begin a new run.
-      if (aborted) return { error: "run aborted before start" };
+      // A disposable worker that was aborted must never begin a new run — a
+      // TYPED abort error, never a successful {error} object.
+      if (aborted) throw new RunAbortedError("run aborted before start");
       const controller = new AbortController();
       activeRun = { gen, controller };
       if (aborted || controller.signal.aborted) {
         activeRun = null;
-        return { error: "run aborted before start" };
+        throw new RunAbortedError("run aborted before start");
       }
       // Wire the run-scoped controller to agent-do so abort() during the run
       // cancels the model loop (agent-do's own abort() only works after its run()
@@ -523,6 +550,7 @@ export function createAgent({
           runAgent.abort();
         } catch { /* no active run */ }
       };
+      lastRunAborted = false; // per-run reset
       controller.signal.addEventListener("abort", onAbort);
       try {
         // Provider execution boundary: re-validate the IMMUTABLE run-start
@@ -547,8 +575,21 @@ export function createAgent({
             return { error: "origin re-enrolled during run — result discarded" };
           }
         }
+        // An ABORTED run NEVER resolves: the mid-run abort THROWS the single
+        // typed RunAbortedError (with the partial text as `partialText`) — the
+        // SW + the direct-delegation callers catch the typed error. A queued
+        // next run can never overwrite this caller's observable abort state.
+        if (controller.signal.aborted) {
+          const err = new RunAbortedError("run aborted mid-run");
+          err.partialText = result;
+          throw err;
+        }
         return result;
       } finally {
+        // DURABLE per-run outcome: capture the abort state BEFORE activeRun is
+        // cleared (the SW's isAborted() check runs after orch.run resolves —
+        // activeRun is null by then, so the controller signal alone is lost).
+        lastRunAborted = controller.signal.aborted;
         controller.signal.removeEventListener("abort", onAbort);
         activeRun = null;
         activeSystemPrompt = null;
@@ -572,6 +613,11 @@ export function createAgent({
     // The SW binds a sink tagged with the runId so the attestation journaled
     // for a run is captured from THAT run's actual provider-bound message.
     setAttestation: (cb) => { attestationCb = cb; lastAttestedDigest = null; },
+    // Whether THIS agent's run was aborted (a disposable pre-start abort or a
+    // mid-run controller abort) — the DURABLE per-run flag survives the
+    // activeRun cleanup, so the SW can read it after orch.run resolves and
+    // propagate it in the run response (an aborted run is never a success).
+    isAborted: () => aborted || lastRunAborted,
   };
 }
 
@@ -655,7 +701,7 @@ export function createOrchestrator({
           try {
             await assertRunOwned();
           } catch {
-            return { error: "run aborted — delegation not started" };
+            throw new RunAbortedError("run aborted — delegation not started");
           }
           const a = workerAgents.get(agentId);
           if (!a) return { error: `no agent for ${agentId}` };
@@ -675,25 +721,61 @@ export function createOrchestrator({
           // Re-check the fence AFTER the guard await: an abort during the
           // delegateGuard await must still prevent the worker from starting
           // (the round-16 blocker: delegate_task could abort during the guard
-          // then still start the worker).
-          await assertRunOwned();
+          // then still start the worker). An ownership loss HERE is the single
+          // typed abort error too (every ownership fence is typed).
+          try {
+            await assertRunOwned();
+          } catch {
+            throw new RunAbortedError("run aborted — delegation ownership lost before start");
+          }
           // Thread the captured generation into a.run so the worker's memory/
           // usage commits revalidate THAT immutable identity, not the current
           // enrollment (the round-22 ABA blocker).
-          const result = await a.run(task, undefined, undefined, gen);
+          // An ABORTED worker REJECTS the run — catch it into the explicit
+          // aborted failure (never a thrown tool error that would surface as a
+          // generic "No output generated").
+          let result;
+          try {
+            result = await a.run(task, undefined, undefined, gen);
+          } catch (e) {
+            // ONLY an ABORT-shaped worker rejection becomes the typed error (a
+            // REAL tool-error); any UNRELATED worker error (a tool failure, a
+            // provider error) is PRESERVED unchanged — the delegation surfaces
+            // it as its own error, never mislabelled as an abort.
+            if (isAbortShape(e)) {
+              throw new RunAbortedError(
+                `delegation aborted — the worker for ${agentId} was aborted mid-run`,
+              );
+            }
+            throw e; // UNRELATED worker failures are preserved UNCHANGED (identity, type, stack, custom fields)
+          }
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded
           // rather than returned to the model (the round-17 blocker: delegateGuard
-          // returned {gen} but delegate_task ignored it).
+          // returned {gen} but delegate_task ignored it). An ownership loss is
+          // an ABORT-shaped failure → the typed error.
           if (delegateGuard && gen) {
             const after = await delegateGuard(agentId);
             if (!after?.ok || (after.gen ?? 0) !== gen) {
-              return {
-                error: `agent ${agentId} was disenrolled during the task`,
-              };
+              throw new RunAbortedError(`agent ${agentId} was disenrolled during the task`);
             }
           }
-          return { agentId, result };
+          // The SECOND ownership fence (re-check before the run's own start):
+          // an abort here is also the typed error.
+          try {
+            await assertRunOwned();
+          } catch {
+            throw new RunAbortedError("run aborted — delegation ownership lost");
+          }
+          // An ABORT-shaped outcome — the pre-start {error:'run aborted…'} OR a
+          // mid-run {aborted:true} — must FAIL the delegation with a REAL
+          // tool-error: the single predicate covers every shape, so no abort can
+          // masquerade as a successful delegate result.
+          if (isAbortShape(result)) {
+            throw new RunAbortedError(`delegation aborted — the worker for ${agentId} was aborted`);
+          }
+          const workerResult = (result && typeof result === "object" && typeof result.text === "string") ? result.text : result;
+          return { agentId, result: workerResult };
         },
       }),
     }
@@ -725,6 +807,9 @@ export function createOrchestrator({
     abort() {
       master.abort();
     },
+    // Whether the CURRENT run was aborted (the master's controller) — the SW
+    // propagates it in the run response.
+    isAborted: () => (typeof master.isAborted === "function" ? master.isAborted() : false),
     // Rebind the live progress callback on the master + every worker. The SW
     // calls this per-run; the cached orchestrator's agents are reused.
     setProgress(cb) {

@@ -50,7 +50,7 @@ import {
   requestCapability,
   revokeCapability,
 } from "../lib/capabilities.js";
-import { createAgent, createOrchestrator } from "../lib/agent.js";
+import { createAgent, createOrchestrator, RunAbortedError, isAbortShape } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   diagnosticClear,
@@ -89,6 +89,7 @@ import {
   updateNamedAgent,
   withNamedAgentsLock,
 } from "../lib/named-agents.js";
+import { pairToolJournal } from "../shared/conversation.js";
 import {
   appendThreadMessage,
   continueThread,
@@ -372,6 +373,10 @@ async function registerAlarm(task) {
     delayMs: task.delayMs,
     periodInMinutes: task.periodInMinutes,
     attachments: task.attachments ?? [],
+    // ROUTE PARITY with the schedule_task tool: the owner-facing register-task
+    // route accepts a script-backed schedule too (runs the script sandboxed,
+    // no model re-invocation).
+    scriptId: task.scriptId,
   });
 }
 
@@ -443,6 +448,7 @@ async function handleAlarm(alarm) {
     if (task.scriptId) {
       await fence.assertOwned();
       const got = await getScript("master", task.scriptId);
+      const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       if (got.ok) {
         const run = await runScriptSandboxed(got.script.source);
         let result = run?.result ?? null;
@@ -451,13 +457,22 @@ async function handleAlarm(alarm) {
         }
         await recordScriptRun("master", task.scriptId, { ok: run?.ok, result, error: run?.error }).catch(() => {});
         await fence.assertOwned();
+        // The scheduled-script journal row matches the tool-journal schema:
+        // run instance + callId + ok — a replay restores a FAILED script as an
+        // error card (the absent-ok heuristic previously passed "script not
+        // found" / arbitrary error text as success).
         journalAppend(backgroundAgentMemory(alarm.name), {
-          type: "tool-result", id: alarm.name, tool: `script:${task.scriptId}`,
+          type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
+          tool: `script:${task.scriptId}`,
           result: run?.ok ? (typeof result === "string" ? result : JSON.stringify(result ?? null)) : (run?.error ?? "script failed"),
+          ok: run?.ok === true,
         }).catch(() => {});
       } else {
         await fence.assertOwned();
-        journalAppend(backgroundAgentMemory(alarm.name), { type: "tool-result", id: alarm.name, tool: "script", result: `script ${task.scriptId} not found` }).catch(() => {});
+        journalAppend(backgroundAgentMemory(alarm.name), {
+          type: "tool-result", id: alarm.name, run: runInstance, callId: `${alarm.name}:${runInstance}:script:1`,
+          tool: "script", result: `script ${task.scriptId} not found`, ok: false,
+        }).catch(() => {});
       }
     } else {
       await runTask({
@@ -690,7 +705,12 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       // CURRENT caller — the callback is per-run, not baked into the cached
       // agent (which is reused across runs). Rebuilding is avoided; the shared
       // master's hooks consult this binding.
-      cached.setProgress?.(onProgress);
+      // NEVER rebind to null here: the direct-delegation path calls
+      // ensureOrchestrator() with no callback, and a null rebind would CLOBBER
+      // the progress callback of a run still inside its lock (the
+      // callback-clobber race). Per-run callbacks bind inside the run's own
+      // lock + unbind in its finally.
+      if (onProgress) cached.setProgress?.(onProgress);
       return cached;
     }
     const orch = await buildOrchestrator(onProgress, scoped, masterMemory());
@@ -1155,6 +1175,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // what an agent did — even a background agent with no live UI. The journal
     // is bounded (count + bytes); a journal failure never kills the run
     // (best-effort telemetry), and the live broadcast still flows through.
+    const runInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
+    const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
+    const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
     const journalingProgress = (event) => {
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
@@ -1162,14 +1186,34 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         let args;
         try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
         if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
-        journalAppend(mem, { type: "tool-call", id: taskId, tool: event.toolName ?? "tool", args }).catch(() => {});
+        // A per-call correlation id (FIFO per tool name within THIS run,
+        // RUN-INSTANCE scoped — a scheduled run reusing taskId/alarm.name must
+        // never regenerate colliding ids) lets a replay PAIR each tool-call
+        // with its result + render ONE terminal card.
+        const n = (callSeq.get(event.toolName) ?? 0) + 1;
+        callSeq.set(event.toolName, n);
+        const callId = `${taskId}:${runInstance}:${event.toolName ?? "tool"}:${n}`;
+        const cq = callQueue.get(event.toolName) ?? [];
+        cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
+        callQueue.set(event.toolName, cq);
+        journalAppend(mem, { type: "tool-call", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", args }).catch(() => {});
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
         else if (typeof event.result === "string") result = event.result;
         else { try { result = JSON.stringify(event.result); } catch { result = String(event.result); } }
         if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
-        journalAppend(mem, { type: "tool-result", id: taskId, tool: event.toolName ?? "tool", result }).catch(() => {});
+        // Match the OLDEST pending callId for this tool name (FIFO — parallel
+        // same-name calls pair in order) + persist the ok flag so a replay can
+        // restore failed/blocked results as ERROR cards (the journal discarded
+        // ok before — failed results reopened as success).
+        const q = callQueue.get(event.toolName) ?? [];
+        const orphanN = (orphanSeq.get(event.toolName) ?? 0) + 1;
+        orphanSeq.set(event.toolName, orphanN);
+        // An unmatched result gets a UNIQUE id (never a repeated ":1" that
+        // would collapse multiple orphan results into one card).
+        const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
+        journalAppend(mem, { type: "tool-result", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
       }
     };
     const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride, promptScope, agentRole);
@@ -1282,15 +1326,33 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
       // agent sees what came before).
       let result;
+      let runOutcome = null; // raw result or a provider's explicit { text, aborted } outcome
       try {
-        result = await orch.run(buildMultimodalTask(task, attachments), context, Array.isArray(history) ? history : [], runSkills);
+        runOutcome = await orch.run(buildMultimodalTask(task, attachments), context, Array.isArray(history) ? history : [], runSkills);
+        result = (runOutcome && typeof runOutcome === "object" && !Array.isArray(runOutcome) && typeof runOutcome.text === "string")
+          ? runOutcome.text
+          : runOutcome;
         recordProviderSuccess();
       } catch (e) {
         // Only a PROVIDER failure (network/config/credential) trips the
         // circuit-breaker; a tool error or a fence abort must not pause the
         // agent. Re-throw so the caller's own error handling still runs.
         if (isProviderError(e)) recordProviderFailure(formatError(e));
+        // An ABORT mid-run — the typed RunAbortedError, the fence signal, or
+        // the agent controller — must surface as {ok:false, aborted:true},
+        // never a generic provider error and never a success.
+        if ((e instanceof RunAbortedError) || isAbortShape(e) || (fence?.signal?.aborted === true) || (typeof orch.isAborted === "function" && orch.isAborted())) {
+          return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
+        }
         throw e;
+      }
+      // An ABORTED run must never be reported as a successful outcome: the
+      // response propagates the aborted/cancelled state (the page gates its
+      // result append + done status on it). The RETURNED per-run outcome is
+      // authoritative (a queued next run can never overwrite it); the durable
+      // flag + the fence signal back it up.
+      if ((fence?.signal?.aborted === true) || runOutcome?.aborted === true || (typeof orch.isAborted === "function" && orch.isAborted())) {
+        return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
       }
       await fence?.assertOwned?.();
       await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
@@ -1337,6 +1399,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       } catch { /* best-effort */ }
       finalizeExecution(executionId);
       clearRunFence();
+      // Unbind the per-run PROGRESS callback (the live UI + the journaling
+      // forwarder) so no stale callback survives into the next run — the next
+      // run's ensureOrchestrator rebinds inside ITS lock.
+      try {
+        orch.setProgress?.(null);
+      } catch { /* best-effort */ }
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
       // `handleAlarm` calls releaseInflight AFTER runTask returns — releasing
@@ -1920,16 +1988,16 @@ const handlers = {
     // Track the last tool the run attempted, so a failure can name the tool
     // that was in flight (the per-task error view shows WHY it failed).
     let lastTool = null;
+    // The thread's OWN tool-row persistence: after the run, the run's REAL
+    // tool rows are read from the JOURNAL (the production writer — reliable)
+    // and paired into ONE terminal card per call appended to the thread, so a
+    // reopened thread restores the tool cards (the persisted-history boundary).
+    const threadRunInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       result = await runTask({
         id: m.id,
         task: m.task,
         attachments: bounded,
-        // The live progress stream: every run (interactive or a follow-up nudge)
-        // broadcasts its thinking/tool/text/done events to the connected UI ports.
-        // Events are TAGGED with a per-run runId + the threadId so each listener
-        // renders ONLY its own run — the wider-goal review found the untagged
-        // global broadcast leaked/misattributed tool data across threads/pages.
         onProgress: (event) => {
           if (event?.type === "tool-call") lastTool = event.toolName ?? null;
           broadcastProgress({
@@ -1972,6 +2040,34 @@ const handlers = {
     // BOTH the success + failure paths, including the throw path above, so a
     // failed run is never stuck "running".
     if (threadId) {
+      // The run's REAL tool rows, PAIRED into ONE terminal card per call
+      // (callId + ok persisted — a failed/blocked result restores as error),
+      // appended to the thread once — the reopened thread replays them.
+      // The run's REAL tool rows from the JOURNAL (the production writer),
+      // PAIRED into ONE terminal card per call (callId + ok persisted — a
+      // failed/blocked result restores as error), appended to the thread once.
+      try {
+        const journal = (await masterMemory().get("journal").catch(() => null)) ?? [];
+        const rows = Array.isArray(journal) ? journal : [];
+        const toolRows = rows
+          .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result") && r.id === m.id)
+          .slice(-50);
+        if (toolRows.length) {
+          const pairs = pairToolJournal(toolRows);
+          for (const p of pairs) {
+            await appendThreadMessage(threadId, {
+              role: "tool",
+              toolName: p.tool,
+              toolStatus: p.status,
+              toolArgs: p.args ?? null,
+              toolResult: p.result ?? null,
+              toolOk: p.ok ?? null,
+              toolDuration: p.durationMs ?? null,
+              toolCallId: p.callId ?? `replay:${threadRunInstance}:${p.tool}`,
+            }).catch(() => {});
+          }
+        }
+      } catch { /* a thread tool-card write must never fail the run */ }
       if (result && typeof result.result === "string" && result.result) {
         await appendThreadMessage(threadId, { role: "assistant", content: result.result }).catch(() => {});
       }
@@ -3561,9 +3657,11 @@ const handlers = {
     if (runAborted()) {
       return { ok: false, error: "run aborted — delegation not started" };
     }
-    const result = await withRunLock(async () => {
+    let outcome;
+    try {
+      outcome = await withRunLock(async () => {
       if (runAborted()) {
-        throw new Error("run aborted — delegation not started");
+        throw new RunAbortedError("run aborted — delegation not started");
       }
       // Re-check the SAME generation IMMEDIATELY before a.run: a delete while
       // this delegation was waiting on the run mutex must not start a stale
@@ -3575,16 +3673,12 @@ const handlers = {
           `origin ${canonical} was disenrolled before delegation`,
         );
       }
-      // Bind THIS delegation's own immutable execution id + attestation sink
-      // (a direct delegation is its own attempt — it must never record
-      // against a prior hub run's callback or leak into a later one). The
-      // sink is UNBOUND + the execution FINALIZED in the finally.
+      // Bind THIS delegation's own immutable execution id, prompt attestation,
+      // and progress stream inside the lock. No callback from this attempt may
+      // survive into a later cached-worker run.
       const execId = newExecutionId();
       const logicalId = `delegate:${canonical}:${Date.now()}`;
       beginExecution(execId, logicalId);
-      // Key establishment + callback binding are inside the same finally-sealed
-      // attempt as the model run; a setup failure cannot leave a live slot or a
-      // callback inherited by the next direct delegation.
       try {
         const attestKeyState = await attestationKeyState();
         a.setAttestation?.((att) => {
@@ -3605,17 +3699,30 @@ const handlers = {
           };
           recordRunAttestation(bound);
         });
+        a.setProgress?.((ev) => {
+          try { broadcastProgress({ ...ev, runId: execId, agentId: canonical }); } catch { /* best-effort */ }
+        });
         // Thread the captured generation into a.run so the worker's memory/usage
-        // commits revalidate THAT immutable identity (the round-22 ABA blocker: a
-        // delete→re-enroll lets a stale run write into the new enrollment).
+        // commits revalidate THAT immutable identity (the round-22 ABA blocker).
         return await a.run(task, "", [], gen);
       } finally {
-        try {
-          a.setAttestation?.(null);
-        } catch { /* best-effort */ }
+        try { a.setProgress?.(null); } catch { /* best-effort */ }
+        try { a.setAttestation?.(null); } catch { /* best-effort */ }
         finalizeExecution(execId);
       }
-    });
+      });
+    } catch (e) {
+      // A typed abort (pre-start, fence, mid-run) → the failed delegation.
+      if (e instanceof RunAbortedError || isAbortShape(e)) {
+        outcome = { error: "delegation aborted", aborted: true };
+      } else {
+        outcome = { error: `delegation failed: ${e?.message ?? e}` };
+      }
+    }
+    // The worker's per-run outcome: unwrap text for the route's string contract
+    // and map an aborted delegation to failure, never success with partial text.
+    const delegatedAborted = !!(outcome && typeof outcome === "object" && outcome.aborted === true);
+    const result = (outcome && typeof outcome === "object" && typeof outcome.text === "string") ? outcome.text : outcome;
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the
     // journalAppend and resurrect the tombstoned directory (the round-16
@@ -3640,7 +3747,10 @@ const handlers = {
         type: "delegated-result",
         id: `delegate:${canonical}:${Date.now()}`,
         task,
-        result,
+        // an aborted delegation journals the TERMINAL aborted status — never
+        // the partial output as an ordinary delegated-result
+        result: delegatedAborted ? "delegation aborted" : result,
+        ...(delegatedAborted ? { aborted: true } : {}),
       }, async () => {
         const g = await enrollmentSnapshot(canonical);
         if (!g.enrolled || g.gen !== gen) {
@@ -3656,7 +3766,9 @@ const handlers = {
           );
         }
       });
-      return { ok: true, origin: canonical, result };
+      return delegatedAborted
+        ? { ok: false, aborted: true, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted" }
+        : { ok: true, origin: canonical, result };
     });
   },
   async "agent.listAll"() {

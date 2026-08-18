@@ -43,6 +43,14 @@ function ensurePort() {
   });
   port.onDisconnect.addListener(() => {
     port = null;
+    // A port DISCONNECT is a terminal signal: the SW's final event can no
+    // longer arrive, so every still-subscribed run settles fail-closed (error)
+    // + removes its listener + clears its cards — no listener/card leak.
+    const fns = [...listeners];
+    listeners.clear();
+    for (const fn of fns) {
+      try { fn({ type: "disconnect" }); } catch { /* a listener error must not kill the dispatch */ }
+    }
   });
   return port;
 }
@@ -143,14 +151,16 @@ export async function loadJournal() {
  * "[object Object]" (the wider-goal review's finding): objects/arrays become
  * bounded JSON; strings pass through; anything else is String()'d. Bounded to
  * keep a huge result from blowing up the DOM. */
-function safeToolResult(value) {
+export function safeToolResult(value) {
   if (value == null) return "";
   if (typeof value === "string") return value;
+  // Route hostile/cyclic objects through the BOUNDED safe serializer — never
+  // a raw String(object) "[object Object]" in a live tool result.
   try {
-    const s = JSON.stringify(value);
-    if (typeof s === "string") return s.length > 2000 ? s.slice(0, 2000) + "…" : s;
-  } catch { /* fall through */ }
-  return String(value);
+    return safeJsonStringify(value, { maxBytes: 2000, maxNodes: 50, maxString: 400 });
+  } catch {
+    return '"[unserializable value]"';
+  }
 }
 
 /** A per-run client id so the live progress listener renders ONLY its own run
@@ -184,6 +194,189 @@ export function friendlyActivityLabel(toolName, args) {
     case "delegate_task": return name ? `delegating to ${name}` : "delegating a task";
     default: return verb;
   }
+}
+
+// ── the tool-card lifecycle (pure, unit-testable) ───────────────────────────
+// The live progress path keeps a FIFO queue of in-flight tool cards per tool
+// NAME (parallel same-name calls resolve in order); the run lifecycle MUST
+// resolve every queued card (done / error / abort) so no card stays
+// permanently "running".
+
+/** A per-tool-name FIFO queue of tool-card elements. */
+export function createToolCardQueue() {
+  const map = new Map();
+  return {
+    push(name, card) {
+      const q = map.get(name) ?? [];
+      q.push(card);
+      map.set(name, q);
+    },
+    take(name) {
+      const q = map.get(name);
+      if (!q || !q.length) return null;
+      return q.shift();
+    },
+    pendingCount() {
+      let n = 0;
+      for (const q of map.values()) n += q.length;
+      return n;
+    },
+    /** Resolve every still-in-flight card (never left permanently running). */
+    flush(status) {
+      let n = 0;
+      for (const q of map.values()) {
+        for (const card of q) {
+          card?.setAttribute?.("tool-status", status);
+          n += 1;
+        }
+      }
+      map.clear();
+      return n;
+    },
+  };
+}
+
+/** Whether a live tool-result event signals FAILURE. The SW's `ok` flag is
+ * AUTHORITATIVE — text heuristics apply ONLY when `ok` is absent (older
+ * producers / journal replay), so a valid summary like "failed attempts: 0"
+ * with ok:true never misclassifies as an error. */
+export function isToolErrorEvent(ev) {
+  if (ev?.ok === true) return false;
+  if (ev?.ok === false) return true;
+  const s = String(ev?.result ?? "");
+  return /^\s*failed\b/i.test(s) || /^\s*\[[^\]]+\]\s*DENIED/i.test(s);
+}
+
+/** The run TERMINAL arbiter: settles the in-flight tool-card queue exactly
+ * once, on the AUTHORITATIVE final event, whichever channel arrives last.
+ *
+ * Both orderings must be correct:
+ *   - port-before-response: the port's done/error settles immediately; the
+ *     later request response is a no-op.
+ *   - response-before-port: the response arms a GRACE window; a delayed
+ *     tool-result {ok:false} or done {aborted:true} still wins (it settles
+ *     the queue with the true status), and only when the grace expires does
+ *     the response's own ok decide. The listener stays subscribed through the
+ *     grace so late current-run events are never dropped.
+ * Deterministic: `timers` (setTimeout/clearTimeout) can be injected for tests.
+ */
+export function createRunTerminal({ onSettle = null } = {}) {
+  // NO timing dependency: the terminal settles IMMEDIATELY on the first
+  // AUTHORITATIVE event — the port's done/error, or the run RESPONSE (which
+  // now carries the final outcome, including aborted). Either channel alone is
+  // sufficient; the other is an idempotent no-op. Settling unsubscribes the
+  // listener, so a late event is never misapplied.
+  let settled = false;
+  let status = null;
+  const settle = (st) => {
+    if (settled) return;
+    settled = true;
+    status = st;
+    onSettle?.(st);
+  };
+  return {
+    get settled() { return settled; },
+    get status() { return status; },
+    /** the port's final event is authoritative */
+    onPortDone(aborted) { settle(aborted ? "error" : "success"); },
+    onPortError() { settle("error"); },
+    /** the request response carries the FINAL run outcome (ok + aborted) */
+    onResponse(ok, aborted = false) { settle(ok && !aborted ? "success" : "error"); },
+    /** force-settle now (tests / a hard abort) */
+    force(status) { settle(status); },
+  };
+}
+
+/** Pair persisted journal tool rows into ONE terminal card per tool call.
+ * The SW persists a per-call `callId` (run-instance scoped) on BOTH rows; a
+ * replay must render ONE card with the call's args + a TERMINAL status:
+ *   - ok:false → "error" (failed/blocked)
+ *   - ok:true  → "success"
+ *   - ok ABSENT (legacy rows) → the result TEXT heuristic (a "failed"/"DENIED"
+ *     result restores as error, not a blanket success)
+ *   - no result at all → "done" (terminal — the component maps done → done,
+ *     never running)
+ * LEGACY rows without a callId pair by (id, tool, occurrence index) — the Nth
+ * call pairs with the Nth result of the same (id, tool), independent of the
+ * row order bookkeeping (the old `order.length` fallback gave different ids to
+ * a call and its result). Pure — unit-tested; used by the agent-history
+ * surfaces (ntp.js). */
+export function pairToolJournal(entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const byCall = new Map(); // callId -> { call, result, ts }
+  const order = [];
+  // Legacy (no callId) pairing: the Nth CALL of an (id, tool) pairs with the
+  // Nth RESULT of the same (id, tool) — separate counters, shared indexes (the
+  // old single counter gave a call and its result DIFFERENT indexes).
+  const legacyCallSeq = new Map();
+  const legacyResultSeq = new Map();
+  const legacyId = (r) => {
+    const k = `${r.id ?? ""}::${r.tool ?? ""}`;
+    if (r.type === "tool-call") {
+      const n = legacyCallSeq.get(k) ?? 0;
+      legacyCallSeq.set(k, n + 1);
+      return `legacy:${k}:${n}`;
+    }
+    const n = legacyResultSeq.get(k) ?? 0;
+    legacyResultSeq.set(k, n + 1);
+    return `legacy:${k}:${n}`;
+  };
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    if (r.type === "tool-call" || r.type === "tool-result") {
+      // The pairing key includes the persisted RUN instance — a corrupt or
+      // duplicate row from ANOTHER run (or a replayed schedule) can never
+      // collapse into this run's cards.
+      const id = typeof r.callId === "string" && r.callId
+        ? `${r.run ?? ""}::${r.callId}`
+        : legacyId(r);
+      const entry = byCall.get(id);
+      if (!entry) {
+        byCall.set(id, { call: null, result: null, ts: typeof r.ts === "number" ? r.ts : null, duplicate: false });
+        order.push(id);
+      }
+      // The expected complementary pair (a call + its result) is NOT a
+      // duplicate — only a SECOND same-type row (two calls or two results for
+      // the same key) flags the card; the duplicate is never silently dropped.
+      if (r.type === "tool-call") {
+        if (!byCall.get(id).call) byCall.get(id).call = r;
+        else byCall.get(id).duplicate = true;
+      } else {
+        if (!byCall.get(id).result) byCall.get(id).result = r;
+        else byCall.get(id).duplicate = true;
+      }
+    }
+  }
+  const out = [];
+  for (const id of order) {
+    const { call, result, ts } = byCall.get(id);
+    const tool = call?.tool ?? result?.tool ?? "tool";
+    const ok = result?.ok;
+    let status;
+    if (!result) status = "done";
+    else if (ok === false) status = "error";
+    else if (ok === true) status = "success";
+    else {
+      // legacy: ok absent → the text heuristic (failed/DENIED restores as error)
+      const s = String(result.result ?? "");
+      status = /^\s*failed\b/i.test(s) || /^\s*\[[^\]]+\]\s*DENIED/i.test(s) ? "error" : "success";
+    }
+    out.push({
+      type: "tool",
+      tool,
+      status,
+      // the ORIGINAL immutable callId (the composite ${run}::${callId} stays
+      // the INTERNAL pairing key only — persisting it would re-prefix on every
+      // reload)
+      callId: call?.callId ?? result?.callId ?? id,
+      args: call?.args ?? result?.args ?? null,
+      result: result?.result ?? null,
+      ok: result?.ok ?? null,
+      ts,
+      duplicate: byCall.get(id)?.duplicate === true,
+    });
+  }
+  return out;
 }
 
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
@@ -255,15 +448,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
     c.append(row);
     if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
   };
-  const runId = newRunId();
-
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   appendBubble(c, "user", text, attachments);
 
   // The run + result rendering, factored so the host-permission "Grant network
   // access" button can RE-RUN the same turn after the permission is granted
-  // (the dynamic-permission-on-need retry).
+  // (the dynamic-permission-on-need retry). EVERY ATTEMPT gets its own runId +
+  // queue + arbiter + listener: a provider-grant retry must never accept the
+  // failed attempt's stale events, and each attempt settles its own cards.
   const executeTurn = async () => {
+  const runId = newRunId();
 
   // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
   //    trace when reasoning arrives).
@@ -275,24 +469,34 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // are matched in order and a completed card is never duplicated (the
   // wider-goal review's finding that a single `lastTool` left A's card running
   // and created a duplicate completed card when calls interleave).
-  const inFlightTools = new Map(); // toolName -> Element[]
+  const toolCards = createToolCardQueue();
   const clearThinking = () => {
     thinking?.remove();
     thinking = null;
   };
-  const takeInFlight = (toolName) => {
-    const q = inFlightTools.get(toolName);
-    if (!q || !q.length) return null;
-    return q.shift();
-  };
+  // The terminal arbiter: settles the queue + unsubscribes EXACTLY ONCE on the
+  // first authoritative terminal (the port's done/error or the run response —
+  // which carries the final outcome incl. aborted). No timing dependency.
+  const terminal = createRunTerminal({
+    onSettle: (status) => {
+      toolCards.flush(status);
+      unsubscribe();
+    },
+  });
 
-  // 3. subscribe to the live progress for THIS turn. The port broadcast is
-  //    global, so we FILTER by runId — events for another thread/page are
-  //    ignored (never mis-attributed). We unsubscribe in the finally.
+  // 3. subscribe to the live progress for THIS attempt. The port broadcast is
+  //    global, so we FILTER by runId — events for another thread/page/attempt
+  //    are ignored (never mis-attributed). We unsubscribe at settle.
   const unsubscribe = subscribeProgress((ev) => {
     if (!ev || typeof ev !== "object") return;
-    // Only render THIS run's events (the SW tags them with runId).
-    if (ev.runId != null && ev.runId !== runId) return;
+    // a port DISCONNECT settles fail-closed (the terminal can no longer arrive)
+    if (ev.type === "disconnect") {
+      clearThinking();
+      terminal.onPortError();
+      return;
+    }
+    // Only render THIS attempt's events — FAIL-CLOSED on the exact runId.
+    if (ev.runId !== runId) return;
     switch (ev.type) {
       case "thinking": {
         const step = ev.step != null ? ev.step + 1 : null;
@@ -310,24 +514,25 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const card = typeof c.appendTool === "function"
           ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
-        const q = inFlightTools.get(ev.toolName) ?? [];
-        q.push(card);
-        inFlightTools.set(ev.toolName, q);
+        toolCards.push(ev.toolName, card);
         break;
       }
       case "tool-result": {
         // Match the OLDEST in-flight card for this tool name (FIFO — handles
-        // parallel same-name calls in order), mark it done; fall back to a fresh
-        // done card only when no in-flight card exists.
-        const card = takeInFlight(ev.toolName);
+        // parallel same-name calls in order); mark it done on success, error on
+        // a FAILED result (the SW tags `ok:false` — never a blanket success).
+        const card = toolCards.take(ev.toolName);
         const raw = safeToolResult(ev.result);
         const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
+        const err = isToolErrorEvent(ev);
+        const status = err ? "error" : "success";
         if (card) {
-          card.setAttribute?.("tool-status", "success");
+          card.setAttribute?.("tool-status", status);
+          if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
           if (summary) card.setAttribute?.("tool-result", summary);
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status: "success", result: summary, detail: raw !== summary ? raw : null });
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
@@ -339,10 +544,19 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       case "done":
         clearThinking();
-        onStatus?.({ state: "done" });
+        // The port's done is AUTHORITATIVE (aborted → error): settles the
+        // queue once; a later response is a no-op. An ABORTED run must never
+        // report a successful "done" status.
+        terminal.onPortDone(ev.aborted === true);
+        if (ev.aborted === true) {
+          onStatus?.({ state: "error", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
+        } else {
+          onStatus?.({ state: "done" });
+        }
         break;
       case "error":
         clearThinking();
+        terminal.onPortError();
         onStatus?.({
           state: "error",
           message: ev.reason ?? ev.message ?? "error",
@@ -405,13 +619,21 @@ export async function runConversationTurn(container, { text, attachments = [], h
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {
-    unsubscribe();
+    // The response IS the terminal handshake: it carries the FINAL run outcome
+    // (ok + aborted — the SW propagates the aborted/cancelled state), so the
+    // arbiter settles immediately — NO timing dependency, and an aborted run
+    // can never be mislabelled by a later port event (which is now a no-op).
+    terminal.onResponse(res?.ok === true, res?.aborted === true);
   }
 
   // 5. the final result (the journal is the source of truth; append the result
-  //    bubble locally so the user sees the outcome without a refresh).
+  //    bubble locally so the user sees the outcome without a refresh). The
+  //    TERMINAL outcome is authoritative: an aborted/failed run must NEVER
+  //    append a successful assistant result or report a done status — the
+  //    abort controls the OVERALL run outcome, not just the card colours.
   clearThinking();
-  if (res?.ok) {
+  const outcome = terminal.status ?? (res?.ok === true ? "success" : "error");
+  if (outcome === "success" && res?.ok) {
     onStatus?.({ state: "done" });
     if (typeof res.result === "string" && res.result) {
       appendBubble(c, "agent", res.result);
@@ -420,10 +642,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
     // A provider/config failure must be CLEAR + ACTIONABLE, not a generic
     // "Error: …" — surface the UNWRAPPED reason + the "what to do" + a
     // "Fix in Settings" button (the category drives the button).
-    const reason = res?.errorReason ?? null;
-    const action = res?.errorAction ?? null;
-    const category = res?.errorCategory ?? null;
-    const msg = res?.error ?? "unknown error";
+    const reason = res?.errorReason ?? (res?.aborted ? "the run was aborted" : null);
+    const action = res?.errorAction ?? (res?.aborted ? "the run stopped before completing" : null);
+    const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
+    const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
     onStatus?.({
       state: "error",
       message: reason ?? msg,
