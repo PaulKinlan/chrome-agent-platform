@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.89] — 2026-08-18
+- fix(tool-calls): successor-2 acceptance — delegate_task aborts, no partial journaling, one-step deterministic demo, mode-consistent evidence with image hashes, versions aligned
+
+## [0.2.88] — 2026-08-18
+- fix(tool-calls): successor-2 acceptance — delegate_task aborts, no partial journaling, one-step deterministic demo, mode-consistent evidence with image hashes
+
 ## [0.2.87] — 2026-08-18
 - fix(tool-calls): successor acceptance — byte-bound root strings, canonical redaction, delegation unwrap, no [object Object], complete external evidence
 

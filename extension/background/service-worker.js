@@ -2833,7 +2833,10 @@ const handlers = {
         type: "delegated-result",
         id: `delegate:${canonical}:${Date.now()}`,
         task,
-        result,
+        // an aborted delegation journals the TERMINAL aborted status — never
+        // the partial output as an ordinary delegated-result
+        result: delegatedAborted ? "delegation aborted" : result,
+        ...(delegatedAborted ? { aborted: true } : {}),
       }, async () => {
         const g = await enrollmentSnapshot(canonical);
         if (!g.enrolled || g.gen !== gen) {

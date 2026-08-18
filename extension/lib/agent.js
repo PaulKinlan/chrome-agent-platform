@@ -584,7 +584,17 @@ export function createOrchestrator({
           // Thread the captured generation into a.run so the worker's memory/
           // usage commits revalidate THAT immutable identity, not the current
           // enrollment (the round-22 ABA blocker).
-          const result = await a.run(task, undefined, undefined, gen);
+          // An ABORTED worker REJECTS the run — catch it into the explicit
+          // aborted failure (never a thrown tool error that would surface as a
+          // generic "No output generated").
+          let result;
+          try {
+            result = await a.run(task, undefined, undefined, gen);
+          } catch (e) {
+            return {
+              error: `delegation aborted — the worker for ${agentId} failed mid-run (${e?.message ?? "aborted"})`,
+            };
+          }
           // Post-run generation revalidation: a delete DURING the worker run
           // tombstones + bumps the generation, so the result must be discarded
           // rather than returned to the model (the round-17 blocker: delegateGuard
@@ -597,7 +607,16 @@ export function createOrchestrator({
               };
             }
           }
-          // the worker's per-run outcome object → the delegation's TEXT result
+          // the worker's per-run outcome object → the delegation's TEXT result.
+          // An ABORTED worker must FAIL the delegation (never a success object
+          // handed back to the model): the outcome's aborted state is checked
+          // FIRST + an explicit aborted failure is returned.
+          const workerAborted = !!(result && typeof result === "object" && result.aborted === true);
+          if (workerAborted) {
+            return {
+              error: `delegation aborted — the worker for ${agentId} was aborted mid-run`,
+            };
+          }
           const workerResult = (result && typeof result === "object" && typeof result.text === "string") ? result.text : result;
           return { agentId, result: workerResult };
         },

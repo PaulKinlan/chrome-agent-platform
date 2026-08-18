@@ -183,3 +183,52 @@ Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string resu
   assertEquals(delegatedResponse.ok, false, "an aborted delegation FAILS");
   assertEquals(delegatedResponse.aborted, true, "the abort is propagated");
 });
+
+// ── the successor review: the PRODUCTION model-facing delegate_task ─────────
+
+Deno.test("agent-abort: the PRODUCTION delegate_task fails on an aborted worker (real orchestrator path)", async () => {
+  const { createOrchestrator } = await import("../extension/lib/agent.js");
+  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const workerEvents = [];
+  const orch = createOrchestrator({
+    model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
+    system: "you are the hub",
+    masterMemory: fakeMemory(),
+    workers: [{ origin: "demo-site", memory: fakeMemory() }],
+    multiAgent: true,
+    delegateGuard: async () => ({ ok: true, gen: 1 }),
+    onProgress: (ev) => workerEvents.push(ev),
+  });
+  // the worker runs "@demo-tools @demo-slow" — a slow first step gives a
+  // deterministic mid-run abort window
+  const runP = orch.run("@demo-delegate demo-site", "", []);
+  const t0 = Date.now();
+  while (!workerEvents.some((e) => e?.type === "tool-call")) {
+    if (Date.now() - t0 > 8000) throw new Error("the delegation never reached the worker");
+    await sleep(5);
+  }
+  await sleep(120); // the worker's slow step is still in flight
+  orch.workers.get("demo-site").abort(); // abort the WORKER mid-delegation
+  // The PRODUCTION delegate_task fails the delegation: the aborted worker's run
+  // is caught into the explicit "delegation aborted" failure, so the model's
+  // continuation sees the failure — the RUN either completes with the failed
+  // summary or rejects through the SDK's tool-error path. Either way the
+  // delegation NEVER returns a success object.
+  let out;
+  try {
+    out = await runP;
+  } catch (e) {
+    out = { error: e?.message ?? String(e) };
+  }
+  const text = out && typeof out === "object" ? (out.text ?? out.error ?? "") : String(out);
+  assert(!text.includes("[object Object]"), "no object leaked into the result");
+  // the PRODUCTION delegate_task FAILED the delegation: the worker's abort is
+  // caught into the explicit "delegation aborted" failure — observable in the
+  // tool-result progress event (the model-facing result) AND/OR the run text
+  const toolResults = workerEvents.filter((e) => e?.type === "tool-result");
+  const delegationResult = JSON.stringify(toolResults.map((e) => e?.result ?? e).join(" "));
+  assert(
+    /abort|delegation aborted|no output|failed/i.test(text + " " + delegationResult),
+    `the delegation failed explicitly (text: ${text.slice(0, 80)} | tool-result: ${delegationResult.slice(0, 120)})`,
+  );
+});

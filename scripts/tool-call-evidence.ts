@@ -605,26 +605,34 @@ async function main() {
     }
 
     // HEAD-bound evidence manifest + the attestation log — generated AFTER every
-    // check, at the EXACT current git HEAD (the corrective commit being attested)
+    // check, at the EXACT current git HEAD (the corrective commit being attested).
+    // EACH mode's run GENERATES + sources ONLY its own screenshots (a tree-mode
+    // run never inherits raw-mode images — nothing unauthenticated), and every
+    // image's SHA-256 is recorded in the manifest.
+    const shotList = MODE === "raw"
+      ? ["raw-1-running.png", "raw-2-done.png"]
+      : ["tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"];
     try {
       const gitHead = new Deno.Command("git", { args: ["rev-parse", "HEAD"], stdout: "piped", stderr: "null" }).outputSync();
       const head = new TextDecoder().decode(gitHead.stdout).trim();
-      const manifest = {
+      const manifest: Record<string, unknown> = {
         suite: "tool-call-evidence",
         commit: head || "unknown",
         generated: new Date().toISOString(),
         mode: MODE,
         checks: `${pass}/${pass + fail}`,
-        screenshots: ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"],
+        screenshots: shotList,
       };
-      // the EXTERNAL evidence artifact (CI/review, never committed): the 7
-      // screenshots + the manifest + the FULL execution transcript + a
-      // metadata file (full SHA, clean git status, the exact command, the
-      // assertion/script hash, tool versions)
       await Deno.mkdir(EVIDENCE_OUT, { recursive: true });
-      for (const shot of ["raw-1-running.png", "raw-2-done.png", "tree-1-running.png", "tree-2-done.png", "tree-3-replay.png", "tree-4-reopen.png", "tree-5-reopen-thread.png"]) {
-        try { await Deno.copyFile(`${EVIDENCE_DIR}/${shot}`, `${EVIDENCE_OUT}/${shot}`); } catch { /* absent in raw mode */ }
+      const imageHashes: Record<string, string> = {};
+      for (const shot of shotList) {
+        try {
+          const bytes = await Deno.readFile(`${EVIDENCE_DIR}/${shot}`);
+          await Deno.writeFile(`${EVIDENCE_OUT}/${shot}`, bytes);
+          imageHashes[shot] = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+        } catch { imageHashes[shot] = "missing"; }
       }
+      manifest.images = imageHashes; // per-image SHA-256 bound to THIS run
       await Deno.writeTextFile(`${EVIDENCE_OUT}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
       await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
