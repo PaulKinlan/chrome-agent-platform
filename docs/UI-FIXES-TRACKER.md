@@ -61,6 +61,9 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 - The error console: the per-line Copy + Copy-all + Clear buttons work (the shadow-root outside-click fix) + the panels close-others + they anchor to the trigger.
 - The security shield: the granted permissions are removable.
 
+### Unified agent access
+- **CAP-FB-20260818-AGENT-ACCESS-01 — FIXED (2026-08-18, worktree feat/agent-access-picker).** ONE reusable `<agent-picker>` renderer (grouped Named/Background/Site, search, selected/Current, empty/loading/error) consumes the redacted revisioned registry and serves the side panel, every composer's + menu, and strict-position `/agent`; canonical refs route named/background/site runs without collisions. Lifecycle broadcasts, request revision/sequence fences, stale-send rejection, and side-panel history fencing cover mutation races. The side panel includes browse/history/scheduled tasks, removes the iframe/morph stub, and opens real tabs only through the sender-authenticated + current-owner-gesture SW route. Evidence: `scripts/agent-access-journeys.ts` has 88 fixed real-CDP checks and writes nine screenshots plus commit/clean-tree/assertion-set/file-hash metadata outside the repo; general Chrome 119/119, unit 333/333, gallery 35/35, security 7/7, a11y 17/17. Residuals tracked in KNOWN-ISSUES (site-agent delegation is text-only; hub summary rows still use capability-row).
+
 ## Open (genuinely remaining — action these)
 
 1. **Browser-control toggle/grant persistence** — Paul flagged "STILL not working" after the item-51 fix; re-verify the toggle stays ON + the grant persists across a reload in the real extension, and fix the actual cause. (The grant-storage read/write is present; the persistence needs a real-browser proof.)

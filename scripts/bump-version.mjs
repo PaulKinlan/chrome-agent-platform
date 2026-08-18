@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Bump the version across package.json + extension/manifest.json + CHANGELOG.md.
+// Bump the version across package.json + package-lock.json + extension/manifest.json + CHANGELOG.md.
 // Chaos-extension-style (adapted from ~/chaos/scripts/bump-version.mjs).
 //
 // Usage:
@@ -44,16 +44,23 @@ const mi = argv.findIndex((a) => a === "--message" || a === "-m");
 const message = mi >= 0 ? argv[mi + 1] : null;
 
 const pkgPath = join(ROOT, "package.json");
+const lockPath = join(ROOT, "package-lock.json");
 const manifestPath = join(ROOT, "extension", "manifest.json");
 const pkg = readJson(pkgPath);
+const lock = existsSync(lockPath) ? readJson(lockPath) : null;
 const manifest = readJson(manifestPath);
 const current = manifest.version || pkg.version;
 const next = bumpSemver(current, type);
 
 pkg.version = next;
+if (lock) {
+  lock.version = next;
+  if (lock.packages?.[""]) lock.packages[""].version = next;
+}
 manifest.version = next;
 manifest.version_name = next;
 writeJson(pkgPath, pkg);
+if (lock) writeJson(lockPath, lock);
 writeJson(manifestPath, manifest);
 
 // Prepend a CHANGELOG entry ONLY when we have a message (the commit message).

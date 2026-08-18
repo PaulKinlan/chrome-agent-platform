@@ -10,7 +10,7 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 4. **Memory persistence** — RESOLVED: origin-keyed OPFS (per-origin, one site can never read another). A sync/export (cloud backup) path is a FUTURE option, not in scope now.
 5. **MHTML vs screenshots** — RESOLVED: both. Screenshots for the chat strip; MHTML for full-page archives, kept until the user deletes. (Paul decided.)
 6. **WASM tool integration** — RESOLVED (direction): start with the WebMCP (window.*) tool inference + approval flow. A minimal WASM tool set with an owner upload mechanism is a FUTURE option (the wasm-vs-js work informs it).
-7. **co-do double-iframe generative UI** — RESOLVED: the agent-generated HTML artifact surface is implemented as a sandboxed double iframe with the artifact gallery/viewer.
+7. **co-do double-iframe generative UI** — RESOLVED (built): generated HTML artifacts render inside the sandboxed double iframe with the artifact gallery/viewer plus CSP, network, and navigation guards.
 
 ## Open
 

@@ -12,7 +12,14 @@
 // visual/behavioral consistency is structural (one component, everywhere).
 // docs/ keeps a synced copy (see build.mjs → copy:docs).
 
-import { buildAgentCandidates } from "./agent-candidates.js";
+import {
+  canonicalRef,
+  filterGroups,
+  findAgentByRef,
+  flattenGroups,
+  shouldApplyRegistrySnapshot,
+} from "./agent-registry.js";
+import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -34,6 +41,9 @@ export const ICONS = {
   terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
   alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -447,19 +457,12 @@ async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKin
         .filter((r) => matches(r.name) || matches(r.id))
         .map((r) => ({ id: `skill:${r.id}`, label: r.name, description: r.description || "", kind: "background" }));
     }
-    case "agent": {
-      // Only the callable agents (enabled background + created named + enrolled
-      // site) — the current agent excluded (see buildAgentCandidates).
-      const [named, bg, site] = await Promise.all([
-        RUNTIME_SEND ? RUNTIME_SEND("named-agent.list").catch(() => ({})) : Promise.resolve({}),
-        RUNTIME_SEND ? RUNTIME_SEND("background-agent.list").catch(() => ({})) : Promise.resolve({}),
-        RUNTIME_SEND ? RUNTIME_SEND("agent.directory").catch(() => ({})) : Promise.resolve({}),
-      ]);
-      return buildAgentCandidates(named.agents || [], bg.agents || [], site.agents || [], {
-        query: arg,
-        currentAgentId,
-      });
-    }
+    case "agent":
+      // The /agent sub-items are NOT rendered here: /agent opens the ONE shared
+      // <agent-picker> (see AgentComposer._openSlashAgentPicker), so the slash
+      // list and every other picker surface share the single renderer + a11y
+      // contract and can never drift.
+      return [];
     case "model": {
       const res = RUNTIME_SEND ? await RUNTIME_SEND("provider.models").catch(() => ({})) : {};
       return (res.choices || [])
@@ -856,6 +859,7 @@ class AttachButton extends Component {
         <button type="button" role="menuitem" data-kind="record-screen">Record screen</button>
         <button type="button" role="menuitem" data-kind="grab-screenshot">Grab screenshot</button>
         <button type="button" role="menuitem" data-kind="add-tab">Add tab</button>
+        <button type="button" role="menuitem" data-kind="choose-agent">Choose agent</button>
         <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
       </div>`);
     this._btn = this._root.querySelector(".plus");
@@ -883,6 +887,13 @@ class AttachButton extends Component {
       const kind = b.dataset.kind;
       if (kind === "record-audio" || kind === "capture-camera") {
         this._emit("attach-media", { kind });
+        return;
+      }
+      if (kind === "choose-agent") {
+        // Route this message to ONE agent (CAP-FB-20260818-AGENT-ACCESS-01):
+        // the host composer opens the shared <agent-picker> anchored to the +
+        // button; choosing sets a removable agent chip.
+        this._emit("choose-agent");
         return;
       }
       if (kind === "record-screen" || kind === "grab-screenshot" ||
@@ -1735,13 +1746,28 @@ customElements.define("screenshot-strip", ScreenshotStrip);
  * Composite components
  * ────────────────────────────────────────────────────────────────────────── */
 
+// A per-instance id seed so the composer popup's aria-controls / option ids are
+// unique when several composers share a page (the hub + the thread composer).
+let agentComposerUid = 0;
+
 /* <agent-composer placeholder label send-label> — mic + attach + input + send.
  * Light DOM (shadow() = false) so the extension's CDP journeys can still
  * target #task-input / #run-task. */
 class AgentComposer extends Component {
   static shadow() { return false; }
   static get observedAttributes() { return ["placeholder", "label", "send-label", "agent-id", "agent-kind"]; }
-  constructor() { super(); this.attachments = []; }
+  constructor() {
+    super();
+    this.attachments = [];
+    this._uid = ++agentComposerUid;
+    // The ONE canonical selected agent (CAP-FB-20260818-AGENT-ACCESS-01):
+    // { ref: "named:<id>"|"background:<id>"|"site:<origin>", kind, id, name }.
+    // Set by the + menu's Choose agent / a committed /agent: option; rendered
+    // as a removable chip; flows into the send detail so the run is routed by
+    // ID, never by a name.
+    this._selectedAgent = null;
+    this._agentChip = null;
+  }
   // The agent this composer is scoped to (null for the hub/thread): agent-id =
   // the agent's slug/id, agent-kind = "named" | "background". Used to EXCLUDE the
   // current agent from the /agent + @ mention lists (you can't call the agent
@@ -1752,16 +1778,22 @@ class AgentComposer extends Component {
     const placeholder = this.getAttribute("placeholder") || "Ask anything…";
     const label = this.getAttribute("label") || "Message";
     const sendLabel = this.getAttribute("send-label") || "Run task";
+    const currentAgent = this._currentAgentId;
     const html = `
       <div class="composer" part="composer">
-        <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}" rows="2"></textarea>
-        <div class="popup" id="popup" role="listbox" aria-label="Suggestions" hidden></div>
+        <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}" rows="2"
+          aria-expanded="false" aria-controls="popup-${this._uid}" aria-autocomplete="list"></textarea>
+        <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Suggestions" hidden></div>
         <div class="chips" id="chips"></div>
         <div class="row">
           <mic-button id="mic"></mic-button>
           <attach-button id="attach"></attach-button>
           <span class="spacer"></span>
           <button id="run-task" class="btn send" type="button">${escapeHtml(sendLabel)}</button>
+        </div>
+        <div class="agent-pop" id="agent-pop" popover="manual" hidden>
+          <agent-picker id="agent-pick" callable-only label="Run with agent"
+            ${currentAgent ? `current-agent-id="${escapeHtml(currentAgent)}" exclude-current` : ""}></agent-picker>
         </div>
       </div>
       <div class="composer-status" role="status" aria-live="polite"></div>`;
@@ -1788,6 +1820,8 @@ class AgentComposer extends Component {
       agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       agent-composer .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
+      agent-composer .popup .group-label { padding:6px 10px 2px; font-size:11px; font-weight:700;
+        color:var(--muted,#635e56); letter-spacing:.01em; }
       agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:vertical; min-height:44px; outline:none; line-height:1.45; }
       agent-composer .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       agent-composer .composer .spacer { flex:1; }
@@ -1811,6 +1845,28 @@ class AgentComposer extends Component {
       agent-composer .composer .chips .chip.recording button { font-weight:600; color:var(--accent,#0e6e63); }
       @keyframes cap-pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
       @media (prefers-reduced-motion: reduce) { agent-composer .composer .chips .chip.recording .rec-dot { animation:none; } }
+      /* the agent chip (the + menu's Choose agent / a committed /agent: option):
+         the ONE canonical selected agent, removable before send. */
+      agent-composer .composer .chips .chip.agent-chip { border-color:var(--accent,#0e6e63);
+        color:var(--accent,#0e6e63); font-weight:600; }
+      agent-composer .composer .chips .chip.agent-chip .agent-initial { width:18px; height:18px;
+        border-radius:50%; border:1px solid var(--accent,#0e6e63); display:inline-flex; align-items:center;
+        justify-content:center; font-size:10px; font-weight:700; }
+      agent-composer .composer .chips .chip.agent-chip button { color:var(--accent,#0e6e63); min-width:24px; min-height:24px; }
+      /* the + menu's Choose agent popover: the shared <agent-picker> in the top
+         layer, anchored to the + button (logical anchor positioning + edge
+         flipping; a JS fallback where anchor positioning is unsupported). */
+      agent-composer attach-button { anchor-name:--composer-attach; }
+      agent-composer .agent-pop { position:absolute; inset:auto; margin:0; padding:10px;
+        width:min(380px, calc(100vw - 24px)); background:var(--panel,#ffffff);
+        border:1px solid var(--border,#e3e0d9); border-radius:12px;
+        box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.12)); z-index:60;
+        position-anchor:--composer-attach; position-area:block-start span-inline-end;
+        position-try-fallbacks:flip-block, flip-inline; }
+      @supports not (position-area: top) {
+        agent-composer .agent-pop { position:fixed; }
+      }
+      agent-composer .agent-pop[hidden] { display:none; }
       /* the tab picker (add-tab / grab-screenshot) — a floating list, in-bounds */
       .tab-picker { position:fixed; z-index:60; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9);
         border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.12)); padding:4px; min-width:300px; max-width:420px; }
@@ -1827,19 +1883,34 @@ class AgentComposer extends Component {
     this._attach = this._root.querySelector("#attach");
     this._run = this._root.querySelector("#run-task");
     this._status = this._root.querySelector(".composer-status");
-    this._popup = this._root.querySelector("#popup");
+    this._popup = this._root.querySelector(".popup");
     this._chips = this._root.querySelector("#chips");
+    this._agentPop = this._root.querySelector("#agent-pop");
+    this._agentPick = this._root.querySelector("#agent-pick");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
+    this._slashAgentToken = null; // { start, end } while /agent: drives the picker
   }
   _wire() {
     this._run?.addEventListener("click", () => this._send());
     this._input?.addEventListener("input", () => this._onComposerInput());
     this._input?.addEventListener("keydown", (e) => {
+      // The /agent slash picker: the composer text is the query source, so the
+      // navigation keys are FORWARDED to the shared <agent-picker> (its one
+      // keyboard contract) while ordinary typing flows through the input event.
+      if (this._slashAgentToken) {
+        if (["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab", "Escape"].includes(e.key)) {
+          e.preventDefault();
+          this._agentPick?.navigate?.(e.key);
+        }
+        return;
+      }
       if (this._popupOpen) {
         if (e.key === "ArrowDown") { e.preventDefault(); this._moveSelection(1); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); this._moveSelection(-1); return; }
+        if (e.key === "Home") { e.preventDefault(); this._setSelectionIndex(0); return; }
+        if (e.key === "End") { e.preventDefault(); this._setSelectionIndex(this._popupItems.length - 1); return; }
         if (e.key === "Enter") { e.preventDefault(); this._selectActive(); return; }
         if (e.key === "Tab") { e.preventDefault(); this._selectActive(); return; }
         if (e.key === "Escape") { e.preventDefault(); this._hidePopup(); return; }
@@ -1862,6 +1933,185 @@ class AgentComposer extends Component {
     this._attach?.addEventListener("attach-context", (e) => this._contextAction(e.detail?.kind));
     this._attach?.addEventListener("attach-error", (e) => this.setStatus(e.detail?.message || "attachment rejected", false));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
+    // the + menu's "Choose agent" → the shared <agent-picker> in a top-layer
+    // popover anchored to the + button.
+    this._attach?.addEventListener("choose-agent", () => this._openAgentPicker());
+    this._agentPick?.addEventListener("agent-select", (e) => {
+      const detail = e.detail ?? {};
+      // Slash mode: replace the /agent:… token with the CANONICAL textual
+      // reference (/agent:named:<id> — never the ambiguous bare-id form).
+      const token = this._slashAgentToken;
+      this._closeAgentPicker(token ? "input" : false);
+      if (token && this._input && detail.ref) {
+        this._input.setRangeText(`/agent:${detail.ref}`, token.start, token.end, "end");
+      }
+      this._setSelectedAgent(detail);
+      this._input?.focus();
+    });
+    this._agentPick?.addEventListener("agent-cancel", () => {
+      // Escape: close + revert — the typed text stays, nothing commits; focus
+      // returns to the input in slash mode, to the + trigger otherwise.
+      this._closeAgentPicker(this._slashAgentToken ? "input" : true);
+    });
+  }
+
+  // ── the agent selection (the + menu's Choose agent + a committed /agent:
+  //    option). ONE canonical agent (ref = named:<id>/background:<id>/
+  //    site:<origin>) is selected at a time; the removable chip is the clear
+  //    pre-send indication; the ref flows into the send detail so routing is
+  //    by ID, never by a (possibly duplicated) name.
+  get selectedAgent() { return this._selectedAgent; }
+
+  _setSelectedAgent(detail) {
+    if (!detail?.ref) return;
+    this._selectedAgent = {
+      ref: detail.ref,
+      kind: detail.kind,
+      id: detail.id,
+      name: detail.name || detail.id,
+    };
+    this._renderAgentChip();
+    this._emit("agent-change", { agent: { ...this._selectedAgent } });
+  }
+
+  /** Clear the selected agent (the chip's X, a stale registry entry, or the
+   * host). Emits agent-change { agent: null, reason }. */
+  clearSelectedAgent(reason = "") {
+    if (!this._selectedAgent) return;
+    this._selectedAgent = null;
+    this._agentChip?.remove();
+    this._agentChip = null;
+    this._emit("agent-change", { agent: null, reason });
+  }
+
+  _renderAgentChip() {
+    if (!this._chips || !this._selectedAgent) return;
+    this._agentChip?.remove();
+    const a = this._selectedAgent;
+    const chip = document.createElement("span");
+    chip.className = "chip agent-chip";
+    const av = document.createElement("span");
+    av.className = "agent-initial";
+    av.setAttribute("aria-hidden", "true");
+    av.textContent = (String(a.name || "?").trim()[0] || "?").toUpperCase();
+    const label = document.createElement("span");
+    label.textContent = a.name;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.setAttribute("aria-label", `Remove agent ${a.name}`);
+    rm.textContent = "✕";
+    rm.addEventListener("click", () => {
+      this.clearSelectedAgent("removed");
+      this._input?.focus();
+    });
+    chip.append(av, label, rm);
+    this._chips.prepend(chip);
+    this._agentChip = chip;
+  }
+
+  /** Revalidate the selected agent against the LIVE registry (a renamed agent
+   * keeps its id; a deleted/disabled one is REJECTED — the chip is cleared and
+   * the caller must not route to it). Returns true when the selection is still
+   * valid (or there is none). A registry FETCH failure never blocks the run. */
+  async revalidateSelectedAgent() {
+    if (!this._selectedAgent) return true;
+    if (!RUNTIME_SEND) return true;
+    let res = null;
+    try {
+      res = await RUNTIME_SEND("agent.registry");
+    } catch {
+      return true; // a transport failure must not block the send
+    }
+    if (!res || res.ok === false || !Array.isArray(res.groups)) return true;
+    const found = findAgentByRef(res.groups, this._selectedAgent.ref);
+    // A disabled background agent is no longer callable → treat as stale.
+    if (!found || (found.kind === "background" && found.enabled !== true)) {
+      const name = this._selectedAgent.name;
+      this.clearSelectedAgent("stale");
+      this.setStatus(
+        `Agent "${name}" is no longer available — the selection was cleared.`,
+        false,
+      );
+      return false;
+    }
+    if (found.name && found.name !== this._selectedAgent.name) {
+      this._selectedAgent.name = found.name; // a rename updates the chip live
+      this._renderAgentChip();
+    }
+    return true;
+  }
+
+  // ── the Choose agent popover (manual popover, top layer; anchored to the +
+  //    button via CSS anchor positioning with the placeFloating JS fallback) ──
+  //    ONE popover + ONE <agent-picker> instance serves both entry points:
+  //    the + menu's "Choose agent" (chip only) and the /agent: slash command
+  //    (chip + the canonical textual reference inserted). `this._slashAgentToken`
+  //    is null in + menu mode and { start, end } in slash mode.
+  _openAgentPicker() {
+    this._slashAgentToken = null; // the + menu flow never rewrites the text
+    this._presentAgentPopover();
+    this._agentPick?.focusSearch?.();
+  }
+
+  /** /agent[:query] — the SAME shared picker + popover as the + menu, driven
+   * by the composer text: the typed arg is synced into the picker's query on
+   * every keystroke; the navigation keys are forwarded (the keydown handler);
+   * the text stays put until a commit replaces the token with the canonical
+   * /agent:<kind>:<id> reference (Escape reverts, nothing commits). */
+  _openSlashAgentPicker(token) {
+    const reopen = !this._slashAgentToken;
+    this._slashAgentToken = { start: token.start, end: token.end };
+    if (reopen) this._presentAgentPopover();
+    this._input?.setAttribute("aria-expanded", "true");
+    // The typed arg filters the picker; the composer input KEEPS focus so the
+    // user can keep typing the reference (or a space to end the token).
+    this._agentPick?.setQuery?.(token.arg || "");
+  }
+
+  _presentAgentPopover() {
+    if (!this._agentPop || !this._agentPick) return;
+    if (this._selectedAgent) this._agentPick.setAttribute("selected", this._selectedAgent.ref);
+    else this._agentPick.removeAttribute("selected");
+    this._agentPop.hidden = false;
+    if (typeof this._agentPop.showPopover === "function") {
+      try { this._agentPop.showPopover(); } catch { /* already shown */ }
+    }
+    if (!supportsAnchorPositioning()) {
+      placeFloating(this._attach, this._agentPop, { minWidth: 320 });
+    }
+    // Live data on every open (the SW registry is the authority).
+    this._agentPick.refresh?.();
+    this._agentDocClose = (e) => {
+      if (!this._agentPop.contains(e.target) && !this._attach?.contains(e.target)) {
+        this._closeAgentPicker(false);
+      }
+    };
+    document.addEventListener("pointerdown", this._agentDocClose);
+  }
+
+  /** Close the picker popover. `returnFocus`: "input" refocuses the composer
+   *  (the slash flow), true refocuses the + trigger, false moves no focus. */
+  _closeAgentPicker(returnFocus) {
+    this._slashAgentToken = null;
+    if (this._agentDocClose) {
+      document.removeEventListener("pointerdown", this._agentDocClose);
+      this._agentDocClose = null;
+    }
+    if (!this._agentPop) return;
+    if (typeof this._agentPop.hidePopover === "function") {
+      try { this._agentPop.hidePopover(); } catch { /* already hidden */ }
+    }
+    this._agentPop.hidden = true;
+    // The slash picker's aria-expanded is owned here (the items popup manages
+    // its own via _showPopup/_hidePopup).
+    if (this._popup?.hidden) this._input?.setAttribute("aria-expanded", "false");
+    if (returnFocus === "input") {
+      this._input?.focus();
+    } else if (returnFocus) {
+      // Focus returns to the + button (the trigger), falling back to the input.
+      const plus = this._attach?.shadowRoot?.querySelector?.(".plus");
+      (plus ?? this._input)?.focus?.();
+    }
   }
 
   // ── the + menu's browser-context actions (record-screen / grab-screenshot /
@@ -2115,16 +2365,32 @@ class AgentComposer extends Component {
     if (!input) return;
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
-    const before = text.slice(0, caret);
 
-    // / command — a slash beginning the current token.
-    const slash = before.match(/(?:^|\s)\/([a-z]*)(?::([a-z0-9._ -]*))?$/i);
+    // / command — STRICT command position only (shared/command-parser.js): the
+    // "/" must be the FIRST character of the input and the token up to the
+    // caret must be whitespace-free. Ordinary prose ("please inspect
+    // /agent:pr"), URLs ("https://example.com/agent:foo"), and a leading-space
+    // " /agent" NEVER open the command UI (the review's free-text false
+    // positive); the token ends at the first space, so the task text after
+    // "/agent:<ref> " is plain text again.
+    const slash = parseSlashCommand(text, caret);
+    if (slash && slash.hasColon && slash.ns === "agent") {
+      // /agent[:query] — the ONE shared <agent-picker> (the same renderer +
+      // a11y contract as the + menu's Choose agent), driven by the composer
+      // text: the typed arg is the picker's query; Arrow/Home/End/Enter/Tab/
+      // Escape are forwarded to it (see the keydown handler).
+      this._hidePopup();
+      this._openSlashAgentPicker({ start: slash.start, end: slash.end, arg: slash.arg });
+      return;
+    }
+    // Any non-/agent parse result closes the slash picker if it was open (e.g.
+    // the user backspaced over the ":" or typed a space after the token).
+    if (this._slashAgentToken) this._closeAgentPicker(false);
     if (slash) {
-      const slashPos = text[slash.index] === "/" ? slash.index : slash.index + 1;
-      const ns = (slash[1] || "").toLowerCase();
-      const arg = (slash[2] || "").trim();
-      const hasColon = String(slash[0]).includes(":");
-      if (!hasColon) {
+      const slashPos = slash.start;
+      const ns = slash.ns;
+      const arg = slash.arg.trim();
+      if (!slash.hasColon) {
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
         const items = COMMAND_NAMESPACES
@@ -2151,12 +2417,12 @@ class AgentComposer extends Component {
       return;
     }
 
-    // @ mention.
-    const at = before.match(/(?:^|\s)@([^\s@]*)$/);
+    // @ mention — legal anywhere a fresh token begins (a /agent-targeted task
+    // can still mention agents inline); parseMentionToken is the ONE tokenizer.
+    const at = parseMentionToken(text, caret);
     if (at) {
-      const atPos = text[at.index] === "@" ? at.index : at.index + 1;
-      const items = await mentionCandidates(at[1] || "", this._currentAgentId, this._currentAgentKind);
-      this._showPopup(items, { type: "mention", start: atPos, end: caret });
+      const items = await mentionCandidates(at.query, this._currentAgentId, this._currentAgentKind);
+      this._showPopup(items, { type: "mention", start: at.start, end: at.end });
       return;
     }
 
@@ -2171,6 +2437,7 @@ class AgentComposer extends Component {
     this._renderPopupItems();
     if (this._popup) {
       this._popup.hidden = false;
+      this._input?.setAttribute("aria-expanded", "true");
       // Always position via the JS fallback (flips above/below + clamps). The
       // native CSS anchor positioning (position-area) proved unreliable for the
       // bottom-anchored composer (the popup fell off-screen), so the JS path
@@ -2181,12 +2448,19 @@ class AgentComposer extends Component {
 
   _renderPopupItems() {
     if (!this._popup) return;
-    const html = this._popupItems.map((it, i) =>
-      `<div class="item" role="option" data-index="${i}" data-active="${i === this._popupActive}" aria-selected="${i === this._popupActive}">
+    let lastGroup = null;
+    const html = this._popupItems.map((it, i) => {
+      // Group headers (the /agent list is grouped Named / Background / Site —
+      // the same grouping as the shared <agent-picker>).
+      const gh = it.group && it.group !== lastGroup
+        ? `<div class="group-label" role="presentation">${escapeHtml(it.group)}</div>`
+        : "";
+      if (it.group) lastGroup = it.group;
+      return `${gh}<div class="item" role="option" id="cmp-${this._uid}-opt-${i}" data-index="${i}" data-active="${i === this._popupActive}" aria-selected="${i === this._popupActive}">
         <span class="lbl">${escapeHtml(it.label)}</span>${
           it.description ? `<span class="dsc">${escapeHtml(it.description)}</span>` : ""
-        }</div>`
-    ).join("");
+        }</div>`;
+    }).join("");
     this._popup.innerHTML = html;
     this._popup.querySelectorAll(".item").forEach((el) => {
       el.addEventListener("mousedown", (e) => {
@@ -2194,13 +2468,20 @@ class AgentComposer extends Component {
         this._select(Number(el.dataset.index));
       });
     });
+    const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
+    if (active) this._input?.setAttribute("aria-activedescendant", active.id);
+  }
+
+  _setSelectionIndex(i) {
+    if (!this._popupItems.length) return;
+    const n = this._popupItems.length;
+    this._popupActive = ((i % n) + n) % n;
+    this._renderPopupItems();
+    this._popup.querySelector(`[data-index="${this._popupActive}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
   _moveSelection(delta) {
-    if (!this._popupItems.length) return;
-    this._popupActive = (this._popupActive + delta + this._popupItems.length) % this._popupItems.length;
-    this._renderPopupItems();
-    this._popup.querySelector(`[data-index="${this._popupActive}"]`)?.scrollIntoView({ block: "nearest" });
+    this._setSelectionIndex(this._popupActive + delta);
   }
 
   _selectActive() { this._select(this._popupActive); }
@@ -2230,6 +2511,9 @@ class AgentComposer extends Component {
       // A concrete command item → insert its full reference (with the /).
       input.setRangeText(`/${item.id}`, token.start, token.end, "end");
       this._hidePopup();
+      // NOTE: /agent items never reach this path — /agent: opens the shared
+      // <agent-picker> (_openSlashAgentPicker), whose agent-select handler both
+      // inserts the canonical reference AND selects the agent chip.
       this._emit("command", { namespace: item.ns, item });
       input.focus();
       return;
@@ -2244,6 +2528,8 @@ class AgentComposer extends Component {
 
   _hidePopup() {
     if (this._popup) this._popup.hidden = true;
+    this._input?.setAttribute("aria-expanded", "false");
+    this._input?.removeAttribute("aria-activedescendant");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
@@ -2273,13 +2559,23 @@ class AgentComposer extends Component {
     if (this._chips) this._chips.replaceChildren();
   }
 
-  _send() {
+  async _send() {
     const text = this._input?.value.trim();
     if (!text) return;
+    // A selected agent is revalidated against the LIVE registry before the run:
+    // a stale/deleted (or freshly-disabled) selection is REJECTED — the text
+    // stays put, the chip clears, and nothing is routed to a ghost agent.
+    if (this._selectedAgent) {
+      const stillValid = await this.revalidateSelectedAgent();
+      if (!stillValid) return;
+    }
     if (this._input) this._input.value = "";
     const pending = this.attachments.splice(0);
     this._clearChips();
-    this._emit("send", { text, attachments: pending });
+    const agent = this._selectedAgent ? { ...this._selectedAgent } : null;
+    this._selectedAgent = null;
+    this._agentChip = null;
+    this._emit("send", { text, attachments: pending, agent });
   }
 }
 customElements.define("agent-composer", AgentComposer);
@@ -2653,37 +2949,355 @@ class AgentDialog extends Component {
 }
 customElements.define("agent-dialog", AgentDialog);
 
-/* <agent-picker agents="[{origin,tools}]" selected> — a list of agents */
+/* <agent-picker> — THE ONE unified agent picker (CAP-FB-20260818-AGENT-ACCESS-01).
+ * Every agent-choosing surface uses THIS component: the side panel's Agents
+ * view, every composer's + menu "Choose agent" action, AND the /agent slash
+ * command (the composer drives this same picker via setQuery + navigate, so
+ * the slash UI shares the one renderer + a11y contract — no parallel popup).
+ *
+ * Data: consumes the REDACTED live registry. With no `agents` attribute and an
+ * extension runtime present, it fetches `agent.registry` itself (the SW is the
+ * single authority — no duplicated registry state); call refresh() when the
+ * `agent-registry-changed` broadcast fires. With an `agents` attribute it takes
+ * grouped data ([{ id, label, agents: [...] }]) — or the LEGACY flat site-agent
+ * shape ([{ origin, tools }]) for backward compatibility. In the docs showcase
+ * (no runtime) it renders the attribute data / the empty state.
+ *
+ * Attributes:
+ *   agents           — grouped (or legacy flat) JSON data (skips the live fetch)
+ *   selected         — the canonical selected ref (named:<id>/background:<id>/site:<origin>)
+ *   current-agent-id — the bare id of the agent being talked to (a "Current" badge)
+ *   exclude-current  — hide the current agent from the list
+ *   callable-only    — list only callable agents (a disabled background agent is hidden)
+ *   label            — the visible label for the search combobox
+ *   state / error    — "loading" | "error" (+ error message) overrides
+ *
+ * Events: agent-select { ref, kind, id, name, agent } · agent-cancel (Escape) ·
+ * the LEGACY select { origin } for site entries (backward compatibility).
+ *
+ * A11y contract: the search input is a combobox controlling a listbox
+ * (aria-expanded/controls/activedescendant); options are role=option grouped by
+ * role=group; ArrowUp/Down/Home/End move the active option, Enter/Tab commit,
+ * Escape cancels (the host returns focus); a debounced visually-hidden live
+ * region announces the result count; rows are ≥44px; light/dark/high-contrast/
+ * reduced-motion via the shared tokens. No emoji — inline currentColor SVG. */
 class AgentPicker extends Component {
-  static get observedAttributes() { return ["agents", "selected"]; }
+  static get observedAttributes() {
+    return ["agents", "selected", "current-agent-id", "exclude-current", "callable-only", "label", "state", "error"];
+  }
+  constructor() {
+    super();
+    this._query = "";
+    this._groups = null; // null = not loaded yet (auto mode shows loading)
+    this._fetchState = "ready"; // ready | loading | error
+    this._fetchError = "";
+    this._active = -1; // the active option's flat index
+    this._flat = []; // the currently-rendered flat option list
+    this._countTimer = null;
+    this._fetchSeq = 0; // last-request-wins fence (out-of-order responses)
+    this._appliedRevision = null; // last APPLIED registry revision (staleness fence)
+  }
+  get _auto() { return !this.hasAttribute("agents") && !!RUNTIME_SEND; }
+  get _callableOnly() { return this.hasAttribute("callable-only"); }
+  get _excludeCurrent() { return this.hasAttribute("exclude-current"); }
+  get _currentAgentId() { return this.getAttribute("current-agent-id") || ""; }
+
+  connectedCallback() {
+    super.connectedCallback();
+    if (this._auto && this._groups == null) this.refresh();
+  }
+
+  /** Re-fetch the live registry (auto mode). Safe to call on every open +
+   * on the agent-registry-changed broadcast. FENCED twice so a rapid mutation
+   * burst can never regress the UI to an older snapshot: (1) only the LATEST
+   * request's response is applied (out-of-order completion is discarded),
+   * (2) a response whose registry `revision` is OLDER than the last applied
+   * one is discarded (a slow stale read never overwrites a fresher one). */
+  async refresh() {
+    if (!this._auto) { this._renderList(); return; }
+    const seq = ++this._fetchSeq;
+    // Keep an already-applied snapshot visible during a live refresh; only the
+    // first load needs the blocking loading state. This also means a rejected
+    // lower-revision response cannot strand a fresher list behind "Loading…".
+    if (this._groups == null) this._fetchState = "loading";
+    this._renderList();
+    try {
+      const res = await RUNTIME_SEND("agent.registry").catch(() => null);
+      if (!res || res.ok === false || !Array.isArray(res.groups)) {
+        throw new Error(res?.error || "registry unavailable");
+      }
+      const rev = Number(res.revision);
+      if (!shouldApplyRegistrySnapshot(seq, this._fetchSeq, rev, this._appliedRevision)) {
+        return; // superseded request or stale revision — keep the fresher snapshot
+      }
+      this._groups = res.groups;
+      if (Number.isFinite(rev)) this._appliedRevision = rev;
+      this._fetchState = "ready";
+      this._fetchError = "";
+    } catch (e) {
+      if (seq !== this._fetchSeq) return; // superseded while failing — discard
+      this._fetchState = "error";
+      this._fetchError = String(e?.message ?? e);
+    }
+    this._renderList();
+  }
+
+  /** The attribute/legacy data normalized to the grouped shape. */
+  _attrGroups() {
+    const raw = parseJSONAttr(this.getAttribute("agents"), []);
+    if (!Array.isArray(raw) || !raw.length) return [];
+    if (raw[0] && Array.isArray(raw[0].agents)) return raw; // already grouped
+    // Legacy flat site-agent shape: [{ origin, tools }].
+    return [{
+      id: "site",
+      label: "Site agents",
+      agents: raw.map((a) => {
+        const origin = a.origin || a.id || "";
+        const short = String(origin).replace(/^https?:\/\//, "").replace(/\/.*/, "");
+        return {
+          ref: canonicalRef("site", origin),
+          id: origin,
+          kind: "site",
+          name: `@${short}`,
+          summary: `${a.tools?.length ?? a.toolCount ?? 0} tools · site agent`,
+          status: "enrolled",
+          enabled: true,
+        };
+      }),
+    }];
+  }
+
+  _visibleGroups() {
+    const groups = this._auto ? (this._groups ?? []) : this._attrGroups();
+    return filterGroups(groups, this._query, {
+      callableOnly: this._callableOnly,
+      excludeId: this._excludeCurrent ? this._currentAgentId : null,
+    });
+  }
+
   _render() {
-    const agents = parseJSONAttr(this.getAttribute("agents"), []);
-    const selected = this.getAttribute("selected") || "";
-    const items = agents.map((a) => {
-      const origin = a.origin || a.id || "";
-      const short = origin.replace(/^https?:\/\//, "").replace(/\/.*/, "");
-      return `<button type="button" class="agent" data-origin="${escapeHtml(origin)}"
-        aria-pressed="${origin === selected}">
-        <span class="badge" aria-hidden="true">@</span>
-        <span class="who"><span class="name">@${escapeHtml(short)}</span>
-        <span class="tools">${a.tools?.length ?? 0} tools</span></span></button>`;
-    }).join("");
+    const label = this.getAttribute("label") || "Choose an agent";
     mountTemplate(this, `
       :host { display:block; }
-      .list { display:flex; flex-direction:column; gap:8px; }
-      .agent { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); cursor:pointer; font:inherit; color:var(--text,#1d1b18); text-align:left; }
-      .agent[aria-pressed="true"] { border-color:var(--accent,#0e6e63); }
-      .agent:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .badge { width:28px; height:28px; border-radius:7px; background:var(--accent,#0e6e63); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:700; }
-      .name { font-weight:600; }
-      .tools { display:block; font-size:12px; color:var(--muted,#635e56); }
-      .empty { color:var(--muted,#635e56); font-size:13px; }
-    `, agents.length ? `<div class="list">${items}</div>` : `<span class="empty">No agents.</span>`);
+      .picker { display:flex; flex-direction:column; gap:8px; min-width:0; }
+      .lbl { font-size:12px; font-weight:600; color:var(--muted,#635e56); }
+      .search-row { display:flex; align-items:center; gap:8px; background:var(--bg,#f7f6f3);
+        border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:0 10px; }
+      .search-row svg { flex:0 0 auto; color:var(--muted,#635e56); }
+      .search { flex:1; min-width:0; min-height:44px; background:transparent; border:0; color:var(--text,#1d1b18);
+        font:inherit; outline:none; }
+      .list { display:flex; flex-direction:column; gap:2px; max-height:320px; overflow-y:auto; }
+      .group-h { font-size:11px; font-weight:700; letter-spacing:.01em; color:var(--muted,#635e56);
+        padding:8px 10px 2px; }
+      .opt { display:flex; align-items:center; gap:10px; min-height:44px; padding:6px 10px; border-radius:8px;
+        border:1px solid transparent; cursor:pointer; text-align:start; background:transparent; font:inherit;
+        color:var(--text,#1d1b18); width:100%; }
+      .opt:hover, .opt[data-active="true"] { background:var(--panel-2,#efede8); }
+      .opt[aria-selected="true"] { border-color:var(--accent,#0e6e63); }
+      .opt:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .avatar { flex:0 0 auto; width:28px; height:28px; border-radius:50%; overflow:hidden;
+        display:inline-flex; align-items:center; justify-content:center;
+        border:1px solid var(--accent,#0e6e63); color:var(--accent,#0e6e63); font-weight:700; font-size:13px;
+        background:var(--panel,#ffffff); }
+      .avatar img { width:100%; height:100%; object-fit:cover; display:block; }
+      .who { flex:1; min-width:0; display:flex; flex-direction:column; }
+      .name { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .sub { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .meta { flex:0 0 auto; display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted,#635e56); }
+      .current-badge { border:1px solid var(--accent,#0e6e63); color:var(--accent,#0e6e63); border-radius:999px;
+        padding:1px 8px; font-size:10px; font-weight:700; }
+      .sel { color:var(--accent,#0e6e63); display:inline-flex; }
+      .state { padding:12px 10px; font-size:12.5px; color:var(--muted,#635e56); display:flex; align-items:center; gap:8px; }
+      .state.error { color:var(--danger,#b3261e); }
+      .retry { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
+        border-radius:6px; padding:4px 10px; font:inherit; font-size:12px; cursor:pointer; min-height:28px; }
+      .retry:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .spin { width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%;
+        animation: ap-spin 1s linear infinite; }
+      @keyframes ap-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+      @media (forced-colors: active) {
+        .opt[aria-selected="true"] { outline:2px solid Highlight; }
+        .opt:hover, .opt[data-active="true"] { outline:1px solid Highlight; }
+      }
+      .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+        clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+    `, `<div class="picker">
+        <label class="lbl" for="ap-search">${escapeHtml(label)}</label>
+        <div class="search-row">${ICONS.search}
+          <input id="ap-search" class="search" type="text" role="combobox" aria-expanded="true"
+            aria-controls="ap-list" aria-autocomplete="list" autocomplete="off"
+            placeholder="Search agents…" value="${escapeHtml(this._query)}">
+        </div>
+        <div class="list" id="ap-list" role="listbox" aria-label="${escapeHtml(label)}"></div>
+        <div class="sr-only" role="status" aria-live="polite" id="ap-count"></div>
+      </div>`);
+    this._search = this._root.querySelector(".search");
+    this._list = this._root.querySelector(".list");
+    this._count = this._root.querySelector("#ap-count");
+    this._renderList();
   }
+
+  _state_() {
+    const attr = this.getAttribute("state");
+    if (attr) return { state: attr, message: this.getAttribute("error") || "" };
+    return { state: this._fetchState, message: this._fetchError };
+  }
+
+  _renderList() {
+    if (!this._list) return;
+    const { state, message } = this._state_();
+    if (state === "loading") {
+      this._flat = [];
+      this._list.innerHTML = `<div class="state" role="presentation"><span class="spin" aria-hidden="true"></span>Loading agents…</div>`;
+      this._announce("Loading agents");
+      return;
+    }
+    if (state === "error") {
+      this._flat = [];
+      this._list.innerHTML = `<div class="state error">Couldn't load the agents — ${escapeHtml(message || "unknown error")}
+        <button type="button" class="retry">Try again</button></div>`;
+      this._list.querySelector(".retry")?.addEventListener("click", () => this.refresh());
+      this._announce("Couldn't load the agents");
+      return;
+    }
+    const groups = this._visibleGroups();
+    const selected = this.getAttribute("selected") || "";
+    const currentId = this._currentAgentId;
+    this._flat = flattenGroups(groups);
+    if (!this._flat.length) {
+      const emptyText = this._query
+        ? `No agents match “${this._query}”.`
+        : "No agents yet.";
+      this._list.innerHTML = `<div class="state">${escapeHtml(emptyText)}</div>`;
+      this._announce(emptyText);
+      return;
+    }
+    if (this._active >= this._flat.length) this._active = this._flat.length - 1;
+    let html = "";
+    let idx = 0;
+    for (const g of groups) {
+      html += `<div class="group" role="group" aria-label="${escapeHtml(g.label ?? g.id)}">
+        <div class="group-h" id="ap-gh-${escapeHtml(g.id)}">${escapeHtml(g.label ?? g.id)}</div>`;
+      for (const a of g.agents) {
+        const ref = a.ref ?? canonicalRef(a.kind, a.id);
+        const isSelected = !!selected && ref === selected;
+        const isCurrent = !!currentId && String(a.id).toLowerCase() === currentId.toLowerCase();
+        const initial = (String(a.name || a.id || "?").trim()[0] || "?").toUpperCase();
+        const skills = Array.isArray(a.skills) && a.skills.length
+          ? ` · ${a.skills.slice(0, 3).join(", ")}${a.skills.length > 3 ? "…" : ""}`
+          : "";
+        html += `<button type="button" class="opt" role="option" id="ap-opt-${idx}" data-index="${idx}"
+            data-active="${idx === this._active}" aria-selected="${isSelected}">
+          <span class="avatar" aria-hidden="true">${a.avatar ? `<img src="${escapeHtml(a.avatar)}" alt="">` : escapeHtml(initial)}</span>
+          <span class="who"><span class="name">${escapeHtml(a.name || a.id)}</span>
+            <span class="sub">${escapeHtml(a.summary || "")}${escapeHtml(skills)}</span></span>
+          <span class="meta">${a.status ? `<span class="status">${escapeHtml(a.status)}</span>` : ""}
+            ${isCurrent ? `<span class="current-badge">Current</span>` : ""}
+            ${isSelected ? `<span class="sel" aria-hidden="true">${ICONS.check}</span>` : ""}</span>
+        </button>`;
+        idx++;
+      }
+      html += `</div>`;
+    }
+    this._list.innerHTML = html;
+    this._list.querySelectorAll(".opt").forEach((el) => {
+      el.addEventListener("click", () => this._commit(Number(el.dataset.index)));
+    });
+    const n = this._flat.length;
+    this._announce(`${n} agent${n === 1 ? "" : "s"}`);
+  }
+
+  /** Debounced screen-reader result count (typing must not spam the live region). */
+  _announce(text) {
+    if (!this._count) return;
+    clearTimeout(this._countTimer);
+    this._countTimer = setTimeout(() => {
+      if (this._count) this._count.textContent = text;
+    }, 250);
+  }
+
+  _setActive(i, { scroll = true } = {}) {
+    if (!this._flat.length) return;
+    const n = this._flat.length;
+    this._active = ((i % n) + n) % n;
+    this._list?.querySelectorAll(".opt").forEach((el) => {
+      el.dataset.active = String(Number(el.dataset.index) === this._active);
+    });
+    const opt = this._list?.querySelector(`#ap-opt-${this._active}`);
+    if (opt && this._search) this._search.setAttribute("aria-activedescendant", opt.id);
+    if (scroll) opt?.scrollIntoView({ block: "nearest" });
+  }
+
+  _commit(index) {
+    const a = this._flat[index];
+    if (!a) return;
+    const ref = a.ref ?? canonicalRef(a.kind, a.id);
+    this.setAttribute("selected", ref);
+    this._emit("agent-select", { ref, kind: a.kind, id: a.id, name: a.name || a.id, agent: a });
+    // Legacy compatibility: the old picker emitted select { origin } for sites.
+    if (a.kind === "site") this._emit("select", { origin: a.id });
+  }
+
   _wire() {
-    this._root.querySelectorAll(".agent").forEach((b) =>
-      b.addEventListener("click", () => this._emit("select", { origin: b.dataset.origin }))
-    );
+    this._search?.addEventListener("input", () => {
+      this._query = this._search.value;
+      this._active = this._flat.length ? 0 : -1;
+      this._renderList();
+    });
+    this._search?.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); this._setActive(this._active + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); this._setActive(this._active - 1); }
+      else if (e.key === "Home") { e.preventDefault(); this._setActive(0); }
+      else if (e.key === "End") { e.preventDefault(); this._setActive(this._flat.length - 1); }
+      else if (e.key === "Enter" || e.key === "Tab") {
+        if (this._active >= 0 && this._flat[this._active]) {
+          e.preventDefault();
+          this._commit(this._active);
+        } else if (e.key === "Enter" && this._flat.length === 1) {
+          e.preventDefault();
+          this._commit(0);
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this._emit("agent-cancel");
+      }
+    });
+  }
+
+  /** Public: focus the search combobox (the host's open flow). */
+  focusSearch() { this._search?.focus(); }
+  /** Public: the canonical ref of the current selection ("" when none). */
+  get value() { return this.getAttribute("selected") || ""; }
+
+  /** Public: set the filter query EXTERNALLY (the /agent slash command drives
+   * the picker from the composer text). The search row mirrors the query; the
+   * first option becomes active so Enter/Tab commits immediately. */
+  setQuery(q) {
+    this._query = String(q ?? "");
+    if (this._search) this._search.value = this._query;
+    this._active = -1;
+    this._renderList();
+    if (this._flat.length) this._setActive(0, { scroll: false });
+  }
+
+  /** Public: handle a navigation key forwarded by a host that KEEPS focus
+   * elsewhere (the /agent slash command forwards the composer keydown). The
+   * same contract as the search input's own keydown: ArrowUp/Down/Home/End
+   * move the active option, Enter/Tab commit, Escape cancels. Returns true
+   * when the key was consumed. */
+  navigate(key) {
+    if (key === "ArrowDown") { this._setActive(this._active + 1); return true; }
+    if (key === "ArrowUp") { this._setActive(this._active - 1); return true; }
+    if (key === "Home") { this._setActive(0); return true; }
+    if (key === "End") { this._setActive(this._flat.length - 1); return true; }
+    if (key === "Enter" || key === "Tab") {
+      if (this._active >= 0 && this._flat[this._active]) { this._commit(this._active); return true; }
+      if (key === "Enter" && this._flat.length === 1) { this._commit(0); return true; }
+      return true; // nothing to commit — still consumed (never a send)
+    }
+    if (key === "Escape") { this._emit("agent-cancel"); return true; }
+    return false;
   }
 }
 customElements.define("agent-picker", AgentPicker);
@@ -3617,11 +4231,11 @@ class SystemPromptEditor extends Component {
         ${sessionOnly ? `<p class="spe-note" role="status"><strong>Session-only:</strong> the optional storage permission is not granted, so customizations last until the browser restarts. Saving asks for the storage permission so they persist.</p>` : ""}
         <fieldset class="spe-modes">
           <legend class="spe-label">Composition mode</legend>
-          <label class="spe-mode"><input type="radio" name="spe-mode" value="append" ${draft.mode === "append" ? "checked" : ""}>
+          <label class="spe-mode"><input type="radio" name="spe-mode" value="append" aria-label="Append" ${draft.mode === "append" ? "checked" : ""}>
             <span>Append<span class="muted">Your instructions are added after the built-in prompt (recommended).</span></span></label>
-          <label class="spe-mode"><input type="radio" name="spe-mode" value="prepend" ${draft.mode === "prepend" ? "checked" : ""}>
+          <label class="spe-mode"><input type="radio" name="spe-mode" value="prepend" aria-label="Prepend" ${draft.mode === "prepend" ? "checked" : ""}>
             <span>Prepend<span class="muted">Your instructions are added before the built-in prompt.</span></span></label>
-          <label class="spe-mode"><input type="radio" name="spe-mode" value="replace" ${draft.mode === "replace" ? "checked" : ""}>
+          <label class="spe-mode"><input type="radio" name="spe-mode" value="replace" aria-label="Replace" ${draft.mode === "replace" ? "checked" : ""}>
             <span>Replace<span class="muted">Your instructions replace the built-in prompt. The protected safety constraints still apply and can never be removed.</span></span></label>
         </fieldset>
         <label class="spe-field">

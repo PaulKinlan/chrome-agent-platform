@@ -334,6 +334,19 @@ function broadcastProgress(event) {
     } catch { /* port closing — ignore */ }
   }
 }
+// The unified agent registry changed (a named agent created/renamed/deleted, a
+// background agent enabled/disabled/duplicated/updated/deleted, a site agent
+// enrolled/removed). The shared <agent-picker> + the surfaces hosting it
+// re-fetch `agent.registry` on this event so every view updates live without
+// duplicating registry state. The REVISION is a monotonic per-worker counter
+// seeded from the wall clock (rather than restarting from a small sequence):
+// every registry response + broadcast carries it, and consumers fence stale
+// reads with it (a late older snapshot never regresses the UI).
+let registryRevision = Date.now();
+function broadcastRegistryChanged() {
+  registryRevision += 1;
+  broadcastProgress({ type: "agent-registry-changed", revision: registryRevision });
+}
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-progress") return;
   progressPorts.add(port);
@@ -1791,11 +1804,13 @@ const handlers = {
   async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }) {
     const r = await createNamedAgent({ id, name, role, avatar, skills, coreAssets });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    broadcastRegistryChanged();
     return r;
   },
   async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }) {
     const r = await updateNamedAgent(id, { name, role, avatar, skills, coreAssets });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    broadcastRegistryChanged();
     return r;
   },
   async "named-agent.set-provider"({ id, config }) {
@@ -1808,12 +1823,14 @@ const handlers = {
       // The running model cache is global; a per-agent override does NOT touch
       // it (the override is threaded per-run via runTask's modelOverride).
       broadcastProgress({ type: "named-agent-changed" });
+    broadcastRegistryChanged();
     }
     return r;
   },
   async "named-agent.delete"({ id }) {
     const r = await deleteNamedAgent(id);
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    broadcastRegistryChanged();
     return r;
   },
   async "named-agent.grep"({ id, query }) {
@@ -2055,6 +2072,93 @@ const handlers = {
     }
     return { agents: out };
   },
+
+  // `agent.registry` — the ONE redacted, grouped, live agent registry the shared
+  // <agent-picker> consumes (CAP-FB-20260818-AGENT-ACCESS-01). It is the single
+  // source for the side panel's Agents view, every composer's + menu "Choose
+  // agent" action, and the /agent slash command, so the three surfaces can never
+  // drift. REDACTED by construction: named agents come from listNamedAgents()
+  // (the provider override's apiKey is stripped there), background agents carry
+  // no credentials, and site agents expose only the origin + tool NAMES — never
+  // provider keys, internal OPFS paths, or master-only operations. The `ref` is
+  // the canonical, unambiguous agent id (`named:<id>` / `background:<id>` /
+  // `site:<origin>`) that flows composer → run request. The `revision` is the
+  // registry's monotonic version — the consumers fence stale reads with it.
+  async "agent.registry"() {
+    const [named, tasks, custom, origins] = await Promise.all([
+      listNamedAgents().catch(() => []),
+      listScheduledTasks().catch(() => []),
+      getCustomRecipes().catch(() => []),
+      listOrigins().catch(() => []),
+    ]);
+    const enabled = new Set(
+      (tasks ?? [])
+        .map((t) => t.name)
+        .filter((n) => n.startsWith("recipe:")),
+    );
+    const bgAll = [
+      ...backgroundRecipes(),
+      ...(Array.isArray(custom) ? custom : []).filter((r) => r.mode !== "on-demand"),
+    ];
+    const site = [];
+    for (const o of origins) {
+      const info = await agentInfo(o).catch(() => null);
+      if (!info?.enrolled) continue; // only the ENROLLED site agents are callable
+      site.push({
+        ref: `site:${info.origin}`,
+        id: info.origin,
+        kind: "site",
+        name: info.name && info.name !== info.origin ? info.name : `@${String(info.origin).replace(/^https?:\/\//, "").replace(/\/.*/, "")}`,
+        summary: `${info.toolCount ?? 0} tools · site agent`,
+        avatar: null,
+        skills: (Array.isArray(info.tools) ? info.tools : []).slice(0, 8),
+        status: "enrolled",
+        enabled: true,
+      });
+    }
+    return {
+      ok: true,
+      revision: registryRevision,
+      groups: [
+        {
+          id: "named",
+          label: "Named agents",
+          agents: (Array.isArray(named) ? named : []).map((a) => ({
+            ref: `named:${a.id}`,
+            id: a.id,
+            kind: "named",
+            name: a.name || a.id,
+            summary: a.role || "named agent",
+            avatar: a.avatar || null,
+            skills: (Array.isArray(a.skills) ? a.skills : [])
+              .map((s) => (typeof s === "string" ? s : s?.name ?? s?.id))
+              .filter(Boolean)
+              .slice(0, 8),
+            status: "ready",
+            enabled: true,
+          })),
+        },
+        {
+          id: "background",
+          label: "Background agents",
+          agents: bgAll.map((r) => ({
+            ref: `background:${r.id}`,
+            id: r.id,
+            kind: "background",
+            name: r.name || r.id,
+            summary: r.description || "background agent",
+            avatar: null,
+            skills: [],
+            status: enabled.has(`recipe:${r.id}`)
+              ? (r.schedule?.periodInMinutes ? `every ${r.schedule.periodInMinutes} min` : "enabled")
+              : "disabled",
+            enabled: enabled.has(`recipe:${r.id}`),
+          })),
+        },
+        { id: "site", label: "Site agents", agents: site },
+      ],
+    };
+  },
   async "agent.get"({ origin }) {
     if (!(await isEnrolled(origin))) {
       return { ok: false, error: "origin not enrolled" };
@@ -2074,6 +2178,7 @@ const handlers = {
         await siteMemory(canonical).setTrusted("agentConfig", { name: String(name) });
       }
       invalidateAgent();
+      broadcastRegistryChanged();
       return { ok: true, origin: canonical, agent: await agentInfo(canonical) };
     });
   },
@@ -2135,6 +2240,32 @@ const handlers = {
       toolCount: info?.toolCount ?? 0,
       memoryKeys: info?.memoryKeys ?? [],
     };
+  },
+  // The ONE navigation authority for the side panel's page view. The panel
+  // itself NEVER calls chrome.tabs.create — the open request crosses THIS
+  // sender-authenticated dispatcher (a content-script sender is denied by the
+  // page-route allowlist; only trusted extension-page code can reach here).
+  // The extension page must also attest a CURRENT owner activation: the panel's
+  // button/Enter path sets it synchronously, while an agent-opened panel cannot
+  // turn its stored target into a tab mutation. http(s) only, validated here —
+  // never a message-supplied javascript:/data: URL.
+  async "sidepanel.openPage"({ url, ownerGesture = false }) {
+    if (ownerGesture !== true) {
+      return { ok: false, error: "opening a page requires an owner gesture" };
+    }
+    const raw = String(url ?? "").trim();
+    if (!raw) return { ok: false, error: "url is required" };
+    let parsed;
+    try {
+      parsed = new URL(/^https?:\/\//.test(raw) ? raw : `https://${raw}`);
+    } catch {
+      return { ok: false, error: "invalid URL" };
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { ok: false, error: "only http(s) pages can be opened" };
+    }
+    const tab = await chrome.tabs.create({ url: parsed.href });
+    return { ok: true, tabId: tab?.id ?? null, url: parsed.href, origin: parsed.origin };
   },
 
   async "skills.set"({ origin, skills }) {
@@ -2349,7 +2480,12 @@ const handlers = {
     // required an authoritative cancel route, not just a reconcile-side skip).
     const name = String(m?.name ?? "");
     if (!name) return { ok: false, error: "task name is required" };
-    return await cancelScheduledTask(name);
+    const r = await cancelScheduledTask(name);
+    // Cancelling a recipe:<id> schedule DISABLES that background agent in the
+    // live registry (the enabled state derives from the schedule store) —
+    // broadcast so the pickers/conversations revalidate.
+    if (r?.ok !== false && name.startsWith("recipe:")) broadcastRegistryChanged();
+    return r;
   },
 
   async "recipe.list"() {
@@ -2421,6 +2557,7 @@ const handlers = {
       for (const hookId of recipe.hooks ?? []) {
         await unsubscribeHook({ hookId, recipeId: recipe.id }).catch(() => {});
       }
+      broadcastRegistryChanged();
       return { ok: true, enabled: false, id: recipe.id, ...r };
     }
     const periodInMinutes = recipe.schedule?.periodInMinutes;
@@ -2443,6 +2580,7 @@ const handlers = {
       periodInMinutes,
       name,
     });
+    broadcastRegistryChanged();
     return { ok: true, enabled: true, id: recipe.id, name, nextRunAt: when };
   },
 
@@ -2469,6 +2607,9 @@ const handlers = {
     };
     custom.push(copy);
     await masterMemory().set("customRecipes", custom);
+    // A duplicated recipe ENTERS the live registry (a new background agent) —
+    // broadcast so every picker/slash surface updates live.
+    broadcastRegistryChanged();
     return { ok: true, recipe: copy };
   },
   async "recipe.update"({ id, prompt, name, description }) {
@@ -2479,6 +2620,8 @@ const handlers = {
     if (name !== undefined) custom[idx].name = String(name);
     if (description !== undefined) custom[idx].description = String(description);
     await masterMemory().set("customRecipes", custom);
+    // A rename/description edit mutates the live registry entry — broadcast.
+    broadcastRegistryChanged();
     return { ok: true, recipe: custom[idx] };
   },
   async "recipe.delete"({ id }) {
@@ -2486,6 +2629,10 @@ const handlers = {
     const next = custom.filter((r) => r.id !== id);
     await masterMemory().set("customRecipes", next);
     await cancelScheduledTask(`recipe:${id}`).catch(() => ({ ok: false }));
+    // The deleted custom recipe LEAVES the live registry — broadcast so the
+    // open pickers/conversations revalidate (a selected deleted agent is
+    // rejected, never routed to a ghost).
+    broadcastRegistryChanged();
     return { ok: true };
   },
 
@@ -2732,6 +2879,7 @@ const handlers = {
       await enrollOrigin(canonical);
       // Rebuild the orchestrator so the new worker is actually fan-out-able now.
       invalidateAgent();
+      broadcastRegistryChanged();
       return { ok: true, origin: canonical, name };
     });
   },
@@ -2856,6 +3004,7 @@ const handlers = {
           retryable: true,
         };
       }
+      broadcastRegistryChanged();
       return { ok: true, origin: canonical, scriptsRegistered: true };
     });
   },
@@ -2901,6 +3050,7 @@ const handlers = {
       const permissionRemoved = unreg.permissionRemoved === true;
       if (scriptsRemoved && permissionRemoved && cleared) {
         await clearCleanupPending(canonical);
+        broadcastRegistryChanged();
         return {
           ok: true,
           origin: canonical,

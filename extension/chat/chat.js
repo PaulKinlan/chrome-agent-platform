@@ -7,6 +7,7 @@ import { send } from "../lib/messages.js";
 import {
   runConversationTurn,
   appendBubble,
+  subscribeProgress,
 } from "../shared/conversation.js";
 import {
   installPageDiagnostics,
@@ -34,14 +35,19 @@ function trim() {
 
 // The run flow (identical to the hub): append the user turn, stream live
 // progress, append the result. The composer stays live throughout — a follow-up
-// is a nudge in the same thread.
-async function runTask(text, attachments = []) {
+// is a nudge in the same thread. `agent` (the + menu's Choose agent chip / a
+// committed /agent: option) routes the run DIRECTLY to that agent by its
+// canonical id — its own memory/skills, never a name lookup.
+async function runTask(text, attachments = [], agent = null) {
   // Continue the ACTIVE thread (a follow-up is a nudge in the SAME thread), not
-  // a fresh global-journal run.
+  // a fresh global-journal run. A routed agent run is NOT threaded (it is
+  // journaled in the agent's own store).
   await runConversationTurn(body, {
     text,
     attachments,
-    threadId: activeThreadId ?? null,
+    threadId: agent?.ref ? null : (activeThreadId ?? null),
+    agentId: agent?.id ?? null,
+    agentKind: agent?.kind ?? null,
   }).then((res) => {
     if (res?.threadId) activeThreadId = res.threadId;
   });
@@ -74,10 +80,15 @@ async function captureShot(label) {
 // to the NTP hub.
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
-  await runTask(ev.detail.text, ev.detail.attachments);
+  await runTask(ev.detail.text, ev.detail.attachments, ev.detail.agent ?? null);
 });
 composer.addEventListener("status", (ev) => {
   if (ev.detail?.text) appendBubble(body, "agent", ev.detail.text);
+});
+// A registry change (an agent renamed/deleted, a background agent disabled)
+// revalidates the composer's selected-agent chip live.
+subscribeProgress((ev) => {
+  if (ev?.type === "agent-registry-changed") composer.revalidateSelectedAgent?.();
 });
 
 // Open the REAL Chrome side panel (the driven-page surface), not a fake in-page

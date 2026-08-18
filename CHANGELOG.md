@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.76] — 2026-08-18
+- merge(agent-access): integrate the frozen unified-agent-access feature with the system-prompt architecture. The combined release retains canonical `named:`/`background:`/`site:` references, the redacted revisioned registry and lifecycle broadcasts, the shared `<agent-picker>` across the + menu and strict-position `/agent` command, stale/race fencing, side-panel agent history and scheduled-task surfaces, sender-authenticated owner-gesture-gated real-tab navigation, the layered `<system-prompt-editor>`, authoritative runtime prompt policy/routes, and unique-execution prompt attestations. The integrated gates are the 44-check system-prompt journey, 88-check agent-access journey, and 119-check full Chrome journey.
+
 ## [0.2.75] — 2026-08-18
 - fix(system-prompts): close independent review blockers
 

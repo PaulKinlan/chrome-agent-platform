@@ -15,6 +15,12 @@ isolated OPFS memory, run history, skills, and avatar.
   OPFS sandbox (memory + run history + installable skills + a `memory_grep` tool).
   Named, site, and background agents are all isolated. The master hub agent
   creates + manages them (create/update/delete/delegate).
+- **Unified agent access** — one shared `<agent-picker>` everywhere: the side
+  panel's Agents view (browse/search/select → the agent's own conversation →
+  direct a task, live updates, per-session restore), every composer's + menu
+  "Choose agent" (a removable agent chip routes the run by canonical ID), and
+  the `/agent` slash command (grouped, keyboard-complete, stale selections
+  rejected).
 - **Sites as sub-agents** — enrolled origins expose their WebMCP tools; the agent
   discovers + invokes them (first-run approval per tool).
 - **Tasks as threads** — a task is a distinct thread (auto-named, full-screen, with

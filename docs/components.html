@@ -227,11 +227,22 @@
       </div>
 
       <div class="specimen">
-        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — choose an agent</h3>
+        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — the ONE unified agent picker</h3>
         <div class="stage column" style="max-width:420px">
-          <agent-picker id="picker" agents='[{"origin":"https://github.com","tools":[{},{}]},{"origin":"https://aifoc.us","tools":[{}]}]' selected="https://github.com"></agent-picker>
+          <agent-picker id="picker" label="Choose an agent" selected="named:reader"
+            agents='[{"id":"named","label":"Named agents","agents":[{"ref":"named:reader","id":"reader","kind":"named","name":"Reader","summary":"reads articles aloud","skills":["reading","summary"],"status":"ready","enabled":true},{"ref":"named:pr-reviewer","id":"pr-reviewer","kind":"named","name":"PR Reviewer","summary":"reviews pull requests","skills":["github"],"status":"ready","enabled":true}]},{"id":"background","label":"Background agents","agents":[{"ref":"background:sorting-hat","id":"sorting-hat","kind":"background","name":"Sorting Hat","summary":"groups related tabs","status":"every 15 min","enabled":true}]},{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · site agent","skills":["list_prs","create_issue"],"status":"enrolled","enabled":true}]}]'></agent-picker>
         </div>
-        <p class="caption">emits <code>select</code>.</p>
+        <p class="caption">grouped (Named / Background / Site) + searchable; combobox→listbox keyboard contract; emits <code>agent-select</code> (canonical ref) + the legacy <code>select</code> for site entries. In the extension it fetches the live <code>agent.registry</code> itself; here it renders the attribute data.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — states (empty / loading / error)</h3>
+        <div class="stage column" style="max-width:420px; gap:16px">
+          <agent-picker agents='[]' label="Empty"></agent-picker>
+          <agent-picker state="loading" label="Loading"></agent-picker>
+          <agent-picker state="error" error="registry unavailable" label="Error"></agent-picker>
+        </div>
+        <p class="caption">the explicit empty / loading / error states every host gets for free.</p>
       </div>
 
       <div class="specimen">
@@ -257,7 +268,8 @@
           <h3 class="spec">hub surface (composer + recipes + conversation + agents)</h3>
           <div class="stage column">
             <agent-composer id="hub-composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
-            <agent-picker agents='[{"origin":"https://github.com","tools":[{},{}]},{"origin":"https://aifoc.us","tools":[{}]}]'></agent-picker>
+            <agent-picker label="Agents"
+              agents='[{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · site agent","status":"enrolled","enabled":true},{"ref":"site:https://aifoc.us","id":"https://aifoc.us","kind":"site","name":"@aifoc.us","summary":"1 tools · site agent","status":"enrolled","enabled":true}]}]'></agent-picker>
             <div id="hub-log" class="demo-log">events appear here…</div>
           </div>
         </div>
@@ -327,9 +339,10 @@
       document.getElementById("config-form")?.addEventListener("save", (e) => log("#hub-log", `agent saved: ${JSON.stringify(e.detail)}`));
 
       // pickers
-      document.querySelectorAll("agent-picker").forEach((p) =>
-        p.addEventListener("select", (e) => log("#hub-log", `agent selected: ${e.detail.origin}`))
-      );
+      document.querySelectorAll("agent-picker").forEach((p) => {
+        p.addEventListener("agent-select", (e) => log("#hub-log", `agent-select: ${e.detail.ref} (${e.detail.name})`));
+        p.addEventListener("select", (e) => log("#hub-log", `legacy select: ${e.detail.origin}`));
+      });
 
       // mic
       document.querySelectorAll("mic-button").forEach((m) =>

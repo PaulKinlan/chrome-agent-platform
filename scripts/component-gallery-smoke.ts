@@ -37,6 +37,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const DRIFT_FILES: [string, string][] = [
   ["extension/shared/components.js", "docs/components.js"],
   ["extension/shared/theme.css", "docs/theme.css"],
+  ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
 ];
 for (const [src, dst] of DRIFT_FILES) {
   const [a, b] = await Promise.all([
@@ -245,7 +246,7 @@ async function main() {
     const pal = await evl(s.sessionId, `(()=>{
       const c = document.querySelector('#composer');
       const ta = c.querySelector('#task-input');
-      const pop = c.querySelector('#popup');
+      const pop = c.querySelector('.popup');
       ta.focus(); ta.value = "/"; ta.dispatchEvent(new Event('input', { bubbles: true }));
       return new Promise(r => setTimeout(() => r({ hidden: pop.hidden, count: pop.querySelectorAll('.item').length }), 100));
     })()`);

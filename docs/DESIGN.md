@@ -43,6 +43,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   Save/Reset/Keep is revision-CAS guarded; attestations expose keyed, versioned
   receipts (with an honest ephemeral label when storage is unavailable), never
   prompt text or an unkeyed custom-text fingerprint.
+- `<agent-picker>` (2026-08-18) — the ONE agent picker renderer used by the side
+  panel, every composer's + menu, and the strict-position `/agent` command:
+  grouped Named/Background/Site rows (28px avatar | name+role | status), 44px
+  option targets, a search combobox → grouped listbox contract, explicit empty/
+  loading/error states, popover top-layer presentation anchored with logical
+  `position-area` + `position-try-fallbacks` (JS `placeFloating` fallback). The
+  selected agent shows as a removable accent chip in the composer's chip row.
 
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
