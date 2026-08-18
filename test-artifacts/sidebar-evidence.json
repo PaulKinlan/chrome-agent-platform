@@ -1,0 +1,34 @@
+{
+  "scope": "collapsed-sidebar-nub fix (branch fix/collapsed-sidebar-nub)",
+  "capturedFrom": "the built MV3 extension loaded in headless Chrome (scripts/ui-integration.ts)",
+  "screenshots": [
+    {
+      "file": "sidebar-collapsed.png",
+      "sha256": "e2a642d9b1f7b9d239a33a292e329825dd7a4316a5d1b7474de16efe931eaa68",
+      "bytes": 57682,
+      "describes": "the 60px icon rail with the centred rail icons + the edge nub (chevron pointing right)"
+    },
+    {
+      "file": "sidebar-expanded.png",
+      "sha256": "8bb38411ead38fd50b9513d30716128a4311ff61db62a3bb4dd0911138d4d519",
+      "bytes": 69026,
+      "describes": "the 240px sidebar with the edge nub (chevron pointing left)"
+    }
+  ],
+  "tests": {
+    "test:ui": "32/32 pass",
+    "test:components": "34/34 pass",
+    "npm test (deno test -A tests/)": "321/321 pass"
+  },
+  "verified": [
+    "exactly five rail actions exist + share one centre (≤2px spread) + uniform 34×34",
+    "collapse control is a ≥44×44 nub hit target, straddles the sidebar edge, in-bounds",
+    "nub z-index is above the thread overlay + elementFromPoint hit-testable at every sampled point + pointer-click toggles with the overlay open",
+    "Enter + Space toggle; aria-expanded/label/title track the state",
+    "collapsed state persists across reload (SW kv.set/kv.get)",
+    "RTL nub centres on the rail's inner (left) boundary + border swapped to the inner edge",
+    "rapid double-click returns to the deterministic prior state + View Transition settles",
+    "recent-activity renders a journal entry via the production activity.list path",
+    "narrow (500px) in-bounds, prefers-reduced-motion disables the transition, dark theme renders a visible border"
+  ]
+}

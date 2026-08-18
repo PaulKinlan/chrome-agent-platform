@@ -27,7 +27,6 @@
       display: none;
     }
     .side {
-      --side-width: 240px;
       width: 240px;
       flex: 0 0 240px;
       border-right: 1px solid var(--border);
@@ -43,18 +42,20 @@
       transition: width .18s ease, flex-basis .18s ease;
     }
     /* collapsed → a narrow icon rail */
-    .side.collapsed { --side-width: 60px; width: 60px; flex-basis: 60px; padding-left: 10px; padding-right: 10px; }
+    .side.collapsed { width: 60px; flex-basis: 60px; padding-left: 10px; padding-right: 10px; }
     .brand-row { display: flex; align-items: center; gap: 6px; }
     .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
     /* The collapse/expand control is an edge NUB protruding from the sidebar's
        right boundary — attached to the panel, discoverable, min 44×44 hit
-       target (the visible tab is smaller). position:fixed keeps it outside the
-       sidebar's overflow clip; --side-width tracks the rail so the nub follows
-       the collapse transition. */
+       target (the visible tab is smaller). It is a SIBLING of #side (not a
+       descendant) so its z-index competes in the root stacking context against
+       the #thread-view overlay — a descendant's z-index would be trapped inside
+       .side's sticky stacking context and painted under the overlay. */
     .side-toggle { display: inline-flex; align-items: center; justify-content: center;
-      position: fixed; left: var(--side-width, 240px); top: 50%; transform: translate(-50%, -50%);
+      position: fixed; left: 240px; top: 50%; transform: translate(-50%, -50%);
       width: 44px; height: 44px; border: 0; background: transparent; color: var(--muted);
       cursor: pointer; padding: 0; z-index: 110; transition: left .18s ease; }
+    #side.collapsed ~ .side-toggle { left: 60px; }
     .side-toggle .nub { display: inline-flex; align-items: center; justify-content: center;
       width: 22px; height: 36px; border: 1px solid var(--border); border-left: 0;
       border-radius: 0 9px 9px 0; background: var(--panel);
@@ -64,17 +65,20 @@
     .side-toggle:focus-visible { outline: none; }
     .side-toggle:focus-visible .nub { box-shadow: 0 0 0 2px var(--accent); }
     .side-toggle svg { display: block; transition: transform .18s ease; }
-    .side.collapsed .side-toggle svg { transform: rotate(180deg); }
+    #side.collapsed ~ .side-toggle svg { transform: rotate(180deg); }
     @media (prefers-reduced-motion: reduce) {
       .side-toggle, .side-toggle .nub, .side-toggle svg { transition: none; }
     }
     /* RTL: the rail sits on the right — mirror the nub to the left edge, flip
        the horizontal translate (the nub protrudes LEFT now), and mirror the
        chevron + border so collapse/expand direction reads correctly. */
-    [dir="rtl"] .side-toggle { left: auto; right: var(--side-width, 240px); transform: translate(50%, -50%); }
+    [dir="rtl"] .side-toggle { left: auto; right: 240px; transform: translate(50%, -50%); }
+    [dir="rtl"] #side.collapsed ~ .side-toggle { right: 60px; }
     [dir="rtl"] .side-toggle .nub { border-left: 1px solid var(--border); border-right: 0; border-radius: 9px 0 0 9px; }
     [dir="rtl"] .side-toggle svg { transform: scaleX(-1); }
-    [dir="rtl"] .side.collapsed .side-toggle svg { transform: scaleX(-1) rotate(180deg); }
+    [dir="rtl"] #side.collapsed ~ .side-toggle svg { transform: scaleX(-1) rotate(180deg); }
+    /* RTL: the rail's hairline border belongs on the INNER (left) edge. */
+    [dir="rtl"] .side { border-right: 0; border-left: 1px solid var(--border); }
     .side-label-row { display: flex; align-items: center; gap: 4px; }
     .side-label-row .side-label { flex: 1; min-width: 0; }
     /* Rail action buttons (new-task / new-agent) share the icon scale with the
@@ -545,15 +549,18 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           <span class="btn-label">Directory</span>
         </button>
-      <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
-        <span class="nub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></span>
-      </button>
         <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="btn-label">Settings</span>
         </button>
       </div>
     </aside>
+
+    <!-- The collapse/expand edge nub — a SIBLING of the sidebar (not a child) so
+         its z-index competes in the root stacking context against the overlays. -->
+    <button class="side-toggle" id="side-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+      <span class="nub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></span>
+    </button>
 
     <main class="content">
       <div class="main-wrap">

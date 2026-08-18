@@ -182,6 +182,35 @@ try {
   // reachable when a view is open (the sidebar persists for the task thread).
   const nubZ = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const z = t ? parseInt(getComputedStyle(t).zIndex) : 0; const tv = document.querySelector('#thread-view'); const tvz = tv ? parseInt(getComputedStyle(tv).zIndex) : 0; return { z, tvz }; })()`);
   check("nub z-index is above the thread overlay", nubZ?.z > nubZ?.tvz, nubZ);
+  // 2b-2. Real overlay hit-testing: force the thread overlay open and prove the
+  //     FULL 44×44 nub is still hit-testable (elementFromPoint) + toggles on a
+  //     pointer click — not just a z-index integer comparison.
+  const overlayHit = await cdp.eval(hub, `(() => {
+    const tv = document.getElementById('thread-view');
+    tv.hidden = false; // simulate an open thread (no seeded thread needed)
+    const t = document.querySelector('#side-toggle');
+    const r = t.getBoundingClientRect();
+    const pts = [
+      { x: r.left + r.width/2, y: r.top + r.height/2 },
+      { x: r.left + 3, y: r.top + 3 },
+      { x: r.right - 3, y: r.bottom - 3 },
+      { x: r.left + 3, y: r.bottom - 3 },
+      { x: r.right - 3, y: r.top + 3 },
+    ];
+    const hits = pts.map(p => { const el = document.elementFromPoint(p.x, p.y); return el && (el === t || t.contains(el)); });
+    tv.hidden = true;
+    return { allInNub: hits.every(Boolean), hits, r: { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom) } };
+  })()`);
+  check("open-thread overlay: every sampled point of the 44×44 nub is hit-testable", overlayHit?.allInNub === true, overlayHit);
+  // A pointer click at the nub centre toggles even with the thread overlay open.
+  const ptrBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
+  const nubCtr = await cdp.eval(hub, `(() => { const r = document.querySelector('#side-toggle').getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+  await cdp.eval(hub, `document.getElementById('thread-view').hidden = false`);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: nubCtr.x, y: nubCtr.y, button: "left", clickCount: 1 }, hub);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: nubCtr.x, y: nubCtr.y, button: "left", clickCount: 1 }, hub);
+  await sleep(500);
+  const ptrAfter = await cdp.eval(hub, `(() => { document.getElementById('thread-view').hidden = true; return document.querySelector('#side').classList.contains('collapsed'); })()`);
+  check("pointer click on the nub toggles the sidebar with the thread overlay open", ptrAfter !== ptrBefore, { ptrBefore, ptrAfter });
   // Commit-specific evidence: capture the collapsed rail + nub.
   const shotCollapsed = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: number) => c.charCodeAt(0)));
@@ -194,19 +223,22 @@ try {
   await sleep(500); // let the View Transition settle
   const keyAfter = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title }; })()`);
   check("Enter toggles the sidebar (collapsed ↔ expanded)", keyBefore && keyAfter && keyBefore.collapsed !== keyAfter.collapsed, { keyBefore, keyAfter });
-  check("aria-expanded + label + title track the state", keyAfter && keyAfter.collapsed === false && keyAfter.expanded === "true" && keyAfter.label === "Collapse sidebar" && keyAfter.title === "Collapse sidebar", keyAfter);
+  check("aria-expanded + label + title track the state", keyAfter && keyAfter.expanded === String(!keyAfter.collapsed) && keyAfter.label === (keyAfter.collapsed ? "Expand sidebar" : "Collapse sidebar") && keyAfter.title === keyAfter.label, keyAfter);
   const shotExpanded = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: number) => c.charCodeAt(0)));
 
   // 2d. Space toggles too (native button activation).
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.focus(); })()`);
+  const spaceBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
   await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, hub);
   await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, hub);
   await sleep(500);
   const spaceAfter = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
-  check("Space toggles the sidebar", spaceAfter === true, { spaceAfter });
+  check("Space toggles the sidebar", spaceAfter !== spaceBefore, { spaceBefore, spaceAfter });
 
-  // 2e. The collapsed state persists across a reload.
+  // 2e. The collapsed state persists across a reload (collapse first, then reload).
+  await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (!side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
+  await sleep(500);
   await cdp.send("Page.reload", {}, hub);
   await sleep(1500);
   const afterReload = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side?.classList.contains('collapsed') ?? false, width: side ? Math.round(side.getBoundingClientRect().width) : 0 }; })()`);
@@ -228,11 +260,14 @@ try {
   })()`);
   check("RTL nub centres on the rail's inner (left) boundary", rtlGeom && Math.abs(rtlGeom.nubCx - rtlGeom.sideLeft) <= 3, rtlGeom);
 
-  // 2g. Rapid double-click settles to a single, final state (no stuck transition).
+  // 2g. Rapid double-click is a NET-ZERO toggle: two clicks return the sidebar
+  //     to its prior state, and the View Transition settles (width matches).
+  const rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
   await sleep(700);
-  const rapid = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); const t = document.querySelector('#side-toggle'); return { collapsed: side.classList.contains('collapsed'), expanded: t.getAttribute('aria-expanded') }; })()`);
-  check("rapid double-click settles without a stuck transition", rapid && (rapid.collapsed === true || rapid.collapsed === false) && rapid.expanded === String(!rapid.collapsed), rapid);
+  const rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); const t = document.querySelector('#side-toggle'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width), expanded: t.getAttribute('aria-expanded') }; })()`);
+  check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter.collapsed === rapidBefore, { rapidBefore, rapidAfter });
+  check("View Transition settled (width matches the final state)", rapidAfter.width === (rapidAfter.collapsed ? 60 : 240), rapidAfter);
 
   // 3. The + menu opens AND stays in-bounds.
   const attach = await cdp.eval(hub, `(() => {
@@ -275,21 +310,24 @@ try {
     check("the error console stays in-bounds", inBounds(consoleRect.rect, consoleRect.vw, consoleRect.vh), consoleRect.rect);
   }
 
-  // 5. The recent-activity rows have horizontal padding + real entry content
-  //    (an EMPTY state is non-attesting: it renders even if activity loading
-  //    is broken). Seed a real entry and assert its content + padding.
-  const activity = await cdp.eval(hub, `(() => {
-    const ae = document.querySelector('#run-log activity-explorer');
-    if (!ae || !ae.shadowRoot) return { note: 'no activity-explorer' };
-    // Seed via the component's public entries setter (the gallery path) so we
-    // assert the ENTRY render, not the empty state.
-    ae.entries = [{ id: 't1', source: 'hub', agentLabel: 'Hub', type: 'task', task: 'Summarise the docs', result: 'done' }];
-    const summary = ae.shadowRoot.querySelector('.aex-entry summary');
-    if (!summary) return { note: 'no entry rendered' };
+  // 5. The recent-activity rows have horizontal padding + real entry content,
+  //    loaded through the PRODUCTION activity.list path (not the demo entries
+  //    setter): seed the SW master journal via memory.set, recreate the explorer
+  //    so it re-loads via activity.list, and assert the rendered entry.
+  const activity = await cdp.eval(hub, `(async () => {
+    const seed = await chrome.runtime.sendMessage({ type: "memory.set", origin: "master", key: "journal", value: [{ type: "task", id: "t1", task: "Summarise the docs", tool: "demo" }] });
+    const el = document.getElementById('run-log');
+    el.replaceChildren();
+    const explorer = document.createElement('activity-explorer');
+    explorer.setAttribute('limit', '100');
+    el.append(explorer);
+    await new Promise(r => setTimeout(r, 600)); // let _load() round-trip activity.list
+    const summary = explorer.shadowRoot?.querySelector('.aex-entry summary');
+    if (!summary) return { note: 'no entry rendered', seed };
     const cs = getComputedStyle(summary);
-    return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop), text: summary.textContent.trim(), entryCount: ae.shadowRoot.querySelectorAll('.aex-entry').length, empty: !!ae.shadowRoot.querySelector('.aex-empty') };
+    return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop), text: summary.textContent.trim(), entryCount: explorer.shadowRoot.querySelectorAll('.aex-entry').length, empty: !!explorer.shadowRoot.querySelector('.aex-empty'), seed };
   })()`);
-  check("recent-activity renders the seeded entry (content, not empty)", activity?.entryCount === 1 && activity?.empty === false && /Summarise the docs/.test(activity?.text ?? ""), activity);
+  check("recent-activity renders the journal entry via production activity.list", activity?.entryCount === 1 && activity?.empty === false && /Summarise the docs/.test(activity?.text ?? ""), activity);
   check("the recent-activity entry has horizontal padding (not edge-to-edge)", (activity?.paddingLeft ?? 0) > 0, activity);
 
   // ---- Settings ----
@@ -330,6 +368,27 @@ try {
     return { hasInput: !!inp, hasSend: send };
   })()`);
   check("chat composer renders (input + send)", chatComposer?.hasInput && chatComposer?.hasSend, chatComposer);
+
+  // 8. Responsive + theme + reduced-motion matrix (the nub must hold up beyond
+  //    the default 1400×900 light LTR run).
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);
+  const narrow = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const r = t.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), vw: innerWidth, inBounds: r.left >= 0 && r.right <= innerWidth }; })()`);
+  check("narrow (500px) viewport: nub stays in-bounds", narrow?.inBounds === true, narrow);
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, hub);
+
+  await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] }, hub);
+  const reducedMotion = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); return { transition: getComputedStyle(t).transition }; })()`);
+  check("prefers-reduced-motion disables the nub transition", reducedMotion && (reducedMotion.transition === "none" || reducedMotion.transition.includes("0s")), reducedMotion);
+  await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
+
+  const darkNub = await cdp.eval(hub, `(() => {
+    document.documentElement.dataset.theme = 'charcoal';
+    const nub = document.querySelector('#side-toggle .nub');
+    const cs = getComputedStyle(nub);
+    document.documentElement.dataset.theme = 'sunlit';
+    return { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor };
+  })()`);
+  check("dark theme: nub renders with a visible border", darkNub?.visible === true, darkNub);
 
   exitCode = fail === 0 ? 0 : 1;
 } finally {

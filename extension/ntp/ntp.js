@@ -1193,19 +1193,37 @@ function setSidebarCollapsed(collapsed) {
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
-  // Persist via the SW's kv routes (single authority) so a reload restores it.
-  // chrome.storage.local would throw when the optional storage permission is
-  // absent, and would miss the SW's session fallback.
-  send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } }).catch(() => {});
+  // Persist via the SW's kv routes (single authority). send() RESOLVES a
+  // {ok:false} on backend failure (storage granted but write failed) rather
+  // than rejecting, so we await + inspect the result instead of relying on a
+  // catch. A permissionless session fallback still returns ok:true (nothing
+  // persists, but the SW session Map keeps it for this boot).
+  persistSidebar(collapsed);
+}
+async function persistSidebar(collapsed) {
+  try {
+    const r = await send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } });
+    if (r?.ok === false) {
+      // Durable backend failed — the collapse is session-only this run.
+      console.warn("sidebar collapse not persisted:", r.error ?? "unknown");
+    }
+  } catch {
+    // worker unreachable — session-only (no persistence).
+  }
 }
 sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
 });
-// Restore the persisted rail state on load.
-(async () => {
-  const s = await send("kv.get", { keys: SIDEBAR_KEY }).catch(() => ({}));
-  if (s?.[SIDEBAR_KEY] === true) setSidebarCollapsed(true);
-})();
+// Restore the persisted rail state on load (session or durable).
+async function restoreSidebar() {
+  try {
+    const s = await send("kv.get", { keys: SIDEBAR_KEY });
+    if (s?.[SIDEBAR_KEY] === true) setSidebarCollapsed(true);
+  } catch {
+    // worker unreachable — default expanded.
+  }
+}
+restoreSidebar();
 
 // The "+" new-task button returns to the hub + focuses the composer. When the
 // user is inside a task thread, it also closes the thread view so the composer
