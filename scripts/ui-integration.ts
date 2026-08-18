@@ -509,19 +509,26 @@ try {
   await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
 
   const darkNub = await cdp.eval(hub, `(() => {
+    // Disable transitions so the theme change + nub background/border are read at
+    // their INSTANT final values (no mid-transition read), and do it all
+    // synchronously so no async theme-reset can interleave.
+    const st = document.createElement('style'); st.textContent = '*{transition:none !important}';
+    document.head.appendChild(st);
     document.documentElement.dataset.theme = 'midnight';
+    document.body.offsetWidth; // force synchronous reflow
     const lum = (c) => { const m = c.match(/\\d+(?:\\.\\d+)?/g); if (!m) return 0; const [r,g,b] = m.map(Number).map(v => v/255).map(v => v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)); return 0.2126*r + 0.7152*g + 0.0722*b; };
     const nub = document.querySelector('#side-toggle .nub');
     const side = document.querySelector('#side');
     const cs = getComputedStyle(nub); const scs = getComputedStyle(side);
-    // READ the values BEFORE resetting the theme (getComputedStyle is live —
-    // reading after the reset would validate the restored light theme).
-    const out = { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor, nubBg: cs.backgroundColor, sideBg: scs.backgroundColor, sideText: scs.color, sideBgLum: lum(scs.backgroundColor), sideTextLum: lum(scs.color) };
+    const out = { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor, nubBg: cs.backgroundColor, nubBgLum: lum(cs.backgroundColor), nubBorderLum: lum(cs.borderTopColor), sideBg: scs.backgroundColor, sideText: scs.color, sideBgLum: lum(scs.backgroundColor), sideTextLum: lum(scs.color) };
     document.documentElement.dataset.theme = 'sunlit';
+    st.remove();
     return out;
   })()`);
   check("dark theme: nub renders with a visible border", darkNub?.visible === true, darkNub);
   check("dark theme (midnight): the sidebar applies dark tokens (dark bg + light text)", darkNub && darkNub.sideBgLum < 0.2 && darkNub.sideTextLum > 0.6, darkNub);
+  check("dark theme (midnight): the nub applies a dark background (luminance < 0.2)", darkNub && darkNub.nubBgLum < 0.2, darkNub);
+  check("dark theme (midnight): the nub border contrasts its dark background", darkNub && darkNub.nubBgLum < 0.2 && darkNub.nubBorderLum > darkNub.nubBgLum, darkNub);
 
   // 9. Overlay-OPEN matrix (the reviewer's D blocker): the real thread overlay
   //    must stay OPEN while sidebar + overlay + nub are asserted across RTL /
@@ -575,7 +582,10 @@ try {
 
   // Dark (overlay open): nub keeps a visible border + the overlay text is legible.
   const overlayDark = await cdp.eval(hub, `(() => {
+    const st = document.createElement('style'); st.textContent = '*{transition:none !important}';
+    document.head.appendChild(st);
     document.documentElement.dataset.theme = 'midnight';
+    document.body.offsetWidth; // force synchronous reflow
     const lum = (c) => { const m = c.match(/\\d+(?:\\.\\d+)?/g); if (!m) return 0; const [r,g,b] = m.map(Number).map(v => v/255).map(v => v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)); return 0.2126*r + 0.7152*g + 0.0722*b; };
     const nub = document.querySelector('#side-toggle .nub');
     const cs = getComputedStyle(nub);
@@ -583,22 +593,24 @@ try {
     const overlay = document.getElementById('thread-view'); const ov = getComputedStyle(overlay);
     const out = {
       nubBorder: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px',
+      nubDark: lum(cs.backgroundColor) < 0.2 && lum(cs.borderTopColor) > lum(cs.backgroundColor),
       overlayVisible: ov.display !== 'none' && overlay.hidden === false,
       sideDark: lum(scs.backgroundColor) < 0.2 && lum(scs.color) > 0.6,
       overlayDark: lum(ov.backgroundColor) < 0.2 && lum(ov.color) > 0.6,
     };
-    document.documentElement.dataset.theme = 'sunlit';
+    st.remove();
     return out;
   })()`);
   check("overlay-open dark (midnight): nub keeps a visible border + overlay visible", overlayDark?.nubBorder === true && overlayDark?.overlayVisible === true, overlayDark);
+  check("overlay-open dark (midnight): nub applies dark tokens (dark bg + contrasting border)", overlayDark?.nubDark === true, overlayDark);
   check("overlay-open dark (midnight): sidebar applies dark tokens (dark bg + light text)", overlayDark?.sideDark === true, overlayDark);
   check("overlay-open dark (midnight): overlay applies dark tokens (dark bg + light text)", overlayDark?.overlayDark === true, overlayDark);
   await cdp.eval(hub, `document.documentElement.dataset.theme = 'midnight'`);
-  await sleep(200);
+  await sleep(300);
   const shotOverlayDark = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
   await Deno.writeFile(`${ROOT}test-artifacts/overlay-dark.png`, Uint8Array.from(atob(shotOverlayDark.data), (c: number) => c.charCodeAt(0)));
   await cdp.eval(hub, `document.documentElement.dataset.theme = 'sunlit'`);
-  await sleep(200);
+  await sleep(300);
 
   // Narrow (overlay open): overlay + nub remain in-bounds at 500px.
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 500, height: 800, deviceScaleFactor: 1, mobile: false }, hub);

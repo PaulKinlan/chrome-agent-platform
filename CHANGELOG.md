@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.92] — 2026-08-18
+- fix(ui): assert midnight nub background luminance/contrast; sync generated changelog
+
 ## [0.2.91] — 2026-08-18
 - docs: sync evidence manifest + recaptured overlay-rtl/overlay-dark hashes
 
