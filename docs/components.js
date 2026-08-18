@@ -13,7 +13,7 @@
 // docs/ keeps a synced copy (see build.mjs → copy:docs).
 
 import { buildAgentCandidates } from "./agent-candidates.js";
-import { safeParse, buildTree, subtreeJson } from "./tool-tree.js";
+import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -1507,6 +1507,9 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
     copy.textContent = r.leaf ? "copy" : "copy json";
     const copyName = r.key || (r.leaf ? "value" : "root");
     copy.setAttribute("aria-label", r.leaf ? `Copy value of ${copyName}` : `Copy JSON for ${copyName}`);
+    // Explicit button → row mapping (a delegated closest() lookup against the
+    // model array could never match — the k3 blocker: `rows.find(r => r === el)`).
+    copy._row = r;
     row.appendChild(copy);
     tree.appendChild(row);
     rowEls.push([r, row]);
@@ -1521,7 +1524,7 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
     if (!btn) return;
     e.stopPropagation();
     const isJson = btn.dataset.copy === "json";
-    const row = rows.find((r) => r === btn.closest(".tt-row"));
+    const row = btn._row; // the explicit button → row mapping
     if (!row) return;
     const label = btn.textContent;
     let text = "";
@@ -1531,8 +1534,17 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
         : (row.full ?? row.text ?? "");
     } catch { text = ""; }
     if (!text) { btn.textContent = "unavailable"; setTimeout(() => { btn.textContent = label; }, 1200); return; }
+    const restore = () => setTimeout(() => { btn.textContent = label; }, 1400);
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).catch(() => {});
+      // The button says "copied" ONLY on a resolved write — a rejection must
+      // NOT claim success (the k3 clipboard finding).
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = "copied";
+        restore();
+      }).catch(() => {
+        btn.textContent = "copy failed";
+        restore();
+      });
     } else if (document.execCommand) {
       const ta = document.createElement("textarea");
       ta.value = text;
@@ -1540,11 +1552,10 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
       ta.style.opacity = "0";
       document.body.appendChild(ta);
       ta.select();
-      try { document.execCommand("copy"); } catch { /* ignore */ }
+      try { document.execCommand("copy"); btn.textContent = "copied"; } catch { btn.textContent = "copy failed"; }
       ta.remove();
+      restore();
     }
-    btn.textContent = "copied";
-    setTimeout(() => { btn.textContent = label; }, 1200);
   });
 
   details.appendChild(tree);
@@ -1953,7 +1964,7 @@ class AgentConversation extends Component {
     return this._bubble("tool", null, {
       "tool-name": name,
       "tool-status": status || "running",
-      "tool-args": args != null ? (typeof args === "string" ? args : JSON.stringify(args)) : null,
+      "tool-args": args != null ? (typeof args === "string" ? args : safeJsonStringify(args)) : null,
       "tool-result": result != null ? String(result) : null,
       "tool-detail": detail != null ? String(detail) : null,
       "tool-duration": durationMs != null ? String(durationMs) : null,

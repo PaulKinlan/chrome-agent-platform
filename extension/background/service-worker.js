@@ -972,16 +972,33 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         let args;
         try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
         if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
-        journalAppend(mem, { type: "tool-call", id: taskId, tool: event.toolName ?? "tool", args }).catch(() => {});
+        // A per-call correlation id (FIFO per tool name within THIS run) lets a
+        // replay PAIR each tool-call with its result + render ONE terminal card
+        // (the persisted-history blocker — the old rows had no pairing key).
+        const n = (callSeq.get(event.toolName) ?? 0) + 1;
+        callSeq.set(event.toolName, n);
+        const callId = `${taskId}:${event.toolName ?? "tool"}:${n}`;
+        const cq = callQueue.get(event.toolName) ?? [];
+        cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
+        callQueue.set(event.toolName, cq);
+        journalAppend(mem, { type: "tool-call", id: taskId, callId, tool: event.toolName ?? "tool", args }).catch(() => {});
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
         else if (typeof event.result === "string") result = event.result;
         else { try { result = JSON.stringify(event.result); } catch { result = String(event.result); } }
         if (result && result.length > 2000) result = result.slice(0, 2000) + "…";
-        journalAppend(mem, { type: "tool-result", id: taskId, tool: event.toolName ?? "tool", result }).catch(() => {});
+        // Match the OLDEST pending callId for this tool name (FIFO — parallel
+        // same-name calls pair in order) + persist the ok flag so a replay can
+        // restore failed/blocked results as ERROR cards (the journal discarded
+        // ok before — failed results reopened as success).
+        const q = callQueue.get(event.toolName) ?? [];
+        const callId = q.shift() ?? `${taskId}:${event.toolName ?? "tool"}:1`;
+        journalAppend(mem, { type: "tool-result", id: taskId, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
       }
     };
+    const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
+    const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride);
     // Thread the fence's abort signal into the RUNNING agent AND every
     // side-effecting tool (via the shared run-fence module): if ownership or

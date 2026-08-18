@@ -5,7 +5,7 @@
 // detection both the SW (tool-summary.isToolResultFailure) and the page
 // (conversation.isToolErrorEvent) use.
 import { assert, assertEquals } from "jsr:@std/assert";
-import { createToolCardQueue, isToolErrorEvent } from "../extension/shared/conversation.js";
+import { createToolCardQueue, isToolErrorEvent, pairToolJournal } from "../extension/shared/conversation.js";
 import { isToolResultFailure } from "../extension/lib/tool-summary.js";
 
 function fakeCard(attrs = {}) {
@@ -71,9 +71,14 @@ Deno.test("tool-lifecycle: a FAILED tool result marks the card error, success st
   assertEquals(ok.get("tool-status"), "success");
 });
 
-Deno.test("tool-lifecycle: isToolErrorEvent falls back to the summarized text markers", () => {
-  assert(isToolErrorEvent({ ok: true, result: "failed: origin re-enrolled" }) === true);
+Deno.test("tool-lifecycle: ok is AUTHORITATIVE — heuristics only when ok is absent", () => {
+  // a valid summary like "failed attempts: 0" with ok:true must NOT error
+  assert(isToolErrorEvent({ ok: true, result: "failed: origin re-enrolled" }) === false, "ok:true wins over the text");
+  assert(isToolErrorEvent({ ok: true, result: "failed attempts: 0" }) === false);
+  assert(isToolErrorEvent({ ok: false, result: "stored 2 items" }) === true, "ok:false wins too");
+  // heuristics only when ok is absent
   assert(isToolErrorEvent({ result: "[memory_set] DENIED by hook — quota" }) === true);
+  assert(isToolErrorEvent({ result: "failed: origin re-enrolled" }) === true);
   assert(isToolErrorEvent({ result: "stored 2 items" }) === false);
   assert(isToolErrorEvent({ result: "" }) === false);
   assert(isToolErrorEvent({}) === false);
@@ -90,4 +95,56 @@ Deno.test("tool-lifecycle: isToolResultFailure (SW side) detects returned failur
   assert(isToolResultFailure({ ok: true }) === false);
   assert(isToolResultFailure("just a string") === false);
   assert(isToolResultFailure(null) === false);
+});
+
+
+Deno.test("tool-lifecycle: pairToolJournal pairs a call with its result into ONE terminal card", () => {
+  const entries = [
+    { type: "tool-call", id: "r1", callId: "r1:memory_set:1", tool: "memory_set", args: "{\"key\":\"x\"}" },
+    { type: "tool-result", id: "r1", callId: "r1:memory_set:1", tool: "memory_set", result: "stored", ok: true },
+  ];
+  const pairs = pairToolJournal(entries);
+  assertEquals(pairs.length, 1, "one card per call");
+  assertEquals(pairs[0].tool, "memory_set");
+  assertEquals(pairs[0].status, "success");
+  assert(pairs[0].args.includes("x"));
+});
+
+Deno.test("tool-lifecycle: a FAILED (ok:false) persisted result renders an ERROR card", () => {
+  const entries = [
+    { type: "tool-call", id: "r1", callId: "c1", tool: "memory_set", args: "{}" },
+    { type: "tool-result", id: "r1", callId: "c1", tool: "memory_set", result: "failed: denied", ok: false },
+  ];
+  const [card] = pairToolJournal(entries);
+  assertEquals(card.status, "error");
+  assertEquals(card.ok, false);
+});
+
+Deno.test("tool-lifecycle: parallel same-name calls pair FIFO by callId", () => {
+  const entries = [
+    { type: "tool-call", callId: "c1", tool: "memory_get", args: "{\"k\":1}" },
+    { type: "tool-call", callId: "c2", tool: "memory_get", args: "{\"k\":2}" },
+    { type: "tool-result", callId: "c1", tool: "memory_get", result: "one", ok: true },
+    { type: "tool-result", callId: "c2", tool: "memory_get", result: "two", ok: true },
+  ];
+  const pairs = pairToolJournal(entries);
+  assertEquals(pairs.length, 2);
+  assert(pairs[0].args.includes("1"));
+  assert(pairs[1].args.includes("2"));
+});
+
+Deno.test("tool-lifecycle: an UNPAIRED tool-call renders a terminal (done) card — never running", () => {
+  const [card] = pairToolJournal([{ type: "tool-call", callId: "c1", tool: "memory_set", args: "{}" }]);
+  assertEquals(card.status, "done");
+  assertEquals(card.result, null);
+});
+
+Deno.test("tool-lifecycle: task/result rows pass through untouched", () => {
+  const pairs = pairToolJournal([
+    { type: "task", id: "t", task: "do it" },
+    { type: "tool-call", callId: "c1", tool: "memory_set", args: "{}" },
+    { type: "tool-result", callId: "c1", tool: "memory_set", result: "ok", ok: true },
+    { type: "result", id: "t", result: "done" },
+  ]);
+  assertEquals(pairs.length, 1, "only the tool rows pair");
 });

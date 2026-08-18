@@ -6,8 +6,9 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { runConversationTurn, subscribeProgress, appendBubble } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, appendBubble, pairToolJournal } from "../shared/conversation.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { safeJsonStringify } from "../shared/tool-tree.js";
 import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
@@ -612,38 +613,51 @@ async function openAgentChat(id) {
 }
 
 // Render an agent's run history (its journal) as a conversation: task → user
-// bubble, result → agent bubble, tool-call/tool-result → a tool card. Chronological
-// (the history route is most-recent-first).
+// bubble, result → agent bubble, and PAIRED tool cards (one TERMINAL card per
+// tool call — a tool-call + its tool-result pair by callId; failed/blocked
+// results render as error, never a stale running card). Chronological (the
+// history route is most-recent-first).
 function renderAgentHistory(container, entries) {
   if (typeof container.clear === "function") container.clear();
   const rows = [...entries].reverse(); // oldest → newest
+  const toolRows = pairToolJournal(rows);
   const filtered = rows.filter(
     (r) =>
       (r?.type === "task" && typeof r.task === "string" && r.task.trim()) ||
-      (r?.type === "result" && typeof r.result === "string" && r.result.trim()) ||
-      r?.type === "tool-call" ||
-      r?.type === "tool-result",
+      (r?.type === "result" && typeof r.result === "string" && r.result.trim()),
   );
-  if (!filtered.length) {
+  if (!filtered.length && !toolRows.length) {
     if (typeof container.appendSystem === "function") {
       container.appendSystem("No runs yet — start a task below to chat with this agent.");
     }
     return;
   }
-  for (const r of filtered) {
-    const ts = typeof r.ts === "number" ? r.ts : null;
-    if (r.type === "task") appendBubble(container, "user", r.task, undefined, ts);
-    else if (r.type === "result") appendBubble(container, "agent", r.result, undefined, ts);
-    else if (r.type === "tool-call") {
-      if (typeof container.appendTool === "function") {
-        container.appendTool({ name: r.tool ?? "tool", status: "running", ts });
-      }
-    } else if (r.type === "tool-result") {
-      if (typeof container.appendTool === "function") {
-        const raw = r.result == null ? "" : typeof r.result === "string" ? r.result : JSON.stringify(r.result);
-        const summary = r.result == null ? "" : summarizeToolResult(r.tool, r.result);
-        container.appendTool({ name: r.tool ?? "tool", status: "success", result: summary, detail: raw && raw !== summary ? raw : null, ts });
-      }
+  // Chronological merge: task/result bubbles + the paired tool cards in order.
+  const items = [...filtered.map((r) => ({ kind: "row", r })), ...toolRows.map((t) => ({ kind: "tool", t }))];
+  items.sort((a, b) => {
+    const ta = a.kind === "row" ? (typeof a.r.ts === "number" ? a.r.ts : 0) : (a.t.ts ?? 0);
+    const tb = b.kind === "row" ? (typeof b.r.ts === "number" ? b.r.ts : 0) : (b.t.ts ?? 0);
+    return ta - tb;
+  });
+  for (const item of items) {
+    if (item.kind === "row") {
+      const r = item.r;
+      const ts = typeof r.ts === "number" ? r.ts : null;
+      if (r.type === "task") appendBubble(container, "user", r.task, undefined, ts);
+      else if (r.type === "result") appendBubble(container, "agent", r.result, undefined, ts);
+    } else {
+      const t = item.t;
+      if (typeof container.appendTool !== "function") continue;
+      const raw = t.result == null ? "" : typeof t.result === "string" ? t.result : safeJsonStringify(t.result);
+      const summary = t.result == null ? "" : summarizeToolResult(t.tool, t.result);
+      container.appendTool({
+        name: t.tool ?? "tool",
+        status: t.status ?? "done",
+        args: t.args ?? null,
+        result: summary || null,
+        detail: raw && raw !== summary ? raw : null,
+        ts: t.ts ?? null,
+      });
     }
   }
 }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.75] — 2026-08-18
+- fix(tool-calls): sol-review blockers — working copy buttons, request-path finalization, paired persisted replay, safe public appendTool
+
 ## [0.2.74] — 2026-08-18
 - fix(tool-calls): k3 MEDIUM findings — phantom duration, error lifecycle, segment paths, a11y roles, defensive safety
 

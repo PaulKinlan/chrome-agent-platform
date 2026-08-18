@@ -7,6 +7,7 @@
 import { assertEquals, assert } from "jsr:@std/assert";
 import {
   looksJsonish,
+  safeJsonStringify,
   safeParse,
   buildTree,
   subtreeJson,
@@ -254,4 +255,17 @@ Deno.test("tool-tree: buildTree survives getter throws + symbol keys", () => {
   };
   const t = buildTree(evil);
   assert(t.rows.some((r) => r.key === "ok" && r.text === "1"));
+});
+
+
+Deno.test("tool-tree: safeJsonStringify never throws at the PUBLIC boundary (cyclic/BigInt/getter)", () => {
+  const a = { n: 1 };
+  a.self = a;
+  assertEquals(safeJsonStringify(a), '{"n":1,"self":"[cyclic]"}', "cyclic → [cyclic] marker");
+  assertEquals(safeJsonStringify({ n: 10n }), '{"n":"10n"}', "BigInt → suffixed string");
+  const g = { get boom() { throw new Error("getter"); } };
+  assert(typeof safeJsonStringify(g) === "string", "a throwing getter falls back, never throws");
+  assertEquals(safeJsonStringify("plain"), "plain");
+  assertEquals(safeJsonStringify(null), "null");
+  assertEquals(safeJsonStringify({ key: "x", items: [1, 2] }), '{"key":"x","items":[1,2]}');
 });

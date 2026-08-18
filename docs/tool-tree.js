@@ -173,6 +173,38 @@ export function buildTree(value, opts = {}) {
   return { rows, maxDepth, maxNodes, truncated, parse: safeParse(value) };
 }
 
+/**
+ * A CYCLE-/BigInt-/getter-safe JSON serializer for the PUBLIC appendTool
+ * boundary (the card attr must never throw on a hostile args value — the
+ * tree core's own cycle guard is for display; this makes the ATTR itself
+ * safe to build). Never throws: cyclic values render "[cyclic]", BigInt
+ * renders "123n", throwing getters fall back to a marker.
+ */
+export function safeJsonStringify(value) {
+  if (value == null) return String(value);
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const stack = [];
+  try {
+    // JSON.stringify itself triggers getters (a throwing getter lands in the
+    // catch → a safe fallback); the ancestor stack catches cycles. BigInt
+    // serializes as "123n" so the attr never throws.
+    const s = JSON.stringify(value, function (k, v) {
+      if (v !== null && typeof v === "object") {
+        if (stack.includes(v)) return "[cyclic]";
+        stack.push(v);
+        return v;
+      }
+      if (typeof v === "bigint") return String(v) + "n";
+      return v;
+    });
+    if (typeof s === "string") return s;
+    return String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 /** The subtree JSON for a row addressed by its SEGMENT array. Bounded +
  * never throws (a cyclic/BigInt/getter value falls back to a marker). */
 export function subtreeJson(value, segments, containerCap = TOOL_TREE_CONTAINER_CAP) {

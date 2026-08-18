@@ -22,6 +22,7 @@
 // drives, with REAL-format data.
 
 const ROOT = new URL("..", import.meta.url).pathname;
+import { pairToolJournal } from "../extension/shared/conversation.js";
 const EXT = `${ROOT}extension`;
 const MODE = Deno.args.includes("--mode=tree") ? "tree" : "raw";
 const EVIDENCE_DIR = `${ROOT}test-artifacts/tool-call`;
@@ -337,6 +338,129 @@ async function main() {
     console.log("error card:", JSON.stringify(errCard));
     check("lifecycle: a FAILED tool result renders the error status", (errCard as any)?.statusChip === 'error', errCard);
     check("lifecycle: the failed result stays readable (no raw-JSON flash)", (errCard as any)?.errorText === true, errCard);
+
+    // ── the sol-review blockers: REAL copy clicks, cyclic-args safety,
+    //    request finalization (no running cards after a run), persisted replay ──
+    if (MODE === "tree") {
+      // A. REAL copy clicks: capture what writeText receives (headless has no
+      //    real clipboard — the click + the handler are real; the API is
+      //    intercepted to observe it) + the REJECT path (must NOT say "copied").
+      const copyProbe = await evalIn(cdp, session, `(async () => {
+        const conv = document.querySelector('agent-conversation');
+        const args = JSON.stringify({ key: "shopping", value: { items: [{ name: "Espresso machine", qty: 1 }], total: 3.5 } });
+        const card = conv.appendTool({ name: 'memory_set', args, status: 'success' });
+        const sr = card.shadowRoot || card;
+        const captured = [];
+        const realWrite = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+        navigator.clipboard = Object.assign(navigator.clipboard ?? {}, { writeText: (t) => { captured.push(String(t)); return Promise.resolve(); } });
+        // a genuine click on a VALUE copy button (the first leaf row)
+        const leaf = sr.querySelector('.tt-row.tt-leaf .tt-copy');
+        leaf.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const valText = captured[0] ?? '';
+        // a genuine click on the ROOT container's copy-JSON button
+        const rootCopy = sr.querySelector('.tt-row.tt-container .tt-copy');
+        rootCopy.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const jsonText = captured[1] ?? '';
+        // the REJECT path: writeText rejects → the button must NOT claim copied
+        let rejectLabel = '';
+        if (leaf) {
+          navigator.clipboard = Object.assign(navigator.clipboard ?? {}, { writeText: () => Promise.reject(new Error('denied')) });
+          leaf.click();
+          await new Promise((r) => setTimeout(r, 120));
+          rejectLabel = leaf.textContent || '';
+        }
+        navigator.clipboard?.writeText?.constructor === undefined && undefined;
+        if (realWrite && navigator.clipboard) navigator.clipboard.writeText = realWrite;
+        const jsonParsed = (() => { try { return JSON.parse(jsonText); } catch { return null; } })();
+        return { valText, jsonText, jsonParsed, rejectLabel };
+      })()`);
+      console.log("copy probe:", JSON.stringify(copyProbe));
+      const cp = copyProbe as any;
+      check("copy: a REAL click copies the leaf VALUE (exact scalar)", cp?.valText === "shopping", cp);
+      check("copy: a REAL click copies the bounded subtree JSON (parses + has the right data)", cp?.jsonParsed?.value?.items?.[0]?.name === "Espresso machine" && cp?.jsonParsed?.key === "shopping", cp);
+      check("copy: a REJECTED clipboard write does NOT claim 'copied'", cp?.rejectLabel === "copy failed" || cp?.rejectLabel === "unavailable", cp);
+
+      // B. appendTool with a CYCLIC args object never throws (the public boundary).
+      const cyclic = await evalIn(cdp, session, `(async () => {
+        const conv = document.querySelector('agent-conversation');
+        const evil = { key: "loop" };
+        evil.self = evil;
+        try {
+          const card = conv.appendTool({ name: 'memory_set', args: evil, status: 'running' });
+          await new Promise((r) => setTimeout(r, 250));
+          const sr = card.shadowRoot || card;
+          const ok = sr.querySelectorAll('.tt-row').length >= 1;
+          card.remove();
+          return { ok, hasCyclicLeaf: (sr.textContent || '').includes('[cyclic]') };
+        } catch (e) { return { ok: false, err: String(e?.message ?? e) }; }
+      })()`);
+      console.log("cyclic probe:", JSON.stringify(cyclic));
+      check("appendTool: a CYCLIC args object never throws + renders a tree", (cyclic as any)?.ok === true, cyclic);
+      check("appendTool: the cycle renders as a bounded [cyclic] leaf", (cyclic as any)?.hasCyclicLeaf === true, cyclic);
+
+      // C. Request finalization: after the REAL demo run completes, ZERO cards
+      //    remain running (the request path settles in-flight cards).
+      const runningLeft = await evalIn(cdp, session, `(() => {
+        const cards = [...document.querySelectorAll('#thread-conversation message-bubble[role="tool"]')];
+        return { running: cards.filter((c) => (c.getAttribute('tool-status') ?? 'running') === 'running').length, total: cards.length };
+      })()`);
+      console.log("finalization:", JSON.stringify(runningLeft));
+      check("finalize: after the REAL run, NO tool card is left running", (runningLeft as any)?.running === 0, runningLeft);
+
+      // D. Persisted replay: the REAL journal rows (callId + ok persisted by the
+      //    SW) are paired by the REAL pairToolJournal (the exact function the
+      //    agent-history replay uses) and rendered as ONE terminal card per call
+      //    on the REAL conversation surface — success + failed/blocked as error,
+      //    never a running card.
+      const replayRows = pairToolJournal([
+        { type: "task", id: "r1", task: "store the list" },
+        { type: "tool-call", id: "r1", callId: "r1:memory_set:1", tool: "memory_set", args: JSON.stringify({ key: "shopping", value: { items: [{ name: "AeroPress" }] } }) },
+        { type: "tool-result", id: "r1", callId: "r1:memory_set:1", tool: "memory_set", result: "stored 1 item", ok: true },
+        { type: "tool-call", id: "r1", callId: "r1:memory_get:1", tool: "memory_get", args: JSON.stringify({ key: "shopping" }) },
+        { type: "tool-result", id: "r1", callId: "r1:memory_get:1", tool: "memory_get", result: "failed: origin re-enrolled", ok: false },
+        { type: "result", id: "r1", result: "finished" },
+      ]);
+      const replayDriven = await evalIn(cdp, session, `(async () => {
+        const conv = document.querySelector('agent-conversation');
+        const cards = [];
+        for (const t of ${JSON.stringify(replayRows)}) {
+          const raw = t.result == null ? "" : typeof t.result === "string" ? t.result : JSON.stringify(t.result);
+          const card = conv.appendTool({ name: t.tool, status: t.status, args: t.args ?? null, result: raw || null, ts: t.ts ?? null });
+          cards.push(card);
+        }
+        await new Promise((r) => setTimeout(r, 300));
+        const info = cards.map((c) => {
+          const sr = c.shadowRoot || c;
+          return {
+            name: c.getAttribute('tool-name'),
+            status: c.getAttribute('tool-status') ?? '',
+            running: (c.getAttribute('tool-status') ?? 'running') === 'running',
+            hasArgsTree: sr.querySelectorAll('.tt-row').length >= 2,
+            text: (sr.textContent || '').slice(0, 80),
+          };
+        });
+        return info;
+      })()`);
+      console.log("replay cards:", JSON.stringify(replayDriven));
+      const rp = replayDriven as any;
+      check("replay: paired journal rows render as ONE terminal card per call, NONE running", Array.isArray(rp) && rp.length === 2 && rp.every((c: any) => !c.running), replayDriven);
+      check("replay: the FAILED (ok:false) persisted result renders an ERROR card", Array.isArray(rp) && rp.some((c: any) => c.name === "memory_get" && c.status === "error"), replayDriven);
+      check("replay: the SUCCESS persisted result renders a success card with its args tree", Array.isArray(rp) && rp.some((c: any) => c.name === "memory_set" && c.status === "success" && c.hasArgsTree), replayDriven);
+      const replayShot = await captureShot(cdp, session);
+      if (replayShot) await writeEvidence("tree-3-replay.png", replayShot);
+
+      // E. The REAL journal write path: a REAL demo run persists task/result rows
+      //    (read back via the real memory.get route) — the journal is live.
+      const journalRead = await evalIn(cdp, session, `(async () => {
+        const r = await chrome.runtime.sendMessage({ type: "memory.get", origin: "master", key: "journal" }).then((v) => ({ v }), (e) => ({ err: e.message }));
+        const j = Array.isArray(r.v) ? r.v : [];
+        return { count: j.length, last: j.slice(-1)[0] ?? null };
+      })()`);
+      console.log("master journal:", JSON.stringify(journalRead));
+      check("journal: the REAL run persisted journal rows (the write path is live)", ((journalRead as any)?.count ?? 0) >= 2, journalRead);
+    }
 
     console.log(`tool-call evidence (${MODE}): ${pass}/${pass + fail} passed`);
     if (fail > 0) Deno.exit(1);

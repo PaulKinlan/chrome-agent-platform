@@ -226,12 +226,56 @@ export function createToolCardQueue() {
   };
 }
 
-/** Whether a live tool-result event signals FAILURE (the SW tags `ok`; the
- * fallback inspects the summarized result text for denial/error markers). */
+/** Whether a live tool-result event signals FAILURE. The SW's `ok` flag is
+ * AUTHORITATIVE — text heuristics apply ONLY when `ok` is absent (older
+ * producers / journal replay), so a valid summary like "failed attempts: 0"
+ * with ok:true never misclassifies as an error. */
 export function isToolErrorEvent(ev) {
+  if (ev?.ok === true) return false;
   if (ev?.ok === false) return true;
   const s = String(ev?.result ?? "");
   return /^\s*failed\b/i.test(s) || /^\s*\[[^\]]+\]\s*DENIED/i.test(s);
+}
+
+/** Pair persisted journal tool rows into ONE terminal card per tool call.
+ * The SW persists a per-call `callId` on BOTH the tool-call and tool-result
+ * rows (FIFO per tool name within a run); a replay must render ONE card with
+ * the call's args + a terminal status (success / error for failed-blocked
+ * results / done when the result is missing — never a permanently running
+ * card). Pure — unit-tested; used by the agent-history surfaces (ntp.js). */
+export function pairToolJournal(entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const byCall = new Map(); // callId -> { call, result }
+  const order = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    if (r.type === "tool-call" || r.type === "tool-result") {
+      const id = r.callId ?? `${r.id ?? ""}:${r.tool ?? ""}:${r.seq ?? order.length}`;
+      if (!byCall.has(id)) {
+        byCall.set(id, { call: null, result: null, ts: typeof r.ts === "number" ? r.ts : null });
+        order.push(id);
+      }
+      if (r.type === "tool-call") byCall.get(id).call = r;
+      else byCall.get(id).result = r;
+    }
+  }
+  const out = [];
+  for (const id of order) {
+    const { call, result, ts } = byCall.get(id);
+    const tool = call?.tool ?? result?.tool ?? "tool";
+    const ok = result?.ok;
+    const status = result ? (ok === false ? "error" : "success") : "done";
+    out.push({
+      type: "tool",
+      tool,
+      status,
+      args: call?.args ?? null,
+      result: result?.result ?? null,
+      ok,
+      ts,
+    });
+  }
+  return out;
 }
 
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
@@ -334,8 +378,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   //    ignored (never mis-attributed). We unsubscribe in the finally.
   const unsubscribe = subscribeProgress((ev) => {
     if (!ev || typeof ev !== "object") return;
-    // Only render THIS run's events (the SW tags them with runId).
-    if (ev.runId != null && ev.runId !== runId) return;
+    // Only render THIS run's events — FAIL-CLOSED on the exact runId (the SW
+    // tags every progress event with the run's runId; an untagged event never
+    // renders here, so another thread/page's tool data cannot leak in).
+    if (ev.runId !== runId) return;
     switch (ev.type) {
       case "thinking": {
         const step = ev.step != null ? ev.step + 1 : null;
@@ -441,6 +487,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   } finally {
+    // Settle any still-in-flight tool cards on EVERY request path (idempotent —
+    // the queue clears once). A run that returned {ok:false} without a port
+    // broadcast, or whose response beat the port's final event, must never
+    // leave a card permanently running.
+    toolCards.flush(res?.ok ? "success" : "error");
     unsubscribe();
   }
 
