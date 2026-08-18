@@ -73,7 +73,7 @@ async function renderSiteAgents() {
   );
   el.replaceChildren();
   if (!agents.length) {
-    el.innerHTML = `<div class="empty">No site agents yet. Visit a site that exposes tools (WebMCP or window functions) to give it a sub-agent.</div>`;
+    el.innerHTML = `<div class="empty">No site agents yet.</div>`;
   } else {
     for (const a of agents.slice(0, 6)) {
       const row = document.createElement("capability-row");
@@ -108,7 +108,7 @@ async function renderWebmcpHubStatus() {
   const status = await send("webmcp.status").catch(() => null);
   const s = status?.status;
   if (!s) {
-    el.textContent = "Site tools are discovered when you enroll a page — use Discover this page.";
+    el.textContent = "Discovery has not run yet.";
     return;
   }
   // The record separates the SW-ATTESTED script lifecycle from the

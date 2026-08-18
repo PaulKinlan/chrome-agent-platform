@@ -50,6 +50,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   loading/error states, popover top-layer presentation anchored with logical
   `position-area` + `position-try-fallbacks` (JS `placeFloating` fallback). The
   selected agent shows as a removable accent chip in the composer's chip row.
+- Hub sidebar Tasks/Agents sections share one intrinsic flex primitive: fixed
+  headers with inline-end actions, independently scrolling lists with stable
+  symmetric gutters while expanded, and gutter-free scrollable lists in the
+  collapsed rail so task dots, agent avatars, and + actions share one center.
+  Task and agent rows share padding/radius/hover tokens; the task delete action
+  is centered on the row and remains keyboard-focusable.
 
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
