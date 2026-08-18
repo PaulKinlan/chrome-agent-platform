@@ -464,7 +464,7 @@ async function renderTasks(activeId = null) {
     del.type = "button";
     del.className = "t-delete";
     del.setAttribute("aria-label", `Delete task ${t.name || "Task"}`);
-    del.textContent = "×";
+    del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
     item.append(railDot, name, preview, meta, del);
     item.addEventListener("click", () => openThread(t.id));
     item.addEventListener("keydown", (e) => {
@@ -1186,16 +1186,26 @@ subscribeProgress((ev) => {
 const side = document.getElementById("side");
 const sideToggle = document.getElementById("side-toggle");
 let sidebarCollapsed = false;
+const SIDEBAR_KEY = "hub.sidebarCollapsed";
 function setSidebarCollapsed(collapsed) {
   sidebarCollapsed = collapsed;
   side.classList.toggle("collapsed", collapsed);
   sideToggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   sideToggle.setAttribute("aria-expanded", String(!collapsed));
+  // Persist via the SW's kv routes (single authority) so a reload restores it.
+  // chrome.storage.local would throw when the optional storage permission is
+  // absent, and would miss the SW's session fallback.
+  send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } }).catch(() => {});
 }
 sideToggle?.addEventListener("click", () => {
   withViewTransition(() => setSidebarCollapsed(!sidebarCollapsed));
 });
+// Restore the persisted rail state on load.
+(async () => {
+  const s = await send("kv.get", { keys: SIDEBAR_KEY }).catch(() => ({}));
+  if (s?.[SIDEBAR_KEY] === true) setSidebarCollapsed(true);
+})();
 
 // The "+" new-task button returns to the hub + focuses the composer. When the
 // user is inside a task thread, it also closes the thread view so the composer

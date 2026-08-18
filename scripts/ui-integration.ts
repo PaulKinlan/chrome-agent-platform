@@ -171,11 +171,20 @@ try {
   })()`);
   const itemCxs = Object.values(railGeom?.items ?? {}).filter((i: any) => i && i.cx).map((i: any) => i.cx);
   const cxSpread = itemCxs.length ? Math.max(...itemCxs) - Math.min(...itemCxs) : Infinity;
-  const all34 = Object.values(railGeom?.items ?? {}).filter((i: any) => i).every((i: any) => i.w === 34 && i.h === 34);
+  const nonNull = Object.values(railGeom?.items ?? {}).filter((i: any) => i);
+  const all34 = nonNull.length === 5 && nonNull.every((i: any) => i.w === 34 && i.h === 34);
+  check("exactly five rail actions exist", nonNull.length === 5, nonNull.map((i: any) => i.cx));
   check("collapsed rail icons share ONE centre (≤2px spread)", railGeom?.sideW < 120 && cxSpread <= 2, { cxSpread, itemCxs });
   check("collapsed rail action buttons are uniformly 34×34", all34 === true, railGeom?.items);
   check("collapse control is a ≥44×44 nub hit target", railGeom?.togg && railGeom.togg.w >= 44 && railGeom.togg.h >= 44, railGeom?.togg);
   check("nub straddles the sidebar edge + stays in-bounds", railGeom?.nub && railGeom.nub.left < railGeom.sideW && railGeom.nub.right > railGeom.sideW && railGeom.nub.right <= railGeom.vw, railGeom?.nub);
+  // The nub must sit ABOVE the thread/settings overlay so its hit target stays
+  // reachable when a view is open (the sidebar persists for the task thread).
+  const nubZ = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const z = t ? parseInt(getComputedStyle(t).zIndex) : 0; const tv = document.querySelector('#thread-view'); const tvz = tv ? parseInt(getComputedStyle(tv).zIndex) : 0; return { z, tvz }; })()`);
+  check("nub z-index is above the thread overlay", nubZ?.z > nubZ?.tvz, nubZ);
+  // Commit-specific evidence: capture the collapsed rail + nub.
+  const shotCollapsed = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
+  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: number) => c.charCodeAt(0)));
 
   // 2c. Keyboard Enter toggles + aria-expanded/label/title track the state.
   const keyBefore = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); t.focus(); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title, focused: document.activeElement === t }; })()`);
@@ -186,6 +195,44 @@ try {
   const keyAfter = await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); const side = document.querySelector('#side'); return { expanded: t.getAttribute('aria-expanded'), collapsed: side.classList.contains('collapsed'), label: t.getAttribute('aria-label'), title: t.title }; })()`);
   check("Enter toggles the sidebar (collapsed ↔ expanded)", keyBefore && keyAfter && keyBefore.collapsed !== keyAfter.collapsed, { keyBefore, keyAfter });
   check("aria-expanded + label + title track the state", keyAfter && keyAfter.collapsed === false && keyAfter.expanded === "true" && keyAfter.label === "Collapse sidebar" && keyAfter.title === "Collapse sidebar", keyAfter);
+  const shotExpanded = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
+  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: number) => c.charCodeAt(0)));
+
+  // 2d. Space toggles too (native button activation).
+  await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.focus(); })()`);
+  await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, hub);
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, hub);
+  await sleep(500);
+  const spaceAfter = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
+  check("Space toggles the sidebar", spaceAfter === true, { spaceAfter });
+
+  // 2e. The collapsed state persists across a reload.
+  await cdp.send("Page.reload", {}, hub);
+  await sleep(1500);
+  const afterReload = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side?.classList.contains('collapsed') ?? false, width: side ? Math.round(side.getBoundingClientRect().width) : 0 }; })()`);
+  check("collapsed state persists across reload", afterReload?.collapsed === true && afterReload?.width === 60, afterReload);
+  // restore to expanded for the rest of the suite
+  await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); if (document.querySelector('#side')?.classList.contains('collapsed')) t?.click(); })()`);
+  await sleep(500);
+
+  // 2f. RTL: the rail sits on the right — the nub must sit on the right-side
+  //     boundary (translated the correct direction, not 44px off).
+  const rtlGeom = await cdp.eval(hub, `(() => {
+    const html = document.documentElement; html.setAttribute('dir', 'rtl');
+    const side = document.querySelector('#side'); const sideR = side.getBoundingClientRect();
+    const t = document.querySelector('#side-toggle'); const tr = t.getBoundingClientRect();
+    const cx = Math.round(tr.left + tr.width/2);
+    html.removeAttribute('dir');
+    // In RTL the rail is on the RIGHT, so the nub belongs on its INNER (left) boundary.
+    return { sideLeft: Math.round(sideR.left), sideRight: Math.round(sideR.right), nubCx: cx, vw: innerWidth };
+  })()`);
+  check("RTL nub centres on the rail's inner (left) boundary", rtlGeom && Math.abs(rtlGeom.nubCx - rtlGeom.sideLeft) <= 3, rtlGeom);
+
+  // 2g. Rapid double-click settles to a single, final state (no stuck transition).
+  await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
+  await sleep(700);
+  const rapid = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); const t = document.querySelector('#side-toggle'); return { collapsed: side.classList.contains('collapsed'), expanded: t.getAttribute('aria-expanded') }; })()`);
+  check("rapid double-click settles without a stuck transition", rapid && (rapid.collapsed === true || rapid.collapsed === false) && rapid.expanded === String(!rapid.collapsed), rapid);
 
   // 3. The + menu opens AND stays in-bounds.
   const attach = await cdp.eval(hub, `(() => {
@@ -228,16 +275,22 @@ try {
     check("the error console stays in-bounds", inBounds(consoleRect.rect, consoleRect.vw, consoleRect.vh), consoleRect.rect);
   }
 
-  // 5. The recent-activity rows (or its empty state) have horizontal padding
-  // (not flush against the panel border).
-  const padding = await cdp.eval(hub, `(() => {
+  // 5. The recent-activity rows have horizontal padding + real entry content
+  //    (an EMPTY state is non-attesting: it renders even if activity loading
+  //    is broken). Seed a real entry and assert its content + padding.
+  const activity = await cdp.eval(hub, `(() => {
     const ae = document.querySelector('#run-log activity-explorer');
-    const el = ae && ae.shadowRoot ? (ae.shadowRoot.querySelector('.aex-empty') || ae.shadowRoot.querySelector('.aex-entry summary')) : null;
-    if (!el) return { note: 'no runlog row/empty found' };
-    const cs = getComputedStyle(el);
-    return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop) };
+    if (!ae || !ae.shadowRoot) return { note: 'no activity-explorer' };
+    // Seed via the component's public entries setter (the gallery path) so we
+    // assert the ENTRY render, not the empty state.
+    ae.entries = [{ id: 't1', source: 'hub', agentLabel: 'Hub', type: 'task', task: 'Summarise the docs', result: 'done' }];
+    const summary = ae.shadowRoot.querySelector('.aex-entry summary');
+    if (!summary) return { note: 'no entry rendered' };
+    const cs = getComputedStyle(summary);
+    return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop), text: summary.textContent.trim(), entryCount: ae.shadowRoot.querySelectorAll('.aex-entry').length, empty: !!ae.shadowRoot.querySelector('.aex-empty') };
   })()`);
-  check("the recent-activity panel has horizontal padding (not edge-to-edge)", (padding?.paddingLeft ?? 0) > 0, padding);
+  check("recent-activity renders the seeded entry (content, not empty)", activity?.entryCount === 1 && activity?.empty === false && /Summarise the docs/.test(activity?.text ?? ""), activity);
+  check("the recent-activity entry has horizontal padding (not edge-to-edge)", (activity?.paddingLeft ?? 0) > 0, activity);
 
   // ---- Settings ----
   const settings = await openPage(`chrome-extension://${extId}/options/options.html`);

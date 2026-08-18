@@ -54,7 +54,7 @@
     .side-toggle { display: inline-flex; align-items: center; justify-content: center;
       position: fixed; left: var(--side-width, 240px); top: 50%; transform: translate(-50%, -50%);
       width: 44px; height: 44px; border: 0; background: transparent; color: var(--muted);
-      cursor: pointer; padding: 0; z-index: 40; transition: left .18s ease; }
+      cursor: pointer; padding: 0; z-index: 110; transition: left .18s ease; }
     .side-toggle .nub { display: inline-flex; align-items: center; justify-content: center;
       width: 22px; height: 36px; border: 1px solid var(--border); border-left: 0;
       border-radius: 0 9px 9px 0; background: var(--panel);
@@ -68,9 +68,13 @@
     @media (prefers-reduced-motion: reduce) {
       .side-toggle, .side-toggle .nub, .side-toggle svg { transition: none; }
     }
-    /* RTL: the rail sits on the right — mirror the nub to the left edge. */
-    [dir="rtl"] .side-toggle { left: auto; right: var(--side-width, 240px); }
+    /* RTL: the rail sits on the right — mirror the nub to the left edge, flip
+       the horizontal translate (the nub protrudes LEFT now), and mirror the
+       chevron + border so collapse/expand direction reads correctly. */
+    [dir="rtl"] .side-toggle { left: auto; right: var(--side-width, 240px); transform: translate(50%, -50%); }
     [dir="rtl"] .side-toggle .nub { border-left: 1px solid var(--border); border-right: 0; border-radius: 9px 0 0 9px; }
+    [dir="rtl"] .side-toggle svg { transform: scaleX(-1); }
+    [dir="rtl"] .side.collapsed .side-toggle svg { transform: scaleX(-1) rotate(180deg); }
     .side-label-row { display: flex; align-items: center; gap: 4px; }
     .side-label-row .side-label { flex: 1; min-width: 0; }
     /* Rail action buttons (new-task / new-agent) share the icon scale with the

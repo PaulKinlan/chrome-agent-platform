@@ -61,8 +61,8 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 # Paul's UI/UX issues (2026-08-16) — tracked in docs/UI-FIXES-TRACKER.md
 
 The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
-- DONE: the 5 settings issues (the switch-collision double-toggle, hooks=permissions, the duplicate back button, the origins stretch), the notification icon path, the provider Test-connection buttons, the base-select background-agent picker, the thread navigation (fullscreen + sidebar + background-agents off the NTP), the security fixes (apiKey leak + highs), semver.
-- IN PROGRESS (the tracker-remaining worker): the sidebar collapse, the new-task + button, View Transitions, HTML-output rendering, the unified Agents area, the + menu options + anchor-positioning, the @mention positioning, the error-console copy buttons + error surfacing.
+- DONE: the 5 settings issues (the switch-collision double-toggle, hooks=permissions, the duplicate back button, the origins stretch), the notification icon path, the provider Test-connection buttons, the base-select background-agent picker, the thread navigation (fullscreen + sidebar + background-agents off the NTP), the collapsed-sidebar geometry (the edge nub + centred rail icons + SVG glyphs + reload persistence + RTL), the security fixes (apiKey leak + highs), semver.
+- IN PROGRESS (the tracker-remaining worker): View Transitions, HTML-output rendering, the unified Agents area, the + menu options + anchor-positioning, the @mention positioning, the error-console copy buttons + error surfacing.
 
 ## Paul meta-directives (2026-08-16)
 - Every ask → tracked (UI-FIXES-TRACKER.md / KNOWN-ISSUES.md) + worked in a subagent + visually verified. Nothing dropped.

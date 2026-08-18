@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.74] — 2026-08-18
+- fix(sidebar): address review blockers — RTL geometry, overlay stacking, persistence, evidence, matrix
+
 ## [0.2.73] — 2026-08-18
 - fix(sidebar): unify collapsed-rail geometry + rebuild collapse control as an edge nub
 
