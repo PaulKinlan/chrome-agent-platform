@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "92b07ceb86606bc06c369d7e3d5b884b3a003e9b",
+  "testedSourceCommit": "8a576933e99fbb8e716e35e3c00907904897eea5",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1787061436110",
+  "runId": "cap-1787144697319",
   "retain": true,
-  "ts": "2026-08-18T13:58:02.132Z",
-  "evidenceDir": "/tmp/cap-webmcp-discovery/test-artifacts",
-  "passed": 119,
+  "ts": "2026-08-19T13:05:49.518Z",
+  "evidenceDir": "/tmp/cap-approval-current-main/test-artifacts",
+  "passed": 125,
   "failed": 0,
   "checks": [
     {
@@ -72,6 +72,10 @@
     },
     {
       "name": "Settings: Permissions panel present",
+      "pass": true
+    },
+    {
+      "name": "approval: forged NTP owner/activation fields are refused",
       "pass": true
     },
     {
@@ -431,6 +435,26 @@
       "pass": true
     },
     {
+      "name": "approval: deny row is singular and capability material absent from DOM",
+      "pass": true
+    },
+    {
+      "name": "approval: NTP cannot programmatically resolve an owner approval",
+      "pass": true
+    },
+    {
+      "name": "approval: deny leaves the exact asset unchanged",
+      "pass": true
+    },
+    {
+      "name": "approval: install-scoped opaque reference survives a worker restart",
+      "pass": true
+    },
+    {
+      "name": "approval: post-restart deny leaves the exact asset unchanged",
+      "pass": true
+    },
+    {
       "name": "mgmt: update_asset patched the asset",
       "pass": true
     },
@@ -490,13 +514,23 @@
   "files": [
     {
       "name": "ntp-driven.png",
-      "sha256": "b9488dadf931decd761d0aa0edddea81782cdf10449027633d3d27e93663b241",
-      "bytes": 58274
+      "sha256": "3221b6d063b1f08d55d8d64521aa70258d7288751a4634779a444033b028f859",
+      "bytes": 58989
     },
     {
       "name": "options-driven.png",
-      "sha256": "075dacfbd66c3f9b626fc5c937ca87a43ee1cd54a0c21106aeb96b06f6164f90",
-      "bytes": 231145
+      "sha256": "8458cc791fdce6d9c98c726ae836c11522bad67dafee59dc50408086a245ea7c",
+      "bytes": 234625
+    },
+    {
+      "name": "approval-deny-pending.png",
+      "sha256": "15a02b2766ed2a188d7ad0000fcc75cc26b3f1a9ed58b918c335cef7e212a84f",
+      "bytes": 240763
+    },
+    {
+      "name": "approval-deny-resolved.png",
+      "sha256": "8282ed4da1b95317f1affef4140159ed93985df9972ef7af12626e3467e8535f",
+      "bytes": 253777
     }
   ]
 }
