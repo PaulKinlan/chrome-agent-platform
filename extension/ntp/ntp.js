@@ -594,6 +594,11 @@ function syncViewOpen() {
   document.body.classList.toggle("view-open", anyOpen);
 }
 function hideThreadViewInner() {
+  runGen++; // leaving fences any in-flight run (its outcome still journals)
+  if (statusOwnerGen !== 0) {
+    statusOwnerGen = 0;
+    setStatus("ready"); // reset an orphaned "running…" (a parked run never resets itself)
+  }
   threadView.hidden = true;
   currentThreadId = null;
   currentAgentId = null;
@@ -609,6 +614,10 @@ function hideViewInner() {
   syncViewOpen();
 }
 function showThreadView() {
+  // Already open (a follow-up/nudge in the same surface): restarting the view
+  // transition would flash the thread + the run-status banner mid-run (the
+  // review's working-state screenshot finding). No-op instead.
+  if (!threadView.hidden) return;
   withViewTransition(() => {
     // Only ONE overlay at a time (item 48): the thread view replaces the
     // settings/directory/recipes view.
@@ -622,6 +631,7 @@ function hideThreadView() {
 }
 
 async function openThread(id) {
+  runGen++; // opening a thread fences any in-flight run's rendering
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
@@ -632,7 +642,15 @@ async function openThread(id) {
   editAgentBtn.hidden = false;
   editAgentBtn.setAttribute("aria-label", "Edit task");
   syncComposerScope();
-  const res = await send("thread.get", { id }).catch(() => ({ ok: false }));
+  // A thread.get can transiently fail when the MV3 service worker is mid-
+  // restart (the message wakes it, but the first attempt can race the boot).
+  // Rendering an empty "Task" surface then is a LIE (the run's data exists) —
+  // retry the read once before settling (the run-lifecycle resilience fix).
+  let res = await send("thread.get", { id }).catch(() => ({ ok: false }));
+  if (!(res.ok && res.thread)) {
+    await new Promise((r) => setTimeout(r, 400)); // let a restarting SW boot
+    res = await send("thread.get", { id }).catch(() => ({ ok: false }));
+  }
   const thread = res.ok ? res.thread : null;
   threadTitle.textContent = thread?.name || "Task";
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
@@ -670,6 +688,7 @@ async function openThread(id) {
 //    INDEPENDENT agent — click it to see its OWN run history + talk to it (a
 //    task runs in its own OPFS sandbox), exactly like a named agent.
 async function openBackgroundAgentChat(id, name) {
+  runGen++;
   currentAgentId = id;
   currentAgentKind = "background";
   currentThreadId = null;
@@ -713,6 +732,7 @@ async function loadAgentHistoryEntries(kind, id) {
  * access, CAP-FB-20260818-AGENT-ACCESS-01): the agent's own history + a
  * composer whose sends run DIRECTLY in that agent (its own memory/skills). */
 async function openAgentSurface({ kind, id, name }) {
+  runGen++;
   currentAgentId = id;
   currentAgentKind = kind;
   currentThreadId = null;
@@ -1194,38 +1214,74 @@ function renderRunStatus(s) {
   }
 }
 
+/** The run generation (per-run identity): bumped on EVERY surface switch
+ * (openThread/openAgentSurface/openBackgroundAgentChat/hideThreadView/new hub
+ * task) AND on every runThreadTurn — so an older turn on the same surface AND
+ * any turn whose surface was left are both stale (the lifecycle findings:
+ * late results/status/terminal writes bleeding into the current surface).
+ * The SW journals every run independently — a stale turn's outcome is never
+ * lost, it just never renders here. */
+let runGen = 0;
+/** Which run generation last wrote the global #status (so a superseded run's
+ * orphaned "running…" is reset exactly once, never clobbering a newer run). */
+let statusOwnerGen = 0;
+
 /** Run a turn in the thread surface (a new task, or a nudge). */
 async function runThreadTurn(text, attachments = []) {
   showThreadView();
   setStatus("running…", false);
+  const gen = ++runGen;
+  statusOwnerGen = gen;
+  const agentAtStart = currentAgentId;
+  const kindAtStart = currentAgentKind;
+  const threadAtStart = currentThreadId;
+  const owns = () => gen === runGen && currentAgentId === agentAtStart &&
+    currentAgentKind === kindAtStart;
   const res = await runConversationTurn(threadConversation, {
     text,
     attachments,
     history: [], // the SW derives the history from the thread when threadId is set
-    threadId: currentThreadId,
+    threadId: threadAtStart,
     onStatus: renderRunStatus,
-    agentId: currentAgentId, // null for a thread; set when chatting with a named/background agent
-    agentKind: currentAgentKind,
+    agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
+    agentKind: kindAtStart,
+    isStale: () => !owns(),
   });
+  // The fence: a superseded run mutates NO global surface state. If THIS run
+  // was the last status writer, reset its orphaned "running…" (a run parked
+  // in a hanging permission request never reaches its own reset).
+  if (!owns()) {
+    if (statusOwnerGen === gen) {
+      statusOwnerGen = 0;
+      setStatus("ready");
+    }
+    return res;
+  }
   if (res.ok) {
-    if (!currentAgentId) {
+    if (!agentAtStart) {
       // The SW created (or reused) the thread; capture its id for continuation.
-      if (res.threadId) currentThreadId = res.threadId;
-      if (res.threadId) {
+      if (res.threadId && currentThreadId === threadAtStart) {
+        currentThreadId = res.threadId;
         const t = await send("thread.get", { id: res.threadId }).catch(() => ({}));
+        // Re-check after the nested await: the surface may have moved on
+        // while the thread title loaded.
+        if (!owns()) return res;
         if (t.thread?.name) threadTitle.textContent = t.thread.name;
       }
       await renderTasks(currentThreadId);
+      if (!owns()) return res;
     }
-    setStatus("ready");
+    if (statusOwnerGen === gen) setStatus("ready");
   } else {
-    setStatus("error: " + (res.error ?? "unknown"), false);
+    if (statusOwnerGen === gen) setStatus("error: " + (res.error ?? "unknown"), false);
   }
+  return res;
 }
 
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments, agent } = ev.detail;
+  runGen++; // a NEW task replaces the surface — fence any in-flight run
   currentThreadId = null; // a new task → a new thread
   threadConversation.clear?.();
   if (agent?.ref) {
