@@ -5,6 +5,10 @@
 // {ok:false, aborted:true} — and an aborted run must never be reported as a
 // successful outcome.
 // @ts-nocheck — the agent core is deliberately dynamic.
+import { installFakeIdb, resetFakeIdb } from "./fake-idb.js";
+import { installFakeLocks, resetFakeLocks } from "./fake-locks.js";
+import { resetUsageMigration } from "../extension/lib/usage-store.js";
+function __resetUsage() { resetFakeIdb(); installFakeIdb(); resetFakeLocks(); installFakeLocks(); resetUsageMigration(); }
 import { assert, assertEquals } from "jsr:@std/assert";
 import { createAgent } from "../extension/lib/agent.js";
 import { createDemoModel } from "../extension/lib/models/demo-model.js";
@@ -37,6 +41,7 @@ function fakeMemory() {
 }
 
 Deno.test("agent-abort: a REAL mid-run abort is DURABLY observable after orch.run resolves", async () => {
+  __resetUsage();
   const events = [];
   const agent = createAgent({
     model: { model: slowModel(600), modelId: "demo-local", providerName: "demo" },
@@ -77,6 +82,7 @@ Deno.test("agent-abort: a REAL mid-run abort is DURABLY observable after orch.ru
 });
 
 Deno.test("agent-abort: an UN-aborted run reports NOT aborted (no false positive)", async () => {
+  __resetUsage();
   const agent = createAgent({
     model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
     id: "ok-test",
@@ -92,6 +98,7 @@ Deno.test("agent-abort: an UN-aborted run reports NOT aborted (no false positive
 });
 
 Deno.test("agent-abort: a PRE-START abort never starts a run + is reported aborted", async () => {
+  __resetUsage();
   const agent = createAgent({
     model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },
     id: "pre-abort",
@@ -119,6 +126,7 @@ Deno.test("agent-abort: a PRE-START abort never starts a run + is reported abort
 
 
 Deno.test("agent-abort: an aborted run followed by a SUCCESSFUL RETRY on the SAME reusable agent", async () => {
+  __resetUsage();
   const events = [];
   const agent = createAgent({
     model: { model: slowModel(500), modelId: "demo-local", providerName: "demo" },
@@ -141,6 +149,7 @@ Deno.test("agent-abort: an aborted run followed by a SUCCESSFUL RETRY on the SAM
 });
 
 Deno.test("agent-abort: QUEUED concurrent runs — run 1's abort never corrupts run 2's outcome", async () => {
+  __resetUsage();
   const events = [];
   const agent = createAgent({
     model: { model: slowModel(400), modelId: "demo-local", providerName: "demo" },
@@ -164,6 +173,7 @@ Deno.test("agent-abort: QUEUED concurrent runs — run 1's abort never corrupts 
 // ── the successor review: delegation unwraps {text, aborted} → string + failure ──
 
 Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string result + aborted → failed delegation", async () => {
+  __resetUsage();
   const events = [];
   const worker = createAgent({
     model: { model: slowModel(400), modelId: "demo-local", providerName: "demo" },
@@ -200,6 +210,7 @@ Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string resu
 // ── the successor review: the PRODUCTION model-facing delegate_task ─────────
 
 Deno.test("agent-abort: the PRODUCTION delegate_task fails on an aborted worker (real orchestrator path)", async () => {
+  __resetUsage();
   const { createOrchestrator } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const workerEvents = [];
@@ -253,6 +264,7 @@ Deno.test("agent-abort: the PRODUCTION delegate_task fails on an aborted worker 
 // ── the successor-3 acceptance: reads observe the write + no callback clobber ──
 
 Deno.test("agent-abort: the sequenced demo reads BOTH observe the written value (never the pre-write state)", async () => {
+  __resetUsage();
   const { createAgent } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const mem = fakeMemory();
@@ -278,6 +290,7 @@ Deno.test("agent-abort: the sequenced demo reads BOTH observe the written value 
 });
 
 Deno.test("agent-abort: a direct delegate's own progress binding never CLOBBERS a concurrent run's callback", async () => {
+  __resetUsage();
   const { createOrchestrator } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const masterEvents = [];
@@ -315,6 +328,7 @@ Deno.test("agent-abort: a direct delegate's own progress binding never CLOBBERS 
 // ── the successor-4 acceptance: typed abort every shape + stateless isolation ──
 
 Deno.test("agent-abort: the typed abort error covers EVERY shape (fence, pre-start, mid-run) + the outcome never succeeds", async () => {
+  __resetUsage();
   const { RunAbortedError, isAbortShape } = await import("../extension/lib/agent.js");
   // every abort shape is recognized by the single predicate
   assert(isAbortShape(new RunAbortedError("run aborted")) === true, "typed error");
@@ -325,6 +339,7 @@ Deno.test("agent-abort: the typed abort error covers EVERY shape (fence, pre-sta
 });
 
 Deno.test("agent-abort: the PRODUCTION delegate throws — ZERO delegate_task tool-results + the failure text", async () => {
+  __resetUsage();
   const { createOrchestrator } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const events = [];
@@ -354,6 +369,7 @@ Deno.test("agent-abort: the PRODUCTION delegate throws — ZERO delegate_task to
 });
 
 Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-marker reset + multi-agent isolation", async () => {
+  __resetUsage();
   const { createAgent, createOrchestrator } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   // TWO runs on the SAME model instance (consecutive marker runs) — each must
@@ -396,6 +412,7 @@ Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-m
 });
 
 Deno.test("agent-abort: the delegate classification parses SDK parts via `output` — success vs failed", async () => {
+  __resetUsage();
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const model = createDemoModel();
   // a SUCCESSFUL delegation: the SDK tool message carries a tool-result part
@@ -425,6 +442,7 @@ Deno.test("agent-abort: the delegate classification parses SDK parts via `output
 // ── the successor-5 acceptance: run-local derivation + structural parsing ──
 
 Deno.test("agent-abort: a PRIOR marker transcript never triggers a later non-marker run (run-local derivation)", async () => {
+  __resetUsage();
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const model = createDemoModel();
   // a prior @demo-tools run's FULL transcript in the history + a fresh
@@ -447,6 +465,7 @@ Deno.test("agent-abort: a PRIOR marker transcript never triggers a later non-mar
 });
 
 Deno.test("agent-abort: an INTERVENING non-marker run resets the run boundary", async () => {
+  __resetUsage();
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const model = createDemoModel();
   // marker run → non-marker run → marker run: the second marker run starts
@@ -464,6 +483,7 @@ Deno.test("agent-abort: an INTERVENING non-marker run resets the run boundary", 
 });
 
 Deno.test("agent-abort: both reads DEEP-EQUAL the written value (parsed outputs, not substrings)", async () => {
+  __resetUsage();
   const { createAgent } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const mem = fakeMemory();
@@ -496,6 +516,7 @@ Deno.test("agent-abort: both reads DEEP-EQUAL the written value (parsed outputs,
 });
 
 Deno.test("agent-abort: structural output parsing — a tool-result with output.type error-text is FAILED, a real output value SUCCEEDS", async () => {
+  __resetUsage();
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const model = createDemoModel();
   // the AI SDK's execution-error shape: a tool-role message with a tool-result
@@ -525,6 +546,7 @@ Deno.test("agent-abort: structural output parsing — a tool-result with output.
 // ── the successor-6 acceptance: ACTUAL AI SDK steps + probative deep-equality ──
 
 Deno.test("agent-abort: the ACTUAL AI SDK result contains EXACTLY ONE delegate_task tool-error and ZERO tool-result", async () => {
+  __resetUsage();
   const { streamText, tool } = await import("npm:ai@^7.0.66");
   const { z } = await import("npm:zod@^3.24.0");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
@@ -554,6 +576,7 @@ Deno.test("agent-abort: the ACTUAL AI SDK result contains EXACTLY ONE delegate_t
 });
 
 Deno.test("agent-abort: BOTH of the run's reads' parsed outputs deep-equal the COMPLETE written value (captured at the tool boundary — no fallback, no detached calls)", async () => {
+  __resetUsage();
   const { createAgent } = await import("../extension/lib/agent.js");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   // Capture the run's ACTUAL read outputs AT THE TOOL BOUNDARY: the memory_get

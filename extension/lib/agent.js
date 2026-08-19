@@ -337,6 +337,13 @@ export function createAgent({
   // commit revalidates THAT generation, never "currently enrolled" (the round-22
   // ABA blocker).
   let activeRun = null; // { gen: number|null, controller: AbortController }
+  // The IMMUTABLE usage-attempt identity: a FIFO queue of { id, occurredAt,
+  // ordinal } pushed at the provider-attempt invocation boundary (doGenerate/
+  // doStream) and consumed by onUsage. Agent-do dispatches ALL onUsage records
+  // AFTER the stream iteration, so a shared latest-attempt scalar would misattribute
+  // delayed callbacks; the queue binds each onUsage to ITS attempt.
+  const attemptQueue = [];
+  let attemptOrdinal = 0;
   let aborted = false;
   let lastRunAborted = false; // the DURABLE per-run abort flag (read after activeRun is cleared)
   // A per-worker RUN QUEUE serializes concurrent `a.run` calls. The AI SDK
@@ -402,19 +409,44 @@ export function createAgent({
   };
   // Wrap the LanguageModel with a Proxy so doGenerate/doStream are observed at
   // the provider boundary (prototype methods + every other property untouched).
+  // Each attempt's identity entry is REMOVED when the attempt FAILS (a sync
+  // throw OR an async rejection): the AI SDK internally retries a retryable
+  // doStream/doGenerate (attempt 1 fails, attempt 2 succeeds), so a blind FIFO
+  // would let a failed attempt's id leak into the next attempt's onUsage (the
+  // reviewer's within-run retry finding).
   const boundModel = new Proxy(model.model, {
     get(target, prop, receiver) {
-      if (prop === "doGenerate" && typeof target.doGenerate === "function") {
-        return (options) => {
-          emitAttestation(options);
-          return target.doGenerate(options);
+      const pushAttempt = () => ({ id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: ++attemptOrdinal });
+      const guarded = (fn, options) => {
+        emitAttestation(options);
+        const entry = pushAttempt();
+        attemptQueue.push(entry);
+        const drop = () => {
+          const i = attemptQueue.indexOf(entry);
+          if (i >= 0) attemptQueue.splice(i, 1);
         };
+        let result;
+        try {
+          result = fn(options);
+        } catch (err) {
+          // Synchronous throw (a non-async doStream/doGenerate) — this attempt
+          // failed and will never emit usage.
+          drop();
+          throw err;
+        }
+        // Wrap in Promise.resolve so BOTH a Promise rejection AND a plain
+        // {stream} / non-thenable return are handled: the rejection drops the
+        // entry; a resolved value (incl. a plain object) passes through untouched.
+        return Promise.resolve(result).catch((err) => {
+          drop();
+          throw err;
+        });
+      };
+      if (prop === "doGenerate" && typeof target.doGenerate === "function") {
+        return (options) => guarded(target.doGenerate.bind(target), options);
       }
       if (prop === "doStream" && typeof target.doStream === "function") {
-        return (options) => {
-          emitAttestation(options);
-          return target.doStream(options);
-        };
+        return (options) => guarded(target.doStream.bind(target), options);
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -466,12 +498,9 @@ export function createAgent({
         try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }
       },
       onUsage: async (record) => {
-        // Worker usage is ENROLLMENT-scoped: a stale run must not append a usage
-        // row under a re-enrolled origin. The IMMUTABLE run-start generation is
-        // threaded INTO recordUsage (as the `guard`), which re-validates it
-        // BEFORE and AFTER its commit + compensates on mismatch — not merely a
-        // single pre-check that a re-enroll during recordUsage's awaits could
-        // bypass (the round-22 + round-24 gen-threading findings).
+        // Bind this callback to ITS provider attempt (FIFO) — a delayed callback
+        // must not read a later attempt's id/timestamp.
+        const attempt = attemptQueue.shift() ?? { id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: attemptOrdinal };
         await recordUsage({
           agentId: id,
           taskId,
@@ -480,6 +509,9 @@ export function createAgent({
           inputTokens: record.inputTokens ?? 0,
           outputTokens: record.outputTokens ?? 0,
           estimatedCost: record.estimatedCost ?? 0,
+          usageEventId: attempt.id,
+          occurredAt: attempt.occurredAt,
+          attemptOrdinal: attempt.ordinal,
         }, enrollmentGuard
           ? { genGuard: enrollmentGuard, getRunGen }
           : null);
@@ -513,6 +545,10 @@ export function createAgent({
       // `execute` carries the full original body; the queue always advances even
       // if a run rejects, so a failed run can never poison later runs.
       const execute = async () => {
+      // Clear any stale provider-attempt entries from a prior aborted/retried run
+      // (an attempt with no onUsage would otherwise misattribute the NEXT run's
+      // first callback — cross-run identity leakage).
+      attemptQueue.length = 0;
       let gen = runGen ?? null;
       if (enrollmentGuard && gen == null) {
         // No caller-supplied generation (a direct worker run) — capture it now.
@@ -593,6 +629,7 @@ export function createAgent({
         controller.signal.removeEventListener("abort", onAbort);
         activeRun = null;
         activeSystemPrompt = null;
+        attemptQueue.length = 0; // no cross-run attempt-identity leakage
       }
       };
       const result = runQueue.then(execute, execute);

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.102] — 2026-08-19
+- feat(usage): IndexedDB sole-authority usage ledger — permissionless durable authority (single-transaction read-modify-write over authority/meta/quarantine, monotonic generation, canonical empty clear), universal mirror outbox (Web Lock + conditional generation ACK), per-source once-only migration with in-transaction discard re-check, corruption quarantine with current-bytes CAS + exact readback, and preparse byte bounds. Records carry an immutable per-provider-attempt identity (attempt entries drop on synchronous throw AND async rejection, so within-run AI-SDK retries and cross-run aborts never misattribute usage). The open Usage panel now refreshes on record/clear (section activation + a visible-page poll), so it never shows a stale count.
+
 ## [0.2.101] — 2026-08-19
 - test(run-status): deterministic thread selection in the lifecycle journey — click-once/poll-first open helper (a retry-per-poll click loop fights the surface-owner fencing: each re-click claims a new token and fences the in-flight open it was retrying), fresh settled switch target (the bounded thread index ages out older targets under warmup flood), sidebar prune step, null-safe selector reads, 60s CDP timeout + backoff retries, hard 8-min global watchdog. Product/SW/approval bytes unchanged.
 

@@ -1,21 +1,16 @@
 // lib/usage.js — usage accounting (per-LLM-call token/cost ledger).
 //
 // Records per-LLM-call usage (agentId, provider, model, input/output tokens,
-// estimated cost) into chrome.storage.local with a rolling 7-day window, then
-// aggregates by agent/provider/model. The memory explorer surfaces a usage view.
-// Every agent-do onUsage event flows through recordUsage().
-import { kvGet, kvRemove, kvSet } from "./kv.js";
+// estimated cost) into the IndexedDB sole-authority ledger (lib/usage-store.js)
+// with a rolling 7-day window, then aggregates by agent/provider/model/task/day.
+// Every agent-do onUsage event flows through recordUsage(). Usage survives
+// service-worker restarts WITHOUT the optional `storage` permission.
+import { usageRead, usageWrite, usageClear, usageRemoveRow } from "./usage-store.js";
 import { assertRunOwned } from "./run-fence.js";
-
-const STORAGE_KEY = "cairn:usage";
-const MAX_RECORDS = 5000;
-const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // A module mutex serializes the usage ledger read-modify-write. Concurrent
 // onUsage events (parallel tool calls in a single model step resolve via
-// Promise.all, so two recordUsage calls can interleave) previously read the same
-// rows, appended, and overwrote each other — losing one row. One lock makes the
-// append atomic (the round-24 usage-RMW blocker).
+// Promise.all) previously lost rows; one lock makes the append atomic.
 let usageMutex = Promise.resolve();
 function withUsageLock(fn) {
   const run = usageMutex.then(fn, fn);
@@ -43,9 +38,14 @@ export async function recordUsage(p, guard = null) {
   const outputTokens = p.outputTokens ?? 0;
   if (inputTokens === 0 && outputTokens === 0) return; // nothing to record
 
+  // The row id IS the immutable provider-attempt usageEventId (generated at the
+  // doGenerate/doStream boundary); occurredAt originates there too. A duplicate
+  // delivery reuses both → byte-identical idempotent no-op.
+  const id = typeof p.usageEventId === "string" && p.usageEventId.length > 0 ? p.usageEventId : crypto.randomUUID();
+
   const record = {
-    id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
+    id,
+    timestamp: p.occurredAt ?? new Date().toISOString(),
     agentId: p.agentId ?? "hub",
     taskId: p.taskId ?? "adhoc",
     provider: p.provider ?? "unknown",
@@ -73,13 +73,10 @@ export async function recordUsage(p, guard = null) {
         return; // guard failure — fail closed, no stale usage row
       }
     }
-    const store = await kvGet(STORAGE_KEY);
-    const rows = (store[STORAGE_KEY] ?? []).filter(
-      (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS,
-    );
-    rows.push(record);
-    // cap the ledger (keep the newest)
-    const trimmed = rows.slice(-MAX_RECORDS);
+    const store = await usageRead();
+    // Pass ONLY the new record (usageWrite merges it into the current authority
+    // inside its IDB transaction — no pre-transaction snapshot).
+    await usageWrite([record]);
     // DUrable ownership re-checked IMMEDIATELY before the ledger commit (no other
     // await between this check and kvSet) — the round-21 finding that usage
     // checked ownership only before the read-modify-write, never adjacent to the
@@ -99,7 +96,7 @@ export async function recordUsage(p, guard = null) {
         return; // fail closed — no stale usage row
       }
     }
-    await kvSet({ [STORAGE_KEY]: trimmed });
+    await usageWrite([record]);
     // Post-commit re-checks: ownership loss DURING the kvSet await must not
     // report a successfully recorded row — AND must COMPENSATE by removing the
     // just-committed row, so a stale owner's usage row does not survive as a
@@ -123,16 +120,12 @@ export async function recordUsage(p, guard = null) {
       }
     }
     if (stale) {
-      // Compensate: remove the row we just appended (by its unique id). Best-effort
-      // — if the compensation write also fails, the row remains but is not REPORTED
-      // as recorded.
+      // Compensate: EXPLICIT atomic removal of the just-appended row (by id).
       try {
-        const cur = await kvGet(STORAGE_KEY);
-        const compensated = (cur[STORAGE_KEY] ?? []).filter(
-          (r) => r.id !== record.id,
-        );
-        await kvSet({ [STORAGE_KEY]: compensated });
-      } catch { /* best-effort compensation */ }
+        await usageRemoveRow(record.id);
+      } catch (e) {
+        throw new Error(`usage compensation failed: ${e?.message ?? e}`);
+      }
       return; // stale owner / re-enrolled — the row is not reported
     }
     return record;
@@ -140,10 +133,7 @@ export async function recordUsage(p, guard = null) {
 }
 
 export async function getUsage() {
-  const store = await kvGet(STORAGE_KEY);
-  const rows = (store[STORAGE_KEY] ?? []).filter(
-    (r) => Date.now() - new Date(r.timestamp).getTime() < RETENTION_MS,
-  );
+  const { rows, durability } = await usageRead();
 
   const byModel = {};
   const byProvider = {};
@@ -243,16 +233,12 @@ export async function getUsage() {
     byTask: Object.values(byTask),
     byDay: Object.values(byDay),
     rows,
+    durability,
   };
 }
 
 export async function clearUsage() {
-  // clearUsage must run INSIDE the SAME usage mutex as append/compensation (the
-  // round-25 blocker 7): an unlocked clear could interleave with an in-flight
-  // append/compensation, letting a still-writing append resurrect rows the owner
-  // just cleared. Route append, compensation, clear, and consistent reads through
-  // the same transaction.
   return await withUsageLock(async () => {
-    await kvRemove(STORAGE_KEY);
+    await usageClear();
   });
 }

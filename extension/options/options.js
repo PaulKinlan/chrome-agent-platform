@@ -1163,14 +1163,6 @@ async function renderUsage() {
     u.byAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
   mk("By day", ["Day", "Calls", "Tokens", "Cost"],
     u.byDay.slice().sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
-
-  $("#usage-detail-toggle").addEventListener("click", () => {
-    const d = $("#usage-detail");
-    d.hidden = !d.hidden;
-    $("#usage-detail-toggle").textContent = d.hidden
-      ? "Show detail"
-      : "Hide detail";
-  });
 }
 
 // ── Data / memory ──
@@ -1669,6 +1661,7 @@ document.querySelectorAll(".nav-item").forEach((a) => {
     );
     a.setAttribute("aria-current", "true");
     if (a.dataset.section === "approvals") renderApprovals();
+    if (a.dataset.section === "usage") renderUsage();
   });
 });
 
@@ -1697,6 +1690,19 @@ setInterval(() => { if (document.visibilityState === "visible") renderApprovals(
 await renderHooks();
 await renderPrompts();
 await renderUsage();
+// The OPEN Usage panel must reflect a record/clear the moment it happens (a run
+// completing, or the owner clearing), not show a stale count until a manual
+// reload — poll while the page is visible (the same pattern as Approvals), and
+// re-render on section activation via the nav handler above.
+setInterval(() => { if (document.visibilityState === "visible") renderUsage(); }, 1500);
+// The detail-toggle is a STATIC control — wire its click EXACTLY ONCE (outside
+// renderUsage, which runs per page-load + nav + poll), so repeated renders never
+// stack listeners and never produce parity-dependent dead/inverted toggles.
+$("#usage-detail-toggle").addEventListener("click", () => {
+  const d = $("#usage-detail");
+  d.hidden = !d.hidden;
+  $("#usage-detail-toggle").textContent = d.hidden ? "Show detail" : "Hide detail";
+});
 await renderData();
 await renderMemoryExplorer();
 await renderEnrolledSites();

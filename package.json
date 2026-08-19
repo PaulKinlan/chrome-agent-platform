@@ -1,9 +1,9 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.101",
+  "version": "0.2.102",
   "private": true,
   "type": "module",
-  "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
+  "description": "Chrome as the agent platform \u2014 agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
     "build": "node build.mjs",
     "sync:gallery": "node scripts/sync-gallery.mjs",
@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "acorn": "^8.18.0",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "fake-indexeddb": "^6.2.5"
   }
 }

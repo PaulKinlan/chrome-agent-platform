@@ -8,11 +8,15 @@
 // fakes the unit suites use.
 // @ts-nocheck — the chrome/kv mocks are intentionally dynamic (no types in Deno).
 
+import { installFakeIdb, resetFakeIdb } from "./fake-idb.js";
+import { installFakeLocks, resetFakeLocks } from "./fake-locks.js";
+import { resetUsageMigration } from "../extension/lib/usage-store.js";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createAgent } from "../extension/lib/agent.js";
 import { createDemoModel } from "../extension/lib/models/demo-model.js";
 import { getUsage } from "../extension/lib/usage.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
+function __resetUsage() { resetFakeIdb(); installFakeIdb(); resetFakeLocks(); installFakeLocks(); resetUsageMigration(); }
 
 // ---- chrome.storage mock (the usage ledger writes here) ----
 const store = new Map();
@@ -67,6 +71,7 @@ function fakeMemory() {
 }
 
 Deno.test("e2e: a task runs end-to-end — result + usage recorded + done event", async () => {
+  __resetUsage();
   clearRunFence();
   store.clear();
 

@@ -10,6 +10,9 @@
 // the real agent core (hub + delegated worker + scoped/hook shapes).
 // @ts-nocheck — the chrome/kv mocks are intentionally dynamic (no types in Deno).
 
+import { installFakeIdb, resetFakeIdb } from "./fake-idb.js";
+import { installFakeLocks, resetFakeLocks } from "./fake-locks.js";
+import { resetUsageMigration } from "../extension/lib/usage-store.js";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 import {
@@ -54,6 +57,7 @@ import { freshSystemPrompts } from "./test-hooks.js";
 import { createAgent, createOrchestrator } from "../extension/lib/agent.js";
 import { createDemoModel } from "../extension/lib/models/demo-model.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
+function __resetUsage() { resetFakeIdb(); installFakeIdb(); resetFakeLocks(); installFakeLocks(); resetUsageMigration(); }
 
 // ---- chrome.storage mock (the overrides persist via lib/kv.js) ----
 const store = new Map();
@@ -376,6 +380,7 @@ Deno.test("truncateUtf8: never splits a code point at the byte bound", () => {
 // ── persistence: versioned store + strict schema + quarantine ─────────────
 
 Deno.test("persistence: an override round-trips through the VERSIONED store with its base stamp", async () => {
+  __resetUsage();
   reset();
   const r = await save("hub", { mode: "append", text: "Be terse." });
   assertEquals(r.ok, true);
@@ -396,6 +401,7 @@ Deno.test("persistence: an override round-trips through the VERSIONED store with
 });
 
 Deno.test("persistence: the base snapshot is bounded in UTF-8 bytes without splitting a code point", async () => {
+  __resetUsage();
   reset();
   const reg = PROMPT_REGISTRY.map((p) =>
     p.id === "cap.hub.master"
@@ -409,6 +415,7 @@ Deno.test("persistence: the base snapshot is bounded in UTF-8 bytes without spli
 });
 
 Deno.test("migration: a LEGACY plain-map store reads (revision 0) and rewrites versioned", async () => {
+  __resetUsage();
   reset();
   const base = registryEntry("cap.hub.master");
   store.set(PROMPT_OVERRIDES_KEY, {
@@ -433,6 +440,7 @@ Deno.test("migration: a LEGACY plain-map store reads (revision 0) and rewrites v
 });
 
 Deno.test("corruption: a junk store / malformed records are QUARANTINED, never composed", async () => {
+  __resetUsage();
   reset();
   // A non-object store.
   store.set(PROMPT_OVERRIDES_KEY, "not-a-map");
@@ -492,6 +500,7 @@ Deno.test("corruption: a junk store / malformed records are QUARANTINED, never c
 });
 
 Deno.test("strict store schema: a FUTURE/foreign versioned envelope is quarantined INTACT, never read as a legacy map", async () => {
+  __resetUsage();
   reset();
   // The review's schema blocker: an unknown store VERSION must never be
   // treated as a legacy scope→record map (its version/revision/scopes fields
@@ -536,6 +545,7 @@ Deno.test("strict store schema: a FUTURE/foreign versioned envelope is quarantin
 // ── revision CAS (concurrent writers) ─────────────────────────────────────
 
 Deno.test("CAS: a stale writer is REJECTED with a conflict, never a silent last-write-wins", async () => {
+  __resetUsage();
   reset();
   const d0 = await describePrompt("hub");
   assertEquals(d0.revision, 0);
@@ -557,6 +567,7 @@ Deno.test("CAS: a stale writer is REJECTED with a conflict, never a silent last-
 });
 
 Deno.test("CAS is MANDATORY: set/reset/keep without a revision are REJECTED (no unguarded mutation path)", async () => {
+  __resetUsage();
   reset();
   const set = await setPromptOverride("hub", { mode: "append", text: "x" });
   assertEquals(set.ok, false);
@@ -576,6 +587,7 @@ Deno.test("CAS is MANDATORY: set/reset/keep without a revision are REJECTED (no 
 });
 
 Deno.test("CAS: a stale RESET / KEEP conflicts instead of deleting or re-stamping a newer write", async () => {
+  __resetUsage();
   reset();
   await save("hub", { mode: "append", text: "V1" });
   const staleRev = (await describePrompt("hub")).revision; // a window reads…
@@ -592,6 +604,7 @@ Deno.test("CAS: a stale RESET / KEEP conflicts instead of deleting or re-stampin
 });
 
 Deno.test("concurrency: mandatory CAS — racing writers conflict; read-then-write retries are monotonic, no lost update", async () => {
+  __resetUsage();
   reset();
   // All three windows read the SAME revision, then race their writes.
   const rev = (await describePrompt("hub")).revision;
@@ -625,6 +638,7 @@ Deno.test("concurrency: mandatory CAS — racing writers conflict; read-then-wri
 // ── agent existence + deletion cleanup ────────────────────────────────────
 
 Deno.test("agent scopes: existence is enforced when the caller supplies the registry check", async () => {
+  __resetUsage();
   reset();
   const noAgent = await setPromptOverride(
     "agent:ghost",
@@ -642,6 +656,7 @@ Deno.test("agent scopes: existence is enforced when the caller supplies the regi
 });
 
 Deno.test("deletion cleanup: deleteAgentPromptOverride removes the agent's override", async () => {
+  __resetUsage();
   reset();
   assertEquals((await save("agent:reader", { mode: "append", text: "MINE" })).ok, true);
   assertEquals((await save("hub", { mode: "append", text: "HUB" })).ok, true);
@@ -657,6 +672,7 @@ Deno.test("deletion cleanup: deleteAgentPromptOverride removes the agent's overr
 // ── per-agent vs global ───────────────────────────────────────────────────
 
 Deno.test("per-agent scope: the agent override wins; absent → inherit the hub override", async () => {
+  __resetUsage();
   reset();
   await save("hub", { mode: "append", text: "HUB-STYLE" });
   let got = await getPromptOverride("agent:reader");
@@ -683,6 +699,7 @@ Deno.test("per-agent scope: the agent override wins; absent → inherit the hub 
 // ── built-in upgrades ─────────────────────────────────────────────────────
 
 Deno.test("upgrade, NO override: the new built-in takes effect automatically", async () => {
+  __resetUsage();
   reset();
   const reg = upgradedRegistry();
   const resolved = await resolveSystemPrompt("hub", { registry: reg });
@@ -693,6 +710,7 @@ Deno.test("upgrade, NO override: the new built-in takes effect automatically", a
 });
 
 Deno.test("upgrade WITH override: flagged, the override still applies, and the diff is exposed", async () => {
+  __resetUsage();
   reset();
   await save("hub", { mode: "append", text: "MY-CUSTOM" });
   const reg = upgradedRegistry();
@@ -707,6 +725,7 @@ Deno.test("upgrade WITH override: flagged, the override still applies, and the d
 });
 
 Deno.test("conflict resolution: keep re-stamps; reset deletes; editing + save merges deterministically", async () => {
+  __resetUsage();
   reset();
   await save("hub", { mode: "append", text: "MY-CUSTOM" });
   const reg = upgradedRegistry();
@@ -730,6 +749,7 @@ Deno.test("conflict resolution: keep re-stamps; reset deletes; editing + save me
 });
 
 Deno.test("INHERITED upgrade: keep/reset on an agent scope act on the inherited HUB record", async () => {
+  __resetUsage();
   reset();
   // The hub has a customization; the agent inherits it (no own override).
   await save("hub", { mode: "append", text: "HUB-CUSTOM" });
@@ -764,6 +784,7 @@ Deno.test("INHERITED upgrade: keep/reset on an agent scope act on the inherited 
 // ── Unicode ───────────────────────────────────────────────────────────────
 
 Deno.test("Unicode: CJK + emoji + RTL text round-trips and hashes deterministically", async () => {
+  __resetUsage();
   reset();
   const text = "常に日本語で答えてください。Use tables. — Résumé naïve ✓";
   const r = await save("hub", { mode: "append", text });
@@ -790,6 +811,7 @@ Deno.test("diffLines: added/removed/unchanged lines; bounded on huge inputs", ()
 // ── attestation (keyed receipts — parity proof, no public fingerprint) ────
 
 Deno.test("attestation: KEYED receipts — deterministic, key-dependent, content-free, UTF-8 bytes", async () => {
+  __resetUsage();
   reset();
   await resetAttestationModule();
   assertEquals((await save("hub", { mode: "append", text: "SECRET-MARKER-XYZ" })).ok, true);
@@ -828,6 +850,7 @@ Deno.test("attestation: KEYED receipts — deterministic, key-dependent, content
 // ── describe payload (the Settings surface) ───────────────────────────────
 
 Deno.test("describe: the full UI payload (viewer + editor + preview + revision + durability + context)", async () => {
+  __resetUsage();
   reset();
   await save("worker", { mode: "replace", text: "WORKER-CUSTOM" });
   const d = await describePrompt("worker");
@@ -860,6 +883,7 @@ Deno.test("describe: the full UI payload (viewer + editor + preview + revision +
 // ── run-bound attestation (the provider/model boundary, real agent core) ──
 
 Deno.test("run-bound attestation: the EXACT provider-bound system message, runId-tagged (hub path)", async () => {
+  __resetUsage();
   reset();
   assertEquals((await save("hub", { mode: "append", text: "RUN-BOUND-MARKER" })).ok, true);
   const composed = await resolveSystemPrompt("hub");
@@ -895,6 +919,7 @@ Deno.test("run-bound attestation: the EXACT provider-bound system message, runId
 });
 
 Deno.test("run-bound attestation: a tampered composition flips prefixMatch (the proof is real)", async () => {
+  __resetUsage();
   reset();
   const atts = [];
   const agent = createAgent({
@@ -923,6 +948,7 @@ Deno.test("run-bound attestation: a tampered composition flips prefixMatch (the 
 });
 
 Deno.test("run-bound attestation: the DELEGATED site-worker path attests with its own agentId", async () => {
+  __resetUsage();
   reset();
   const workerComposed = await resolveSystemPrompt("worker", {
     skills: [{ name: "site-skill", description: "site steps" }],
@@ -965,6 +991,7 @@ Deno.test("run-bound attestation: the DELEGATED site-worker path attests with it
 });
 
 Deno.test("run-bound attestation: the SCOPED (hook) run shape attests too", async () => {
+  __resetUsage();
   reset();
   const composed = await resolveSystemPrompt("hub");
   const orch = createOrchestrator({
@@ -984,6 +1011,7 @@ Deno.test("run-bound attestation: the SCOPED (hook) run shape attests too", asyn
 });
 
 Deno.test("orchestrator: the sent message carries base + override + skills + the policy LAST", async () => {
+  __resetUsage();
   reset();
   assertEquals((await save("hub", { mode: "append", text: "ORCHESTRATOR-MARKER-123" })).ok, true);
   const composed = await resolveSystemPrompt("hub");
@@ -1044,6 +1072,7 @@ Deno.test("orchestrator: the sent message carries base + override + skills + the
 });
 
 Deno.test("run skills: a /skill:<id> reference recomposes the FULL body BEFORE the protected block (real agent core)", async () => {
+  __resetUsage();
   // The review's included-skill blocker, exercised through the real run path:
   // per-run skills (resolved /skill:<id> references) get a FRESH agent whose
   // system prompt recomposes the full skill bodies before the policy — and
@@ -1189,6 +1218,7 @@ Deno.test("truncateUtf8: MALFORMED input — lone surrogates are DROPPED, the ou
 // ── the attestation key: versioned envelope, rotation, durability labelling ─
 
 Deno.test("attestation key: the VERSIONED envelope; receipts identify their key epoch + durability; NO unkeyed hash", async () => {
+  __resetUsage();
   reset();
   await resetAttestationModule();
   const composed = await resolveSystemPrompt("hub");
@@ -1207,6 +1237,7 @@ Deno.test("attestation key: the VERSIONED envelope; receipts identify their key 
 });
 
 Deno.test("attestation key ROTATION: a fresh key + bumped version; older receipts stay verifiable", async () => {
+  __resetUsage();
   reset();
   await resetAttestationModule();
   const composed = await resolveSystemPrompt("hub");
@@ -1232,6 +1263,7 @@ Deno.test("attestation key ROTATION: a fresh key + bumped version; older receipt
 });
 
 Deno.test("attestation key: a LEGACY raw key blob migrates to the versioned envelope (same key, version 1)", async () => {
+  __resetUsage();
   reset();
   await resetAttestationModule();
   const legacy = Array.from({ length: 32 }, (_, i) => (i * 7) % 256);
@@ -1245,6 +1277,7 @@ Deno.test("attestation key: a LEGACY raw key blob migrates to the versioned enve
 });
 
 Deno.test("attestation key: a CORRUPT key blob is replaced, never composed from", async () => {
+  __resetUsage();
   reset();
   await resetAttestationModule();
   store.set("cap:attestationKey", { v: 1, current: { version: 1, bytes: [1, 2, 3] }, previous: [] });
@@ -1255,6 +1288,7 @@ Deno.test("attestation key: a CORRUPT key blob is replaced, never composed from"
 });
 
 Deno.test("attestation: an EXPLICIT key attests without the install key state (external verification path)", async () => {
+  __resetUsage();
   reset();
   await resetAttestationModule();
   const key = new Uint8Array(32).fill(9);
