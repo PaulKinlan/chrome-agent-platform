@@ -41,9 +41,10 @@ there. The reviewer agents check against it.
   resilience checks. Run them on the surfaces where applicable.
 
 ## Working conventions (Paul, 2026-08-16)
-- **Track every ask.** Every Paul issue/request goes into docs/UI-FIXES-TRACKER.md
-  (UI) or docs/KNOWN-ISSUES.md (review/system) with a status. Nothing is dropped.
-  Work through them in subagents; move each to Done with evidence.
+- **Track every ask.** Every product issue/request gets a stable entry in root
+  `TASKS.md`; UI detail also lives in `docs/UI-FIXES-TRACKER.md`, and review/system
+  findings live in root `KNOWN-ISSUES.md`. Nothing is dropped.
+  Work through them in subagents; advance each only with the required evidence.
 - **Resolve open questions.** Read docs/OPEN-QUESTIONS.md; mark the questions Paul
   has answered (with the answer) + surface the genuinely-open ones.
 - **Prioritize known issues.** Work the known-issues + tracker backlog actively,
@@ -84,7 +85,7 @@ there. The reviewer agents check against it.
   moment of need, with a clear grant flow + a clear error only if the user denies.
   A feature that just fails with "permission required" is a bug.
 - **Docs never drift (Paul, 2026-08-17).** Before every commit, update the docs to
-  match the change: PLAN.md (the roadmap state), docs/KNOWN-ISSUES.md (the open/
+  match the change: PLAN.md (the roadmap state), root KNOWN-ISSUES.md (the open/
   fixed findings), docs/DESIGN.md (the design system), docs/OPEN-QUESTIONS.md,
   docs/UI-FIXES-TRACKER.md, CHANGELOG.md (the version entry). A commit that lands
   a feature/fix WITHOUT updating the docs is incomplete — the docs are part of the
@@ -112,3 +113,38 @@ there. The reviewer agents check against it.
 - deno test tests/ — the pure/unit suite.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
+
+## Repository-local task recovery (2026-08-19)
+
+Root [`TASKS.md`](TASKS.md) is the durable, public-safe product task record.
+Root [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md) is the canonical review/system issue
+record; `docs/KNOWN-ISSUES.md` remains a compatibility link.
+
+- Create a stable `CAP-FB-YYYYMMDD-SLUG-NN` entry when feedback arrives. Never
+  rename, reuse, or delete an ID; archive the complete entry only after its
+  terminal state.
+- The accepted Git commit containing `TASKS.md` is authoritative. Ownership and
+  material fields change together with one History event in one commit. A
+  concurrent tracker edit is a compare-and-swap conflict that must be reconciled,
+  never overwritten. Reviewers may append review evidence without taking
+  implementation custody.
+- After a crash, preserve any dirty diff, read the last committed tracker state,
+  verify recorded commits and ancestry, reconcile the stable ID with the private
+  coordination ledger, and choose the more conservative state when evidence is
+  incomplete. Missing/diverged/ambiguous work becomes `BLOCKED` with a recovery
+  owner, prior state, blocker, and one next action.
+- Never publish local absolute paths, session/relay/provider IDs, transport
+  receipts, credentials, personal data, or private evidence locations. Public
+  entries use role labels, repository refs, Git object IDs, and content hashes.
+- Reconcile at least once per active workday and after any recovery. Full schema,
+  state/evidence requirements, atomic ownership, and recovery commands live in
+  `TASKS.md`.
+
+## Review and delivery lifecycle
+
+Use `OPEN → IN_PROGRESS → REVIEWING → REVIEW_PASSED → READY_FOR_BROWSER →
+INTEGRATING → GATED → PUSHED → CONFIRMED`; review failures use `FIX_REQUESTED`, and dependency or
+environment stops use `BLOCKED` with an explicit prior state. `READY_FOR_BROWSER`
+is not final acceptance. `GATED` requires exact-commit content-addressed evidence,
+`PUSHED` an immutable remote ref, and `CONFIRMED` explicit product-owner
+confirmation. Never fabricate evidence or closure.

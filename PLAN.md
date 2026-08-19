@@ -57,7 +57,7 @@ what's landed vs what's next.
 ## Remaining work (the proactive backlog)
 - Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only) — see the task backlog.
 - The screenshot / media-capture permission flows (ask-on-need, not fail).
-- The UI polish + the review backlog (see docs/UI-FIXES-TRACKER.md + docs/KNOWN-ISSUES.md).
+- The UI polish + the review backlog (see [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) + root [KNOWN-ISSUES.md](KNOWN-ISSUES.md)).
 - The extension rename/packaging (still "Chrome Agent Platform").
 
 ## Open questions for Paul

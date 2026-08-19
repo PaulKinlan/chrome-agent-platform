@@ -121,5 +121,6 @@ table (cost tracking + spending limits work out of the box).
 This README is the overview. **The plan — the landed state, the in-flight work, the
 open questions, and the proactive backlog — lives in [PLAN.md](PLAN.md)** (the single
 source of truth for what's done vs what's next). Historical detail and the open review
-findings live in **docs/KNOWN-ISSUES.md** + **docs/UI-FIXES-TRACKER.md**. The design
+findings live in root **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** +
+**[docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md)**. The design
 is **docs/DESIGN.md**; the constraints are **docs/CONSTITUTION.md**.
