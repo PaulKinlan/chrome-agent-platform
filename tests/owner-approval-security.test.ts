@@ -5,6 +5,7 @@ import { assert, assertEquals, assertNotEquals, assertRejects, assertThrows } fr
 import {
   MAX_PENDING_APPROVALS,
   approvalPendingCount,
+  bindModelApprovalDispatcher,
   canonicalArray,
   canonicalBinary,
   canonicalField,
@@ -67,6 +68,16 @@ Deno.test("approval payload: sparse/dense, undefined/null/-0/NaN/infinities and 
   const offsetA = canonicalBinary(new Uint8Array(bytes.buffer, 1, 2));
   const offsetB = canonicalBinary(new Uint8Array(new Uint8Array([1, 2]).buffer, 0, 2));
   assertNotEquals(await payloadDigest(offsetA), await payloadDigest(offsetB));
+
+  let binaryAccessors = 0;
+  const hostileView = new Uint8Array([1, 2]);
+  for (const key of ["buffer", "byteOffset", "byteLength"]) {
+    Object.defineProperty(hostileView, key, { get() { binaryAccessors++; throw new Error("observed"); } });
+  }
+  Object.defineProperty(hostileView, Symbol.toStringTag, { get() { binaryAccessors++; throw new Error("observed"); } });
+  const safeView = canonicalBinary(hostileView);
+  assertEquals(binaryAccessors, 0, "binary canonicalization uses intrinsic getters only");
+  assertEquals(await payloadDigest(safeView), await payloadDigest(canonicalBinary(new Uint8Array([1, 2]))));
 });
 
 Deno.test("approval payload: overflow rejects instead of truncating/colliding", () => {
@@ -78,6 +89,7 @@ Deno.test("approval targets use effective normalized identities and reject inval
   assertEquals(target, canonicalOperationTarget("asset", { origin: "https://example.com", id: "a_1" }));
   assertEquals(canonicalOperationTarget("named", { id: "My Agent!!" }), canonicalOperationTarget("named", { id: "my-agent" }));
   assertEquals(canonicalOperationTarget("script", { origin: "master", id: "s_1" }).startsWith("script:"), true);
+  assertNotEquals(canonicalOperationTarget("asset", { origin: "master", id: "a_1" }), canonicalOperationTarget("asset", { origin: "master", id: " a_1" }));
   assertEquals(canonicalOperationTarget("script", { origin: "not-an-origin", id: "s_1" }), "");
   assertEquals(canonicalOperationTarget("hook", { hookId: "tabs.onCreated", recipeId: null }), canonicalOperationTarget("hook", { hookId: "tabs.onCreated" }));
   assertNotEquals(canonicalOperationTarget("hook", { hookId: "tabs.onCreated", recipeId: null }), canonicalOperationTarget("hook", { hookId: "tabs.onCreated", recipeId: "master" }));
@@ -105,6 +117,17 @@ Deno.test("approval store deduplicates exact requests, never evicts approved gra
   assert(resolvePendingApproval(store, denyTarget.approvalId, false).ok);
   assertEquals(store.approvals.has(denyTarget.approvalId), false);
   assertEquals(store.approvals.get(one.approvalId)?.status, "approved");
+});
+
+Deno.test("model approval dispatcher captures an immutable build-local execution id", () => {
+  const seen = [];
+  const dispatch = (_type, _args, context) => { seen.push(context.executionId); return context.executionId; };
+  const runA = bindModelApprovalDispatcher("exec:A", dispatch);
+  const runB = bindModelApprovalDispatcher("exec:B", dispatch);
+  assertEquals(runA("asset.delete", {}), "exec:A");
+  assertEquals(runB("asset.delete", {}), "exec:B");
+  assertEquals(runA("asset.delete", {}), "exec:A", "a stale closure cannot borrow run B's id");
+  assertEquals(seen, ["exec:A", "exec:B", "exec:A"]);
 });
 
 Deno.test("approval grants bind run/action/target/digest, expire, and consume exactly once", async () => {
@@ -158,8 +181,9 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   assert(!isExactOptionsSender({ ...exact, id: "other" }, id, url));
   assert(!isExactOptionsSender({ ...exact, url: `chrome-extension://${id}/ntp/ntp.html` }, id, url));
   assert(isExactOptionsSender({ ...exact, tab: { id: 1, url } }, id, url), "Settings normally runs in its own tab");
-  assert(!isExactOptionsSender({ ...exact, tab: { id: 1, url: `https://evil.example/` } }, id, url));
-  assert(!isExactOptionsSender({ ...exact, frameId: 1 }, id, url));
+  assert(!isExactOptionsSender({ ...exact, origin: "https://evil.example" }, id, url));
+  const ntp = `chrome-extension://${id}/ntp/ntp.html`;
+  assert(isExactOptionsSender({ ...exact, frameId: 2, tab: { id: 1, url: ntp } }, id, url), "the exact private Settings document is trusted in the shipped NTP iframe");
   assert(!isExactOptionsSender({ ...exact, documentLifecycle: "prerender" }, id, url));
   assert(!isExactOptionsSender({ ...exact, documentId: "" }, id, url));
 });

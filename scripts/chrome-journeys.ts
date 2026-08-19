@@ -435,6 +435,7 @@ const EXPECTED = [
   "mgmt: create_asset succeeded (hub asset)",
   "mgmt: list_assets lists the asset (no content)",
   "mgmt: get_asset round-trips content",
+  "approval: primary NTP Settings iframe can deny an exact request",
   "approval: deny row is singular and capability material absent from DOM",
   "approval: NTP cannot programmatically resolve an owner approval",
   "approval: deny leaves the exact asset unchanged",
@@ -1539,6 +1540,54 @@ async function main() {
       "mgmt: get_asset round-trips content",
       assetGet?.ok === true && assetGet.asset?.content === "<h1>hello</h1>",
     );
+
+    // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
+    // its navigation and Deny button with genuine CDP clicks (Runtime.evaluate
+    // is used only for coordinate discovery/assertions).
+    const iframeDeniedRequest = await msgValue({
+      type: "asset.update", origin: "master", id: assetId, name: "must-not-apply",
+    });
+    // Keep this acceptance focused on owner input/authority rather than a
+    // concurrent ViewTransition lifecycle; reduced-motion is a supported
+    // production mode and makes the overlay state deterministic.
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    }, ntpSession);
+    await clickSel(cdp, ntpSession, "#open-settings");
+    const clickInSettingsFrame = async (selector) => {
+      let point = null;
+      for (let i = 0; i < 30 && !point; i++) {
+        point = await evalIn(cdp, ntpSession, `(() => {
+          const frame = document.querySelector('#view-frame');
+          const el = frame?.contentDocument?.querySelector(${JSON.stringify(selector)});
+          if (!frame || !el) return null;
+          const fr = frame.getBoundingClientRect();
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return null;
+          return {x: fr.left + r.left + r.width / 2, y: fr.top + r.top + r.height / 2};
+        })()`);
+        if (!point) await sleep(200);
+      }
+      if (!point) return false;
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
+      return true;
+    };
+    const iframeNav = await clickInSettingsFrame(`.nav-item[data-section="approvals"]`);
+    await sleep(250);
+    const iframeDeny = await clickInSettingsFrame(`#approval-list .approval-row .approval-controls .ghost`);
+    await sleep(250);
+    const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const iframeShot = await captureShot(cdp, ntpSession).catch(() => null);
+    if (iframeShot) await writeEvidence("approval-iframe-denied.png", iframeShot);
+    const iframePass = iframeDeniedRequest?.ok === false && iframeNav && iframeDeny &&
+      iframeAfter?.ok === true && iframeAfter.asset?.name === "generated page";
+    check(
+      "approval: primary NTP Settings iframe can deny an exact request",
+      iframePass,
+      { request: iframeDeniedRequest, iframeNav, iframeDeny, assetName: iframeAfter?.asset?.name },
+    );
+    await clickSel(cdp, ntpSession, "#view-back").catch(() => false);
 
     // Exact correlated DENY: one request → one row; neither the raw target,
     // asset id, digest nor approval id is present in the DOM. A genuine Deny

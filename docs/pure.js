@@ -642,17 +642,17 @@ export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {
   if (typeof exactOptionsUrl !== "string" || !exactOptionsUrl) return false;
   const exactDocument = sender.url === exactOptionsUrl ||
     (typeof sender.url === "string" && sender.url.startsWith(`${exactOptionsUrl}#`));
-  const exactTab = sender.tab == null || sender.tab.url === exactOptionsUrl ||
-    (typeof sender.tab?.url === "string" && sender.tab.url.startsWith(`${exactOptionsUrl}#`));
+  // The shipped NTP presents this exact private extension document in an
+  // iframe. Chrome may omit frame/lifecycle/tab metadata for extension pages.
+  // Web pages cannot load this non-web-accessible document; browser-supplied
+  // extension id + exact document URL + document id are the authority.
   return sender.id === extensionId &&
     exactDocument &&
     // Chrome omits `origin` for extension-page runtime messages; the exact
     // browser-supplied chrome-extension:// URL already binds the origin.
     (sender.origin == null || sender.origin === `chrome-extension://${extensionId}`) &&
-    (sender.frameId == null || sender.frameId === 0) &&
     (sender.documentLifecycle == null || sender.documentLifecycle === "active") &&
-    typeof sender.documentId === "string" && sender.documentId.length > 0 &&
-    exactTab;
+    typeof sender.documentId === "string" && sender.documentId.length > 0;
 }
 
 export function authorizeToolReport(

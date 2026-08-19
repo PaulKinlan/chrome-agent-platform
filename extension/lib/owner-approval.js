@@ -46,6 +46,17 @@ export class CanonicalPayloadError extends Error {
 const nodeEncoding = new WeakMap();
 const fieldEncoding = new WeakMap();
 const encoder = new TextEncoder();
+// Intrinsic binary-view getters bypass hostile own accessors / @@toStringTag.
+// Reflect.apply performs an internal-slot check and never reads a property from
+// the supplied view.
+const TypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedBuffer = Object.getOwnPropertyDescriptor(TypedArrayPrototype, "buffer").get;
+const typedByteOffset = Object.getOwnPropertyDescriptor(TypedArrayPrototype, "byteOffset").get;
+const typedByteLength = Object.getOwnPropertyDescriptor(TypedArrayPrototype, "byteLength").get;
+const typedTag = Object.getOwnPropertyDescriptor(TypedArrayPrototype, Symbol.toStringTag).get;
+const dataViewBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer").get;
+const dataViewByteOffset = Object.getOwnPropertyDescriptor(DataView.prototype, "byteOffset").get;
+const dataViewByteLength = Object.getOwnPropertyDescriptor(DataView.prototype, "byteLength").get;
 
 function boundedString(value, label) {
   if (typeof value !== "string") throw new CanonicalPayloadError(`${label} must be a string`);
@@ -105,21 +116,31 @@ export function canonicalScalar(value) {
 
 export function canonicalBinary(view) {
   // ArrayBuffer.isView does not execute Proxy traps. Proxied views return false
-  // and fail closed. Only genuine views are accepted; offsets/length/type are
-  // part of the encoding, so subviews cannot collide with standalone bytes.
+  // and fail closed. Intrinsic getters below bypass hostile own accessors.
   if (!ArrayBuffer.isView(view)) throw new CanonicalPayloadError("binary value must be an ArrayBuffer view");
-  const byteLength = view.byteLength;
-  if (!Number.isSafeInteger(byteLength) || byteLength > 128 * 1024) {
-    throw new CanonicalPayloadError("binary value is too large");
+  let buffer;
+  let byteOffset;
+  let byteLength;
+  let type;
+  try {
+    // DataView's intrinsic getter succeeds only for a genuine DataView.
+    byteLength = Reflect.apply(dataViewByteLength, view, []);
+    byteOffset = Reflect.apply(dataViewByteOffset, view, []);
+    buffer = Reflect.apply(dataViewBuffer, view, []);
+    type = "DataView";
+  } catch {
+    byteLength = Reflect.apply(typedByteLength, view, []);
+    byteOffset = Reflect.apply(typedByteOffset, view, []);
+    buffer = Reflect.apply(typedBuffer, view, []);
+    type = Reflect.apply(typedTag, view, []);
   }
-  const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  if (!Number.isSafeInteger(byteLength) || !Number.isSafeInteger(byteOffset) ||
+      typeof type !== "string" || !type || byteLength > 128 * 1024) {
+    throw new CanonicalPayloadError("binary value is invalid or too large");
+  }
+  const bytes = new Uint8Array(buffer, byteOffset, byteLength);
   const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-  return pack("binary;", [
-    Object.prototype.toString.call(view),
-    String(view.byteOffset),
-    String(view.byteLength),
-    hex,
-  ]);
+  return pack("binary;", [type, String(byteOffset), String(byteLength), hex]);
 }
 
 export function canonicalArray(...nodes) {
@@ -182,7 +203,9 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
     case "asset":
     case "script": {
       const origin = normalizedOrigin(parts.origin);
-      const id = typeof parts.id === "string" ? parts.id.trim() : "";
+      // Asset/script stores address the raw string id verbatim; whitespace is
+      // therefore identity, not presentation, and must not be trimmed.
+      const id = typeof parts.id === "string" ? parts.id : "";
       values = [origin, id];
       break;
     }
@@ -252,6 +275,14 @@ export async function opaqueTargetRef(target) {
     throw error;
   });
   return await opaqueTargetRefWithKey(target, await installKeyPromise);
+}
+
+/** Build-local model dispatcher: the execution id is captured once forever. */
+export function bindModelApprovalDispatcher(executionId, dispatch) {
+  if (typeof dispatch !== "function") throw new TypeError("dispatch function required");
+  const captured = typeof executionId === "string" ? executionId : "";
+  const context = Object.freeze({ principal: "model", executionId: captured });
+  return (type, args) => dispatch(type, args, context);
 }
 
 export function createApprovalStore() {

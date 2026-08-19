@@ -148,9 +148,10 @@ export function installDiagnosticCapture() {
   try {
     selfRef.addEventListener?.("unhandledrejection", (ev) => {
       const reason = ev?.reason;
-      const msg =
-        reason?.message || reason?.name ||
-        (typeof reason === "string" ? reason : "unhandled rejection");
+      // Never dereference reason.message/name: a rejected Proxy can execute
+      // those getters before the redactor sees it. Structured reasons fail
+      // closed to a fixed marker; primitive strings remain bounded/redacted.
+      const msg = typeof reason === "string" ? reason : "<redacted:structured rejection>";
       push("error", `unhandled rejection: ${msg}`, "service-worker", "rejection");
     });
   } catch { /* no-op */ }

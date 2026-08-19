@@ -318,6 +318,7 @@ import {
   canonicalOperationTarget,
   canonicalRecord,
   canonicalScalar,
+  bindModelApprovalDispatcher,
   consumeApproved,
   createApprovalStore,
   createPendingApproval,
@@ -644,10 +645,6 @@ function recordRunAttestation(att) {
   slot.events = slot.events.slice(-8);
 }
 let generation = 0;
-// The cached management-tool closures read this cell only while runTask holds
-// the global run mutex. It is set to the immutable execution id immediately
-// after beginExecution and cleared in the same run's finally.
-const managementExecutionContext = { current: null };
 
 function invalidateAgent() {
   // Bump the generation FIRST (so any in-flight build sees a changed
@@ -707,15 +704,26 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "") {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
   // memory instead of the agent's own tier. A custom prompt scope (a named
   // agent's own system-prompt customization) takes the same fresh-build path —
   // the cached shared master carries the hub's composition, not the agent's.
-  if (memoryOverride || promptScope) {
-    return await buildOrchestrator(onProgress, scoped, memoryOverride ?? masterMemory(), modelOverride, promptScope, agentRole);
+  if (memoryOverride || promptScope || approvalExecutionId) {
+    // A management-capable run receives a FRESH toolset whose closure captures
+    // this immutable execution id. Cached/global mutable cells would let a
+    // stale tool call borrow a later run's authority.
+    return await buildOrchestrator(
+      onProgress,
+      scoped,
+      memoryOverride ?? masterMemory(),
+      modelOverride,
+      promptScope,
+      agentRole,
+      approvalExecutionId,
+    );
   }
   while (true) {
     const gen = generation;
@@ -756,7 +764,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "") {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null) {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -801,6 +809,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
     const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
+    const modelManagementDispatch = bindModelApprovalDispatcher(approvalExecutionId, dispatchRoute);
     const orch = await createOrchestrator({
       model,
       masterMemory: mem,
@@ -820,10 +829,9 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // delete_asset/revoke_capability/disenroll_origin (the wider-goal
         // review's finding).
         ...(scoped ? {} : managementToolset({
-          callRoute: (type, args) => dispatchRoute(type, args, {
-            principal: "model",
-            executionId: managementExecutionContext.current,
-          }),
+          // Immutable build-local capture. A stale closure keeps its original
+          // id, which activeExecutions rejects after that run finalizes.
+          callRoute: modelManagementDispatch,
         })),
       },
       delegateGuard: async (origin) => {
@@ -1243,7 +1251,6 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         journalAppend(mem, { type: "tool-result", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
       }
     };
-    const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride, promptScope, agentRole);
     // Bind the RUN-BOUND prompt attestation: lib/agent.js captures the EXACT
     // system message observed at the provider/model boundary (as public
     // SHA-256 digests) for THIS run — hub, named, background, scheduled,
@@ -1262,12 +1269,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // into a later run's records.
     const executionId = newExecutionId();
     beginExecution(executionId, taskId);
-    managementExecutionContext.current = executionId;
-    // Everything after beginExecution is inside this try: key establishment or
-    // callback binding can fail too, and even that pre-model failure must seal
-    // the slot + unbind any prior callback (never leave a ghost-live attempt).
+    // Everything after beginExecution is inside this try: orchestrator/key
+    // establishment can fail too, and even that pre-model failure must seal the
+    // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
+    let orch = null;
     try {
+      orch = await ensureOrchestrator(
+        journalingProgress,
+        scoped,
+        memory,
+        modelOverride,
+        promptScope,
+        agentRole,
+        executionId,
+      );
       const attestKeyState = await attestationKeyState();
       orch.setAttestation?.((att) => {
         const bound = {
@@ -1423,18 +1439,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // emission can be recorded against this — or a later — run (the ring
       // drops emissions for non-live executions).
       try {
-        orch.setAttestation?.(null);
+        orch?.setAttestation?.(null);
       } catch { /* best-effort */ }
       finalizeExecution(executionId);
-      if (managementExecutionContext.current === executionId) {
-        managementExecutionContext.current = null;
-      }
       clearRunFence();
       // Unbind the per-run PROGRESS callback (the live UI + the journaling
       // forwarder) so no stale callback survives into the next run — the next
       // run's ensureOrchestrator rebinds inside ITS lock.
       try {
-        orch.setProgress?.(null);
+        orch?.setProgress?.(null);
       } catch { /* best-effort */ }
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
@@ -1746,6 +1759,21 @@ function namedPatchPayload(id, patch) {
     canonicalField("content", canonicalScalar(asset.content)),
   )))));
   return canonicalRecord(...fields);
+}
+
+function namedExistingPayload(existing) {
+  return payloadFields([
+    ["id", existing.id],
+    ["instanceId", existing.instanceId ?? `legacy:${existing.id}:${existing.createdAt ?? 0}`],
+    ["revision", Number.isSafeInteger(existing.revision) ? existing.revision : 0],
+  ]);
+}
+
+function namedBoundMutationPayload(request, existing) {
+  return canonicalRecord(
+    canonicalField("request", request),
+    canonicalField("existing", namedExistingPayload(existing)),
+  );
 }
 
 async function ownerApprovalRows() {
@@ -2293,9 +2321,9 @@ const handlers = {
     const r = await createNamedAgent(
       { id, name, role, avatar, skills, coreAssets },
       {
-        gateOnReplace: async ({ slug, candidate }) => {
+        gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
-          try { payload = namedCandidatePayload(candidate); } catch { return { ok: false, error: "replacement payload is not approvable" }; }
+          try { payload = namedBoundMutationPayload(namedCandidatePayload(candidate), existing); } catch { return { ok: false, error: "replacement payload is not approvable" }; }
           return await requireOwnerApproval(
             context,
             "named-agent.create",
@@ -2311,16 +2339,19 @@ const handlers = {
   },
   async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }, context) {
     const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets });
-    let payload;
-    try { payload = namedPatchPayload(id, patch); } catch { return { ok: false, error: "update payload is not approvable" }; }
-    const gate = await requireOwnerApproval(
-      context,
-      "named-agent.update",
-      canonicalOperationTarget("named", { id }),
-      payload,
-    );
-    if (!gate.ok) return gate;
-    const r = await updateNamedAgent(id, patch);
+    const r = await updateNamedAgent(id, patch, {
+      gateBeforeMutation: async ({ slug, existing }) => {
+        let payload;
+        try { payload = namedBoundMutationPayload(namedPatchPayload(slug, patch), existing); }
+        catch { return { ok: false, error: "update payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.update",
+          canonicalOperationTarget("named", { id: slug }),
+          payload,
+        );
+      },
+    });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
     return r;
@@ -2332,23 +2363,26 @@ const handlers = {
     // agent (no apiKey).
     const normalized = config == null ? null : normalizeAgentProvider(config);
     if (config != null && normalized == null) return { ok: false, error: "invalid provider configuration" };
-    let payload;
-    try {
-      payload = normalized == null
-        ? payloadFields([["id", slugifyAgentId(id)], ["provider", null]])
-        : payloadFields([
-          ["id", slugifyAgentId(id)], ["provider", normalized.provider],
-          ["baseURL", normalized.baseURL], ["apiKey", normalized.apiKey], ["model", normalized.model],
-        ]);
-    } catch { return { ok: false, error: "provider payload is not approvable" }; }
-    const gate = await requireOwnerApproval(
-      context,
-      "named-agent.set-provider",
-      canonicalOperationTarget("provider", { id }),
-      payload,
-    );
-    if (!gate.ok) return gate;
-    const r = await setNamedAgentProvider(id, normalized);
+    const r = await setNamedAgentProvider(id, normalized, {
+      gateBeforeMutation: async ({ slug, existing }) => {
+        let request;
+        try {
+          request = normalized == null
+            ? payloadFields([["id", slug], ["provider", null]])
+            : payloadFields([
+              ["id", slug], ["provider", normalized.provider],
+              ["baseURL", normalized.baseURL], ["apiKey", normalized.apiKey], ["model", normalized.model],
+            ]);
+          request = namedBoundMutationPayload(request, existing);
+        } catch { return { ok: false, error: "provider payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.set-provider",
+          canonicalOperationTarget("provider", { id: slug }),
+          request,
+        );
+      },
+    });
     if (r?.ok !== false) {
       // The running model cache is global; a per-agent override does NOT touch
       // it (the override is threaded per-run via runTask's modelOverride).
@@ -2359,14 +2393,19 @@ const handlers = {
   },
   async "named-agent.delete"({ id }, context) {
     const slug = slugifyAgentId(id);
-    const gate = await requireOwnerApproval(
-      context,
-      "named-agent.delete",
-      canonicalOperationTarget("named", { id: slug }),
-      payloadFields([["id", slug]]),
-    );
-    if (!gate.ok) return gate;
-    const r = await deleteNamedAgent(slug);
+    const r = await deleteNamedAgent(slug, {
+      gateBeforeDelete: async ({ existing }) => {
+        let payload;
+        try { payload = namedBoundMutationPayload(payloadFields([["id", slug]]), existing); }
+        catch { return { ok: false, error: "delete payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.delete",
+          canonicalOperationTarget("named", { id: slug }),
+          payload,
+        );
+      },
+    });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
     return r;
@@ -3546,9 +3585,14 @@ const handlers = {
     return await subscribeHook(
       { hookId, recipeId, promptTemplate },
       {
-        gateOnReplace: async ({ candidate }) => {
+        gateOnReplace: async ({ existing, candidate }) => {
           let payload;
-          try { payload = payloadFields([["hookId", candidate.hookId], ["recipeId", candidate.recipeId], ["promptTemplate", candidate.promptTemplate]]); }
+          try {
+            payload = canonicalRecord(
+              canonicalField("request", payloadFields([["hookId", candidate.hookId], ["recipeId", candidate.recipeId], ["promptTemplate", candidate.promptTemplate]])),
+              canonicalField("existing", payloadFields([["hookId", existing.hookId], ["recipeId", existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]])),
+            );
+          }
           catch { return { ok: false, error: "hook replacement payload is not approvable" }; }
           return await requireOwnerApproval(
             context,
@@ -3566,7 +3610,7 @@ const handlers = {
       {
         gateBeforeDelete: async ({ existing }) => {
           let payload;
-          try { payload = payloadFields([["hookId", existing.hookId], ["recipeId", existing.recipeId]]); }
+          try { payload = payloadFields([["hookId", existing.hookId], ["recipeId", existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]]); }
           catch { return { ok: false, error: "hook removal payload is not approvable" }; }
           return await requireOwnerApproval(
             context,

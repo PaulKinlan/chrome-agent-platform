@@ -174,6 +174,11 @@ export async function createNamedAgent(
       skills: skillList,
       coreAssets: assetList,
       provider: normalizeAgentProvider(provider) ?? (existing?.provider ?? null),
+      // Non-reusable row identity + monotonic per-row revision let an owner
+      // approval bind the exact current agent without hashing large avatars or
+      // credential-bearing provider state.
+      instanceId: existing?.instanceId ?? crypto.randomUUID(),
+      revision: (Number.isSafeInteger(existing?.revision) ? existing.revision : 0) + 1,
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
@@ -195,7 +200,7 @@ export async function createNamedAgent(
 }
 
 /** Update a named agent's name/role/avatar/skills. Returns the updated agent. */
-export async function updateNamedAgent(id, patch = {}) {
+export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = null } = {}) {
   const slug = slugifyAgentId(id);
   return await withAgentsLock(async () => {
     const map = await agentsMap();
@@ -216,7 +221,13 @@ export async function updateNamedAgent(id, patch = {}) {
       // `null` clears the override (inherit the global); a complete config sets it.
       next.provider = normalizeAgentProvider(patch.provider);
     }
+    next.instanceId = existing.instanceId ?? crypto.randomUUID();
+    next.revision = (Number.isSafeInteger(existing.revision) ? existing.revision : 0) + 1;
     next.updatedAt = Date.now();
+    if (typeof gateBeforeMutation === "function") {
+      const gate = await gateBeforeMutation({ slug, existing, candidate: next });
+      if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
+    }
     map[slug] = next;
     await writeAgents(map);
     return { ok: true, agent: next };
@@ -226,9 +237,9 @@ export async function updateNamedAgent(id, patch = {}) {
 /** Set (or clear) a named agent's provider override. `config` is a COMPLETE
  * provider-specific config, or null to inherit the global. Returns { ok, agent }
  * (the agent is REDACTED — no apiKey). */
-export async function setNamedAgentProvider(id, config) {
+export async function setNamedAgentProvider(id, config, { gateBeforeMutation = null } = {}) {
   const normalized = config == null ? null : normalizeAgentProvider(config);
-  const r = await updateNamedAgent(id, { provider: normalized });
+  const r = await updateNamedAgent(id, { provider: normalized }, { gateBeforeMutation });
   if (r?.ok === false) return r;
   return { ok: true, agent: r.agent };
 }
@@ -240,12 +251,16 @@ export async function setNamedAgentProvider(id, config) {
  * transaction and its failure PROPAGATES (the deletion reports failure and
  * the agent is preserved, so the owner can retry) — never silently swallowed
  * while the agent row disappears. */
-export async function deleteNamedAgent(id) {
+export async function deleteNamedAgent(id, { gateBeforeDelete = null } = {}) {
   const slug = slugifyAgentId(id);
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const existing = map[slug];
     if (!existing) return { ok: true };
+    if (typeof gateBeforeDelete === "function") {
+      const gate = await gateBeforeDelete({ slug, existing });
+      if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
+    }
     // Prompt cleanup first: a failure aborts the deletion honestly (the
     // agent row stays, the override stays consistent with it).
     const cleanup = await deleteAgentPromptOverride(slug)
