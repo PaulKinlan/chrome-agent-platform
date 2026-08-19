@@ -543,24 +543,27 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01] Durable runs independent of mounted UI
 - Feedback: 2026-08-19 — task and agent runs must continue through task/view switches, Settings navigation, tab closure, and later reopen rather than being owned by mounted conversation UI
-- Updated: 2026-08-19 18:13 UTC
+- Updated: 2026-08-19 19:56 UTC
 - Status: OPEN
 - Resume: —
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
-- Branch: none
+- Branch: `docs/durable-background-runs` (research complete; implementation unassigned)
 - Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
 - Candidate: —
 - Shipping: —
 - Acceptance: workflow/service-worker state is the run authority; switching task, agent, Settings, or full views and closing/reopening the tab never cancels or loses an accepted run; reconnect shows bounded progress and exactly one terminal result; restart recovery is idempotent and stale UI owners cannot commit
-- Review: pending independent architecture, crash-recovery, concurrency, and loaded-MV3 review
+- Review: design research complete (docs/durable-background-runs-design.md); independent review of the research pending, then the OPEN policy decisions (ad-hoc cancellation, orphan retention, reconnection progress granularity, resume-vs-orphan); subsequent independent architecture, crash-recovery, concurrency, and loaded-MV3 review required before implementation
 - Gates: deterministic overlap/switch/view/reload/tab-close journeys; genuine service-worker termination and wake; persisted run identity and journal/result equality; reconnect progress; duplicate/loss checks; raw AX status; zero orphaned terminal or mounted-UI ownership
 - Blockers: must extend, not replace, the surface fencing in `CAP-FB-20260818-RUN-STATUS-01`; permission waits must remain compatible with `CAP-FB-20260819-PERMISSIONS-01`
-- Next: map the current run lifecycle between UI, workflow, service worker, persistence, and progress ports, then specify the durable authority and reconnect protocol
+- Next: independent review of the completed lifecycle map and design (docs/durable-background-runs-design.md), then the owner's policy decisions — ad-hoc run cancellation, orphaned-record retention, reconnection progress granularity, and resume-vs-honest-orphaning (all explicitly OPEN); no implementation before those decisions
 - Recover: `git show bbeff7b:TASKS.md && git grep -n "runSurfaceOwner\|progress" bbeff7b -- extension`
 - History:
   - 2026-08-19 18:13 UTC — captured as a new durability goal rather than broadening the already-pushed visible lifecycle task after delivery.
+  - 2026-08-19 19:35 UTC — research completed and frozen in docs/durable-background-runs-design.md: exact current-behavior map (ad-hoc runs have no durable state/lease vs scheduled tasks' full durability; tab close is safe via SW authority + surface fencing; no live-state replay on reconnect), durable per-run registry design (heartbeat, running/settling/terminal/orphaned phases), idempotent startup recovery sweep, run.list + progress-port replay reconnection, six acceptance criteria and six fixtures. Policy questions (ad-hoc cancellation, orphan retention, progress granularity, resume-vs-orphan) remain explicitly OPEN and unapproved.
+  - 2026-08-19 19:56 UTC — re-review BLOCK corrected (final finding): the outbox now persists the full recoverable terminal payload (or durable payload reference), never only a digest; the thread assistant/status terminal append is idempotent by executionId; startup reconciliation completes outbox entries BEFORE any orphaning decision (a stale settling record with an outbox is completed, never orphaned); the fault matrix now covers the thread-write and outbox acknowledgement/removal boundaries. Policy questions remain explicitly OPEN and unapproved.
+  - 2026-08-19 19:50 UTC — independent review BLOCK corrected (8 findings): scheduled behavior re-mapped truthfully (in-memory same-boot authority, heartbeat as storage-failure canary, boot-identity lock clear, re-arm reconciliation, creation-only quarantine, and the at-least-once duplicate window between journal commit and schedule removal); ad-hoc map now includes the durable thread authority and its three exact crash windows; exactly-once terminal now specified as an explicit commit protocol (idempotent journal result keyed by immutable executionId + CAS run transition + durable outbox + full fault matrix); run registry requires a newly reserved trusted master-store prefix (model writes cannot forge it); reconnect replay uses monotonic per-run revision + buffered-snapshot-drain; direct site-agent agent.delegate runs are in scope; canonical SW-issued executionId separated from client correlation/thread/schedule ids; heartbeats documented as freshness evidence, not survival. Policy questions remain explicitly OPEN and unapproved.
 
 ## [CAP-FB-20260819-SITE-AGENT-STATUS-CLEANUP-01] Site Agents and Agent Dev status cleanup
 - Feedback: 2026-08-19 — basic task rows expose stale or noisy WebMCP injection and page-report status text that belongs in a diagnostic surface
