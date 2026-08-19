@@ -7,6 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { runConversationTurn, subscribeProgress, appendBubble, pairToolJournal } from "../shared/conversation.js";
+import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
 import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
@@ -569,6 +570,10 @@ const editAgentBtn = document.getElementById("edit-agent");
 let currentThreadId = null;
 let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
 let currentAgentKind = null; // null | "named" | "background" — which agent kind the chat is scoped to
+// Every async surface open and run owns one immutable token. A later open/run
+// replaces it, so an older continuation can keep journaling in the SW without
+// committing title/status DOM into the newly opened surface.
+const runSurfaceOwner = createRunSurfaceOwner();
 
 // Sync the thread composer's agent scope so the /agent + @ mention exclude the
 // agent the user is currently talking to (they can't call the current agent).
@@ -594,9 +599,9 @@ function syncViewOpen() {
   document.body.classList.toggle("view-open", anyOpen);
 }
 function hideThreadViewInner() {
-  runGen++; // leaving fences any in-flight run (its outcome still journals)
-  if (statusOwnerGen !== 0) {
-    statusOwnerGen = 0;
+  runSurfaceOwner.claim(); // leaving fences any in-flight run (its outcome still journals)
+  if (statusOwner !== 0) {
+    statusOwner = 0;
     setStatus("ready"); // reset an orphaned "running…" (a parked run never resets itself)
   }
   threadView.hidden = true;
@@ -631,10 +636,13 @@ function hideThreadView() {
 }
 
 async function openThread(id) {
-  runGen++; // opening a thread fences any in-flight run's rendering
+  const owner = runSurfaceOwner.claim();
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
+  // Hide the previous run's banner at the ownership hand-off, not after the
+  // asynchronous thread read. The old run continues and journals in the SW.
+  renderRunStatus({ state: "idle" });
   // A TASK shows an Edit button (the same visual as the agent's) that renames
   // the title in place — before, the button was hidden via the `hidden` attr
   // but leaked because `.back { display:inline-flex }` beat `[hidden]`, so it
@@ -651,6 +659,9 @@ async function openThread(id) {
     await new Promise((r) => setTimeout(r, 400)); // let a restarting SW boot
     res = await send("thread.get", { id }).catch(() => ({ ok: false }));
   }
+  // Another open/run may have claimed the surface during either await. Fence
+  // every following title/message/status write as one owner-bound commit.
+  if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
   const thread = res.ok ? res.thread : null;
   threadTitle.textContent = thread?.name || "Task";
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
@@ -688,15 +699,17 @@ async function openThread(id) {
 //    INDEPENDENT agent — click it to see its OWN run history + talk to it (a
 //    task runs in its own OPFS sandbox), exactly like a named agent.
 async function openBackgroundAgentChat(id, name) {
-  runGen++;
+  const owner = runSurfaceOwner.claim();
   currentAgentId = id;
   currentAgentKind = "background";
   currentThreadId = null;
+  renderRunStatus({ state: "idle" });
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
   editAgentBtn.hidden = true;
   syncComposerScope();
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
+  if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
   renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
   showThreadView();
@@ -732,15 +745,17 @@ async function loadAgentHistoryEntries(kind, id) {
  * access, CAP-FB-20260818-AGENT-ACCESS-01): the agent's own history + a
  * composer whose sends run DIRECTLY in that agent (its own memory/skills). */
 async function openAgentSurface({ kind, id, name }) {
-  runGen++;
+  const owner = runSurfaceOwner.claim();
   currentAgentId = id;
   currentAgentKind = kind;
   currentThreadId = null;
+  renderRunStatus({ state: "idle" });
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
   syncComposerScope();
   const entries = await loadAgentHistoryEntries(kind, id);
+  if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
   renderAgentHistory(threadConversation, entries);
   showThreadView();
@@ -1214,35 +1229,29 @@ function renderRunStatus(s) {
   }
 }
 
-/** The run generation (per-run identity): bumped on EVERY surface switch
- * (openThread/openAgentSurface/openBackgroundAgentChat/hideThreadView/new hub
- * task) AND on every runThreadTurn — so an older turn on the same surface AND
- * any turn whose surface was left are both stale (the lifecycle findings:
- * late results/status/terminal writes bleeding into the current surface).
- * The SW journals every run independently — a stale turn's outcome is never
- * lost, it just never renders here. */
-let runGen = 0;
-/** Which run generation last wrote the global #status (so a superseded run's
+/** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
-let statusOwnerGen = 0;
+let statusOwner = 0;
 
 /** Run a turn in the thread surface (a new task, or a nudge). */
 async function runThreadTurn(text, attachments = []) {
+  const owner = runSurfaceOwner.claim();
   showThreadView();
   setStatus("running…", false);
-  const gen = ++runGen;
-  statusOwnerGen = gen;
+  statusOwner = owner;
   const agentAtStart = currentAgentId;
   const kindAtStart = currentAgentKind;
   const threadAtStart = currentThreadId;
-  const owns = () => gen === runGen && currentAgentId === agentAtStart &&
+  const owns = () => runSurfaceOwner.owns(owner) && currentAgentId === agentAtStart &&
     currentAgentKind === kindAtStart;
   const res = await runConversationTurn(threadConversation, {
     text,
     attachments,
     history: [], // the SW derives the history from the thread when threadId is set
     threadId: threadAtStart,
-    onStatus: renderRunStatus,
+    // Fence at the actual shared-DOM commit boundary as well as through
+    // isStale below. No old callback can reveal a banner on a newer surface.
+    onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
     isStale: () => !owns(),
@@ -1251,8 +1260,8 @@ async function runThreadTurn(text, attachments = []) {
   // was the last status writer, reset its orphaned "running…" (a run parked
   // in a hanging permission request never reaches its own reset).
   if (!owns()) {
-    if (statusOwnerGen === gen) {
-      statusOwnerGen = 0;
+    if (statusOwner === owner) {
+      statusOwner = 0;
       setStatus("ready");
     }
     return res;
@@ -1266,14 +1275,16 @@ async function runThreadTurn(text, attachments = []) {
         // Re-check after the nested await: the surface may have moved on
         // while the thread title loaded.
         if (!owns()) return res;
-        if (t.thread?.name) threadTitle.textContent = t.thread.name;
+        if (t.thread?.name) {
+          runSurfaceOwner.commit(owner, () => { threadTitle.textContent = t.thread.name; });
+        }
       }
       await renderTasks(currentThreadId);
       if (!owns()) return res;
     }
-    if (statusOwnerGen === gen) setStatus("ready");
+    if (statusOwner === owner) setStatus("ready");
   } else {
-    if (statusOwnerGen === gen) setStatus("error: " + (res.error ?? "unknown"), false);
+    if (statusOwner === owner) setStatus("error: " + (res.error ?? "unknown"), false);
   }
   return res;
 }
@@ -1281,7 +1292,7 @@ async function runThreadTurn(text, attachments = []) {
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
   const { text: task, attachments, agent } = ev.detail;
-  runGen++; // a NEW task replaces the surface — fence any in-flight run
+  runSurfaceOwner.claim(); // a NEW task replaces the surface — fence any in-flight run
   currentThreadId = null; // a new task → a new thread
   threadConversation.clear?.();
   if (agent?.ref) {
