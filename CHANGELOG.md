@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.98] — 2026-08-19
+- fix(security): owner-bound approvals for destructive agent operations with canonical payload capabilities, exact Settings decisions, install-scoped opaque references, and bounded trap-free redaction
+
 ## [0.2.96] — 2026-08-18
 - merge(sidebar): integrate reviewed Tasks/Agents side-panel parity with the structured tool renderer; preserve both feature streams, align shared panel/list geometry and actions, keep collapsed scrolling gutter-free, center pointer/keyboard delete affordances, and add populated real-MV3 parity acceptance
 

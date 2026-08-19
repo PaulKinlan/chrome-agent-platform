@@ -438,7 +438,10 @@ async function writeSubscriptions(list) {
  *   serialized into `{{payload}}` when the hook fires (default: the recipe's
  *   own prompt + the payload appended)
  */
-export async function subscribeHook({ hookId, recipeId = null, promptTemplate = "" }) {
+export async function subscribeHook(
+  { hookId, recipeId = null, promptTemplate = "" },
+  { gateOnReplace = null } = {},
+) {
   const allowed = await checkHookAllowed(hookId);
   if (!allowed.ok) return allowed;
   // VALIDATE the recipeId: null (the master hub agent) or a KNOWN recipe id.
@@ -475,6 +478,10 @@ export async function subscribeHook({ hookId, recipeId = null, promptTemplate = 
       enabled: true,
       at: new Date().toISOString(),
     };
+    if (existing && typeof gateOnReplace === "function") {
+      const gate = await gateOnReplace({ existing: { ...existing }, candidate: { ...entry } });
+      if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
+    }
     if (existing) {
       Object.assign(existing, entry);
     } else {
@@ -485,9 +492,19 @@ export async function subscribeHook({ hookId, recipeId = null, promptTemplate = 
   });
 }
 
-export async function unsubscribeHook({ hookId, recipeId = null }) {
+export async function unsubscribeHook(
+  { hookId, recipeId = null },
+  { gateBeforeDelete = null } = {},
+) {
   return withHookLock(async () => {
     const list = await getHookSubscriptions();
+    const existing = list.find(
+      (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
+    );
+    if (existing && typeof gateBeforeDelete === "function") {
+      const gate = await gateBeforeDelete({ existing: { ...existing } });
+      if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
+    }
     const next = list.filter(
       (s) => !(s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null)),
     );

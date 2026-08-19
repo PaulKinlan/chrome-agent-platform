@@ -149,7 +149,10 @@ export async function getNamedAgentProvider(id) {
  * natural-language path all land here); it also provisions the agent's own OPFS
  * sandbox (its `agents.md` operating instructions).
  */
-export async function createNamedAgent({ id, name, role = "", avatar = null, skills = [], coreAssets = [], agentsMd = null, provider = null }) {
+export async function createNamedAgent(
+  { id, name, role = "", avatar = null, skills = [], coreAssets = [], agentsMd = null, provider = null },
+  { gateOnReplace = null } = {},
+) {
   const cleanName = String(name ?? "").trim();
   if (!cleanName) return { ok: false, error: "an agent needs a name" };
   if (cleanName.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
@@ -174,6 +177,13 @@ export async function createNamedAgent({ id, name, role = "", avatar = null, ski
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
+    // Replacement detection, trusted approval consumption, and mutation share
+    // this ONE uninterrupted registry-lock critical section. The callback is
+    // supplied only by the service worker; request/model data cannot provide it.
+    if (existing && typeof gateOnReplace === "function") {
+      const gate = await gateOnReplace({ slug, existing, candidate: agent });
+      if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
+    }
     map[slug] = agent;
     await writeAgents(map);
     // Provision the agent's OWN sandbox: its operating instructions (agents.md)

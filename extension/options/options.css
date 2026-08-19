@@ -864,3 +864,16 @@ input:focus, select:focus, textarea:focus {
 }
 .prompt-scope-field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #prompt-scope-hint { margin: 0 0 var(--space-3); }
+
+/* Owner approvals — ids and targets never appear in the DOM. */
+.approval-list { display: grid; gap: var(--space-2, 8px); margin-top: var(--space-3, 12px); }
+.approval-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3, 12px);
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md, 10px);
+  background: var(--panel);
+}
+.approval-row > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.approval-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-xs, 12px); overflow-wrap: anywhere; }
+.approval-controls { display: flex; align-items: center; gap: var(--space-2, 8px); flex: 0 0 auto; }
+.approval-controls .btn:disabled { opacity: .55; cursor: wait; }
+@media (max-width: 720px) { .approval-row { align-items: stretch; flex-direction: column; } .approval-controls { justify-content: flex-end; } }

@@ -56,6 +56,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   collapsed rail so task dots, agent avatars, and + actions share one center.
   Task and agent rows share padding/radius/hover tokens; the task delete action
   is centered on the row and remains keyboard-focusable.
+- Settings → Approvals is the sole owner decision surface for destructive agent
+  operations. Rows disclose only the normalized action and a 128-bit private
+  install-scoped reference—never target, origin, id, payload, digest, execution
+  id, or credentials. Approve-once and Deny are ordinary labelled buttons with
+  immediate disabled/pending state and a polite live result. Approval ids stay
+  in event-handler closures and never become DOM attributes. Opening the section
+  refreshes FIFO pending rows because background-page timers may be throttled.
 
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No

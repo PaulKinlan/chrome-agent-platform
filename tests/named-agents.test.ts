@@ -131,6 +131,46 @@ Deno.test("named agents: create → get → update → list → delete", async (
   assertEquals((await listNamedAgents()).length, 0);
 });
 
+Deno.test("named agents: concurrent same-slug first creates cannot produce an ungated replacement", async () => {
+  const id = "approval-race-agent";
+  await deleteNamedAgent(id);
+  let gates = 0;
+  const gateOnReplace = async () => {
+    gates += 1;
+    return { ok: false, error: "owner approval required" };
+  };
+  const [a, b] = await Promise.all([
+    createNamedAgent({ id, name: "First candidate", role: "one" }, { gateOnReplace }),
+    createNamedAgent({ id, name: "Second candidate", role: "two" }, { gateOnReplace }),
+  ]);
+  assertEquals([a.ok, b.ok].filter(Boolean).length, 1, "exactly one first create commits");
+  assertEquals(gates, 1, "the serialized second create observes replacement and is gated");
+  const saved = await getNamedAgent(id);
+  assert(["First candidate", "Second candidate"].includes(saved.name));
+  await deleteNamedAgent(id);
+});
+
+Deno.test("named agents: replacement gate and mutation share one registry lock", async () => {
+  const id = "approval-lock-agent";
+  await createNamedAgent({ id, name: "Existing", role: "old" });
+  let release;
+  const entered = Promise.withResolvers();
+  const replacing = createNamedAgent(
+    { id, name: "Replacement", role: "new" },
+    { gateOnReplace: async () => { entered.resolve(); await new Promise((r) => { release = r; }); return { ok: true }; } },
+  );
+  await entered.promise;
+  let updateFinished = false;
+  const queuedUpdate = updateNamedAgent(id, { role: "after" }).then((r) => { updateFinished = true; return r; });
+  await Promise.resolve();
+  assertEquals(updateFinished, false, "a concurrent mutation cannot enter while the replacement gate holds the lock");
+  release();
+  assert((await replacing).ok);
+  assert((await queuedUpdate).ok);
+  assertEquals((await getNamedAgent(id)).role, "after", "queued mutation runs only after replacement commits");
+  await deleteNamedAgent(id);
+});
+
 Deno.test("named agents: the name generator is deterministic + quirky", () => {
   const a = generateAgentName("pr-reviewer");
   const b = generateAgentName("pr-reviewer");

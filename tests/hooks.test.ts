@@ -226,6 +226,20 @@ Deno.test("concurrent subscribes of DISTINCT recipes do not last-write-wins (the
   assert(ids.includes("page-summary"), "page-summary subscription must survive");
 });
 
+Deno.test("concurrent same-key first subscriptions cannot produce an ungated replacement", async () => {
+  reset();
+  let gates = 0;
+  const gateOnReplace = async () => { gates += 1; return { ok: false, error: "owner approval required" }; };
+  const [a, b] = await Promise.all([
+    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene", promptTemplate: "first" }, { gateOnReplace }),
+    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene", promptTemplate: "second" }, { gateOnReplace }),
+  ]);
+  assertEquals([a.ok, b.ok].filter(Boolean).length, 1);
+  assertEquals(gates, 1);
+  const [saved] = await getHookSubscriptions();
+  assert(["first", "second"].includes(saved.promptTemplate));
+});
+
 Deno.test("the subscription registry is count-bounded", async () => {
   reset();
   // Fill the registry to the cap with DISTINCT known recipe ids.
