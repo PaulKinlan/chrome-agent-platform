@@ -242,20 +242,27 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
 /** Set (or clear) a named agent's provider override. `config` is a COMPLETE
  * provider-specific config, or null to inherit the global. Returns { ok, agent }
  * (the agent is REDACTED — no apiKey). */
-export async function setNamedAgentProvider(id, config, { gateBeforeMutation = null } = {}) {
-
-  // KEY PRESERVATION (provider-picker integration, k3 HIGH-1): an ABSENT
-  // apiKey (undefined — dropped by message serialization) on the SAME provider
-  // carries the EXISTING stored key forward; an explicit "" still clears.
+// KEY PRESERVATION (provider-picker integration, k3 HIGH-1): an ABSENT apiKey
+// (undefined — dropped by message serialization) on the SAME provider carries
+// the EXISTING stored key forward; an explicit "" still clears. This MUST run
+// BEFORE normalizeAgentProvider, which would coerce the absent apiKey to "" and
+// destroy the blank-save signal — the reason this is a shared helper called both
+// here and by the service-worker route (which otherwise pre-normalizes).
+export async function preserveExistingProviderKey(id, config) {
   if (
     config && typeof config === "object" && config.apiKey === undefined &&
     typeof config.provider === "string"
   ) {
     const existing = await getNamedAgentProvider(id);
     if (existing?.provider === config.provider && existing.apiKey) {
-      config = { ...config, apiKey: existing.apiKey };
+      return { ...config, apiKey: existing.apiKey };
     }
   }
+  return config;
+}
+
+export async function setNamedAgentProvider(id, config, { gateBeforeMutation = null } = {}) {
+  config = await preserveExistingProviderKey(id, config);
   const normalized = config == null ? null : normalizeAgentProvider(config);
   const r = await updateNamedAgent(id, { provider: normalized }, { gateBeforeMutation });
   if (r?.ok === false) return r;

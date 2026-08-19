@@ -91,6 +91,7 @@ import {
   listNamedAgents,
   normalizeAgentProvider,
   normalizeCoreAssets,
+  preserveExistingProviderKey,
   setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
@@ -2510,6 +2511,9 @@ const handlers = {
     // provider-specific config (the apiKey flows ONLY from the Settings UI input
     // → storage → model resolution; never surfaced back). Returns the REDACTED
     // agent (no apiKey).
+    // KEY PRESERVATION: run BEFORE normalizeAgentProvider, which would coerce an
+    // absent apiKey (undefined) to "" and destroy the blank-save signal.
+    config = await preserveExistingProviderKey(id, config);
     const normalized = config == null ? null : normalizeAgentProvider(config);
     if (config != null && normalized == null) return { ok: false, error: "invalid provider configuration" };
     const r = await setNamedAgentProvider(id, normalized, {
