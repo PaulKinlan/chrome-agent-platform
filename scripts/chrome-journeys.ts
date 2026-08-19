@@ -126,6 +126,7 @@ class Cdp {
   pending = new Map();
   consoleErrors = [];
   swSessions = new Set();
+  swTargetSessions = new Map(); // targetId → pre-attached sessionId
   pageSessions = new Set();
   swAttachErrors = [];
   executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
@@ -529,6 +530,9 @@ async function main() {
     cdp.onAttach = (sessionId, targetInfo, waitingForDebugger) => {
       if (targetInfo?.type !== "service_worker") return;
       cdp.swSessions.add(sessionId);
+      if (typeof targetInfo?.targetId === "string") {
+        cdp.swTargetSessions.set(targetInfo.targetId, sessionId);
+      }
       attachSettled = (async () => {
         try {
           await cdp.send("Runtime.enable", {}, sessionId);
@@ -571,11 +575,16 @@ async function main() {
     check("extension loaded", true);
     const extId = sw.url.split("/")[2];
 
-    // Attach to the (already-booted) initial SW + enable Runtime + assert.
-    const swAttach = await cdp.send("Target.attachToTarget", {
-      targetId: sw.id, flatten: true,
-    });
-    const swSession = swAttach?.result?.sessionId;
+    // Reuse the pre-attached SW session when auto-attach already won the race.
+    // Explicitly attaching the same worker twice is flaky and can hang CDP.
+    await attachSettled;
+    let swSession = cdp.swTargetSessions.get(sw.id) ?? null;
+    if (!swSession) {
+      const swAttach = await cdp.send("Target.attachToTarget", {
+        targetId: sw.id, flatten: true,
+      });
+      swSession = swAttach?.result?.sessionId ?? null;
+    }
     check(
       "SW attach returned a session id",
       typeof swSession === "string" && swSession.length > 0,
