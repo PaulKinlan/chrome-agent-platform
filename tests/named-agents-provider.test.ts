@@ -158,6 +158,43 @@ Deno.test("k3 HIGH-1: a blank same-provider Save PRESERVES the stored key", asyn
   assertEquals((await getNamedAgentProvider("keeper")).apiKey, "", "explicit '' clears the key");
 });
 
+Deno.test("provider/model/key sentinels preserve on same-provider Save and stay isolated on swap", async () => {
+  store.clear();
+  await kvSet({ "cap:namedAgents": {
+    alpha: { id: "alpha", name: "Alpha", role: "", createdAt: 1, updatedAt: 1 },
+    beta: { id: "beta", name: "Beta", role: "", createdAt: 1, updatedAt: 1 },
+  } });
+  await setNamedAgentProvider("alpha", {
+    provider: "deepseek", baseURL: "https://api.deepseek.com/v1",
+    apiKey: "alpha-key-sentinel", model: "alpha-model-before",
+  });
+  await setNamedAgentProvider("beta", {
+    provider: "openai", baseURL: "https://api.openai.com/v1",
+    apiKey: "beta-key-sentinel", model: "beta-model-sentinel",
+  });
+
+  await setNamedAgentProvider("alpha", {
+    provider: "deepseek", baseURL: "https://api.deepseek.com/v1",
+    model: "alpha-custom-model-sentinel",
+  });
+  const preserved = await getNamedAgentProvider("alpha");
+  assertEquals(preserved.provider, "deepseek");
+  assertEquals(preserved.model, "alpha-custom-model-sentinel");
+  assertEquals(preserved.apiKey, "alpha-key-sentinel", "omitted same-provider key is preserved");
+
+  await setNamedAgentProvider("alpha", {
+    provider: "gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKey: "", model: "gemini-model-sentinel",
+  });
+  const swapped = await getNamedAgentProvider("alpha");
+  const isolated = await getNamedAgentProvider("beta");
+  assertEquals(swapped.provider, "gemini");
+  assertEquals(swapped.model, "gemini-model-sentinel");
+  assertEquals(swapped.apiKey, "", "a provider swap cannot inherit the old provider key");
+  assertEquals(isolated.apiKey, "beta-key-sentinel", "another agent's key remains isolated");
+  assertEquals(isolated.model, "beta-model-sentinel", "another agent's model remains isolated");
+});
+
 Deno.test("k3 HIGH-1: set-provider's RESULT is redacted (no apiKey crosses back)", async () => {
   store.clear();
   await seed("redact-probe");

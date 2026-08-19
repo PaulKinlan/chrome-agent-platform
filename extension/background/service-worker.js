@@ -2111,7 +2111,8 @@ const handlers = {
   async "perm-lease.state"({ pattern }) {
     return await leaseState(String(pattern ?? ""));
   },
-  async "provider.get"() {
+  async "provider.get"(_m, context) {
+    requireSettingsSender(context);
     // REDACTED (the final review's HIGH): the raw apiKey NEVER crosses into a
     // page — not even Settings. The response carries hasApiKey so the UI can
     // show "key set — leave blank to keep" and offer Clear key, and the rest

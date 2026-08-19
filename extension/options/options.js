@@ -9,6 +9,7 @@ import {
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { modelsForVendor } from "../lib/model-prices.js";
+import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
@@ -551,6 +552,77 @@ function agentProviderRowHtml(a, cur, globalCfg) {
   `;
 }
 
+// A per-agent provider change is a destructive named-agent mutation. The SW
+// deliberately returns a pending capability on the first exact call. This
+// native modal is the explicit owner decision between that call and its one
+// exact retry — dismissal/cancel can only deny, never approve.
+function confirmAgentProviderMutation(agentName, description, trigger) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "recipe-edit provider-approval-dialog";
+    dialog.setAttribute("aria-label", "Approve provider change?");
+
+    const title = document.createElement("h2");
+    title.textContent = "Approve provider change?";
+    const body = document.createElement("p");
+    body.textContent = `${description} for ${agentName}? This changes which model service the agent may use.`;
+    const status = document.createElement("p");
+    status.className = "muted";
+    status.textContent = "Only Approve once saves this exact change.";
+    const actions = document.createElement("div");
+    actions.className = "recipe-edit-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn ghost cancel-provider-change";
+    cancel.textContent = "Cancel";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "btn primary approve-provider-change";
+    approve.textContent = "Approve once";
+    actions.append(cancel, approve);
+    dialog.append(title, body, status, actions);
+    document.body.append(dialog);
+
+    let decision = false;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      dialog.remove();
+      if (trigger?.isConnected) trigger.focus();
+      resolve(decision);
+    };
+    cancel.addEventListener("click", () => dialog.close());
+    approve.addEventListener("click", (event) => {
+      // A script-triggered click can dismiss/cancel, but can never mint an
+      // approval. Match the existing Approvals surface's genuine-click check.
+      if (!event.isTrusted || navigator.userActivation?.isActive !== true) {
+        status.textContent = "Use a real click to approve this provider change.";
+        return;
+      }
+      decision = true;
+      dialog.close();
+    });
+    dialog.addEventListener("cancel", () => { decision = false; });
+    dialog.addEventListener("close", finish, { once: true });
+    try {
+      dialog.showModal();
+      cancel.focus(); // safe default + deterministic keyboard focus
+    } catch {
+      finish();
+    }
+  });
+}
+
+async function runAgentProviderMutation({ message, agentName, description, trigger }) {
+  return await runOwnerApprovedMutation({
+    message,
+    action: "named-agent.set-provider",
+    sendMessage: (value) => chrome.runtime.sendMessage(value),
+    requestConfirmation: () => confirmAgentProviderMutation(agentName, description, trigger),
+  });
+}
+
 async function renderAgentProviders() {
   const list = $("#agent-provider-list");
   if (!list) return;
@@ -605,18 +677,33 @@ async function renderAgentProviders() {
 
     // The owner-gesture EXPLICIT key clear for a per-agent override (the only
     // removal path — a blank Save preserves; the final review's MEDIUM).
-    row.querySelector(".clear-agent-key")?.addEventListener("click", async () => {
+    row.querySelector(".clear-agent-key")?.addEventListener("click", async (event) => {
+      const trigger = event.currentTarget;
+      trigger.disabled = true;
       const provider = row.querySelector(".ag-provider")?.value ?? "";
       const preset = PROVIDERS.find((p) => p.id === provider);
-      const r = await chrome.runtime.sendMessage({
-        type: "named-agent.set-provider",
-        id: a.id,
-        config: { provider, baseURL: provider === "openai-compatible" ? (row.querySelector(".agent-provider-base-url")?.value.trim() ?? "") : (preset?.baseURL ?? ""), model: row.querySelector(".ag-model")?.value?.trim() ?? "", apiKey: "" },
+      const r = await runAgentProviderMutation({
+        message: {
+          type: "named-agent.set-provider",
+          id: a.id,
+          config: { provider, baseURL: provider === "openai-compatible" ? (row.querySelector(".agent-provider-base-url")?.value.trim() ?? "") : (preset?.baseURL ?? ""), model: row.querySelector(".ag-model")?.value?.trim() ?? "", apiKey: "" },
+        },
+        agentName: a.name,
+        description: "Clear the stored API key",
+        trigger,
       });
-      saveFlash(r?.ok === false ? `Key not cleared: ${r.error ?? "unknown error"}` : `${a.name}: API key cleared.`);
-      await renderAgentProviders();
+      if (r.ok) {
+        saveFlash(`${a.name}: API key cleared.`);
+        await renderAgentProviders();
+      } else {
+        trigger.disabled = false;
+        trigger.focus();
+        saveFlash(`Key not cleared: ${r.error ?? "unknown error"}`);
+      }
     });
-    row.querySelector(".set-agent-provider").addEventListener("click", async () => {
+    row.querySelector(".set-agent-provider").addEventListener("click", async (event) => {
+      const trigger = event.currentTarget;
+      trigger.disabled = true;
       const provider = row.querySelector(".ag-provider")?.value ?? "";
       const model = row.querySelector(".ag-model")?.value?.trim() ?? "";
       const apiKey = row.querySelector(".agent-provider-key").value;
@@ -637,9 +724,20 @@ async function renderAgentProviders() {
           apiKey: apiKey || (cur.provider === provider ? undefined : ""),
         };
       }
-      const r = await chrome.runtime.sendMessage({ type: "named-agent.set-provider", id: a.id, config });
-      saveFlash(r?.ok === false ? `Provider not saved: ${r.error ?? "unknown error"}` : `${a.name}: provider updated.`);
-      await renderAgentProviders();
+      const r = await runAgentProviderMutation({
+        message: { type: "named-agent.set-provider", id: a.id, config },
+        agentName: a.name,
+        description: config == null ? "Use the global provider" : `Save ${provider} as the provider`,
+        trigger,
+      });
+      if (r.ok) {
+        saveFlash(`${a.name}: provider updated.`);
+        await renderAgentProviders();
+      } else {
+        trigger.disabled = false;
+        trigger.focus();
+        saveFlash(`Provider not saved: ${r.error ?? "unknown error"}`);
+      }
     });
     list.appendChild(row);
   }

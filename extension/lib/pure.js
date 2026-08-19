@@ -636,17 +636,26 @@ export function truncateUtf8(text, maxBytes) {
  * checks browser-supplied sender metadata, never message-body claims. A tab
  * sender is rejected even if it claims the extension URL.
  */
+const OPTIONS_PRODUCT_HASHES = new Set([
+  "#providers", "#agents", "#background", "#appearance", "#browser",
+  "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data",
+]);
+
 export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {
   if (!sender || typeof sender !== "object") return false;
   if (typeof extensionId !== "string" || !extensionId) return false;
-  if (typeof exactOptionsUrl !== "string" || !exactOptionsUrl) return false;
-  const exactDocument = sender.url === exactOptionsUrl;
+  if (typeof exactOptionsUrl !== "string" || !exactOptionsUrl || /[?#]/.test(exactOptionsUrl)) return false;
+  // Settings owns these fragment-only deep links. Accepting an explicit closed
+  // set reconciles the product's own navigation with sender authorization while
+  // preserving exact document/origin equality and rejecting every query,
+  // foreign path, unknown fragment, or mixed query+fragment.
+  const exactDocument = sender.url === exactOptionsUrl ||
+    (typeof sender.url === "string" && OPTIONS_PRODUCT_HASHES.has(sender.url.slice(exactOptionsUrl.length)) && sender.url.startsWith(exactOptionsUrl));
   // The shipped NTP presents this exact private extension document in an
   // iframe. Chrome may omit frame/lifecycle/tab metadata for extension pages.
   // Web pages cannot load this non-web-accessible document; browser-supplied
-  // extension id + exact document URL + document id are the authority.
-  // EXACT URL EQUALITY ONLY (no query, no hash): a hash-bearing or query-bearing
-  // Options URL is not the Settings surface (the provider review's HIGH).
+  // extension id + exact document URL/product-owned hash + document id are the
+  // authority.
   return sender.id === extensionId &&
     exactDocument &&
     // Chrome omits `origin` for extension-page runtime messages; the exact

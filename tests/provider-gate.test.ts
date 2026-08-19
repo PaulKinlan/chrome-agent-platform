@@ -622,10 +622,32 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   // 5. provider.TEST from NTP: REFUSED.
   const testNtp = await dispatch({ type: "provider.test", provider: "demo" }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(testNtp?.ok === false && /Settings surface/.test(String(testNtp?.error)), "provider.test refused from NTP");
-  // 6. provider.set via the ATTESTED owner principal: NOT surface-refused.
-  const allowed = await dispatch({ type: "provider.set", config: { provider: "demo" } }, ownerSender);
+  // 6. Product-owned hash navigation remains the SAME attested Settings
+  // document for provider set/get/test; credentials stay redacted.
+  const ownerHashSender = { ...ownerSender, url: ownerSender.url + "#providers" };
+  const hashSet = await dispatch({ type: "provider.set", config: {
+    provider: "openai-compatible",
+    baseURL: "https://hash-provider.example/v1",
+    apiKey: "hash-key-sentinel",
+    model: "hash-model-sentinel",
+  } }, ownerHashSender);
+  assert(hashSet?.hasApiKey === true && !JSON.stringify(hashSet).includes("hash-key-sentinel"), "provider.set accepts the product hash and redacts the key");
+  const hashGet = await dispatch({ type: "provider.get" }, ownerHashSender);
+  assert(hashGet?.provider === "openai-compatible" && hashGet?.model === "hash-model-sentinel", "provider.get accepts the product hash");
+  assert(hashGet?.hasApiKey === true && !JSON.stringify(hashGet).includes("hash-key-sentinel"), "provider.get remains redacted");
+  const hashTest = await dispatch({ type: "provider.test", provider: "demo", baseURL: "", apiKey: "", model: "" }, ownerHashSender);
+  assert(hashTest?.ok === true, "provider.test accepts the product hash");
+  const failClosed = await dispatch({ type: "provider.status" }, ownerHashSender);
+  assertEquals(failClosed?.ok, false, "the saved network adapter reaches the no-origin-grant gate");
+  assertEquals(failClosed?.reason, 'network access to the provider (https://hash-provider.example/*) is not granted — click "Use"/"Test connection" in Settings to grant it');
+
+  // The exact no-hash owner document remains valid too.
+  const allowed = await dispatch({ type: "provider.set", config: { provider: "demo", baseURL: "", apiKey: "", model: "" } }, ownerSender);
   assert(!/Settings surface/.test(JSON.stringify(allowed)), "provider.set accepted via attested owner principal");
-  // 7. query/hash spoofs and missing attestations can NEVER pass (the fallback is gone):
+  const allowedGet = await dispatch({ type: "provider.get" }, ownerSender);
+  assert(allowedGet?.provider === "demo", "provider.get accepted via attested owner principal");
+
+  // 7. query/unknown-hash/foreign-document spoofs and missing attestations can NEVER pass (the fallback is gone):
   for (const bad of [
     { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html?spoof=1", documentId: "d", documentLifecycle: "active" },
     { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html#x", documentId: "d", documentLifecycle: "active" },
@@ -633,9 +655,15 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
     { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html", documentId: "d", documentLifecycle: "inactive" },
   ]) {
     // The dispatcher's isExactOptionsSender rejects all of these shapes, so the
-    // principal never becomes owner-options — the route refuses.
-    const r = await dispatch({ type: "provider.set", config: { provider: "gemini" } }, bad);
-    assert(r?.ok === false && /Settings surface/.test(String(r?.error)), "spoofed/incomplete sender refused");
+    // principal never becomes owner-options — every credential route refuses.
+    for (const message of [
+      { type: "provider.set", config: { provider: "gemini" } },
+      { type: "provider.get" },
+      { type: "provider.test", provider: "demo" },
+    ]) {
+      const r = await dispatch(message, bad);
+      assert(r?.ok === false && /Settings surface/.test(String(r?.error)), `${message.type} spoofed/incomplete sender refused`);
+    }
   }
   // cleanup via owner principal
   await dispatch({ type: "kv.remove", keys: ["cap:namedAgents", "providerConfig"] }, ownerSender);

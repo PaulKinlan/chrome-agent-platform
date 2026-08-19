@@ -847,7 +847,7 @@ async function main() {
     );
     await sleep(800);
     const storageDisabledStatus = await msgValue({ type: "capabilities.status" });
-    const providerDuringDisable = await msgValue({ type: "provider.get" });
+    const providerDuringDisable = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
     check(
       "permissions: storage Disable returns revoked (capability.revoke route)",
       storageDisableClicked && storageDisabledStatus?.storage === false,
@@ -861,7 +861,7 @@ async function main() {
     );
     await sleep(800);
     const storageReenabledStatus = await msgValue({ type: "capabilities.status" });
-    const providerAfterReenable = await msgValue({ type: "provider.get" });
+    const providerAfterReenable = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
     check(
       "permissions: storage re-enabled + provider survived (migration)",
       storageEnableClicked && storageReenabledStatus?.storage === true &&
@@ -899,7 +899,7 @@ async function main() {
       await clickSel(cdp, optsSession, `.provider-card[data-provider="openai"] .clear-key`),
     );
     await sleep(500);
-    const afterClear = await msgValue({ type: "provider.get" });
+    const afterClear = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
     check(
       "Settings: Clear key removed only the key (endpoint/model preserved)",
       afterClear?.provider === "openai" &&
@@ -913,7 +913,7 @@ async function main() {
       await clickSel(cdp, optsSession, `.provider-card[data-provider="openai"] .set-default`),
     );
     await sleep(500);
-    const afterUpdate = await msgValue({ type: "provider.get" });
+    const afterUpdate = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
     check(
       "Settings: Update preserved endpoint/model + empty key",
       afterUpdate?.provider === "openai" &&
@@ -931,7 +931,7 @@ async function main() {
     );
     await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
     await sleep(300);
-    const demoCfg = await msgValue({ type: "provider.get" });
+    const demoCfg = await evalOpts(`chrome.runtime.sendMessage({ type: "provider.get" })`);
     check("Settings: provider restored to demo", demoCfg?.provider === "demo" && !demoCfg?.baseURL);
     check(
       "Settings: demo still resolvable via the SW (testing only)",

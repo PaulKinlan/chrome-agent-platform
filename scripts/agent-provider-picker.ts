@@ -824,6 +824,34 @@ async function realClick(sid, selector, shadowSelector = null) {
   return true;
 }
 
+/** Click a per-agent Save/Clear control, then genuinely confirm the explicit
+ * owner-approval modal that the product opens after the first pending call. */
+async function ownerApprovedProviderClick(sid, selector) {
+  if (!(await realClick(sid, selector))) return false;
+  for (let i = 0; i < 40; i++) {
+    const open = await evalIn(sid, `!!document.querySelector(".provider-approval-dialog[open] .approve-provider-change")`);
+    if (open) return await realClick(sid, ".provider-approval-dialog .approve-provider-change");
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+
+/** Resolve a direct harness mutation through the existing exact Settings
+ * approval surface, then perform the one exact retry. */
+async function ownerApprovedSettingsMessage(sid, payload) {
+  const encoded = JSON.stringify(payload);
+  const first = await evalIn(sid, `chrome.runtime.sendMessage(${encoded})`);
+  if (first?.ok === true) return first;
+  await realClick(sid, `.nav-item[data-section="approvals"]`);
+  for (let i = 0; i < 40; i++) {
+    const ready = await evalIn(sid, `!!document.querySelector("#approval-list .approval-row .primary")`);
+    if (ready) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!(await realClick(sid, "#approval-list .approval-row .primary"))) return first;
+  return await evalIn(sid, `chrome.runtime.sendMessage(${encoded})`);
+}
+
 /** Type text with GENUINE CDP key events (char-by-char). */
 async function typeText(sid, text) {
   for (const ch of text) {
@@ -990,13 +1018,13 @@ const custom = await evalIn(opts, `(() => {
 check("custom: unknown id commits as custom value", custom.value === "my-private-finetune-1" && custom.custom === true);
 
 // 7. persistence: save the override, reload the page, verify it round-trips (no key echo)
-const saved = await evalIn(opts, `(async () => {
+await evalIn(opts, `(() => {
   const row = document.querySelector(".agent-provider-row");
   const mp = row.querySelector("model-picker");
   mp.value = (mp.models ?? [])[0];
-  const r = await chrome.runtime.sendMessage({ type: "named-agent.set-provider", id: "picker-probe", config: { provider: "gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", model: mp.value, apiKey: "" } });
-  return r?.ok;
+  return true;
 })()`);
+const saved = await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 check("persistence: override saved", saved === true);
 
 await reloadPage(opts, "persistence");
@@ -1068,7 +1096,7 @@ check("genuine: provider selected via REAL arrow keys on the native select", sel
 
 await realClick(opts, ".agent-provider-row .agent-provider-key");
 await typeText(opts, "sk-journey-key");
-await realClick(opts, ".agent-provider-row .set-agent-provider");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 await new Promise((r) => setTimeout(r, 600));
 const sentinelA = await keySentinel("picker-probe");
 check("k3 H1: key stored after a keyed save (hashed sentinel)", typeof sentinelA === "string" && sentinelA.length > 0);
@@ -1079,7 +1107,7 @@ await send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", 
 await send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 }, opts);
 await keyPress(opts, "Delete", "Delete", 46);
 await new Promise((r) => setTimeout(r, 120));
-await realClick(opts, ".agent-provider-row .set-agent-provider");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 await new Promise((r) => setTimeout(r, 600));
 const sentinelB = await keySentinel("picker-probe");
 check("k3 H1: blank same-provider Save PRESERVES the key", sentinelB !== null && sentinelB === sentinelA);
@@ -1089,7 +1117,7 @@ const swapGenuine = await selectProviderByArrows(opts, "openai");
 check("genuine: provider swapped to openai via REAL arrows", swapGenuine === true);
 await realClick(opts, ".agent-provider-row .agent-provider-key");
 await typeText(opts, "sk-other-key");
-await realClick(opts, ".agent-provider-row .set-agent-provider");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 await new Promise((r) => setTimeout(r, 600));
 const sentinelC = await keySentinel("picker-probe");
 check("final: provider swap does NOT inherit the old key", sentinelC !== null && sentinelC !== sentinelA);
@@ -1098,15 +1126,16 @@ check("final: provider swap does NOT inherit the old key", sentinelC !== null &&
 //    rendered when the redacted override reports hasApiKey) — a REAL click.
 const clearBtnPresent = await evalIn(opts, `!!document.querySelector(".agent-provider-row .clear-agent-key")`);
 check("final: the per-agent Clear key control is rendered (hasApiKey)", clearBtnPresent === true);
-await realClick(opts, ".agent-provider-row .clear-agent-key");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .clear-agent-key");
 await new Promise((r) => setTimeout(r, 600));
 const sentinelD = await keySentinel("picker-probe");
 check("final: the owner-gesture Clear key clears (sentinel -> null)", sentinelD === null);
 
 // 5. The set-provider RESPONSE is redacted (no key VALUE; hasApiKey is a bit).
-await evalIn(opts, `chrome.runtime.sendMessage({ type: "named-agent.set-provider", id: "picker-probe", config: { provider: "deepseek", baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-resp-check" } }).then(() => true)`);
-const setProviderResponse = await evalIn(opts, `chrome.runtime.sendMessage({ type: "named-agent.set-provider", id: "picker-probe", config: { provider: "deepseek", baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-resp-check" } }).then(r => JSON.stringify(r?.agent?.provider ?? {}))`);
-check("final: set-provider response carries no key value", !setProviderResponse.includes("sk-resp-check"));
+const setProviderResult = await ownerApprovedSettingsMessage(opts, { type: "named-agent.set-provider", id: "picker-probe", config: { provider: "deepseek", baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat", apiKey: "sk-resp-check" } });
+const setProviderResponse = JSON.stringify(setProviderResult?.agent?.provider ?? {});
+check("final: set-provider response carries no key value", setProviderResult?.ok === true && !setProviderResponse.includes("sk-resp-check"));
+await realClick(opts, `.nav-item[data-section="agents"]`);
 
 // 6. SECURITY: the GENERIC kv.get NEVER returns a raw key.
 const rawKv = await evalIn(opts, `chrome.runtime.sendMessage({ type: "kv.get", keys: ["cap:namedAgents"] }).then(r => JSON.stringify(r ?? {}))`);
@@ -1146,7 +1175,7 @@ await typeText(opts, "byo-model");
 await keyPress(opts, "Enter", "Enter", 13); // genuine Enter commits the custom id
 await realClick(opts, ".agent-provider-row .agent-provider-key");
 await typeText(opts, "sk-byo-echo");
-await realClick(opts, ".agent-provider-row .set-agent-provider");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 await new Promise((r) => setTimeout(r, 700));
 console.log("    [dbg] byo state:", JSON.stringify(await evalIn(opts, `(() => { const row = document.querySelector(".agent-provider-row"); return { provider: row.querySelector("provider-select").value, model: row.querySelector("model-picker").value, input: row.querySelector("model-picker").shadowRoot.querySelector("input").value, baseUrl: row.querySelector(".agent-provider-base-url")?.value }; })()`)));
 
@@ -1286,7 +1315,7 @@ await keyPress(opts, "Delete", "Delete", 46);
 await new Promise((r) => setTimeout(r, 150));
 await typeText(opts, "my-private-finetune-9");
 await keyPress(opts, "Enter", "Enter", 13);
-await realClick(opts, ".agent-provider-row .set-agent-provider");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 await new Promise((r) => setTimeout(r, 700));
 const persistedCustom = await evalIn(opts, `chrome.runtime.sendMessage({ type: "named-agent.list" }).then(r => r?.agents?.find(a => a.id === "picker-probe")?.provider?.model ?? null)`);
 console.log("    [dbg] persistedCustom:", JSON.stringify(persistedCustom));
@@ -1334,7 +1363,7 @@ await evalIn(opts, `(async () => {
   await new Promise(r => setTimeout(r, 200));
   return true;
 })()`);
-await realClick(opts, ".agent-provider-row .set-agent-provider");
+await ownerApprovedProviderClick(opts, ".agent-provider-row .set-agent-provider");
 await new Promise((r) => setTimeout(r, 400));
 await shot(opts, "final-agents-panel");
 
