@@ -1,13 +1,13 @@
 {
-  "testedSourceCommit": "8a576933e99fbb8e716e35e3c00907904897eea5",
+  "testedSourceCommit": "ba12fb30484836e431b271807edd89508391eee9",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1787144697319",
+  "runId": "cap-1787149966431",
   "retain": true,
-  "ts": "2026-08-19T13:05:49.518Z",
+  "ts": "2026-08-19T14:33:54.478Z",
   "evidenceDir": "/tmp/cap-approval-current-main/test-artifacts",
-  "passed": 125,
+  "passed": 126,
   "failed": 0,
   "checks": [
     {
@@ -435,6 +435,10 @@
       "pass": true
     },
     {
+      "name": "approval: primary NTP Settings iframe can deny an exact request",
+      "pass": true
+    },
+    {
       "name": "approval: deny row is singular and capability material absent from DOM",
       "pass": true
     },
@@ -519,13 +523,13 @@
     },
     {
       "name": "options-driven.png",
-      "sha256": "8458cc791fdce6d9c98c726ae836c11522bad67dafee59dc50408086a245ea7c",
-      "bytes": 234625
+      "sha256": "c500706e347bcb1e2fa992a19bd3122401f1ad8cfae27d3304eddb370e512419",
+      "bytes": 234620
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "15a02b2766ed2a188d7ad0000fcc75cc26b3f1a9ed58b918c335cef7e212a84f",
-      "bytes": 240763
+      "sha256": "3c4f3e7821dc7d11b43517528b6aedff38800fb455d97261ccb6e07cf16727f5",
+      "bytes": 241127
     },
     {
       "name": "approval-deny-resolved.png",
