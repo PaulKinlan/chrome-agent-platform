@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.99] — 2026-08-19
+- fix(run-status): the visible run lifecycle — a per-run generation (runGen) fences every run's status/progress/result rendering AND its post-await globals (currentThreadId/title/tasks/status) against surface switches AND same-surface double-sends; a follow-up in an already-open thread no longer restarts the view transition (the banner flash); a progress-port disconnect settles the banner instead of sticking on Working; an orphaned "running…" is owner-reset on surface leave; a superseded turn's leftover thinking indicator is cleared by the incoming turn. The SW still journals every run independently — a fenced run's outcome is never lost. Coverage: the 29-check loaded-MV3 journey scripts/run-status-lifecycle.ts (real CDP input, input-clear witnesses, warmup-queued genuine overlap/switch/back/reload races, exact working→terminal banner sequence recording, CDP AX-tree role/name checks, no production test seams), failing-first on the unfixed base (duplicate result bubble + transition restart), green after.
+
 ## [0.2.96] — 2026-08-18
 - merge(sidebar): integrate reviewed Tasks/Agents side-panel parity with the structured tool renderer; preserve both feature streams, align shared panel/list geometry and actions, keep collapsed scrolling gutter-free, center pointer/keyboard delete affordances, and add populated real-MV3 parity acceptance
 

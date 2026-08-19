@@ -379,8 +379,18 @@ export function pairToolJournal(entries) {
   return out;
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null }) {
   const c = container;
+  // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
+  // this turn no longer owns the surface (a newer turn started, or the user
+  // left mid-flight). A stale turn keeps executing in the SW (its result is
+  // journaled — nothing is lost) but stops RENDERING: no status flips, no
+  // progress cards, no result/error bubble into a surface it no longer owns.
+  const stale = () => {
+    try { return typeof isStale === "function" && !!isStale(); }
+    catch { return false; }
+  };
+  const status = (s) => { if (!stale()) onStatus?.(s); };
 
   // Proactively ensure the provider host permission BEFORE the run (the Run
   // click is a user gesture, so the permission can be requested right here —
@@ -395,7 +405,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const r = await requestProviderHostAccess(cfg);
         if (!r.granted) {
           const err = { ok: false, error: "network access to the provider was denied — grant it in Settings (Providers) or click the Grant button", errorCategory: "host-permission", errorReason: "the provider host permission was denied", errorAction: "grant network access in Settings" };
-          onStatus?.({ state: "error", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
+          if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
+          status({ state: "error", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
           if (typeof c.appendError === "function") c.appendError(err.error, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
           else appendBubble(c, "error", err.error);
           return err;
@@ -449,6 +460,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
   };
   // 1. the user's turn appears immediately — the surface becomes a conversation.
+  if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
+  // A superseded earlier turn can leave its LIVE thinking indicator behind
+  // (its own cleanup events are fenced off) — a new turn on this surface
+  // clears those leftovers before its first write.
+  for (const el of c.querySelectorAll?.('message-bubble[role="thinking"]') ?? []) {
+    el.remove();
+  }
   appendBubble(c, "user", text, attachments);
 
   // The run + result rendering, factored so the host-permission "Grant network
@@ -457,6 +475,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // queue + arbiter + listener: a provider-grant retry must never accept the
   // failed attempt's stale events, and each attempt settles its own cards.
   const executeTurn = async () => {
+  // A grant-retry re-enters here after its own permission awaits — re-check.
+  if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
   const runId = newRunId();
 
   // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
@@ -464,7 +484,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
   let thinking = typeof c.appendThinking === "function"
     ? c.appendThinking("thinking…")
     : appendBubble(c, "thinking", "thinking…");
-  onStatus?.({ state: "working", activity: "thinking…" });
+  status({ state: "working", activity: "thinking…" });
   // Per-call tool cards: a FIFO queue per tool NAME so parallel same-name calls
   // are matched in order and a completed card is never duplicated (the
   // wider-goal review's finding that a single `lastTool` left A's card running
@@ -493,10 +513,19 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (ev.type === "disconnect") {
       clearThinking();
       terminal.onPortError();
+      // The banner must not stick on "working" when the progress port dies.
+      status({ state: "error", message: "lost connection to the agent runtime", errorReason: "the progress connection dropped", errorAction: "the result is journaled — reopen the thread to check", errorCategory: "network" });
       return;
     }
     // Only render THIS attempt's events — FAIL-CLOSED on the exact runId.
     if (ev.runId !== runId) return;
+    // The fence: this turn no longer owns the surface — render nothing more
+    // (the arbiter still settles the queue + unsubscribes via the terminal).
+    if (stale()) {
+      if (ev.type === "done") terminal.onPortDone(ev.aborted === true);
+      else if (ev.type === "error") terminal.onPortError();
+      return;
+    }
     switch (ev.type) {
       case "thinking": {
         const step = ev.step != null ? ev.step + 1 : null;
@@ -510,7 +539,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
       case "tool-call": {
         clearThinking();
-        onStatus?.({ state: "working", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        status({ state: "working", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
         const card = typeof c.appendTool === "function"
           ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
@@ -549,15 +578,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // report a successful "done" status.
         terminal.onPortDone(ev.aborted === true);
         if (ev.aborted === true) {
-          onStatus?.({ state: "error", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
+          status({ state: "error", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
         } else {
-          onStatus?.({ state: "done" });
+          status({ state: "done" });
         }
         break;
       case "error":
         clearThinking();
         terminal.onPortError();
-        onStatus?.({
+        status({
           state: "error",
           message: ev.reason ?? ev.message ?? "error",
           errorReason: ev.reason ?? null,
@@ -631,10 +660,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
   //    TERMINAL outcome is authoritative: an aborted/failed run must NEVER
   //    append a successful assistant result or report a done status — the
   //    abort controls the OVERALL run outcome, not just the card colours.
+  // The fence: a stale turn appends NOTHING — its result lives in the journal.
+  if (stale()) return res;
   clearThinking();
   const outcome = terminal.status ?? (res?.ok === true ? "success" : "error");
   if (outcome === "success" && res?.ok) {
-    onStatus?.({ state: "done" });
+    status({ state: "done" });
     if (typeof res.result === "string" && res.result) {
       appendBubble(c, "agent", res.result);
     }
@@ -646,7 +677,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const action = res?.errorAction ?? (res?.aborted ? "the run stopped before completing" : null);
     const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
     const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
-    onStatus?.({
+    status({
       state: "error",
       message: reason ?? msg,
       errorReason: reason,
