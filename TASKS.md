@@ -5,7 +5,7 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-19 17:29 UTC. Reconcile before acting; status can advance in
+> Snapshot: 2026-08-19 18:18 UTC. Reconcile before acting; status can advance in
 > another reviewed worktree before this file reaches the integration branch.
 
 ## Safety boundary
@@ -478,6 +478,279 @@ On resume after a coordinator or worker loss:
   - 2026-08-18 12:58 UTC — opened for versioned prompt customization.
   - 2026-08-18 17:10 UTC — reviewed integration pushed and remotely verified.
 
+## [CAP-FB-20260819-CONVERSATION-RUN-STATUS-01] One truthful conversation run-status surface
+- Feedback: 2026-08-19 — conversation feedback requested the preferred grid status inside agent conversations and removal of the duplicate thinking spinner
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: every task and agent conversation renders one shared grid-based status surface for queued, running, retrying, completed, failed, and cancelled states; the legacy duplicate thinking spinner is absent; reconnect and surface-switch updates cannot create two status owners
+- Review: pending independent implementation review and exact loaded-MV3 visual/accessibility review
+- Gates: component and lifecycle units; loaded-MV3 task, named-agent, background-agent, and site-agent conversations; raw AX live-region/state inspection; switch/reconnect/reload screenshots; zero duplicate spinner or stale status
+- Blockers: status presentation must reuse the lifecycle authority delivered under `CAP-FB-20260818-RUN-STATUS-01` without weakening its ownership fences
+- Next: inventory every conversation status/spinner render path and define one shared status component contract before implementation
+- Recover: `git show bbeff7b:TASKS.md && git log --oneline -- TASKS.md`
+- History:
+  - 2026-08-19 18:13 UTC — captured as a distinct presentation task; the pushed lifecycle task remains intact and is linked rather than reopened.
+
+## [CAP-FB-20260819-COMPOSER-AGENT-MENTIONS-01] Composer copy and behavior for mentioning any agent
+- Feedback: 2026-08-19 — composer feedback rejected site-agent-only reply wording because the same composer must mention any supported agent kind
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: composer placeholder, accessible description, mention picker, keyboard completion, and send routing consistently say and implement mention-any-agent semantics across named, background, and site agents without implying a site-only reply path
+- Review: pending independent copy, routing, accessibility, and exact loaded-MV3 review
+- Gates: parser/picker/routing units; keyboard and pointer mention journeys for every agent kind; raw AX names and selected state; narrow/RTL/theme screenshots; no regression to canonical agent references
+- Blockers: must preserve the canonical picker/reference behavior tracked by `CAP-FB-20260818-AGENT-ACCESS-01`
+- Next: enumerate all composer placeholders, helper text, mention queries, and route-resolution branches, then write a single cross-surface contract
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "mention" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — captured separately from unified agent access because the requested copy and composer behavior remain incorrect after the earlier picker delivery.
+
+## [CAP-FB-20260819-COVERED-NUB-VISIBILITY-01] Covered side-panel nub visibility across views
+- Feedback: 2026-08-19 — the side-panel edge nub remains visible where the main page or another view covers it; the Directory-only correction is not a complete view policy
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: a documented per-view policy keeps the nub available only where it is actionable and otherwise makes it hidden, inert, non-hit-testable, non-focusable, and absent from the unignored AX tree; closing or switching views restores the exact prior sidebar state
+- Review: pending independent geometry, interaction, and accessibility review
+- Gates: loaded-MV3 matrix for hub, task conversation, Settings, Directory, Skills, Assets, narrow, RTL, themes, pointer/keyboard focus, elementFromPoint, and raw AX; before/after screenshots and exact restoration assertions
+- Blockers: must compose with `CAP-FB-20260819-AGENT-DIRECTORY-01`, `CAP-FB-20260818-SIDEBAR-01`, and `CAP-FB-20260818-SIDEPANEL-PARITY-01` without merging away their separate acceptance history
+- Next: record the intended sidebar/nub visibility and stacking policy for every routable view, then add failing browser assertions for non-Directory covered views
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "side-toggle" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — opened as a generalized covered-view defect; existing Directory and sidebar tasks remain separate linked workstreams.
+
+## [CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01] Durable runs independent of mounted UI
+- Feedback: 2026-08-19 — task and agent runs must continue through task/view switches, Settings navigation, tab closure, and later reopen rather than being owned by mounted conversation UI
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: workflow/service-worker state is the run authority; switching task, agent, Settings, or full views and closing/reopening the tab never cancels or loses an accepted run; reconnect shows bounded progress and exactly one terminal result; restart recovery is idempotent and stale UI owners cannot commit
+- Review: pending independent architecture, crash-recovery, concurrency, and loaded-MV3 review
+- Gates: deterministic overlap/switch/view/reload/tab-close journeys; genuine service-worker termination and wake; persisted run identity and journal/result equality; reconnect progress; duplicate/loss checks; raw AX status; zero orphaned terminal or mounted-UI ownership
+- Blockers: must extend, not replace, the surface fencing in `CAP-FB-20260818-RUN-STATUS-01`; permission waits must remain compatible with `CAP-FB-20260819-PERMISSIONS-01`
+- Next: map the current run lifecycle between UI, workflow, service worker, persistence, and progress ports, then specify the durable authority and reconnect protocol
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "runSurfaceOwner\|progress" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — captured as a new durability goal rather than broadening the already-pushed visible lifecycle task after delivery.
+
+## [CAP-FB-20260819-SITE-AGENT-STATUS-CLEANUP-01] Site Agents and Agent Dev status cleanup
+- Feedback: 2026-08-19 — basic task rows expose stale or noisy WebMCP injection and page-report status text that belongs in a diagnostic surface
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: ordinary task and Site Agent rows show concise current execution state only; stale injection/page-report messages cannot persist or displace task status; bounded timestamped discovery and injection diagnostics remain available in the dedicated Site Agent or Agent Dev detail surface
+- Review: pending independent information-architecture, bounds, freshness, and loaded-MV3 review
+- Gates: status-source units; navigation/reload/injection failure and recovery journeys; row/detail screenshots; stale-generation fencing; diagnostic byte/count/time bounds; keyboard and raw AX inspection
+- Blockers: diagnostic truth must remain inspectable under `CAP-FB-20260818-WEBMCP-01` while structured detail remains compatible with `CAP-FB-20260818-TOOL-TREE-01`
+- Next: classify every WebMCP injection and page-report message as task status, transient progress, or bounded diagnostic, then move each to its owning surface
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "WebMCP\|injection\|page report" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — opened as a status-surface cleanup; existing WebMCP discovery evidence remains a linked requirement, not a substitute.
+
+## [CAP-FB-20260819-DISCOVER-SITE-TOOLS-COPY-01] Truthful Site Agent and tool-discovery action copy
+- Feedback: 2026-08-19 — “Discover this page” and “pick a tab to scan” overstate page scanning instead of describing tool and Site Agent discovery
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: labels, descriptions, permission rationale, empty/error/success states, and announcements consistently describe discovering available tools and Site Agent capabilities for a selected tab; copy never promises general page scanning, reading, or verification that did not occur
+- Review: pending independent product-copy, permissions, accessibility, and loaded-MV3 review
+- Gates: repository copy inventory; state-transition units; real selected-tab discovery with no-tools, probable-tools, verified-tools, non-injectable, denied, and stale cases; accessible names/live announcements; localized-layout screenshots
+- Blockers: action wording must remain consistent with `CAP-FB-20260818-WEBMCP-01`, `CAP-FB-20260819-PERMISSIONS-01`, and the page identity defined by `CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01`
+- Next: define the discovery vocabulary and state table, then replace every page-scan label and assertion from one shared source
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "Discover this page\|pick a tab\|scan" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — captured as a truthful-copy task distinct from implementing proactive discovery or page-scoped identity.
+
+## [CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01] Proactive per-tab Site Agent discovery before Run
+- Feedback: 2026-08-19 — before Run, the product should show what a selected tab is likely or verified to offer instead of waiting for a blind execution attempt
+- Updated: 2026-08-19 18:13 UTC
+- Status: BLOCKED
+- Resume: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: before Run, each selected tab shows bounded known or probable tool count, capability summary, injectability, owner-visible screenshot or description when authorized, current page state, and observation timestamp; heuristic/probable data is visually and accessibly distinct from verified discovery and stale data cannot authorize execution
+- Review: pending independent privacy, permission, freshness, heuristic-truth, accessibility, and loaded-MV3 review
+- Gates: deterministic heuristic-versus-verified units; selected-tab navigation/reload/injectability/permission matrix; screenshot/description provenance and bounds; stale timestamp fencing; raw AX labels; narrow/RTL/theme screenshots; no automatic broad permission request
+- Blockers: implementation is blocked on the page/document/toolset identity contract in `CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01` and owner-driven permission behavior in `CAP-FB-20260819-PERMISSIONS-01`
+- Next: complete the linked page identity and discovery-state contracts, then define the minimum pre-Run observation that is useful without overclaiming verification
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "discover-active\|active tab" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — captured in BLOCKED state because origin-only identity and permission semantics cannot safely support proactive per-tab claims yet.
+
+## [CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01] Page-scoped Site Agent identity and lifecycle
+- Feedback: 2026-08-19 — origin-only Site Agent identity conflates same-origin subpages that expose different WebMCP tools, titles, and navigation lifecycles
+- Updated: 2026-08-19 18:13 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: Site Agent identity includes a page/document/navigation epoch and canonical toolset identity in addition to origin; same-origin subpages with different tools remain distinct, titles are useful and bounded, reload/navigation invalidates stale authority, and durable history reconnects only when identity continuity is proven
+- Review: pending independent identity-model, migration, privacy, lifecycle, concurrency, and loaded-MV3 review
+- Gates: same-origin multi-page fixtures with different tools; SPA navigation, full navigation, reload, back/forward, duplicate tabs, closed/reopened tabs, toolset mutation, stale-message fencing, bounded title and fingerprint checks, raw AX labels, and persisted-record migration
+- Blockers: the identity must preserve origin isolation and sender authentication from `CAP-FB-20260818-WEBMCP-01` while composing with canonical references from `CAP-FB-20260818-AGENT-ACCESS-01`
+- Next: design the canonical page identity, toolset fingerprint, navigation invalidation, and migration rules before changing storage or UI keys
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "canonicalOrigin\|site:" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:13 UTC — opened as the prerequisite identity task for proactive per-tab discovery; no origin-only record is relabelled as page-verified.
+
+## [CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01] Agent Directory tool explorer and enrollment policy
+- Feedback: 2026-08-19 — Directory feedback requested a page-aware tool explorer and raised, without resolving, the product boundary between enrolling an agent and approving individual tool use
+- Updated: 2026-08-19 18:15 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: every listed tool has a bounded truthful description, input schema summary, useful metadata, and its source page URL, title, and origin; Declared and Approved controls remain contained in and accessibly labelled to the exact tool; pages or sites with zero verified tools are excluded; the enrollment-versus-per-tool-approval policy is documented as an explicit researched decision rather than inferred from feedback
+- Review: research and product-policy decision pending before implementation; subsequent independent security, permissions, information-architecture, accessibility, and loaded-MV3 review required
+- Gates: prior-art and threat-model note; policy decision record; production-registry fixtures with multiple pages/tools and zero-tool exclusions; tool-card containment and exact AX labels; page URL/title/origin provenance; narrow/RTL/theme screenshots; enrollment and per-tool approval journeys matching the chosen policy
+- Blockers: implementation must not start until research distinguishes agent enrollment authority from per-tool invocation approval and records the product decision; page provenance depends on `CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01`
+- Next: research enrollment and per-tool approval models, document trade-offs and abuse cases, and obtain an explicit product decision before designing controls
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "tool-directory-card\|approveTool\|agent.create" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:15 UTC — opened in research-first state and cross-linked to `CAP-FB-20260819-AGENT-DIRECTORY-01`; uncertainty was recorded as an unresolved policy question, not approval.
+
+## [CAP-FB-20260819-UI-FLASH-RELAYOUT-01] Intermittent extension-wide UI flash and relayout investigation
+- Feedback: 2026-08-19 — intermittent whole-interface flashes or relayouts are visible across the NTP and extension pages without a confirmed trigger or root cause
+- Updated: 2026-08-19 18:15 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: the intermittent flash is reproducible or boundedly classified with synchronized recording and screenshots; CDP evidence distinguishes layout shift, full rerender, stylesheet/font/theme reload, iframe or screenshot artifact, view transition, navigation, and service-worker/state replacement; a demonstrated root cause is fixed and a browser regression proves no whole-UI flash under the reproducing sequence
+- Review: research-first reproduction and trace analysis pending; any correction requires independent performance, rendering, accessibility, and exact loaded-MV3 review
+- Gates: repeated fresh-profile NTP/chat/options/Directory/Assets/view-switch journeys; video or frame sequence with timestamps; Performance and tracing events; layout-shift rectangles; DOM/style/theme/font/navigation/view-transition mutation timeline; console/runtime/network logs; before/after screenshots; root-cause-specific regression with a visible no-flash oracle
+- Blockers: no correction should be selected until evidence identifies the owning layer and excludes capture-only artifacts; intermittent reproduction may require a bounded matrix across routes, themes, viewport sizes, and service-worker restarts
+- Next: build a read-only reproduction harness that records synchronized screenshots, CDP trace domains, DOM mutation markers, theme/style/font loads, navigation, view-transition events, and service-worker lifecycle before proposing a fix
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "startViewTransition\|data-theme\|location.reload" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:15 UTC — captured as a research-first extension-wide investigation; no single rendering subsystem or fix is assumed without trace evidence.
+
+## [CAP-FB-20260819-RECENT-ACTIVITY-UI-01] Recent Activity layout, structured detail, and error truth
+- Feedback: 2026-08-19 — Recent Activity on the NTP has overlapping timestamps, escaped tool/data details, unclear error visibility, and awkward filter spacing
+- Updated: 2026-08-19 18:16 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: relative-time labels such as “10 minutes ago” remain visible and never overlap task or event text across supported widths and RTL; tool-call and data details parse and render as bounded accessible nested objects rather than escaped JSON or backslash strings; error events are truthfully represented and keyboard-discoverable/filterable so “no errors” is distinguishable from hidden errors; search and All agents filters have intentional compact spacing without residual padding
+- Review: pending independent data-parsing, error-truth, bounds, visual, keyboard, and accessibility review
+- Gates: long task/event/time fixtures; nested object/array/string/invalid-JSON fixtures; explicit error/no-error/filtered-error states; parser and bounds units; real loaded-MV3 wide, narrow, RTL, and Midnight screenshots; raw AX tree and keyboard traversal; overflow/hit-target checks; zero console/runtime errors
+- Blockers: structured detail may reuse reviewed primitives from `CAP-FB-20260818-TOOL-TREE-01`, but that historical renderer and evidence do not prove Recent Activity parsing, layout, filtering, or error behavior
+- Next: capture failing fixtures for long relative times, long event text, nested tool data, escaped strings, errors, and filter spacing, then define the Recent Activity row/detail/error contract before implementation
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "Recent activity\|activity-search\|All agents" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:16 UTC — opened as a separate NTP correctness task and linked to, but not claimed covered by, the historical structured tool renderer.
+
+## [CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01] User-facing permission management and run remediation
+- Feedback: 2026-08-19 — permission failures need truthful owner-facing diagnosis, least-privilege remediation, and deterministic run continuation rather than vague missing-permission messages
+- Updated: 2026-08-19 18:17 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: Settings reflects actual Chrome optional permissions and site access separately from agent/task policy; a failed run names the exact tool, capability, origin, rationale, and least-privilege choices instead of a vague `<all_urls>` or permission error; the run pauses safely, creates a visible owner-only approval prompt or inbox item, grants only through a genuine browser gesture, and deterministically resumes the same run or records deny, cancel, revoke, and retry outcomes; pending and error history remains discoverable
+- Review: pending independent permission-model, owner-authority, privacy, recovery, Settings-synchronization, accessibility, and loaded-MV3 review
+- Gates: exact-host, activeTab, optional capability, and `<all_urls>` denial/remediation matrix; genuine Settings and browser permission gestures; agent/task policy versus Chrome-state assertions; owner-only prompt and inbox AX/keyboard checks; view changes, tab reopen, service-worker restart, deny/cancel/revoke/retry, same-run resume, stale-owner fencing, and synchronized Settings screenshots
+- Blockers: must build on, but remain a separate user-facing workstream from, `CAP-FB-20260819-PERMISSIONS-01`; no implementation may make permission grants model-callable, silently broaden site access, or blanket-grant `<all_urls>`
+- Next: research current Chrome permission/site-access state APIs and map every tool failure to exact capability, origin, rationale, minimal choices, owner gesture, and resumable run transition before designing UI
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "permissions.request\|optional_permissions\|all_urls" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:17 UTC — opened as a distinct Settings and run-remediation UX task; the existing orchestration candidate remains linked and is not treated as user-facing acceptance.
+
+## [CAP-FB-20260819-AGENT-DELETION-LIFECYCLE-01] Owner-only agent deletion and lifecycle cleanup
+- Feedback: 2026-08-19 — owners need a discoverable, safe way to delete an agent while the policy for artifacts owned or produced by that agent remains unresolved
+- Updated: 2026-08-19 18:18 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Candidate: —
+- Shipping: —
+- Acceptance: only the owner can reach deletion; confirmation names the exact agent and previews bounded dependency counts and affected resource classes; active runs are safely blocked, cancelled, or settled before a transactional idempotent cleanup revokes schedules, permission and credential references, memory, threads and task links, and registry/index entries; partial failure is recoverable and auditable; deny and cancel mutate nothing; artifacts are never silently cascade-deleted while archive, ownership transfer, orphan/read-only retention, export, and cascade policies remain an explicit researched decision
+- Review: research and artifact-policy decision pending before implementation; subsequent independent owner-authority, transaction, privacy, concurrency, recovery, accessibility, and loaded-MV3 review required
+- Gates: dependency-graph/count preview; exact-agent confirmation and owner-only AX/keyboard path; deny/cancel and least-privilege checks; active-run settle/cancel races; schedule/permission/reference/memory/thread/task/registry cleanup invariants; injected step failures with retry and idempotence; service-worker restart and concurrent delete/update; artifact policy fixtures for every researched option; before/after UI and raw storage evidence
+- Blockers: artifact disposition must remain OPEN until research and an explicit product decision; cleanup must compose with `CAP-FB-20260818-ARTIFACT-TX-01`, approval and remediation authority in `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`, and agent identity/presentation in `CAP-FB-20260819-AGENT-DIRECTORY-01`
+- Next: research deletion dependency graphs and artifact disposition options, document safety and recovery trade-offs, and obtain an explicit policy decision before defining the transaction
+- Recover: `git show bbeff7b:TASKS.md && git grep -n "agent.delete\|deleteAgent\|scheduled" bbeff7b -- extension`
+- History:
+  - 2026-08-19 18:18 UTC — opened as a research-first lifecycle task; artifact disposition uncertainty is recorded as unresolved and no cascade behavior is authorized.
+
 ---
 
 ## Archive
@@ -490,3 +763,4 @@ complete field set and History.
 - 2026-08-19 17:01 UTC — recovered the interrupted draft; reconciled stable CAP task IDs against the private coordination ledger, exact Git objects, current refs, and active worktree state. Public entries retain only role labels, repository refs, commit/evidence hashes, and conservative delivery states.
 - 2026-08-19 17:07 UTC — reconciled after `origin/main` advanced to `ffbdf28`; run-status now records PUSHED, while the old-base Directory and artifact integrations explicitly require fresh current-main integrations.
 - 2026-08-19 17:25 UTC — reconciled k3 tracker PASS, usage `d6030b7` REVIEW_PASSED, Assets successor `202b85e` REVIEWING, explicit gemini permission attribution, and old-base Directory/artifact READY_FOR_BROWSER classifications. No private coordination identifiers were copied.
+- 2026-08-19 18:18 UTC — captured thirteen distinct product-feedback tasks on exact public `bbeff7b`; linked prior run-status, agent-access, sidebar, Directory, WebMCP, tool-tree, permission, and artifact-transaction tasks without merging or rewriting their histories. The additions retain unresolved enrollment-versus-tool-approval and agent-artifact-disposition decisions as research, treat intermittent whole-UI flashing as a trace-first investigation, keep Recent Activity layout/data/error truth separate from historical renderer evidence, and separate user-facing permission remediation from the existing orchestration candidate. New entries contain only public role custody, repository objects, acceptance criteria, and conservative OPEN/BLOCKED states.
