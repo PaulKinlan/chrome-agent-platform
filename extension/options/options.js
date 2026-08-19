@@ -884,11 +884,14 @@ async function renderBrowser() {
       try {
         storageGranted = await chrome.permissions.request({ permissions: ["storage"] });
       } catch { storageGranted = false; }
-      // Screenshot capture uses chrome.tabs.captureVisibleTab with the SILENT
-      // `activeTab` permission (NOT `tabs`, which warns and can't be granted in
-      // headless; NOT the Chrome debugger, which can't be optional). Requested
-      // HERE (a real user gesture). Denial degrades gracefully: the grant still
-      // covers open/navigate/close; only screenshots become unavailable.
+      // The Screenshots capability requests the SILENT `activeTab` permission
+      // (NOT `tabs`, which warns and can't be granted in headless; NOT the
+      // Chrome debugger, which can't be optional) — this ENABLES Chrome's
+      // transient owner-invoked capture (clicking the extension icon while
+      // viewing a page). It never authorizes a background or model-selected
+      // capture (those require exact site access). Requested HERE (a real user
+      // gesture). Denial degrades gracefully: the grant still covers
+      // open/navigate/close; only icon-click screenshots become unavailable.
       let captureGranted = false;
       try {
         captureGranted = await chrome.permissions.request({
@@ -906,7 +909,7 @@ async function renderBrowser() {
         captureGranted
           ? "Browser control granted (global, all origins — set origins below to scope it)." +
             (storageGranted ? "" : " (session-only — storage permission not granted)")
-          : "Browser control granted (screenshots unavailable — activeTab permission not granted)." +
+          : "Browser control granted (icon-click screenshots unavailable — activeTab permission not granted)." +
             (storageGranted ? "" : " (session-only — storage permission not granted)"),
       );
       renderPermissions();

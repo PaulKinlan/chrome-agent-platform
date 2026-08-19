@@ -11,6 +11,8 @@
 // chrome.* access, and each feature reports "permission not granted" rather than
 // throwing.
 
+import { exactOriginPattern } from "./permission-orchestration.js";
+
 export const CAPABILITIES = [
   {
     id: "storage",
@@ -34,7 +36,8 @@ export const CAPABILITIES = [
     id: "activeTab",
     permissions: ["activeTab"],
     label: "Screenshots",
-    hint: "Capture the active tab via chrome.tabs.captureVisibleTab. Silent (no warning) — the same permission the reference screenshot tool uses.",
+    hint: "Enables Chrome's TRANSIENT owner-invoked capture: click the extension icon while viewing a page to capture that page. It never authorizes a background or model-selected capture (those need exact site access). Silent (no Chrome warning).",
+
   },
   {
     id: "scripting",
@@ -129,10 +132,8 @@ export async function revokeCapability(id) {
  * from a user gesture. Returns the honest grant result.
  */
 export async function requestOriginHost(origin) {
-  const matches = [`${origin}/*`];
-  try {
-    return await chrome.permissions.request({ origins: matches });
-  } catch (e) {
-    throw e;
-  }
+  // Validate before crossing the Chrome authority boundary. A vague network
+  // need, wildcard host, path, or `<all_urls>` can never be escalated here.
+  const matches = [exactOriginPattern(origin)];
+  return await chrome.permissions.request({ origins: matches });
 }

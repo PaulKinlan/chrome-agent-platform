@@ -16,7 +16,6 @@
 
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
-import { requestProviderHostAccess, providerOriginPattern, hasProviderHostAccess, isLocalProvider } from "../lib/provider-gate.js";
 
 // ── the live progress port ────────────────────────────────────────────────
 // A single long-lived port per page. The SW broadcasts progress to every
@@ -392,72 +391,49 @@ export async function runConversationTurn(container, { text, attachments = [], h
   };
   const status = (s) => { if (!stale()) onStatus?.(s); };
 
-  // Proactively ensure the provider host permission BEFORE the run (the Run
-  // click is a user gesture, so the permission can be requested right here —
-  // the dynamic-permission-on-need principle: ask when needed, not after a
-  // failure). A denied request returns early with a clear error instead of
-  // running + failing.
+  // Do not treat the original Run click as a live gesture after an asynchronous
+  // provider lookup: calling permissions.request after that round-trip is
+  // rejected by Chrome and creates a misleading retry loop. This redacted
+  // preflight keeps provider secrets out of the page and pauses before any
+  // model execution. The complete owner-button orchestration remains OPEN; for
+  // now Settings is the only genuine permission-request surface.
   try {
-    const cfg = await send("provider.get").catch(() => ({}));
-    if (!isLocalProvider(cfg)) {
-      const has = await hasProviderHostAccess(cfg);
-      if (!has) {
-        const r = await requestProviderHostAccess(cfg);
-        if (!r.granted) {
-          const err = { ok: false, error: "network access to the provider was denied — grant it in Settings (Providers) or click the Grant button", errorCategory: "host-permission", errorReason: "the provider host permission was denied", errorAction: "grant network access in Settings" };
-          if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
-          status({ state: "error", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
-          if (typeof c.appendError === "function") c.appendError(err.error, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
-          else appendBubble(c, "error", err.error);
-          return err;
-        }
+    const summary = await send("provider.permission-summary");
+    if (!summary?.local) {
+      if (!summary?.origin) throw new Error("configured provider origin is invalid");
+      const granted = await chrome.permissions.contains({ origins: [summary.origin] }).catch(() => false);
+      if (!granted) {
+        const err = {
+          ok: false,
+          waitingForPermission: true,
+          error: `network access to ${summary.origin} is not granted — open Settings → Providers and approve that exact origin`,
+          errorCategory: "host-permission",
+          errorReason: "the configured provider's exact origin is not granted",
+          errorAction: "grant the exact provider origin in Settings, then run this task again",
+        };
+        if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
+        status({ state: "waiting-for-permission", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
+        if (typeof c.appendError === "function") c.appendError(err.error, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
+        else appendBubble(c, "error", err.error);
+        return err;
       }
     }
-  } catch {
-    // A failure to check/request must not block the run — the run itself will
-    // surface the actionable error if the permission is still missing.
+  } catch (e) {
+    const err = {
+      ok: false,
+      waitingForPermission: true,
+      error: `provider permission preflight failed closed: ${e?.message ?? e}`,
+      errorCategory: "host-permission",
+    };
+    if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
+    status({ state: "waiting-for-permission", message: err.error, errorCategory: err.errorCategory });
+    if (typeof c.appendError === "function") c.appendError(err.error, { category: err.errorCategory });
+    else appendBubble(c, "error", err.error);
+    return err;
   }
-  // The host-permission provider failure: a DIRECT "Grant network access"
-  // action (requests the provider's host permission right here, on the user's
-  // click) — the dynamic-permission-on-need principle, not just "Fix in
-  // Settings". Renders an inline button; clicking it grants + prompts a retry.
-  const appendProviderGrant = (category, retryFn) => {
+  const appendProviderGrant = (category) => {
     if (category !== "host-permission") return;
-    const row = document.createElement("div");
-    row.className = "provider-grant";
-    row.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 14px;justify-content:flex-start;";
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Grant network access";
-    btn.style.cssText = "font:inherit;font-size:12.5px;font-weight:600;color:var(--accent,#0e6e63);background:transparent;border:1px solid var(--accent,#0e6e63);border-radius:6px;padding:4px 10px;cursor:pointer;";
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "Requesting…";
-      try {
-        const cfg = await send("provider.get").catch(() => ({}));
-        const r = await requestProviderHostAccess(cfg);
-        if (r.granted) {
-          // The permission is granted ON THIS CLICK (a fresh user gesture) —
-          // auto-retry the run so the user doesn't have to re-type the task.
-          btn.textContent = "Granted — retrying…";
-          if (typeof retryFn === "function") {
-            row.remove();
-            await retryFn();
-          } else {
-            btn.textContent = "Granted — run the task again";
-          }
-        } else {
-          btn.textContent = "Denied — grant it in Settings";
-          btn.disabled = false;
-        }
-      } catch {
-        btn.textContent = "Grant it in Settings";
-        btn.disabled = false;
-      }
-    });
-    row.append(btn);
-    c.append(row);
-    if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+    appendBubble(c, "system", "Provider access is missing or was revoked. Open Settings → Providers to approve the exact origin, then run the task again.");
   };
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
@@ -469,11 +445,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
   }
   appendBubble(c, "user", text, attachments);
 
-  // The run + result rendering, factored so the host-permission "Grant network
-  // access" button can RE-RUN the same turn after the permission is granted
-  // (the dynamic-permission-on-need retry). EVERY ATTEMPT gets its own runId +
-  // queue + arbiter + listener: a provider-grant retry must never accept the
-  // failed attempt's stale events, and each attempt settles its own cards.
+  // Keep run + result rendering in one attempt-scoped function. Every attempt
+  // owns its runId, queue, arbiter, and listener, so stale events from another
+  // page or attempt are never accepted.
   const executeTurn = async () => {
   // A grant-retry re-enters here after its own permission awaits — re-check.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
@@ -598,7 +572,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         } else {
           appendBubble(c, "error", ev.message ?? "error");
         }
-        appendProviderGrant(ev.category ?? null, executeTurn);
+        appendProviderGrant(ev.category ?? null);
         break;
     }
   });
@@ -689,11 +663,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
     } else {
       appendBubble(c, "error", "Error: " + msg);
     }
-    appendProviderGrant(category, executeTurn);
+    appendProviderGrant(category);
   }
   return res;
   };
 
-  // 6. run the turn (the grant button re-invokes executeTurn on retry).
+  // 6. Run this turn once. Permission failures require a new owner-initiated
+  // attempt after Settings changes; this page never loops or auto-retries.
   return await executeTurn();
 }

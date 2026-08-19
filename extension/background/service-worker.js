@@ -17,6 +17,8 @@ import {
   ProviderUnavailableError,
   isProviderError,
   logGateOnce,
+  isLocalProvider,
+  providerOriginPattern,
 } from "../lib/provider-gate.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
@@ -2031,6 +2033,17 @@ const handlers = {
     // non-settings DOM. The full config is Settings-only (provider.get).
     const cfg = await getProviderConfig();
     return { provider: cfg.provider };
+  },
+  async "provider.permission-summary"() {
+    // Permission preflight must not pull the provider key/model/base URL into a
+    // non-settings DOM. Return only the normalized origin match needed by the
+    // owner surface; malformed network endpoints fail closed as unavailable.
+    const cfg = await getProviderConfig();
+    return {
+      provider: String(cfg.provider ?? "").slice(0, 80),
+      local: isLocalProvider(cfg),
+      origin: providerOriginPattern(cfg),
+    };
   },
   async "provider.status"() {
     // Whether the active provider can RUN right now — the hub shows a warning
@@ -4513,7 +4526,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.action?.onClicked?.addListener(async (tab) => {
   if (runAborted()) return;
   try {
-    const shot = await captureTabScreenshot(tab?.id);
+    // Chrome's action click is the qualifying owner invocation — transient
+    // activeTab authority for THIS tab (the model/tool path never gets it).
+    const shot = await captureTabScreenshot(tab?.id, { ownerInvoked: true });
     if (shot?.screenshot) {
       const mem = masterMemory();
       // Store the screenshot as a DEDICATED OPFS file (bounded + evict-oldest),

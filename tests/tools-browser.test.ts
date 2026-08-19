@@ -19,6 +19,7 @@ import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
 // ---- in-memory chrome shim (tabs + permissions + scripting + storage) ----
 const store = new Map();
 const granted = new Set(["storage", "tabs", "activeTab", "scripting"]);
+const grantedOrigins = new Set(); // exact host permissions ("https://x/*")
 const tabs = []; // { id, url, title, active }
 
 function clone(v) {
@@ -28,6 +29,7 @@ function reset() {
   store.clear();
   granted.clear();
   for (const p of ["storage", "tabs", "activeTab", "scripting"]) granted.add(p);
+  grantedOrigins.clear();
   tabs.length = 0;
   clearRunFence();
 }
@@ -37,9 +39,13 @@ function nextTabId() {
 
 globalThis.chrome = {
   permissions: {
-    contains: async ({ permissions }) => permissions.every((p) => granted.has(p)),
-    request: async ({ permissions }) => {
-      permissions.forEach((p) => granted.add(p));
+    contains: async ({ permissions, origins }) => {
+      if (origins) return origins.every((o) => grantedOrigins.has(o));
+      return permissions.every((p) => granted.has(p));
+    },
+    request: async ({ permissions, origins }) => {
+      permissions?.forEach((p) => granted.add(p));
+      origins?.forEach((o) => grantedOrigins.add(o));
       return true;
     },
     remove: async ({ permissions }) => {
@@ -260,13 +266,41 @@ Deno.test("browser read_page: DENIES without the scripting permission", async ()
   assertStringIncludes(r.error, "scripting permission not granted");
 });
 
-Deno.test("browser capture_screenshot: DENIES without an activeTab/tabs permission", async () => {
+Deno.test("browser capture_screenshot: activeTab/tabs are NOT a background fallback without exact host access", async () => {
   reset();
-  granted.delete("activeTab");
-  granted.delete("tabs");
-  const r = await toolset().capture_screenshot.execute({});
+  tabs.push({ id: 7, url: "https://private.example/page", title: "Private", active: true });
+  await setOriginBrowserControlGrant(["https://private.example"]);
+  // activeTab + tabs are both present in the shim, but a model/background
+  // capture still requires the selected tab's exact origin permission.
+  const r = await toolset().capture_screenshot.execute({ tabId: 7 });
   assert(!r.ok);
-  assertStringIncludes(r.error, "activeTab permission not granted");
+  assertEquals(r.waitingForPermission, true);
+  assertStringIncludes(r.error, "https://private.example/*");
+});
+
+Deno.test("browser capture_screenshot: the OWNER-INVOKED path uses Chrome's transient activeTab authority (no exact host needed)", async () => {
+  reset();
+  tabs.push({ id: 9, url: "https://anywhere.example/page", title: "Anywhere", active: true });
+  // The product browser-control grant covers the origin, but the exact host
+  // Chrome permission is NOT granted — the owner-invoked path must still
+  // capture (Chrome's action click carries the transient authority).
+  await setOriginBrowserControlGrant(["https://anywhere.example"]);
+  // Call the function directly the way the action listener does (the tool
+  // route never passes ownerInvoked).
+  const { captureTabScreenshot } = await import("../extension/lib/browser-tools.js");
+  const r = await captureTabScreenshot(9, { ownerInvoked: true });
+  assert(!r.error, `owner-invoked capture must not fail closed: ${r.error ?? ""}`);
+  assert(typeof r.screenshot === "string" && r.screenshot.startsWith("data:image/"), "captured a screenshot");
+});
+
+Deno.test("browser capture_screenshot: the MODEL path with exact host granted captures", async () => {
+  reset();
+  tabs.push({ id: 11, url: "https://allowed.example/page", title: "Allowed", active: true });
+  await setOriginBrowserControlGrant(["https://allowed.example"]);
+  grantedOrigins.add("https://allowed.example/*"); // the exact host grant
+  const r = await toolset().capture_screenshot.execute({ tabId: 11 });
+  assert(!r.error, `exact-host capture must succeed: ${r.error ?? ""}`);
+  assert(typeof r.screenshot === "string" && r.screenshot.startsWith("data:image/"));
 });
 
 Deno.test("browser schedule_task: schedules when fenced ok", async () => {

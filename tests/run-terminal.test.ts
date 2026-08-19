@@ -9,19 +9,20 @@
 // @ts-nocheck — the chrome mock + the container are intentionally dynamic.
 import { assert, assertEquals } from "jsr:@std/assert";
 
-function installChromeMock() {
+function installChromeMock(permissionSummary = { provider: "demo", local: true, origin: null }, contains = async () => false) {
   let portListener = null;
   let disconnectListener = null;
   const sent = [];
   const held = [];
   globalThis.chrome = {
+    permissions: { contains },
     runtime: {
       lastError: null,
       sendMessage: (msg, cb) => {
         sent.push(msg);
         return new Promise((resolve) => {
           const done = (v) => { resolve(v); if (cb) cb(v); };
-          if (msg.type === "provider.get") done({ provider: "demo", baseURL: "", apiKey: "", model: "" });
+          if (msg.type === "provider.permission-summary") done(permissionSummary);
           else if (msg.type === "agent.run" || msg.type === "named-agent.run" || msg.type === "background-agent.run") {
             held.push({ msg, done });
           } else done({ ok: true });
@@ -88,6 +89,17 @@ async function waitFor(cond, label, timeoutMs = 2000) {
 }
 
 const freshConv = () => import("../extension/shared/conversation.js?t=" + Math.random());
+
+Deno.test("provider preflight is redacted and pauses before model execution when the exact origin is missing", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock({ provider: "custom", local: false, origin: "https://api.example/*" });
+  const container = makeContainer();
+  const result = await conv.runConversationTurn(container, { text: "must not run" });
+  assertEquals(result?.waitingForPermission, true);
+  assertEquals(mock.held.length, 0, "agent.run must not be sent");
+  assertEquals(mock.sent.map((message) => message.type), ["provider.permission-summary"]);
+  assert(!JSON.stringify(mock.sent).includes("apiKey"), "full provider configuration must not enter the conversation page");
+});
 
 Deno.test("run-terminal: PORT-before-response — an ok:false tool-result marks the card error; the late response is a no-op", async () => {
   const conv = await freshConv();

@@ -19,14 +19,47 @@ function makeTools() {
   return { toolset, calls };
 }
 
-Deno.test("management: every tool in the catalog is callable except owner-only enroll_origin", () => {
+Deno.test("management: MANAGEMENT_TOOL_NAMES exactly equals the callable toolset (no owner-only exception)", () => {
   const { toolset } = makeTools();
-  const ownerOnly = new Set(["enroll_origin"]); // owner-only host-access grant
-  for (const name of MANAGEMENT_TOOL_NAMES) {
-    if (ownerOnly.has(name)) continue;
-    assert(toolset[name], `MANAGEMENT_TOOL_NAMES has ${name} but the toolset is missing it`);
+  const callable = Object.keys(toolset).sort();
+  assertEquals(MANAGEMENT_TOOL_NAMES.slice().sort(), callable, "the introspection catalog must exactly match the callable tools");
+  for (const name of callable) {
     assert(typeof toolset[name].execute === "function", `${name}.execute must be a function`);
   }
+});
+
+Deno.test("management: the all-name × all-surface forbidden-tool matrix is standalone-clean", async () => {
+  const { toolset } = makeTools();
+  const FORBIDDEN = ["enroll_origin", "grant_capability", "revoke_capability"];
+  // A STANDALONE word for each forbidden name: word boundaries on BOTH sides so
+  // `enroll_origin` is caught in `enroll_origin(` and `(enroll_origin)` but never
+  // as the substring inside the STILL-callable `disenroll_origin`.
+  const standalone = (name) => new RegExp(`\\b${name}\\b`);
+  const masterSkill = await Deno.readTextFile("extension/lib/master-skill.js");
+  const policy = await Deno.readTextFile("extension/lib/runtime-policy.js");
+
+  // The matrix surfaces: every place the model could learn a removed tool.
+  const surfaces = [
+    ["toolset-keys", Object.keys(toolset).join("\n")],
+    ["catalog", MANAGEMENT_TOOL_NAMES.join("\n")],
+    ["master-skill", masterSkill],
+    ["runtime-policy", policy],
+    ...Object.entries(toolset).map(([name, t]) => [`${name}.description`, String(t?.description ?? "")]),
+  ];
+  for (const name of FORBIDDEN) {
+    for (const [surface, text] of surfaces) {
+      assert(!standalone(name).test(text), `${surface} must not contain the standalone tool name ${name}`);
+    }
+  }
+
+  // Exact OLD parenthesized/plain fixtures MUST be caught.
+  assert(standalone("enroll_origin").test("(enroll_origin)"), "the parenthesized (enroll_origin) fixture must match");
+  assert(standalone("enroll_origin").test("enroll_origin("), "the plain enroll_origin( fixture must match");
+  assert(standalone("grant_capability").test("grant_capability(id)"), "the grant_capability(id) fixture must match");
+  assert(standalone("revoke_capability").test("revoke_capability(id)"), "the revoke_capability(id) fixture must match");
+
+  // disenroll_origin MUST pass (never flagged by the standalone enroll_origin).
+  assert(!standalone("enroll_origin").test("disenroll_origin"), "standalone enroll_origin must NOT match disenroll_origin");
 });
 
 Deno.test("management create_agent: routes to agent.create with the origin+name", async () => {
@@ -113,14 +146,10 @@ Deno.test("management list_assets / get_asset: route correctly", async () => {
   assertEquals(calls[1].type, "asset.get");
 });
 
-Deno.test("management grant_capability / revoke_capability: route correctly", async () => {
-  const { toolset, calls } = makeTools();
-  await toolset.grant_capability.execute({ id: "alarms" });
-  assertEquals(calls[0].type, "capability.request");
-  assertEquals(calls[0].args.id, "alarms");
-  await toolset.revoke_capability.execute({ id: "alarms" });
-  assertEquals(calls[1].type, "capability.revoke");
-  assertEquals(calls[1].args.id, "alarms");
+Deno.test("management never exposes grant/revoke capability tools to the model", () => {
+  const { toolset } = makeTools();
+  assertEquals("grant_capability" in toolset, false);
+  assertEquals("revoke_capability" in toolset, false);
 });
 
 Deno.test("management get_usage / get_memory_overview: route correctly", async () => {

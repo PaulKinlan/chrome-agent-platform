@@ -1063,7 +1063,7 @@ export const PERMISSIONS = [
   { id: "storage", label: "Memory & settings", note: "OPFS memory + settings" },
   { id: "alarms", label: "Scheduled tasks", note: "chrome.alarms" },
   { id: "tabs", label: "Browser control", note: "open/navigate/close tabs (warned)" },
-  { id: "activeTab", label: "Screenshots", note: "captureVisibleTab (silent)" },
+  { id: "activeTab", label: "Screenshots", note: "enables Chrome's transient owner-invoked capture only — never a background grant" },
   { id: "scripting", label: "Site agents", note: "read pages / register scripts" },
   { id: "notifications", label: "Notifications", note: "chrome.notifications" },
   { id: "sidePanel", label: "Side panel", note: "chrome.sidePanel" },

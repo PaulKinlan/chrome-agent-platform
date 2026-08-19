@@ -16,13 +16,15 @@
 //    failures, so subsequent hook/task runs back off (fail quietly, no run, no
 //    per-event log) until a successful provider call resets it.
 
-/** Derive the host-permission origin pattern for a provider's base URL.
- * Returns null for localhost-ish / non-http(s) endpoints (nothing to grant). */
+import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
+
+/** Derive the exact host-permission origin pattern for a provider base URL.
+ * Returns null for missing, malformed, credential-bearing, or non-http(s) URLs. */
 export function providerOriginPattern(cfg) {
   try {
     const u = new URL(cfg?.baseURL ?? "");
-    if (u.protocol === "http:" || u.protocol === "https:") {
-      return `${u.protocol}//${u.host}/*`;
+    if ((u.protocol === "http:" || u.protocol === "https:") && !u.username && !u.password && !u.hostname.includes("*")) {
+      return normalizeHostPattern(`${u.origin}/*`);
     }
   } catch { /* invalid URL — no pattern */ }
   return null;
@@ -67,7 +69,10 @@ export async function requestProviderHostAccess(cfg) {
     return { granted: true, pattern, error: null };
   }
   try {
-    const granted = await chrome.permissions.request({ origins: [pattern] });
+    // requestPermissionBundleFromGesture performs no asynchronous work before
+    // chrome.permissions.request. Callers must invoke this directly from the
+    // owner click (never after provider.get/contains awaits).
+    const granted = await requestPermissionBundleFromGesture({ origins: [pattern] });
     return { granted: !!granted, pattern, error: granted ? null : "permission request denied" };
   } catch (e) {
     return { granted: false, pattern, error: String(e?.message ?? e) };

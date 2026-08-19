@@ -6,6 +6,9 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 ## Open
 
+### Permission preflight (Paul 2026-08-19 — presentation-critical)
+- Recovery is PARTIAL: unsafe async grant/retry behavior was removed and missing exact provider access now pauses truthfully before execution, but the reusable owner-button preflight and its loaded-MV3/a11y/visual acceptance remain open. Settings is currently the only genuine provider grant surface.
+
 ### WebMCP discovery (Paul 2026-08-18 — "where is the content script?")
 - **Paul's exact observable failure:** "Where is the WebMCP content script that looks at the page and determines which functions/tools it can register? It is not visible in Chrome DevTools Sources and there are no logs proving it runs."
 - **Round-28 review BLOCK:** the first fix's browser evidence bypassed the implementation (Runtime.evaluate'd source, direct route calls), and the review found a cancellation regression, no post-reload generation sync, an NTP-selecting "Discover this page", blind window.* inference, forgeable status, duplicate listeners on re-enroll, stale tools never removed, and partial injection reported as success. The premature "Done" wording was reverted — this item stayed open.

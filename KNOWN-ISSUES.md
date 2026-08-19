@@ -12,6 +12,11 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 
 ## Open (as of round 27)
 
+### Permission orchestration recovery (PARTIAL — 2026-08-19)
+- Canonical planning rejects malformed/decorated/unknown/overlong/wildcard/implicit `<all_urls>`/background `activeTab` declarations; exact members are checked individually with `permissions.contains`. Model-visible grant/revoke/enroll tools are removed, and model/background screenshots require exact host access. The model contract is now consistent: the master-skill, protected runtime policy, and MANAGEMENT_TOOL_NAMES introspection no longer instruct the model to call `enroll_origin`/`grant_capability`/`revoke_capability`.
+- Conversation preflight uses a redacted provider permission summary and pauses before model execution; the run-status banner renders an explicit accessible "Waiting for permission" state; Settings describes Screenshots/activeTab as enabling the transient owner-invoked capture, never a persistent background grant.
+- **Still OPEN:** reusable owner preflight UI, explicit task/execution product authorization distinct from Chrome's browser-global grant, same-identity one-shot JIT continuation, denial/cancel/revocation/concurrency/service-worker-restart behavior, and genuine headed accept/revoke evidence. No complete feature or release-acceptance claim is made.
+
 ### Unified agent access (CAP-FB-20260818-AGENT-ACCESS-01) — residuals
 - **Site-agent delegation is text-only.** `agent.delegate` runs the enrolled
   origin's worker with the task text only: no attachments, and no live per-run

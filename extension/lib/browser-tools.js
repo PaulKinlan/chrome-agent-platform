@@ -196,27 +196,14 @@ async function activeTab() {
   return tabs[0] ?? null;
 }
 
-/** Whether the OPTIONAL `tabs` permission is currently granted (the broader
- * open/navigate/close/list controls). Screenshot capture uses the SILENT
- * `activeTab` permission instead (see hasActiveTabPermission) — the same
- * permission the reference screenshot tool uses, grantable from a user gesture
- * with no warning. */
+/** Whether the OPTIONAL `tabs` permission is currently granted for
+ * open/navigate/close/list controls. Screenshot capture separately requires
+ * exact host access; activeTab is reserved for Chrome's owner-invoked current-
+ * tab action path and is never a model/background fallback. */
 async function hasTabsPermission() {
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) return false;
     return await chrome.permissions.contains({ permissions: ["tabs"] });
-  } catch {
-    return false;
-  }
-}
-
-/** Whether the OPTIONAL `activeTab` permission is granted (screenshot capture).
- * `activeTab` is SILENT (no warning) so it grants from the Settings gesture even
- * in headless; it authorizes captureVisibleTab of the active tab. */
-async function hasActiveTabPermission() {
-  try {
-    if (typeof chrome === "undefined" || !chrome.permissions) return false;
-    return await chrome.permissions.contains({ permissions: ["activeTab"] });
   } catch {
     return false;
   }
@@ -375,21 +362,25 @@ async function captureActiveTab({ origin, grantIdBefore, tabId }) {
  * Capture a PNG screenshot of the active tab, gated by the browser-control
  * grant FOR THAT TAB'S ORIGIN. Uses chrome.tabs.captureVisibleTab (the standard
  * extension screenshot API — NOT the Chrome debugger, which cannot be optional
- * and carries Chrome's all-sites warning) with the SILENT `activeTab` permission
- * (the same permission the reference screenshot tool uses).
+ * and carries Chrome's all-sites warning) with an exact host grant for the
+ * selected origin. `activeTab` is deliberately NOT a background/model fallback:
+ * Chrome only activates its temporary host authority after a qualifying owner
+ * invocation on the current tab (action/context-menu/command/omnibox).
  *
- * `activeTab` authorizes the ACTIVE tab, so capture semantics are: if a tabId
- * is supplied, that tab is ACTIVATED first (chrome.tabs.update needs no
- * permission for {active:true}); the now-active tab's url is read via
- * chrome.tabs.query({active:true}) (url is visible under activeTab) and its
- * origin is grant-checked. The active-tab ABA window is closed by re-deriving +
- * re-checking the origin AND the grant identity before AND after the capture,
- * under a per-tab mutex.
+ * A model-selected tab is resolved and exact-origin-authorized before it is
+ * activated. The active-tab ABA window is closed by re-deriving + re-checking
+ * the origin AND the product grant identity before and after capture, under a
+ * per-tab mutex.
  *
- * Requires the OPTIONAL `activeTab` permission (requested from the Settings
- * browser-control toggle / Screenshots capability). Fail closed when absent.
+ * The OWNER-INVOKED path (ownerInvoked: true — ONLY the chrome.action
+ * onClicked listener may pass it): Chrome's action click grants activeTab's
+ * TRANSIENT authority for the tab the owner is viewing, which authorizes
+ * captureVisibleTab for exactly that moment — no exact host grant is required
+ * (the product browser-control grant is still validated). The persistent
+ * optional `activeTab` permission merely ENABLES Chrome's transient grant; it
+ * never authorizes a background/model-selected capture.
  */
-export async function captureTabScreenshot(tabId) {
+export async function captureTabScreenshot(tabId, { ownerInvoked = false } = {}) {
   // Screenshot capture is a side-effecting boundary (it captures + may return
   // privileged page pixels) — fence it (the round-16 fence coverage finding).
   // DUrable ownership must be asserted BEFORE activation/capture, not merely the
@@ -400,13 +391,6 @@ export async function captureTabScreenshot(tabId) {
   } catch {
     return { error: "run aborted — screenshot not captured" };
   }
-  if (!(await hasActiveTabPermission()) && !(await hasTabsPermission())) {
-    return {
-      error:
-        "activeTab permission not granted — enable Screenshots in Settings to allow captures",
-    };
-  }
-
   return await withTabCaptureLock(tabId ?? "active", async () => {
     // Resolve the TARGET tab + its origin FIRST, BEFORE any activation, so the
     // grant can be checked BEFORE mutating the owner's active tab (the round-19
@@ -432,8 +416,25 @@ export async function captureTabScreenshot(tabId) {
       : undefined;
     if (!origin) {
       return {
-        error:
-          "cannot read the tab's URL — capture requires the tab to be authorized (in a headed browser, invoke the extension on the page you are viewing; activeTab is transient and headless cannot grant it for an arbitrary tab)",
+        error: "cannot read the tab's exact origin — screenshot is waiting for an owner-selected site permission",
+        waitingForPermission: true,
+      };
+    }
+    const originPattern = `${origin}/*`;
+    // The owner-invoked path carries Chrome's transient activeTab authority
+    // (the action click) — exact host access is the MODEL/background gate only.
+    const hasExactHost = ownerInvoked
+      ? true
+      : await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
+    if (!hasExactHost) {
+      return {
+        error: `screenshot is waiting for permission to ${originPattern}`,
+        waitingForPermission: true,
+        permissionRequirement: {
+          tool: "capture_screenshot",
+          reason: "Capture the selected tab",
+          origins: [originPattern],
+        },
       };
     }
 

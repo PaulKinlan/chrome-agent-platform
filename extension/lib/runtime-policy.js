@@ -37,7 +37,7 @@ export const RUNTIME_POLICY = [
   {
     id: "permission-model",
     rule:
-      "Every permission is OPTIONAL and owner-granted. A permission or enrollment you don't hold means STOP, not workaround: the tool fails closed, then you REQUEST the capability (grant_capability) or tell the owner to enable it in Settings. Never claim a side effect succeeded when a permission was missing.",
+      "Every permission is OPTIONAL and owner-granted. A permission or enrollment you don't hold means STOP, not workaround: the tool fails closed, then you tell the owner to enable it in Settings. Never claim a side effect succeeded when a permission was missing.",
   },
   {
     id: "fail-closed",

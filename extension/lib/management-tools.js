@@ -21,15 +21,12 @@ export const MANAGEMENT_TOOL_NAMES = [
   "delete_agent",
   "get_agent",
   "list_agents",
-  "enroll_origin",
   "disenroll_origin",
   "create_asset",
   "update_asset",
   "delete_asset",
   "list_assets",
   "get_asset",
-  "grant_capability",
-  "revoke_capability",
   "get_usage",
   "get_memory_overview",
   "create_named_agent",
@@ -57,7 +54,7 @@ export function managementToolset({ callRoute }) {
     // ---- sub-agent management ----
     create_agent: tool({
       description:
-        "Enroll a new per-site sub-agent for an origin. Registers the origin so its WebMCP/site tools can be discovered. Host access is a separate owner-approved step (enroll_origin).",
+        "Enroll a new per-site sub-agent for an origin. Registers the origin so its WebMCP/site tools can be discovered. Host access is a separate owner-approved step in Settings.",
       inputSchema: z.object({
         origin: z.string().describe("the https origin, e.g. https://example.com"),
         name: z.string().optional().describe("a display name for the sub-agent"),
@@ -151,18 +148,9 @@ export function managementToolset({ callRoute }) {
       execute: ({ origin, id }) => call("asset.get", { origin, id }),
     }),
 
-    // ---- capabilities ----
-    grant_capability: tool({
-      description:
-        "Request an optional permission (storage|alarms|tabs|activeTab|scripting|notifications|sidePanel). Needs a user gesture; if it fails closed, tell the owner to click Enable in Settings.",
-      inputSchema: z.object({ id: z.string().describe("the capability id") }),
-      execute: ({ id }) => call("capability.request", { id }),
-    }),
-    revoke_capability: tool({
-      description: "Revoke an optional permission.",
-      inputSchema: z.object({ id: z.string() }),
-      execute: ({ id }) => call("capability.revoke", { id }),
-    }),
+    // Permission grants/revocations are intentionally NOT model tools. Until
+    // the owner preflight is complete, Settings is the only authority that may
+    // call chrome.permissions.request/remove from a genuine owner gesture.
 
     // ---- named agents (the persistent teammates) ----
     create_named_agent: tool({

@@ -41,9 +41,10 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   `notifications` are `optional_permissions`, host access is
   `optional_host_permissions`. No `debugger` anywhere (it cannot be optional and
   carries Chrome's all-sites warning) — screenshots use
-  `chrome.tabs.captureVisibleTab` (the ACTIVE tab). Screenshot capture success is
-  a HEADED-browser path (activeTab is transient + tied to the tab active at the
-  granting gesture); in headless it fails closed. The extension boots + runs with ZERO optional
+  `chrome.tabs.captureVisibleTab` (the ACTIVE tab). `activeTab` is transient and
+  tied to a qualifying owner invocation on the current tab; it is never a
+  model/background fallback. Model-selected screenshots require exact host
+  access and fail closed without it. The extension boots + runs with ZERO optional
   permissions (degrade gracefully), and each capability is requested from a real
   owner gesture in Settings → Permissions (the SW never requests). Enrollment
   requests `scripting` + exact host access; browser control requests `tabs`.

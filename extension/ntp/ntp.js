@@ -1211,12 +1211,16 @@ function renderRunStatus(s) {
       label.textContent = "Done";
     } else if (state === "error") {
       label.textContent = "Failed — " + (s.errorReason || s.message || "error");
+    } else if (state === "waiting-for-permission") {
+      // The explicit paused state (the partial permission recovery): a run
+      // that is WAITING on an owner grant must SAY so — never an empty banner.
+      label.textContent = "Waiting for permission — " + (s.errorReason || s.message || "an owner grant is required");
     }
     runStatusEl.append(label);
-    // A provider/config failure gets an inline "Fix in Settings" button (the
-    // actionable path), not just the message.
+    // A provider/config failure OR a permission wait gets an inline "Fix in
+    // Settings" button (the actionable path), not just the message.
     const cat = s?.errorCategory ?? "";
-    if (state === "error" && /host-permission|provider-auth|model-config|network/i.test(cat)) {
+    if ((state === "error" || state === "waiting-for-permission") && /host-permission|provider-auth|model-config|network/i.test(cat)) {
       const fix = document.createElement("button");
       fix.type = "button";
       fix.className = "rs-fix";
