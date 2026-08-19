@@ -631,6 +631,30 @@ export function truncateUtf8(text, maxBytes) {
  *
  * Returns: { kind: "content-script"|"extension"|"unmatched", origin?, error? }
  */
+/**
+ * Owner approvals may be resolved only by the exact Settings document. This
+ * checks browser-supplied sender metadata, never message-body claims. A tab
+ * sender is rejected even if it claims the extension URL.
+ */
+export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {
+  if (!sender || typeof sender !== "object") return false;
+  if (typeof extensionId !== "string" || !extensionId) return false;
+  if (typeof exactOptionsUrl !== "string" || !exactOptionsUrl) return false;
+  const exactDocument = sender.url === exactOptionsUrl ||
+    (typeof sender.url === "string" && sender.url.startsWith(`${exactOptionsUrl}#`));
+  // The shipped NTP presents this exact private extension document in an
+  // iframe. Chrome may omit frame/lifecycle/tab metadata for extension pages.
+  // Web pages cannot load this non-web-accessible document; browser-supplied
+  // extension id + exact document URL + document id are the authority.
+  return sender.id === extensionId &&
+    exactDocument &&
+    // Chrome omits `origin` for extension-page runtime messages; the exact
+    // browser-supplied chrome-extension:// URL already binds the origin.
+    (sender.origin == null || sender.origin === `chrome-extension://${extensionId}`) &&
+    (sender.documentLifecycle == null || sender.documentLifecycle === "active") &&
+    typeof sender.documentId === "string" && sender.documentId.length > 0;
+}
+
 export function authorizeToolReport(
   sender,
   messageOrigin,

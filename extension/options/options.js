@@ -1576,6 +1576,78 @@ function saveFlash(msg) {
   }, 2500);
 }
 
+// ── owner approvals ────────────────────────────────────────────────────────
+// Approval ids live only in click-handler closures. No id, target, digest,
+// payload, origin or execution identifier is written into the DOM.
+const approvalList = $("#approval-list");
+const approvalStatus = $("#approval-status");
+let approvalRenderBusy = false;
+
+async function resolveApprovalFromClick(event, approvalId, approve, row) {
+  if (!event.isTrusted || navigator.userActivation?.isActive !== true) {
+    if (approvalStatus) approvalStatus.textContent = "Use a real click to approve or deny.";
+    return;
+  }
+  for (const button of row.querySelectorAll("button")) button.disabled = true;
+  if (approvalStatus) approvalStatus.textContent = approve ? "Approving…" : "Denying…";
+  const result = await chrome.runtime.sendMessage({
+    type: "management.resolve-approval",
+    approvalId,
+    approve,
+  }).catch(() => ({ ok: false }));
+  if (approvalStatus) approvalStatus.textContent = result?.ok
+    ? (approve ? "Approved. The exact requesting operation may retry once." : "Denied. The exact request was removed.")
+    : "That approval could not be resolved. Refresh and try again.";
+  await renderApprovals();
+}
+
+async function renderApprovals() {
+  if (!approvalList || approvalRenderBusy) return;
+  approvalRenderBusy = true;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "management.pending-approvals" }).catch(() => null);
+    const approvals = Array.isArray(response?.approvals) ? response.approvals : [];
+    approvalList.replaceChildren();
+    if (!approvals.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "No pending approvals.";
+      approvalList.append(empty);
+      return;
+    }
+    if (approvalStatus) approvalStatus.textContent = "Review the pending action, then approve it once or deny it.";
+    for (const approval of approvals) {
+      const approvalId = approval.approvalId; // closure only
+      const row = document.createElement("div");
+      row.className = "approval-row";
+      const description = document.createElement("div");
+      const action = document.createElement("strong");
+      action.textContent = String(approval.action ?? "destructive operation");
+      const reference = document.createElement("span");
+      reference.className = "approval-ref muted";
+      reference.textContent = `Private reference ${String(approval.targetRef ?? "unavailable")}`;
+      description.append(action, reference);
+      const controls = document.createElement("div");
+      controls.className = "approval-controls";
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "btn primary";
+      approve.textContent = "Approve once";
+      const deny = document.createElement("button");
+      deny.type = "button";
+      deny.className = "btn ghost";
+      deny.textContent = "Deny";
+      approve.addEventListener("click", (event) => resolveApprovalFromClick(event, approvalId, true, row));
+      deny.addEventListener("click", (event) => resolveApprovalFromClick(event, approvalId, false, row));
+      controls.append(approve, deny);
+      row.append(description, controls);
+      approvalList.append(row);
+    }
+  } finally {
+    approvalRenderBusy = false;
+  }
+}
+
 // nav active state
 const sections = [
   "providers",
@@ -1584,6 +1656,7 @@ const sections = [
   "appearance",
   "browser",
   "permissions",
+  "approvals",
   "hooks",
   "prompts",
   "usage",
@@ -1595,6 +1668,7 @@ document.querySelectorAll(".nav-item").forEach((a) => {
       x.removeAttribute("aria-current")
     );
     a.setAttribute("aria-current", "true");
+    if (a.dataset.section === "approvals") renderApprovals();
   });
 });
 
@@ -1618,6 +1692,8 @@ await renderEnroll();
 await renderAppearance();
 await renderBrowser();
 await renderPermissions();
+await renderApprovals();
+setInterval(() => { if (document.visibilityState === "visible") renderApprovals(); }, 1500);
 await renderHooks();
 await renderPrompts();
 await renderUsage();

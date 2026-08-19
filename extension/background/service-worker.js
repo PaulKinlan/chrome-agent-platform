@@ -57,6 +57,7 @@ import {
   diagnosticList,
   installDiagnosticCapture,
   push as pushDiagnostic,
+  securityApprovalEvent,
   securityClear,
   securityEvent,
   securityState,
@@ -84,6 +85,8 @@ import {
   getNamedAgentProvider,
   grepAgentMemory,
   listNamedAgents,
+  normalizeAgentProvider,
+  normalizeCoreAssets,
   setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
@@ -307,7 +310,23 @@ import {
   syncSnapshotDocument,
   schemaToZod as buildSchema,
   summarizeInjection,
+  isExactOptionsSender,
 } from "../lib/pure.js";
+import {
+  canonicalArray,
+  canonicalField,
+  canonicalOperationTarget,
+  canonicalRecord,
+  canonicalScalar,
+  bindModelApprovalDispatcher,
+  consumeApproved,
+  createApprovalStore,
+  createPendingApproval,
+  listPendingApprovals,
+  opaqueTargetRef,
+  payloadDigest,
+  resolvePendingApproval,
+} from "../lib/owner-approval.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
 // provider failures through describeError (one actionable error with the status
@@ -685,15 +704,26 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "") {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
   // memory instead of the agent's own tier. A custom prompt scope (a named
   // agent's own system-prompt customization) takes the same fresh-build path —
   // the cached shared master carries the hub's composition, not the agent's.
-  if (memoryOverride || promptScope) {
-    return await buildOrchestrator(onProgress, scoped, memoryOverride ?? masterMemory(), modelOverride, promptScope, agentRole);
+  if (memoryOverride || promptScope || approvalExecutionId) {
+    // A management-capable run receives a FRESH toolset whose closure captures
+    // this immutable execution id. Cached/global mutable cells would let a
+    // stale tool call borrow a later run's authority.
+    return await buildOrchestrator(
+      onProgress,
+      scoped,
+      memoryOverride ?? masterMemory(),
+      modelOverride,
+      promptScope,
+      agentRole,
+      approvalExecutionId,
+    );
   }
   while (true) {
     const gen = generation;
@@ -734,7 +764,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "") {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null) {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -779,6 +809,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
     const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
+    const modelManagementDispatch = bindModelApprovalDispatcher(approvalExecutionId, dispatchRoute);
     const orch = await createOrchestrator({
       model,
       masterMemory: mem,
@@ -797,7 +828,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // untrusted browser event data must never drive delete_agent/
         // delete_asset/revoke_capability/disenroll_origin (the wider-goal
         // review's finding).
-        ...(scoped ? {} : managementToolset({ callRoute: (type, args) => handlers[type](args) })),
+        ...(scoped ? {} : managementToolset({
+          // Immutable build-local capture. A stale closure keeps its original
+          // id, which activeExecutions rejects after that run finalizes.
+          callRoute: modelManagementDispatch,
+        })),
       },
       delegateGuard: async (origin) => {
         // The model-facing delegate_task must revalidate LIVE enrollment before
@@ -1216,7 +1251,6 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         journalAppend(mem, { type: "tool-result", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
       }
     };
-    const orch = await ensureOrchestrator(journalingProgress, scoped, memory, modelOverride, promptScope, agentRole);
     // Bind the RUN-BOUND prompt attestation: lib/agent.js captures the EXACT
     // system message observed at the provider/model boundary (as public
     // SHA-256 digests) for THIS run — hub, named, background, scheduled,
@@ -1235,11 +1269,21 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // into a later run's records.
     const executionId = newExecutionId();
     beginExecution(executionId, taskId);
-    // Everything after beginExecution is inside this try: key establishment or
-    // callback binding can fail too, and even that pre-model failure must seal
-    // the slot + unbind any prior callback (never leave a ghost-live attempt).
+    // Everything after beginExecution is inside this try: orchestrator/key
+    // establishment can fail too, and even that pre-model failure must seal the
+    // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
+    let orch = null;
     try {
+      orch = await ensureOrchestrator(
+        journalingProgress,
+        scoped,
+        memory,
+        modelOverride,
+        promptScope,
+        agentRole,
+        executionId,
+      );
       const attestKeyState = await attestationKeyState();
       orch.setAttestation?.((att) => {
         const bound = {
@@ -1395,7 +1439,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // emission can be recorded against this — or a later — run (the ring
       // drops emissions for non-live executions).
       try {
-        orch.setAttestation?.(null);
+        orch?.setAttestation?.(null);
       } catch { /* best-effort */ }
       finalizeExecution(executionId);
       clearRunFence();
@@ -1403,7 +1447,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // forwarder) so no stale callback survives into the next run — the next
       // run's ensureOrchestrator rebinds inside ITS lock.
       try {
-        orch.setProgress?.(null);
+        orch?.setProgress?.(null);
       } catch { /* best-effort */ }
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
@@ -1620,6 +1664,141 @@ async function recordWebmcpPageReport(origin, acceptedTools) {
   await kvSet({ [WEBMCP_STATUS_KEY]: status });
 }
 
+// ── owner-bound destructive-operation approvals ──────────────────────────
+const ownerApprovalStore = createApprovalStore();
+
+function approvalExecutionId(context) {
+  if (context?.principal === "model") {
+    const id = context.executionId;
+    return typeof id === "string" && activeExecutions.has(id) ? id : "";
+  }
+  // UI initiation is bound to the browser-supplied document identity. It is
+  // never read from the request body. Only the exact Settings document may
+  // resolve; other extension pages can request but cannot approve.
+  if (context?.principal === "extension" || context?.principal === "owner-options") {
+    return typeof context.documentId === "string" && context.documentId
+      ? `ui:${context.documentId}`
+      : "";
+  }
+  return "";
+}
+
+async function requireOwnerApproval(context, action, target, payload) {
+  const executionId = approvalExecutionId(context);
+  if (!executionId || !target) return { ok: false, error: "This operation requires owner approval in Settings." };
+  let digest;
+  let targetRef;
+  try {
+    digest = await payloadDigest(payload);
+    // Key persistence is part of the boundary. If OPFS cannot provide the
+    // install key, fail closed rather than publishing an ephemeral reference.
+    targetRef = await opaqueTargetRef(target);
+  } catch {
+    return { ok: false, error: "This operation requires owner approval in Settings." };
+  }
+  const consumed = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
+  if (consumed.ok) {
+    securityApprovalEvent("consumed", action, targetRef);
+    return { ok: true };
+  }
+  const pending = createPendingApproval(ownerApprovalStore, executionId, action, target, digest);
+  if (pending.ok) {
+    const row = ownerApprovalStore.approvals.get(pending.approvalId);
+    if (row) row.targetRef = targetRef;
+    if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
+  }
+  return { ok: false, error: "This operation requires owner approval in Settings." };
+}
+
+function payloadFields(entries) {
+  return canonicalRecord(...entries.map(([name, value]) => canonicalField(name, canonicalScalar(value))));
+}
+
+function payloadStringArray(values) {
+  if (!Array.isArray(values) || values.length > 128 || values.some((value) => typeof value !== "string")) {
+    throw new Error("invalid approval array");
+  }
+  return canonicalArray(...values.map(canonicalScalar));
+}
+
+function namedCandidatePayload(candidate) {
+  const assets = Array.isArray(candidate.coreAssets) ? candidate.coreAssets : [];
+  const assetNodes = assets.map((asset) => canonicalRecord(
+    canonicalField("name", canonicalScalar(asset.name)),
+    canonicalField("type", canonicalScalar(asset.type)),
+    canonicalField("content", canonicalScalar(asset.content)),
+  ));
+  return canonicalRecord(
+    canonicalField("id", canonicalScalar(candidate.id)),
+    canonicalField("name", canonicalScalar(candidate.name)),
+    canonicalField("role", canonicalScalar(candidate.role)),
+    canonicalField("avatar", canonicalScalar(candidate.avatar)),
+    canonicalField("skills", payloadStringArray(candidate.skills)),
+    canonicalField("coreAssets", canonicalArray(...assetNodes)),
+  );
+}
+
+function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
+  const patch = Object.create(null);
+  patch.name = name === undefined ? undefined : String(name).trim();
+  patch.role = role === undefined ? undefined : String(role).trim().slice(0, 200);
+  patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
+  patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, 32) : []);
+  patch.coreAssets = coreAssets === undefined ? undefined : normalizeCoreAssets(coreAssets);
+  return patch;
+}
+
+function namedPatchPayload(id, patch) {
+  const fields = [canonicalField("id", canonicalScalar(slugifyAgentId(id)))];
+  for (const key of ["name", "role", "avatar"]) fields.push(canonicalField(key, canonicalScalar(patch[key])));
+  fields.push(canonicalField("skills", patch.skills === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.skills)));
+  if (patch.coreAssets === undefined) fields.push(canonicalField("coreAssets", canonicalScalar(undefined)));
+  else fields.push(canonicalField("coreAssets", canonicalArray(...patch.coreAssets.map((asset) => canonicalRecord(
+    canonicalField("name", canonicalScalar(asset.name)),
+    canonicalField("type", canonicalScalar(asset.type)),
+    canonicalField("content", canonicalScalar(asset.content)),
+  )))));
+  return canonicalRecord(...fields);
+}
+
+function namedExistingPayload(existing) {
+  return payloadFields([
+    ["id", existing.id],
+    ["instanceId", existing.instanceId ?? `legacy:${existing.id}:${existing.createdAt ?? 0}`],
+    ["revision", Number.isSafeInteger(existing.revision) ? existing.revision : 0],
+  ]);
+}
+
+function namedBoundMutationPayload(request, existing) {
+  return canonicalRecord(
+    canonicalField("request", request),
+    canonicalField("existing", namedExistingPayload(existing)),
+  );
+}
+
+async function ownerApprovalRows() {
+  const rows = listPendingApprovals(ownerApprovalStore);
+  return rows.map((row) => ({
+    approvalId: row.approvalId,
+    action: row.action,
+    targetRef: ownerApprovalStore.approvals.get(row.approvalId)?.targetRef ?? "",
+    at: row.at,
+  }));
+}
+
+function dispatchRoute(type, body, context) {
+  const handler = handlers[type];
+  if (!handler) return Promise.resolve({ ok: false, error: `unknown message: ${type}` });
+  // Reserved authority fields from a model/message body are discarded. Trusted
+  // sender/run authority is passed only through the separate context object.
+  const safeBody = body && typeof body === "object" ? { ...body } : {};
+  for (const key of Object.keys(safeBody)) {
+    if (key.startsWith("__") || key === "userActivation") delete safeBody[key];
+  }
+  if (context?.pageSender) safeBody.__sender = context.pageSender;
+  return Promise.resolve(handler(safeBody, context));
+}
+
 const handlers = {
   // The controlled cross-origin fetch for the script-host (and any extension
   // page): the service worker performs the fetch with the extension's host
@@ -1680,7 +1859,12 @@ const handlers = {
   //     Disable) + reset the migration flag for a clean re-enable.
   //   - scripting: also unregister every enrolled origin's dynamic scripts +
   //     host permission (Disable must not leave origin authority behind).
-  async "capability.revoke"({ id }) {
+  async "capability.revoke"({ id }, context) {
+    const target = canonicalOperationTarget("capability", { id });
+    let payload;
+    try { payload = payloadFields([["id", id]]); } catch { return { ok: false, error: "invalid capability" }; }
+    const approval = await requireOwnerApproval(context, "capability.revoke", target, payload);
+    if (!approval.ok) return approval;
     if (id === "storage") {
       // The snapshot + permission removal + reset must be ONE atomic transition
       // under the storage-mode lock, so a concurrent KV write cannot slip between
@@ -2133,24 +2317,72 @@ const handlers = {
     const agent = await getNamedAgent(id);
     return agent ? { ok: true, agent } : { ok: false, error: `no agent ${id}` };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }) {
-    const r = await createNamedAgent({ id, name, role, avatar, skills, coreAssets });
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets }, context) {
+    const r = await createNamedAgent(
+      { id, name, role, avatar, skills, coreAssets },
+      {
+        gateOnReplace: async ({ slug, existing, candidate }) => {
+          let payload;
+          try { payload = namedBoundMutationPayload(namedCandidatePayload(candidate), existing); } catch { return { ok: false, error: "replacement payload is not approvable" }; }
+          return await requireOwnerApproval(
+            context,
+            "named-agent.create",
+            canonicalOperationTarget("named", { id: slug }),
+            payload,
+          );
+        },
+      },
+    );
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }) {
-    const r = await updateNamedAgent(id, { name, role, avatar, skills, coreAssets });
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }, context) {
+    const patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets });
+    const r = await updateNamedAgent(id, patch, {
+      gateBeforeMutation: async ({ slug, existing }) => {
+        let payload;
+        try { payload = namedBoundMutationPayload(namedPatchPayload(slug, patch), existing); }
+        catch { return { ok: false, error: "update payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.update",
+          canonicalOperationTarget("named", { id: slug }),
+          payload,
+        );
+      },
+    });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
     return r;
   },
-  async "named-agent.set-provider"({ id, config }) {
+  async "named-agent.set-provider"({ id, config }, context) {
     // Set (or clear) a named agent's provider override. `config` is a COMPLETE
     // provider-specific config (the apiKey flows ONLY from the Settings UI input
     // → storage → model resolution; never surfaced back). Returns the REDACTED
     // agent (no apiKey).
-    const r = await setNamedAgentProvider(id, config);
+    const normalized = config == null ? null : normalizeAgentProvider(config);
+    if (config != null && normalized == null) return { ok: false, error: "invalid provider configuration" };
+    const r = await setNamedAgentProvider(id, normalized, {
+      gateBeforeMutation: async ({ slug, existing }) => {
+        let request;
+        try {
+          request = normalized == null
+            ? payloadFields([["id", slug], ["provider", null]])
+            : payloadFields([
+              ["id", slug], ["provider", normalized.provider],
+              ["baseURL", normalized.baseURL], ["apiKey", normalized.apiKey], ["model", normalized.model],
+            ]);
+          request = namedBoundMutationPayload(request, existing);
+        } catch { return { ok: false, error: "provider payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.set-provider",
+          canonicalOperationTarget("provider", { id: slug }),
+          request,
+        );
+      },
+    });
     if (r?.ok !== false) {
       // The running model cache is global; a per-agent override does NOT touch
       // it (the override is threaded per-run via runTask's modelOverride).
@@ -2159,8 +2391,21 @@ const handlers = {
     }
     return r;
   },
-  async "named-agent.delete"({ id }) {
-    const r = await deleteNamedAgent(id);
+  async "named-agent.delete"({ id }, context) {
+    const slug = slugifyAgentId(id);
+    const r = await deleteNamedAgent(slug, {
+      gateBeforeDelete: async ({ existing }) => {
+        let payload;
+        try { payload = namedBoundMutationPayload(payloadFields([["id", slug]]), existing); }
+        catch { return { ok: false, error: "delete payload is not approvable" }; }
+        return await requireOwnerApproval(
+          context,
+          "named-agent.delete",
+          canonicalOperationTarget("named", { id: slug }),
+          payload,
+        );
+      },
+    });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
     return r;
@@ -2172,7 +2417,7 @@ const handlers = {
     const mem = namedAgentMemory(slugifyAgentId(id));
     return await grepAgentMemory(mem, query);
   },
-  async "named-agent.avatar"({ id, name, role }) {
+  async "named-agent.avatar"({ id, name, role }, context) {
     // Generate an avatar via the Gemini image model (nano banana) using the
     // user's configured Gemini key. Falls back to a deterministic initial when
     // the key/model is unavailable. Never returns the key.
@@ -2182,10 +2427,8 @@ const handlers = {
     const cfg = await getProviderConfig("gemini");
     const apiKey = typeof cfg?.apiKey === "string" ? cfg.apiKey : "";
     const avatar = await generateAgentAvatar({ name: label, role: roleText, apiKey });
-    if (avatar && agent) {
-      const updated = await updateNamedAgent(agent.id, { avatar });
-      return { ok: true, avatar, agent: updated.agent };
-    }
+    // Avatar generation is a PREVIEW only. Persisting it goes through the
+    // ordinary named-agent.update owner-approval boundary when the owner saves.
     return { ok: true, avatar: avatar ?? null };
   },
   async "named-agent.refine"({ id, role }) {
@@ -2515,9 +2758,17 @@ const handlers = {
     }
     return { ok: true, agent: await agentInfo(origin) };
   },
-  async "agent.update"({ origin, name }) {
+  async "agent.update"({ origin, name }, context) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
+    const normalizedName = name === undefined ? undefined : String(name);
+    const gate = await requireOwnerApproval(
+      context,
+      "agent.update",
+      canonicalOperationTarget("origin", { origin: canonical }),
+      payloadFields([["origin", canonical], ["name", normalizedName]]),
+    );
+    if (!gate.ok) return gate;
     return await withOriginLock(canonical, async () => {
       if (!(await isEnrolled(canonical))) {
         return { ok: false, error: "origin not enrolled" };
@@ -2525,7 +2776,7 @@ const handlers = {
       // The sub-agent name is a reserved site authority key (never model-
       // writable via memory_set) — written through the TRUSTED path here.
       if (name !== undefined) {
-        await siteMemory(canonical).setTrusted("agentConfig", { name: String(name) });
+        await siteMemory(canonical).setTrusted("agentConfig", { name: normalizedName });
       }
       invalidateAgent();
       broadcastRegistryChanged();
@@ -2791,6 +3042,21 @@ const handlers = {
     return { ok: true };
   },
 
+  // ---- exact Settings-only owner approval surface ----
+  async "management.pending-approvals"(_body, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "approvals are available only in Settings" };
+    return { ok: true, approvals: await ownerApprovalRows() };
+  },
+  async "management.resolve-approval"({ approvalId, approve }, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "approvals are available only in Settings" };
+    const before = ownerApprovalStore.approvals.get(String(approvalId ?? ""));
+    const result = resolvePendingApproval(ownerApprovalStore, String(approvalId ?? ""), approve === true);
+    if (result.ok && before) {
+      securityApprovalEvent(result.decision, before.action, before.targetRef ?? "");
+    }
+    return result;
+  },
+
   // ---- artifacts (asset) management (the hub agent's create_asset / etc.) ----
   // NOTE: the asset TYPE field is named `assetType` here (not `type`) because the
   // message router uses `message.type` for ROUTING — a `type` field would collide.
@@ -2800,15 +3066,33 @@ const handlers = {
       ? { ok: true, asset: res.asset, index: res.index }
       : res;
   },
-  async "asset.update"({ origin, id, assetType, name, content }) {
+  async "asset.update"({ origin, id, assetType, name, content }, context) {
+    const scope = origin ?? "master";
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["type", assetType], ["name", name], ["content", content],
+      ]);
+    } catch { return { ok: false, error: "asset update payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.update", target, payload);
+    if (!gate.ok) return gate;
     const patch = {};
     if (assetType !== undefined) patch.type = assetType;
     if (name !== undefined) patch.name = name;
     if (content !== undefined) patch.content = content;
-    return await updateAsset(origin ?? "master", id, patch);
+    return await updateAsset(scope, id, patch);
   },
-  async "asset.delete"({ origin, id }) {
-    return await deleteAsset(origin ?? "master", id);
+  async "asset.delete"({ origin, id }, context) {
+    const scope = origin ?? "master";
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try { payload = payloadFields([["origin", scope === "master" ? "master" : canonicalOrigin(scope)], ["id", id]]); }
+    catch { return { ok: false, error: "asset delete payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.delete", target, payload);
+    if (!gate.ok) return gate;
+    return await deleteAsset(scope, id);
   },
   async "asset.list"({ origin }) {
     return await listAssets(origin ?? "master");
@@ -2821,14 +3105,32 @@ const handlers = {
   async "script.create"({ origin, name, source }) {
     return await createScript(origin ?? "master", { name, source });
   },
-  async "script.update"({ origin, id, name, source }) {
+  async "script.update"({ origin, id, name, source }, context) {
+    const scope = origin ?? "master";
+    const target = canonicalOperationTarget("script", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["name", name], ["source", source],
+      ]);
+    } catch { return { ok: false, error: "script update payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "script.update", target, payload);
+    if (!gate.ok) return gate;
     const patch = {};
     if (name !== undefined) patch.name = name;
     if (source !== undefined) patch.source = source;
-    return await updateScript(origin ?? "master", id, patch);
+    return await updateScript(scope, id, patch);
   },
-  async "script.delete"({ origin, id }) {
-    return await deleteScript(origin ?? "master", id);
+  async "script.delete"({ origin, id }, context) {
+    const scope = origin ?? "master";
+    const target = canonicalOperationTarget("script", { origin: scope, id });
+    let payload;
+    try { payload = payloadFields([["origin", scope === "master" ? "master" : canonicalOrigin(scope)], ["id", id]]); }
+    catch { return { ok: false, error: "script delete payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "script.delete", target, payload);
+    if (!gate.ok) return gate;
+    return await deleteScript(scope, id);
   },
   async "script.list"({ origin }) {
     return await listScripts(origin ?? "master");
@@ -3274,15 +3576,51 @@ const handlers = {
   // OWNER-ONLY: the deny-list is authoritative and can only be changed from the
   // Settings UI. It is deliberately NOT exposed to the agent toolset (no
   // `deny_hook` tool) — the agent can never un-deny a hook it was refused.
-  async "hooks.deny"({ hookId, denied }) {
+  async "hooks.deny"({ hookId, denied }, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "hook policy is owned by Settings" };
     if (!getHook(hookId)) return { ok: false, error: `unknown hook ${hookId}` };
     return await setHookDeny(hookId, denied !== false);
   },
-  async "hooks.subscribe"({ hookId, recipeId, promptTemplate }) {
-    return await subscribeHook({ hookId, recipeId, promptTemplate });
+  async "hooks.subscribe"({ hookId, recipeId, promptTemplate }, context) {
+    return await subscribeHook(
+      { hookId, recipeId, promptTemplate },
+      {
+        gateOnReplace: async ({ existing, candidate }) => {
+          let payload;
+          try {
+            payload = canonicalRecord(
+              canonicalField("request", payloadFields([["hookId", candidate.hookId], ["recipeId", candidate.recipeId], ["promptTemplate", candidate.promptTemplate]])),
+              canonicalField("existing", payloadFields([["hookId", existing.hookId], ["recipeId", existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]])),
+            );
+          }
+          catch { return { ok: false, error: "hook replacement payload is not approvable" }; }
+          return await requireOwnerApproval(
+            context,
+            "hooks.subscribe",
+            canonicalOperationTarget("hook", candidate),
+            payload,
+          );
+        },
+      },
+    );
   },
-  async "hooks.unsubscribe"({ hookId, recipeId }) {
-    return await unsubscribeHook({ hookId, recipeId });
+  async "hooks.unsubscribe"({ hookId, recipeId }, context) {
+    return await unsubscribeHook(
+      { hookId, recipeId },
+      {
+        gateBeforeDelete: async ({ existing }) => {
+          let payload;
+          try { payload = payloadFields([["hookId", existing.hookId], ["recipeId", existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]]); }
+          catch { return { ok: false, error: "hook removal payload is not approvable" }; }
+          return await requireOwnerApproval(
+            context,
+            "hooks.unsubscribe",
+            canonicalOperationTarget("hook", existing),
+            payload,
+          );
+        },
+      },
+    );
   },
 
   async "browser-control.get"() {
@@ -3510,9 +3848,16 @@ const handlers = {
       };
     });
   },
-  async "agent.delete"({ origin }) {
+  async "agent.delete"({ origin }, context) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
+    const gate = await requireOwnerApproval(
+      context,
+      "agent.delete",
+      canonicalOperationTarget("origin", { origin: canonical }),
+      payloadFields([["origin", canonical]]),
+    );
+    if (!gate.ok) return gate;
     return await withOriginLock(canonical, async () => {
       // Authoritative, PREEMPTIVE revocation: abort any in-flight worker run,
       // then tombstone the enrollment FIRST (a running content-script bridge is
@@ -3829,8 +4174,7 @@ const handlers = {
 // This is an allowlist — unknown/new routes default to denied for page senders.
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const handler = handlers[message?.type];
-  if (!handler) {
+  if (!handlers[message?.type]) {
     sendResponse({ ok: false, error: `unknown message: ${message?.type}` });
     return true;
   }
@@ -3844,6 +4188,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     canonicalOrigin,
     chrome.runtime.id,
   );
+  let routeContext = {
+    principal: "extension",
+    documentId: typeof sender?.documentId === "string" ? sender.documentId : "",
+    senderUrl: typeof sender?.url === "string" ? sender.url : "",
+  };
+  const optionsUrl = chrome.runtime.getURL("options/options.html");
+  if (isExactOptionsSender(sender, chrome.runtime.id, optionsUrl)) {
+    routeContext = { ...routeContext, principal: "owner-options" };
+  }
   if (auth.kind === "content-script") {
     if (auth.error) {
       sendResponse({ ok: false, error: auth.error });
@@ -3862,15 +4215,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // anything in the message BODY, but it cannot forge the sender — Chrome
     // populates sender.tab.id + sender.documentId. Handlers treat these as
     // the only trustworthy tab/document identity.
-    message.__sender = {
-      tabId: sender?.tab?.id ?? null,
-      documentId: typeof sender?.documentId === "string" ? sender.documentId : null,
-      // Chrome-attested lifecycle closes the late-old-document race: a
-      // back/forward-cache or superseded document on the same tab must never
-      // advance the current snapshot gate after the active navigation did.
-      documentLifecycle: typeof sender?.documentLifecycle === "string"
-        ? sender.documentLifecycle
-        : null,
+    routeContext = {
+      principal: "page",
+      documentId: typeof sender?.documentId === "string" ? sender.documentId : "",
+      pageSender: {
+        tabId: sender?.tab?.id ?? null,
+        documentId: typeof sender?.documentId === "string" ? sender.documentId : null,
+        // Chrome-attested lifecycle closes the late-old-document race.
+        documentLifecycle: typeof sender?.documentLifecycle === "string"
+          ? sender.documentLifecycle
+          : null,
+      },
     };
   } else if (auth.kind === "unmatched") {
     securityEvent("cross-origin", `sender refused: ${auth.error}`);
@@ -3878,7 +4233,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  handler(message).then((result) => sendResponse(result)).catch((e) => {
+  dispatchRoute(message.type, message, routeContext).then((result) => sendResponse(result)).catch((e) => {
     // The comprehensive error: unwrap the AI SDK wrapper + say what to do,
     // instead of the raw "No output generated. Check the stream for errors".
     const desc = errorDetail(e, { tool: message?.type || "" });

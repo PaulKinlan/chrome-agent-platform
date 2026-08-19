@@ -126,6 +126,7 @@ class Cdp {
   pending = new Map();
   consoleErrors = [];
   swSessions = new Set();
+  swTargetSessions = new Map(); // targetId → pre-attached sessionId
   pageSessions = new Set();
   swAttachErrors = [];
   executionContextEvents = []; // { sessionId, kind: "created"|"cleared", ts }
@@ -345,6 +346,7 @@ const EXPECTED = [
   "NTP: retained a driven-UI screenshot",
   "NTP: the typed task reached the agent journal",
   "Settings: Permissions panel present",
+  "approval: forged NTP owner/activation fields are refused",
   "permissions: all seven capabilities start ungranted",
   "permissions: enabled storage (granted)",
   "permissions: enabled alarms (granted)",
@@ -434,6 +436,12 @@ const EXPECTED = [
   "mgmt: create_asset succeeded (hub asset)",
   "mgmt: list_assets lists the asset (no content)",
   "mgmt: get_asset round-trips content",
+  "approval: primary NTP Settings iframe can deny an exact request",
+  "approval: deny row is singular and capability material absent from DOM",
+  "approval: NTP cannot programmatically resolve an owner approval",
+  "approval: deny leaves the exact asset unchanged",
+  "approval: install-scoped opaque reference survives a worker restart",
+  "approval: post-restart deny leaves the exact asset unchanged",
   "mgmt: update_asset patched the asset",
   "mgmt: delete_asset removed it",
   "mgmt: asset gone after delete",
@@ -522,6 +530,9 @@ async function main() {
     cdp.onAttach = (sessionId, targetInfo, waitingForDebugger) => {
       if (targetInfo?.type !== "service_worker") return;
       cdp.swSessions.add(sessionId);
+      if (typeof targetInfo?.targetId === "string") {
+        cdp.swTargetSessions.set(targetInfo.targetId, sessionId);
+      }
       attachSettled = (async () => {
         try {
           await cdp.send("Runtime.enable", {}, sessionId);
@@ -564,11 +575,16 @@ async function main() {
     check("extension loaded", true);
     const extId = sw.url.split("/")[2];
 
-    // Attach to the (already-booted) initial SW + enable Runtime + assert.
-    const swAttach = await cdp.send("Target.attachToTarget", {
-      targetId: sw.id, flatten: true,
-    });
-    const swSession = swAttach?.result?.sessionId;
+    // Reuse the pre-attached SW session when auto-attach already won the race.
+    // Explicitly attaching the same worker twice is flaky and can hang CDP.
+    await attachSettled;
+    let swSession = cdp.swTargetSessions.get(sw.id) ?? null;
+    if (!swSession) {
+      const swAttach = await cdp.send("Target.attachToTarget", {
+        targetId: sw.id, flatten: true,
+      });
+      swSession = swAttach?.result?.sessionId ?? null;
+    }
     check(
       "SW attach returned a session id",
       typeof swSession === "string" && swSession.length > 0,
@@ -699,6 +715,37 @@ async function main() {
     cdp.pageSessions.add(optsSession);
     let evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
+    // Destructive routes now pause behind the exact Settings approval surface.
+    // Resolve one pending row with a GENUINE CDP click; ids remain in the
+    // page's click-handler closure and are never read by this runner.
+    const resolveNextApproval = async (approve = true) => {
+      // Opening the Approvals section is itself a genuine owner navigation and
+      // refreshes the pending list (background-page timers are throttled).
+      await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
+      const selector = approve
+        ? "#approval-list .approval-row .approval-controls .primary"
+        : "#approval-list .approval-row .approval-controls .ghost";
+      let box = null;
+      for (let i = 0; i < 30 && !box; i++) {
+        box = await boxOf(cdp, optsSession, selector);
+        if (!box) await sleep(200);
+      }
+      if (!box) throw new Error("pending owner approval did not render in exact Settings");
+      if (!(await clickSel(cdp, optsSession, selector))) throw new Error("owner approval click failed");
+      await sleep(250);
+    };
+    const approvedMsg = async (payload) => {
+      const first = await msgValue(payload);
+      if (first?.ok === true) return first;
+      await resolveNextApproval(true);
+      return await msgValue(payload);
+    };
+    const approvedSettingsClick = async (selector) => {
+      if (!(await clickSel(cdp, optsSession, selector))) return false;
+      await resolveNextApproval(true);
+      return await clickSel(cdp, optsSession, selector);
+    };
+
     // ─────────────────────────────────────────────────────────────
     // OPTIONAL-PERMISSION CAPABILITY GRANT — every permission is optional
     // (Paul's hard requirement). Drive the Settings → Permissions panel with
@@ -710,6 +757,16 @@ async function main() {
     check(
       "Settings: Permissions panel present",
       (await boxOf(cdp, optsSession, "#permission-list")) !== null,
+    );
+    const forgedOwner = await msgValue({
+      type: "management.pending-approvals",
+      __ownerUI: true,
+      userActivation: true,
+      __approvalRunId: "forged",
+    });
+    check(
+      "approval: forged NTP owner/activation fields are refused",
+      forgedOwner?.ok === false && !Array.isArray(forgedOwner?.approvals),
     );
     const capState0 = await evalOpts(
       `[...document.querySelectorAll('#permission-list .perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
@@ -761,8 +818,8 @@ async function main() {
     // configured provider readable from the session fallback (no data loss), and
     // (c) re-enable must migrate the session changes back (never restore stale
     // values). This exercises the new SW-side permission removal end-to-end.
-    const storageDisableClicked = await clickSel(
-      cdp, optsSession, `.revoke-perm[data-capability="storage"]`,
+    const storageDisableClicked = await approvedSettingsClick(
+      `.revoke-perm[data-capability="storage"]`,
     );
     await sleep(800);
     const storageDisabledStatus = await msgValue({ type: "capabilities.status" });
@@ -1331,7 +1388,7 @@ async function main() {
         orchOn2.delegationTools.includes("delegate_task"),
     );
     // Delete the worker → the list + fan-out shrink.
-    await msgValue({ type: "agent.delete", origin: "https://worker.example" });
+    await approvedMsg({ type: "agent.delete", origin: "https://worker.example" });
     const listedAfter = await msgValue({ type: "agent.list" });
     check(
       "agent.delete removed the worker from the list",
@@ -1385,9 +1442,12 @@ async function main() {
       "Settings: Disenroll button present for an enrolled agent",
       disenrollBtn !== null,
     );
+    const disenrollRequested = await clickSel(cdp, optsSession2, ".origin-row .disenroll-origin");
+    await resolveNextApproval(true);
+    const disenrollRetried = await clickSel(cdp, optsSession2, ".origin-row .disenroll-origin");
     check(
       "Settings: clicked Disenroll via a real click",
-      await clickSel(cdp, optsSession2, ".origin-row .disenroll-origin"),
+      disenrollRequested && disenrollRetried,
     );
     await sleep(600);
     const afterDisenroll = await msgValue({ type: "agent.list" });
@@ -1415,7 +1475,7 @@ async function main() {
         preDisable.includes("https://script-disable-a.example") &&
         preDisable.includes("https://script-disable-b.example"),
     );
-    const revokeScripting = await msgValue({ type: "capability.revoke", id: "scripting" });
+    const revokeScripting = await approvedMsg({ type: "capability.revoke", id: "scripting" });
     check(
       "scripting Disable: capability revoked",
       revokeScripting?.ok === true && revokeScripting?.revoked !== false,
@@ -1461,7 +1521,7 @@ async function main() {
         gotAgent.agent?.enrolled === true &&
         Array.isArray(gotAgent.agent?.memoryKeys),
     );
-    const updated = await msgValue({
+    const updated = await approvedMsg({
       type: "agent.update", origin: "https://mgmt.example", name: "renamed-worker",
     });
     check(
@@ -1489,14 +1549,149 @@ async function main() {
       "mgmt: get_asset round-trips content",
       assetGet?.ok === true && assetGet.asset?.content === "<h1>hello</h1>",
     );
-    const assetUpdate = await msgValue({
+
+    // The PRIMARY Settings entry is the NTP's embedded options iframe. Drive
+    // its navigation and Deny button with genuine CDP clicks (Runtime.evaluate
+    // is used only for coordinate discovery/assertions).
+    const iframeDeniedRequest = await msgValue({
+      type: "asset.update", origin: "master", id: assetId, name: "must-not-apply",
+    });
+    // Keep this acceptance focused on owner input/authority rather than a
+    // concurrent ViewTransition lifecycle; reduced-motion is a supported
+    // production mode and makes the overlay state deterministic.
+    await cdp.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    }, ntpSession);
+    await clickSel(cdp, ntpSession, "#open-settings");
+    const clickInSettingsFrame = async (selector) => {
+      let point = null;
+      for (let i = 0; i < 30 && !point; i++) {
+        point = await evalIn(cdp, ntpSession, `(() => {
+          const frame = document.querySelector('#view-frame');
+          const el = frame?.contentDocument?.querySelector(${JSON.stringify(selector)});
+          if (!frame || !el) return null;
+          const fr = frame.getBoundingClientRect();
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return null;
+          return {x: fr.left + r.left + r.width / 2, y: fr.top + r.top + r.height / 2};
+        })()`);
+        if (!point) await sleep(200);
+      }
+      if (!point) return false;
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
+      return true;
+    };
+    const iframeNav = await clickInSettingsFrame(`.nav-item[data-section="approvals"]`);
+    await sleep(250);
+    const iframeDeny = await clickInSettingsFrame(`#approval-list .approval-row .approval-controls .ghost`);
+    await sleep(250);
+    const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    const iframeShot = await captureShot(cdp, ntpSession).catch(() => null);
+    if (iframeShot) await writeEvidence("approval-iframe-denied.png", iframeShot);
+    const iframePass = iframeDeniedRequest?.ok === false && iframeNav && iframeDeny &&
+      iframeAfter?.ok === true && iframeAfter.asset?.name === "generated page";
+    check(
+      "approval: primary NTP Settings iframe can deny an exact request",
+      iframePass,
+      { request: iframeDeniedRequest, iframeNav, iframeDeny, assetName: iframeAfter?.asset?.name },
+    );
+    await clickSel(cdp, ntpSession, "#view-back").catch(() => false);
+
+    // Exact correlated DENY: one request → one row; neither the raw target,
+    // asset id, digest nor approval id is present in the DOM. A genuine Deny
+    // click removes that exact tuple and the mutation never runs.
+    const denyRequest = await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
+    await sleep(250);
+    const denyDom = await evalOpts(`({
+      count: document.querySelectorAll('#approval-list .approval-row').length,
+      text: document.querySelector('#approval-list')?.textContent || '',
+      html: document.querySelector('#approval-list')?.innerHTML || ''
+    })`);
+    const captureApprovalEvidence = async (name) => {
+      await cdp.send("Page.bringToFront", {}, optsSession).catch(() => {});
+      let shot = null;
+      for (let i = 0; i < 3 && !shot; i++) {
+        shot = await captureShot(cdp, optsSession).catch(() => null);
+        if (!shot) await sleep(250);
+      }
+      if (!shot) throw new Error(`approval evidence capture failed: ${name}`);
+      await writeEvidence(name, shot);
+      return shot;
+    };
+    await captureApprovalEvidence("approval-deny-pending.png");
+    check(
+      "approval: deny row is singular and capability material absent from DOM",
+      denyRequest?.ok === false && denyDom?.count === 1 &&
+        !String(denyDom?.text).includes(assetId) &&
+        !String(denyDom?.html).includes("approvalId") &&
+        !String(denyDom?.html).includes("digest") &&
+        !String(denyDom?.html).includes("asset:master"),
+    );
+    // Assertion-only retrieval from the exact owner surface: the identifier is
+    // then replayed from NTP with every old body bypass flag. The SW must still
+    // reject because sender authority is a separate browser-derived context.
+    const pendingForForgery = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.approvalId || '')`);
+    const forgedResolve = await msgValue({
+      type: "management.resolve-approval",
+      approvalId: pendingForForgery,
+      approve: true,
+      __ownerUI: true,
+      userActivation: true,
+    });
+    check(
+      "approval: NTP cannot programmatically resolve an owner approval",
+      forgedResolve?.ok === false,
+    );
+    await resolveNextApproval(false);
+    await captureApprovalEvidence("approval-deny-resolved.png");
+    const afterDeniedDelete = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    check(
+      "approval: deny leaves the exact asset unchanged",
+      afterDeniedDelete?.ok === true && afterDeniedDelete.asset?.content === "<h1>hello</h1>",
+    );
+
+    // Stable install-scoped target reference across an actual MV3 worker
+    // restart. Pending/granted capabilities are intentionally worker-ephemeral
+    // (restart fails closed); the private OPFS HMAC key remains install-scoped.
+    await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
+    await sleep(250);
+    const refBeforeRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
+    const targetsForApprovalRestart = await cdp.send("Target.getTargets");
+    const approvalWorker = targetsForApprovalRestart?.result?.targetInfos?.find((t) => t.type === "service_worker" && t.url.includes(extId));
+    if (!approvalWorker?.targetId) throw new Error("approval worker target missing before restart");
+    await cdp.send("Target.closeTarget", { targetId: approvalWorker.targetId });
+    await sleep(300);
+    let approvalWake = null;
+    for (let i = 0; i < 10 && !approvalWake; i++) {
+      approvalWake = await msgValue({ type: "asset.list", origin: "master" }).catch(() => null);
+      if (!approvalWake) await sleep(200);
+    }
+    await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
+    await sleep(250);
+    const refAfterRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
+    check(
+      "approval: install-scoped opaque reference survives a worker restart",
+      typeof refBeforeRestart === "string" && refBeforeRestart.length === 32 && refAfterRestart === refBeforeRestart,
+    );
+    await resolveNextApproval(false);
+    const afterRestartDeny = await msgValue({ type: "asset.get", origin: "master", id: assetId });
+    check(
+      "approval: post-restart deny leaves the exact asset unchanged",
+      afterRestartDeny?.ok === true && afterRestartDeny.asset?.content === "<h1>hello</h1>",
+    );
+
+    const assetUpdate = await approvedMsg({
       type: "asset.update", origin: "master", id: assetId, name: "final page",
     });
     check(
       "mgmt: update_asset patched the asset",
       assetUpdate?.ok === true && assetUpdate.asset?.name === "final page",
     );
-    const assetDel = await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    const assetDel = await approvedMsg({ type: "asset.delete", origin: "master", id: assetId });
     check("mgmt: delete_asset removed it", assetDel?.ok === true);
     const assetAfter = await msgValue({ type: "asset.list", origin: "master" });
     check(
@@ -1504,7 +1699,7 @@ async function main() {
       Array.isArray(assetAfter?.assets) &&
         !assetAfter.assets.some((a) => a.id === assetId),
     );
-    const mgmtDel = await msgValue({ type: "agent.delete", origin: "https://mgmt.example" });
+    const mgmtDel = await approvedMsg({ type: "agent.delete", origin: "https://mgmt.example" });
     check("mgmt: delete_agent removed the agent", mgmtDel?.ok === true);
     const dirAfter = await msgValue({ type: "agent.directory" });
     check(

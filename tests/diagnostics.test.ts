@@ -56,6 +56,17 @@ Deno.test("diagnostics: securityEvent lands in both buffers, newest-first", () =
   assertEquals(diag.entries[0].kind, "csp");
 });
 
+Deno.test("diagnostics: approval audit retains only validated action + opaque reference", () => {
+  fresh();
+  const ref = "a".repeat(32);
+  const entry = mod.securityApprovalEvent("denied", "asset.delete", ref);
+  assert(entry);
+  assertEquals(entry.kind, "owner-denied");
+  assert(entry.message.includes(ref));
+  assert(!entry.message.includes("https://") && !entry.message.includes("asset:master"));
+  assertEquals(mod.securityApprovalEvent("denied", "asset.delete", "raw-target"), null);
+});
+
 Deno.test("diagnostics: securityClear empties the security buffer", () => {
   fresh();
   mod.securityEvent("blocked-action", "page route denied");

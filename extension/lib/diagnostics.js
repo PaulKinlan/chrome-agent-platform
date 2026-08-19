@@ -25,34 +25,111 @@ function now() {
   return Date.now();
 }
 
+const MAX_DETAIL_BYTES = 800;
+const MAX_INPUT_CODE_UNITS = 4096;
+const encoder = new TextEncoder();
+
+function byteCap(value, maxBytes = MAX_DETAIL_BYTES) {
+  const source = String(value).slice(0, MAX_INPUT_CODE_UNITS);
+  let out = "";
+  let used = 0;
+  for (const ch of source) {
+    const bytes = encoder.encode(ch).byteLength;
+    if (used + bytes > maxBytes) return out + "…";
+    out += ch;
+    used += bytes;
+  }
+  return out;
+}
+
+function scrubPrimitive(value) {
+  if (value == null) return value === null ? "<null>" : "<undefined>";
+  const type = typeof value;
+  if (type === "object" || type === "function" || type === "symbol") {
+    // JavaScript has no trap-free way to distinguish a plain object from a
+    // Proxy. Diagnostics therefore fail closed for EVERY arbitrary structure
+    // rather than enumerating it, invoking accessors, or trusting prototypes.
+    return "<redacted:structured>";
+  }
+  let text;
+  try { text = String(value).slice(0, MAX_INPUT_CODE_UNITS).normalize("NFKC"); }
+  catch { return "<redacted>"; }
+  let clean = "";
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    if ((cp < 0x20 && cp !== 0x09 && cp !== 0x0a) || cp === 0x7f) continue;
+    if ((cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069)) continue;
+    if ([0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0xfeff, 0x00ad, 0x2060, 0x034f].includes(cp)) continue;
+    clean += ch;
+    if (clean.length >= MAX_INPUT_CODE_UNITS) break;
+  }
+  clean = clean
+    .replace(/\b(?:api[_-]?key|token|secret|password|passwd|authorization|credential|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=<redacted>")
+    .replace(/\b(?:sk-|ghp_|xox[bap]-|Bearer\s+)[A-Za-z0-9._~+/=-]{8,}\b/gi, "<redacted:token>")
+    .replace(/[0-9a-f]{24,}/gi, "<redacted:opaque>")
+    .replace(/[A-Za-z0-9_-]{40,}/g, "<redacted:opaque>");
+  return byteCap(clean);
+}
+
+/** Public fail-closed redaction. It never inspects object keys/prototypes. */
+export function scrubEventDetail(detail) {
+  return scrubPrimitive(detail);
+}
+
+function safeEntry(level, message, source, kind) {
+  const entry = Object.create(null);
+  entry.ts = now();
+  entry.level = scrubPrimitive(level);
+  entry.message = scrubPrimitive(message);
+  entry.source = scrubPrimitive(source);
+  entry.kind = scrubPrimitive(kind);
+  return entry;
+}
+
 /** The one capture path — every entry funnels through here. */
 export function push(level, message, source = "service-worker", kind = "runtime") {
-  const entry = { ts: now(), level, message: String(message ?? ""), source, kind };
+  const entry = safeEntry(level, message, source, kind);
   buffer.push(entry);
   if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
   return entry;
 }
 
-/**
- * Record a security-relevant event for the shield. `kind` is a stable tag
- * (csp, denied-hook, blocked-action, cross-origin, permission, grant). A blocked
- * action is the transparency surface the shield shows — the user can SEE the
- * security posture + every refusal, not just the final state.
- */
+/** Record a security-relevant event for the owner transparency surface. */
 export function securityEvent(kind, detail = "") {
-  const entry = {
-    ts: now(),
-    level: kind === "csp" || kind === "blocked-action" ? "error" : "warn",
-    message: String(detail ?? ""),
-    source: "security",
-    kind,
-  };
+  const safeKind = scrubPrimitive(kind);
+  const entry = safeEntry(
+    safeKind === "csp" || safeKind === "blocked-action" ? "error" : "warn",
+    detail,
+    "security",
+    safeKind,
+  );
   securityBuffer.push(entry);
   if (securityBuffer.length > MAX_ENTRIES) {
     securityBuffer.splice(0, securityBuffer.length - MAX_ENTRIES);
   }
-  // A refusal is also a diagnostic entry (the console shows it too).
-  push(entry.level, `[security:${kind}] ${entry.message}`, "security", kind);
+  push(entry.level, `[security:${safeKind}] ${entry.message}`, "security", safeKind);
+  return entry;
+}
+
+/**
+ * Approval audit events contain only schema-validated fixed fields. The opaque
+ * 128-bit HMAC reference is intentionally retained for owner correlation; the
+ * generic redactor would otherwise treat any long hex as possible key material.
+ */
+export function securityApprovalEvent(decision, action, targetRef) {
+  if (!new Set(["requested", "approved", "denied", "consumed"]).has(decision)) return null;
+  if (typeof action !== "string" || !/^[a-z][a-z.-]{0,63}$/.test(action)) return null;
+  if (typeof targetRef !== "string" || !/^[0-9a-f]{32}$/.test(targetRef)) return null;
+  const kind = `owner-${decision}`;
+  const entry = safeEntry("warn", "approval", "security", kind);
+  // These three fields passed the strict primitive grammar above; preserve the
+  // HMAC reference for correlation instead of sending it through generic
+  // secret-shaped-string redaction.
+  entry.message = `approval ${decision} action=${action} ref=${targetRef}`;
+  securityBuffer.push(entry);
+  buffer.push(entry);
+  if (securityBuffer.length > MAX_ENTRIES) securityBuffer.splice(0, securityBuffer.length - MAX_ENTRIES);
+  if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
   return entry;
 }
 
@@ -71,9 +148,10 @@ export function installDiagnosticCapture() {
   try {
     selfRef.addEventListener?.("unhandledrejection", (ev) => {
       const reason = ev?.reason;
-      const msg =
-        reason?.message || reason?.name ||
-        (typeof reason === "string" ? reason : "unhandled rejection");
+      // Never dereference reason.message/name: a rejected Proxy can execute
+      // those getters before the redactor sees it. Structured reasons fail
+      // closed to a fixed marker; primitive strings remain bounded/redacted.
+      const msg = typeof reason === "string" ? reason : "<redacted:structured rejection>";
       push("error", `unhandled rejection: ${msg}`, "service-worker", "rejection");
     });
   } catch { /* no-op */ }
@@ -92,14 +170,16 @@ export function installDiagnosticCapture() {
   const origWarn = selfRef.console?.warn?.bind(selfRef.console);
   if (origError) {
     selfRef.console.error = (...args) => {
-      push("error", args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "), "service-worker", "error");
-      try { origError(...args); } catch { /* never throw from a logger */ }
+      const safe = args.slice(0, 16).map(scrubPrimitive).join(" ");
+      push("error", safe, "service-worker", "error");
+      try { origError(safe); } catch { /* never throw from a logger */ }
     };
   }
   if (origWarn) {
     selfRef.console.warn = (...args) => {
-      push("warn", args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "), "service-worker", "warning");
-      try { origWarn(...args); } catch { /* never throw from a logger */ }
+      const safe = args.slice(0, 16).map(scrubPrimitive).join(" ");
+      push("warn", safe, "service-worker", "warning");
+      try { origWarn(safe); } catch { /* never throw from a logger */ }
     };
   }
 }

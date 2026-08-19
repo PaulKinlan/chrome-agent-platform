@@ -38,9 +38,11 @@ export function installPageDiagnostics() {
 
   // Unhandled promise rejections in this page realm.
   window.addEventListener?.("unhandledrejection", (ev) => {
-    const r = ev?.reason;
-    const msg = r?.message || r?.name || (typeof r === "string" ? r : "unhandled rejection");
-    report([{ kind: "rejection", level: "error", message: String(msg), source: "page" }]);
+    const reason = ev?.reason;
+    // Do not dereference arbitrary rejection objects/proxies before the SW's
+    // bounded redaction boundary.
+    const message = typeof reason === "string" ? reason : "<redacted:structured rejection>";
+    report([{ kind: "rejection", level: "error", message, source: "page" }]);
   });
 }
 
