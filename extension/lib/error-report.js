@@ -9,6 +9,8 @@
 // MV3-CSP-safe: no eval / new Function. Defensive: this module never throws —
 // a malformed error falls back to a generic but still-actionable description.
 
+import { safeProviderError } from "./pure.js";
+
 /** Error categories — a stable tag the UI can style + group. */
 export const ERROR_CATEGORY = {
   NETWORK: "network",
@@ -231,12 +233,43 @@ export function describeError(error, context = {}) {
 }
 
 function build(category, reason, action, message, detailParts) {
-  const detail = detailParts.filter(Boolean).join(" · ");
+  // SECRET-SAFE CHOKE POINT (the final review's HIGH): EVERY describeError
+  // output — reason/message/detail — is redacted (pattern-embedded
+  // credentials: Bearer/Basic, URL passwords, key:value assignments) and
+  // bounded BEFORE it leaves this module. These strings flow into route
+  // responses, the console, thread messages, lastError storage, and
+  // diagnostics — none of them may ever carry a credential a hostile endpoint
+  // echoed into its error body/URL. Known-secret exact masking happens earlier
+  // (the model adapter threads the configured key); this is the structural
+  // backstop for everything else.
+  const safe = (s) => safeProviderError(s);
+  const safeUrl = (s) => {
+    // URLs: keep scheme+host+path, mask any userinfo, DROP the query (a
+    // reflected credential can hide in a query param).
+    let out = safe(String(s ?? ""));
+    try {
+      const u = new URL(out);
+      if (u.username) u.username = "[REDACTED]";
+      if (u.password) u.password = "";
+      u.search = "";
+      out = u.toString();
+    } catch { /* not a URL — already redacted above */ }
+    return out;
+  };
+  const detail = detailParts
+    .filter(Boolean)
+    .map((p) => {
+      const s = String(p);
+      return /^url: /i.test(s) ? `url: ${safeUrl(s.slice(5))}` : safe(s);
+    })
+    .join(" · ");
+  const safeReason = safe(reason || "");
+  const safeAction = action || ACTION[ERROR_CATEGORY.UNKNOWN];
   return {
     category,
-    reason: reason || "unknown",
-    action: action || ACTION[ERROR_CATEGORY.UNKNOWN],
-    message: `${reason} — ${action}`,
+    reason: safeReason || "unknown",
+    action: safeAction,
+    message: safe(`${safeReason} — ${safeAction}`),
     detail,
   };
 }

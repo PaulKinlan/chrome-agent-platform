@@ -112,3 +112,185 @@ Deno.test("per-agent provider: getModelForAgent resolves the override, else the 
   const viaAgent = await getModelForAgent(null);
   assertEquals(viaAgent.modelId, "demo-local");
 });
+
+// ── k3 review fixes (2026-08-18) ────────────────────────────────────────────
+  // Seed the registry directly (no OPFS needed for the provider path).
+  const seed = (id) =>
+    kvSet({ "cap:namedAgents": { [id]: { id, name: id, role: "", createdAt: 1, updatedAt: 1 } } });
+
+Deno.test("k3 HIGH-1: a blank same-provider Save PRESERVES the stored key", async () => {
+  store.clear();
+  await seed("keeper");
+  // The settings page routes through the SW — JSON serialization DROPS
+  // `apiKey: undefined`, so the route receives a config with NO apiKey key.
+  // The old code coerced that to "" and silently erased the stored key.
+  await setNamedAgentProvider("keeper", {
+    provider: "deepseek",
+    baseURL: "https://api.deepseek.com/v1",
+    apiKey: "sk-keep-me",
+    model: "deepseek-chat",
+  });
+  const before = await getNamedAgentProvider("keeper");
+  assertEquals(before.apiKey, "sk-keep-me");
+
+  // Re-save the SAME provider with the key field blank: the serialized config
+  // has no apiKey property at all (exactly what the SW route receives).
+  const serialized = JSON.parse(JSON.stringify({
+    provider: "deepseek",
+    baseURL: "https://api.deepseek.com/v1",
+    apiKey: undefined, // dropped by serialization
+    model: "deepseek-v4-pro",
+  }));
+  assert(!("apiKey" in serialized), "serialization drops undefined apiKey (the HIGH-1 chain)");
+  const r = await setNamedAgentProvider("keeper", serialized);
+  assertEquals(r.ok, true);
+  const after = await getNamedAgentProvider("keeper");
+  assertEquals(after.apiKey, "sk-keep-me", "blank same-provider Save keeps the stored key");
+  assertEquals(after.model, "deepseek-v4-pro", "the OTHER fields still update");
+
+  // An EXPLICIT empty string still clears the key (the only removal path).
+  await setNamedAgentProvider("keeper", {
+    provider: "deepseek",
+    baseURL: "https://api.deepseek.com/v1",
+    apiKey: "",
+    model: "deepseek-chat",
+  });
+  assertEquals((await getNamedAgentProvider("keeper")).apiKey, "", "explicit '' clears the key");
+});
+
+Deno.test("k3 HIGH-1: set-provider's RESULT is redacted (no apiKey crosses back)", async () => {
+  store.clear();
+  await seed("redact-probe");
+  const r = await setNamedAgentProvider("redact-probe", {
+    provider: "openai",
+    baseURL: "https://api.openai.com/v1",
+    apiKey: "sk-never-echo",
+    model: "gpt-5.6-sol",
+  });
+  assertEquals(r.ok, true);
+  assert(!("apiKey" in (r.agent?.provider ?? {})), "the returned agent's provider has no apiKey");
+});
+
+Deno.test("k3 HIGH-2: openai-compatible is a first-class provider everywhere", async () => {
+  // The Settings page offers it — normalize must ACCEPT it (it silently
+  // returned null before, clearing a saved override on every Save).
+  const ok = normalizeAgentProvider({
+    provider: "openai-compatible",
+    baseURL: "https://my-endpoint.example/v1",
+    apiKey: "sk-byo",
+    model: "my-model",
+  });
+  assertEquals(ok?.provider, "openai-compatible");
+  assertEquals(ok?.baseURL, "https://my-endpoint.example/v1");
+
+  // Global resolution: it must NOT fall through to demo once configured.
+  const resolved = await resolveModelFromConfig({
+    provider: "openai-compatible",
+    baseURL: "https://my-endpoint.example/v1",
+    apiKey: "sk-byo",
+    model: "my-model",
+  });
+  assertEquals(resolved.modelId, "my-model", "a configured openai-compatible resolves");
+  assertEquals(resolved.providerName, "openai-compatible");
+
+  // And an UNCONFIGURED one degrades honestly (demo fallback, named reason).
+  const missing = await resolveModelFromConfig({
+    provider: "openai-compatible",
+    baseURL: "",
+    apiKey: "",
+    model: "",
+  });
+  assertEquals(missing.modelId, "demo-local");
+  assert(missing.providerName.includes("missing"), "the fallback names what is missing");
+
+  // The override round-trips (not silently dropped).
+  store.clear();
+  await seed("byo");
+  await setNamedAgentProvider("byo", ok);
+  const stored = await getNamedAgentProvider("byo");
+  assertEquals(stored?.provider, "openai-compatible");
+  assertEquals(stored?.model, "my-model");
+});
+
+Deno.test("k3 LOW: the gemini cloud catalogue excludes on-device nano ids", async () => {
+  const { modelsForVendor } = await import("../extension/lib/model-prices.js");
+  const gemini = modelsForVendor("gemini");
+  assert(!gemini.some((m) => m.includes("nano")), "no gemini-nano ids in the cloud catalogue");
+  assert(!gemini.some((m) => m.includes("prompt-api")), "no prompt-api ids in the cloud catalogue");
+  assert(gemini.length > 0, "the real cloud models remain");
+});
+
+// ── review a258f814: bump regression — unmodified script, complete mirror,
+//    --message, canonical+bundled changelog equality, all version surfaces,
+//    and a controlled-failure atomicity check. ──
+Deno.test("bump-version: unmodified script in a complete scratch mirror (--message; canonical + bundled changelog + all version surfaces)", async () => {
+  const fsQ = "node:fs/promises", pathQ = "node:path", osQ = "node:os", cpQ = "node:child_process";
+  const fsp = await import(fsQ);
+  const path = (await import(pathQ)).default;
+  const os = await import(osQ);
+  const { execFileSync } = await import(cpQ);
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cap-bump2-"));
+  try {
+    // COMPLETE mirror: the real scripts/ dir (bump + sync-changelog), package,
+    // lock, manifest, changelog, extension/ — no rewrites of the script.
+    const repoScripts = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+    await fsp.mkdir(path.join(dir, "scripts"), { recursive: true });
+    for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
+      await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
+    }
+    await fsp.mkdir(path.join(dir, "extension"), { recursive: true });
+    await fsp.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
+    await fsp.writeFile(path.join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
+    await fsp.writeFile(path.join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3", version_name: "1.2.3" }, null, 2));
+    const changelog = "# Changelog\n\n## [1.2.3] — 2026-01-01\n- init\n";
+    await fsp.writeFile(path.join(dir, "CHANGELOG.md"), changelog);
+    await fsp.writeFile(path.join(dir, "extension", "CHANGELOG.md"), changelog);
+    // Run the UNMODIFIED bump script WITH --message.
+    execFileSync("node", [path.join(dir, "scripts", "bump-version.mjs"), "patch", "--message", "test: the fix"], { cwd: dir, stdio: "pipe" });
+    const pkg = JSON.parse(await fsp.readFile(path.join(dir, "package.json"), "utf8"));
+    const lock = JSON.parse(await fsp.readFile(path.join(dir, "package-lock.json"), "utf8"));
+    const manifest = JSON.parse(await fsp.readFile(path.join(dir, "extension", "manifest.json"), "utf8"));
+    assertEquals(pkg.version, "1.2.4", "package");
+    assertEquals(lock.version, "1.2.4", "lock root");
+    assertEquals(lock.packages[""].version, "1.2.4", "lock packages[\"\"]");
+    assertEquals(manifest.version, "1.2.4", "manifest.version");
+    assertEquals(manifest.version_name, "1.2.4", "manifest.version_name");
+    // canonical changelog: exactly one 1.2.4 entry with the message
+    const canon = await fsp.readFile(path.join(dir, "CHANGELOG.md"), "utf8");
+    assertEquals((canon.match(/## \[1\.2\.4\]/g) ?? []).length, 1, "one canonical entry");
+    assert(canon.includes("test: the fix"), "message present");
+    // bundled changelog: byte-equal to canonical
+    const bundled = await fsp.readFile(path.join(dir, "extension", "CHANGELOG.md"), "utf8");
+    assertEquals(bundled, canon, "bundled == canonical (byte equality)");
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+Deno.test("bump-version: controlled failure leaves NO partial write (atomicity)", async () => {
+  const fsQ = "node:fs/promises", pathQ = "node:path", osQ = "node:os", cpQ = "node:child_process";
+  const fsp = await import(fsQ);
+  const path = (await import(pathQ)).default;
+  const os = await import(osQ);
+  const { spawnSync } = await import(cpQ);
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cap-bump3-"));
+  try {
+    const repoScripts = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+    await fsp.mkdir(path.join(dir, "scripts"), { recursive: true });
+    for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
+      await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
+    }
+    await fsp.mkdir(path.join(dir, "extension"), { recursive: true });
+    await fsp.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
+    // NO package-lock, NO manifest, NO changelog → the bump must FAIL (readJson
+    // of manifest throws) WITHOUT having bumped package.json (write ordering:
+    // all reads precede all writes).
+    const before = await fsp.readFile(path.join(dir, "package.json"), "utf8");
+    const r = spawnSync("node", [path.join(dir, "scripts", "bump-version.mjs"), "patch"], { cwd: dir, stdio: "pipe" });
+    assertEquals(r.status !== 0, true, "bump fails on the incomplete mirror");
+    const after = await fsp.readFile(path.join(dir, "package.json"), "utf8");
+    assertEquals(after, before, "package.json UNCHANGED (no partial write)");
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});

@@ -17,6 +17,7 @@
 //    per-event log) until a successful provider call resets it.
 
 import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
+import { safeProviderError } from "./pure.js";
 
 /** Derive the exact host-permission origin pattern for a provider base URL.
  * Returns null for missing, malformed, credential-bearing, or non-http(s) URLs. */
@@ -62,21 +63,129 @@ export async function hasProviderHostAccess(cfg) {
  * gesture (the Settings Set/Update button, the Test connection button). Returns
  * { granted, pattern, error } — never swallows the result.
  */
-export async function requestProviderHostAccess(cfg) {
-  const pattern = providerOriginPattern(cfg);
-  if (!pattern) return { granted: true, pattern: null, error: null };
-  if (typeof chrome === "undefined" || !chrome.permissions?.request) {
-    return { granted: true, pattern, error: null };
+// ── permission-request coordination THROUGH THE SW (the final review's HIGH)
+// ────────────────────────────────────────────────────────────────────────────
+// The in-flight registry lives in the SERVICE WORKER (lib/perm-lease.js via
+// the perm-lease.* routes) so every extension page — Settings + each
+// conversation surface — shares ONE slot per origin pattern: two pages can
+// never launch duplicate prompts. The PAGE still performs
+// chrome.permissions.request during ITS OWN user gesture (gesture context
+// cannot cross into the SW), then settles the lease; a page that cannot get
+// the lease waits for the settle broadcast (bounded) instead of prompting.
+const LEASE_TIMEOUT_MS = 8_000;
+
+function _swSend(message) {
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    return Promise.resolve(chrome.runtime.sendMessage(message)).catch((e) => ({ __sendError: String(e?.message ?? e) }));
   }
+  return Promise.resolve({ __sendError: "no runtime" });
+}
+
+export async function requestProviderHostAccess(cfg, { onIssued = null } = {}) {
+  const pattern = providerOriginPattern(cfg);
+  if (!pattern) return { granted: true, pattern: null, error: null, generation: null };
+  if (typeof chrome === "undefined" || !chrome.permissions?.request) {
+    return { granted: true, pattern, error: null, generation: null };
+  }
+  // 1. Acquire the single in-flight slot from the SW authority.
+  const acquired = await _swSend({ type: "perm-lease.acquire", pattern });
+  if (!acquired || acquired.__sendError) {
+    // No SW coordination available (unit tests / non-extension): bounded
+    // direct request, no dedupe possible; no generation exists to bind.
+    const r = await _directBoundedRequest(pattern);
+    return { ...r, generation: null };
+  }
+  if (!acquired.lease) {
+    // Someone else's request is in flight. If it already timed out, deny
+    // honestly NOW (never a duplicate prompt); otherwise wait (bounded) for
+    // the settle broadcast, then report the RECONCILED outcome. The consumer
+    // is bound to the OBSERVED in-flight generation (exact match in the
+    // waiter), never a guess.
+    if (onIssued) { try { onIssued({ pattern, generation: acquired.generation, ours: false }); } catch { /* consumer error */ } }
+    if (acquired.timedOut) {
+      return { granted: false, pattern, error: "permission request timed out (another surface's request is still pending)", generation: acquired.generation };
+    }
+    const r = await _awaitSettle(pattern, acquired.generation);
+    return { ...r, generation: acquired.generation };
+  }
+  // 2. We hold the lease: OUR generation was issued atomically WITH the
+  // acquisition — the onIssued callback (this caller's own subscription) is
+  // invoked before any await can interleave, so a consumer registered this
+  // way can never observe a stale or newer settlement.
+  if (onIssued) { try { onIssued({ pattern, generation: acquired.generation, ours: true }); } catch { /* consumer error */ } }
   try {
     // requestPermissionBundleFromGesture performs no asynchronous work before
     // chrome.permissions.request. Callers must invoke this directly from the
-    // owner click (never after provider.get/contains awaits).
+    // owner click (never after provider.get/contains awaits). The provider's
+    // perm-lease settle is preserved (generation/token) around the orchestrated
+    // request.
     const granted = await requestPermissionBundleFromGesture({ origins: [pattern] });
-    return { granted: !!granted, pattern, error: granted ? null : "permission request denied" };
+    await _swSend({ type: "perm-lease.settle", pattern, generation: acquired.generation, token: acquired.token, granted: Boolean(granted) });
+    return { granted: Boolean(granted), pattern, error: granted ? null : "permission request denied", generation: acquired.generation };
   } catch (e) {
-    return { granted: false, pattern, error: String(e?.message ?? e) };
+    await _swSend({ type: "perm-lease.settle", pattern, generation: acquired.generation, token: acquired.token, granted: false, error: String(e?.message ?? e) });
+    return { granted: false, pattern, error: safeProviderError(String(e?.message ?? e)), generation: acquired.generation };
   }
+}
+
+/** Wait (bounded) for another surface's in-flight request to settle, then
+ *  report the reconciled outcome from the SW state. */
+async function _awaitSettle(pattern, generation) {
+  return await new Promise((resolve) => {
+    let done = false;
+    let timer = null;
+    const finish = async () => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (typeof chrome !== "undefined") chrome.runtime.onMessage.removeListener(onSettled);
+      const state = await _swSend({ type: "perm-lease.state", pattern });
+      resolve({
+        granted: state?.lastOutcome === "granted",
+        pattern,
+        error: state?.inFlight
+          ? "permission request timed out (another surface's request was pending)"
+          : (state?.lastOutcome === "granted" ? null : "permission request denied on another surface"),
+      });
+    };
+    const onSettled = (msg) => {
+      // EXACT-match consumer (the acceptance review): only the broadcast for
+      // the EXACT expected pattern + generation resolves this wait — a
+      // missing, older, OR newer generation is dropped.
+      if (msg?.type === "provider-host-perm:settled" && msg.pattern === pattern &&
+          msg.generation === generation) {
+        finish();
+      }
+    };
+    try { chrome.runtime.onMessage.addListener(onSettled); } catch { /* non-extension */ }
+    timer = setTimeout(finish, LEASE_TIMEOUT_MS + 500);
+  });
+}
+
+/** Fallback (no SW): a bounded direct request. */
+async function _directBoundedRequest(pattern) {
+  try {
+    const outcome = await Promise.race([
+      chrome.permissions.request({ origins: [pattern] }),
+      new Promise((resolve) => setTimeout(() => resolve("timeout"), LEASE_TIMEOUT_MS)),
+    ]);
+    if (outcome === "timeout") return { granted: false, pattern, error: "permission request timed out" };
+    return { granted: Boolean(outcome), pattern, error: outcome ? null : "permission request denied" };
+  } catch (e) {
+    return { granted: false, pattern, error: safeProviderError(String(e?.message ?? e)) };
+  }
+}
+
+/** Late-settle broadcast consumer registry (pages call this to reconcile
+ *  their UI when another surface's request settles). Returns an unlisten. */
+export function onPermissionSettled(handler) {
+  const listener = (msg) => {
+    if (msg?.type === "provider-host-perm:settled") {
+      try { handler(msg); } catch { /* consumer error never breaks the bus */ }
+    }
+  };
+  try { chrome.runtime.onMessage.addListener(listener); } catch { /* non-extension */ }
+  return () => { try { chrome.runtime.onMessage.removeListener(listener); } catch { /* noop */ } };
 }
 
 // ── the circuit-breaker ─────────────────────────────────────────────────────

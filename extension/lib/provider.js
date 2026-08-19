@@ -62,6 +62,18 @@ export const PROVIDER_CHOICES = [
     needsModel: true,
   },
   {
+    // The BYO-endpoint provider (Bedrock, Kimi, Groq, Together…). Resolves
+    // through the same adapter but has NO preset base URL — the user must set
+    // one (k3 review HIGH-2: previously offered in Settings yet unresolvable —
+    // absent from this set AND PROVIDER_CHOICES, so a global selection fell
+    // through to demo and a per-agent override was silently dropped).
+    id: "openai-compatible",
+    label: "OpenAI-compatible (your endpoint + key)",
+    needsKey: true,
+    baseURL: "",
+    needsModel: true,
+  },
+  {
     id: "ollama",
     label: "Ollama (local, OpenAI-compatible)",
     needsKey: false,
@@ -79,6 +91,7 @@ export const PROVIDER_CHOICES = [
 /** Every provider id that resolves through the OpenAI-compatible adapter. */
 const OPENAI_COMPATIBLE_IDS = new Set([
   "openai",
+  "openai-compatible",
   "anthropic",
   "gemini",
   "deepseek",

@@ -640,12 +640,13 @@ export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {
   if (!sender || typeof sender !== "object") return false;
   if (typeof extensionId !== "string" || !extensionId) return false;
   if (typeof exactOptionsUrl !== "string" || !exactOptionsUrl) return false;
-  const exactDocument = sender.url === exactOptionsUrl ||
-    (typeof sender.url === "string" && sender.url.startsWith(`${exactOptionsUrl}#`));
+  const exactDocument = sender.url === exactOptionsUrl;
   // The shipped NTP presents this exact private extension document in an
   // iframe. Chrome may omit frame/lifecycle/tab metadata for extension pages.
   // Web pages cannot load this non-web-accessible document; browser-supplied
   // extension id + exact document URL + document id are the authority.
+  // EXACT URL EQUALITY ONLY (no query, no hash): a hash-bearing or query-bearing
+  // Options URL is not the Settings surface (the provider review's HIGH).
   return sender.id === extensionId &&
     exactDocument &&
     // Chrome omits `origin` for extension-page runtime messages; the exact
@@ -695,7 +696,102 @@ export function authorizeToolReport(
 /** SECRET-key pattern for `redactSecrets`: any object key matching this must
  * never be serialized into a hook task/prompt/journal (the wider-goal review's
  * CRITICAL — the storage.onChanged hook forwarded providerConfig.apiKey). */
-export const SECRET_KEY_RE = /(api[_-]?key|token|secret|password|authorization|credential|bearer|access[_-]?key)/i;
+// Structural: a key whose NAME looks like a credential. BOTH-side boundaries
+// prevent false positives on ordinary words that merely CONTAIN a keyword
+// (tokenCount, secretary, mytoken, notasecret) — the keyword must START and
+// END at a non-word-char boundary.
+export const SECRET_KEY_RE = /(?<![a-z0-9])(api[_-]?key|token|secret|password|authorization|credential|bearer|access[_-]?key)(?![a-z0-9])/i;
+
+/** Escape a literal for safe RegExp construction. */
+function _reEsc(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** NFKC-normalize (handles fullwidth/confusable + combining forms). */
+function _nfkc(s) {
+  try { return String(s).normalize("NFKC"); } catch { return String(s); }
+}
+
+/** Mask the QUERY STRING of every http(s) URL embedded ANYWHERE in the text
+ *  (messages, reasons, bodies — not just explicit url: fields): the query is
+ *  dropped entirely (sig=, key=, token=, or ANY unknown credential param). */
+function _stripUrlQueries(text) {
+  return String(text).replace(/https?:\/\/[^\s"'<>)]+/gi, (m) => {
+    const cut = m.search(/[?#]/);
+    return cut >= 0 ? m.slice(0, cut) + "…[query redacted]" : m;
+  });
+}
+
+/** A secret VALUE that may appear inside arbitrary error text: a configured
+ * key echoed back by a hostile/misbehaving endpoint, a Bearer credential, or
+ * credentials embedded in a URL. Exported for unit tests.
+ *
+ * Robustness (the final review's HIGH): known secrets are masked
+ * case-insensitively, in their NFKC-NORMALIZED forms, and from length >= 4
+ * (short keys count too); embedded URL queries are stripped WHOLESALE (any
+ * unknown credential param, not a keyword list). */
+export function redactSecretText(text, knownSecrets = []) {
+  let out = _nfkc(String(text ?? ""));
+  // Known secrets (longest first). COLLISION-SAFE FOR ALL LENGTHS (the
+  // successor review): NO global substring masking at any length — every
+  // known secret masks ONLY inside credential CONTEXTS (after a bounded
+  // credential keyword with separator/whitespace, or in a Bearer/Basic header
+  // value). Prose containing a colliding substring (any length) and existing
+  // [REDACTED] markers are never corrupted.
+  const secrets = knownSecrets
+    .filter((s) => typeof s === "string" && s.length >= 1)
+    .map((s) => [s, _nfkc(s), (() => { try { return encodeURIComponent(s); } catch { return s; } })()])
+    .flat()
+    .filter((s, i, arr) => arr.indexOf(s) === i)
+    .sort((a, b) => b.length - a.length);
+  const KW = "(?<![a-z0-9])(?:api[_-]?key|access[_-]?key|key|token|secret|password|authorization|credential|bearer)(?![a-z0-9])";
+  for (const s of secrets) {
+    // EVERY length: credential-context-only masking.
+    out = out.replace(
+      new RegExp(`${KW}["'\`]?\\s*[:=]?\\s*["'\`]?\\s*${_reEsc(s)}(?![a-z0-9])`, "gi"),
+      (m) => m.slice(0, Math.max(0, m.length - s.length)) + "[REDACTED]",
+    );
+    out = out.replace(
+      new RegExp(`((?:bearer|basic)\\s+)${_reEsc(s)}`, "gi"),
+      "$1[REDACTED]",
+    );
+  }
+  // Embedded URL queries: strip wholesale (covers sig=, key=, token=, and
+  // every unrecognized credential param) — BEFORE the credential-shape pass
+  // so URL tails never hide a shape match.
+  out = _stripUrlQueries(out);
+  // Bearer/Basic credentials in text + URL userinfo passwords.
+  out = out.replace(/(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]");
+  out = out.replace(/([a-z][a-z0-9+.-]*:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+  // A bounded keyword followed by a credential SHAPE (colon/quote OR bare
+  // whitespace): `api_key=…`, `bad key sk-…`, `key: ghp_…`.
+  out = out.replace(
+    /((?<![a-z0-9])(?:api[_-]?key|access[_-]?key|key|token|secret|password|authorization|credential|bearer)(?![a-z0-9])["'`]?\s*[:=]?\s*["'`]?\s*)((?:sk|rk|pk|key|tok|ghp|gho|xox|AIza|sig)[A-Za-z0-9_-]{3,}|Bearer\s+\S{8,})/gi,
+    "$1[REDACTED]",
+  );
+  // Generic assignment redaction (keyword + separator + any 6+ char value).
+  out = out.replace(
+    /((?<![a-z0-9])(?:api[_-]?key|token|secret|password|authorization|credential|access[_-]?key)(?![a-z0-9])["'`]?\s*[:=]\s*["'`]?)([^\s"'`,;}]{6,})/gi,
+    "$1[REDACTED]",
+  );
+  return out;
+}
+
+/** Bound an arbitrary error string to a safe display length (the provider's
+ * raw body can be huge; only the head is ever useful). */
+export function boundErrorText(text, max = 300) {
+  const s = String(text ?? "").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+/** The single safe-mapping point for provider errors crossing into
+ * console/UI/storage: redact known secrets + pattern-embedded credentials,
+ * then bound the length. Every provider error surface (the model adapter's
+ * fetch logging, the connection tester's messages, the Settings error
+ * bubbles) routes through here (the sol review's HIGH-2). */
+export function safeProviderError(text, knownSecrets = []) {
+  return boundErrorText(redactSecretText(text, knownSecrets));
+}
 
 /**
  * Deep-redact secret VALUES from an arbitrary payload (pure, dependency-free).

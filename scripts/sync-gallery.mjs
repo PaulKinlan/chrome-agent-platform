@@ -3,11 +3,12 @@
 // docs/components.js and docs/theme.css are generated deploy copies so the
 // gallery (served from docs/) can never drift from the canonical components.
 //
-//   node scripts/sync-gallery.mjs          → copy the canonical files into docs/
+//   node scripts/sync-gallery.mjs          → copy the canonical files (gallery + the bundled changelog)
 //   node scripts/sync-gallery.mjs --check  → verify no drift (exit 1 on drift)
 //
-// Wired into `npm run build` (build.mjs) so every build re-syncs, and into
-// `npm run check:gallery` + the component-gallery smoke test as a drift guard.
+// Run as a SEPARATE deterministic pre-commit step (npm run sync:gallery) —
+// NOT wired into the build. The CHANGELOG has its own gate
+// (scripts/sync-changelog.mjs).
 
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";

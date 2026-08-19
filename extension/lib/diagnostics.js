@@ -25,6 +25,8 @@ function now() {
   return Date.now();
 }
 
+import { safeProviderError } from "./pure.js";
+
 const MAX_DETAIL_BYTES = 800;
 const MAX_INPUT_CODE_UNITS = 4096;
 const encoder = new TextEncoder();
@@ -89,6 +91,9 @@ function safeEntry(level, message, source, kind) {
 /** The one capture path — every entry funnels through here. */
 export function push(level, message, source = "service-worker", kind = "runtime") {
   const entry = safeEntry(level, message, source, kind);
+  // SECRET-SAFE layer (provider-picker integration): scrubbed output ALSO
+  // passes structural credential redaction before storage.
+  entry.message = safeProviderError(String(entry.message ?? ""));
   buffer.push(entry);
   if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
   return entry;
@@ -99,7 +104,7 @@ export function securityEvent(kind, detail = "") {
   const safeKind = scrubPrimitive(kind);
   const entry = safeEntry(
     safeKind === "csp" || safeKind === "blocked-action" ? "error" : "warn",
-    detail,
+    safeProviderError(String(detail ?? "")),
     "security",
     safeKind,
   );

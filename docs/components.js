@@ -3655,6 +3655,346 @@ class AgentConfigForm extends Component {
 customElements.define("agent-config-form", AgentConfigForm);
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * Provider / model configuration controls (single source for BOTH the main
+ * Providers section and the per-agent overrides — Settings → Agents). Both are
+ * labeled controls with an exact --input-h control height so every cell in a
+ * configuration row aligns (the 2026-08-18 mismatched-heights finding).
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Pure: filter a model catalogue for the combobox (case-insensitive substring
+ * on the id; caps the visible list so a huge catalogue stays cheap). Exported
+ * for unit tests. */
+export function filterModels(models, query, { cap = 60 } = {}) {
+  const list = Array.isArray(models) ? models.filter((m) => typeof m === "string") : [];
+  const q = String(query ?? "").trim().toLowerCase();
+  if (!q) return list.slice(0, cap);
+  return list.filter((m) => m.toLowerCase().includes(q)).slice(0, cap);
+}
+
+const CONTROL_CSS = `
+  :host { display: block; }
+  .field { display: grid; gap: 4px; }
+  .field-label { font-size: var(--text-xs, 12px); color: var(--muted, #635e56); }
+  .control {
+    box-sizing: border-box;
+    height: var(--input-h, 36px);
+    width: 100%;
+    background: var(--bg, #f7f6f3);
+    border: 1px solid var(--border, #e3e0d9);
+    color: var(--text, #1d1b18);
+    border-radius: var(--radius-sm, 7px);
+    padding: 0 12px;
+    font: inherit;
+  }
+  .control:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 1px; }
+  :host([disabled]) .control { opacity: 0.5; cursor: not-allowed; }
+`;
+
+/* <provider-select> — the shared provider picker. A styled NATIVE select
+ * (appearance: base-select where supported; fully keyboard-accessible by
+ * construction — never a hand-rolled listbox). Attributes: label (visible
+ * field label), placeholder (the empty option's text — e.g. "Use the global
+ * provider"), providers (JSON [{id,name}]), value, disabled. Property
+ * `providers`/`value` mirror the attributes. Fires `change` {value}. */
+class ProviderSelect extends Component {
+  static get observedAttributes() { return ["label", "placeholder", "providers", "value", "disabled"]; }
+  attributeChangedCallback(name, oldValue, newValue) {
+    // SELF-INFLICTED value changes (our own change handler / the property
+    // setter) must NOT re-render — a re-render destroys the focused select, so
+    // arrowing through a closed native select broke after one step (k3
+    // MEDIUM-3). External attribute changes still re-render as usual.
+    if (this._selfUpdate) return;
+    super.attributeChangedCallback(name, oldValue, newValue);
+  }
+  get value() { return this._select?.value ?? this.getAttribute("value") ?? ""; }
+  set value(v) {
+    this._selfUpdate = true;
+    try {
+      this.setAttribute("value", String(v ?? ""));
+      if (this._select) this._select.value = String(v ?? "");
+    } finally { this._selfUpdate = false; }
+  }
+  get providers() { return parseJSONAttr(this.getAttribute("providers"), []); }
+  set providers(list) { this.setAttribute("providers", JSON.stringify(list ?? [])); }
+  _render() {
+    const label = this.getAttribute("label") || "Provider";
+    const placeholder = this.getAttribute("placeholder") || "Use the global provider";
+    const value = this.getAttribute("value") ?? "";
+    const providers = this.providers;
+    const options = [
+      `<option value="">${escapeHtml(placeholder)}</option>`,
+      ...providers.map((p) =>
+        `<option value="${escapeHtml(p.id ?? "")}"${String(value) === String(p.id) ? " selected" : ""}>${escapeHtml(p.name ?? p.id ?? "")}</option>`
+      ),
+    ].join("");
+    mountTemplate(this, `${CONTROL_CSS}
+      select.control { cursor: pointer; padding-right: 30px; }
+      select.control, select.control::picker(select) { appearance: base-select; }
+      /* the chevron (hidden when base-select draws its own arrow space) */
+      .wrap { position: relative; display: block; }
+      .wrap svg { position: absolute; right: 10px; top: 50%; translate: 0 -50%; pointer-events: none; color: var(--muted, #635e56); }
+    `, `
+      <div class="field">
+        <span class="field-label">${escapeHtml(label)}</span>
+        <span class="wrap"><select class="control" aria-label="${escapeHtml(label)}" ${this.hasAttribute("disabled") ? "disabled" : ""}>${options}</select>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+      </div>`);
+    this._select = this._root.querySelector("select");
+    if (this._select && this.getAttribute("value") != null) this._select.value = this.getAttribute("value");
+  }
+  _wire() {
+    this._select?.addEventListener("change", (e) => {
+      // The NATIVE change event is composed and would ALSO cross the shadow
+      // boundary, so host listeners would see it AND our CustomEvent — double
+      // handling (k3 LOW). Stop the native one here; the CustomEvent below is
+      // the single, canonical `change` the host receives.
+      e.stopPropagation();
+      this._selfUpdate = true;
+      try { this.setAttribute("value", this._select.value); } finally { this._selfUpdate = false; }
+      this._emit("change", { value: this._select.value });
+    });
+  }
+}
+customElements.define("provider-select", ProviderSelect);
+
+/* <model-picker> — the shared, searchable model-id combobox over the SAME
+ * maintained catalogue the Providers section uses (modelsForVendor → llm-prices,
+ * newest-first). ARIA combobox semantics: input[role=combobox] + filtered
+ * role=listbox + aria-activedescendant; full keyboard (arrows/Enter/Escape/Tab);
+ * an unknown typed id commits as a CUSTOM value (first-class path, not an
+ * error); empty catalogue (Ollama / OpenAI-compatible) = free-text mode.
+ * Attributes: label, placeholder, value, disabled, loading, models (JSON).
+ * Fires `change` {value}. Getters: value, isCustom, open. */
+class ModelPicker extends Component {
+  static get observedAttributes() { return ["label", "placeholder", "value", "disabled", "loading", "models"]; }
+  attributeChangedCallback(name, oldValue, newValue) {
+    // SELF-INFLICTED value changes (a commit from typing/keyboard/option click)
+    // must NOT re-render — a re-render destroys the focused input mid-keyboard
+    // use (k3 MEDIUM-3). The shadow input is synced by _syncInput instead.
+    // External attribute/property changes (a page restoring a saved value)
+    // still re-render as usual.
+    if (this._selfUpdate) return;
+    super.attributeChangedCallback(name, oldValue, newValue);
+  }
+  constructor() {
+    super();
+    this._open = false;
+    this._activeIndex = -1;
+    this._committed = "";
+    this._scrollBound = null;
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // The window resize + document scroll listeners are per-instance — remove
+    // them so a removed picker leaks nothing (k3 LOW).
+    if (this._resizeBound && typeof window?.removeEventListener === "function") {
+      window.removeEventListener("resize", this._resizeBound);
+      this._resizeBound = null;
+    }
+    if (this._scrollBound && typeof document?.removeEventListener === "function") {
+      document.removeEventListener("scroll", this._scrollBound, true);
+      this._scrollBound = null;
+    }
+  }
+  get value() { return this._committed; }
+  set value(v) {
+    this._committed = String(v ?? "");
+    this._selfUpdate = true;
+    try { this.setAttribute("value", this._committed); } finally { this._selfUpdate = false; }
+    this._syncInput();
+  }
+  get models() { return parseJSONAttr(this.getAttribute("models"), []); }
+  set models(list) { this.setAttribute("models", JSON.stringify(Array.isArray(list) ? list : [])); }
+  get isCustom() {
+    const models = this.models;
+    return this._committed !== "" && !models.includes(this._committed);
+  }
+  get open() { return this._open; }
+  /** Test/drive hook: set the open state programmatically. */
+  _setOpen(v) { this._open = Boolean(v); this._applyOpen(); }
+
+  _render() {
+    const label = this.getAttribute("label") || "Model";
+    const placeholder = this.getAttribute("placeholder") || "Search or type a model id…";
+    const disabled = this.hasAttribute("disabled");
+    const loading = this.hasAttribute("loading");
+    const value = this.getAttribute("value") ?? "";
+    this._committed = String(value);
+    const listId = `model-picker-list-${Math.random().toString(36).slice(2, 9)}`;
+    this._listId = listId;
+    mountTemplate(this, `${CONTROL_CSS}
+      .row { position: relative; display: flex; }
+      input.control { flex: 1; min-width: 0; }
+      input.control[role="combobox"] { cursor: text; }
+      .toggle {
+        box-sizing: border-box; height: var(--input-h, 36px); width: 34px;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: var(--bg, #f7f6f3); border: 1px solid var(--border, #e3e0d9);
+        border-left: 0; border-radius: 0 var(--radius-sm, 7px) var(--radius-sm, 7px) 0;
+        color: var(--muted, #635e56); cursor: pointer; padding: 0;
+      }
+      .toggle:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 1px; }
+      .toggle svg { transition: rotate 150ms ease; }
+      :host([data-open]) .toggle svg { rotate: 180deg; }
+      .listbox {
+        position: fixed; z-index: 2147483647;
+        min-width: 220px; max-width: 420px; max-height: 260px; overflow: auto;
+        background: var(--panel, #ffffff); color: var(--text, #1d1b18);
+        border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-md, 10px);
+        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+        padding: 4px; margin: 0;
+      }
+      .listbox[hidden] { display: none; }
+      .opt {
+        display: block; width: 100%; text-align: left; background: transparent;
+        border: 0; padding: 8px 10px; border-radius: 6px; cursor: pointer;
+        font: inherit; font-size: 13px; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .opt:hover { background: color-mix(in oklab, var(--accent, #0e6e63) 8%, transparent); }
+      .opt[aria-selected="true"] { background: color-mix(in oklab, var(--accent, #0e6e63) 14%, transparent); font-weight: 600; }
+      .empty { padding: 8px 10px; font-size: 12px; color: var(--muted, #635e56); }
+      .custom-hint { font-size: 12px; color: var(--secondary, #b45309); }
+      .loading-hint { font-size: 12px; color: var(--muted, #635e56); }
+    `, `
+      <div class="field">
+        <span class="field-label">${escapeHtml(label)}</span>
+        <div class="row">
+          <input class="control" role="combobox" type="text" autocomplete="off" spellcheck="false"
+            aria-expanded="false" aria-controls="${listId}" aria-autocomplete="list"
+            aria-label="${escapeHtml(label)}" placeholder="${escapeHtml(placeholder)}"
+            value="${escapeHtml(this._committed)}" ${disabled ? "disabled" : ""} ${loading ? 'aria-busy="true"' : ""}>
+          <button type="button" class="toggle" aria-label="Browse models" aria-haspopup="listbox" tabindex="-1">${'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>'}</button>
+        </div>
+        ${this.models.length ? `<span class="custom-hint" data-part="custom" hidden>Custom model id — used as-is.</span>` : ""}
+        ${loading ? `<span class="loading-hint" data-part="loading">Loading models…</span>` : ""}
+        <div class="listbox" id="${listId}" role="listbox" aria-label="${escapeHtml(label)} options" hidden></div>
+      </div>`);
+    this._input = this._root.querySelector("input[role='combobox']");
+    this._listbox = this._root.querySelector(".listbox");
+    this._customHint = this._root.querySelector("[data-part='custom']");
+    this._syncInput();
+    this._syncCustomHint();
+  }
+  _wire() {
+    if (!this._input) return;
+    this._input.addEventListener("input", () => {
+      this._renderList(this._input.value);
+      if (!this._open) this._setOpen(true);
+    });
+    this._input.addEventListener("focus", () => {
+      // Populate BEFORE opening so an expanded combobox never sits over an
+      // empty listbox (k3 MEDIUM-4).
+      if (!this._open && this.models.length) { this._renderList(this._input.value); this._setOpen(true); }
+    });
+    this._input.addEventListener("keydown", (e) => this._onKey(e));
+    this._root.querySelector(".toggle")?.addEventListener("click", () => {
+      this._setOpen(!this._open);
+      if (this._open) { this._renderList(this._input.value); this._input.focus(); }
+    });
+    this._bindDocument("mousedown", (e) => {
+      if (!this._open) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      if (!path.includes(this)) this._setOpen(false);
+    });
+    // Reposition the fixed listbox when the page scrolls under it (k3 LOW) —
+    // capture phase so ancestor containers scrolling also reposition it.
+    // _wire() re-runs on external attribute changes; add these exactly once.
+    if (!this._scrollBound) {
+      this._scrollBound = () => { if (this._open) this._position(); };
+      document.addEventListener?.("scroll", this._scrollBound, true);
+    }
+    if (!this._resizeBound) {
+      this._resizeBound = () => this._position();
+      window.addEventListener?.("resize", this._resizeBound);
+    }
+  }
+  _onKey(e) {
+    const options = this._visibleOptions ?? [];
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        if (!this._open) { this._setOpen(true); this._renderList(this._input.value); }
+        this._moveActive(1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        this._moveActive(-1);
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (this._open && this._activeIndex >= 0 && options[this._activeIndex]) {
+          this._commit(options[this._activeIndex]);
+        } else {
+          this._commitInput();
+        }
+        this._setOpen(false);
+        break;
+      case "Escape":
+        e.preventDefault();
+        this._setOpen(false);
+        // Escape REVERTS the visible text to the committed value (the gallery
+        // caption promises this; _syncInput alone skips while focused, so set
+        // the input text directly — k3 LOW).
+        if (this._input) this._input.value = this._committed;
+        break;
+      case "Tab":
+        this._commitInput();
+        this._setOpen(false);
+        break;
+    }
+  }
+  _moveActive(delta) {
+    const options = this._visibleOptions ?? [];
+    if (!options.length) return;
+    this._activeIndex = Math.min(options.length - 1, Math.max(0, this._activeIndex + delta));
+    const nodes = [...this._listbox.querySelectorAll("[role='option']")];
+    nodes.forEach((n, i) => n.setAttribute("aria-selected", String(i === this._activeIndex)));
+    const active = nodes[this._activeIndex];
+    if (active?.id) this._input.setAttribute("aria-activedescendant", active.id);
+    active?.scrollIntoView({ block: "nearest" });
+  }
+  _renderList(query) {
+    if (!this._listbox) return;
+    const visible = filterModels(this.models, query);
+    this._visibleOptions = visible;
+    this._activeIndex = -1;
+    this._input.removeAttribute("aria-activedescendant");
+    this._listbox.innerHTML = visible.length
+      ? visible.map((m, i) => `<button type="button" class="opt" role="option" id="${this._listId}-opt-${i}" aria-selected="false" data-value="${escapeHtml(m)}">${escapeHtml(m)}</button>`).join("")
+      : `<div class="empty">No matches — Enter keeps “${escapeHtml(String(query ?? "").slice(0, 40))}” as a custom id.</div>`;
+    this._listbox.querySelectorAll("[role='option']").forEach((o) =>
+      o.addEventListener("click", () => { this._commit(o.dataset.value); this._setOpen(false); this._input.focus(); }));
+    this._position();
+  }
+  _applyOpen() {
+    if (!this._input) return;
+    this._input.setAttribute("aria-expanded", String(this._open));
+    if (this._listbox) this._listbox.hidden = !this._open;
+    if (this._open) this.setAttribute("data-open", ""); else this.removeAttribute("data-open");
+    if (this._open) this._position();
+  }
+  _position() {
+    if (!this._open || !this._listbox || !this._input) return;
+    placeFloating(this._input, this._listbox, { fullWidth: false, minWidth: 200 });
+  }
+  _commit(v) {
+    this._committed = String(v ?? "").trim();
+    this._selfUpdate = true;
+    try { this.setAttribute("value", this._committed); } finally { this._selfUpdate = false; }
+    this._syncInput();
+    this._syncCustomHint();
+    this._emit("change", { value: this._committed });
+  }
+  /** Test/drive hook: commit whatever is currently typed. */
+  _commitInput() { this._commit(this._input?.value ?? ""); }
+  _syncInput() { if (this._input && (this._root?.activeElement ?? document.activeElement) !== this._input) this._input.value = this._committed; }
+  _syncCustomHint() {
+    if (this._customHint) this._customHint.hidden = !(this.isCustom && this.models.length);
+  }
+}
+customElements.define("model-picker", ModelPicker);
+
+/* ──────────────────────────────────────────────────────────────────────────
  * Views — navigation between the hub/chat/directory/settings surfaces
  * ────────────────────────────────────────────────────────────────────────── */
 export const VIEWS = [

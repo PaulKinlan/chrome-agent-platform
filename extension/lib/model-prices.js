@@ -272,6 +272,10 @@ export function modelsForVendor(vendor) {
   if (!prefixes) return [];
   return Object.keys(MODEL_PRICING)
     .filter((id) => prefixes.some((p) => id.startsWith(p)))
+    // On-device ids (the Prompt API's gemini-nano family) are NOT cloud models
+    // — they never resolve through the OpenAI-compatible endpoint, so the
+    // pickers must not offer them (the k3 review's catalogue finding).
+    .filter((id) => !id.includes("nano") && !id.includes("prompt-api"))
     .filter((id) => !id.includes("image"))
     .sort(sortNewestFirst);
 }

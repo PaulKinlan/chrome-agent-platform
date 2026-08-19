@@ -30,27 +30,30 @@ Deno.test("testProvider demo always succeeds with no network", async () => {
 });
 
 Deno.test("testProvider openai-compatible requires baseURL + model + key", async () => {
-  const openai = {
-    id: "openai",
-    name: "OpenAI",
-    baseURL: "https://api.openai.com/v1",
+  const byo = {
+    id: "openai-compatible",
+    name: "OpenAI-compatible",
+    baseURL: "",
     needsKey: true,
     needsModel: true,
   };
   // Missing everything.
-  assertEquals((await testProvider(openai, {})).errorKind, "config");
+  assertEquals((await testProvider(byo, {})).errorKind, "config");
   // Missing the model id.
   assertEquals(
-    (await testProvider(openai, { baseURL: "https://api.openai.com/v1", apiKey: "k" }))
+    (await testProvider(byo, { baseURL: "https://byo.example/v1", apiKey: "k" }))
       .errorKind,
     "config",
   );
   // Missing the key.
   assertEquals(
-    (await testProvider(openai, { baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini" }))
+    (await testProvider(byo, { baseURL: "https://byo.example/v1", model: "my-model" }))
       .errorKind,
     "config",
   );
+  // And the REAL openai preset still behaves the same.
+  const openai = { id: "openai", name: "OpenAI", baseURL: "https://api.openai.com/v1", needsKey: true, needsModel: true };
+  assertEquals((await testProvider(openai, {})).errorKind, "config");
 });
 
 Deno.test("testProvider unknown provider id fails closed", async () => {

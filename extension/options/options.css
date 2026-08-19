@@ -179,7 +179,12 @@ input, select, textarea {
   font: inherit;
 }
 input, select {
-  min-height: var(--input-h);
+  /* Exactly the control token everywhere (border-box + fixed height). The
+     former min-height let 8px vertical padding push text inputs to 40px while
+     select/controls sat at 36px — the mismatched band the picker work exposed
+     on the provider cards too (k3 journey gap finding). */
+  box-sizing: border-box;
+  height: var(--input-h);
 }
 textarea {
   min-height: 80px;
@@ -833,26 +838,47 @@ input:focus, select:focus, textarea:focus {
 .changelog-items li { margin: 3px 0; }
 .changelog-items li::marker { color: var(--muted); }
 
-/* Per-agent provider override rows (the Agents section). */
+/* Per-agent provider override rows (the Agents section). A responsive grid
+   that WRAPS at narrow card widths (the final review's overflow finding): the
+   six cells flow onto as many rows as needed; every cell is a .field (or a
+   self-labeled shared component) whose CONTROL is exactly --input-h tall. */
 .agent-provider-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 10px 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: end;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border, #e3e0d9);
-  flex-wrap: wrap;
+}
+.agent-provider-row[hidden] { display: none; }
+/* The author `.field { display: grid }` rule defeats the UA `[hidden]` style —
+   without this, the Base URL cell stayed visible for every provider (k3
+   MEDIUM-1). */
+.agent-provider-row .field[hidden] { display: none !important; }
+/* The agent name + the actions keep their natural width (never stretched). */
+.agent-provider-row .ag-name { grid-column: span 1; min-width: 0; }
+.agent-provider-row .ag-actions {
+  display: flex; gap: 8px; align-items: center;
+  justify-self: end;
+}
+/* The Base URL cell spans full width when it wraps alone (openai-compatible). */
+.agent-provider-row .ag-base-url { grid-column: 1 / -1; }
+.agent-provider-row .field { display: grid; gap: 4px; min-width: 0; }
+.agent-provider-row .field-label { font-size: var(--text-xs, 12px); color: var(--muted); }
+.agent-provider-row input.agent-provider-base-url,
+.agent-provider-row input.agent-provider-key {
+  box-sizing: border-box;
+  height: var(--input-h, 36px);
+  width: 100%;
+  min-width: 0;
 }
 .agent-provider-name {
-  min-width: 120px;
   font-weight: 600;
-  align-self: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 180px;
-}
-.agent-provider-select {
-  min-width: 170px;
+  line-height: var(--input-h, 36px);
+  max-width: 100%;
 }
 
 /* Advanced — system prompts */
@@ -877,3 +903,4 @@ input:focus, select:focus, textarea:focus {
 .approval-controls { display: flex; align-items: center; gap: var(--space-2, 8px); flex: 0 0 auto; }
 .approval-controls .btn:disabled { opacity: .55; cursor: wait; }
 @media (max-width: 720px) { .approval-row { align-items: stretch; flex-direction: column; } .approval-controls { justify-content: flex-end; } }
+.set-agent-provider, .clear-agent-key { height: var(--input-h, 36px); }

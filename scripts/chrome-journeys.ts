@@ -636,6 +636,30 @@ async function main() {
         },
         ntpSession,
       );
+    // The provider CREDENTIAL routes (set/clear-key/test) are restricted to the
+    // Settings sender — harness calls that represent owner Settings actions go
+    // through the OPTIONS page session (msgOpts), never the NTP.
+    const msgOpts = async (payload) => {
+      const r = await withTimeout(
+        cdp.send(
+          "Runtime.evaluate",
+          {
+            expression:
+              `chrome.runtime.sendMessage(${JSON.stringify(payload)}).then(v => ({v}), e => ({err: e.message}))`,
+            returnByValue: true,
+            awaitPromise: true,
+          },
+          optsSession,
+        ),
+        15000,
+        `msgOpts ${payload.type}`,
+      );
+      const inner = r?.result?.result?.value;
+      if (inner && typeof inner === "object" && "v" in inner) return inner.v;
+      if (inner && typeof inner === "object" && "err" in inner) return inner.err;
+      return inner;
+    };
+
     const msgValue = async (payload) => {
       const r = await withTimeout(sendMsg(payload), 15000, `msg ${payload.type}`);
       const inner = r?.result?.result?.value;
@@ -802,7 +826,7 @@ async function main() {
       );
     }
 
-    await msgValue({
+    await msgOpts({
       type: "provider.set",
       config: {
         provider: "openai",
@@ -905,7 +929,7 @@ async function main() {
       "Settings: demo + prompt-api absent from the provider picker",
       (await evalIn(cdp, optsSession, `document.querySelectorAll('.provider-card[data-provider="demo"], .provider-card[data-provider="prompt-api"]').length`)) === 0,
     );
-    await msgValue({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+    await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
     await sleep(300);
     const demoCfg = await msgValue({ type: "provider.get" });
     check("Settings: provider restored to demo", demoCfg?.provider === "demo" && !demoCfg?.baseURL);

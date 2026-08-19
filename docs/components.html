@@ -246,6 +246,25 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;provider-select&gt;</code> — the shared provider picker</h3>
+        <div class="stage column" style="max-width:420px">
+          <provider-select id="provider-demo" label="Provider" placeholder="Use the global provider"
+            providers='[{"id":"openai","name":"OpenAI"},{"id":"anthropic","name":"Anthropic"},{"id":"gemini","name":"Google Gemini"},{"id":"deepseek","name":"DeepSeek"}]'></provider-select>
+        </div>
+        <p class="caption">the SAME component the Providers section and the per-agent overrides use. Native select (base-select styled), one 36px control, labeled by default. Emits <code>change</code>.</p>
+      </div>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;model-picker&gt;</code> — the searchable model combobox</h3>
+        <div class="stage column" style="max-width:420px">
+          <model-picker id="model-demo" label="Model id" placeholder="Search or type a model id…"
+            models='["gemini-3.7-flash","gemini-3.7-pro","gemini-2.5-flash","gemini-2.5-pro","gpt-5.6-sol","gpt-5.6-terra","claude-opus-5","claude-fable-5","deepseek-v4-pro","deepseek-v4-flash"]'
+            value="gemini-3.7-flash"></model-picker>
+        </div>
+        <p class="caption">the SAME maintained catalogue the Providers section uses (modelsForVendor → llm-prices, newest-first). ARIA combobox: type to filter, arrows + Enter, Escape reverts; an unknown typed id commits as a custom value. Empty catalogue = free-text mode (Ollama / OpenAI-compatible).</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;activity-explorer&gt;</code> — the browsable/searchable activity log</h3>
         <div class="stage column" style="max-width:680px">
           <activity-explorer id="activity-demo" limit="50"></activity-explorer>

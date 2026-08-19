@@ -1,0 +1,16 @@
+{
+  "identicalFailuresOnBothSides": true,
+  "branch": [
+    "",
+    "",
+    "",
+    ""
+  ],
+  "base": [
+    "",
+    "",
+    "",
+    ""
+  ],
+  "index": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/index.json"
+}

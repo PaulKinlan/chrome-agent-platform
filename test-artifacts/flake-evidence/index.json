@@ -1,0 +1,95 @@
+{
+  "generatedAt": "2026-08-18T15:18:07.558Z",
+  "branch": {
+    "name": "provider-model-picker",
+    "commit": "bd924916ee295f720073ab5ca9243179e1f6fd14"
+  },
+  "base": {
+    "commit": "bdbe1f3127eb375946587e01dce0fc6453e69549",
+    "detachedWorktree": "/tmp/cap-flake-base-14f98fbc59ecedc"
+  },
+  "command": "deno run -A scripts/chrome-journeys.ts",
+  "runsPerSide": 4,
+  "runs": [
+    {
+      "side": "branch",
+      "run": 1,
+      "commit": "bd924916ee295f720073ab5ca9243179e1f6fd14",
+      "startedAt": "2026-08-18T15:18:07.558Z",
+      "durationMs": 46006,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/branch-1.log"
+    },
+    {
+      "side": "branch",
+      "run": 2,
+      "commit": "bd924916ee295f720073ab5ca9243179e1f6fd14",
+      "startedAt": "2026-08-18T15:18:53.566Z",
+      "durationMs": 46005,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/branch-2.log"
+    },
+    {
+      "side": "branch",
+      "run": 3,
+      "commit": "bd924916ee295f720073ab5ca9243179e1f6fd14",
+      "startedAt": "2026-08-18T15:19:39.572Z",
+      "durationMs": 46017,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/branch-3.log"
+    },
+    {
+      "side": "branch",
+      "run": 4,
+      "commit": "bd924916ee295f720073ab5ca9243179e1f6fd14",
+      "startedAt": "2026-08-18T15:20:25.590Z",
+      "durationMs": 46027,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/branch-4.log"
+    },
+    {
+      "side": "base",
+      "run": 1,
+      "commit": "bdbe1f3127eb375946587e01dce0fc6453e69549",
+      "startedAt": "2026-08-18T15:21:11.618Z",
+      "durationMs": 46029,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/base-1.log"
+    },
+    {
+      "side": "base",
+      "run": 2,
+      "commit": "bdbe1f3127eb375946587e01dce0fc6453e69549",
+      "startedAt": "2026-08-18T15:21:57.648Z",
+      "durationMs": 46023,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/base-2.log"
+    },
+    {
+      "side": "base",
+      "run": 3,
+      "commit": "bdbe1f3127eb375946587e01dce0fc6453e69549",
+      "startedAt": "2026-08-18T15:22:43.672Z",
+      "durationMs": 46029,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/base-3.log"
+    },
+    {
+      "side": "base",
+      "run": 4,
+      "commit": "bdbe1f3127eb375946587e01dce0fc6453e69549",
+      "startedAt": "2026-08-18T15:23:29.702Z",
+      "durationMs": 46082,
+      "result": "119/119 passed",
+      "failures": [],
+      "log": "/home/paulkinlan/cap-provider-picker/test-artifacts/flake-evidence/base-4.log"
+    }
+  ]
+}

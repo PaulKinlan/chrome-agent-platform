@@ -15,11 +15,13 @@ import {
   createPromptApiModel,
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
+import { safeProviderError } from "./pure.js";
 
 // OpenAI-compatible providers (every cloud provider advertised goes through the
 // same adapter + endpoint).
 const OPENAI_COMPATIBLE_IDS = new Set([
   "openai",
+  "openai-compatible",
   "anthropic",
   "gemini",
   "deepseek",
@@ -144,7 +146,11 @@ export async function testProvider(p, fields = {}) {
       };
     }
 
-    // Non-2xx: surface the provider's specific error (invalid key, unknown model).
+    // Non-2xx: surface the provider's specific error (invalid key, unknown
+    // model) — SECRET-SAFE: a custom endpoint can echo the Authorization
+    // credential in its error body, so the message is redacted (the configured
+    // key + any pattern-embedded credential) and bounded before it reaches
+    // the Settings UI (the sol review's HIGH-2).
     let msg = `HTTP ${res.status}`;
     try {
       const err = await res.json();
@@ -166,7 +172,7 @@ export async function testProvider(p, fields = {}) {
       latencyMs: latency(),
       status: res.status,
       errorKind: errorKindForStatus(res.status),
-      error: msg,
+      error: safeProviderError(msg, apiKey ? [apiKey] : []),
     };
   } catch (e) {
     clearTimeout(timer);
@@ -182,7 +188,9 @@ export async function testProvider(p, fields = {}) {
       ok: false,
       latencyMs: latency(),
       errorKind: "network",
-      error: `Unreachable: ${String(e?.message ?? e)}`,
+      // The fetch failure text can embed the URL (with credentials) or a
+      // header the endpoint echoed — redact + bound it (HIGH-2).
+      error: safeProviderError(`Unreachable: ${String(e?.message ?? e)}`, apiKey ? [apiKey] : []),
     };
   }
 }

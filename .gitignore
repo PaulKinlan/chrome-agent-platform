@@ -1,8 +1,12 @@
 node_modules/
 *.log
 .pi-subagents/
-extension/dist/
+extension/dist
 extension/**/*.bundle.js
 dist/
 extension/CHANGELOG.md
 node_modules
+
+# provider-picker integration additions
+extension/dist-versions/
+dist-archives/

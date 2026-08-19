@@ -82,6 +82,154 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 ## Open (genuinely remaining — action these)
 
+### Settings → Agents: per-agent provider/model picker is broken + inconsistent with Providers (Paul, 2026-08-18) — FIXED
+
+**Fix (2026-08-18, branch `provider-model-picker`):** two new shared Web Components in
+`extension/shared/components.js` — `<provider-select>` (native base-select styled, labeled,
+placeholder="Use the global provider") and `<model-picker>` (ARIA combobox: searchable/filterable
+over the SAME `modelsForVendor` catalogue, newest-first; arrows/Enter/Escape/Tab; an unknown
+id commits as a first-class CUSTOM value; empty catalogue = free-text mode for Ollama /
+OpenAI-compatible) — used by BOTH the per-agent rows and the main Providers section. The agent
+row is now a labeled grid (Agent | Provider | Model id | Base URL (openai-compatible only) |
+API key | Save) with every control exactly `--input-h` (36px). The stale hand-maintained
+openai-compatible model list is gone (free-custom). The override's baseURL is stored
+deliberately (preset endpoint, or the explicit field for openai-compatible, prefilled from the
+global when it matches); the key stays write-only.
+
+Evidence: before/after CDP screenshots + measured metrics
+(`/tmp/cap-picker-audit-*/metrics-audit.json`: select 36px vs inputs 40px, unlabelled →
+`/tmp/cap-picker-full-*/`: all controls 36px, labelled). Regression:
+`deno run -A scripts/agent-provider-picker.ts` — 27/27 (filter/search, keyboard nav,
+global-provider toggle, persistence round-trip, key not echoed, catalogue newest-first,
+custom-id fallback, equal heights, Providers reuses the component, stale list gone,
++ the k3 block: provider-card heights, blank-key preservation in the real registry,
+Base-URL cell visibility, openai-compatible e2e, focus preservation).
+Unit: `deno test -A tests/` 331/331 (incl. `tests/model-picker.test.ts` + the k3
+HIGH-1/HIGH-2/redaction/nano-filter tests). Gates: chrome journeys 119/119, gallery
+smoke 34/34, security suite 7/7, `check:gallery` no drift. Vision review:
+deepseek-v4-pro (PASS; its placeholder-clip finding fixed).
+
+**sol + final review rounds (2026-08-18) — BLOCKS cleared:**
+CRITICAL: the test sentinel is GONE from production — the journey builds its own
+CAP_TEST_SEAM=1 bundle (build.mjs appends scripts/test-seam.snippet.js only when
+the env var is set; the default build hard-fails if it ever ships a seam).
+HIGH: provider.get/set are REDACTED (apiKey:"" + hasApiKey; the raw global key
+is SW-only — absent-key preservation + clear-key + provider.test all run inside
+the SW; conversation surfaces use provider.summary). HIGH: centralized
+secret-safe errors — describeError's build() redacts + bounds EVERY output
+(reason/message/detail/URLs with query dropped) before routes/threads/logs/
+diagnostics; openai-model logs a sanitized bounded URL+body; diagnostics push()
+redacts+bounds; the structural regex is boundary-anchored (no tokenCount/
+secretary false positives) + case-insensitive + percent-encoded masking +
+credential-shape matching (sk-/Bearer/… after a keyword). HIGH: permission race
+— one in-flight request per pattern (concurrent callers share it), timeout
+never launches a duplicate, late outcomes reconciled + broadcast. MEDIUM: the
+journey is fully genuine-CDP now (native select via real click + arrows +
+Enter; real typing incl. Ctrl+A+Delete; real Escape; listener-count accounting;
+owner-gesture Clear-key control; commit-anchored manifest with console
+transcript; responsive no-overflow grid proven at 520px; package-lock synced).
+The adapter run is attested FAIL-CLOSED (headless auto-denies the origin
+prompt — the gate's correct posture) while provider.test executes its HTTP
+path against a real CORS-open local endpoint SW-side. chrome-journeys: 117/119
+with the SAME two worker-restart checks failing IDENTICALLY on the pristine
+base — retained evidence under test-artifacts/flake-evidence/ (index.json +
+summary.json + one FULL log per run: commit, command, timestamp, duration,
+every FAIL line). Ancestry honesty: the branch is SEVEN hashes including the
+base (six after it), not eight.
+
+**Acceptance round (2026-08-18, b9120317) — BLOCK cleared:** atomic build
+publish (build to temp → scan/clean → atomic same-fs rename; a marker-bearing
+output can never exist at the production path); build-test destinations
+guarded (must resolve inside the system tmpdir — repo/extension/parent/symlink
+escapes rejected BEFORE any deletion); the journey's ENTIRE setup inside
+try/finally + SIGINT/SIGTERM/unload handlers running the same cleanup, and the
+audit-mode exit routes through it (no Deno.exit bypass); isSettingsSender now
+URL-parses (exact extension origin + pathname /options/options.html — no
+substring spoof); the lease hardened (canonicalized+validated bounded patterns,
+EXPIRING recoverable leases — a crashed page can't block an origin, unguessable
+owner token required to settle, settled entries deleted, bounded monotonic
+generation high-water map; consumers filter broadcasts by pattern AND
+generation); exact known secrets masked at ANY length ≥1. Retained exact-HEAD
+evidence: test-artifacts/exact-head/{unit,build,gallery-smoke,security-suite,
+gallery-drift}.log (356/354-evolution noted below, 34, 7, clean) + the flake
+suite re-run at the final HEAD: 8/8 × 119/119 (branch 4 + base 4, full logs in
+test-artifacts/flake-evidence/). Picker journey 50/50 (exact-commit manifest).
+Current numbers supersede all earlier counts in this entry: journey 50/50,
+unit 356/356, gallery 34/34, security 7/7, chrome-journeys 119/119 (×4+×4).
+Ancestry: NINE hashes after the base as of 2f7c0c7 (fe5df46 → f5ee223 → 9cea2e0
+→ 49f8c24 → 33742da → fcac8da → 2ddc9ff → bd92491 → 2f7c0c7), plus the
+one successor acceptance commit on top.
+
+**Acceptance successor round (2026-08-18, review 677ae679) — single source commit:**
+temp guard hardened (system tmp ROOT rejected; every destination is a private
+mkdtemp child; nearest-existing-ancestor realpath resolution — symlink escapes
+rejected before any rm; verified /tmp + repo paths throw, safe default works);
+the SW route now THREADS THE OWNER TOKEN into settleLease (the CRITICAL drop
+that made every real settlement fail — with a route-shaped integration test);
+leases: capacity is BACKPRESSURE (active leases never evicted — churn cannot
+duplicate prompts), strict URL-parse canonicalization (userinfo/query/path
+rejected), generations persist across settle/expiry/worker-restart (bounded
+chrome.storage.session high-water), consumers match the EXACT expected
+pattern+generation with tracked+removed listeners (options + conversation,
+one per page); journey lifecycle: ONE awaited idempotent cleanup scope (ws
+close, chromium kill+status, server stop, BOTH temp dirs with bounded
+retries, production rebuild+scan — all steps run despite one failure, 6/6),
+signals exit only after awaited cleanup, audit + final exits route through
+it, no Deno.exit inside try; build is a TRANSACTION (unique per-run staging
+dir, .build.lock concurrency guard — concurrent-build verified, ALL artifacts
+(bundles + gallery + changelog) staged before the swaps, per-file
+backup/rollback on failure, stale .build-txn-* cleanup, preserved destination
+permissions, clear Windows failure); any-length redaction is COLLISION-SAFE
+(short known secrets mask only in credential contexts — keyword-adjacent or
+Bearer — never as global substrings; prose + prior markers stay readable;
+tested). Tracker ancestry corrected. Post-commit external evidence (not
+committed): the exact-HEAD run with true start/end timestamps, exact command,
+git status/diff snapshot, 4× branch chrome-journeys at the final SHA,
+merge-tree/ancestry vs current main.
+
+**k3 review round (2026-08-18, run b5aff36e) — BLOCK cleared:** HIGH-1 blank-key
+preservation (setNamedAgentProvider carries the same-provider key when apiKey is
+absent — the JSON-serialization-drop chain — and returns the redacted agent);
+HIGH-2 openai-compatible is a first-class provider (PROVIDER_IDS,
+OPENAI_COMPATIBLE_IDS ×2, PROVIDER_CHOICES; resolvable + honest missing-config
+fallback + testable); MEDIUM-1 `.field[hidden]` display fix + journey assertion;
+MEDIUM-2 outer duplicate Model label removed (self-labeled component); MEDIUM-3
+self-update re-render guard on both components (focus survives change/commit;
+journey-asserted); MEDIUM-4 focus populates the listbox before opening; LOWs:
+resize/scroll listener cleanup + scroll reposition, Escape truly reverts,
+gemini-nano filtered from the cloud catalogue, native change stopped at the
+shadow boundary (no double dispatch). The journey's new provider-card height
+check ALSO caught a pre-existing 40px input mismatch on the provider cards —
+all single-line controls on the page are now exactly the 36px token.
+
+Paul's report: Settings → Agents supports multiple agents + per-agent providers (right), but the
+provider/model picker UI looks broken. "Use global provider" is fine. Selecting a different
+provider/model override needs a **searchable/filterable Model ID driven by the same maintained
+catalogue as Providers** (`modelsForVendor` / llm-prices), and the select vs Model-ID controls have
+**mismatched heights**.
+
+Audit findings (verified in the loaded extension, bdbe1f3, 2026-08-18 — measured via CDP,
+evidence `/tmp/cap-picker-audit-*/metrics-audit.json` + screenshot):
+1. The per-agent **Model id is a bare free-text `<input>`** (`options.js` `renderAgentProviders`) —
+   no catalogue, no search, placeholder hard-codes `e.g. deepseek-chat` (stale across providers).
+2. The provider `<select>` sits label-less in the row while the Model/API-key inputs carry
+   `.field-label`s — MEASURED: the native select renders **36px** while the model/key inputs render
+   **40px** in the same `flex-end` row (the mismatched heights), and there is no "Provider" label
+   (`selectLabelled: false`).
+3. The main Providers model control is a plain non-searchable `<select>` with a Custom… option —
+   the two sections share zero code (AGENTS.md heavy-componentization violation) and a catalogue
+   model list can't be filtered/typed.
+4. The `openai-compatible` preset ships a hand-maintained model list (11 ids) — a stale hard-coded
+   catalogue nothing else uses.
+5. The agent override silently stores the PRESET baseURL (`preset?.baseURL ?? ""`) — for
+   `openai-compatible` that's an empty baseURL even when the global uses a custom endpoint (a
+   stale/wrong value by construction).
+
+Fix (planned): shared `<provider-select>` + `<model-picker>` Web Components (single source,
+   extension/shared/components.js) used by BOTH sections; searchable catalogue (newest-first),
+   accessible combobox semantics, custom-ID path, equal control heights on the design tokens,
+   "Use global provider" preserved, key stays write-only, baseURL stored deliberately.
+
 1. **Browser-control toggle/grant persistence** — Paul flagged "STILL not working" after the item-51 fix; re-verify the toggle stays ON + the grant persists across a reload in the real extension, and fix the actual cause. (The grant-storage read/write is present; the persistence needs a real-browser proof.)
 
 2. **Remove the Chrome Prompt API (Gemini nano) + Demo (local) from the settings provider picker** — both are for internal/testing use only. The picker filtering is IN FLIGHT (uncommitted); verify it lands + only the real chat providers show.

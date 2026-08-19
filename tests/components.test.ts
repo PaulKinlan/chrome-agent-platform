@@ -60,6 +60,8 @@ const COMPONENTS = [
   "agent-dialog",
   "agent-picker",
   "agent-config-form",
+  "provider-select",
+  "model-picker",
   "agent-nav",
   "error-console",
   "security-shield",

@@ -7,7 +7,6 @@ import {
   capabilityStatus,
   requestCapability,
 } from "../lib/capabilities.js";
-import { testProvider } from "../lib/provider-test.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { modelsForVendor } from "../lib/model-prices.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
@@ -72,7 +71,9 @@ const PROVIDERS = [
     needsKey: true,
     needsModel: true,
     onDevice: false,
-    models: ["gpt-4o", "gpt-4o-mini", "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2", "moonshot-v1-8k", "qwen-plus", "claude-sonnet-4-5", "llama-3.3-70b"],
+    // No vendor catalogue — a free-custom model id via the shared <model-picker>
+    // (the former hand-maintained 11-id list was a stale hard-coded catalogue).
+    models: [],
   },
   {
     id: "ollama",
@@ -112,35 +113,40 @@ const storage = {
   },
 };
 
-// ── Providers ──
-// Render the model field as a per-provider dropdown (known models + a "Custom…"
-// option that reveals a free-text input) so the placeholder is never a wrong
-// cross-provider example like "gpt-4o-mini" on Anthropic/Gemini/DeepSeek.
-function modelFieldHtml(p, cfg) {
-  const current = cfg.provider === p.id ? (cfg.model || "") : "";
-  const models = Array.isArray(p.models) ? p.models : [];
-  if (!models.length) {
-    const ph = p.id === "ollama" ? "e.g. llama3.1" : "model id";
-    return `<label class="field"><span class="field-label">Model id</span><input class="model" type="text" placeholder="${ph}" value="${escapeAttr(current)}"></label>`;
-  }
-  const opts = models
-    .map((m) => `<option value="${escapeAttr(m)}"${m === current ? " selected" : ""}>${escapeHtml(m)}</option>`)
-    .join("");
-  const isCustom = current !== "" && !models.includes(current);
-  return `
-    <label class="field"><span class="field-label">Model</span>
-      <select class="model-select" aria-label="Model for ${escapeAttr(p.name)}">
-        <option value=""${current === "" ? " selected" : ""}>Select a model…</option>
-        ${opts}
-        <option value="__custom__"${isCustom ? " selected" : ""}>Custom…</option>
-      </select>
-      <input class="model model-custom" type="text" placeholder="model id" value="${escapeAttr(isCustom ? current : "")}"${isCustom ? "" : " hidden"}>
-    </label>`;
+async function providerStatusChanged() {
+  // Re-read the (redacted) provider status + re-render the status surface so a
+  // grant that landed on ANOTHER page (conversation "Grant network access")
+  // is reflected here immediately.
+  try {
+    const status = await chrome.runtime.sendMessage({ type: "provider.status" }).catch(() => null);
+    const chip = document.querySelector("#provider-status-chip, .provider-status");
+    if (chip && status) chip.dataset.granted = String(Boolean(status.granted ?? status.ok ?? ""));
+  } catch { /* status surface absent — nothing to reconcile */ }
 }
 
-// The effective model: the select's value unless "Custom…" is chosen (then the
-// custom text input).
+// ── Providers ──
+// The model field is the SHARED <model-picker> combobox (searchable, driven by
+// the same modelsForVendor catalogue everywhere) so the main Providers section
+// and the per-agent overrides behave identically. Providers without a vendor
+// catalogue (Ollama, OpenAI-compatible) run it in free-custom mode.
+function providerCatalogue(p) {
+  return Array.isArray(p.models) ? p.models : [];
+}
+
+function modelFieldHtml(p, cfg) {
+  const current = cfg.provider === p.id ? (cfg.model || "") : "";
+  const models = providerCatalogue(p);
+  const ph = models.length ? "Search or type a model id…" : (p.id === "ollama" ? "e.g. llama3.1" : "model id");
+  // The component is SELF-LABELED (its shadow .field carries the label) — no
+  // outer wrapper, or two "Model" captions stack (k3 MEDIUM-2).
+  return `<model-picker class="model" data-provider="${escapeAttr(p.id)}" placeholder="${escapeAttr(ph)}" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(current)}" label="Model"></model-picker>`;
+}
+
+// The effective model: the shared component's committed value (fall back to a
+// legacy .model input during transition).
 function effectiveModel(card) {
+  const picker = card.querySelector("model-picker");
+  if (picker) return picker.value ?? "";
   const select = card.querySelector(".model-select");
   if (select) {
     return select.value === "__custom__"
@@ -207,18 +213,15 @@ async function renderProviders(restoreFocus = false) {
       <div class="test-status" role="status" hidden></div>
     `;
     card.querySelector(".set-default")?.addEventListener("click", async () => {
-      // Preserve the EXISTING stored key when the field is left blank (an Update
-      // must not wipe a configured credential). An explicit clear control is the
-      // only way to remove a key.
+      // The raw key NEVER enters the page: an entered key is sent; a BLANK
+      // field sends apiKey: undefined and the SW preserves the stored key for
+      // the SAME provider (the final review's HIGH). The page's cfg is already
+      // redacted (apiKey: "" + hasApiKey) — it cannot read the stored key.
       const isActive = cfg.provider === p.id;
-      const keyInput = card.querySelector(".api-key");
-      const enteredKey = keyInput?.value ?? "";
-      const apiKey = enteredKey
-        ? enteredKey
-        : (isActive && cfg.apiKey ? cfg.apiKey : "");
+      const enteredKey = card.querySelector(".api-key")?.value ?? "";
       const fields = {
         baseURL: card.querySelector(".base-url")?.value ?? (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
-        apiKey,
+        apiKey: enteredKey || undefined, // undefined → the SW preserves (same provider)
         model: effectiveModel(card),
       };
       // Route through the worker's provider.set so the running agent's cached
@@ -241,17 +244,14 @@ async function renderProviders(restoreFocus = false) {
     card.querySelector(".test-connection")?.addEventListener("click", async () => {
       const testBtn = card.querySelector(".test-connection");
       const testStatus = card.querySelector(".test-status");
-      const isActive = cfg.provider === p.id;
-      // Collect the CURRENT field values (including any unsaved typing), falling
-      // back to the stored key/model on the active card when the key field is
-      // blank (the stored key is never echoed into the password input).
-      const keyInput = card.querySelector(".api-key");
-      const enteredKey = keyInput?.value ?? "";
+      // The test runs INSIDE the SW (provider.test): an entered key is passed
+      // through; a BLANK key field means "use the stored one", which the page
+      // never sees. The response's error text is already secret-safe.
+      const enteredKey = card.querySelector(".api-key")?.value ?? "";
       const fields = {
-        baseURL:
-          card.querySelector(".base-url")?.value ??
-          (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
-        apiKey: enteredKey || (isActive && cfg.apiKey ? cfg.apiKey : ""),
+        provider: p.id,
+        baseURL: card.querySelector(".base-url")?.value ?? p.baseURL,
+        apiKey: enteredKey, // "" → the SW merges the stored key
         model: effectiveModel(card),
       };
       // Loading state (the button is disabled + a live region announces it).
@@ -261,13 +261,13 @@ async function renderProviders(restoreFocus = false) {
       testBtn.disabled = true;
       // Request the provider's OPTIONAL host permission (this click is a real
       // user gesture) — the test fetch fails without it.
-      await requestProviderHostAccess(fields);
-      const res = await testProvider(p, fields);
+      await requestProviderHostAccess({ baseURL: fields.baseURL });
+      const res = await chrome.runtime.sendMessage({ type: "provider.test", ...fields });
       testBtn.disabled = false;
-      testStatus.className = "test-status " + (res.ok ? "ok" : "err");
-      testStatus.textContent = res.ok
+      testStatus.className = "test-status " + (res?.ok ? "ok" : "err");
+      testStatus.textContent = res?.ok
         ? `Connected — ${res.detail ?? "ok"} (${res.latencyMs}ms)`
-        : `Failed — ${res.error ?? "unknown error"}`;
+        : `Failed — ${res?.error ?? "unknown error"}`;
     });
     list.appendChild(card);
   }
@@ -276,24 +276,23 @@ async function renderProviders(restoreFocus = false) {
     `.provider-card[data-provider="${cfg.provider}"]`,
   );
   if (active) {
-    if (cfg.apiKey) {
+    if (cfg.hasApiKey) {
       const k = active.querySelector(".api-key");
       if (k) k.placeholder = "API key (set — leave blank to keep)";
     }
     // A keyless provider (Demo / Prompt API) has nothing to clear — only offer
     // the Clear key control when a key is actually configured (never the
-    // contradictory "Clear key" on a keyless provider).
-    if (cfg.apiKey) {
+    // contradictory "Clear key" on a keyless provider). The clear routes to
+    // the dedicated provider.clear-key (an owner gesture; the ONLY removal
+    // path — provider.set can no longer erase a key from the page).
+    if (cfg.hasApiKey) {
       const clear = document.createElement("button");
       clear.className = "btn ghost small clear-key";
       clear.type = "button";
       clear.textContent = "Clear key";
       clear.setAttribute("aria-label", `Clear API key for ${cfg.provider}`);
       clear.addEventListener("click", async () => {
-        await chrome.runtime.sendMessage({
-          type: "provider.set",
-          config: { provider: cfg.provider, baseURL: cfg.baseURL, apiKey: "", model: cfg.model },
-        });
+        await chrome.runtime.sendMessage({ type: "provider.clear-key" });
         saveFlash("API key cleared.");
         renderProviders(true);
       });
@@ -521,17 +520,35 @@ async function renderAgents() {
   await renderAgentProviders();
 }
 
-/** A compact provider dropdown for the per-agent override (the global
- * PROVIDERS list, minus the in-page baseURL/key fields — the override reuses the
- * provider's own endpoint + a fresh key/model the user enters here). */
-function agentProviderOptionsHtml(current) {
-  const cur = current?.provider ?? "";
-  return [
-    `<option value="" ${cur ? "" : "selected"}>Use the global provider</option>`,
-    ...PROVIDERS.filter((p) => p.id !== "demo").map((p) =>
-      `<option value="${p.id}" ${cur === p.id ? "selected" : ""}>${p.name}</option>`
-    ),
-  ].join("");
+/** The per-agent override row: SHARED components (provider-select +
+ * model-picker) — the same maintained catalogue + combobox as the main
+ * Providers section, on one labeled grid with equal 36px controls. "Use the
+ * global provider" is the provider-select's empty option. The API key stays
+ * write-only; the Base URL is stored deliberately (the preset endpoint for
+ * fixed-endpoint providers; an explicit field for OpenAI-compatible, prefilled
+ * from the global config when it matches). */
+function agentProviderRowHtml(a, cur, globalCfg) {
+  const provider = cur?.provider ?? "";
+  const preset = PROVIDERS.find((p) => p.id === provider);
+  const models = preset ? providerCatalogue(preset) : [];
+  const needsBaseURL = provider === "openai-compatible";
+  // Prefill the OpenAI-compatible base URL from the GLOBAL config when the
+  // global provider is also openai-compatible (no stale preset empty string).
+  const baseURLDefault = needsBaseURL
+    ? (cur.baseURL ?? (globalCfg?.provider === "openai-compatible" ? globalCfg.baseURL : ""))
+    : "";
+  const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.filter((p) => p.id !== "demo").map((p) => ({ id: p.id, name: p.name }))));
+  return `
+    <label class="field ag-name"><span class="field-label">Agent</span><span class="agent-provider-name" title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</span></label>
+    <provider-select class="ag-provider" providers="${providersAttr}" value="${escapeAttr(provider)}" label="Provider" placeholder="Use the global provider"></provider-select>
+    <model-picker class="ag-model" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(cur.model ?? "")}" label="Model id" placeholder="${models.length ? "Search or type a model id…" : "model id"}" ${provider ? "" : "disabled"}></model-picker>
+    <label class="field ag-base-url" ${needsBaseURL ? "" : "hidden"}><span class="field-label">Base URL</span><input class="agent-provider-base-url" type="text" placeholder="https://your-endpoint/v1" value="${escapeAttr(baseURLDefault)}"></label>
+    <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${cur.provider ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${cur.provider ? "A saved key is kept when this field is left blank" : "API key"}"></label>
+    <div class="ag-actions">
+      <button class="btn small set-agent-provider" type="button">Save</button>
+      ${cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
+    </div>
+  `;
 }
 
 async function renderAgentProviders() {
@@ -552,32 +569,70 @@ async function renderAgentProviders() {
     list.appendChild(empty);
     return;
   }
+  const globalCfg = await chrome.runtime.sendMessage({ type: "provider.get" }).catch(() => null);
   for (const a of agents) {
     const row = document.createElement("div");
     row.className = "agent-provider-row";
     // The stored override is REDACTED (no key) — the provider + model are shown,
     // the key is entered (and only ever written, never read back).
     const cur = a.provider ?? {};
-    row.innerHTML = `
-      <span class="agent-provider-name" title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</span>
-      <select class="agent-provider-select" aria-label="Provider for ${escapeAttr(a.name)}">${agentProviderOptionsHtml(cur)}</select>
-      <label class="field" style="flex:1"><span class="field-label">Model id</span><input class="agent-provider-model" type="text" placeholder="e.g. deepseek-chat" value="${escapeAttr(cur.model ?? "")}"></label>
-      <label class="field" style="flex:1"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${cur.provider ? "(kept — leave blank to keep)" : "…"}" autocomplete="off"></label>
-      <button class="btn small set-agent-provider" type="button">Save</button>
-    `;
+    row.innerHTML = agentProviderRowHtml(a, cur, globalCfg);
+
+    // Provider change → swap the model catalogue + base-URL field to the
+    // selected provider (the row stays a labeled grid; only the dependent
+    // cells change).
+    row.querySelector(".ag-provider")?.addEventListener("change", (e) => {
+      const provider = e.detail?.value ?? e.target.value ?? "";
+      const preset = PROVIDERS.find((p) => p.id === provider);
+      const models = preset ? providerCatalogue(preset) : [];
+      const picker = row.querySelector(".ag-model");
+      if (picker) {
+        picker.models = models;
+        picker.value = ""; // never carry one provider's model id to another
+        picker.setAttribute("placeholder", models.length ? "Search or type a model id…" : "model id");
+        if (provider) picker.removeAttribute("disabled"); else picker.setAttribute("disabled", "");
+      }
+      const baseURLField = row.querySelector(".ag-base-url");
+      if (baseURLField) {
+        const needs = provider === "openai-compatible";
+        baseURLField.hidden = !needs;
+        const input = baseURLField.querySelector(".agent-provider-base-url");
+        if (needs && input && !input.value) {
+          input.value = globalCfg?.provider === "openai-compatible" ? (globalCfg.baseURL ?? "") : "";
+        }
+      }
+    });
+
+    // The owner-gesture EXPLICIT key clear for a per-agent override (the only
+    // removal path — a blank Save preserves; the final review's MEDIUM).
+    row.querySelector(".clear-agent-key")?.addEventListener("click", async () => {
+      const provider = row.querySelector(".ag-provider")?.value ?? "";
+      const preset = PROVIDERS.find((p) => p.id === provider);
+      const r = await chrome.runtime.sendMessage({
+        type: "named-agent.set-provider",
+        id: a.id,
+        config: { provider, baseURL: provider === "openai-compatible" ? (row.querySelector(".agent-provider-base-url")?.value.trim() ?? "") : (preset?.baseURL ?? ""), model: row.querySelector(".ag-model")?.value?.trim() ?? "", apiKey: "" },
+      });
+      saveFlash(r?.ok === false ? `Key not cleared: ${r.error ?? "unknown error"}` : `${a.name}: API key cleared.`);
+      await renderAgentProviders();
+    });
     row.querySelector(".set-agent-provider").addEventListener("click", async () => {
-      const provider = row.querySelector(".agent-provider-select").value;
-      const model = row.querySelector(".agent-provider-model").value.trim();
+      const provider = row.querySelector(".ag-provider")?.value ?? "";
+      const model = row.querySelector(".ag-model")?.value?.trim() ?? "";
       const apiKey = row.querySelector(".agent-provider-key").value;
+      const customBaseURL = row.querySelector(".agent-provider-base-url")?.value.trim() ?? "";
       let config = null;
       if (provider) {
         // Build a COMPLETE config: the provider's own endpoint + the model/key
         // entered here. When the key is left blank AND an override already
-        // exists, keep the stored key (a Save must not wipe a credential).
+        // exists for the SAME provider, keep the stored key (a Save must not
+        // wipe a credential). The baseURL is deliberate: the preset endpoint
+        // for fixed-endpoint providers, the explicit field for
+        // openai-compatible.
         const preset = PROVIDERS.find((p) => p.id === provider);
         config = {
           provider,
-          baseURL: preset?.baseURL ?? "",
+          baseURL: provider === "openai-compatible" ? customBaseURL : (preset?.baseURL ?? ""),
           model,
           apiKey: apiKey || (cur.provider === provider ? undefined : ""),
         };
@@ -1668,18 +1723,14 @@ document.querySelectorAll(".nav-item").forEach((a) => {
   });
 });
 
-// The model dropdown's "Custom…" option reveals the free-text input. Delegated
-// on the provider list (NOT inside the Use/Update click handler) so selecting
-// "Custom…" works immediately at render time — the old placement only wired it
-// after a Use/Update click, so the custom input never appeared (Paul's bug).
-$("#provider-list")?.addEventListener("change", (e) => {
-  const select = e.target;
-  if (!(select instanceof HTMLSelectElement) || !select.classList.contains("model-select")) return;
-  const custom = select.closest(".provider-card")?.querySelector(".model-custom");
-  if (!custom) return;
-  if (select.value === "__custom__") { custom.hidden = false; custom.focus(); }
-  else { custom.hidden = true; }
-});
+// (The legacy "Custom…" reveal wiring for the old select-based model field is
+// gone — the shared <model-picker> makes custom ids a first-class typed path.)
+
+// Permission-settle consumer (the acceptance review): Settings performs its
+// own permission requests via requestProviderHostAccess (whose waiter is
+// exact pattern+generation); no passive listener here. The status chip
+// re-reads from the SW on focus so a grant landed anywhere is reflected.
+window.addEventListener("focus", () => { providerStatusChanged(); }, { once: true });
 
 await renderProviders();
 await renderAgents();

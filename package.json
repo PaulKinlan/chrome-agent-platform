@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.103",
+  "version": "0.2.104",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform \u2014 agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -25,7 +25,11 @@
     "test:ui": "deno run -A scripts/ui-integration.ts",
     "test:opfs": "deno run -A scripts/opfs-real-browser.ts",
     "test:webmcp": "deno run -A scripts/webmcp-acceptance.ts",
-    "test:sidebar": "deno run -A scripts/sidebar-parity.ts"
+    "test:sidebar": "deno run -A scripts/sidebar-parity.ts",
+    "sync:changelog": "node scripts/sync-changelog.mjs",
+    "check:changelog": "node scripts/sync-changelog.mjs --check",
+    "package": "node scripts/package-extension.mjs",
+    "check:changelog-order": "node scripts/check-changelog.mjs"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",

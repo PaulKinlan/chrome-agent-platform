@@ -63,6 +63,16 @@ writeJson(pkgPath, pkg);
 if (lock) writeJson(lockPath, lock);
 writeJson(manifestPath, manifest);
 
+// Keep package-lock.json in lockstep (the final review's MEDIUM): the root
+// version + the root packages[""].version entry must match, or release
+// metadata is inconsistent. (Single lockPath declaration — the static review's
+// finding 3; the earlier lock object already syncs, this block stamps version.)
+if (lock) {
+  lock.version = next;
+  if (lock.packages && lock.packages[""]) lock.packages[""].version = next;
+  writeJson(lockPath, lock);
+}
+
 // Prepend a CHANGELOG entry ONLY when we have a message (the commit message).
 const changelogPath = join(ROOT, "CHANGELOG.md");
 if (existsSync(changelogPath) && message) {
@@ -73,5 +83,11 @@ if (existsSync(changelogPath) && message) {
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
 }
+
+// Keep the bundled changelog in lockstep + VERIFY (the review's MEDIUM: the
+// bump must not leave the bundle stale).
+const { syncChangelog } = await import("./sync-changelog.mjs");
+await syncChangelog({ check: false });
+await syncChangelog({ check: true }); // verify — throws (nonzero) on drift
 
 console.log(`Bumped ${current} → ${next}${message ? ` (changelog: ${message.slice(0, 60)})` : ""}`);

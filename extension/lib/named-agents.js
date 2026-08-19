@@ -75,7 +75,9 @@ export function slugifyAgentId(value) {
 // never mix one provider's endpoint with another's credential (the wider-goal
 // review's credential-disclosure finding). The override is null (inherit the
 // global) when absent.
-const PROVIDER_IDS = new Set(["demo", "openai", "anthropic", "gemini", "deepseek", "ollama", "prompt-api"]);
+const PROVIDER_IDS = new Set([
+  "demo", "openai", "openai-compatible", "anthropic", "gemini", "deepseek", "ollama", "prompt-api",
+]);
 
 /** Validate + normalize a per-agent provider override. Returns null when the
  * value is null/empty (inherit the global), or a clean complete config. */
@@ -102,7 +104,10 @@ export function redactAgentProvider(provider) {
     provider: provider.provider,
     baseURL: provider.baseURL ?? "",
     model: provider.model ?? "",
-    // apiKey deliberately omitted
+    // apiKey deliberately omitted — hasApiKey carries ONLY the presence bit
+    // (the UI shows "(kept — blank keeps it)" + the Clear key control without
+    // ever seeing the key).
+    hasApiKey: Boolean(provider.apiKey),
   };
 }
 
@@ -238,10 +243,30 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
  * provider-specific config, or null to inherit the global. Returns { ok, agent }
  * (the agent is REDACTED — no apiKey). */
 export async function setNamedAgentProvider(id, config, { gateBeforeMutation = null } = {}) {
+
+  // KEY PRESERVATION (provider-picker integration, k3 HIGH-1): an ABSENT
+  // apiKey (undefined — dropped by message serialization) on the SAME provider
+  // carries the EXISTING stored key forward; an explicit "" still clears.
+  if (
+    config && typeof config === "object" && config.apiKey === undefined &&
+    typeof config.provider === "string"
+  ) {
+    const existing = await getNamedAgentProvider(id);
+    if (existing?.provider === config.provider && existing.apiKey) {
+      config = { ...config, apiKey: existing.apiKey };
+    }
+  }
   const normalized = config == null ? null : normalizeAgentProvider(config);
   const r = await updateNamedAgent(id, { provider: normalized }, { gateBeforeMutation });
   if (r?.ok === false) return r;
-  return { ok: true, agent: r.agent };
+  // REDACTED result: the apiKey never crosses back out of the resolution path
+  // (the contract the doc-comment always claimed — now enforced).
+  return {
+    ok: true,
+    agent: r.agent?.provider
+      ? { ...r.agent, provider: redactAgentProvider(r.agent.provider) }
+      : r.agent,
+  };
 }
 
 /** Delete a named agent + its OPFS sandbox + its system-prompt override

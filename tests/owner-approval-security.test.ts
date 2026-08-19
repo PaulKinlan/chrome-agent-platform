@@ -176,7 +176,7 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
   assert(isExactOptionsSender(exact, id, url));
   assert(isExactOptionsSender({ id, url, documentId: "doc-2" }, id, url), "Chrome extension-page senders omit origin/frame/lifecycle metadata");
-  assert(isExactOptionsSender({ ...exact, url: url + "#approvals" }, id, url));
+  assert(!isExactOptionsSender({ ...exact, url: url + "#approvals" }, id, url), "a hash-bearing URL is not the exact Settings document");
   assert(!isExactOptionsSender({ ...exact, url: url + "?x" }, id, url));
   assert(!isExactOptionsSender({ ...exact, id: "other" }, id, url));
   assert(!isExactOptionsSender({ ...exact, url: `chrome-extension://${id}/ntp/ntp.html` }, id, url));

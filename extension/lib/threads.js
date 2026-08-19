@@ -43,8 +43,12 @@ function previewOf(text) {
   return s;
 }
 
+// SECRET-SAFE + bounded (the final review's HIGH): every string persisted
+// into a thread (messages, lastError, index rows) passes safeProviderError —
+// a credential echoed by a hostile endpoint can never reach thread storage.
+import { safeProviderError } from "./pure.js";
 function boundText(text, max = MAX_MESSAGE_CHARS) {
-  const s = String(text ?? "");
+  const s = safeProviderError(String(text ?? ""));
   return s.length > max ? s.slice(0, max) : s;
 }
 
