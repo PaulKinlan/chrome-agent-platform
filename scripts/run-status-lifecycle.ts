@@ -305,6 +305,36 @@ async function main() {
     return await clickUntil(session, `document.getElementById('thread-back')`,
       `document.getElementById('thread-view').hidden === true`, 6);
   };
+  // Open a thread by its sidebar title DETERMINISTICALLY: click ONCE, then
+  // poll for the open to complete. A retry-per-poll click loop fights the
+  // product's surface-owner fencing — every re-click claims a NEW owner token
+  // and fences the in-flight open it was retrying (the watcher-proven flake).
+  // Re-click only after a genuine no-open (the click never landed).
+  const openThreadByTitle = async (session, marker) => {
+    const itemExpr = `[...document.querySelectorAll('#thread-sidebar .thread-item')].find(el => (el.title ?? '').includes(${JSON.stringify(marker)}))`;
+    const openConfirm = `!document.getElementById('thread-view').hidden && document.getElementById('thread-title').textContent.includes(${JSON.stringify(marker)})`;
+    for (let clickAttempt = 0; clickAttempt < 4; clickAttempt++) {
+      await clickExpr(session, itemExpr);
+      for (let i = 0; i < 40; i++) {
+        if (await evl(session, openConfirm).catch(() => false)) return true;
+        await sleep(150);
+      }
+    }
+    return false;
+  };
+  // Prune the sidebar to ONLY the threads whose titles contain a keep-marker
+  // (via the genuine thread.delete SW route — never a UI mutation). The
+  // warmup-queued race windows flood the 40-item sidebar window; without a
+  // prune, an older target thread scrolls off and its sidebar item no longer
+  // exists to click (the watcher-proven switch/reload flake).
+  const pruneThreadsTo = async (session, keepMarkers) => {
+    const list = await msg(session, { type: "thread.list" });
+    for (const t of (list?.threads ?? [])) {
+      const title = String(t?.name ?? "") + " " + String(t?.preview ?? "");
+      if (keepMarkers.some((m) => title.includes(m))) continue;
+      await msg(session, { type: "thread.delete", id: t.id });
+    }
+  };
   // Wait until the thread view is genuinely closed (hidden) — the close
   // transition defers the DOM change a frame.
   const waitThreadClosed = async (session) => {
@@ -524,6 +554,18 @@ async function main() {
 
     // ── navigation/thread switch mid-run ─────────────────────────────────
     await closeThread(ntp);
+    await pruneThreadsTo(ntp, []); // a clean sidebar — the targets are created fresh below
+    // The switch target is a FRESH settled thread (not the run-1 thread): the
+    // warmup windows create dozens of threads, and the thread index is bounded
+    // — an older target can age out entirely. Create + settle it NOW.
+    const swTarget = `rs-switch-target-${Date.now() % 100000}`;
+    const sentTarget = await sendWithWitness(ntp, COMPOSER, swTarget);
+    let targetDone = false;
+    for (let i = 0; i < 100 && !targetDone; i++) {
+      targetDone = await journalHas(ntp, swTarget);
+      if (!targetDone) await sleep(100);
+    }
+    await closeThread(ntp); // settle on the hub — the switch run opens its own surface next
     const sw1 = `rs-switch-${Date.now() % 100000}`;
     const warmupsSW = () => evl(ntp, `(() => { for (let i = 0; i < 8; i++) chrome.runtime.sendMessage({ type: 'agent.run', task: 'rs warmup2 ${Date.now()} ' + i, id: 'rswq${Date.now()}-' + i }).catch(() => {}); return true; })()`);
     const sentSw = await sendWithWitness(ntp, COMPOSER, sw1, warmupsSW);
@@ -539,9 +581,7 @@ async function main() {
     check("switch: run started + provably in flight (no journal row yet)", inFlightAtLeave, { sentSw, backBox: backBox != null });
     await waitThreadClosed(ntp);
     // Open the FIRST task's thread (the settled one) while the run is in flight.
-    const openedOther = await clickUntil(ntp,
-      `[...document.querySelectorAll('#thread-sidebar .thread-item')].find(el => (el.title ?? '').includes(${JSON.stringify(marker1)}))`,
-      `!document.getElementById('thread-view').hidden && document.getElementById('thread-title').textContent.includes(${JSON.stringify(marker1.slice(0, 12))})`, 8);
+    const openedOther = await openThreadByTitle(ntp, swTarget);
     // Wait for the switched-away run to complete, then assert zero bleed.
     let swDone = false;
     for (let i = 0; i < 100 && !swDone; i++) {
@@ -557,8 +597,8 @@ async function main() {
     check("switch: opened another thread mid-flight — ONLY its own messages, no status flip, no retitle",
       openedOther && swDone &&
       otherState.roles.length === 2 && otherState.roles[0] === "user" && otherState.roles[1] === "agent" &&
-      otherState.banner === true && otherState.title.includes(marker1.slice(0, 12)) &&
-      !otherState.title.includes(sw1), otherState);
+      otherState.banner === true && otherState.title.includes(swTarget.slice(0, 12)) &&
+      !otherState.title.includes(sw1), { openedOther, swDone, otherState, sidebar: await evl(ntp, `[...document.querySelectorAll('#thread-sidebar .thread-item')].map(el => (el.title ?? '').slice(0, 24))`).catch(() => null) });
     const swThreads = await msg(ntp, { type: "thread.list" });
     let tSw = null;
     for (const t of (swThreads?.threads ?? [])) {
@@ -586,6 +626,7 @@ async function main() {
     check("back mid-run: the run still completes + journals after leaving", bkDone);
 
     // ── reload mid-run (the genuine MV3 port disconnect + reconnect) ──────
+    await pruneThreadsTo(ntp, []); // a clean sidebar — the reload thread is created fresh
     const rl1 = `rs-reload-${Date.now() % 100000}`;
     const warmupsRL = () => evl(ntp, `(() => { for (let i = 0; i < 6; i++) chrome.runtime.sendMessage({ type: 'agent.run', task: 'rs warmup4 ${Date.now()} ' + i, id: 'rswl${Date.now()}-' + i }).catch(() => {}); return true; })()`);
     const sentRl = await sendWithWitness(ntp, COMPOSER, rl1, warmupsRL);
@@ -629,9 +670,7 @@ async function main() {
     let reopenedHasResult = false;
     let reopenDiag = null;
     if (rlThread?.id) {
-      await clickUntil(ntp,
-        `[...document.querySelectorAll('#thread-sidebar .thread-item')].find(el => (el.title ?? '').includes(${JSON.stringify(rl1.slice(0, 12))}))`,
-        `!document.getElementById('thread-view').hidden && document.getElementById('thread-title').textContent.includes(${JSON.stringify(rl1.slice(0, 12))})`, 8);
+      await openThreadByTitle(ntp, rl1.slice(0, 12));
       // The open is async (thread.get + render) — poll for the result bubble.
       for (let i = 0; i < 30 && !reopenedHasResult; i++) {
         reopenedHasResult = await evl(ntp, `[...document.querySelectorAll('#thread-conversation message-bubble')]
@@ -701,9 +740,7 @@ async function main() {
     let vtBefore = 0;
     let vtAfter = 0;
     // Open the AX run's own thread (settled), then send the follow-up there.
-    await clickUntil(ntp,
-      `[...document.querySelectorAll('#thread-sidebar .thread-item')].find(el => (el.title ?? '').includes(${JSON.stringify(ax1.slice(0, 12))}))`,
-      `!document.getElementById('thread-view').hidden`, 8);
+    await openThreadByTitle(ntp, ax1.slice(0, 12));
     await sleep(400);
     vtBefore = await evl(ntp, `(() => { window.__vtCount = 0; const orig = document.startViewTransition?.bind(document);
       if (orig) document.startViewTransition = (cb) => { window.__vtCount++; return orig(cb); };

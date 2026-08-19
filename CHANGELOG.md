@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.101] — 2026-08-19
+- test(run-status): deterministic thread selection in the lifecycle journey — click-once/poll-first open helper (a retry-per-poll click loop fights the surface-owner fencing: each re-click claims a new token and fences the in-flight open it was retrying), fresh settled switch target (the bounded thread index ages out older targets under warmup flood), sidebar prune step, null-safe selector reads, 60s CDP timeout + backoff retries, hard 8-min global watchdog. Product/SW/approval bytes unchanged.
+
 ## [0.2.100] — 2026-08-19
 - fix(run-status): fence switched-surface UI ownership
 
