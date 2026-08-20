@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.105] — 2026-08-20
+- docs(tasks): add semantic tool search and reprioritize run status
+
 ## [0.2.104] — 2026-08-19
 - feat(provider): integrate the provider/model picker + CDP evidence harness — searchable shared components, key preservation, owner-surface auth, bounded diagnostics harness, and the provider review corrections (generic kv.set/kv.remove deny providerConfig + cap:namedAgents outside Settings; attested-principal credential routes bind the exact Options document while accepting only its known fragment navigation; per-agent Save/Clear now require an explicit owner confirmation, resolve that exact pending capability, and retry the exact mutation once; the bump regression + truthful changelog provenance/identity gate).
 - fix(provider): blank same-provider Save preserves the stored key through the SW route's pre-normalization — the `named-agent.set-provider` route coerced `apiKey: undefined` to `""` before the preservation guard ran (silently clearing the key); the preserve step now runs first via a shared `preserveExistingProviderKey` helper, and a route-level regression drives the real message dispatcher + owner-approval dance for preserve/clear/swap.

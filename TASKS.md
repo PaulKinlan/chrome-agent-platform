@@ -5,7 +5,7 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-19 18:18 UTC. Reconcile before acting; status can advance in
+> Snapshot: 2026-08-20 15:21 UTC. Reconcile before acting; status can advance in
 > another reviewed worktree before this file reaches the integration branch.
 
 ## Safety boundary
@@ -479,25 +479,26 @@ On resume after a coordinator or worker loss:
   - 2026-08-18 17:10 UTC — reviewed integration pushed and remotely verified.
 
 ## [CAP-FB-20260819-CONVERSATION-RUN-STATUS-01] One truthful conversation run-status surface
-- Feedback: 2026-08-19 — conversation feedback requested the preferred grid status inside agent conversations and removal of the duplicate thinking spinner
-- Updated: 2026-08-19 18:13 UTC
+- Feedback: 2026-08-19 — conversation feedback requested the preferred grid status inside agent conversations and removal of the duplicate thinking spinner; repeated 2026-08-20 feedback identified the still-live top-of-task `div.run-status > loading-state` as the unreplaced legacy surface
+- Updated: 2026-08-20 15:21 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P1
+- Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
-- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
+- Base: `ecf657fe2f9e32aee7b5e2043808f4f7978fd456`
 - Candidate: —
 - Shipping: —
-- Acceptance: every task and agent conversation renders one shared grid-based status surface for queued, running, retrying, completed, failed, and cancelled states; the legacy duplicate thinking spinner is absent; reconnect and surface-switch updates cannot create two status owners
+- Acceptance: remove the standalone top-of-thread `div.run-status` presentation and its duplicate thinking state; every task and agent conversation renders exactly one shared conversation-owned grid status at the bottom of the transcript for queued, running, tool activity, retrying, waiting for permission, completed, failed, and cancelled states; status and accessible naming expose useful live activity rather than the generic `thinking…`; reconnect, reload, double-send and surface switches cannot create two status owners or reintroduce the legacy container
 - Review: pending independent implementation review and exact loaded-MV3 visual/accessibility review
-- Gates: component and lifecycle units; loaded-MV3 task, named-agent, background-agent, and site-agent conversations; raw AX live-region/state inspection; switch/reconnect/reload screenshots; zero duplicate spinner or stale status
-- Blockers: status presentation must reuse the lifecycle authority delivered under `CAP-FB-20260818-RUN-STATUS-01` without weakening its ownership fences
-- Next: inventory every conversation status/spinner render path and define one shared status component contract before implementation
-- Recover: `git show bbeff7b:TASKS.md && git log --oneline -- TASKS.md`
+- Gates: component and lifecycle units; source assertion that the legacy top-of-thread container/render path is absent; loaded-MV3 task, named-agent, background-agent, and site-agent conversations; genuine working/tool/permission/retry/terminal states; raw AX single-live-region and name/state inspection; bottom-of-transcript placement; switch/reconnect/reload/double-send screenshots; zero duplicate spinner, stale status, generic-only activity, or top-of-thread banner
+- Blockers: status presentation must reuse the lifecycle authority delivered under `CAP-FB-20260818-RUN-STATUS-01` without weakening its ownership fences; the historical `ffbdf28` push proves lifecycle fencing, not this still-open presentation replacement
+- Next: replace `#run-status` plus `renderRunStatus()` with one conversation-owned shared component at the transcript boundary, remove the duplicate thinking renderer, and prepare real loaded-MV3 lifecycle, placement, visual, keyboard and AX evidence
+- Recover: `git show ecf657f:TASKS.md && git grep -n "run-status\|renderRunStatus\|loading-state" ecf657f -- extension`
 - History:
   - 2026-08-19 18:13 UTC — captured as a distinct presentation task; the pushed lifecycle task remains intact and is linked rather than reopened.
+  - 2026-08-20 15:21 UTC — repeated product-owner feedback confirmed current main still renders the standalone top-of-task `div.run-status` containing a generic `thinking…` loading component. Priority raised to P0; the earlier lifecycle push is explicitly not presentation acceptance.
 
 ## [CAP-FB-20260819-COMPOSER-AGENT-MENTIONS-01] Composer copy and behavior for mentioning any agent
 - Feedback: 2026-08-19 — composer feedback rejected site-agent-only reply wording because the same composer must mention any supported agent kind
@@ -784,6 +785,27 @@ On resume after a coordinator or worker loss:
   - 2026-08-19 21:08 UTC — captured the local-model request as research-first OPEN work; no Ollama dependency, model identity, size, quantization, licence, runtime, or storage backend is inferred or approved from the uncertain voice transcription.
   - 2026-08-20 03:25 UTC — replayed the independently accepted public-safe task capture onto exact current public main; the extension-managed download goal remains OPEN, with no runtime, model identity or size, quantization, source or licence, update/version, storage/ownership/quota/eviction/atomicity/recovery, integrity, or supply-chain/security choice approved.
 
+## [CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01] Local semantic search over the complete tool catalog
+- Feedback: 2026-08-20 — product-owner requested WebMCP-relay/Modern-Web-Guidance-style retrieval so the model receives only the most relevant tools instead of every available definition
+- Updated: 2026-08-20 15:21 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `ecf657fe2f9e32aee7b5e2043808f4f7978fd456`
+- Candidate: —
+- Shipping: —
+- Acceptance: one local versioned catalog indexes every callable built-in tool, extension-provided tool, declared WebMCP tool and positively inferred WebMCP tool with stable source, scope, generation/document identity, bounded description, schema summary and searchable text; each run retrieves a bounded top-k set by semantic/cosine relevance plus deterministic exact-name/alias and lexical fallback, and only that authorized set is exposed to the model; retrieval never grants permission, bypasses source-specific dispatch, crosses origin/agent boundaries, revives removed tools, or lets untrusted tool text alter ranking policy or protected prompts; index updates, removals, extension upgrades, navigation, service-worker restart and offline startup converge without sending the whole catalog; owner diagnostics explain selected, excluded, stale and fallback results without exposing secrets or private data
+- Review: research-first; independent architecture, retrieval-quality, security/privacy, lifecycle, performance and exact loaded-MV3 review required before implementation acceptance
+- Gates: compare SQLite/Wasm and IndexedDB storage/indexing under MV3 CSP, worker lifetime, migration, quota and crash semantics; compare local embedding choices, dimensions, update cost and deterministic lexical fallback; build a versioned bounded corpus spanning all four tool sources with relevance/precision/recall and token-budget targets plus measured budgets for catalog-scale warm-query latency, cold/offline startup, full index build, incremental add/update/remove, persisted index bytes and peak memory; establish explicit device/corpus tiers and pass/fail budgets during research before implementation; exact-name, paraphrase, multi-intent, low-confidence, collision and no-match queries; adversarial descriptions/schema/prompt-injection and oversized/Unicode fixtures; source/generation/origin/permission fencing; add/update/remove/navigation/restart/offline/corruption recovery; loaded-MV3 proof that only selected descriptors reach the provider while non-selected tools remain undisclosed and uncallable
+- Blockers: storage engine, local embedding model/runtime, ranking thresholds/top-k/token budget, hybrid semantic-versus-lexical policy, catalog schema, update authority and embedding provenance remain OPEN; the design must compose with `CAP-FB-20260818-WEBMCP-01`, page identity in `CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01`, canonical agent references in `CAP-FB-20260818-AGENT-ACCESS-01`, and permission remediation in `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`
+- Next: study the existing WebMCP-relay registry and Modern Web Guidance search implementation, inventory every current tool registration/dispatch path, then write a decision matrix for catalog schema, SQLite versus IndexedDB, local embeddings, hybrid ranking, invalidation and security before selecting an implementation
+- Recover: `git show ecf657f:TASKS.md && git grep -n "toolSetForOrigin\|MANAGEMENT_TOOL\|browserTools\|webmcpExpose\|document.modelContext" ecf657f -- extension`
+- History:
+  - 2026-08-20 15:21 UTC — opened as research-first semantic tool retrieval across built-in, extension, declared WebMCP and inferred WebMCP sources; no database, embedding model, threshold or runtime was inferred from the request.
+
 ---
 
 ## Archive
@@ -797,3 +819,4 @@ complete field set and History.
 - 2026-08-19 17:07 UTC — reconciled after `origin/main` advanced to `ffbdf28`; run-status now records PUSHED, while the old-base Directory and artifact integrations explicitly require fresh current-main integrations.
 - 2026-08-19 17:25 UTC — reconciled k3 tracker PASS, usage `d6030b7` REVIEW_PASSED, Assets successor `202b85e` REVIEWING, explicit gemini permission attribution, and old-base Directory/artifact READY_FOR_BROWSER classifications. No private coordination identifiers were copied.
 - 2026-08-19 18:18 UTC — captured thirteen distinct product-feedback tasks on exact public `bbeff7b`; linked prior run-status, agent-access, sidebar, Directory, WebMCP, tool-tree, permission, and artifact-transaction tasks without merging or rewriting their histories. The additions retain unresolved enrollment-versus-tool-approval and agent-artifact-disposition decisions as research, treat intermittent whole-UI flashing as a trace-first investigation, keep Recent Activity layout/data/error truth separate from historical renderer evidence, and separate user-facing permission remediation from the existing orchestration candidate. New entries contain only public role custody, repository objects, acceptance criteria, and conservative OPEN/BLOCKED states.
+- 2026-08-20 15:21 UTC — on exact public `ecf657f`, opened semantic tool retrieval across all four tool sources and strengthened the already-open conversation-status presentation task after repeated feedback proved the standalone top-of-task banner remains. No implementation or prior lifecycle acceptance was inferred.
