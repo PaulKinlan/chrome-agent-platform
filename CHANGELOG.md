@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.133] — 2026-08-21
+- fix(scheduler): integrate the reviewed alarm lifecycle onto the public onboarding tip 5236cac (CAP-FB-20260821-SCHEDULED-MEMORY-BOUND-01)
+
 ## [0.2.132] — 2026-08-21
 - feat(onboarding): add durable provider setup and owner-only storage guidance (CAP-FB-20260821-FIRST-RUN-ONBOARDING-01)
 

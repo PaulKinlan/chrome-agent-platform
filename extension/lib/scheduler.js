@@ -8,6 +8,10 @@ import { assertRunAlive, assertRunOwned } from "./run-fence.js";
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
 
+// Chrome permits at most 500 active alarms per extension. This is an alarm API
+// capacity, not an OPFS/memory key ceiling; owner memory remains byte-bounded.
+export const MAX_ACTIVE_ALARMS = 500;
+
 /** The chrome.alarms API when the OPTIONAL `alarms` permission is granted,
  * else null. Scheduling degrades gracefully to a clear error when absent. */
 function alarmsApi() {
@@ -107,16 +111,28 @@ export async function scheduleTask(
 
     // The abort must be re-checked at EVERY commit boundary, not just once at
     // the tool's start: an abort arriving DURING an await must prevent the
-    // durable commit. The boundaries are: (1) before the first read, (2) after
-    // the read + BEFORE the payload write (closes the read-abort crash window
-    // — nothing is persisted, so no rollback is needed), (3) after the write +
-    // before the IRREVERSIBLE alarm creation (roll back the payload), and
-    // (4) after `alarms.create` resolves + before returning success (the
-    // round-18 blocker reproduced an abort during `alarms.create` committing
-    // the alarm + payload and returning ok).
+    // durable commit.
     assertRunAlive();
 
-    // Persist the task (inside the lock so the read-modify-write is atomic).
+    const alarms = alarmsApi();
+    if (!alarms) {
+      throw new Error(
+        "alarms permission not granted — enable Scheduled tasks in Settings",
+      );
+    }
+    // Fail before persistence when Chrome's extension-wide alarm capacity is
+    // exhausted. Replacing the same alarm name consumes no additional slot.
+    const activeAlarms = await alarms.getAll();
+    await assertRunOwned();
+    const replacing = activeAlarms.some((alarm) => alarm?.name === name);
+    if (!replacing && activeAlarms.length >= MAX_ACTIVE_ALARMS) {
+      throw new Error(
+        `Chrome allows at most ${MAX_ACTIVE_ALARMS} active alarms per extension — cancel an existing scheduled task before adding another`,
+      );
+    }
+
+    // Persist the canonical task payload only after timing, permission, alarm
+    // capacity, and run ownership are known valid.
     const store = await kvGet(TASK_KEY);
 
     // Re-check the fence AFTER the read await but BEFORE the write: an abort
@@ -149,12 +165,6 @@ export async function scheduleTask(
     // Create the alarm LAST. On failure, roll back the persisted task so it is
     // never orphaned.
     try {
-      const alarms = alarmsApi();
-      if (!alarms) {
-        throw new Error(
-          "alarms permission not granted — enable Scheduled tasks in Settings",
-        );
-      }
       const info = { when };
       if (periodInMinutes) info.periodInMinutes = periodInMinutes;
       await alarms.create(name, info);
@@ -206,6 +216,43 @@ export async function scheduleTask(
       throw e;
     }
     return { name, when };
+  });
+}
+
+/** Disarm only alarms backed by the canonical cap:scheduledTasks authority.
+ * Payloads remain untouched so an explicit future grant can re-arm them during
+ * ordinary boot reconciliation. Used before owner-driven permission removal. */
+export async function disarmScheduledAlarms() {
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const names = Object.keys(store[TASK_KEY] ?? {});
+    const alarms = alarmsApi();
+    if (!alarms) {
+      return { ok: true, disarmed: 0, retained: names.length, apiAvailable: false };
+    }
+    const failed = [];
+    let disarmed = 0;
+    for (const name of names) {
+      try {
+        await alarms.clear(name);
+        const stillArmed = await alarms.get(name);
+        if (stillArmed != null) failed.push(name);
+        else disarmed += 1;
+      } catch {
+        failed.push(name);
+      }
+    }
+    if (failed.length > 0) {
+      return {
+        ok: false,
+        disarmed,
+        retained: names.length,
+        failed,
+        retryable: true,
+        error: `${failed.length} scheduled alarm(s) could not be confirmed disarmed`,
+      };
+    }
+    return { ok: true, disarmed, retained: names.length, apiAvailable: true };
   });
 }
 
@@ -636,6 +683,7 @@ export async function reconcileScheduledTasks() {
   const alarms = alarmsApi();
   if (!alarms) return []; // alarms not granted — nothing to reconcile (graceful)
   const existing = new Set((await alarms.getAll()).map((a) => a.name));
+  let activeAlarmCount = existing.size;
   const resumed = [];
   const failed = [];
   const now = Date.now();
@@ -650,6 +698,12 @@ export async function reconcileScheduledTasks() {
     // owner's cancel route (the round-24 fail-closed cancel blocker).
     if (task?.quarantined || task?.cancelling || task?.storageBlocked) continue;
     if (!existing.has(name)) {
+      // Chrome's extension-wide 500-active-alarm cap is distinct from memory
+      // capacity. Preserve the task payload but report that it was not re-armed.
+      if (activeAlarmCount >= MAX_ACTIVE_ALARMS) {
+        failed.push(`${name} (Chrome ${MAX_ACTIVE_ALARMS}-alarm limit)`);
+        continue;
+      }
       // The alarm is missing (fired + consumed, or the worker restarted). Recreate
       // it if the task is still in the future; a past one-shot is resumable.
       const when = task.periodInMinutes
@@ -661,6 +715,7 @@ export async function reconcileScheduledTasks() {
       // create is surfaced, never silently claimed as resumed.
       try {
         await alarms.create(name, info);
+        activeAlarmCount += 1;
         resumed.push(name);
       } catch (err) {
         failed.push(name);

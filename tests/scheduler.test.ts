@@ -3,8 +3,8 @@
 // scheduler.js is tested with a minimal chrome.storage/chrome.alarms mock.
 // @ts-nocheck — the chrome mock is intentionally dynamic (no chrome.* types in Deno).
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
-import { INFLIGHT_LEASE_MS } from "../extension/lib/scheduler.js";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { INFLIGHT_LEASE_MS, MAX_ACTIVE_ALARMS } from "../extension/lib/scheduler.js";
 import { freshScheduler } from "./test-hooks.js";
 import { isMemoryKeyQuotaError } from "../extension/lib/storage-errors.js";
 
@@ -13,15 +13,17 @@ import { isMemoryKeyQuotaError } from "../extension/lib/storage-errors.js";
 // mutation of shipped state. The functions below are re-bound to the fresh
 // instance's exports by initScheduler(), so bare references stay stable across
 // the mid-test `await initScheduler()` restarts.
-let blockScheduledTaskForStorage, cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
-  markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight, retryScheduledTask,
-  scheduleTask, tryAcquireInflight;
+let blockScheduledTaskForStorage, cancelScheduledTask, clearStaleInflight, disarmScheduledAlarms,
+  heartbeatInflight, listScheduledTasks, markScheduledDone, ownsInflight,
+  reconcileScheduledTasks, releaseInflight, retryScheduledTask, scheduleTask,
+  tryAcquireInflight;
 async function initScheduler() {
   const m = await freshScheduler();
   ({
-    blockScheduledTaskForStorage, cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
-    markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight, retryScheduledTask,
-    scheduleTask, tryAcquireInflight,
+    blockScheduledTaskForStorage, cancelScheduledTask, clearStaleInflight, disarmScheduledAlarms,
+    heartbeatInflight, listScheduledTasks, markScheduledDone, ownsInflight,
+    reconcileScheduledTasks, releaseInflight, retryScheduledTask, scheduleTask,
+    tryAcquireInflight,
   } = m);
 }
 await initScheduler(); // initial binding (fresh module for the first test)
@@ -57,6 +59,50 @@ globalThis.chrome = {
     getAll: async () => [],
   },
 };
+
+Deno.test("scheduler reports Chrome's 500-active-alarm limit before persistence", async () => {
+  const original = { ...chrome.alarms };
+  const active = Array.from({ length: MAX_ACTIVE_ALARMS }, (_, i) => ({ name: `active-${i}` }));
+  let creates = 0;
+  chrome.alarms.getAll = async () => active;
+  chrome.alarms.create = async () => { creates += 1; };
+  store.delete("cap:scheduledTasks");
+  try {
+    await assertRejects(
+      () => scheduleTask({ name: "over-limit", task: "never persisted", delayMs: 1000 }),
+      Error,
+      "Chrome allows at most 500 active alarms",
+    );
+    assertEquals(creates, 0);
+    const persisted = (await chrome.storage.local.get("cap:scheduledTasks"))["cap:scheduledTasks"] ?? {};
+    assertEquals(persisted["over-limit"], undefined, "capacity rejection leaves no payload");
+  } finally {
+    Object.assign(chrome.alarms, original);
+    store.delete("cap:scheduledTasks");
+  }
+});
+
+Deno.test("permission disarm clears canonical alarms but retains cap:scheduledTasks", async () => {
+  const original = { ...chrome.alarms };
+  const tasks = {
+    "task-a": { name: "task-a", task: "a", at: Date.now() + 60_000 },
+    "task-b": { name: "task-b", task: "b", at: Date.now() + 60_000 },
+  };
+  store.set("cap:scheduledTasks", clone(tasks));
+  const armed = new Set(Object.keys(tasks));
+  chrome.alarms.clear = async (name) => armed.delete(name);
+  chrome.alarms.get = async (name) => armed.has(name) ? { name } : undefined;
+  try {
+    const result = await disarmScheduledAlarms();
+    assertEquals(result.ok, true);
+    assertEquals(result.disarmed, 2);
+    assertEquals(armed.size, 0);
+    assertEquals(store.get("cap:scheduledTasks"), tasks, "permission removal retains canonical payloads");
+  } finally {
+    Object.assign(chrome.alarms, original);
+    store.delete("cap:scheduledTasks");
+  }
+});
 
 Deno.test("inflight lock blocks a second acquisition while the owner is alive", async () => {
   const a = await tryAcquireInflight("lease-a");

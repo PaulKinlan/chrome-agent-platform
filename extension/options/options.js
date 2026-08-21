@@ -1272,7 +1272,22 @@ async function renderPermissions() {
         // The real chrome.permissions.request happens here, inside the click
         // handler (a genuine user gesture — the SW can never request).
         const res = await requestCapability(cap.id);
-        if (res?.granted) saveFlash(`Enabled ${cap.label}.`);
+        if (res?.granted && cap.id === "alarms") {
+          // Permission was requested only by this owner click. Notify the worker,
+          // which confirms the grant and owns listener activation/reload.
+          const activation = await chrome.runtime.sendMessage({
+            type: "alarms.permission-granted",
+          }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+          if (activation?.reloadScheduled) {
+            saveFlash("Enabled Scheduled tasks. Reloading once to activate alarms…");
+          } else if (activation?.listenerRegistered) {
+            saveFlash("Enabled Scheduled tasks.");
+          } else {
+            saveFlash(
+              `Scheduled tasks was granted, but activation failed: ${activation?.error ?? "alarm listener unavailable"}.`,
+            );
+          }
+        } else if (res?.granted) saveFlash(`Enabled ${cap.label}.`);
         else {
           saveFlash(
             `Enable ${cap.label} declined: ${res?.error ?? "not granted"}.`,

@@ -157,6 +157,7 @@ import {
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
 import { durableRuns } from "../lib/durable-runs.js";
+import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -284,8 +285,10 @@ import {
   INFLIGHT_HEARTBEAT_MS,
   blockScheduledTaskForStorage,
   cancelScheduledTask,
+  disarmScheduledAlarms,
   heartbeatInflight,
   listScheduledTasks,
+  reconcileScheduledTasks,
   recoverOnBoot,
   markScheduledDone,
   ownsInflight,
@@ -574,25 +577,16 @@ async function handleAlarm(alarm) {
   }
 }
 
-// The `chrome.alarms` namespace is permission-gated: when `alarms` is an
-// OPTIONAL permission (Paul's all-optional requirement) and not yet granted,
-// `chrome.alarms` is `undefined` at module-eval time, so a top-level
-// `chrome.alarms?.onAlarm?.addListener(...)` would silently no-op and the alarm
-// listener would NEVER be registered (the round-14b alarm bug: the alarm fires
-// and is consumed, but nothing handles it, so no task/result is journaled).
-// Register the listener lazily: once when the module evaluates (if `alarms` was
-// already granted, e.g. the extension was reloaded after a grant) and again via
-// chrome.permissions.onAdded when the user grants the capability.
-let alarmListenerRegistered = false;
-function registerAlarmListener() {
-  if (alarmListenerRegistered) return;
-  if (typeof chrome === "undefined" || !chrome.alarms?.onAlarm) return;
-  chrome.alarms.onAlarm.addListener(handleAlarm);
-  alarmListenerRegistered = true;
-}
-registerAlarmListener();
+// Optional alarms can be granted after this worker evaluated. The lifecycle
+// attaches idempotently when Chrome injects the API, or performs one bounded
+// reload only after a confirmed owner grant. Removal disarms this worker while
+// leaving cap:scheduledTasks as the sole future re-arm authority.
+const alarmPermissionLifecycle = createAlarmPermissionLifecycle({
+  chromeApi: chrome,
+  onAlarm: handleAlarm,
+});
 chrome.permissions?.onAdded?.addListener((perms) => {
-  if (perms?.permissions?.includes("alarms")) registerAlarmListener();
+  // Alarm activation is owned by alarmPermissionLifecycle's own listener.
   // When the optional `storage` permission is granted later, migrate the SW's
   // session fallback into the persistent backend so the configured provider /
   // theme / grants are not orphaned (the round-16 migration finding: a genuine
@@ -605,6 +599,7 @@ chrome.permissions?.onAdded?.addListener((perms) => {
   }
 });
 chrome.permissions?.onRemoved?.addListener((perms) => {
+  // Alarm listener detachment is owned by alarmPermissionLifecycle.
   if (perms?.permissions?.includes("storage")) {
     // On a storage Disable→Enable cycle the session fallback holds changes made
     // during the disabled period; reset the migration flag so the next grant
@@ -2085,6 +2080,12 @@ const handlers = {
     // enable buttons from this; the Chrome suite asserts the empty base list.
     return await capabilityStatus();
   },
+  async "alarms.permission-granted"(_message, context) {
+    // Settings owns chrome.permissions.request on its genuine click. The worker
+    // re-attests that principal, confirms the grant, and activates/reloads once.
+    requireSettingsSender(context);
+    return await alarmPermissionLifecycle.notifyGrantedFromOwner();
+  },
   // Revoke an optional capability from the SW (single authority for the
   // dependent cleanup + the permission removal). The Settings Disable button
   // routes here so storage/scripting get their authoritative side effects:
@@ -2112,6 +2113,28 @@ const handlers = {
         onStoragePermissionTransition();
         return res;
       });
+    }
+    if (id === "alarms") {
+      // Disarm every alarm backed by the canonical task registry BEFORE owner-
+      // requested permission removal. Keep payloads intact for a future grant.
+      const disarmed = await disarmScheduledAlarms();
+      if (!disarmed.ok) return disarmed;
+      const res = await revokeCapability(id);
+      if (!res.revoked) {
+        // Removal did not commit; restore the still-authorized schedules.
+        try {
+          await reconcileScheduledTasks();
+        } catch (e) {
+          return {
+            ...res,
+            ok: false,
+            disarmed: disarmed.disarmed,
+            retryable: true,
+            error: `alarms permission remains granted and schedules could not be re-armed: ${String(e?.message ?? e)}`,
+          };
+        }
+      }
+      return { ...res, disarmed: disarmed.disarmed, retained: disarmed.retained };
     }
     if (id === "scripting") {
       // Disabling scripting must REVOKE the enrolled origins' authority, not
