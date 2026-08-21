@@ -2,6 +2,7 @@
 body {
   display: flex;
   min-height: 100vh;
+  min-inline-size: 0;
 }
 .side {
   width: 240px;
@@ -58,7 +59,8 @@ nav {
   padding-top: 12px;
 }
 .content {
-  flex: 1;
+  flex: 1 1 auto;
+  min-inline-size: 0;
   padding: var(--space-5) var(--space-6);
   max-width: 760px;
 }
@@ -75,6 +77,7 @@ nav {
   margin: 0;
 }
 .panel {
+  min-inline-size: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -110,6 +113,7 @@ code {
   gap: 8px;
 }
 .provider-card {
+  min-inline-size: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-4);
@@ -160,7 +164,7 @@ code {
 }
 .provider-card .fields {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 8px;
 }
@@ -198,7 +202,7 @@ input:focus, select:focus, textarea:focus {
    is the shared <switch-toggle> Web Component (one component, everywhere). */
 .toggle-field {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 14px;
   align-items: center;
   padding: 12px 14px;
@@ -904,3 +908,139 @@ input:focus, select:focus, textarea:focus {
 .approval-controls .btn:disabled { opacity: .55; cursor: wait; }
 @media (max-width: 720px) { .approval-row { align-items: stretch; flex-direction: column; } .approval-controls { justify-content: flex-end; } }
 .set-agent-provider, .clear-agent-key { height: var(--input-h, 36px); }
+
+/* Settings also renders inside the NTP's covered-view iframe. At the first
+   content-driven break (680px), reflow rather than clipping or introducing a
+   document-level horizontal scrollbar. Every section and control stays present. */
+@media (max-width: 680px) {
+  body {
+    flex-direction: column;
+  }
+
+  .side {
+    position: static;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    flex: 0 0 auto;
+    padding: var(--space-3) var(--space-4);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+
+  .brand {
+    padding: 4px 8px 8px;
+  }
+
+  nav {
+    flex: 0 1 auto;
+    flex-flow: row wrap;
+    gap: 4px;
+  }
+
+  .nav-item {
+    flex: 1 1 150px;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .side-foot {
+    border-top: 0;
+    padding-top: 4px;
+  }
+
+  .content {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .panel,
+  .provider-card {
+    min-width: 0;
+    padding: var(--space-4);
+  }
+
+  .provider-head,
+  .provider-actions,
+  .approval-controls,
+  .origin-row,
+  .changelog-head {
+    flex-wrap: wrap;
+  }
+
+  .provider-head {
+    align-items: flex-start;
+  }
+
+  .provider-card .fields,
+  .agent-provider-row,
+  .theme-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-provider-row .ag-base-url {
+    grid-column: 1;
+  }
+
+  .agent-provider-row .ag-actions {
+    justify-self: stretch;
+    flex-wrap: wrap;
+  }
+
+  .enroll-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .enroll-row .field,
+  .enroll-row input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .enroll-row .btn,
+  .perm-row .btn {
+    justify-self: start;
+  }
+
+  .background-agent-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name"
+      "state"
+      "toggle"
+      "hint"
+      "actions";
+    align-items: start;
+  }
+
+  .background-agent-row .agent-actions {
+    justify-self: start;
+    flex-wrap: wrap;
+  }
+
+  .perm-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name"
+      "state"
+      "hint"
+      "btn";
+    align-items: start;
+  }
+
+  .origin-row .origin {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .foot {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

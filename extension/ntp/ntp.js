@@ -23,6 +23,7 @@ import {
   focusExplicitRouteTarget,
   VIEW_ROUTE,
 } from "./view-transition.js";
+import { applySidebarNubPolicy } from "./view-policy.js";
 
 import {
   installPageDiagnostics,
@@ -647,16 +648,19 @@ function syncViewOpen() {
   document.body.classList.toggle("view-open", anyOpen);
   document.body.classList.toggle("full-view-open", fullViewOpen);
 
-  // The full Directory/Settings/Skills view covers the whole hub. Keep the
-  // covered sidebar and its edge nub out of pointer, keyboard, and AX flows;
-  // remove every state marker on close so their prior expanded/collapsed state
-  // and interactions resume unchanged. Task threads keep both controls active.
-  for (const covered of [side, sideToggle]) {
-    if (!covered) continue;
-    covered.inert = fullViewOpen;
-    if (fullViewOpen) covered.setAttribute("aria-hidden", "true");
-    else covered.removeAttribute("aria-hidden");
+  // The full Directory/Settings/Skills/Assets view covers the whole hub. Keep
+  // the sidebar itself inert and AX-absent while the pure nub policy separately
+  // owns every toggle state. This avoids two authorities mutating sideToggle,
+  // while preserving the sidebar's exact expanded/collapsed state on restore.
+  if (side) {
+    side.inert = fullViewOpen;
+    if (fullViewOpen) side.setAttribute("aria-hidden", "true");
+    else side.removeAttribute("aria-hidden");
   }
+  applySidebarNubPolicy(
+    sideToggle,
+    fullViewOpen ? "full" : !threadView.hidden ? "conversation" : "hub",
+  );
 }
 function hideThreadViewInner() {
   runSurfaceOwner.claim(); // leaving fences any in-flight run (its outcome still journals)

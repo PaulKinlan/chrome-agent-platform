@@ -248,6 +248,8 @@
     /* the .run-status { display:flex } above would override the UA [hidden]
        display:none, so an empty banner stayed visible — restore it. */
     .run-status[hidden] { display: none; }
+    /* Author styles beat the UA hidden rule; a covered nub stays absent. */
+    .side-toggle[hidden] { display: none; }
     .title-edit {
       font: inherit;
       font-weight: 650;

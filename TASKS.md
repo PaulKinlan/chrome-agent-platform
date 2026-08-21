@@ -646,24 +646,28 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260819-COVERED-NUB-VISIBILITY-01] Covered side-panel nub visibility across views
 - Feedback: 2026-08-19 — the side-panel edge nub remains visible where the main page or another view covers it; the Directory-only correction is not a complete view policy
-- Updated: 2026-08-19 18:13 UTC
-- Status: OPEN
+- Updated: 2026-08-21 17:16 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
-- Candidate: —
+- Owner: integration worker
+- Workspace: active (local path private)
+- Branch: `reconcile/nub-narrow-transition-focus-46a-r1`
+- Base: `46a3e6df9a9a63e31ceb8da2fde6551f1a8eb621`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: a documented per-view policy keeps the nub available only where it is actionable and otherwise makes it hidden, inert, non-hit-testable, non-focusable, and absent from the unignored AX tree; closing or switching views restores the exact prior sidebar state
-- Review: pending independent geometry, interaction, and accessibility review
-- Gates: loaded-MV3 matrix for hub, task conversation, Settings, Directory, Skills, Assets, narrow, RTL, themes, pointer/keyboard focus, elementFromPoint, and raw AX; before/after screenshots and exact restoration assertions
-- Blockers: must compose with `CAP-FB-20260819-AGENT-DIRECTORY-01`, `CAP-FB-20260818-SIDEBAR-01`, and `CAP-FB-20260818-SIDEPANEL-PARITY-01` without merging away their separate acceptance history
-- Next: record the intended sidebar/nub visibility and stacking policy for every routable view, then add failing browser assertions for non-Directory covered views
-- Recover: `git show bbeff7b:TASKS.md && git grep -n "side-toggle" bbeff7b -- extension`
+- Acceptance: a documented per-view policy keeps the nub available only where it is actionable and otherwise makes it hidden, inert, non-hit-testable, non-focusable, and absent from the unignored AX tree; closing or switching views restores the exact prior sidebar state; Settings retains every section/control and has no document-level horizontal overflow at 500px or 360px
+- Review: exact `35f3246f` nub/responsive content independently passed for recomposition; independent review of this `46a3e6df` composite remains pending before browser authorization
+- Gates: semantic nub lifecycle/restoration and responsive CSS contracts; full unit/build/package/shipped scan/gallery/changelog/security/syntax/format/diff checks; fresh loaded-MV3 48-cell matrix plus both rapid sequences remains required
+- Blockers: browser acceptance is excluded from this implementation lane; provisional `0.2.119` remains subject to serialized integration order
+- Next: independently review the exact composition delta, then run the complete loaded-MV3 per-view nub matrix without weakening the 500px/360px iframe-overflow assertions or explicit-focus regressions
+- Recover: `git log --all --oneline --grep='CAP-FB-20260819-COVERED-NUB-VISIBILITY-01' && git diff 46a3e6df -- extension/ntp extension/options/options.css tests`
 - History:
   - 2026-08-19 18:13 UTC — opened as a generalized covered-view defect; existing Directory and sidebar tasks remain separate linked workstreams.
+  - 2026-08-21 15:45 UTC — reconciled the reviewed generalized nub policy onto exact `0f86e60`: pure per-view `extension/ntp/view-policy.js`, callback-scoped application, exact collapse-state restoration, author-level hidden CSS, documentation, and focused tests.
+  - 2026-08-21 16:05 UTC — independent review fixed the first reconciliation's eager `openView()` policy sync and expanded null-input, rapid multi-hop, source-order, and collapse-state test coverage; amended `aff2375e` passed source review for browser.
+  - 2026-08-21 16:42 UTC — content-reconciled the reviewed nub behavior onto exact transition/Directory tip `9a118d44`, preserving route-aware transitions, deferred focus, changelog shipping, and the sidebar's covered inertness while making `applySidebarNubPolicy` the sole toggle authority. Immutable v4 browser evidence had passed eight cells and canonical keyboard activation before exposing Settings iframe overflow at 500px (`640 > 490`); this candidate reflows the navigation/forms at the content breakpoint, adds 500px/360px semantic contracts, and remains pending independent source plus full loaded-MV3 review.
+  - 2026-08-21 17:16 UTC — recomposed independently accepted nub/responsive content onto exact transition-focus tip `46a3e6df`, retaining explicit-only same-surface composer focus, no-argument follow-up/same-thread neutrality, route snapshots, Directory focus authority, sole nub ownership, and the complete shrink-safe Settings reflow. Exact composite review and the full loaded-MV3 matrix remain pending.
 
 ## [CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01] Durable runs independent of mounted UI
 - Feedback: 2026-08-19 — task and agent runs must continue through task/view switches, Settings navigation, tab closure, and later reopen rather than being owned by mounted conversation UI

@@ -389,10 +389,25 @@ Deno.test("current-main task routing composes with Directory covered-state and f
   );
 
   assert(
-    /for \(const covered of \[side, sideToggle\]\)/.test(js) &&
-      /covered\.inert = fullViewOpen/.test(js) &&
-      /covered\.setAttribute\("aria-hidden", "true"\)/.test(js),
-    "full Directory views retain inert and aria-hidden authority for both covered controls",
+    /import \{[\s\S]*?focusExplicitRouteTarget,[\s\S]*?\} from "\.\/view-transition\.js";/
+      .test(js) &&
+      /import \{ applySidebarNubPolicy \} from "\.\/view-policy\.js";/.test(js),
+    "the composed NTP imports both the accepted explicit-focus and sole nub authorities",
+  );
+  assert(
+    /function showThreadView\(options = \{\}\)[\s\S]*?if \(!threadView\.hidden\) \{\s*focusExplicitRouteTarget\(options\);\s*return;\s*\}/
+      .test(js) &&
+      /function syncViewOpen\(\)[\s\S]*?applySidebarNubPolicy\([\s\S]*?sideToggle,[\s\S]*?fullViewOpen \? "full"/
+        .test(js),
+    "recomposition keeps explicit-only already-open focus and per-view nub state in their production routes",
+  );
+  assert(
+    /side\.inert = fullViewOpen/.test(js) &&
+      /side\.setAttribute\("aria-hidden", "true"\)/.test(js) &&
+      /applySidebarNubPolicy\([\s\S]*?sideToggle,[\s\S]*?fullViewOpen \? "full"/
+        .test(js) &&
+      !/\[side, sideToggle\]/.test(js),
+    "full Directory views retain sidebar inert/AX authority while the pure nub policy solely owns the covered toggle",
   );
   assert(
     /function openView\(path, title, trigger\)/.test(js) &&

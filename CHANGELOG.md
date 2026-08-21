@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.119] — 2026-08-21
+- fix(ui): compose covered nub with transition focus (CAP-FB-20260819-COVERED-NUB-VISIBILITY-01)
+
 ## [0.2.118] — 2026-08-21
 - fix(ntp): preserve composer focus on follow-up turns (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
 
