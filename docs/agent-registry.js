@@ -111,6 +111,33 @@ export function filterGroups(groups = [], query = "", opts = {}) {
   return out;
 }
 
+/** The human-readable text inserted when an agent is chosen from an @ mention.
+ * Routing NEVER depends on this display text: the adjacent candidate carries a
+ * canonical ref, and the composer sends that ref through its selected-agent
+ * chip. Strip a site's existing leading @ so the visible mention has one. */
+export function mentionTextForAgent(agent) {
+  const label = String(agent?.name ?? agent?.label ?? agent?.id ?? "").trim().replace(/^@+/, "");
+  return label ? `@${label}` : "";
+}
+
+/** Turn a picker/mention candidate into the one canonical composer selection.
+ * Fail closed when redundant kind/id fields disagree with the canonical ref;
+ * untrusted or stale popup data must never route a run to a different agent. */
+export function selectionFromAgentCandidate(candidate) {
+  const parsed = parseAgentRef(candidate?.ref);
+  if (!parsed) return null;
+  const claimedKind = String(candidate?.kind ?? "").trim();
+  const claimedId = String(candidate?.agentId ?? candidate?.id ?? "").trim();
+  if (claimedKind && claimedKind !== parsed.kind) return null;
+  if (claimedId && claimedId !== parsed.id) return null;
+  return {
+    ref: candidate.ref,
+    kind: parsed.kind,
+    id: parsed.id,
+    name: String(candidate?.name ?? candidate?.label ?? parsed.id),
+  };
+}
+
 /** Flat picker/popup candidates from the grouped registry. Each item carries:
  *   ref       — the canonical routing ref (named:<id> / background:<id> / site:<origin>)
  *   kind      — named | background | site
@@ -119,6 +146,8 @@ export function filterGroups(groups = [], query = "", opts = {}) {
  *               `agent:<canonical-ref>` (e.g. `agent:named:reader`), so the
  *               inserted `/agent:…` text is the UNAMBIGUOUS canonical form —
  *               never a bare id that could collide across kinds.
+ *   mentionText — the display text inserted by @ completion; routing still
+ *                 uses ref, never this possibly duplicated display name.
  *   label     — the display name
  *   description — role / status / tool summary
  *   group     — the group label (for grouped rendering)
@@ -135,6 +164,7 @@ export function candidatesFromGroups(groups = [], opts = {}) {
         kind: a.kind,
         agentId: a.id,
         id: `agent:${ref}`, // the canonical textual form (agent:named:<id>…)
+        mentionText: mentionTextForAgent(a),
         label: a.name || a.id,
         description: a.summary || "",
         avatar: a.avatar || null,

@@ -14,9 +14,11 @@
 
 import {
   canonicalRef,
+  candidatesFromGroups,
   filterGroups,
   findAgentByRef,
   flattenGroups,
+  selectionFromAgentCandidate,
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
@@ -526,45 +528,40 @@ async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKin
   }
 }
 
-// @ mention candidates: named agents, background agents, Site Agents, skills,
-// and recent artifacts — all delineated so the user can tell them apart. The
-// current agent is excluded + only ENABLED background agents are listed.
+// @ mention candidates: every CALLABLE agent comes from the same redacted,
+// grouped `agent.registry` authority as <agent-picker> and /agent. This keeps
+// named/background/site filtering, canonical refs, current-agent exclusion and
+// stale-selection behavior identical across all three entry points. Skills and
+// recent artifacts remain mentionable, but only agent rows select a run target.
 async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind = null) {
   const ql = (q || "").toLowerCase();
   const items = [];
   const hit = (s) => !ql || String(s ?? "").toLowerCase().includes(ql);
-  const isCurrent = (id) => !!currentAgentId && String(id).toLowerCase() === String(currentAgentId).toLowerCase();
   if (RUNTIME_SEND) {
-    const [named, bg, site, skills, assets] = await Promise.all([
-      RUNTIME_SEND("named-agent.list").catch(() => ({ agents: [] })),
-      RUNTIME_SEND("background-agent.list").catch(() => ({ agents: [] })),
-      RUNTIME_SEND("agent.directory").catch(() => ({ agents: [] })),
+    const [registry, skills, assets] = await Promise.all([
+      RUNTIME_SEND("agent.registry").catch(() => ({ groups: [] })),
       RUNTIME_SEND("skill.list").catch(() => ({ skills: [] })),
       RUNTIME_SEND("asset.list", { origin: "master" }).catch(() => ({ assets: [] })),
     ]);
-    for (const a of (named.agents || [])) {
-      const aid = a.id ?? a.name;
-      if (isCurrent(aid)) continue; // don't offer the current agent
-      if (!hit(a.name) && !hit(a.id)) continue;
-      items.push({ id: `agent:${aid}`, label: a.name, description: a.role || "named agent", kind: "agent" });
-    }
-    for (const a of (bg.agents || [])) {
-      if (!a.enabled) continue; // only the ENABLED background agents are callable
-      if (isCurrent(a.id)) continue;
-      if (!hit(a.name) && !hit(a.id)) continue;
-      items.push({ id: `agent:${a.id}`, label: a.name, description: a.description || "background agent", kind: "background" });
-    }
-    for (const a of (site.agents || []).filter((x) => x.enrolled)) {
-      if (!hit(a.origin) && !hit(a.name || "")) continue;
-      items.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · Site Agent`, kind: "agent" });
+    const excludeRef = currentAgentId && currentAgentKind
+      ? canonicalRef(currentAgentKind, currentAgentId)
+      : null;
+    const agents = candidatesFromGroups(registry.groups || [], {
+      query: q,
+      callableOnly: true,
+      excludeRef,
+      excludeId: currentAgentId,
+    });
+    for (const a of agents) {
+      items.push({ ...a, id: a.mentionText, name: a.label });
     }
     for (const s of (skills.skills || [])) {
       if (!hit(s.name) && !hit(s.id)) continue;
-      items.push({ id: `skill:${s.id}`, label: s.name, description: s.description || "skill", kind: "skill" });
+      items.push({ id: `skill:${s.id}`, label: s.name, description: s.description || "skill", kind: "skill", group: "Skills" });
     }
     for (const a of assets.assets || []) {
       if (!hit(a.name) && !hit(a.id)) continue;
-      items.push({ id: `asset:${a.id ?? a.name}`, label: a.name, description: a.type || "artifact", kind: "artifact" });
+      items.push({ id: `asset:${a.id ?? a.name}`, label: a.name, description: a.type || "artifact", kind: "artifact", group: "Assets" });
     }
   }
   return items;
@@ -2920,7 +2917,7 @@ let agentComposerUid = 0;
  * target #task-input / #run-task. */
 class AgentComposer extends Component {
   static shadow() { return false; }
-  static get observedAttributes() { return ["placeholder", "label", "send-label", "agent-id", "agent-kind"]; }
+  static get observedAttributes() { return ["placeholder", "label", "description", "send-label", "agent-id", "agent-kind"]; }
   constructor() {
     super();
     this.attachments = [];
@@ -2940,15 +2937,18 @@ class AgentComposer extends Component {
   get _currentAgentId() { return this.getAttribute("agent-id") || null; }
   get _currentAgentKind() { return this.getAttribute("agent-kind") || null; }
   _render() {
-    const placeholder = this.getAttribute("placeholder") || "Ask anything…";
+    const placeholder = this.getAttribute("placeholder") || "Ask anything, or @mention an agent…";
     const label = this.getAttribute("label") || "Message";
+    const description = this.getAttribute("description") || "Type @ to mention any named, background, or Site Agent.";
     const sendLabel = this.getAttribute("send-label") || "Run task";
     const currentAgent = this._currentAgentId;
     const html = `
       <div class="composer" part="composer">
-        <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}" rows="2"
+        <span class="sr-only" id="composer-description-${this._uid}">${escapeHtml(description)}</span>
+        <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
+          aria-describedby="composer-description-${this._uid}" rows="2"
           aria-expanded="false" aria-controls="popup-${this._uid}" aria-autocomplete="list"></textarea>
-        <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Suggestions" hidden></div>
+        <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
         <div class="chips" id="chips"></div>
         <div class="row">
           <mic-button id="mic"></mic-button>
@@ -2971,6 +2971,8 @@ class AgentComposer extends Component {
          apply within THIS component's subtree. */
       agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
       agent-composer .composer:focus-within { border-color:var(--accent,#0e6e63); }
+      agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+        clip:rect(0,0,0,0); white-space:nowrap; border:0; }
       agent-composer .popup { position:absolute; inset:auto; margin:0; left:0; right:0; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08));
         max-height:260px; overflow-y:auto; padding:4px; z-index:40;
@@ -3128,13 +3130,14 @@ class AgentComposer extends Component {
   get selectedAgent() { return this._selectedAgent; }
 
   _setSelectedAgent(detail) {
-    if (!detail?.ref) return;
-    this._selectedAgent = {
-      ref: detail.ref,
-      kind: detail.kind,
-      id: detail.id,
-      name: detail.name || detail.id,
-    };
+    const selection = selectionFromAgentCandidate({
+      ref: detail?.ref,
+      kind: detail?.kind,
+      agentId: detail?.id ?? detail?.agentId,
+      name: detail?.name ?? detail?.label,
+    });
+    if (!selection) return;
+    this._selectedAgent = selection;
     this._renderAgentChip();
     this._emit("agent-change", { agent: { ...this._selectedAgent } });
   }
@@ -3684,15 +3687,32 @@ class AgentComposer extends Component {
       return;
     }
 
-    // mention
+    // Mention completion inserts human-readable text. When the row is an agent,
+    // it ALSO selects the same canonical routing chip as /agent and the + menu;
+    // send() therefore routes named/background/site mentions by ref, never by
+    // the potentially duplicated display name. Skills/assets stay text-only.
     input.setRangeText(item.id, token.start, token.end, "end");
     this._hidePopup();
-    this._emit("mention", { item });
+    if (item.ref) {
+      this._setSelectedAgent({
+        ref: item.ref,
+        kind: item.kind,
+        id: item.agentId,
+        name: item.label,
+      });
+    }
+    this._emit("mention", { item, agent: this._selectedAgent ? { ...this._selectedAgent } : null });
     input.focus();
   }
 
   _hidePopup() {
-    if (this._popup) this._popup.hidden = true;
+    if (this._popup) {
+      this._popup.hidden = true;
+      // Hidden means EMPTY: no-match, Escape, selection and parser-reset paths
+      // all converge here, so stale role=option nodes cannot survive in the DOM
+      // or Accessibility tree after a prior result set.
+      this._popup.replaceChildren();
+    }
     this._input?.setAttribute("aria-expanded", "false");
     this._input?.removeAttribute("aria-activedescendant");
     this._popupItems = [];
@@ -4069,7 +4089,8 @@ class PromptBar extends Component {
       .pop button:hover, .pop button[aria-selected="true"] { background:var(--panel-2,#efede8); }
       .pop .head { font-size:11px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
     `, `<div class="bar">
-        <textarea id="pb-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Prompt"></textarea>
+        <textarea id="pb-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Prompt"
+          aria-description="Type @ to mention any named, background, or Site Agent."></textarea>
         <div class="tools">
           <button type="button" class="model" id="pb-model" aria-haspopup="listbox" aria-expanded="false">${escapeHtml(model)} ▾</button>
           <mic-button label="Dictate" aria-label="Dictate"></mic-button>

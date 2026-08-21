@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.136] — 2026-08-21
+- feat(composer): canonical agent mention routing (CAP-FB-20260819-COMPOSER-AGENT-MENTIONS-01)
+
 ## [0.2.135] — 2026-08-21
 - fix(site-agents): truthful Site Agent lifecycle/status copy + vocabulary authority (CAP-FB-20260819-SITE-AGENT-STATUS-CLEANUP-01)
 

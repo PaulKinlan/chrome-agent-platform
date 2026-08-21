@@ -154,6 +154,108 @@ Deno.test("components: every design-system element registers as a custom element
   }
 });
 
+Deno.test("components: mention keyboard completion routes every agent kind by canonical ref", async () => {
+  await import("../extension/shared/components.js");
+  const AgentComposer = registry.get("agent-composer");
+  const candidates = [
+    { ref: "named:reader", kind: "named", agentId: "reader", id: "@Reader", label: "Reader" },
+    { ref: "background:sorting-hat", kind: "background", agentId: "sorting-hat", id: "@Sorting Hat", label: "Sorting Hat" },
+    { ref: "site:https://github.com", kind: "site", agentId: "https://github.com", id: "@github.com", label: "@github.com" },
+  ];
+
+  for (const candidate of candidates) {
+    const composer = new AgentComposer();
+    const emitted: Array<{ type: string; detail: any }> = [];
+    composer._emit = (type: string, detail: any) => emitted.push({ type, detail });
+    composer._popup = {
+      hidden: false,
+      replaceChildren() {},
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    };
+    composer._input = {
+      value: "@query",
+      setRangeText(text: string) { this.value = text; },
+      setAttribute() {},
+      removeAttribute() {},
+      focus() {},
+    };
+    composer._popupItems = [candidate];
+    composer._popupToken = { type: "mention", start: 0, end: 6 };
+
+    // Enter/Tab both converge on _selectActive; drive that completion path and
+    // then the real composer send payload consumed by NTP/chat routing.
+    composer._popupActive = 0;
+    composer._selectActive();
+    if (composer.value !== candidate.id) throw new Error(`${candidate.kind} mention text was not completed`);
+    if (composer.selectedAgent?.ref !== candidate.ref) throw new Error(`${candidate.kind} canonical ref was not selected`);
+    const mention = emitted.find((event) => event.type === "mention");
+    if (mention?.detail?.agent?.ref !== candidate.ref) throw new Error(`${candidate.kind} mention event lost canonical routing`);
+
+    composer._input.value = `Ask ${candidate.id}`;
+    await composer._send();
+    const send = emitted.find((event) => event.type === "send");
+    if (send?.detail?.agent?.ref !== candidate.ref || send.detail.agent.kind !== candidate.kind) {
+      throw new Error(`${candidate.kind} send payload lost canonical routing`);
+    }
+  }
+});
+
+Deno.test("components: empty mention results remove stale popup options and a later render recovers", async () => {
+  await import("../extension/shared/components.js");
+  const AgentComposer = registry.get("agent-composer");
+  const composer = new AgentComposer();
+  const attrs = new Map();
+  const popup = {
+    hidden: true,
+    _html: "",
+    _items: [] as any[],
+    set innerHTML(value: unknown) {
+      this._html = String(value);
+      const count = (this._html.match(/class="item"/g) ?? []).length;
+      this._items = Array.from({ length: count }, (_, index) => ({
+        dataset: { index: String(index) },
+        addEventListener() {},
+        scrollIntoView() {},
+      }));
+    },
+    get innerHTML() { return this._html; },
+    replaceChildren() { this._html = ""; this._items = []; },
+    querySelectorAll(selector: string) {
+      return selector === ".item" || selector === '[role="option"]' ? this._items : [];
+    },
+    querySelector(selector: string) {
+      const match = selector.match(/data-index="?(\d+)/);
+      return match ? this._items[Number(match[1])] ?? null : null;
+    },
+  };
+  composer._popup = popup;
+  composer._input = {
+    setAttribute(name: string, value: unknown) { attrs.set(name, value); },
+    removeAttribute(name: string) { attrs.delete(name); },
+  };
+
+  composer._showPopup([{ label: "Prior candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
+  if (popup.hidden || popup.querySelectorAll(".item").length !== 1) {
+    throw new Error("prior candidate did not render");
+  }
+
+  // Regression: @Disabled/no-match used to hide the popup but leave the prior
+  // .item/role=option nodes in the DOM, so AX and later assertions saw ghosts.
+  composer._showPopup([], { type: "mention", start: 0, end: 9 });
+  if (!popup.hidden || popup.querySelectorAll(".item").length !== 0 || popup.querySelectorAll('[role="option"]').length !== 0) {
+    throw new Error("hidden empty popup retained stale option DOM");
+  }
+  if (attrs.get("aria-expanded") !== "false" || attrs.has("aria-activedescendant")) {
+    throw new Error("empty popup did not reset combobox accessibility state");
+  }
+
+  composer._showPopup([{ label: "Fresh candidate", kind: "agent" }], { type: "mention", start: 0, end: 6 });
+  if (popup.hidden || popup.querySelectorAll(".item").length !== 1) {
+    throw new Error("popup did not rerender after an empty result");
+  }
+});
+
 Deno.test("components: theme metadata covers the four themes", async () => {
   const mod = await import("../extension/shared/components.js");
   const ids = mod.THEMES.map((t) => t.id);
