@@ -192,7 +192,20 @@ Deno.test("threads: recordThreadError PERSISTS redacted text (the real storage c
       return this.kids.get(name);
     }
     async getFileHandle(name, { create } = {}) {
-      if (!this.kids.has(name)) { if (!create) throw new Error("nf"); this.kids.set(name, new FileShim("")); }
+      if (!this.kids.has(name)) {
+        // The REAL OPFS API throws a NotFoundError DOMException for a missing
+        // handle; the product's isNotFound() recognises that name. The previous
+        // harness threw a plain Error("nf") whose message matched none of the
+        // heuristics, so readJsonStrict re-threw and issueVersion failed closed
+        // with "the durable generation authority is corrupt" — a HARNESS
+        // defect, not a product bug.
+        if (!create) {
+          const missing = new Error("not found: " + name);
+          missing.name = "NotFoundError";
+          throw missing;
+        }
+        this.kids.set(name, new FileShim(""));
+      }
       return this.kids.get(name);
     }
     async *entries() { for (const [n, v] of this.kids) yield [n, v.constructor === FileShim ? n : n]; }
