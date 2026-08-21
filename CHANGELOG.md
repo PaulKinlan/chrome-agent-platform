@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.107] — 2026-08-21
+- docs(lifecycle): adopt the four-state delivery lifecycle — CAP-FB-20260821-DELIVERY-LIFECYCLE-01
+
 ## [0.2.106] — 2026-08-21
 - docs(review): land the 2026-08-21 independent architectural review
 

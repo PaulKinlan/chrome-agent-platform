@@ -38,7 +38,7 @@ Every task uses every field below; use `—` rather than deleting a field.
 ## [CAP-FB-YYYYMMDD-SLUG-NN] Title
 - Feedback: YYYY-MM-DD — public-safe source and summary
 - Updated: YYYY-MM-DD HH:MM UTC
-- Status: OPEN | IN_PROGRESS | FIX_REQUESTED | REVIEWING | REVIEW_PASSED | READY_FOR_BROWSER | INTEGRATING | GATED | PUSHED | BLOCKED | CONFIRMED | ABANDONED
+- Status: OPEN | IN_REVIEW | MERGED | DONE | BLOCKED | ABANDONED
 - Resume: prior state when BLOCKED, otherwise —
 - Priority: P0 | P1 | P2 | P3
 - Owner: model/role | unassigned
@@ -61,19 +61,43 @@ IDs are immutable and never reused. The date is the feedback date; `NN`
 disambiguates. Entries move intact to **Archive** after `CONFIRMED` or
 `ABANDONED`; they are never deleted.
 
-## State and evidence rules
+## State and evidence rules (Paul, 2026-08-21 — replaces the nine-state model)
 
-- Normal flow is `OPEN → IN_PROGRESS → REVIEWING → REVIEW_PASSED →
-  READY_FOR_BROWSER → INTEGRATING → GATED → PUSHED → CONFIRMED`. A review failure moves to
-  `FIX_REQUESTED`; an external dependency moves to `BLOCKED` and records the
-  exact `Resume` state.
-- `READY_FOR_BROWSER` means source/static review passed but required browser or
-  headed evidence has not. It is not final acceptance.
-- `GATED` requires an exact candidate commit plus content-addressed gate evidence.
-  `PUSHED` requires an immutable remote ref at that commit. `CONFIRMED` requires
-  explicit product-owner confirmation. Never infer one state from another.
-- Historical test counts prove only their named commit. Use `reported` when the
-  current reviewer has not independently verified the evidence.
+Normal flow is **`OPEN → IN_REVIEW → MERGED → DONE`**, with `BLOCKED` and
+`ABANDONED` as the two off-ramps.
+
+- `OPEN` — not started, or being worked on. Leaves when a candidate commit exists
+  and a reviewer is assigned.
+- `IN_REVIEW` — a candidate exists and a **different model/session** is reviewing
+  it. A failed review **stays** `IN_REVIEW` with the findings recorded in
+  `Review`/`History`; it does not get its own state.
+- `MERGED` — the candidate is on `origin/main`.
+- `DONE` — merged **and** the Chrome journey suite green at that tip. Terminal.
+  **`DONE` does not require a per-task product-owner interaction.** The previous
+  model made the terminal state depend on explicit confirmation per task; the
+  result was 0 of 31 tasks reaching it while this file grew without bound.
+- `BLOCKED` — stopped on something external. Records an owner, the reason, one
+  next action, and the `Resume` state.
+- `ABANDONED` — will not be done. Records why. Terminal.
+
+Two rules survive and are not negotiable: **a different model/session reviews
+every change**, and **real-browser verification with evidence** — the 126-check
+journey suite is a strong gate and it is sufficient. Content-addressed gate
+evidence, live remote attestation and versioned acceptance packages are removed;
+they produced 322 open handoff records and zero confirmations. Never fabricate
+evidence or closure.
+
+**A review is valid for its content, not its base.** If a candidate passed review
+and `main` advanced without touching the same files, the review still stands —
+rebase and land it. Re-review only what actually changed.
+
+Historical test counts prove only their named commit. Use `reported` when the
+current reviewer has not independently verified the evidence.
+
+Entries written under the previous model are **not** rewritten. Read them through
+this mapping: `IN_PROGRESS`/`FIX_REQUESTED` → `OPEN`;
+`REVIEWING`/`REVIEW_PASSED`/`READY_FOR_BROWSER`/`INTEGRATING`/`GATED` →
+`IN_REVIEW`; `PUSHED` → `MERGED`; `CONFIRMED` → `DONE`.
 
 ## Atomic ownership and updates
 
@@ -866,32 +890,33 @@ On resume after a coordinator or worker loss:
 - Acceptance: every branch ahead of `origin/main` reaches an explicit terminal disposition — merged, superseded by a named successor, or abandoned with a recorded reason — and the disposition is written into its owning task; the merged set passes the full unit and Chrome journey suites at the resulting tip; branch count ahead of `origin/main` is reduced to the actively worked lanes only; no branch is silently deleted
 - Review: independent review of the merged range as one integration, and independent confirmation that each abandoned branch's task records why
 - Gates: full unit suite and `scripts/chrome-journeys.ts` green at the post-triage tip; a per-branch disposition table with commit ranges; `git branch --merged` and `git branch --no-merged` before and after
-- Blockers: requires a declared freeze window on `origin/main` — triaging against a moving base reproduces the exact failure this task exists to end; the freeze is an owner decision recorded under `CAP-FB-20260821-DELIVERY-LIFECYCLE-01`
-- Next: obtain the freeze window, then produce the per-branch disposition table before merging anything
+- Blockers: requires a declared freeze window on `origin/main` — triaging against a moving base reproduces the exact failure this task exists to end; the freeze is an owner decision and is still outstanding. Note that rule 3 of the 2026-08-21 lifecycle decision ("a review is valid for its content, not its base") already removes most of the pressure: a candidate that passed review and does not conflict with what landed since can be rebased and merged without re-review
+- Next: obtain the freeze window; meanwhile produce the per-branch disposition table and identify which branches rule 3 lets through without re-review
 - Recover: `git for-each-ref --format='%(refname:short)' refs/heads/ | while read b; do echo "$b $(git rev-list --count origin/main..$b)"; done`
 - History:
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.2). No branch disposition is asserted here; the triage itself is the deliverable.
 
 ## [CAP-FB-20260821-DELIVERY-LIFECYCLE-01] Simplify the delivery lifecycle
 - Feedback: 2026-08-21 — independent architectural review measured a 96% collapse in landed commits over 72 hours, correlated with the nine-state lifecycle and mandatory handoff protocol, with zero tasks reaching the terminal state
-- Updated: 2026-08-21 09:55 UTC
-- Status: OPEN
+- Updated: 2026-08-21 10:15 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
+- Owner: review author (landing the owner's decision)
+- Workspace: active (local path private)
+- Branch: `origin/main`
 - Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
-- Candidate: —
-- Shipping: —
+- Candidate: this lifecycle commit
+- Shipping: this lifecycle commit on `origin/main`
 - Acceptance: the owner records an explicit decision on each proposed rule change in `REVIEW-2026-08-21.md` §7; `AGENTS.md`, `TASKS.md` and this repository's stated lifecycle are updated to match that decision in one commit; the two retained hard rules — independent review by a different model, and real-browser verification — remain stated and enforced; tasks that are shipped can reach a terminal state without a per-task owner interaction, or the terminal state is redefined so they can
 - Review: owner decision required before any rule is changed; an independent session then verifies the documentation is internally consistent across `AGENTS.md`, `TASKS.md`, `PLAN.md` and `REVIEW-2026-08-21.md`
 - Gates: a written decision per proposed rule; a cross-document consistency check for the lifecycle state list; landed-commits-per-day measured for one week after the change
-- Blockers: this is a process decision reserved to the product owner; no agent may change the lifecycle unilaterally
-- Next: obtain the owner's decision on each of the six proposed rule changes, then land the documentation change as one commit
-- Recover: `git show cdc1a65:AGENTS.md && git show cdc1a65:TASKS.md`
+- Blockers: —
+- Next: run the Chrome journey suite at the merged tip and move to `DONE`; then measure landed-commits-per-day for one week against the pre-change baseline recorded in `REVIEW-2026-08-21.md` §2
+- Recover: `git show cdc1a65:AGENTS.md && git log --oneline -- AGENTS.md TASKS.md`
 - History:
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.1, §2.3, §7). The measured evidence is recorded there; the proposed rules are explicitly proposals awaiting an owner decision.
+  - 2026-08-21 10:15 UTC — **product owner approved all six proposed rule changes.** `AGENTS.md` and `TASKS.md` now state `OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps; `DONE` no longer requires a per-task owner interaction. The two load-bearing rules are retained verbatim: a different model/session reviews every change, and real-browser verification with evidence. Content-addressed gate evidence, live remote attestation, versioned acceptance packages and the five intermediate states are removed. Rules 3–6 (review validity by content not base; `CAP-FB-*` in the commit subject; no worktree or evidence on a RAM-backed filesystem; no `-vN+1` without a commit in `-vN`) are recorded in `AGENTS.md`. Existing entries are deliberately NOT rewritten — a documented legacy-state mapping is published instead, so no prior status, evidence or acceptance is silently reclassified.
 
 ## [CAP-FB-20260821-PUSHED-TASK-CLOSEOUT-01] Close out the shipped-but-unconfirmed tasks
 - Feedback: 2026-08-21 — independent architectural review found four tasks at `PUSHED` awaiting only product-owner confirmation, some since 2026-08-18, blocking three further tasks that name them as dependencies
@@ -908,8 +933,8 @@ On resume after a coordinator or worker loss:
 - Acceptance: `CAP-FB-20260818-RUN-STATUS-01`, `CAP-FB-20260818-WEBMCP-01`, `CAP-FB-20260818-AGENT-ACCESS-01` and `CAP-FB-20260818-SYSPROMPT-01` each reach a terminal state and move intact to Archive, or record a specific named regression preventing it; the tasks blocked on them (`CAP-FB-20260818-SIDEBAR-01`, `CAP-FB-20260818-TOOL-TREE-01`, `CAP-FB-20260818-SIDEPANEL-PARITY-01`) are unblocked or re-blocked on a different, stated reason
 - Review: a current-main regression check covering the four features, presented to the owner as one confirmation request rather than four
 - Gates: `scripts/chrome-journeys.ts` at the current tip (the independent review recorded 126/126 at `300bea1`, a documentation-only ancestor of the current tip); each shipped commit confirmed as an ancestor of `origin/main` with `git merge-base --is-ancestor`
-- Blockers: terminal closure currently requires explicit product-owner confirmation per task; if `CAP-FB-20260821-DELIVERY-LIFECYCLE-01` changes that rule, apply the new rule instead
-- Next: run one regression pass covering all four features and present a single consolidated confirmation request
+- Blockers: — (the 2026-08-21 lifecycle decision removed the per-task confirmation requirement; `DONE` is now merged plus the journey suite green at that tip, which all four already satisfy pending one regression run)
+- Next: run one regression pass at the current tip covering all four features, then move all four to `DONE` and archive them
 - Recover: `git merge-base --is-ancestor ffbdf28 origin/main && git merge-base --is-ancestor 215d815 origin/main`
 - History:
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.1). No confirmation is inferred and no status of the four tasks is changed by this entry.
@@ -1034,3 +1059,4 @@ complete field set and History.
 - 2026-08-19 18:18 UTC — captured thirteen distinct product-feedback tasks on exact public `bbeff7b`; linked prior run-status, agent-access, sidebar, Directory, WebMCP, tool-tree, permission, and artifact-transaction tasks without merging or rewriting their histories. The additions retain unresolved enrollment-versus-tool-approval and agent-artifact-disposition decisions as research, treat intermittent whole-UI flashing as a trace-first investigation, keep Recent Activity layout/data/error truth separate from historical renderer evidence, and separate user-facing permission remediation from the existing orchestration candidate. New entries contain only public role custody, repository objects, acceptance criteria, and conservative OPEN/BLOCKED states.
 - 2026-08-20 15:21 UTC — on exact public `ecf657f`, opened semantic tool retrieval across all four tool sources and strengthened the already-open conversation-status presentation task after repeated feedback proved the standalone top-of-task banner remains. No implementation or prior lifecycle acceptance was inferred.
 - 2026-08-21 09:55 UTC — reconciled against an independent architectural review of exact public `300bea1` (documentation-only ancestor of `cdc1a65`). The review executed the build, the unit suite (632 pass, one environment-caused failure), the Chrome journey suite (126/126) and five surface captures. Ten new tasks were opened on exact `cdc1a65` covering worktree/evidence durability, tracker-to-repository reconciliation, the unmerged branch backlog, the delivery lifecycle decision, shipped-task closeout, first-run setup, one reproduced hub alignment defect, superseded-surface removal, service-worker route modularization and the unfinished recipes rename. No existing task's status, owner or evidence was altered, and no prior acceptance was inferred. Full rationale and the ordered work queue are in `REVIEW-2026-08-21.md`.
+- 2026-08-21 10:15 UTC — the product owner approved all six rule changes in `REVIEW-2026-08-21.md` §7. The delivery lifecycle in this file and in `AGENTS.md` is now `OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps, and `DONE` no longer depends on a per-task owner interaction. Independent review by a different model/session and real-browser verification are retained unchanged; content-addressed gate evidence, live remote attestation and versioned acceptance packages are removed. **No existing entry was rewritten** — a legacy-state mapping is published in the state rules instead, so no prior status, evidence or acceptance is silently reclassified. `CAP-FB-20260821-DELIVERY-LIFECYCLE-01` moves to `MERGED`; the confirmation blocker on `CAP-FB-20260821-PUSHED-TASK-CLOSEOUT-01` is cleared and the freeze-window pressure on `CAP-FB-20260821-STALE-BRANCH-TRIAGE-01` is reduced by rule 3.

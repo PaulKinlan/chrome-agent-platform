@@ -160,11 +160,57 @@ record; `docs/KNOWN-ISSUES.md` remains a compatibility link.
   state/evidence requirements, atomic ownership, and recovery commands live in
   `TASKS.md`.
 
-## Review and delivery lifecycle
+## Review and delivery lifecycle (Paul, 2026-08-21 — replaces the nine-state model)
 
-Use `OPEN → IN_PROGRESS → REVIEWING → REVIEW_PASSED → READY_FOR_BROWSER →
-INTEGRATING → GATED → PUSHED → CONFIRMED`; review failures use `FIX_REQUESTED`, and dependency or
-environment stops use `BLOCKED` with an explicit prior state. `READY_FOR_BROWSER`
-is not final acceptance. `GATED` requires exact-commit content-addressed evidence,
-`PUSHED` an immutable remote ref, and `CONFIRMED` explicit product-owner
-confirmation. Never fabricate evidence or closure.
+**`OPEN → IN_REVIEW → MERGED → DONE`**, with `BLOCKED` and `ABANDONED` as the two
+off-ramps. That is the whole lifecycle.
+
+| State | Means | To leave it you need |
+|---|---|---|
+| `OPEN` | Not started, or being worked on. | A candidate commit and a reviewer. |
+| `IN_REVIEW` | A candidate exists and a **different model/session** is reviewing it. | A review verdict. A failed review stays `IN_REVIEW` with the findings recorded — it does not need its own state. |
+| `MERGED` | On `origin/main`. | The Chrome journey suite green at that tip. |
+| `DONE` | Merged **and** the journey suite green at that tip. Terminal. | — |
+| `BLOCKED` | Stopped on something external. Records an owner, the reason, and one next action. | Resolution of the named blocker. |
+| `ABANDONED` | Will not be done. Records why. Terminal. | — |
+
+`DONE` **does not require a per-task owner interaction.** The nine-state model made the
+terminal state depend on explicit product-owner confirmation per task, and the result was
+0 of 31 tasks reaching it while the tracker grew without bound. Merged plus green is the
+bar. Paul reviews what landed when he wants to, not as a gate on every entry.
+
+Legacy entries written under the old model map as: `IN_PROGRESS`/`FIX_REQUESTED` → `OPEN`;
+`REVIEWING`/`REVIEW_PASSED`/`READY_FOR_BROWSER`/`INTEGRATING`/`GATED` → `IN_REVIEW`;
+`PUSHED` → `MERGED`; `CONFIRMED` → `DONE`. Existing entries are **not** rewritten — read
+them through this mapping.
+
+### The rules that survive, and the ones that went
+
+Two rules are load-bearing and are not negotiable:
+
+1. **A different model/session reviews every change.** Never self-review.
+2. **Real browser verification.** Drive the actual behaviour in a real loaded extension
+   with evidence. "It serves" is still not "it works". The 126-check journey suite is a
+   strong gate and it is sufficient.
+
+Deleted: content-addressed gate evidence, live remote attestation, versioned acceptance
+packages, and the separate `GATED`/`READY_FOR_BROWSER`/`INTEGRATING`/`PUSHED`/`CONFIRMED`
+distinctions. They produced 322 open handoff records, 152 of them `BLOCKED`, and zero
+confirmations. Never fabricate evidence or closure — that rule stands on its own without
+the machinery.
+
+### Four working rules (Paul, 2026-08-21)
+
+3. **A review is valid for its content, not its base.** If a candidate passed review and
+   `main` advanced without touching the same files, **the review still stands** — rebase
+   and land it. Re-review only what actually changed. Do not recreate reviewed work on a
+   new base as a matter of course; that treadmill is what converted finished work into 46
+   stale branches.
+4. **Put the `CAP-FB-*` ID in the commit subject.** Today 2 of 430 commits do, which is
+   why every `Recover:` command in `TASKS.md` fails to find its own work.
+5. **No worktree or retained evidence on a RAM-backed filesystem.** Both live on durable
+   storage. Evidence whose only copy is on tmpfs is not evidence.
+6. **No `-vN+1` without a commit in `-vN`.** An agent about to create the next versioned
+   attempt with nothing committed in the previous one stops and escalates instead.
+
+**Optimise for one visible increment per day**, not for an unfalsifiable audit trail.

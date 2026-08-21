@@ -29,6 +29,12 @@ Landed commits per day fell 83 → 65 → 20 → 3 → 0 between 17 and 21 Augus
 reaching a terminal state and 46 branches of reviewed work unmerged. The review's §6 work
 queue supersedes the ordering of the backlog below until its P0 items are cleared.
 
+**Lifecycle change (Paul, 2026-08-21):** the nine-state delivery lifecycle is replaced by
+`OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps, and `DONE` no
+longer requires a per-task owner interaction. Independent review by a different
+model/session and real-browser verification are retained unchanged; the gate-evidence and
+attestation machinery is removed. See `AGENTS.md` for the normative rules.
+
 ## Status (2026-08-17)
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
 - [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)
