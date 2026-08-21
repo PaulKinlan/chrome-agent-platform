@@ -6,7 +6,7 @@
 // NTP's in-context view frame; messaging via lib/messages.js).
 
 import { send } from "../lib/messages.js";
-import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
+import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent } from "../shared/components.js";
 
 const grid = document.getElementById("grid");
 const status = document.getElementById("status");
@@ -129,6 +129,7 @@ async function openArtifactDialog(id, origin) {
   const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
   const asset = res?.ok ? res.asset : null;
   if (!asset) { status.textContent = "Artifact not found."; return; }
+  const frameCleanups = [];
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", asset.name ?? "Artifact");
   const body = document.createElement("div");
@@ -143,6 +144,8 @@ async function openArtifactDialog(id, origin) {
     frame.style.overflow = "hidden";
     frame.style.background = "#fff";
     frame.innerHTML = renderHtmlFrame(content);
+    const frameCleanup = wireHtmlFrameContent(frame); // deliver the staged guarded HTML to the sandbox host
+    frameCleanups.push(frameCleanup); // retained → cleaned on the dialog close
     body.append(frame);
   } else if (type === "image") {
     const img = document.createElement("img");
@@ -160,7 +163,7 @@ async function openArtifactDialog(id, origin) {
   dialog.append(body);
   document.body.append(dialog);
   dialog.show();
-  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch {} }); dialog.remove(); }, { once: true });
 }
 
 render();

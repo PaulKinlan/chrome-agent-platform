@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.128] — 2026-08-21
+- fix(assets): land stable sandboxed previews while preserving crash-safe artifact transactions
+
 ## [0.2.127] — 2026-08-21
 - fix(conversation): reconcile one owned run status (CAP-FB-20260819-CONVERSATION-RUN-STATUS-01)
 

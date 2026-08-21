@@ -99,6 +99,22 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   in event-handler closures and never become DOM attributes. Opening the section
   refreshes FIFO pending rows because background-page timers may be throttled.
 
+## Generated artifact boundary
+Interactive HTML previews use three distinct layers: the privileged extension
+surface, a stable manifest-declared opaque sandbox host, and one disposable
+nested `sandbox="allow-scripts"` document. The privileged surface keeps guarded
+HTML out of its DOM and delivers it to the host with a fresh bounded nonce. The
+host never uses `document.write` and never executes generated markup; it replaces
+only the nested frame when the nonce/content changes. Direct
+`location.assign`/`replace`/`href` and `self.location` therefore cannot destroy
+the host URL, lifecycle listener, or preference relay, while the missing
+same-origin/top-navigation/forms/popups tokens preserve the authority boundary.
+The generated document receives the strict prepend-first CSP and may run inline
+UI scripts/styles without network access. Preference messages relay only between
+the current child and its exact nonce. Teardown removes the outer frame and the
+privileged staging entry; repeated async preview renders clean the prior listener
+and stage exactly one replacement.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

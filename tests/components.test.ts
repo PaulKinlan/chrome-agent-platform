@@ -277,3 +277,202 @@ Deno.test("components: TS_GAP_MS is the subtle-timestamp threshold", async () =>
   const mod = await import("../extension/shared/components.js");
   if (mod.TS_GAP_MS !== 5 * 60 * 1000) throw new Error(`TS_GAP_MS unexpected: ${mod.TS_GAP_MS}`);
 });
+
+Deno.test("components: renderHtmlFrame routes through the manifest-sandbox host (no srcdoc) in the extension", async () => {
+  const mod = await import("../extension/shared/components.js");
+  globalThis.chrome = { runtime: { getURL: (p) => `chrome-extension://extid/${p}` } };
+  try {
+    const out = mod.renderHtmlFrame("<script>alert(1)</script>", {});
+    if (!out.includes('src="chrome-extension://extid/sandbox/artifact-preview.html"')) throw new Error("the extension frame must point at the sandbox host, not srcdoc");
+    if (out.includes("srcdoc=")) throw new Error("the extension frame must NOT use srcdoc (extension_pages script-src 'self' blocks inline)");
+    if (!out.includes('sandbox="allow-scripts"')) throw new Error("the sandbox must be allow-scripts only");
+  } finally {
+    delete globalThis.chrome;
+  }
+  // Without chrome (the docs showcase) the srcdoc fallback still renders.
+  const showcase = mod.renderHtmlFrame("<b>x</b>", {});
+  if (!showcase.includes("srcdoc=")) throw new Error("the non-extension showcase keeps the srcdoc fallback");
+});
+
+Deno.test("components: wireHtmlFrameContent delivers the staged HTML once, then cleans up the frameContents entry", async () => {
+  const mod = await import("../extension/shared/components.js?wire=" + Date.now());
+  globalThis.chrome = { runtime: { getURL: (p) => `chrome-extension://extid/${p}` } }; // the extension branch stages the frameContents
+  const nonce = "wire-test";
+  try {
+  const out = mod.renderHtmlFrame("<p>hi</p>", { nonce });
+  // Mount the rendered markup into a minimal DOM stub + a fake iframe contentWindow.
+  const mkEl = (tag, inner = "") => {
+    const el = { tagName: tag, dataset: {}, innerHTML: inner, children: [], listeners: {}, contentWindow: null };
+    el.querySelector = (sel) => el.children.find((c) => sel === ".html-frame" ? c.tagName === "div" && c.classList?.includes("html-frame") : sel === "iframe" ? c.tagName === "iframe" : false) ?? null;
+    el.querySelectorAll = () => el.children;
+    el.matches = () => false;
+    el.classList = [];
+    el.addClass = (c) => el.classList.push(c);
+    el.addEventListener = () => {};
+    el.removeEventListener = () => {};
+    el.appendChild = (c) => el.children.push(c);
+    return el;
+  };
+  const container = mkEl("div");
+  const htmlFrame = mkEl("div"); htmlFrame.addClass("html-frame");
+  const iframe = mkEl("iframe");
+  iframe.contentWindow = { postMessage: (msg) => posted.push(msg) };
+  htmlFrame.children.push(iframe); container.children.push(htmlFrame);
+  htmlFrame.querySelector = (sel) => sel === "iframe" ? iframe : null;
+  htmlFrame.dataset.frameNonce = nonce;
+  // parse the nonce from the rendered markup's data attribute (the stub mirrors it)
+  const nonceMatch = out.match(/data-frame-nonce="([^"]+)"/);
+  if (nonceMatch) htmlFrame.dataset.frameNonce = nonceMatch[1];
+  const frame = htmlFrame;
+  frame.matches = (sel) => sel === ".html-frame";
+  const posted = [];
+  const cleanup = mod.wireHtmlFrameContent(frame, { nonce });
+  // The content must be delivered (the sandbox host resolves fast → the timeout(0) path).
+  await new Promise((r) => setTimeout(r, 10));
+  if (!posted.some((m) => m.type === "cap:artifact-preview-open" && m.nonce === nonce && m.html.includes("<p>hi</p>"))) {
+    throw new Error(`the staged HTML must be delivered via postMessage: ${JSON.stringify(posted)}`);
+  }
+  cleanup();
+  // The staged entry must be gone (no memory leak).
+  const again = mod.renderHtmlFrame("<p>hi</p>", { nonce });
+  if (again.length === 0) throw new Error("renderHtmlFrame still emits for a fresh nonce");
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+Deno.test("components: the sandbox host files + the manifest sandbox.pages ship together (no 404 preview)", async () => {
+  // import.meta.url-RELATIVE paths (portable across worktrees/clones/CI); Deno
+  // fs APIs keep the suite free of a @types/node type-check dependency.
+  const root = new URL("..", import.meta.url);
+  const read = (rel: string) => Deno.readTextFile(new URL(rel, root));
+  const exists = async (rel: string) => {
+    try { await Deno.stat(new URL(rel, root)); return true; } catch { return false; }
+  };
+  if (!await exists("extension/sandbox/artifact-preview.html") ||
+      !await exists("extension/sandbox/artifact-preview.js") ||
+      !await exists("extension/sandbox/artifact-preview.css")) throw new Error("the complete sandbox host must ship (the extension frame would 404 or render at 300×150)");
+  const host = await read("extension/sandbox/artifact-preview.js");
+  const executableHost = host.replace(/\/\/.*$/gm, "");
+  if (/document\.(open|write|close)\s*\(/.test(executableHost)) throw new Error("the stable host must not replace itself with generated HTML");
+  if (!host.includes('document.createElement("iframe")') || !host.includes('frame.srcdoc = html')) throw new Error("the host must mount generated HTML in a disposable nested iframe");
+  const manifest = JSON.parse(await read("extension/manifest.json"));
+  if (!manifest.sandbox?.pages?.includes("sandbox/artifact-preview.html")) throw new Error("the manifest sandbox.pages must declare the artifact preview host");
+  if (!manifest.content_security_policy?.extension_pages?.includes("frame-src 'self' about: blob: data:")) throw new Error("the extension CSP must allow the sandbox frame");
+});
+
+Deno.test("components: direct artifact preview mounts retain content/preference teardown", async () => {
+  const root = new URL("..", import.meta.url);
+  const ntp = await Deno.readTextFile(new URL("extension/ntp/ntp.js", root));
+  const standalone = await Deno.readTextFile(new URL("extension/artifact/artifact.js", root));
+  const gallery = await Deno.readTextFile(new URL("extension/artifacts/index.js", root));
+  if (!ntp.includes("frameCleanups.push(wireHtmlFrameContent(frame))") ||
+      !ntp.includes("for (const cleanup of frameCleanups.splice(0))")) {
+    throw new Error("the NTP artifact dialog must clean staged content/listeners on close");
+  }
+  if (!standalone.includes('window.addEventListener("pagehide", cleanup, { once: true })') ||
+      !standalone.includes("cleanups.push(wireHtmlFramePreference")) {
+    throw new Error("the standalone artifact view must clean both content and preference wiring");
+  }
+  if (!gallery.includes("frameCleanups.forEach") || !gallery.includes("wireHtmlFrameContent(frame)")) {
+    throw new Error("the Assets gallery dialog must clean staged frame content on close");
+  }
+});
+
+// ── ArtifactCard async-preview lifecycle (the browser review's product defect) ──
+// The `preview` async setter after the mount must re-render AND re-wire: the
+// fresh shadow's click/keydown/reuse/delete listeners + the HTML staging
+// (wireHtmlFrameContent) must survive, exactly once (no duplicates), with the
+// prior frameContents cleanup run first.
+Deno.test("components: ArtifactCard async preview re-renders and re-wires (keyboard/pointer/reuse/delete listeners + HTML staging)", async () => {
+  const mod = await import("../extension/shared/components.js?acard=" + Date.now());
+  globalThis.chrome = { runtime: { getURL: (p) => `chrome-extension://extid/${p}` } };
+  try {
+    // A purpose-built stub: elements record their listeners; the preview frame
+    // exposes a fake iframe contentWindow that records the staged postMessage.
+    const listeners = [];
+    const posted = [];
+    const mkEl = (tag, cls = []) => {
+      const el = { tagName: tag, className: "", classList: cls, dataset: {}, children: [], contentWindow: null };
+      el.addClass = (c) => cls.push(c);
+      el.listeners = {};
+      el.addEventListener = (type, fn) => { listeners.push({ tag: tag, type, fn }); el.listeners[type] = (el.listeners[type] ?? 0) + 1; };
+      el.removeEventListener = () => {};
+      el.appendChild = (c) => el.children.push(c);
+      el.replaceChildren = () => { el.children.length = 0; };
+      el.scrollTop = 0; el.scrollHeight = 0;
+      el.matches = (sel) => cls.includes(sel) || el.tagName === sel;
+      el.querySelector = (sel) => el.children.find((c) => c.tagName === sel || c.classList?.includes(sel)) ?? null;
+      el.getBoundingClientRect = () => ({ x: 0, y: 0, width: 10, height: 10 });
+      return el;
+    };
+    const shadow = { innerHTML: "", set innerHTML(v) { this._html = v; }, _html: "", querySelector: (sel) => {
+      if (sel === ".preview .html-frame") return htmlFrame;
+      if (sel === ".preview") return preview;
+      if (sel === '[data-act="reuse"]') return reuseBtn;
+      if (sel === '[data-act="delete"]') return deleteBtn;
+      return null;
+    }, querySelectorAll: () => [] };
+    const host = {
+      constructor: { shadow: () => true, observedAttributes: mod.ArtifactCard?.observedAttributes ?? [] },
+      _root: shadow, _rendered: false, _previewCleanup: undefined, getAttribute: (n) => n === "type" ? "html" : null,
+      _emit: (type, detail) => emitted.push({ type, detail }), _render: null, _wire: null,
+    };
+    let preview = mkEl("div", [".preview"]);
+    let htmlFrame = mkEl("div", [".html-frame"]);
+    htmlFrame.dataset.frameNonce = "async-nonce";
+    let iframe = mkEl("iframe");
+    iframe.contentWindow = { postMessage: (m) => posted.push(m) };
+    htmlFrame.children.push(iframe);
+    const emitted = [];
+    // Drive the real _render/_wire via the registered class (customElements.get).
+    const ArtifactCardClass = globalThis.customElements.get("artifact-card");
+    if (!ArtifactCardClass) throw new Error("artifact-card must be registered");
+    let reuseBtn = mkEl("button"); let deleteBtn = mkEl("button");
+    const originalRender = ArtifactCardClass.prototype._render;
+    const card = Object.create(ArtifactCardClass.prototype);
+    Object.assign(card, host);
+    // The real _render REPLACES the shadow → the fresh elements each time; the
+    // stub recreates them on every render so the listener accounting matches.
+    card._render = () => {
+      preview = mkEl("div", [".preview"]);
+      htmlFrame = mkEl("div", [".html-frame"]);
+      iframe.contentWindow = { postMessage: (m) => posted.push(m) };
+      htmlFrame.children.push(iframe);
+      reuseBtn = mkEl("button"); deleteBtn = mkEl("button");
+      const renderSet = (v) => { shadow._html = v; };
+      shadow.innerHTML = "";
+      originalRender.call(card);
+      // Extract the GENERATED frame nonce from the rendered markup (the real
+      // _render stages the HTML under it + emits the data-frame-nonce).
+      const nonceMatch = String(shadow._html ?? "").match(/data-frame-nonce="([^"]+)"/);
+      htmlFrame.dataset.frameNonce = nonceMatch ? nonceMatch[1] : "missing-nonce";
+    };
+    card._wire = ArtifactCardClass.prototype._wire.bind(card);
+    card._rendered = true;
+    card._render(); card._wire();
+    const firstWire = listeners.length;
+    // The async preview set: re-render + re-wire (the browser defect fix).
+    card.preview = "<p>async</p>";
+    const secondWire = listeners.length;
+    if (secondWire <= firstWire) throw new Error("the preview set must re-wire the fresh listeners");
+    // Exactly one set on the CURRENT (fresh) elements — the reuse + delete
+    // buttons each carry exactly one click listener after the async preview set.
+    if (reuseBtn.listeners?.click !== 1) throw new Error(`the fresh reuse button must have exactly one click listener`);
+    if (deleteBtn.listeners?.click !== 1) throw new Error(`the fresh delete button must have exactly one click listener`);
+    // The staged HTML must be delivered (the wireHtmlFrameContent postMessage).
+    await new Promise((r) => setTimeout(r, 10));
+    if (!posted.some((m) => m.type === "cap:artifact-preview-open" && m.html.includes("<p>async</p>"))) {
+      throw new Error(`the async preview HTML must be staged + delivered: ${JSON.stringify({ posted, nonce: htmlFrame.dataset.frameNonce, markup: String(shadow._html ?? "").slice(0, 120) })}`);
+    }
+    // A second async set stays idempotent (the cleanup + one fresh wire).
+    const before = listeners.length;
+    card.preview = "<p>async2</p>";
+    const after = listeners.length;
+    if (after <= before) throw new Error("the second preview set must re-wire too");
+    await new Promise((r) => setTimeout(r, 10));
+    if (!posted.some((m) => m.html.includes("<p>async2</p>"))) throw new Error("the second async preview must be delivered");
+  } finally {
+    delete globalThis.chrome;
+  }
+});

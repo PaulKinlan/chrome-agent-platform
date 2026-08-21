@@ -235,23 +235,19 @@ export const HTML_FRAME_CSP =
   "object-src 'none'; frame-src 'none'; media-src data: blob:; font-src data:;";
 
 /**
- * A navigation guard injected FIRST (before any attacker content) into a
- * generated-UI frame. The CSP blocks NETWORK loads, but it cannot stop the
- * frame navigating ITSELF (self-location / window.open / link + form
- * navigation) — a sandboxed iframe with allow-scripts can navigate its own
- * browsing context. This guard neutralizes the navigation vectors:
- * window.open, location.assign/replace, link clicks, form submits, and a
- * best-effort location-href shadow. (The location.href setter is not fully
- * overridable — that residual is closed by the parent intercepting the frame's
- * navigation requests; see the security suite.)
+ * A navigation guard injected FIRST (before any attacker content) into the
+ * disposable generated-document frame. It blocks popups and ordinary link /
+ * form activation and uses the Navigation API when available. Window.location
+ * is intentionally untouched: it is an unforgeable platform object, so trying
+ * to redefine it throws and creates a false security boundary. Direct
+ * location/self navigation is instead confined to the nested opaque frame by
+ * the stable manifest-sandbox host (`sandbox/artifact-preview.html`).
  */
 export function navigationGuardScript() {
   return `<script data-cap-navguard>${[
     "(function(){",
     "try{window.open=function(){return null;};}catch(e){}",
-    "try{if(window.location){window.location.assign=function(){};window.location.replace=function(){};}}catch(e){}",
-    // Best-effort: shadow window.location with a non-navigating object.
-    "try{var L=window.location;Object.defineProperty(window,'location',{configurable:false,get:function(){return L;},set:function(){}});}catch(e){}",
+    "try{if(window.navigation&&window.navigation.addEventListener){window.navigation.addEventListener('navigate',function(e){if(e.cancelable)e.preventDefault();});}}catch(e){}",
     "function block(e){e.preventDefault();e.stopPropagation();}",
     "document.addEventListener('click',function(e){var t=e.target;var a=t&&t.closest?t.closest('a[href],area[href]'):null;if(a)block(e);},true);",
     "document.addEventListener('submit',block,true);",
@@ -337,10 +333,12 @@ export function injectFrameGuards(html, nonce) {
 }
 
 /**
- * Render untrusted HTML output in a SANDBOXED iframe (the co-do double-iframe
- * pattern: this trusted extension surface is the OUTER frame; the model's HTML
- * runs in an INNER opaque-sandbox iframe with no access to the extension origin
- * and no top-navigation/forms/popups).
+ * Render untrusted HTML output behind a stable manifest-sandbox host. The
+ * trusted extension surface mounts that opaque host; the host then mounts the
+ * model's HTML in a second allow-scripts-only opaque iframe with no access to
+ * the extension origin and no top-navigation/forms/popups. Direct self/
+ * location navigation can replace only that disposable inner document, never
+ * the host URL, message relay, or lifecycle boundary.
  *
  * sandbox="allow-scripts" keeps the frame an opaque origin: it cannot read
  * parent.document, navigate top, or open popups. The injected CSP (above) then
@@ -351,9 +349,51 @@ export function injectFrameGuards(html, nonce) {
  * The generated UI is also THEMED via the preference-percolation: the frame
  * carries a one-time nonce + a bootstrap that applies the parent's theme/locale.
  */
+// The rendered-HTML frame contents are held OUT of the privileged DOM. A
+// direct srcdoc child inherits extension_pages script-src 'self' (blocking the
+// inline guard/bootstrap and generated scripts), so the string renderer points
+// at the manifest-sandboxed stable host. That host creates the disposable
+// nested srcdoc frame under the sandbox CSP. The guarded HTML is staged here
+// (never serialized into the privileged DOM) and flushed over a nonce-matched
+// postMessage by wireHtmlFrameContent after mount.
+const frameContents = new Map(); // nonce → guarded HTML string
+
 export function renderHtmlFrame(html, { nonce } = {}) {
   const n = nonce ?? generateNonce();
-  return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectFrameGuards(html, n))}"></iframe></div>`;
+  const previewUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
+    ? chrome.runtime.getURL("sandbox/artifact-preview.html")
+    : null;
+  if (!previewUrl) {
+    // Non-extension showcase (no sandbox host + no extension_pages CSP): the
+    // srcdoc path has no parent CSP to inherit, so the guarded inline scripts
+    // run. The extension never reaches this branch.
+    return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectFrameGuards(html, n))}"></iframe></div>`;
+  }
+  frameContents.set(n, injectFrameGuards(html, n));
+  return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" src="${escapeHtml(previewUrl)}"></iframe></div>`;
+}
+
+/** Deliver the staged guarded HTML to a rendered frame (post-mount wiring — a
+ * string renderer cannot postMessage). Returns a cleanup function. */
+export function wireHtmlFrameContent(container, { nonce } = {}) {
+  const frame = container?.matches?.(".html-frame") ? container : container?.querySelector?.(".html-frame");
+  const iframe = frame?.matches?.("iframe") ? frame : frame?.querySelector?.("iframe");
+  const n = nonce ?? frame?.dataset?.frameNonce ?? "";
+  const guarded = n ? frameContents.get(n) : null;
+  if (!iframe || guarded == null) return () => {};
+  let open = true;
+  const post = () => {
+    if (!open) return;
+    try { iframe.contentWindow?.postMessage({ type: "cap:artifact-preview-open", nonce: n, html: guarded }, "*"); } catch { /* frame not ready */ }
+  };
+  iframe.addEventListener("load", post);
+  // The frame may already be loaded (the sandbox host resolves fast) — try once now.
+  setTimeout(post, 0);
+  return () => {
+    open = false;
+    iframe.removeEventListener("load", post);
+    frameContents.delete(n);
+  };
 }
 
 /**
@@ -1341,7 +1381,12 @@ class ArtifactCard extends Component {
   }
   set preview(v) {
     this._preview = v ?? "";
-    if (this._rendered) this._render();
+    if (this._rendered) { this._render(); this._wire(); }
+    // An async preview set after the mount re-renders the shadow (the old
+    // listeners are destroyed) AND re-wires the fresh elements + re-stages the
+    // guarded HTML (wireHtmlFrameContent) — the browser review's defect.
+    // Idempotence: the re-render replaced the old nodes, so the re-wire adds
+    // exactly one set of listeners + the prior frame cleanup ran first.
   }
   get preview() { return this._preview ?? ""; }
   _render() {
@@ -1411,6 +1456,12 @@ class ArtifactCard extends Component {
     </div>`);
   }
   _wire() {
+    // Deliver the staged guarded HTML to the sandbox-host iframe (the string
+    // renderer cannot postMessage — wire it here after the markup mounted) and
+    // retain the cleanup so a re-render or disconnect never leaks frameContents.
+    this._previewCleanup?.();
+    const previewFrame = this._root.querySelector(".preview .html-frame");
+    if (previewFrame) this._previewCleanup = wireHtmlFrameContent(previewFrame);
     const detail = () => ({
       id: this.getAttribute("id") || "",
       name: this.getAttribute("name") || "Untitled",
@@ -1424,6 +1475,12 @@ class ArtifactCard extends Component {
     this._root.querySelector('[data-act="reuse"]')?.addEventListener("click", () => this._emit("reuse", detail()));
     this._root.querySelector('[data-act="delete"]')?.addEventListener("click", () => this._emit("delete", detail()));
   }
+  disconnectedCallback() {
+    this._previewCleanup?.();
+    this._previewCleanup = undefined;
+    super.disconnectedCallback?.();
+  }
+
 }
 customElements.define("artifact-card", ArtifactCard);
 
@@ -1983,6 +2040,9 @@ class MessageBubble extends Component {
     this.querySelectorAll?.(".html-frame").forEach((frame) => {
       const nonce = frame.dataset?.frameNonce;
       if (nonce) this._frameCleanups.push(wireHtmlFramePreference(frame, { nonce, ...pref }));
+      // Deliver the staged guarded HTML to the sandbox-host iframe (the string
+      // renderer cannot postMessage — wire it here after the markup mounted).
+      this._frameCleanups.push(wireHtmlFrameContent(frame));
     });
   }
   disconnectedCallback() {

@@ -190,3 +190,32 @@ Deno.test("assets are origin-scoped (master vs site don't mix)", async () => {
   assert(!masterList.assets.some((a) => a.id === s.asset.id), "master must NOT see the site asset");
   assert(!siteList.assets.some((a) => a.id === m.asset.id), "site must NOT see the master asset");
 });
+
+Deno.test("assets: same-tick same-name ids disambiguate by the UNIQUE random tail (AX suffix)", async () => {
+  // createAsset calls newId() synchronously before its first await, so two
+  // un-awaited calls share the same Date.now() tick — the old slice(0,8) prefix
+  // collides, the fixed slice(-8) tail does not.
+  const p1 = createAsset("master", { type: "text", name: "dup", content: "1" });
+  const p2 = createAsset("master", { type: "text", name: "dup", content: "2" });
+  const [a, b] = await Promise.all([p1, p2]);
+  assert(a.ok && b.ok, "both same-name creates succeed");
+  const id1 = a.asset.id;
+  const id2 = b.asset.id;
+  assert(id1 !== id2, "distinct ids");
+  // The AX disambiguator (index.js distinct) uses slice(-8): the random tail is
+  // unique even when the timestamp prefix (slice(0,8)) is shared.
+  assert(id1.slice(-8) !== id2.slice(-8), "the id tail (AX suffix) is unique in the same tick");
+});
+
+Deno.test("assets: concurrent same-tick creates both persist in the index (no RMW loss)", async () => {
+  // Two un-awaited creates read the index before either writes; the per-origin
+  // mutex must serialize the read-modify-write so neither row is dropped.
+  const p1 = createAsset("master", { type: "text", name: "concurrent", content: "1" });
+  const p2 = createAsset("master", { type: "text", name: "concurrent", content: "2" });
+  const [a, b] = await Promise.all([p1, p2]);
+  assert(a.ok && b.ok, "both creates succeed");
+  const list = await listAssets("master");
+  const ids = new Set(list.assets.map((x) => x.id));
+  assert(ids.has(a.asset.id), "the first id persists in the index");
+  assert(ids.has(b.asset.id), "the second id persists in the index");
+});

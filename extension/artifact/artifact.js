@@ -6,6 +6,7 @@
 import { send } from "../lib/messages.js";
 import {
   renderHtmlFrame,
+  wireHtmlFrameContent,
   wireHtmlFramePreference,
   currentFramePreference,
 } from "../shared/components.js";
@@ -42,8 +43,21 @@ async function main() {
     frame.className = "frame";
     frame.innerHTML = renderHtmlFrame(asset.content ?? "");
     out.append(frame);
+    const cleanups = [wireHtmlFrameContent(frame)];
     const nonce = frame.querySelector(".html-frame")?.dataset?.frameNonce;
-    if (nonce) wireHtmlFramePreference(frame, { nonce, ...currentFramePreference() });
+    if (nonce) cleanups.push(wireHtmlFramePreference(frame, { nonce, ...currentFramePreference() }));
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      observer.disconnect();
+      for (const dispose of cleanups.splice(0)) {
+        try { dispose(); } catch { /* page/frame is already tearing down */ }
+      }
+    };
+    const observer = new MutationObserver(() => { if (!frame.isConnected) cleanup(); });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener("pagehide", cleanup, { once: true });
   } else if (asset.type === "image") {
     const img = document.createElement("img");
     img.src = asset.content ?? "";

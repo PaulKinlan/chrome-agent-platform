@@ -10,7 +10,13 @@ import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDur
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
-import { renderHtmlFrame, isHtmlDocument } from "../shared/components.js";
+import {
+  renderHtmlFrame,
+  isHtmlDocument,
+  wireHtmlFrameContent,
+  wireHtmlFramePreference,
+  currentFramePreference,
+} from "../shared/components.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
@@ -472,6 +478,7 @@ async function openArtifactDialog(id, origin, fallbackName) {
   const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
   const asset = res?.ok ? res.asset : null;
   if (!asset) { setStatus("Artifact not found", false); return; }
+  const frameCleanups = [];
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", asset.name ?? fallbackName ?? "Artifact");
   const body = document.createElement("div");
@@ -487,11 +494,9 @@ async function openArtifactDialog(id, origin, fallbackName) {
     frame.style.overflow = "hidden";
     frame.style.background = "#fff";
     frame.innerHTML = renderHtmlFrame(content);
+    frameCleanups.push(wireHtmlFrameContent(frame));
     const nonce = frame.querySelector(".html-frame")?.dataset?.frameNonce;
-    if (nonce) {
-      const { wireHtmlFramePreference, currentFramePreference } = await import("../shared/components.js");
-      wireHtmlFramePreference(frame, { nonce, ...currentFramePreference() });
-    }
+    if (nonce) frameCleanups.push(wireHtmlFramePreference(frame, { nonce, ...currentFramePreference() }));
     body.append(frame);
   } else if (type === "image") {
     const img = document.createElement("img");
@@ -510,7 +515,12 @@ async function openArtifactDialog(id, origin, fallbackName) {
   dialog.append(body);
   document.body.append(dialog);
   dialog.show();
-  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.addEventListener("close", () => {
+    for (const cleanup of frameCleanups.splice(0)) {
+      try { cleanup(); } catch { /* best-effort teardown while the dialog closes */ }
+    }
+    dialog.remove();
+  }, { once: true });
 }
 
 // ── Recent activity (the agent run log — item 16) ────────────────────────
