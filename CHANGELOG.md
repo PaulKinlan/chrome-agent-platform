@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.135] — 2026-08-21
+- fix(site-agents): truthful Site Agent lifecycle/status copy + vocabulary authority (CAP-FB-20260819-SITE-AGENT-STATUS-CLEANUP-01)
+
 ## [0.2.134] — 2026-08-21
 - fix(diagnostics): contain hostile console arguments (CAP-FB-20260818-BOUNDS-01)
 

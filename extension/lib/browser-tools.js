@@ -583,7 +583,7 @@ export async function readPage(tabId) {
     if (!(await hasScriptingPermission())) {
       return {
         error:
-          "scripting permission not granted — enable Site agents in Settings",
+          "scripting permission not granted — enable Site Agents in Settings",
       };
     }
     const target = tabId

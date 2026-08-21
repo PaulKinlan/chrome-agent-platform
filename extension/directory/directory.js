@@ -12,7 +12,7 @@ async function render() {
   if (!list.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "No sites enrolled yet. Browse the web with the extension installed; each enrolled origin becomes a site agent.";
+    empty.textContent = "No sites enrolled yet. Browse the web with the extension installed; each enrolled origin becomes a Site Agent.";
     rowsEl.append(empty);
     return;
   }

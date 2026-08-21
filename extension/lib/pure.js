@@ -856,11 +856,23 @@ export const WEBMCP_SCRIPT_STATUSES = new Set([
   "injection-error",
 ]);
 
-/** Byte-bound an error string for the status record (page/SW exception text is
- * unbounded attacker-influenced data — never store it raw). */
-export function boundWebmcpError(e, max = 300) {
+// The ONE diagnostics error bound — a UTF-16 CODE-UNIT bound (JS string
+// length semantics; NOT a UTF-8 byte bound and NOT a code-point count).
+// The persisted cap:webmcpStatus error is bounded in code units.
+export const WEBMCP_ERROR_BOUND = 240;
+
+/** Bound a lifecycle error to WEBMCP_ERROR_BOUND UTF-16 code units. The slice
+ * is SURROGATE-SAFE: if the truncation would leave a lone high surrogate as
+ * the final code unit, that unit is dropped too (a malformed pair must never
+ * be persisted). */
+export function boundWebmcpError(e, max = WEBMCP_ERROR_BOUND) {
   if (e == null) return null;
-  return String(e).slice(0, max);
+  const text = String(e);
+  if (text.length <= max) return text;
+  const sliced = text.slice(0, max);
+  const last = sliced.charCodeAt(sliced.length - 1);
+  const drops = last >= 0xd800 && last <= 0xdbff ? 1 : 0;
+  return sliced.slice(0, sliced.length - drops);
 }
 
 /** Clamp a count to a sane non-negative integer (page-reported counts are

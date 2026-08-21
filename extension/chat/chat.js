@@ -130,7 +130,7 @@ document.getElementById("open-side-panel").addEventListener("click", async () =>
     appendBubble(
       body,
       "agent",
-      "Chrome Agent Platform chat. Ask a task, @mention a site agent, or attach media. Screenshots of visited pages appear below.",
+      "Chrome Agent Platform chat. Ask a task, @mention an agent, or attach media. Screenshots of visited pages appear below.",
     );
   }
 })();

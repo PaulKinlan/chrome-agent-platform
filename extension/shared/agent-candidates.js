@@ -8,7 +8,7 @@ function shortOrigin(o) {
 // Compute the /agent + @ mention agent candidates from the raw agent arrays.
 // Only agents that are ACTUALLY callable are listed: the created named agents,
 // the ENABLED background agents (the available-but-not-enabled recipes are
-// NOT callable), and the enrolled site agents. The current agent (the one the
+// NOT callable), and the enrolled Site Agents. The current agent (the one the
 // composer is scoped to) is excluded — you can't call the agent you're talking
 // to. Pure + exported for unit testing.
 /**
@@ -42,7 +42,7 @@ export function buildAgentCandidates(
   }
   for (const a of site.filter((x) => x.enrolled)) {
     if (!matches(a.origin) && !matches(a.name || "")) continue;
-    out.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · site agent`, kind: "agent" });
+    out.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · Site Agent`, kind: "agent" });
   }
   return out;
 }

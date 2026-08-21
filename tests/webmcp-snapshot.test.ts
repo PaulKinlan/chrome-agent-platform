@@ -190,7 +190,7 @@ Deno.test("injection summary: a tab is ready only when BOTH worlds injected", as
   assertEquals(s.ready, [1], "only the dual-injected tab is ready");
   assertEquals(s.partial, [{ tabId: 2, missing: ["bridge"] }], "the single-world tab is PARTIAL");
   assertEquals(s.failed.length, 1);
-  assert(s.failed[0].error.length <= 300, "the failure error is byte-bounded");
+  assert(s.failed[0].error.length <= pure.WEBMCP_ERROR_BOUND, "the failure error is UTF-16 code-unit bounded");
   assertEquals(s.scriptStatus, "injection-partial");
   assertEquals(pure.summarizeInjection([{ tabId: 1, main: true, bridge: true }]).scriptStatus, "injected");
   assertEquals(pure.summarizeInjection([{ tabId: 1, main: false, bridge: false }]).scriptStatus, "injection-failed");
@@ -215,7 +215,7 @@ Deno.test("status: SW-attested lifecycle is separate from page-reported data + b
     error: "e".repeat(1000),
   }, 3000);
   assertEquals(status.scriptStatus, "injection-error", "a non-enum status never lands");
-  assert(status.scriptError.length <= 300, "the lifecycle error is byte-bounded");
+  assert(status.scriptError.length <= pure.WEBMCP_ERROR_BOUND, "the lifecycle error is UTF-16 code-unit bounded");
   // A lifecycle record for a DIFFERENT origin drops the prior page report.
   status = pure.applyWebmcpLifecycle(status, { origin: "https://b.example", scriptStatus: "registered" }, 4000);
   assertEquals(status.lastReport, null, "cross-origin page data never carries over");
@@ -224,5 +224,5 @@ Deno.test("status: SW-attested lifecycle is separate from page-reported data + b
     Array.from({ length: 80 }, (_, i) => ({ name: "n".repeat(200) + i, source: "declared" })),
   );
   assertEquals(report.toolNames.length, 50, "tool names capped at 50");
-  assert(report.toolNames.every((n) => n.length <= 128), "each tool name byte-bounded");
+  assert(report.toolNames.every((n) => n.length <= 128), "each tool name length-bounded");
 });

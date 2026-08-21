@@ -526,7 +526,7 @@ async function commandItems(ns, arg = "", currentAgentId = null, currentAgentKin
   }
 }
 
-// @ mention candidates: named agents, background agents, site agents, skills,
+// @ mention candidates: named agents, background agents, Site Agents, skills,
 // and recent artifacts — all delineated so the user can tell them apart. The
 // current agent is excluded + only ENABLED background agents are listed.
 async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind = null) {
@@ -556,7 +556,7 @@ async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind
     }
     for (const a of (site.agents || []).filter((x) => x.enrolled)) {
       if (!hit(a.origin) && !hit(a.name || "")) continue;
-      items.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · site agent`, kind: "agent" });
+      items.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · Site Agent`, kind: "agent" });
     }
     for (const s of (skills.skills || [])) {
       if (!hit(s.name) && !hit(s.id)) continue;
@@ -1235,7 +1235,7 @@ export const PERMISSIONS = [
   { id: "alarms", label: "Scheduled tasks", note: "chrome.alarms" },
   { id: "tabs", label: "Browser control", note: "open/navigate/close tabs (warned)" },
   { id: "activeTab", label: "Screenshots", note: "enables Chrome's transient owner-invoked capture only — never a background grant" },
-  { id: "scripting", label: "Site agents", note: "read pages / register scripts" },
+  { id: "scripting", label: "Site Agents", note: "read pages / register scripts" },
   { id: "notifications", label: "Notifications", note: "chrome.notifications" },
   { id: "sidePanel", label: "Side panel", note: "chrome.sidePanel" },
 ];
@@ -1292,7 +1292,7 @@ class SiteAgentCard extends Component {
       .name { font-weight:600; }
       .tools { font-size:12px; color:var(--muted,#635e56); }
       .status { font-size:11px; color:var(--muted,#635e56); }
-    `, `<div class="card" role="button" tabindex="0" aria-label="Use site agent ${escapeHtml(short)}">
+    `, `<div class="card" role="button" tabindex="0" aria-label="Use Site Agent ${escapeHtml(short)}">
       <span class="badge" aria-hidden="true">@</span>
       <span class="who"><span class="name">@${escapeHtml(short)}</span><span class="tools"> · ${tools.length} tools</span></span>
       ${status ? `<span class="status">${escapeHtml(status)}</span>` : ""}
@@ -1411,13 +1411,14 @@ customElements.define("tool-directory-card", ToolDirectoryCard);
  * (right-aligned) — so every capability list is aligned by construction. */
 class CapabilityRow extends Component {
   static get observedAttributes() {
-    return ["name", "description", "icon", "action", "enabled", "last-run"];
+    return ["name", "description", "icon", "action", "action-label", "enabled", "last-run"];
   }
   _render() {
     const name = this.getAttribute("name") || "";
     const description = this.getAttribute("description") || "";
     const icon = this.getAttribute("icon") || "";
     const action = this.getAttribute("action") || "run";
+    const actionLabel = this.getAttribute("action-label") || "Run";
     const enabled = this.hasAttribute("enabled");
     const lastRun = this.getAttribute("last-run") || "";
     // "open" = the WHOLE row is clickable (an agent → open its chat/view) with a
@@ -1436,7 +1437,7 @@ class CapabilityRow extends Component {
               label="${enabled ? "Disable" : "Enable"} ${escapeHtml(name)}"></switch-toggle>`
           : action === "use"
             ? `<button part="use" class="run" type="button">Use</button>`
-            : `<button part="run" class="run" type="button">Run</button>`;
+            : `<button part="run" class="run" type="button" aria-label="${escapeHtml(actionLabel)} ${escapeHtml(name)}">${escapeHtml(actionLabel)}</button>`;
     const rowAttrs = action === "open"
       ? ` part="row" class="row clickable" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}"`
       : ` part="row" class="row"`;
@@ -4050,7 +4051,7 @@ customElements.define("approval-card", ApprovalCard);
 class PromptBar extends Component {
   static get observedAttributes() { return ["placeholder", "model"]; }
   _render() {
-    const placeholder = this.getAttribute("placeholder") || "Ask anything, or @mention a site agent…";
+    const placeholder = this.getAttribute("placeholder") || "Ask anything, or @mention an agent…";
     const model = this.getAttribute("model") || "demo";
     mountTemplate(this, `
       :host { display:block; }
@@ -4272,7 +4273,7 @@ class AgentPicker extends Component {
     // Legacy flat site-agent shape: [{ origin, tools }].
     return [{
       id: "site",
-      label: "Site agents",
+      label: "Site Agents",
       agents: raw.map((a) => {
         const origin = a.origin || a.id || "";
         const short = String(origin).replace(/^https?:\/\//, "").replace(/\/.*/, "");
@@ -4281,7 +4282,7 @@ class AgentPicker extends Component {
           id: origin,
           kind: "site",
           name: `@${short}`,
-          summary: `${a.tools?.length ?? a.toolCount ?? 0} tools · site agent`,
+          summary: `${a.tools?.length ?? a.toolCount ?? 0} tools · Site Agent`,
           status: "enrolled",
           enabled: true,
         };

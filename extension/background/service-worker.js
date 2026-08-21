@@ -390,7 +390,7 @@ function broadcastProgress(event) {
   }
 }
 // The unified agent registry changed (a named agent created/renamed/deleted, a
-// background agent enabled/disabled/duplicated/updated/deleted, a site agent
+// background agent enabled/disabled/duplicated/updated/deleted, a Site Agent
 // enrolled/removed). The shared <agent-picker> + the surfaces hosting it
 // re-fetch `agent.registry` on this event so every view updates live without
 // duplicating registry state. The REVISION is a monotonic per-worker counter
@@ -840,7 +840,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         tools: await siteToolset(origin, cell),
       };
     }));
-    // multiAgent toggles fan-out (hub + per-site sub-agents) vs a solo hub agent.
+    // multiAgent toggles fan-out (hub + per-site Site Agents) vs a solo hub agent.
     // Read it at orchestration time; the options page changes it via
     // provider.set-style invalidation so a saved change rebuilds the orchestrator.
     const prefs = (await kvGet("cap:multiAgent")) ?? {};
@@ -1700,7 +1700,7 @@ function resolveMemory(origin) {
   return siteMemory(origin);
 }
 
-/** Inspect one sub-agent: name, tools, memory keys, enrollment state. The
+/** Inspect one Site Agent: name, tools, memory keys, enrollment state. The
  * management get_agent / agent.directory routes use this. */
 async function agentInfo(origin) {
   const canonical = canonicalOrigin(origin);
@@ -1726,7 +1726,7 @@ async function agentInfo(origin) {
 
 // ── WebMCP discovery diagnostics + status (Paul 2026-08-18) ─────────────
 // The discovery content scripts emit structured [WebMCP]-prefixed console logs
-// when the owner enables Diagnostics (Settings → Site agents). This stores (a)
+// when the owner enables Diagnostics (Settings → Site Agents). This stores (a)
 // the owner's diagnostics toggle and (b) a BOUNDED per-origin "last discovery"
 // status so the Settings/Hub surfaces show WHEN discovery last ran, for which
 // origin, how many tools it found, and the script/injection state — rather than
@@ -3050,7 +3050,7 @@ const handlers = {
   // agent" action, and the /agent slash command, so the three surfaces can never
   // drift. REDACTED by construction: named agents come from listNamedAgents()
   // (the provider override's apiKey is stripped there), background agents carry
-  // no credentials, and site agents expose only the origin + tool NAMES — never
+  // no credentials, and Site Agents expose only the origin + tool NAMES — never
   // provider keys, internal OPFS paths, or master-only operations. The `ref` is
   // the canonical, unambiguous agent id (`named:<id>` / `background:<id>` /
   // `site:<origin>`) that flows composer → run request. The `revision` is the
@@ -3074,13 +3074,13 @@ const handlers = {
     const site = [];
     for (const o of origins) {
       const info = await agentInfo(o).catch(() => null);
-      if (!info?.enrolled) continue; // only the ENROLLED site agents are callable
+      if (!info?.enrolled) continue; // only the ENROLLED Site Agents are callable
       site.push({
         ref: `site:${info.origin}`,
         id: info.origin,
         kind: "site",
         name: info.name && info.name !== info.origin ? info.name : `@${String(info.origin).replace(/^https?:\/\//, "").replace(/\/.*/, "")}`,
-        summary: `${info.toolCount ?? 0} tools · site agent`,
+        summary: `${info.toolCount ?? 0} tools · Site Agent`,
         avatar: null,
         skills: (Array.isArray(info.tools) ? info.tools : []).slice(0, 8),
         status: "enrolled",
@@ -3126,7 +3126,7 @@ const handlers = {
             enabled: enabled.has(`recipe:${r.id}`),
           })),
         },
-        { id: "site", label: "Site agents", agents: site },
+        { id: "site", label: "Site Agents", agents: site },
       ],
     };
   },
@@ -3151,7 +3151,7 @@ const handlers = {
       if (!(await isEnrolled(canonical))) {
         return { ok: false, error: "origin not enrolled" };
       }
-      // The sub-agent name is a reserved site authority key (never model-
+      // The Site Agent name is a reserved site authority key (never model-
       // writable via memory_set) — written through the TRUSTED path here.
       if (name !== undefined) {
         await siteMemory(canonical).setTrusted("agentConfig", { name: normalizedName });
@@ -3878,7 +3878,7 @@ const handlers = {
   // through the SAME composition authority the run path uses
   // (lib/system-prompts.js), so the preview IS what the model receives.
   // Scopes: "hub" (hub + background/hook/scheduled runs), "worker" (site
-  // sub-agents), "agent:<slug>" (a named agent — inherits the hub override).
+  // Site Agents), "agent:<slug>" (a named agent — inherits the hub override).
   async "prompt.describe"({ scope }) {
     const s = normalizeScope(scope);
     if (!s) return { ok: false, error: "unknown prompt scope" };
@@ -4238,6 +4238,10 @@ const handlers = {
           // or OPFS. Report honest failure; the owner retries against the fresh
           // enrollment.
           invalidateAgent();
+          await recordWebmcpLifecycle(canonical, {
+            scriptStatus: "injection-error",
+            error: "origin re-enrolled during enrollment — retry",
+          });
           return {
             ok: false,
             origin: canonical,
@@ -4265,6 +4269,12 @@ const handlers = {
           await clearCleanupPending(canonical);
         }
         invalidateAgent();
+        await recordWebmcpLifecycle(canonical, {
+          scriptStatus: "injection-error",
+          error: transitionLost
+            ? "scripting was disabled during enrollment"
+            : (registered?.error ?? "script registration failed"),
+        });
         return {
           ok: false,
           origin: canonical,
@@ -4306,6 +4316,12 @@ const handlers = {
       const finalSnap = await enrollmentSnapshot(canonical);
       if (!finalSnap.enrolled || finalSnap.gen !== snapAfter.gen) {
         invalidateAgent();
+        // Record the authority loss in the SW-owned diagnostics BEFORE the
+        // failure return, so the persisted state survives reopen.
+        await recordWebmcpLifecycle(canonical, {
+          scriptStatus: "injection-error",
+          error: "scripting was disabled during enrollment — retry",
+        });
         return {
           ok: false,
           origin: canonical,

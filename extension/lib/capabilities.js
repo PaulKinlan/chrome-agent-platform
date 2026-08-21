@@ -42,8 +42,8 @@ export const CAPABILITIES = [
   {
     id: "scripting",
     permissions: ["scripting"],
-    label: "Site agents (read pages)",
-    hint: "Inject the discovery/content scripts into enrolled origins so a site's WebMCP tools can be discovered and driven.",
+    label: "Site Agents",
+    hint: "Find and use tools made available by sites you add. Chrome asks for access only to those sites.",
   },
   {
     id: "notifications",

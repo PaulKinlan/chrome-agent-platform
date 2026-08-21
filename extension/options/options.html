@@ -82,25 +82,25 @@
           <switch-toggle id="multi-agent" label="Multiple agents"></switch-toggle>
           <div class="toggle-text">
             <span class="toggle-name">Multiple agents</span>
-            <span class="muted">When off, the hub is a single agent. When on, the hub fans out to per-site sub-agents.</span>
+            <span class="muted">When off, the hub is a single agent. When on, the hub fans out to Site Agents.</span>
           </div>
         </div>
         <div class="enroll">
-          <h3>Enroll a site</h3>
+          <h3>Add a Site Agent</h3>
           <p
-            class="muted">Grant host access to a single origin so its WebMCP tools can be discovered. This requests the exact origin — no broad <code>&lt;all_urls&gt;</code> access.</p>
+            class="muted">Grant access to one site so the tools it makes available can become Site Agent actions. Chrome requests only that site's origin — never broad <code>&lt;all_urls&gt;</code> access.</p>
           <div class="enroll-row">
-            <label class="field" style="flex:1"><span class="field-label">Origin</span>
+            <label class="field" style="flex:1"><span class="field-label">Site origin</span>
               <input type="text" id="enroll-origin" placeholder="https://github.com">
             </label>
-            <button class="btn" id="enroll-btn" type="button">Enroll</button>
+            <button class="btn" id="enroll-btn" type="button">Add Site Agent</button>
           </div>
           <div id="enrolled-sites" class="origin-list"></div>
         </div>
         <div class="webmcp-status">
-          <h3>WebMCP discovery</h3>
+          <h3>Site Agent diagnostics</h3>
           <p
-            class="muted">The content scripts that scan a page for WebMCP tools (declared <code>document.modelContext.getTools()</code> + functions explicitly opted in through <code>window.webmcpExpose</code>) live at <code>content/main-world.js</code> (page world) and <code>content/content-script.js</code> (isolated relay) — visible in the page's DevTools Sources once the origin is enrolled.</p>
+            class="muted">Technical details for tool discovery on enrolled sites. Runtime lifecycle, tab setup, and page-reported tool counts stay here rather than in ordinary Site Agent rows.</p>
           <div class="toggle-field">
             <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
             <div class="toggle-text">
@@ -202,7 +202,7 @@
         <h2>About</h2>
         <div class="about-card">
           <div class="about-brand">Chrome Agent Platform</div>
-          <p class="muted">Chrome as the agent platform — a new-tab hub, per-site sub-agents (WebMCP), origin-keyed memory, skills, generative UI, and scripts.</p>
+          <p class="muted">Chrome as the agent platform — a new-tab hub, Site Agents (WebMCP), origin-keyed memory, skills, generative UI, and scripts.</p>
           <div class="about-meta">
             <span>Version <strong id="about-version">v0.0.0</strong></span>
           </div>

@@ -246,7 +246,7 @@
       <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;prompt-bar&gt;</code> — the composer with @ sources + / commands + a model picker + dictation</h3>
         <div class="stage column" style="max-width:640px">
-          <prompt-bar model="demo" placeholder="Ask anything, or @mention a site agent…"></prompt-bar>
+          <prompt-bar model="demo" placeholder="Ask anything, or @mention an agent…"></prompt-bar>
         </div>
         <p class="caption">a composer composed from the atomic <code>mic-button</code> + <code>attach-button</code> + a model picker + the @ / popups. Emits <code>send</code>, <code>mention</code>, <code>command</code>, <code>model-change</code>.</p>
       </div>
@@ -285,7 +285,7 @@
         <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — the ONE unified agent picker</h3>
         <div class="stage column" style="max-width:420px">
           <agent-picker id="picker" label="Choose an agent" selected="named:reader"
-            agents='[{"id":"named","label":"Named agents","agents":[{"ref":"named:reader","id":"reader","kind":"named","name":"Reader","summary":"reads articles aloud","skills":["reading","summary"],"status":"ready","enabled":true},{"ref":"named:pr-reviewer","id":"pr-reviewer","kind":"named","name":"PR Reviewer","summary":"reviews pull requests","skills":["github"],"status":"ready","enabled":true}]},{"id":"background","label":"Background agents","agents":[{"ref":"background:sorting-hat","id":"sorting-hat","kind":"background","name":"Sorting Hat","summary":"groups related tabs","status":"every 15 min","enabled":true}]},{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · site agent","skills":["list_prs","create_issue"],"status":"enrolled","enabled":true}]}]'></agent-picker>
+            agents='[{"id":"named","label":"Named agents","agents":[{"ref":"named:reader","id":"reader","kind":"named","name":"Reader","summary":"reads articles aloud","skills":["reading","summary"],"status":"ready","enabled":true},{"ref":"named:pr-reviewer","id":"pr-reviewer","kind":"named","name":"PR Reviewer","summary":"reviews pull requests","skills":["github"],"status":"ready","enabled":true}]},{"id":"background","label":"Background agents","agents":[{"ref":"background:sorting-hat","id":"sorting-hat","kind":"background","name":"Sorting Hat","summary":"groups related tabs","status":"every 15 min","enabled":true}]},{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · Site Agent","skills":["list_prs","create_issue"],"status":"enrolled","enabled":true}]}]'></agent-picker>
         </div>
         <p class="caption">grouped (Named / Background / Site) + searchable; combobox→listbox keyboard contract; emits <code>agent-select</code> (canonical ref) + the legacy <code>select</code> for site entries. In the extension it fetches the live <code>agent.registry</code> itself; here it renders the attribute data.</p>
       </div>
@@ -351,7 +351,7 @@
           <div class="stage column">
             <agent-composer id="hub-composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
             <agent-picker label="Agents"
-              agents='[{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · site agent","status":"enrolled","enabled":true},{"ref":"site:https://aifoc.us","id":"https://aifoc.us","kind":"site","name":"@aifoc.us","summary":"1 tools · site agent","status":"enrolled","enabled":true}]}]'></agent-picker>
+              agents='[{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · Site Agent","status":"enrolled","enabled":true},{"ref":"site:https://aifoc.us","id":"https://aifoc.us","kind":"site","name":"@aifoc.us","summary":"1 tools · Site Agent","status":"enrolled","enabled":true}]}]'></agent-picker>
             <div id="hub-log" class="demo-log">events appear here…</div>
           </div>
         </div>

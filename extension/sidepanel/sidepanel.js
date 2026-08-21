@@ -19,6 +19,7 @@ import {
   appendBubble,
 } from "../shared/conversation.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
+import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 
 const urlInput = document.getElementById("url");
@@ -36,7 +37,7 @@ async function renderTools(origin) {
   const res = await send("sidepanel.getTools", { origin });
   if (!res?.ok) {
     toolsEl.innerHTML = "";
-    toolsEl.textContent = res?.error ?? "not enrolled";
+    toolsEl.textContent = siteAgentToolsMessage("error");
     return;
   }
   const names = res.tools ?? [];
@@ -44,14 +45,14 @@ async function renderTools(origin) {
   if (!res.enrolled) {
     const row = document.createElement("div");
     row.className = "tool-row empty";
-    row.textContent = "Not enrolled — the agent can enroll this origin to discover its tools.";
+    row.textContent = siteAgentToolsMessage("not-added");
     toolsEl.append(row);
     return;
   }
   if (names.length === 0) {
     const row = document.createElement("div");
     row.className = "tool-row empty";
-    row.textContent = "Enrolled · 0 WebMCP tools discovered yet.";
+    row.textContent = siteAgentToolsMessage("empty");
     toolsEl.append(row);
     return;
   }
@@ -90,7 +91,7 @@ async function go() {
     setStatus("Could not open tab: " + (res?.error ?? "unknown error"), true);
     return;
   }
-  setStatus(`Opened ${parsed.origin} in a tab (tab ${res.tabId}). The agent drives it there via WebMCP.`);
+  setStatus(`Opened ${parsed.origin} in a tab. Available Site Agent tools are shown below.`);
 
   // Record the origin so the hub can enroll it.
   send("tools.allOrigins").catch(() => {});
@@ -113,7 +114,7 @@ urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
       let parsed = null;
       try { parsed = new URL(res.url); } catch { /* invalid legacy target */ }
       if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
-        setStatus(`Target ready: ${parsed.origin}. Choose Go to open it in a real tab.`);
+        setStatus(`Site ready: ${parsed.origin}. Choose Open site to show its available Site Agent tools.`);
         await renderTools(parsed.origin);
       } else {
         setStatus("The stored target is invalid.", true);
@@ -155,7 +156,7 @@ const detailStatus = document.getElementById("agent-detail-status");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
 
-const KIND_LABELS = { named: "Named agent", background: "Background agent", site: "Site agent" };
+const KIND_LABELS = { named: "Named agent", background: "Background agent", site: "Site Agent" };
 const SESSION_KEY = "cap:sidepanel:selected-agent";
 
 // The currently-open agent (null = the list view). { ref, kind, id, name }.

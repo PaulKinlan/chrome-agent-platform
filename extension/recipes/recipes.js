@@ -1,5 +1,5 @@
 // recipes/recipes.js — the documented on-demand recipe page. Each recipe is a
-// <capability-row> (the SAME shared row component as the hub's site agents,
+// <capability-row> (the SAME shared row component as the hub's Site Agents,
 // artifacts, and the settings' permission/hook lists — icon | name+description
 // STACKED | right-aligned action) + a collapsed "how it works" <details> for
 // the documentation. Grouped by intent.

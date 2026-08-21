@@ -20,6 +20,11 @@ import {
   credentialNeedsDurableStorage,
   requestStorageFromOwnerClick,
 } from "../lib/first-run-onboarding.js";
+import {
+  SITE_AGENT_COPY,
+  enrollOutcomeState,
+  siteAgentSetupMessage,
+} from "../shared/site-agent-copy.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
@@ -457,12 +462,12 @@ async function renderEnroll() {
         permissions: ["scripting"],
         origins: matches,
       });
-    } catch (e) {
-      saveFlash("Permission request failed: " + String(e?.message ?? e));
+    } catch {
+      saveFlash(siteAgentSetupMessage("permission-error", origin));
       return;
     }
     if (!granted) {
-      saveFlash("Host permission not granted — the origin was not enrolled.");
+      saveFlash(siteAgentSetupMessage("permission-denied", origin));
       return;
     }
     const res = await chrome.runtime.sendMessage({
@@ -471,26 +476,20 @@ async function renderEnroll() {
       ownerGesture: true,
     }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     input.value = "";
-    if (res?.ok) {
-      // Surface the injection outcome honestly — a partial injection (one
-      // world failed in an open tab) is never reported as plain success.
-      const inj = res.injection;
-      let suffix = " (scripts registered)";
-      if (inj && (inj.targets ?? 0) > 0) {
-        suffix = ` (injected into ${inj.ready?.length ?? 0}/${inj.targets} open tab(s))`;
-        if (res.injectionPartial) suffix += " — a tab only partially injected; reload it";
-      }
-      saveFlash(`Enrolled ${origin}${suffix}.`);
-      renderData();
-      renderEnrolledSites();
-      renderWebmcpStatus();
-    } else {
-      saveFlash("Enroll failed: " + (res?.error ?? "unknown"));
-    }
+    const state = enrollOutcomeState(res);
+    // The SW owns the persisted lifecycle record (cap:webmcpStatus — bounded +
+    // redacted registration/injection errors, survive reopen); the flash is the
+    // transient confirmation + the diagnostics section renders the SW record.
+    saveFlash(state === "failed"
+      ? siteAgentSetupMessage("failed-now", origin)
+      : siteAgentSetupMessage(state, origin));
+    renderData();
+    renderEnrolledSites();
+    renderWebmcpStatus();
   });
 }
 
-// ── Enrolled sites (the Disenroll lives HERE — the agent lifecycle, not the
+// ── Enrolled sites (the removal action lives HERE — the agent lifecycle, not the
 //    Data & memory section — item 58) ──
 async function renderEnrolledSites() {
   const el = $("#enrolled-sites");
@@ -511,18 +510,16 @@ async function renderEnrolledSites() {
     const disenroll = document.createElement("button");
     disenroll.type = "button";
     disenroll.className = "btn small ghost disenroll-origin";
-    disenroll.textContent = "Disenroll";
-    disenroll.setAttribute("aria-label", `Disenroll ${origin}`);
+    disenroll.textContent = "Remove Site Agent";
+    disenroll.setAttribute("aria-label", `Remove Site Agent for ${origin}`);
     disenroll.addEventListener("click", async () => {
       const res = await chrome.runtime
         .sendMessage({ type: "agent.delete", origin })
         .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
       if (res?.ok) {
-        saveFlash(
-          `Disenrolled ${origin} (scripts + host permission removed).`,
-        );
+        saveFlash(`Site Agent removed for ${origin}.`);
       } else {
-        saveFlash(`Disenroll incomplete: ${res?.error ?? "unknown"}.`);
+        saveFlash(`Couldn't fully remove the Site Agent for ${origin}. Try again.`);
       }
       renderEnrolledSites();
       renderData();
@@ -566,7 +563,7 @@ async function renderWebmcpStatus() {
   if (!s) {
     const p = document.createElement("p");
     p.className = "muted";
-    p.textContent = "No discovery yet — enroll a site above to scan it for WebMCP tools.";
+    p.textContent = SITE_AGENT_COPY.diagnosticsEmpty;
     body.appendChild(p);
     return;
   }
@@ -578,6 +575,7 @@ async function renderWebmcpStatus() {
     `Origin: ${s.origin}`,
     `Script status (attested): ${s.scriptStatus}${s.scriptStatusAt ? " · " + new Date(s.scriptStatusAt).toLocaleString() : ""}`,
   ];
+  // The persisted scriptError is rendered ONCE (the "Error:" line below).
   if (s.injection && (s.injection.targets ?? 0) > 0) {
     lines.push(
       `Injection: ${s.injection.ready?.length ?? 0}/${s.injection.targets} tab(s) ready` +
@@ -1465,7 +1463,7 @@ async function renderUsage() {
 
 // ── Data / memory ──
 // Item 59: the OPFS memory explorer is now a FILE-SYSTEM tree — an expandable
-// directory tree (Master / Named agents / Background agents / Site agents),
+// directory tree (Master / Named agents / Background agents / Site Agents),
 // each agent a directory whose keys are files you click to view. Directories
 // expand/collapse; a file toggles its value. Like a file manager, not a flat
 // list.
@@ -1633,7 +1631,7 @@ async function renderMemoryExplorer() {
   if (master) root.append(storeNode(master));
   if (named.length) root.append(dirNode("Named agents", "named", named.map(storeNode)));
   if (bg.length) root.append(dirNode("Background agents", "background", bg.map(storeNode)));
-  if (site.length) root.append(dirNode("Site agents", "site", site.map(storeNode)));
+  if (site.length) root.append(dirNode("Site Agents", "site", site.map(storeNode)));
 }
 
 async function renderData() {
@@ -1711,7 +1709,7 @@ async function renderData() {
 
 // ── Advanced — system prompts (the layered prompt architecture) ──────────
 // The scope selector picks WHICH agent's system prompt is shown: the hub
-// (also the default for background/hook/scheduled runs), the site sub-agents
+// (also the default for background/hook/scheduled runs), the Site Agents
 // (the "worker" scope), or a specific named agent (agent:<slug>, which
 // inherits the hub's customization until it has its own). The
 // <system-prompt-editor> component renders the describe payload; saves/resets
@@ -1719,7 +1717,7 @@ async function renderData() {
 // run path uses — the preview is the exact platform composition).
 const PROMPT_SCOPES = [
   { id: "hub", label: "Hub agent (default)", hint: "Applies to the hub and, unless a named agent has its own customization, to every named/background/hook/scheduled run." },
-  { id: "worker", label: "Site sub-agents", hint: "The base prompt every enrolled site's sub-agent runs with. Per-origin skills are appended at run time." },
+  { id: "worker", label: "Site Agents", hint: "The base prompt every enrolled site's Site Agent runs with. Per-origin skills are appended at run time." },
 ];
 
 async function renderPrompts() {

@@ -644,9 +644,9 @@
         </header>
 
         <first-run-guide id="first-run-guide" hidden></first-run-guide>
-        <agent-composer id="composer" placeholder="Ask anything, or @mention a site agent…" send-label="Run task"></agent-composer>
+        <agent-composer id="composer" placeholder="Ask anything, or @mention an agent…" send-label="Run task"></agent-composer>
 
-        <!-- Agents: the two groupings — background agents (scheduled) + site agents (enrolled origins). -->
+        <!-- Agents: the two groupings — background agents (scheduled) + Site Agents (enrolled origins). -->
         <section aria-label="Agents">
           <div class="panel">
             <div class="panel-head">
@@ -657,7 +657,7 @@
             <div class="panel-body" id="named-agents"></div>
             <div class="panel-subhead"><span>Background agents</span><a href="#" class="hint-link" id="bg-configure">Configure</a></div>
             <div class="panel-body" id="background-agents"></div>
-            <div class="panel-subhead"><span>Site agents</span><a href="#" class="hint-link" id="discover-page">Discover this page</a></div>
+            <div class="panel-subhead"><span>Site Agents</span><a href="#" class="hint-link" id="discover-page">Find site tools</a></div>
             <div class="panel-body" id="site-agents"></div>
             <div class="panel-body webmcp-hub-status muted hub-row" id="webmcp-hub-status" aria-live="polite"></div>
           </div>
@@ -712,7 +712,7 @@
         <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
         <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
         <conversation-run-status class="run-status" id="run-status" hidden></conversation-run-status>
-        <agent-composer id="thread-composer" placeholder="Reply, or @mention a site agent…" send-label="Send"></agent-composer>
+        <agent-composer id="thread-composer" placeholder="Reply, or @mention an agent…" send-label="Send"></agent-composer>
       </div>
     </div>
     <script type="module" src="ntp.js"></script>

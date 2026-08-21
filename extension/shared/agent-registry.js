@@ -77,7 +77,7 @@ export function shouldApplyRegistrySnapshot(
 export function isCallable(agent) {
   if (!agent || typeof agent !== "object") return false;
   if (agent.kind === "background") return agent.enabled === true;
-  return true; // named agents + enrolled site agents are always callable
+  return true; // named agents + enrolled Site Agents are always callable
 }
 
 /** Filter the grouped registry by a search query. Returns NEW group arrays

@@ -1,6 +1,6 @@
 // ntp/ntp.js — the hub page wiring. The hub is a COMMAND CENTER:
 //   header → composer (the hero) → Tasks (the distinct task threads) →
-//   background agents (scheduled, toggle) → site agents (enrolled origins) →
+//   background agents (scheduled, toggle) → Site Agents (enrolled origins) →
 //   recent artifacts. A task is a DISTINCT THREAD: starting one opens a
 //   full-screen thread surface (the conversation + a composer to nudge/continue),
 //   and the hub lists every prior thread (auto-named).
@@ -39,6 +39,16 @@ import {
 } from "./view-transition.js";
 import { applySidebarNubPolicy } from "./view-policy.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
+import {
+  SITE_AGENT_COPY,
+  enrollOutcomeState,
+  siteAgentSetupMessage,
+} from "../shared/site-agent-copy.js";
+// The visible find-tools action consumes the centralized authority at runtime
+// (the ntp module runs at the end of the body — the element exists at eval, so
+// no DOMContentLoaded dependency).
+const discoverPage = document.getElementById("discover-page");
+if (discoverPage) discoverPage.textContent = SITE_AGENT_COPY.findToolsAction;
 
 import {
   installPageDiagnostics,
@@ -183,20 +193,20 @@ const withViewTransition = createViewTransitionRunner({
   prefersReducedMotion,
 });
 
-// ── site agents (enrolled origins) ────────────────────────────────────────
+// ── Site Agents (enrolled origins) ────────────────────────────────────────
 async function renderSiteAgents() {
   const el = document.getElementById("site-agents");
   if (!el) return;
   const res = await send("agent.directory").catch(() => ({ agents: [] }));
   // Item 44: a site with ZERO tools is not an agent (paul.kinlan.me with no
-  // WebMCP/inferred tools must not appear as a site agent). Only origins that
+  // WebMCP/inferred tools must not appear as a Site Agent). Only origins that
   // actually expose tools are listed here.
   const agents = (Array.isArray(res.agents) ? res.agents : []).filter(
     (a) => (a.toolCount ?? a.tools?.length ?? 0) > 0,
   );
   el.replaceChildren();
   if (!agents.length) {
-    el.innerHTML = `<div class="empty">No site agents yet.</div>`;
+    el.innerHTML = `<div class="empty">No Site Agents yet. Find tools from an open tab to add one.</div>`;
   } else {
     for (const a of agents.slice(0, 6)) {
       const row = document.createElement("capability-row");
@@ -221,10 +231,11 @@ async function renderSiteAgents() {
   refreshAgentCount();
 }
 
-// ── WebMCP discovery hub status (Paul 2026-08-18) ────────────────────────
-// A one-line honest status under the Site agents section: when discovery last
+// ── WebMCP discovery hub status ──────────────────────────────────────────
+// A one-line honest status under the Site Agents section: when discovery last
 // ran, for which origin, how many tools it found, and the script state — so the
-// discovery pipeline is never opaque from the hub.
+// discovery pipeline is never opaque from the hub. PRESERVED on the current
+// main (the copy-cleanup candidate removed it; the WebMCP semantics stay).
 async function renderWebmcpHubStatus() {
   const el = document.getElementById("webmcp-hub-status");
   if (!el) return;
@@ -250,7 +261,7 @@ async function renderWebmcpHubStatus() {
   el.textContent = parts.join(" · ");
 }
 
-// ── "Discover this page" (explicit tab picker) ───────────────────────────
+// ── Find site tools (explicit tab picker) ────────────────────────────────
 // Browsing a page must be discoverable without typing the origin into Settings
 // (the dynamic-permission-on-need principle). The EXACT-TAB finding: the old
 // flow resolved the ACTIVE tab — which is the hub's own NTP while the user is
@@ -267,18 +278,18 @@ async function discoverActivePage() {
       .request({ permissions: ["tabs"] })
       .catch(() => false);
     if (!granted) {
-      setStatus("Tabs permission denied — can't list the open pages", false);
+      setStatus(siteAgentSetupMessage("tabs-denied"), false);
       return;
     }
     listing = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
   }
   if (!listing?.ok) {
-    setStatus(listing?.error ?? "Couldn't list the open pages", false);
+    setStatus(siteAgentSetupMessage("list-failed"), false);
     return;
   }
   const tabs = Array.isArray(listing.tabs) ? listing.tabs : [];
   if (tabs.length === 0) {
-    setStatus("No open web pages to discover — open the page in a tab first.", false);
+    setStatus(siteAgentSetupMessage("no-tabs"), false);
     return;
   }
   openDiscoverPicker(tabs);
@@ -286,11 +297,11 @@ async function discoverActivePage() {
 
 function openDiscoverPicker(tabs) {
   const dialog = document.createElement("agent-dialog");
-  dialog.setAttribute("title", "Discover a page");
+  dialog.setAttribute("title", SITE_AGENT_COPY.pickerTitle);
   const list = document.createElement("div");
   const hint = document.createElement("div");
   hint.className = "empty";
-  hint.textContent = "Pick the tab to scan for tools — the exact tab you pick is enrolled and injected.";
+  hint.textContent = SITE_AGENT_COPY.pickerHint;
   list.append(hint);
   for (const t of tabs) {
     const row = document.createElement("capability-row");
@@ -298,6 +309,7 @@ function openDiscoverPicker(tabs) {
     row.setAttribute("description", t.origin);
     row.setAttribute("icon", "");
     row.setAttribute("action", "run");
+    row.setAttribute("action-label", "Choose");
     row.addEventListener("run", () => {
       dialog.close();
       discoverTab(t);
@@ -322,11 +334,11 @@ async function discoverTab(tab) {
       origins: [`${tab.origin}/*`],
     });
   } catch (e) {
-    setStatus("Permission request failed: " + String(e?.message ?? e), false);
+    setStatus(siteAgentSetupMessage("permission-error", tab.origin), false);
     return;
   }
   if (!granted) {
-    setStatus("Host permission not granted — " + tab.origin + " was not enrolled.", false);
+    setStatus(siteAgentSetupMessage("permission-denied", tab.origin), false);
     return;
   }
   const res = await send("agent.enroll-origin", {
@@ -335,14 +347,12 @@ async function discoverTab(tab) {
     tabId: tab.id,
   }).catch(() => ({ ok: false }));
   if (res?.ok) {
-    if (res.pickedTabReady === true) {
-      setStatus(`Discovered ${tab.origin} — give it a moment to scan for tools…`, true);
-    } else if (res.pickedTabReady === false) {
-      setStatus(`Enrolled ${tab.origin}, but the picked tab was not fully injected — reload that tab.`, false);
-    } else {
-      setStatus(`Enrolled ${tab.origin} — the discovery scripts run on the next page load.`, true);
-    }
-    // Re-poll the site agents + the directory so the newly-discovered tools
+    // The SHARED error-first mapping (the same enrollOutcomeState as Settings),
+    // with the selected-tab-specific recovery: the picker HAS a chosen tab, so
+    // a partial injection keeps the exact-tab reload wording.
+    const state = enrollOutcomeState(res, { selectedTab: true });
+    setStatus(siteAgentSetupMessage(state, tab.origin), state !== "failed" && state !== "reload");
+    // Re-poll the Site Agents + the directory so the newly-discovered tools
     // appear without a manual refresh. The discovery scripts re-poll
     // asynchronously (800ms/2s/4s) — refresh again after they report.
     const refresh = () => {
@@ -353,7 +363,7 @@ async function discoverTab(tab) {
     refresh();
     for (const delay of [1200, 3200]) setTimeout(refresh, delay);
   } else {
-    setStatus("Discovery failed: " + (res?.error ?? "unknown"), false);
+    setStatus(siteAgentSetupMessage("failed", tab.origin), false);
   }
 }
 
@@ -586,7 +596,7 @@ async function openArtifactDialog(id, origin, fallbackName) {
 
 // ── Recent activity (the agent run log — item 16) ────────────────────────
 // Shows what the agents DID across the WHOLE system (master + named + background
-// + site agents), most-recent-first, so a background agent's work is visible
+// + Site Agents), most-recent-first, so a background agent's work is visible
 // even without a live UI. Rendered by the reusable <activity-explorer> Web
 // Component (searchable + filterable by agent).
 async function renderRunLog() {

@@ -61,10 +61,10 @@
     <div class="head">
       <span>Side panel</span>
       <input id="url" placeholder="https://…" value="https://example.com">
-      <button class="btn" id="go">Go</button>
+      <button class="btn" id="go">Open site</button>
     </div>
-    <div class="status" id="status">Ready. The agent drives this page via WebMCP / injected JS in its real tab.</div>
-    <div class="tools" id="tools" aria-label="Discovered WebMCP tools"></div>
+    <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true">Choose Open site to show the site's available Site Agent tools.</div>
+    <div class="tools" id="tools" role="status" aria-live="polite" aria-atomic="true" aria-label="Available Site Agent tools"></div>
   </section>
 
   <section id="agents-view" role="tabpanel" aria-labelledby="tab-agents" hidden>

@@ -33,7 +33,7 @@ async function renderAgents() {
   const list = Array.isArray(origins) ? origins : [];
   agentsEl.replaceChildren();
   if (!list.length) {
-    agentsEl.append(Object.assign(document.createElement("p"), { textContent: "No site agents yet.", style: "color:var(--muted)" }));
+    agentsEl.append(Object.assign(document.createElement("p"), { textContent: "No Site Agents yet.", style: "color:var(--muted)" }));
     return;
   }
   for (const origin of list) {

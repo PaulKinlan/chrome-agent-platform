@@ -635,12 +635,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
   let res;
   try {
     if (agentKind === "site") {
-      // A SITE agent: direct delegation to the enrolled origin's worker agent
+      // A Site Agent: direct delegation to the enrolled origin's worker agent
       // (agent.delegate — generation-fenced, journaled to the site's OWN OPFS
       // store). Site delegation carries the task TEXT only (no attachments yet,
       // no live per-run progress) — say so honestly when attachments exist.
       if (attachments.length && typeof c.appendSystem === "function") {
-        c.appendSystem("Attachments aren't delivered to site agents yet — the text was sent.");
+        c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
       }
       res = await send("agent.delegate", {
         origin: agentId,
