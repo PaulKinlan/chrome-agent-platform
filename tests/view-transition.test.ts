@@ -2,6 +2,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   createViewTransitionRunner,
+  focusExplicitRouteTarget,
   shouldSuppressRootCrossfade,
   TASK_VIEW_TRANSITION_CLASS,
   VIEW_ROUTE,
@@ -372,8 +373,9 @@ Deno.test("NTP task routing preserves reduced-motion and focus contracts", async
     "NTP supplies source and target routes instead of globally disabling transitions",
   );
   assert(
-    js.includes("focusAfter = threadTitle"),
-    "task arrival has an explicit focus destination",
+    /const focusAfter = Object\.hasOwn\(options, "focusAfter"\)[\s\S]*?: threadTitle;/
+      .test(js),
+    "fresh task arrival retains the default title focus destination",
   );
   assert(
     html.includes('id="thread-title" tabindex="-1"'),
@@ -406,99 +408,94 @@ Deno.test("current-main task routing composes with Directory covered-state and f
   );
 });
 
-Deno.test("showThreadView already-open branch routes focus to focusAfter synchronously without view transition", () => {
-  let starts = 0;
-  const dummyDoc = {
-    startViewTransition: (update) => {
-      starts += 1;
-      update?.();
-      return { finished: Promise.resolve() };
+Deno.test("explicit route focus distinguishes no-owner, connected, disconnected, and throwing targets", () => {
+  let focusedCount = 0;
+  const focusTarget = {
+    isConnected: true,
+    focus: () => {
+      focusedCount += 1;
     },
   };
-  const runner = createViewTransitionRunner({
-    document: dummyDoc,
-    prefersReducedMotion: () => false,
-  });
 
-  // Replicate the showThreadView pattern for testing the branch contract
-  function makeShowThreadView(threadView, activeViewRouteRef) {
-    return function showThreadView({ focusAfter } = {}) {
-      if (!threadView.hidden) {
-        if (focusAfter && focusAfter.isConnected !== false) {
-          try {
-            focusAfter.focus?.();
-          } catch {
-            // Focus routing is progressive enhancement
-          }
-        }
-        return;
-      }
-      runner(() => {
-        threadView.hidden = false;
-        activeViewRouteRef.current = VIEW_ROUTE.TASK;
-      }, {
-        sourceRoute: activeViewRouteRef.current,
-        targetRoute: VIEW_ROUTE.TASK,
-        focusAfter,
-      });
-    };
-  }
+  assertEquals(
+    focusExplicitRouteTarget(),
+    false,
+    "a no-argument route does not acquire focus ownership",
+  );
+  assertEquals(focusedCount, 0, "a no-argument route focuses nothing");
 
-  // Case 1: threadView is already open (!threadView.hidden) -> routes focus synchronously, 0 transitions
-  let focusedCount = 0;
-  const focusTarget = { isConnected: true, focus: () => { focusedCount += 1; } };
-  const openThreadView = { hidden: false };
-  const routeRef1 = { current: VIEW_ROUTE.TASK };
-  const showOpen = makeShowThreadView(openThreadView, routeRef1);
+  assertEquals(
+    focusExplicitRouteTarget({ focusAfter: focusTarget }),
+    true,
+    "an explicit focus disposition owns routing",
+  );
+  assertEquals(
+    focusedCount,
+    1,
+    "a connected explicit target is focused synchronously",
+  );
 
-  showOpen({ focusAfter: focusTarget });
-  assertEquals(focusedCount, 1, "connected focusAfter receives focus synchronously");
-  assertEquals(starts, 0, "no view transition is started when threadView is already open");
-
-  // Case 2: focusAfter is disconnected -> focus is skipped
   let disconnectedFocusCount = 0;
-  const disconnectedTarget = { isConnected: false, focus: () => { disconnectedFocusCount += 1; } };
-  showOpen({ focusAfter: disconnectedTarget });
-  assertEquals(disconnectedFocusCount, 0, "disconnected target does not receive focus");
-  assertEquals(starts, 0, "still no view transition started");
+  assertEquals(
+    focusExplicitRouteTarget({
+      focusAfter: {
+        isConnected: false,
+        focus: () => {
+          disconnectedFocusCount += 1;
+        },
+      },
+    }),
+    true,
+    "a disconnected target still represents an explicit disposition",
+  );
+  assertEquals(
+    disconnectedFocusCount,
+    0,
+    "a disconnected target is not focused",
+  );
 
-  // Case 3: focusAfter focus throws -> swallowed gracefully
-  const throwingTarget = {
-    isConnected: true,
-    focus: () => { throw new Error("focus failed"); },
-  };
-  showOpen({ focusAfter: throwingTarget });
-  assertEquals(starts, 0, "exception during focus does not escape or trigger transition");
-
-  // Case 4: threadView is hidden -> starts view transition
-  const closedThreadView = { hidden: true };
-  const routeRef2 = { current: VIEW_ROUTE.HUB };
-  const showClosed = makeShowThreadView(closedThreadView, routeRef2);
-  showClosed({ focusAfter: focusTarget });
-  assertEquals(starts, 1, "closed threadView starts a view transition");
-  assertEquals(closedThreadView.hidden, false, "threadView is unhidden inside transition update");
-  assertEquals(routeRef2.current, VIEW_ROUTE.TASK, "active route is updated to TASK");
+  assertEquals(
+    focusExplicitRouteTarget({
+      focusAfter: {
+        isConnected: true,
+        focus: () => {
+          throw new Error("focus failed");
+        },
+      },
+    }),
+    true,
+    "a focus exception is contained without losing explicit ownership",
+  );
 });
 
-Deno.test("NTP showThreadView preserves composer focus on same-surface task-to-agent switches", async () => {
+Deno.test("NTP showThreadView keeps follow-ups focus-neutral and explicit agent switches composer-focused", async () => {
   const js = await Deno.readTextFile(
     new URL("../extension/ntp/ntp.js", import.meta.url),
   );
 
   assert(
-    /function showThreadView\(\{ focusAfter = threadTitle \} = \{\}\)\s*\{[\s\S]*?if \(!threadView\.hidden\) \{[\s\S]*?if \(focusAfter && focusAfter\.isConnected !== false\) \{[\s\S]*?focusAfter\.focus\?\.\(\);[\s\S]*?\}[\s\S]*?return;\s*\}/
+    /function showThreadView\(options = \{\}\)\s*\{[\s\S]*?const focusAfter = Object\.hasOwn\(options, "focusAfter"\)[\s\S]*?: threadTitle;[\s\S]*?if \(!threadView\.hidden\) \{\s*focusExplicitRouteTarget\(options\);\s*return;\s*\}[\s\S]*?withViewTransition\(/
       .test(js),
-    "showThreadView routes focus to focusAfter when already open before returning",
+    "already-open routes return before transitions and focus only an explicit target",
+  );
+  assert(
+    /async function runThreadTurn\(text, attachments = \[\]\)\s*\{[\s\S]*?showThreadView\(\);/
+      .test(js),
+    "follow-up turns retain the focus-neutral no-argument route",
+  );
+  assert(
+    /async function openThread\(id\)\s*\{[\s\S]*?showThreadView\(\);/
+      .test(js),
+    "same-thread row opens retain the focus-neutral no-argument route",
   );
   assert(
     /async function openAgentSurface\(\{ kind, id, name \}\)\s*\{[\s\S]*?showThreadView\(\{ focusAfter: threadComposer \}\);/
       .test(js),
-    "openAgentSurface routes focus to threadComposer",
+    "openAgentSurface explicitly routes focus to threadComposer",
   );
   assert(
     /async function openBackgroundAgentChat\(id, name\)\s*\{[\s\S]*?showThreadView\(\{ focusAfter: threadComposer \}\);/
       .test(js),
-    "openBackgroundAgentChat routes focus to threadComposer",
+    "openBackgroundAgentChat explicitly routes focus to threadComposer",
   );
 });
-

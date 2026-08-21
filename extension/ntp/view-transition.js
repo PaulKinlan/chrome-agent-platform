@@ -28,6 +28,13 @@ function routeFocus(target) {
   }
 }
 
+/** Route focus only when a caller explicitly owns the focus disposition. */
+export function focusExplicitRouteTarget(options = {}) {
+  if (!Object.hasOwn(options, "focusAfter")) return false;
+  routeFocus(options.focusAfter);
+  return true;
+}
+
 export function createViewTransitionRunner({ document, prefersReducedMotion }) {
   let active = false;
   let activeCompletion = null;

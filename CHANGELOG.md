@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.118] — 2026-08-21
+- fix(ntp): preserve composer focus on follow-up turns (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+
 ## [0.2.117] — 2026-08-21
 - fix(ntp): retain composer focus on same-surface task-to-agent switches (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
 

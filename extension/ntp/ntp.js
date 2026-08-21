@@ -20,6 +20,7 @@ import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-
 import { createViewFocusController } from "../lib/view-focus.js";
 import {
   createViewTransitionRunner,
+  focusExplicitRouteTarget,
   VIEW_ROUTE,
 } from "./view-transition.js";
 
@@ -677,19 +678,17 @@ function hideViewInner() {
   viewFrame.src = "about:blank";
   syncViewOpen();
 }
-function showThreadView({ focusAfter = threadTitle } = {}) {
+function showThreadView(options = {}) {
+  const focusAfter = Object.hasOwn(options, "focusAfter")
+    ? options.focusAfter
+    : threadTitle;
   // Already open (a follow-up/nudge in the same surface): restarting the view
   // transition would flash the thread + the run-status banner mid-run (the
-  // review's working-state screenshot finding). No-op instead, but route focus
-  // to focusAfter so same-surface agent switches retain focus on the composer.
+  // review's working-state screenshot finding). A no-argument call remains a
+  // focus no-op; only explicit route changes (for example, task → agent) own
+  // a synchronous focus disposition.
   if (!threadView.hidden) {
-    if (focusAfter && focusAfter.isConnected !== false) {
-      try {
-        focusAfter.focus?.();
-      } catch {
-        // Focus routing is progressive enhancement; transition cleanup must win.
-      }
-    }
+    focusExplicitRouteTarget(options);
     return;
   }
   const sourceRoute = activeViewRoute;
