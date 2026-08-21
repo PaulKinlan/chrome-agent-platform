@@ -480,6 +480,13 @@
       outline: none;
     }
     .panel-body { padding: 4px 0; }
+    /* Shared row treatment: the WebMCP discovery status line IS a .panel-body
+       (so a child selector can never reach it) — the shared .hub-row class is
+       applied DIRECTLY to the element and overrides the panel-body's 4px 0
+       inline via the later declaration (CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01).
+       A shared class rule, never a one-off #id override; the sibling
+       capability-row hosts already supply 12px 14px, so 14px matches them. */
+    .hub-row { padding-inline: 14px; }
     .empty {
       padding: 14px;
       color: var(--muted);
@@ -649,7 +656,7 @@
             <div class="panel-body" id="background-agents"></div>
             <div class="panel-subhead"><span>Site agents</span><a href="#" class="hint-link" id="discover-page">Discover this page</a></div>
             <div class="panel-body" id="site-agents"></div>
-            <div class="panel-body webmcp-hub-status muted" id="webmcp-hub-status" aria-live="polite"></div>
+            <div class="panel-body webmcp-hub-status muted hub-row" id="webmcp-hub-status" aria-live="polite"></div>
           </div>
         </section>
 

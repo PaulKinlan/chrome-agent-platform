@@ -239,3 +239,29 @@ Deno.test("webmcp bridge: re-execution leaves one relay listener and one upsert"
   await tick(5);
   assertEquals(bridge.sent.filter((m) => m.type === "tools.upsert").length, 1);
 });
+
+// CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01: the hub's WebMCP discovery status
+// line must align with the sibling rows via the SHARED row treatment (never a
+// one-off #id rule). The status node IS a .panel-body — a child selector can
+// never reach it — so the shared .hub-row CLASS is applied directly to the
+// element, and the effective cascade must give it the 14px inline padding.
+Deno.test("webmcp hub status: the shared .hub-row class is applied directly + the effective cascade yields the sibling 14px inline", async () => {
+  const html = await Deno.readTextFile(new URL("../extension/ntp/ntp.html", import.meta.url));
+  // SELECTOR MEMBERSHIP: the status element itself carries the shared row class.
+  if (!/<div class="panel-body webmcp-hub-status muted hub-row" id="webmcp-hub-status"/.test(html)) {
+    throw new Error("the status element does not carry the shared hub-row class (selector membership)");
+  }
+  // NO one-off #id rule may exist (the fix must be shared, not per-id).
+  if (/#webmcp-hub-status\s*\{/.test(html)) throw new Error("a one-off #webmcp-hub-status rule is forbidden");
+  // EFFECTIVE CASCADE: the .hub-row rule must set padding-inline: 14px AND be
+  // declared AFTER .panel-body (same specificity → the later declaration wins
+  // for the inline component, overriding the panel-body's 4px 0).
+  const panelBodyAt = html.indexOf(".panel-body { padding: 4px 0; }");
+  const hubRowAt = html.indexOf(".hub-row { padding-inline: 14px; }");
+  if (panelBodyAt < 0) throw new Error(".panel-body rule missing");
+  if (hubRowAt < 0) throw new Error(".hub-row inline-padding rule missing");
+  if (!(hubRowAt > panelBodyAt)) throw new Error("the .hub-row rule must be declared after .panel-body for the cascade to win");
+  // The sibling capability-row hosts carry 14px inline — the shared 14px must match.
+  const components = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  if (!/padding:12px 14px/.test(components)) throw new Error("the sibling capability-row inline padding is not 14px — the shared rule must match it");
+});
