@@ -6067,6 +6067,156 @@ class DurableRunRegistry extends Component {
 }
 customElements.define("durable-run-registry", DurableRunRegistry);
 
+/* <local-model-catalog> — publisher-origin model metadata + preflight states.
+ * The host owns the immutable catalogue and performs the bounded network probe;
+ * this shared component only renders truthful state and emits `model-preflight`.
+ */
+class LocalModelCatalog extends Component {
+  constructor() {
+    super();
+    this._models = [];
+    this._feasibility = { warnings: [], runtimeImplemented: false, opfsInstallImplemented: false };
+    this._probeStates = new Map();
+  }
+  set models(value) {
+    this._models = Array.isArray(value) ? value : [];
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get models() { return this._models; }
+  set feasibility(value) {
+    this._feasibility = value && typeof value === "object" ? value : { warnings: [] };
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get feasibility() { return this._feasibility; }
+  setProbeState(modelId, state, message = "") {
+    if (!this._models.some((model) => model.id === modelId)) return;
+    this._probeStates.set(modelId, { state, message });
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  _render() {
+    mountTemplate(this, `
+      :host { display:block; color:var(--text, #24211f); }
+      .warning, .policy { margin:0 0 12px; padding:10px 12px; border-radius:10px;
+        background:var(--bg, #f7f6f3); color:var(--muted, #625d57); font-size:13px; }
+      .warning-list { margin:0 0 16px; padding:0; list-style:none; display:grid; gap:6px; }
+      .warning-list li { padding:9px 12px; border:1px solid var(--border, #ddd8d2);
+        border-radius:10px; color:var(--text, #24211f); font-size:13px; }
+      .catalog { display:grid; gap:12px; }
+      .model { border-top:1px solid var(--border, #ddd8d2); padding-top:16px; }
+      .model:first-child { border-top:0; padding-top:0; }
+      .head { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:12px; align-items:start; }
+      h3 { margin:0 0 4px; font-size:15px; }
+      .size { font-variant-numeric:tabular-nums; font-weight:700; white-space:nowrap; }
+      .meta, .file, .state { color:var(--muted, #625d57); font-size:12px; overflow-wrap:anywhere; }
+      .file { word-break:break-word; }
+      .files { margin:10px 0; padding:0; list-style:none; display:grid; gap:5px; }
+      .file strong { color:var(--text, #24211f); font-weight:600; }
+      .actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; }
+      button { min-height:36px; border-radius:8px; padding:7px 12px; font:inherit;
+        font-weight:600; border:1px solid var(--border, #ddd8d2); cursor:pointer;
+        background:var(--panel, #fff); color:var(--text, #24211f); }
+      button.primary { border-color:var(--accent, #0e6e63); background:var(--accent, #0e6e63);
+        color:var(--accent-contrast, #fff); }
+      button:disabled { opacity:.5; cursor:not-allowed; }
+      button:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
+      .state[data-state="passed"] { color:var(--success, #0e6e63); }
+      .state[data-state="failed"] { color:var(--danger, #b3261e); }
+      @media (max-width:560px) { .head { grid-template-columns:1fr; } .size { white-space:normal; } }
+    `, `<div class="warnings"></div><div class="catalog"></div><p class="policy"></p>`);
+
+    const warningHost = this._root.querySelector(".warnings");
+    const warnings = Array.isArray(this._feasibility?.warnings) ? this._feasibility.warnings : [];
+    if (warnings.length) {
+      const list = document.createElement("ul");
+      list.className = "warning-list";
+      list.setAttribute("aria-label", "Local model feasibility warnings");
+      for (const warning of warnings) {
+        const item = document.createElement("li");
+        item.textContent = String(warning);
+        list.append(item);
+      }
+      warningHost.append(list);
+    }
+
+    const catalog = this._root.querySelector(".catalog");
+    for (const model of this._models) {
+      const probe = this._probeStates.get(model.id) ?? { state: "idle", message: "Run the publisher preflight to enable Download." };
+      const article = document.createElement("article");
+      article.className = "model";
+      article.dataset.modelId = model.id;
+
+      const head = document.createElement("div");
+      head.className = "head";
+      const identity = document.createElement("div");
+      const title = document.createElement("h3");
+      title.textContent = model.name;
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = `${model.publisher} · ${model.license} · revision ${model.revision}`;
+      identity.append(title, meta);
+      const size = document.createElement("div");
+      size.className = "size";
+      size.textContent = `${model.installedGiB} installed payload`;
+      head.append(identity, size);
+
+      const files = document.createElement("ul");
+      files.className = "files";
+      for (const file of model.files ?? []) {
+        const item = document.createElement("li");
+        item.className = "file";
+        const name = document.createElement("strong");
+        name.textContent = file.name;
+        item.append(name, document.createTextNode(` · ${file.bytes.toLocaleString()} bytes · SHA-256 ${file.sha256}`));
+        files.append(item);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const preflight = document.createElement("button");
+      preflight.type = "button";
+      preflight.className = "preflight";
+      preflight.textContent = probe.state === "probing" ? "Probing publisher…" : "Probe publisher";
+      preflight.disabled = probe.state === "probing";
+      // Model-bound accessible names: the label names the exact model, so a
+      // screen reader never hears two identical "Probe publisher" buttons.
+      preflight.setAttribute("aria-label", `Probe publisher for ${model.name}`);
+      const download = document.createElement("button");
+      download.type = "button";
+      download.className = "primary download";
+      download.textContent = "Download";
+      download.disabled = probe.state !== "passed";
+      download.setAttribute("aria-label", `Download ${model.name}`);
+      download.setAttribute("aria-describedby", `model-state-${model.id}`);
+      const state = document.createElement("span");
+      state.id = `model-state-${model.id}`;
+      state.className = "state";
+      state.dataset.state = probe.state;
+      state.setAttribute("role", "status");
+      state.setAttribute("aria-live", "polite");
+      state.textContent = probe.message;
+      actions.append(preflight, download, state);
+      article.append(head, files, actions);
+      catalog.append(article);
+    }
+
+    const policy = this._root.querySelector(".policy");
+    policy.textContent = "Runtime inference, full OPFS installation, model removal, and eviction are not implemented or authorized in this slice.";
+  }
+  _wire() {
+    for (const article of this._root.querySelectorAll(".model")) {
+      const modelId = article.dataset.modelId;
+      article.querySelector(".preflight")?.addEventListener("click", () => this._emit("model-preflight", { modelId }));
+      article.querySelector(".download")?.addEventListener("click", () => {
+        const state = article.querySelector(".state");
+        if (state) state.textContent = "Full OPFS install is not implemented in this slice. No download started.";
+
+      });
+    }
+  }
+}
+
+customElements.define("local-model-catalog", LocalModelCatalog);
+
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs
  * showcase both call this.

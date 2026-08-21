@@ -15,6 +15,9 @@
         <a href="#providers" class="nav-item" data-section="providers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 0 0-10 10c0 5.5 4.5 10 10 10s10-4.5 10-10A10 10 0 0 0 12 2z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         Providers</a>
+        <a href="#local-models" class="nav-item" data-section="local-models">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+        Local models</a>
         <a href="#agents" class="nav-item" data-section="agents">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Agents</a>
@@ -65,6 +68,12 @@
         <div id="provider-list" class="provider-list"></div>
         <div
           class="hint">The on-device Prompt API (Gemini nano) needs no key and works offline. Demo mode runs a deterministic local model — useful for testing the loop without a provider.</div>
+      </section>
+
+      <section id="local-models" class="panel">
+        <h2>Local models</h2>
+        <p class="muted">Official Google Gemma 4 QAT q4_0 artifacts, pinned to publisher revisions. Preflight reads exactly one byte per file with no credentials; it does not download a model.</p>
+        <local-model-catalog id="local-model-catalog"></local-model-catalog>
       </section>
 
       <section id="agents" class="panel">

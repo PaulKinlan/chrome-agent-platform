@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.130] — 2026-08-21
+- feat(local-models): integrate the Gemma 4 catalog/preflight slice onto the drawer tip e468dfb (CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01)
+
 ## [0.2.129] — 2026-08-21
 - feat(assets): add bounded quick drawer
 

@@ -38,6 +38,7 @@ const DRIFT_FILES: [string, string][] = [
   ["extension/shared/components.js", "docs/components.js"],
   ["extension/shared/theme.css", "docs/theme.css"],
   ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
+  ["extension/lib/local-model-catalog.js", "docs/local-model-catalog.js"],
 ];
 for (const [src, dst] of DRIFT_FILES) {
   const [a, b] = await Promise.all([
@@ -349,6 +350,44 @@ async function main() {
       return !!c?.shadowRoot?.querySelector('[data-copy-all]');
     })()`);
     check("error-console has a Copy all button", consoleCopy === true, consoleCopy);
+
+    // <local-model-catalog> — drive its real shadow-DOM contract. Download is
+    // disabled before preflight, becomes available only after an explicit pass,
+    // and still starts no transfer because OPFS install belongs to a later slice.
+    const localModels = await evl(s.sessionId, `(()=>{
+      const c=document.getElementById('local-model-demo');
+      if(!c?.shadowRoot) return {found:false};
+      const articles=[...c.shadowRoot.querySelectorAll('.model')];
+      const first=articles[0];
+      const before=first?.querySelector('.download')?.disabled;
+      let preflightEvent='';
+      c.addEventListener('model-preflight',e=>{preflightEvent=e.detail?.modelId||'';},{once:true});
+      first?.querySelector('.preflight')?.click();
+      c.setProbeState('gemma-4-e4b-it-qat-q4_0','passed','Publisher preflight passed.');
+      const enabled=!c.shadowRoot.querySelector('.model .download')?.disabled;
+      c.shadowRoot.querySelector('.model .download')?.click();
+      return {
+        found:true,
+        count:articles.length,
+        sizes:[...c.shadowRoot.querySelectorAll('.size')].map(el=>el.textContent),
+        warnings:c.shadowRoot.querySelectorAll('.warning-list li').length,
+        before, enabled, preflightEvent,
+        status:c.shadowRoot.querySelector('.model .state')?.textContent,
+        policy:c.shadowRoot.querySelector('.policy')?.textContent,
+      };
+    })()`);
+    check("local-model-catalog renders both exact installed sizes + feasibility warnings",
+      localModels.found === true && localModels.count === 2 &&
+      localModels.sizes?.includes('5.72 GiB installed payload') &&
+      localModels.sizes?.includes('14.56 GiB installed payload') && localModels.warnings >= 2,
+      localModels);
+    check("local-model Download is disabled until an explicit preflight pass",
+      localModels.before === true && localModels.enabled === true &&
+      localModels.preflightEvent === 'gemma-4-e4b-it-qat-q4_0', localModels);
+    check("local-model Download starts no fake install and policy forbids auto-eviction",
+      localModels.status?.includes('No download started') === true &&
+      localModels.policy?.includes('not implemented or authorized') === true &&
+      localModels.policy?.includes('eviction') === true, localModels);
 
     // <activity-explorer> — the browsable/searchable activity log. Seeded demo
     // entries must render rows (one per entry), the agent filter must list the

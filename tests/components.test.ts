@@ -64,6 +64,7 @@ const COMPONENTS = [
   "agent-config-form",
   "provider-select",
   "model-picker",
+  "local-model-catalog",
   "agent-nav",
   "error-console",
   "security-shield",

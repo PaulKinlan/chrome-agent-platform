@@ -9,6 +9,11 @@ import {
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { modelsForVendor } from "../lib/model-prices.js";
+import {
+  LOCAL_MODEL_CATALOG,
+  localModelFeasibility,
+  preflightLocalModel,
+} from "../lib/local-model-catalog.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
@@ -123,6 +128,41 @@ async function providerStatusChanged() {
     const chip = document.querySelector("#provider-status-chip, .provider-status");
     if (chip && status) chip.dataset.granted = String(Boolean(status.granted ?? status.ok ?? ""));
   } catch { /* status surface absent — nothing to reconcile */ }
+}
+
+// ── Local publisher models (catalogue + bounded preflight only) ──
+async function renderLocalModels() {
+  const catalog = $("#local-model-catalog");
+  if (!catalog) return;
+  let availableStorageBytes;
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    if (Number.isFinite(estimate?.quota) && Number.isFinite(estimate?.usage)) {
+      availableStorageBytes = Math.max(0, estimate.quota - estimate.usage);
+    }
+  } catch { /* inability to estimate is rendered as unknown, never as feasible */ }
+  catalog.models = LOCAL_MODEL_CATALOG;
+  catalog.feasibility = localModelFeasibility({
+    deviceMemory: navigator.deviceMemory,
+    // Memory64 support and runtime limits need a dedicated runtime benchmark;
+    // this source slice refuses to infer support from ordinary wasm32 support.
+    memory64: false,
+    opfs: typeof navigator.storage?.getDirectory === "function",
+    availableStorageBytes,
+  });
+  catalog.addEventListener("model-preflight", async (event) => {
+    const model = LOCAL_MODEL_CATALOG.find((entry) => entry.id === event.detail?.modelId);
+    if (!model) return;
+    catalog.setProbeState(model.id, "probing", "Reading one byte from each pinned publisher file…");
+    const result = await preflightLocalModel(model);
+    catalog.setProbeState(
+      model.id,
+      result.ok ? "passed" : "failed",
+      result.ok
+        ? "Publisher preflight passed. Download is available, but full OPFS install remains unimplemented."
+        : `Publisher preflight failed closed: ${result.error ?? "unverified response"}`,
+    );
+  });
 }
 
 // ── Providers ──
@@ -1799,6 +1839,7 @@ async function renderApprovals() {
 // nav active state
 const sections = [
   "providers",
+  "local-models",
   "agents",
   "background",
   "appearance",
@@ -1831,6 +1872,7 @@ document.querySelectorAll(".nav-item").forEach((a) => {
 window.addEventListener("focus", () => { providerStatusChanged(); }, { once: true });
 
 await renderProviders();
+await renderLocalModels();
 await renderAgents();
 await renderBackgroundAgents();
 await renderEnroll();
