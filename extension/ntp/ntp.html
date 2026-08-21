@@ -347,6 +347,28 @@
       width: 100%;
     }
     .foot-btn svg { flex: 0 0 auto; display: block; }
+    /* Assets is a split row: the main, familiar action opens the full browser;
+       the adjacent disclosure opens the metadata-only quick drawer. Both stay
+       visible and independently operable in the collapsed rail. */
+    .assets-nav-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 36px;
+      gap: 4px;
+      min-inline-size: 0;
+    }
+    .assets-nav-row .foot-btn { min-inline-size: 0; }
+    .assets-nav-row asset-quick-drawer { min-inline-size: 0; }
+    .side.collapsed .assets-nav-row {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .side.collapsed .assets-nav-row .foot-btn { inline-size: 34px; block-size: 34px; }
+    .side.collapsed .assets-nav-row asset-quick-drawer::part(trigger) {
+      inline-size: 34px;
+      block-size: 34px;
+    }
 
     .content {
       flex: 1;
@@ -590,6 +612,13 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           <span class="btn-label">Directory</span>
         </button>
+        <div class="assets-nav-row">
+          <button class="btn ghost foot-btn" id="open-assets" type="button" title="Assets" aria-label="Assets">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m8 14 2.5-2.5L14 15l2-2 3 3"/><circle cx="9" cy="8" r="1"/></svg>
+            <span class="btn-label">Assets</span>
+          </button>
+          <asset-quick-drawer id="asset-quick-drawer" auto origin="master" label="Quick access assets"></asset-quick-drawer>
+        </div>
         <button class="btn foot-btn" id="open-settings" type="button" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="btn-label">Settings</span>

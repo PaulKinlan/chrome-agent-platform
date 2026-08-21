@@ -479,6 +479,8 @@ async function openArtifactDialog(id, origin, fallbackName) {
   const asset = res?.ok ? res.asset : null;
   if (!asset) { setStatus("Artifact not found", false); return; }
   const frameCleanups = [];
+
+  if (!asset) { setStatus("Artifact not found", false); return false; }
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", asset.name ?? fallbackName ?? "Artifact");
   const body = document.createElement("div");
@@ -521,6 +523,8 @@ async function openArtifactDialog(id, origin, fallbackName) {
     }
     dialog.remove();
   }, { once: true });
+
+  return true;
 }
 
 // ── Recent activity (the agent run log — item 16) ────────────────────────
@@ -1749,6 +1753,29 @@ document.getElementById("open-recipes")?.addEventListener(
   "click",
   (event) => openView("recipes/index.html", "Skills", event.currentTarget),
 );
+const assetQuickDrawer = document.getElementById("asset-quick-drawer");
+document.getElementById("open-assets")?.addEventListener(
+  "click",
+  () => {
+    assetQuickDrawer?.close?.({ returnFocus: false });
+    openView("artifacts/index.html", "Assets");
+  },
+);
+assetQuickDrawer?.addEventListener("browse-assets", () => {
+  openView("artifacts/index.html", "Assets");
+});
+assetQuickDrawer?.addEventListener("asset-open", async (event) => {
+  const asset = event.detail?.asset;
+  if (!asset?.id) return;
+  const opened = await openArtifactDialog(asset.id, asset.origin ?? "master", asset.name);
+  if (!opened) assetQuickDrawer.focusTrigger?.();
+});
+assetQuickDrawer?.addEventListener("asset-reuse", async (event) => {
+  const asset = event.detail?.asset;
+  if (!asset?.id) return;
+  const reused = await attachAssetToComposer(asset, { closeOverlay: false });
+  if (!reused) assetQuickDrawer.focusTrigger?.();
+});
 
 document.getElementById("bg-configure")?.addEventListener(
   "click",
@@ -1781,6 +1808,36 @@ function assetDataURL(type, content) {
     : "text/plain";
   return `data:${mime};base64,${utf8ToBase64(content ?? "")}`;
 }
+
+// One authoritative Reuse path serves both the full browser iframe and the
+// quick drawer. It fetches the body only after the owner's action; the drawer
+// itself remains metadata-only and bounded.
+async function attachAssetToComposer({ id, name, type, origin }, { closeOverlay = false } = {}) {
+  const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+  const asset = full?.ok ? full.asset : null;
+  if (!asset) { setStatus("Artifact not found", false); return false; }
+  const assetType = asset.type ?? type ?? "data";
+  const mime = assetType === "html" ? "text/html"
+    : assetType === "json" ? "application/json"
+    : assetType === "image" ? "image/png"
+    : "text/plain";
+  composer.addAttachment({
+    name: asset.name ?? name ?? "artifact",
+    type: mime,
+    size: asset.size ?? 0,
+    kind: "artifact",
+    dataURL: assetDataURL(assetType, asset.content),
+    content: asset.content,
+    artifactId: asset.id ?? id,
+    artifactOrigin: asset.origin ?? origin ?? "master",
+    artifactType: asset.type ?? type,
+  });
+  if (closeOverlay) closeView();
+  composer.focus();
+  setStatus(`Attached "${asset.name ?? name}" to a new task`);
+  return true;
+}
+
 window.addEventListener("message", async (e) => {
   const d = e.data;
   if (d?.type === "use-skill") {
@@ -1798,21 +1855,10 @@ window.addEventListener("message", async (e) => {
   if (e.source !== viewFrame.contentWindow) return; // only our own gallery
   const { id, name, type, origin } = d.artifact ?? {};
   if (!id) return;
-  const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
-  const asset = full?.ok ? full.asset : null;
-  if (!asset) { setStatus("Artifact not found", false); return; }
-  const mime = type === "html" ? "text/html" : type === "json" ? "application/json" : type === "image" ? "image/png" : "text/plain";
-  composer.addAttachment({
-    name: asset.name ?? name ?? "artifact",
-    type: mime,
-    size: asset.size ?? 0,
-    kind: "file",
-    dataURL: assetDataURL(type, asset.content),
-    content: asset.content,
-  });
-  closeView();
-  setStatus(`Attached "${asset.name ?? name}" to a new task`);
-  setTimeout(() => composer.input?.focus?.(), 0);
+  // The single Reuse path: attachAssetToComposer performs exactly one
+  // asset.get + the canonical kind:"artifact" attachment + the closeView. No
+  // duplicate inline get/add/close/status locals.
+  await attachAssetToComposer({ id, name, type, origin }, { closeOverlay: true });
 });
 
 setStatus("ready");

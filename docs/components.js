@@ -1484,6 +1484,565 @@ class ArtifactCard extends Component {
 }
 customElements.define("artifact-card", ArtifactCard);
 
+/* <artifact-inspector> — source/hex inspection and explicit confined HTML play.
+ * Content is property-only and enters the DOM via textContent/srcdoc, never an
+ * outer HTML parser. Rendering is bounded while Copy preserves exact content. */
+class ArtifactInspector extends Component {
+  constructor() { super(); this._asset = null; this._frameCleanup = null; this._frameDispose = null; }
+  set asset(value) { this._asset = value && typeof value === "object" ? value : null; if (this._rendered) this._render(); }
+  get asset() { return this._asset; }
+  disconnectedCallback() { this.stopPreview(); }
+  _render() {
+    const a = this._asset ?? {};
+    const type = String(a.type ?? "data");
+    const content = String(a.content ?? "");
+    const limit = 65536;
+    const truncated = content.length > limit;
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:min(76vw,920px); max-inline-size:920px; }
+      .bar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-block-end:10px; }
+      .meta { color:var(--muted,#635e56); font-size:12px; margin-inline-end:auto; }
+      button { min-block-size:36px; border:1px solid var(--border,#e3e0d9); border-radius:6px; background:var(--panel,#fff); color:var(--text,#1d1b18); padding:6px 10px; cursor:pointer; font:inherit; }
+      button.primary { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); color:var(--accent-ink,#fff); }
+      button:focus-visible, pre:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      pre { max-block-size:52vh; overflow:auto; margin:0; padding:12px; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:var(--panel-2,#efede8); color:var(--text,#1d1b18); font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
+      .note,.status { font-size:12px; color:var(--muted,#635e56); margin-block:8px 0; }
+      .status { min-block-size:1.4em; }
+      .preview[hidden] { display:none; }
+      .preview { margin-block-start:12px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; background:#fff; }
+      .preview iframe { display:block; inline-size:100%; block-size:min(56vh,520px); border:0; }
+    `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
+    this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
+    this._root.querySelector("code").textContent = content.slice(0, limit);
+    const note = this._root.querySelector(".note");
+    note.hidden = !truncated;
+    if (truncated) note.textContent = `Inspection is bounded to the first ${limit.toLocaleString()} characters. Copy includes the complete artifact.`;
+  }
+  _wire() {
+    this._root.querySelector(".copy")?.addEventListener("click", async () => {
+      const status = this._root.querySelector(".status");
+      try { await navigator.clipboard.writeText(String(this._asset?.content ?? "")); status.textContent = "Copied exact artifact content."; }
+      catch { status.textContent = "Copy failed. Select the source and copy it manually."; }
+    });
+    this._root.querySelector(".play")?.addEventListener("click", () => this.startPreview());
+  }
+  startPreview() {
+    const host = this._root.querySelector(".preview");
+    if (!host || this._asset?.type !== "html") return;
+    this.stopPreview();
+    const frame = createHtmlFrame(this._asset.content ?? "", { title:`Interactive preview of ${this._asset.name ?? "HTML artifact"}` });
+    host.replaceChildren(frame.wrapper);
+    host.hidden = false;
+    this._frameCleanup = wireHtmlFramePreference(frame.wrapper, { nonce:frame.nonce, ...currentFramePreference() });
+    this._frameDispose = frame.dispose;
+    frame.iframe.focus();
+    this._root.querySelector(".status").textContent = "Interactive preview opened in a restricted sandbox.";
+  }
+  stopPreview() {
+    this._frameCleanup?.();
+    this._frameCleanup = null;
+    this._frameDispose?.();
+    this._frameDispose = null;
+    const host = this._root?.querySelector?.(".preview");
+    const iframe = host?.querySelector?.("iframe");
+    if (iframe) iframe.src = "about:blank";
+    host?.replaceChildren?.();
+    if (host) host.hidden = true;
+  }
+}
+customElements.define("artifact-inspector", ArtifactInspector);
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * <asset-quick-drawer> — bounded recent/search/filter access to asset metadata.
+ * The component never reads asset bodies: hosts own Open/Reuse authority and
+ * receive metadata-only events. Dynamic asset values are written with DOM
+ * textContent, never interpolated into HTML.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const ASSET_QUICK_LIMITS = Object.freeze({
+  maxSource: 200,
+  recent: 8,
+  results: 40,
+  maxQuery: 200,
+});
+
+const QUICK_ASSET_TYPES = new Set(["html", "text", "json", "image", "data"]);
+
+function boundedAssetField(value, max, fallback = "") {
+  const text = String(value ?? fallback).trim();
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+function quickAssetTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  const numeric = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value ?? ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function normalizeQuickAsset(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = boundedAssetField(value.id, 256);
+  if (!id) return null;
+  const rawType = boundedAssetField(value.type, 40, "data").toLowerCase();
+  const type = QUICK_ASSET_TYPES.has(rawType) ? rawType : "unknown";
+  const sizeValue = Number(value.size);
+  return {
+    id,
+    name: boundedAssetField(value.name, 200, "Untitled") || "Untitled",
+    type,
+    origin: boundedAssetField(value.origin, 256, "master") || "master",
+    size: Number.isFinite(sizeValue) && sizeValue >= 0 ? Math.floor(sizeValue) : 0,
+    at: quickAssetTimestamp(value.at ?? value.updatedAt ?? value.createdAt),
+  };
+}
+
+/** A truthful owner label: hub-owned master entries, otherwise the canonical
+ * origin when parseable (and the bounded stored owner string when not). */
+export function quickAssetOwner(origin) {
+  const stored = boundedAssetField(origin, 256, "master") || "master";
+  if (stored === "master") return "Hub";
+  try { return new URL(stored).origin; } catch { return stored; }
+}
+
+export function formatQuickAssetSize(value) {
+  const bytes = Number.isFinite(Number(value)) && Number(value) >= 0
+    ? Math.floor(Number(value))
+    : 0;
+  if (bytes < 1024) return `${bytes.toLocaleString()} ${bytes === 1 ? "byte" : "bytes"}`;
+  const units = ["KB", "MB", "GB"];
+  let amount = bytes;
+  let unit = -1;
+  do { amount /= 1024; unit++; } while (amount >= 1024 && unit < units.length - 1);
+  const compact = amount >= 10 ? amount.toFixed(0) : amount.toFixed(1);
+  return `${compact} ${units[unit]} (${bytes.toLocaleString()} bytes)`;
+}
+
+export function formatQuickAssetTime(value) {
+  const timestamp = quickAssetTimestamp(value);
+  if (!timestamp) return { label: "Time unavailable", datetime: "" };
+  const date = new Date(timestamp);
+  try {
+    return {
+      label: new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date),
+      datetime: date.toISOString(),
+    };
+  } catch {
+    return { label: date.toISOString(), datetime: date.toISOString() };
+  }
+}
+
+/** Select the visible metadata rows without unbounded work or DOM growth.
+ * Storage contract: one origin owns at most 200 assets. A malformed oversized
+ * response is read from its newest end and explicitly reported as truncated. */
+export function selectQuickAssets(raw, { query = "", type = "all" } = {}) {
+  const source = Array.isArray(raw) ? raw : [];
+  const start = Math.max(0, source.length - ASSET_QUICK_LIMITS.maxSource);
+  const normalized = [];
+  for (let i = start; i < source.length; i++) {
+    const asset = normalizeQuickAsset(source[i]);
+    if (asset) normalized.push(asset);
+  }
+  normalized.sort((a, b) => b.at - a.at || a.name.localeCompare(b.name));
+  const q = String(query ?? "").trim().slice(0, ASSET_QUICK_LIMITS.maxQuery).toLocaleLowerCase();
+  const selectedType = QUICK_ASSET_TYPES.has(type) ? type : "all";
+  const matches = [];
+  for (const asset of normalized) {
+    if (selectedType !== "all" && asset.type !== selectedType) continue;
+    if (q) {
+      const haystack = `${asset.name}\n${asset.type}\n${asset.origin}\n${quickAssetOwner(asset.origin)}`.toLocaleLowerCase();
+      if (!haystack.includes(q)) continue;
+    }
+    matches.push(asset);
+  }
+  const activeFilter = !!q || selectedType !== "all";
+  const limit = activeFilter ? ASSET_QUICK_LIMITS.results : ASSET_QUICK_LIMITS.recent;
+  return {
+    items: matches.slice(0, limit),
+    total: matches.length,
+    sourceTotal: source.length,
+    sourceTruncated: source.length > ASSET_QUICK_LIMITS.maxSource,
+    limited: matches.length > limit,
+  };
+}
+
+class AssetQuickDrawer extends Component {
+  constructor() {
+    super();
+    this._assets = [];
+    this._state = "idle";
+    this._error = "";
+    this._query = "";
+    this._type = "all";
+    this._open = false;
+    this._requestSeq = 0;
+    this._announceTimer = null;
+    this._resizeHandler = null;
+    this._returnFocus = true;
+  }
+
+  set assets(value) {
+    this._assets = Array.isArray(value) ? value : [];
+    this._state = "ready";
+    this._error = "";
+    if (this._rendered) this._renderList();
+  }
+  get assets() { return this._assets; }
+
+  connectedCallback() {
+    if (!this._assets.length && this.hasAttribute("assets")) {
+      this._assets = parseJSONAttr(this.getAttribute("assets"), []);
+      this._state = "ready";
+    }
+    super.connectedCallback();
+  }
+
+  disconnectedCallback() {
+    if (this._resizeHandler) window.removeEventListener("resize", this._resizeHandler);
+    this._resizeHandler = null;
+    clearTimeout(this._announceTimer);
+    super.disconnectedCallback();
+  }
+
+  _render() {
+    const label = this.getAttribute("label") || "Quick access assets";
+    mountTemplate(this, `
+      :host { display:inline-flex; min-inline-size:0; }
+      .trigger { inline-size:36px; block-size:36px; display:inline-flex; align-items:center; justify-content:center;
+        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); padding:0;
+        background:transparent; color:var(--muted,#635e56); cursor:pointer; }
+      .trigger:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .trigger:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .trigger svg { inline-size:16px; block-size:16px; display:block; }
+      :host-context([dir="rtl"]) .trigger svg { transform:scaleX(-1); }
+      .drawer { position:fixed; z-index:220; margin:0; padding:0;
+        inline-size:min(380px, calc(100vw - 24px)); max-block-size:min(620px, calc(100vh - 24px));
+        color:var(--text,#1d1b18); background:var(--panel,#fff); border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-md,12px); box-shadow:var(--shadow-2,0 12px 32px rgba(29,27,24,.08));
+        overflow:hidden; }
+      .drawer[hidden] { display:none; }
+      .shell { display:flex; flex-direction:column; max-block-size:min(620px, calc(100vh - 24px)); }
+      .head { display:flex; align-items:center; gap:8px; padding:12px 14px; border-block-end:1px solid var(--border,#e3e0d9); }
+      h2 { flex:1; min-inline-size:0; margin:0; font-size:14px; font-weight:650; letter-spacing:-.01em; }
+      .close { inline-size:36px; block-size:36px; display:inline-flex; align-items:center; justify-content:center;
+        border:0; border-radius:var(--radius-sm,6px); background:transparent; color:var(--muted,#635e56); cursor:pointer; }
+      .close:hover { color:var(--text,#1d1b18); background:var(--panel-2,#efede8); }
+      .close:focus-visible, .action:focus-visible, .browse:focus-visible, .retry:focus-visible,
+      input:focus-visible, select:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .controls { display:grid; grid-template-columns:minmax(0,1fr) 112px; gap:8px; padding:12px 14px; }
+      label { display:flex; flex-direction:column; gap:4px; min-inline-size:0; font-size:11px; font-weight:600; color:var(--muted,#635e56); }
+      input, select { min-inline-size:0; min-block-size:40px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-sm,6px); background:var(--bg,#f7f6f3); color:var(--text,#1d1b18);
+        font:inherit; font-size:13px; padding:0 10px; }
+      .summary { margin:0; padding:0 14px 8px; color:var(--muted,#635e56); font-size:12px; }
+      .list { flex:1 1 auto; min-block-size:0; list-style:none; margin:0; padding:0 8px 8px; overflow-y:auto; overscroll-behavior:contain; }
+      .item { padding:10px 6px; border-block-start:1px solid var(--border,#e3e0d9); }
+      .item:first-child { border-block-start:0; }
+      .item-head { display:flex; align-items:flex-start; gap:8px; }
+      .name { flex:1; min-inline-size:0; font-weight:650; font-size:13px; line-height:1.35;
+        overflow-wrap:anywhere; }
+      .type { flex:0 0 auto; border:1px solid var(--border,#e3e0d9); border-radius:999px;
+        padding:1px 7px; color:var(--muted,#635e56); font-size:10px; text-transform:uppercase; }
+      dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 10px; margin:7px 0 8px; }
+      dl div { min-inline-size:0; }
+      dt { color:var(--muted,#635e56); font-size:10px; }
+      dd { margin:0; color:var(--text,#1d1b18); font-size:11px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+      .actions { display:flex; gap:6px; }
+      .action, .browse, .retry { min-block-size:36px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-sm,6px); background:transparent; color:var(--text,#1d1b18);
+        font:inherit; font-size:12px; font-weight:600; cursor:pointer; padding:0 12px; }
+      .action:hover, .browse:hover, .retry:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .state { padding:16px 14px; color:var(--muted,#635e56); font-size:12px; }
+      .state.error { color:var(--danger,#b3261e); }
+      .state .retry { display:block; margin-block-start:10px; color:inherit; }
+      .foot { display:flex; align-items:center; gap:8px; padding:10px 14px; border-block-start:1px solid var(--border,#e3e0d9); }
+      .browse { inline-size:100%; min-block-size:40px; }
+      .sr-only { position:absolute; inline-size:1px; block-size:1px; padding:0; margin:-1px; overflow:hidden;
+        clip-path:inset(50%); white-space:nowrap; border:0; }
+      @media (max-width:420px) {
+        .controls { grid-template-columns:1fr; }
+        .drawer { inline-size:calc(100vw - 16px); }
+        dl { grid-template-columns:1fr; }
+      }
+      @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
+      @media (forced-colors:active) { .type { border:1px solid CanvasText; } }
+    `, `<button part="trigger" class="trigger" type="button" aria-label="${escapeHtml(label)}"
+        title="${escapeHtml(label)}" aria-expanded="false" aria-controls="asset-quick-panel">
+        ${ICONS.chevron}</button>
+      <section class="drawer" id="asset-quick-panel" popover="auto" hidden aria-labelledby="asset-quick-title">
+        <div class="shell">
+          <header class="head"><h2 id="asset-quick-title">Recent assets</h2>
+            <button class="close" type="button" aria-label="Close quick access assets">${ICONS.close}</button></header>
+          <div class="controls">
+            <label for="asset-quick-search">Search assets
+              <input id="asset-quick-search" type="search" autocomplete="off" placeholder="Name or owner">
+            </label>
+            <label for="asset-quick-type">Filter by type
+              <select id="asset-quick-type">
+                <option value="all">All types</option><option value="html">HTML</option>
+                <option value="text">Text</option><option value="json">JSON</option>
+                <option value="image">Image</option><option value="data">Data</option>
+              </select>
+            </label>
+          </div>
+          <p class="summary" id="asset-quick-summary"></p>
+          <ul class="list" id="asset-quick-list" aria-label="Assets"></ul>
+          <div class="foot"><button type="button" class="browse">Browse all assets</button></div>
+          <span class="sr-only" id="asset-quick-live" role="status" aria-live="polite"></span>
+        </div>
+      </section>`);
+    this._trigger = this._root.querySelector(".trigger");
+    this._drawer = this._root.querySelector(".drawer");
+    this._search = this._root.querySelector("input[type=search]");
+    this._select = this._root.querySelector("select");
+    this._list = this._root.querySelector(".list");
+    this._summary = this._root.querySelector(".summary");
+    this._live = this._root.querySelector("#asset-quick-live");
+    this._renderList();
+  }
+
+  _wire() {
+    this._trigger?.addEventListener("click", () => this.toggleDrawer());
+    this._root.querySelector(".close")?.addEventListener("click", () => this.close());
+    this._root.querySelector(".browse")?.addEventListener("click", () => {
+      this.close({ returnFocus: false });
+      this._emit("browse-assets");
+    });
+    this._search?.addEventListener("input", () => {
+      this._query = this._search.value.slice(0, ASSET_QUICK_LIMITS.maxQuery);
+      if (this._search.value !== this._query) this._search.value = this._query;
+      this._renderList();
+    });
+    this._select?.addEventListener("change", () => {
+      this._type = this._select.value;
+      this._renderList();
+    });
+    this._drawer?.addEventListener("toggle", (event) => {
+      if (event.newState === "closed") this._finishClose();
+    });
+    // Native auto-popover supplies Escape + light-dismiss. These listeners are
+    // the equivalent fallback and also make the focus-return contract explicit.
+    this._bindDocument("keydown", (event) => {
+      if (event.key === "Escape" && this._open) {
+        event.preventDefault();
+        this.close();
+      }
+    });
+    this._bindDocument("pointerdown", (event) => {
+      // A pointer destination owns focus. Light-dismiss without returning focus
+      // to the trigger, or the queued trigger focus would steal it after click.
+      if (this._open && !event.composedPath().includes(this)) {
+        this.close({ returnFocus: false });
+      }
+    });
+    if (!this._resizeHandler) {
+      this._resizeHandler = () => { if (this._open) this._position(); };
+      window.addEventListener("resize", this._resizeHandler);
+    }
+  }
+
+  toggleDrawer() { this._open ? this.close() : this.open(); }
+  focusTrigger() { this._trigger?.focus(); }
+
+  async open() {
+    if (this._open || !this._drawer) return;
+    this._open = true;
+    this._trigger?.setAttribute("aria-expanded", "true");
+    this._drawer.hidden = false;
+    if (typeof this._drawer.showPopover === "function") {
+      try { this._drawer.showPopover(); }
+      catch { this._drawer.removeAttribute("popover"); /* use the visible fixed fallback */ }
+    }
+    this._position();
+    this._search?.focus();
+    this._emit("drawer-toggle", { open: true });
+    if (this.hasAttribute("auto")) await this.refresh();
+  }
+
+  close({ returnFocus = true } = {}) {
+    if (!this._open) return;
+    this._returnFocus = returnFocus;
+    if (typeof this._drawer?.hidePopover === "function") {
+      try { this._drawer.hidePopover(); } catch { /* already closed */ }
+    }
+    this._finishClose();
+  }
+
+  _finishClose() {
+    if (!this._open) return;
+    const returnFocus = this._returnFocus;
+    this._returnFocus = true;
+    this._open = false;
+    if (this._drawer) this._drawer.hidden = true;
+    this._trigger?.setAttribute("aria-expanded", "false");
+    this._emit("drawer-toggle", { open: false });
+    if (returnFocus) setTimeout(() => this._trigger?.focus(), 0);
+  }
+
+  _position() {
+    const rect = this._trigger?.getBoundingClientRect?.();
+    const drawer = this._drawer;
+    if (!rect || !drawer) return;
+    const margin = 12;
+    const gap = 8;
+    const width = drawer.offsetWidth || Math.min(380, window.innerWidth - margin * 2);
+    const height = drawer.offsetHeight || Math.min(620, window.innerHeight - margin * 2);
+    const rtl = (getComputedStyle(this).direction || document.documentElement?.dir) === "rtl";
+    const outward = rtl ? rect.left - width - gap : rect.right + gap;
+    const opposite = rtl ? rect.right + gap : rect.left - width - gap;
+    const preferredFits = outward >= margin && outward + width <= window.innerWidth - margin;
+    let left = preferredFits ? outward : opposite;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    let top = rect.bottom - height;
+    top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+    drawer.style.inset = "auto";
+    drawer.style.left = `${left}px`;
+    drawer.style.top = `${top}px`;
+  }
+
+  async refresh() {
+    if (!RUNTIME_SEND) return;
+    const seq = ++this._requestSeq;
+    this._state = "loading";
+    this._renderList();
+    try {
+      const res = await RUNTIME_SEND("asset.list", {
+        origin: this.getAttribute("origin") || "master",
+      });
+      if (seq !== this._requestSeq) return;
+      if (!res || res.ok === false || !Array.isArray(res.assets)) {
+        throw new Error(res?.error || "asset list unavailable");
+      }
+      this._assets = res.assets;
+      this._state = "ready";
+      this._error = "";
+    } catch (error) {
+      if (seq !== this._requestSeq) return;
+      this._state = "error";
+      this._error = String(error?.message ?? error);
+    }
+    this._renderList();
+  }
+
+  _announce(text) {
+    clearTimeout(this._announceTimer);
+    this._announceTimer = setTimeout(() => {
+      if (this._live) this._live.textContent = text;
+    }, 200);
+  }
+
+  _renderList() {
+    if (!this._list || !this._summary) return;
+    this._list.replaceChildren();
+    // Loading, filtering and fetched results all change block size. Re-clamp
+    // after layout so the final drawer (not its initial loading shell) stays
+    // inside the viewport with every action reachable.
+    if (this._open) {
+      setTimeout(() => { if (this._open) this._position(); }, 0);
+    }
+    if (this._state === "loading") {
+      this._summary.textContent = "Loading assets…";
+      this._announce("Loading assets");
+      return;
+    }
+    if (this._state === "error") {
+      this._summary.textContent = "";
+      const row = document.createElement("li");
+      row.className = "state error";
+      const message = document.createElement("span");
+      message.textContent = `Couldn't load assets — ${this._error || "unknown error"}.`;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "retry";
+      retry.textContent = "Try again";
+      retry.addEventListener("click", () => this.refresh());
+      row.append(message, retry);
+      this._list.append(row);
+      this._announce("Couldn't load assets");
+      return;
+    }
+
+    const selected = selectQuickAssets(this._assets, { query: this._query, type: this._type });
+    const suffix = selected.limited ? ` Showing the first ${selected.items.length}.` : "";
+    const truncation = selected.sourceTruncated
+      ? ` The asset index exceeded ${ASSET_QUICK_LIMITS.maxSource}; only its newest ${ASSET_QUICK_LIMITS.maxSource} entries were searched.`
+      : "";
+    this._summary.textContent = `${selected.total} ${selected.total === 1 ? "asset" : "assets"}.${suffix}${truncation}`;
+    this._announce(`${selected.total} ${selected.total === 1 ? "asset" : "assets"}`);
+
+    if (!selected.items.length) {
+      const row = document.createElement("li");
+      row.className = "state";
+      row.textContent = this._query || this._type !== "all"
+        ? "No assets match this search and filter."
+        : "No assets yet. Ask an agent to make something.";
+      this._list.append(row);
+      return;
+    }
+
+    for (const asset of selected.items) {
+      const row = document.createElement("li");
+      row.className = "item";
+      const head = document.createElement("div");
+      head.className = "item-head";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = asset.name;
+      const type = document.createElement("span");
+      type.className = "type";
+      type.textContent = asset.type;
+      head.append(name, type);
+
+      const meta = document.createElement("dl");
+      const time = formatQuickAssetTime(asset.at);
+      const facts = [
+        ["Owner", quickAssetOwner(asset.origin), null],
+        ["Type", asset.type, null],
+        ["Size", formatQuickAssetSize(asset.size), null],
+        ["Created", time.label, time.datetime],
+      ];
+      for (const [term, value, datetime] of facts) {
+        const pair = document.createElement("div");
+        const dt = document.createElement("dt");
+        dt.textContent = term;
+        const dd = document.createElement("dd");
+        if (datetime) {
+          const timeEl = document.createElement("time");
+          timeEl.dateTime = datetime;
+          timeEl.textContent = value;
+          dd.append(timeEl);
+        } else dd.textContent = value;
+        pair.append(dt, dd);
+        meta.append(pair);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      for (const [action, visible] of [["asset-open", "Open"], ["asset-reuse", "Reuse"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "action";
+        const label = document.createElement("span");
+        label.textContent = visible;
+        const context = document.createElement("span");
+        context.className = "sr-only";
+        context.textContent = ` ${asset.name}`;
+        button.append(label, context);
+        button.addEventListener("click", () => {
+          this.close({ returnFocus: false });
+          this._emit(action, { asset: { ...asset } });
+        });
+        actions.append(button);
+      }
+      row.append(head, meta, actions);
+      this._list.append(row);
+    }
+  }
+}
+customElements.define("asset-quick-drawer", AssetQuickDrawer);
 /* <code-block lang="python">code text</code-block>
  * A fenced code block: monospace, a subtle panel surface, a language label,
  * horizontal scroll + a copy button. Content is its light-DOM text (already

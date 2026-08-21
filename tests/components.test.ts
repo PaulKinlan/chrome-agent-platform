@@ -52,6 +52,8 @@ const COMPONENTS = [
   "site-agent-card",
   "tool-directory-card",
   "artifact-card",
+  "artifact-inspector",
+  "asset-quick-drawer",
   "code-block",
   "message-bubble",
   "agent-conversation",
@@ -474,5 +476,54 @@ Deno.test("components: ArtifactCard async preview re-renders and re-wires (keybo
     if (!posted.some((m) => m.html.includes("<p>async2</p>"))) throw new Error("the second async preview must be delivered");
   } finally {
     delete globalThis.chrome;
+  }
+});
+
+Deno.test("asset quick drawer: newest/search/filter rendering is strictly bounded", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const assets = Array.from({ length: 300 }, (_, i) => ({
+    id: `asset-${i}`,
+    name: i === 299 ? "<script>Newest</script>" : `Report ${i}`,
+    type: i % 2 ? "text" : "html",
+    size: i,
+    origin: i % 3 ? "master" : "https://owner.example/path",
+    at: i + 1,
+  }));
+  const recent = mod.selectQuickAssets(assets);
+  if (recent.items.length !== mod.ASSET_QUICK_LIMITS.recent) {
+    throw new Error(`recent DOM bound drifted: ${recent.items.length}`);
+  }
+  if (recent.items[0].id !== "asset-299") throw new Error("newest asset is not first");
+  if (!recent.sourceTruncated || recent.sourceTotal !== 300) throw new Error("oversized source not reported truthfully");
+  if (recent.items[0].name !== "<script>Newest</script>") throw new Error("metadata was silently rewritten");
+
+  const search = mod.selectQuickAssets(assets, { query: "owner.example", type: "html" });
+  if (!search.items.length || search.items.length > mod.ASSET_QUICK_LIMITS.results) {
+    throw new Error(`search result bound invalid: ${search.items.length}`);
+  }
+  if (search.items.some((a) => a.type !== "html" || a.origin !== "https://owner.example/path")) {
+    throw new Error("search/type filtering returned a non-match");
+  }
+  const outsideBound = mod.selectQuickAssets(assets, { query: "Report 50" });
+  if (outsideBound.total !== 0) throw new Error("drawer searched beyond the bounded newest index window");
+});
+
+Deno.test("asset quick drawer: owner, exact size and absolute time metadata stay truthful", async () => {
+  const mod = await import("../extension/shared/components.js");
+  if (mod.quickAssetOwner("master") !== "Hub") throw new Error("master owner label drifted");
+  if (mod.quickAssetOwner("https://example.com/path") !== "https://example.com") {
+    throw new Error("web owner was not canonicalized to its origin");
+  }
+  const size = mod.formatQuickAssetSize(1536);
+  if (!size.includes("KB") || !size.replace(/\D/g, "").includes("1536")) {
+    throw new Error(`size omitted its exact byte count: ${size}`);
+  }
+  const time = mod.formatQuickAssetTime(Date.UTC(2026, 7, 19, 12, 30));
+  if (time.datetime !== "2026-08-19T12:30:00.000Z" || !time.label) {
+    throw new Error(`absolute time metadata invalid: ${JSON.stringify(time)}`);
+  }
+  const missing = mod.formatQuickAssetTime("not-a-date");
+  if (missing.label !== "Time unavailable" || missing.datetime !== "") {
+    throw new Error("invalid time was presented as factual");
   }
 });

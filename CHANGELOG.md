@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.129] — 2026-08-21
+- feat(assets): add bounded quick drawer
+
 ## [0.2.128] — 2026-08-21
 - fix(assets): land stable sandboxed previews while preserving crash-safe artifact transactions
 
