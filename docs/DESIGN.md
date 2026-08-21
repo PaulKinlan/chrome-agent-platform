@@ -91,6 +91,18 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.
 
+Same-document task routing keeps the named primary overlay transition. The
+browser's root and named snapshots live in the top layer, so direction-aware
+policy makes both obsolete old images immediately transparent across every task
+boundary: Hub or embedded view → task, task → Hub, and task →
+Settings/Directory/Skills/Artifacts. Only the old `overlay-view` image is
+suppressed; the new named overlay stays active. Unrelated full-view routes never
+receive the temporary class and retain their normal named cross-fade. The class
+is removed after finish, abort, or overlapping route changes; focus moves to the
+active task heading, composer, embedded frame, or return target only after the
+top layer settles. Reduced motion updates route and focus synchronously without
+creating a snapshot.
+
 ## Anti-slop bans (enforced)
 No rainbow conic glow, no gradient text, no uppercase tracked kickers, no ghost
 cards, no over-rounded cards, no emoji, no default purple/blue-black, no AI-beige

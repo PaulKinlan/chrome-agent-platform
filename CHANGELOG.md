@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.115] — 2026-08-21
+- fix(ntp): provisionally reconcile task-boundary transition routing onto Directory main — suppress obsolete old root and named-overlay pixels in both directions, retain the incoming named overlay and unrelated transitions, preserve covered-view inert/focus behavior, and ship the canonical changelog in clean builds (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+
 ## [0.2.114] — 2026-08-21
 - fix(directory): reconcile reviewed Directory overlay and function cards — CAP-FB-20260819-AGENT-DIRECTORY-01
 

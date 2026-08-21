@@ -39,10 +39,18 @@ await rm(path.join(STAGE, "dist-versions"), { recursive: true, force: true }).ca
 const manifest = JSON.parse(await readFile(path.join(STAGE, "manifest.json"), "utf8"));
 const sw = path.join(STAGE, manifest.background.service_worker);
 const optsBundle = path.join(STAGE, "dist/options.bundle.js");
-for (const f of [sw, optsBundle, path.join(STAGE, "dist/dist.complete")]) {
+const shippedChangelog = path.join(STAGE, "CHANGELOG.md");
+for (const f of [sw, optsBundle, shippedChangelog, path.join(STAGE, "dist/dist.complete")]) {
   const st = await stat(f).catch(() => null);
   if (!st?.isFile()) throw new Error(`packaging validation failed: ${f} missing`);
   if (st.isSymbolicLink?.()) throw new Error(`packaging validation failed: ${f} is a symlink`);
+}
+const [canonicalChangelog, packagedChangelog] = await Promise.all([
+  readFile(path.join(ROOT, "CHANGELOG.md")),
+  readFile(shippedChangelog),
+]);
+if (Buffer.compare(canonicalChangelog, packagedChangelog) !== 0) {
+  throw new Error("packaging validation failed: generated CHANGELOG.md is missing or stale");
 }
 // No symlinks anywhere in the artifact.
 const findSymlinks = execSync(`find ${JSON.stringify(STAGE)} -type l`, { encoding: "utf8" }).trim();

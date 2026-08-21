@@ -19,6 +19,7 @@ import path, { join, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
+import { syncChangelog } from "./scripts/sync-changelog.mjs";
 
 const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
@@ -70,6 +71,11 @@ console.log(`build assertion: no test controls/oracles in ${shippedJs.length} sh
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The
 // docs/ copies are committed too so the GitHub Pages showcase works standalone.
 await syncGallery();
+// CHANGELOG.md is canonical and tracked; extension/CHANGELOG.md is an ignored
+// generated package file. A clean git archive therefore needs the production
+// build to materialize and verify it before the extension is copied/loaded.
+await syncChangelog({ check: false });
+await syncChangelog({ check: true });
 
 // ── DIRECTORY lock (owner-atomic by construction) ────────────────────────────
 // The lock dir is CREATED FULLY-POPULATED off-path, then renamed INTO place —

@@ -18,6 +18,10 @@ import { renderDurabilityState } from "../lib/durability-ui.js";
 import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../lib/task-sidebar-lifecycle.js";
 import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
 import { createViewFocusController } from "../lib/view-focus.js";
+import {
+  createViewTransitionRunner,
+  VIEW_ROUTE,
+} from "./view-transition.js";
 
 import {
   installPageDiagnostics,
@@ -84,6 +88,11 @@ function prefersReducedMotion() {
     return false;
   }
 }
+
+const withViewTransition = createViewTransitionRunner({
+  document,
+  prefersReducedMotion,
+});
 
 // ── site agents (enrolled origins) ────────────────────────────────────────
 async function renderSiteAgents() {
@@ -606,6 +615,7 @@ const editAgentBtn = document.getElementById("edit-agent");
 let currentThreadId = null;
 let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
 let currentAgentKind = null; // null | "named" | "background" — which agent kind the chat is scoped to
+let activeViewRoute = VIEW_ROUTE.HUB;
 // Every async surface open and run owns one immutable token. A later open/run
 // replaces it, so an older continuation can keep journaling in the SW without
 // committing title/status DOM into the newly opened surface.
@@ -667,21 +677,40 @@ function hideViewInner() {
   viewFrame.src = "about:blank";
   syncViewOpen();
 }
-function showThreadView() {
+function showThreadView({ focusAfter = threadTitle } = {}) {
   // Already open (a follow-up/nudge in the same surface): restarting the view
   // transition would flash the thread + the run-status banner mid-run (the
   // review's working-state screenshot finding). No-op instead.
   if (!threadView.hidden) return;
+  const sourceRoute = activeViewRoute;
   withViewTransition(() => {
     // Only ONE overlay at a time (item 48): the thread view replaces the
     // settings/directory/recipes view.
     if (!viewOverlay.hidden) hideViewInner();
     threadView.hidden = false;
+    activeViewRoute = VIEW_ROUTE.TASK;
+    // The new-root snapshot must already exclude the hub. Keeping this state
+    // change inside the update callback makes snapshot capture deterministic.
     syncViewOpen();
+  }, {
+    sourceRoute,
+    targetRoute: VIEW_ROUTE.TASK,
+    focusAfter,
   });
 }
-function hideThreadView() {
-  withViewTransition(hideThreadViewInner);
+function hideThreadView({
+  focusAfter =
+    document.querySelector('#thread-sidebar [aria-current="true"]') || composer,
+} = {}) {
+  const sourceRoute = activeViewRoute;
+  withViewTransition(() => {
+    hideThreadViewInner();
+    activeViewRoute = VIEW_ROUTE.HUB;
+  }, {
+    sourceRoute,
+    targetRoute: VIEW_ROUTE.HUB,
+    focusAfter,
+  });
 }
 
 function renderThreadProjection(thread) {
@@ -774,9 +803,8 @@ async function openBackgroundAgentChat(id, name) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
   renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
-  showThreadView();
+  showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
-  threadComposer.focus();
 }
 
 // ── the AGENT chat surface (item 43): click a named agent → chat with it ──
@@ -820,9 +848,8 @@ async function openAgentSurface({ kind, id, name }) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
   renderAgentHistory(threadConversation, entries);
-  showThreadView();
+  showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
-  threadComposer.focus();
 }
 
 async function openAgentChat(id) {
@@ -1573,15 +1600,15 @@ restoreSidebar();
 // user is inside a task thread, it also closes the thread view so the composer
 // (on the hub) can receive focus (item 26).
 document.getElementById("new-task")?.addEventListener("click", () => {
-  if (!threadView.hidden) hideThreadView();
-  composer.focus();
+  if (!threadView.hidden) hideThreadView({ focusAfter: composer });
+  else composer.focus();
 });
 
 // The "+" create-agent button in the sidebar Agents section (item: a quick
 // create path — opens the create dialog; it returns to the hub first so the
 // dialog is not stacked behind the thread overlay).
 document.getElementById("new-agent")?.addEventListener("click", () => {
-  if (!threadView.hidden) hideThreadView();
+  if (!threadView.hidden) hideThreadView({ focusAfter: null });
   openQuickCreateAgent();
 });
 
@@ -1589,36 +1616,10 @@ document.getElementById("new-agent")?.addEventListener("click", () => {
 // Named elements let the thread body + composer morph between the hub and the
 // full-screen thread. No-op when the API is absent or reduced-motion is on.
 //
-// Guard against a transition already in flight: rapid view switches (task →
-// agent → recipes) call startViewTransition while the previous transition is
-// still capturing, which the browser aborts with "invalid state snapshot" /
-// "Capture failed" and throws. When one is active we skip straight to the
-// state change (no transition) rather than abort the running one.
-let viewTransitionActive = false;
-function withViewTransition(fn) {
-  if (
-    typeof document.startViewTransition !== "function" ||
-    prefersReducedMotion() ||
-    viewTransitionActive
-  ) {
-    fn();
-    return null;
-  }
-  viewTransitionActive = true;
-  try {
-    const t = document.startViewTransition(() => fn());
-    // A transition that never settles must not throw; clear the guard either
-    // way so a later state change can use a transition again.
-    t?.finished?.finally(() => { viewTransitionActive = false; });
-    return t;
-  } catch {
-    // startViewTransition threw (invalid snapshot/state) — apply the change
-    // without a transition and release the guard.
-    viewTransitionActive = false;
-    fn();
-    return null;
-  }
-}
+// The runner guards against overlapping snapshots, cleans route-scoped policy
+// after both success and abort, and moves focus only after the active transition
+// finishes. Rapid switches still apply their state immediately rather than
+// aborting the transition already in flight.
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");
@@ -1626,21 +1627,48 @@ const viewFrame = document.getElementById("view-frame");
 const viewTitle = document.getElementById("view-title");
 const viewFocus = createViewFocusController();
 
+function embeddedViewRoute(path) {
+  if (path === "options/options.html") return VIEW_ROUTE.SETTINGS;
+  if (path === "directory/directory.html") return VIEW_ROUTE.DIRECTORY;
+  if (path === "recipes/index.html") return VIEW_ROUTE.SKILLS;
+  return VIEW_ROUTE.ARTIFACTS;
+}
+
 function openView(path, title, trigger) {
+  const sourceRoute = activeViewRoute;
+  const targetRoute = embeddedViewRoute(path);
+  // Start the embedded document load before snapshot capture so the named
+  // destination overlay is populated at the transition midpoint.
   viewFrame.src = chrome.runtime.getURL(path);
   viewFrame.title = title;
   viewTitle.textContent = title;
-  withViewTransition(() => viewFocus.open(trigger, () => {
-    // Only ONE overlay at a time (item 48): the settings/directory/recipes
-    // view replaces the task thread. Synchronise covered-view state inside the
-    // transition callback: startViewTransition applies this callback later.
-    if (!threadView.hidden) hideThreadViewInner();
-    viewOverlay.hidden = false;
-    syncViewOpen();
-  }, viewFrame));
+  withViewTransition(() =>
+    viewFocus.open(trigger, () => {
+      // Only ONE overlay at a time (item 48): the settings/directory/recipes
+      // view replaces the task thread. Synchronise covered-view state inside the
+      // transition callback: startViewTransition applies this callback later.
+      if (!threadView.hidden) hideThreadViewInner();
+      viewOverlay.hidden = false;
+      activeViewRoute = targetRoute;
+      syncViewOpen();
+    }, null), {
+    sourceRoute,
+    targetRoute,
+    focusAfter: viewFrame,
+  });
 }
 function closeView() {
-  withViewTransition(() => viewFocus.close(hideViewInner));
+  const sourceRoute = activeViewRoute;
+  withViewTransition(() => {
+    hideViewInner();
+    activeViewRoute = VIEW_ROUTE.HUB;
+  }, {
+    sourceRoute,
+    targetRoute: VIEW_ROUTE.HUB,
+    // Keep Directory's initiating-trigger restoration, but defer it until the
+    // View Transition top layer has settled instead of focusing underneath it.
+    focusAfter: { focus: () => viewFocus.close(() => {}) },
+  });
   // Returning from Settings/Directory is an owner navigation boundary. A
   // fresh authoritative read both restores the row promptly and fences any
   // older delayed sidebar read that began before the view switch.

@@ -78,6 +78,9 @@
     #side.collapsed ~ .side-toggle svg { transform: rotate(180deg); }
     @media (prefers-reduced-motion: reduce) {
       .side-toggle, .side-toggle .nub, .side-toggle svg, .side, #thread-view.view-overlay, #view.view-overlay { transition: none !important; }
+      ::view-transition-group(*),
+      ::view-transition-old(*),
+      ::view-transition-new(*) { animation: none !important; }
     }
     /* RTL: the rail sits on the right — mirror the nub to the left edge, flip
        the horizontal translate (the nub protrudes LEFT now), and mirror the
@@ -492,6 +495,21 @@
       view-transition-name: overlay-view;
     }
     .view-overlay[hidden] { display: none; }
+
+    /* Root and named overlay snapshots live in the View Transition top layer.
+       Across a task boundary, hide both stale old images so neither obsolete
+       hub nor task controls cross-fade over the destination. Keep the new
+       overlay-view snapshot named and animated; unrelated routes never receive
+       this temporary class and retain their normal named cross-fade. */
+    html.task-view-transition::view-transition-old(root),
+    html.task-view-transition::view-transition-old(overlay-view) {
+      animation: none;
+      opacity: 0;
+    }
+    html.task-view-transition::view-transition-new(root) {
+      animation: none;
+    }
+
     .view-head {
       display: flex;
       align-items: center;
@@ -675,7 +693,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
           Back
         </button>
-        <span class="view-title" id="thread-title">Task</span>
+        <span class="view-title" id="thread-title" tabindex="-1">Task</span>
         <button class="back subtle" id="edit-agent" type="button" aria-label="Edit agent" hidden>Edit</button>
       </div>
       <div class="thread-body">

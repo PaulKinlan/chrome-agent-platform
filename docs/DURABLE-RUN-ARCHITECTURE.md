@@ -348,5 +348,8 @@ Exact screenshot SHA-256 digests, in order:
 
 The journey recorded zero browser exceptions, crashes, or websocket errors.
 One known nonfatal packaged Settings request for `CHANGELOG.md` returned
-`net::ERR_FILE_NOT_FOUND`; it did not affect the journey. The independent verdict
-is `PASS_FOR_INTEGRATION`, scoped to this exact Durable source and evidence.
+`net::ERR_FILE_NOT_FOUND`; it did not affect that historical journey. The later
+local task-view successor makes the clean-archive production build materialize
+and verify the ignored generated package copy; that correction still requires
+its own loaded-MV3 review and does not rewrite this evidence. The independent
+verdict is `PASS_FOR_INTEGRATION`, scoped to this exact Durable source and evidence.

@@ -145,6 +145,31 @@ On resume after a coordinator or worker loss:
 
 ## Active
 
+## [CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01] Task-view transition must not ghost the obsolete hub
+- Feedback: 2026-08-21 — accepted Durable-run evidence exposed the old hub composer and dashboard cross-fading beneath the opening task view while the View Transition top layer was active; immutable v2 review later isolated remaining task→full-view pixels to `::view-transition-old(overlay-view)`
+- Updated: 2026-08-21 15:45 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: current-main reconciliation worker
+- Workspace: active (local path private)
+- Branch: `reconcile/task-transition-eed40358-worker`
+- Base: `eed403580c001c472dcf31954626b798364cdb86`
+- Candidate: this current-main reconciliation commit
+- Shipping: —
+- Acceptance: entering/restoring a task and leaving an active task/thread for Hub, Settings, Directory, Skills, or Artifacts hides obsolete old `root` and old `overlay-view` pixels beneath the destination; source/target route policy preserves normal unrelated transitions and keeps new `overlay-view` named and active; temporary policy cleans after finish/abort/races; focus lands after the top-layer transition; Directory's covered sidebar and edge control remain inert/`aria-hidden` and initiating-trigger focus returns after close; reduced motion bypasses snapshots; a clean-archive production build materializes the canonical changelog in the loaded extension so Settings has zero missing-file errors
+- Review: immutable v2 loaded-MV3 review rejected exact `8b5a6287` because old `overlay-view` remained at opacity `0.197597` during task→Settings even though old `root` was hidden; reviewed successor `0d3199a` scopes `animation: none; opacity: 0` to the old named overlay without targeting the new named overlay. Its content is now reconciled onto Directory main `eed40358`; independent review of the conflict disposition and loaded-MV3 proof remain pending
+- Gates: current-main reconciliation passes 13/13 transition + 2/2 Directory focus tests, 710/710 full no-Chrome tests, production build, deterministic package, gallery, changelog identity/order (48 unique descending), 7/7 sandbox security, changed-helper/test formatting, JS syntax, and diff checks. The inherited `extension/ntp/ntp.js` is not repository-format-clean at exact base `eed40358`; the reconciliation keeps its new hunks formatter-aligned without widening scope to reformat the 1,700-line baseline. Residual loaded-MV3 midpoint captures must cover task launch, task→Settings, keyboard Tasks restore, cleanup/focus, and genuine pointer View logs
+- Blockers: loaded-MV3 acceptance is excluded from this implementation lane, so visual and genuine-pointer closure remain pending on a reviewer; provisional version `0.2.115` must be reconciled during serialized integration
+- Next: complete current-main no-Chrome gates, independently review the reconciliation, then run the corrected loaded-extension harness without consuming another task/retry
+- Recover: `git log --all --oneline --grep='CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01'`
+- History:
+  - 2026-08-21 13:14 UTC — reproduced from accepted screenshot/CDP evidence as a transient root-snapshot defect, scoped root suppression to task routing, and added finish/abort/reduced-motion focus-cleanup tests; no settled-layout defect or global transition disable is claimed.
+  - 2026-08-21 13:27 UTC — recovered the interrupted draft after host ENOSPC, made overlapping-route focus wait for the active top layer without cancelling incidental transitions, fenced synchronous update replay, and passed the complete no-Chrome gate; status remains OPEN until an independent reviewer is assigned.
+  - 2026-08-21 14:19 UTC — exact loaded-MV3/browser review rejected `7d3b3e7e`: task→Settings still showed old task controls and clean-archive builds omitted the ignored generated changelog. The successor makes suppression a source/target task-boundary policy (including Settings/Directory/Skills), moves embedded-view focus after settlement, and makes build/package generation of canonical `CHANGELOG.md` fail-closed. The reported `durable-run-registry` hit target is recorded as valid Shadow DOM retargeting for the future harness, not a product change. Release `0.2.116` was local-candidate identity only.
+  - 2026-08-21 15:31 UTC — immutable v2 review rejected exact `8b5a6287`: old `root` suppression worked, but shared naming paired the old task and new full-view containers as `overlay-view`, leaving the old named snapshot visible at the 125 ms midpoint. The provisional 0.2.118 successor hides only that old named image under the existing task-boundary class, retains new named-overlay activity and unrelated route cross-fades, and adds complete enter/exit route plus semantic CSS coverage.
+  - 2026-08-21 15:45 UTC — reconciled reviewed successor content onto public Directory main `eed40358` rather than rebasing blindly. The provisional identity is `0.2.115`; Directory's `side` + `sideToggle` covered-state authority and initiating-trigger focus return are retained, with focus composed after transition settlement. Current-main review and loaded-MV3 proof remain open.
+
 ## [CAP-FB-20260821-DURABLE-SIDEBAR-LIVE-01] Live durable task in the Tasks sidebar
 - Feedback: 2026-08-21 — owner Tasks rows must remain native, live, unique, and recover after navigation and hard reload
 - Updated: 2026-08-21 13:55 UTC
