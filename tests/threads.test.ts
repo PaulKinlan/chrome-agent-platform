@@ -7,6 +7,8 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   appendThreadMessage,
+  commitThreadCancellation,
+  commitThreadTerminal,
   createThread,
   deleteThread,
   generateThreadName,
@@ -186,6 +188,40 @@ Deno.test("a successful retry clears the prior error detail", async () => {
   const index = await listThreads();
   const row = index.find((r) => r.id === t.id);
   assertEquals(row.status, "done");
+});
+
+Deno.test("commitThreadTerminal is idempotent by executionId and later tool replay preserves terminal status", async () => {
+  const thread = await createThread("durable task");
+  await commitThreadTerminal(thread.id, "exec-thread-001", {
+    role: "assistant",
+    content: "one answer",
+    status: "done",
+  });
+  await commitThreadTerminal(thread.id, "exec-thread-001", {
+    role: "assistant",
+    content: "duplicate answer",
+    status: "done",
+  });
+  await appendThreadMessage(thread.id, {
+    role: "tool",
+    toolName: "memory_get",
+    toolStatus: "done",
+  });
+  const saved = await getThread(thread.id);
+  assertEquals(saved.messages.filter((message) => message.executionId === "exec-thread-001").length, 1);
+  assertEquals(saved.messages.find((message) => message.executionId === "exec-thread-001").content, "one answer");
+  assertEquals(saved.status, "done");
+});
+
+Deno.test("commitThreadCancellation replaces a partial terminal and remains singular", async () => {
+  const thread = await createThread("cancel me");
+  await commitThreadTerminal(thread.id, "exec_cancel", { role: "assistant", content: "partial", status: "done" });
+  await commitThreadCancellation(thread.id, "exec_cancel", { content: "Run cancelled by owner", reason: "explicit owner cancellation" });
+  await commitThreadCancellation(thread.id, "exec_cancel", { content: "Run cancelled by owner", reason: "explicit owner cancellation" });
+  const saved = await getThread(thread.id);
+  assertEquals(saved.status, "cancelled");
+  assertEquals(saved.messages.filter((message) => message.executionId === "exec_cancel").length, 1);
+  assertEquals(saved.messages.find((message) => message.executionId === "exec_cancel").cancelled, true);
 });
 
 Deno.test("deleteThread removes the index row AND the body atomically (item 17)", async () => {

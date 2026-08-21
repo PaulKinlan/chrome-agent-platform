@@ -208,6 +208,14 @@
       <h2 class="section">Composite components</h2>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;durable-run-registry&gt;</code> — retained owner run controls</h3>
+        <div class="stage column" style="max-width:760px">
+          <durable-run-registry id="durable-run-demo"></durable-run-registry>
+        </div>
+        <p class="caption">Native Cancel, Resume and View logs controls with exact run context, confirmation, pending suppression and live feedback.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;agent-composer&gt;</code> — mic + attach + input + send, one component</h3>
         <div class="stage column" style="max-width:640px">
           <agent-composer id="composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
@@ -402,6 +410,13 @@
         { ts: Date.now() - 120000, source: "agent:paul", agentLabel: "Paul", type: "tool-result", tool: "list_agents", result: "{\"modelContent\":\"{\\\"agents\\\":[{\\\"name\\\":\\\"Paul\\\",\\\"role\\\":\\\"summarises paul.kinlan.me\\\"}]}\"}" },
         { ts: Date.now() - 180000, source: "background:recipe:auto-group-by-domain", agentLabel: "Sorting Hat", type: "tool-result", tool: "tab_group", result: "grouped 12 tabs into 3 domains" },
         { ts: Date.now() - 300000, source: "https://paul.kinlan.me", agentLabel: "https://paul.kinlan.me", type: "screenshot", url: "https://paul.kinlan.me" },
+      ];
+
+      const durableDemo = document.getElementById("durable-run-demo");
+      if (durableDemo) durableDemo.runs = [
+        { executionId: "exec:11111111-1111-4111-8111-111111111111", taskPreview: "Summarise the release", phase: "running" },
+        { executionId: "exec:22222222-2222-4222-8222-222222222222", taskPreview: "Publish the report", phase: "paused-side-effect-uncertain", pause: { reason: "A publishing side effect may already have completed." } },
+        { executionId: "exec:33333333-3333-4333-8333-333333333333", taskPreview: "Completed research", phase: "terminal", terminal: { summary: "Done" } },
       ];
 
       // <system-prompt-editor> example — a seeded describe payload showing the

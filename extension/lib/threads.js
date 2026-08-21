@@ -255,7 +255,16 @@ export async function appendThreadMessage(id, message) {
   });
   thread.messages = trimMessages(thread.messages);
   thread.updatedAt = Date.now();
-  thread.status = role === "assistant" ? "done" : "running";
+  // Tool-card replay may happen after the durable terminal outbox has already
+  // committed the assistant/error row. A non-terminal tool append must never
+  // regress that authoritative terminal status back to "running".
+  thread.status = role === "assistant"
+    ? "done"
+    : role === "error"
+      ? "error"
+      : role === "tool" && ["done", "error"].includes(thread.status)
+        ? thread.status
+        : "running";
   await mem.setTrusted(`thread:${id}`, thread);
   const index = (await mem.get(INDEX_KEY)) ?? [];
   const row = index.find((r) => r.id === id);
@@ -267,6 +276,131 @@ export async function appendThreadMessage(id, message) {
     await writeIndex(index);
   }
   return thread;
+  });
+}
+
+/** Idempotently commit one terminal assistant/error message and thread status
+ * for an immutable execution. Outbox recovery can repeat this after any crash;
+ * the executionId check and body/index update share the thread mutex. */
+/** Explicit cancellation replaces any partially committed terminal message for
+ * the same immutable execution and derives a visible cancelled thread state. */
+export async function commitThreadCancellation(id, executionId, terminal) {
+  if (!id || !executionId) return null;
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    if (!thread) return null;
+    thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+    const content = boundText(terminal?.content ?? "Run cancelled by owner");
+    const replacement = {
+      role: "error",
+      content,
+      executionId,
+      ts: Date.now(),
+      category: "cancelled",
+      reason: terminal?.reason ?? "explicit owner cancellation",
+      action: "Start a new run to execute this request again.",
+      cancelled: true,
+    };
+    const index = thread.messages.findIndex((message) => message?.executionId === executionId);
+    if (index >= 0) thread.messages[index] = replacement;
+    else thread.messages.push(replacement);
+    thread.status = "cancelled";
+    thread.lastError = {
+      message: content,
+      tool: null,
+      category: "cancelled",
+      reason: replacement.reason,
+      action: replacement.action,
+      at: Date.now(),
+      executionId,
+    };
+    thread.updatedAt = Date.now();
+    await mem.setTrusted(`thread:${id}`, thread);
+    const rows = (await mem.get(INDEX_KEY)) ?? [];
+    const row = rows.find((entry) => entry.id === id);
+    if (row) {
+      row.preview = previewOf(content);
+      row.updatedAt = thread.updatedAt;
+      row.status = "cancelled";
+      row.count = thread.messages.length;
+      row.error = content;
+      await writeIndex(rows);
+    }
+    return thread;
+  });
+}
+
+export async function commitThreadTerminal(id, executionId, terminal) {
+  if (!id || !executionId) return null;
+  return withThreadLock(async () => {
+    const mem = masterMemory();
+    const thread = (await mem.get(`thread:${id}`)) ?? null;
+    if (!thread) return null;
+    thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+    const existing = thread.messages.find((message) => message?.executionId === executionId);
+    if (!existing) {
+      const role = terminal?.role === "assistant" ? "assistant" : "error";
+      const content = boundText(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      thread.messages.push({
+        role,
+        content,
+        executionId,
+        ts: Date.now(),
+        ...(role === "error"
+          ? {
+            tool: terminal?.tool ?? undefined,
+            category: terminal?.category ?? "error",
+            reason: terminal?.reason ?? undefined,
+            action: terminal?.action ?? undefined,
+          }
+          : {}),
+      });
+      thread.messages = trimMessages(thread.messages);
+    }
+    // A repeated executionId always derives status/detail from the first
+    // committed message. Even a conflicting replay payload cannot change the
+    // winning terminal outcome; retries only repair a possibly-missed index.
+    const committed = existing ?? thread.messages.find((message) => message?.executionId === executionId);
+    const committedTerminal = committed?.role === "assistant"
+      ? { role: "assistant", content: committed.content, status: "done" }
+      : {
+        role: "error",
+        content: committed?.content ?? "run failed",
+        status: "error",
+        tool: committed?.tool ?? null,
+        category: committed?.category ?? "error",
+        reason: committed?.reason ?? null,
+        action: committed?.action ?? null,
+      };
+    thread.status = committedTerminal.status;
+    if (thread.status === "done") {
+      delete thread.lastError;
+    } else {
+      thread.lastError = {
+        message: boundText(committedTerminal.content),
+        tool: committedTerminal.tool ?? null,
+        category: committedTerminal.category ?? "error",
+        reason: committedTerminal.reason ?? null,
+        action: committedTerminal.action ?? null,
+        at: Date.now(),
+        executionId,
+      };
+    }
+    thread.updatedAt = Date.now();
+    await mem.setTrusted(`thread:${id}`, thread);
+    const index = (await mem.get(INDEX_KEY)) ?? [];
+    const row = index.find((entry) => entry.id === id);
+    if (row) {
+      row.preview = previewOf(committedTerminal.content);
+      row.updatedAt = thread.updatedAt;
+      row.status = thread.status;
+      row.count = thread.messages.length;
+      if (thread.status === "done") delete row.error;
+      else row.error = boundText(committedTerminal.content);
+      await writeIndex(index);
+    }
+    return thread;
   });
 }
 

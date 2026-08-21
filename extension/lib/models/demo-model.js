@@ -21,6 +21,26 @@ const DELEGATE_MARKER = "@demo-delegate";
 // @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
+/** Public deterministic cancellation window used by the demo provider. This is
+ * product behavior (the documented @demo-slow marker), not a hidden test seam. */
+export const DEMO_SLOW_HOLD_MS = 10_000;
+
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+      return;
+    }
+    const done = () => { signal?.removeEventListener?.("abort", aborted); resolve(); };
+    const timer = setTimeout(done, ms);
+    const aborted = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", aborted);
+      reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+    };
+    signal?.addEventListener?.("abort", aborted, { once: true });
+  });
+}
 
 function wantsDelegate(prompt) {
   return !!latestRunSlice(prompt)?.marker?.delegate;
@@ -200,7 +220,7 @@ export function createDemoModel() {
     async doStream(options) {
       if (wantsSlow(options.prompt) && !options._slowUsed) {
         options._slowUsed = true;
-        await new Promise((r) => setTimeout(r, 500));
+        await abortableDelay(DEMO_SLOW_HOLD_MS, options.abortSignal);
       }
       const text = extractText(options.prompt);
       const wantsTools = wantsDemoTools(options.prompt);

@@ -20,13 +20,17 @@ import {
   isLocalProvider,
   providerOriginPattern,
 } from "../lib/provider-gate.js";
+import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import { testProvider } from "../lib/provider-test.js";
 import { acquireLease, settleLease, leaseState } from "../lib/perm-lease.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
+import { isNativeQuotaExceededError } from "../lib/storage-errors.js";
+import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
 import {
   canonicalOrigin,
   journalAppend,
+  journalAppendWithReceipt,
   listBackgroundAgentIds,
   listNamedAgentIds,
   listOrigins,
@@ -108,9 +112,7 @@ import {
   historyFromThread,
   listThreads,
   nameThreadAsync,
-  recordThreadError,
   renameThread,
-  setThreadStatus,
 } from "../lib/threads.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import {
@@ -152,6 +154,7 @@ import {
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
+import { durableRuns } from "../lib/durable-runs.js";
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -348,6 +351,7 @@ globalThis.AI_SDK_LOG_WARNINGS = false;
 // a time, so an abort always targets the one active run. Delegated worker runs
 // inside a serialized master are also serialized by this gate.
 let runMutex = Promise.resolve();
+const durableRunAborters = new Map(); // executionId -> exact live orchestrator abort
 function withRunLock(fn) {
   const run = runMutex.then(fn, fn);
   runMutex = run.then(() => {}, () => {});
@@ -361,6 +365,16 @@ function withRunLock(fn) {
 // alive while a page is listening, and the events are fire-and-forget (a
 // closed port never throws into the run).
 const progressPorts = new Set();
+// Startup truth is established before a new run is accepted: recover complete
+// terminal outboxes first, then honestly orphan pre-boot executions. Recovery
+// failure blocks durable starts/routes rather than pretending state is current.
+// Start recovery eagerly in the real service worker. Router/unit imports omit
+// OPFS entirely; do not probe it there. Any real recovery rejection remains the
+// awaited fail-closed result for every durable run path.
+const durableRecoveryReady = typeof globalThis.navigator?.storage?.getDirectory === "function"
+  ? durableRuns.recover()
+  : Promise.resolve({ recoveredOutboxes: 0, orphaned: [] });
+durableRecoveryReady.catch(() => {});
 function broadcastProgress(event) {
   for (const port of progressPorts) {
     try {
@@ -384,6 +398,9 @@ function broadcastRegistryChanged() {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-progress") return;
   progressPorts.add(port);
+  // Register/buffer/snapshot/drain is owned by the durable registry. Existing
+  // live progress remains available, while reconnect receives durable truth.
+  durableRuns.attachPort(port);
   port.onDisconnect.addListener(() => progressPorts.delete(port));
 });
 
@@ -504,6 +521,8 @@ async function handleAlarm(alarm) {
         id: alarm.name,
         task: task.task ?? alarm.name,
         scheduled: true,
+        scheduleName: alarm.name,
+        runKind: "scheduled",
         attachments: task.attachments ?? [],
         fence,
         // A background/scheduled agent gets its OWN OPFS (memory + run log),
@@ -1194,23 +1213,105 @@ function attachmentContext(attachments) {
   return "Attachments:\n" + parts.join("\n");
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "" }) {
+function providerResumeIdentity(config) {
+  return {
+    schemaVersion: 1,
+    provider: String(config?.provider ?? config?.id ?? ""),
+    model: String(config?.model ?? ""),
+    requestedScope: providerOriginPattern(config) ?? null,
+    local: isLocalProvider(config),
+  };
+}
+
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
-    // EARLY provider gate (Paul 2026-08-17): refuse before journaling/setup
-    // when the circuit-breaker is OPEN or the provider's host permission is
-    // missing — this is what stops a failing provider from flooding the
-    // console with one failed hook/task run per event.
-    {
-      const early = await providerRunGate(await getProviderConfig());
-      if (!early.ok) throw new ProviderUnavailableError(early.reason);
-    }
     const taskId = id ?? String(Date.now());
     // A BACKGROUND/SCHEDULED agent passes its OWN memory (Paul: all agents get
     // their own OPFS). The journal + the orchestrator's memory tools then write
     // to that agent's own tier, never the master's.
     const mem = memory ?? masterMemory();
+    const providerConfig = providerGateConfig ?? await getProviderConfig();
+    const currentProviderBinding = resumedExecutionId
+      ? providerResumeIdentity(providerConfig)
+      : (providerBinding ?? providerResumeIdentity(providerConfig));
+    const executionId = resumedExecutionId || newExecutionId();
+    await durableRecoveryReady;
+    const resumeRequest = {
+      id: taskId,
+      task: String(task ?? ""),
+      scheduled: !!scheduled,
+      attachments: structuredClone(Array.isArray(attachments) ? attachments : []),
+      history: structuredClone(Array.isArray(history) ? history : []),
+      scoped: !!scoped,
+      route: resumeRoute,
+      routeArgs: structuredClone(resumeRouteArgs ?? {}),
+      providerBinding: currentProviderBinding,
+      idempotencyKey: executionId,
+      replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true },
+      promptScope: promptScope ?? null,
+      agentRole: String(agentRole ?? ""),
+      clientCorrelationId: clientCorrelationId ?? null,
+      threadId: threadId ?? null,
+      scheduleName: scheduleName ?? null,
+      runKind: runKind ?? null,
+      memoryOrigin: mem.origin ?? "master",
+    };
+    const admissionFailure = await admitDurableRun(durableRuns, {
+      executionId,
+      clientCorrelationId,
+      threadId,
+      scheduleName,
+      kind: runKind ?? (scheduled ? "scheduled" : (agentRole ? "agent" : "task")),
+      agentId: agentRole || null,
+      taskPreview: task,
+      journalTarget: mem.origin,
+      resumeRequest,
+    });
+    // start() compensated this pre-authority refusal. Do not call rollback:
+    // there is no readable execution authority from which deletion is safe.
+    if (admissionFailure) return admissionFailure;
+    if (resumedExecutionId) {
+      const activated = await durableRuns.activateResume(executionId, resumeToken, currentProviderBinding, allowProviderChange);
+      if (!activated.ok) return activated;
+    }
+    const early = await providerRunGate(providerConfig);
+    if (!early.ok) {
+      if (early.code === "permission_required") {
+        const paused = await durableRuns.pauseForPermission(executionId, {
+          code: early.code,
+          reason: early.reason,
+          requestedScope: early.requestedScope,
+          providerBinding: currentProviderBinding,
+        });
+        return {
+          ok: false,
+          paused: true,
+          pauseKind: "permission",
+          executionId,
+          run: paused,
+          error: early.reason,
+          errorCategory: "permission",
+          errorReason: early.reason,
+          errorAction: "Resolve the narrow provider permission in Settings; this run will resume automatically.",
+        };
+      }
+      await durableRuns.settle(executionId, {
+        ok: false,
+        error: early.reason,
+        errorCategory: "provider",
+        errorReason: early.reason,
+        errorAction: "Retry after the provider becomes available.",
+        logicalId: taskId,
+      });
+      throw new ProviderUnavailableError(early.reason);
+    }
+    if (permissionResume) {
+      const snapshot = await durableRuns.list();
+      const resumed = snapshot.runs.find((run) => run.executionId === executionId);
+      if (resumed?.phase !== "running") throw new Error("permission resume did not acquire durable running state");
+    }
     // Journal the agent's tool activity for the run log (item 16): each
     // tool-call and tool-result is appended to the journal so the owner can SEE
     // what an agent did — even a background agent with no live UI. The journal
@@ -1237,7 +1338,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const cq = callQueue.get(event.toolName) ?? [];
         cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
         callQueue.set(event.toolName, cq);
-        journalAppend(mem, { type: "tool-call", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", args }).catch(() => {});
+        const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
+        journalAppend(mem, log).catch(() => {});
+        durableRuns.appendLog(executionId, log, `tool-call:${callId}`).catch(() => {});
+        durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
+          heartbeatFailed = true;
+          try { orch?.abort?.(); } catch { /* already stopped */ }
+        });
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";
@@ -1254,7 +1361,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // An unmatched result gets a UNIQUE id (never a repeated ":1" that
         // would collapse multiple orphan results into one card).
         const callId = q.shift() ?? `${taskId}:${runInstance}:${event.toolName ?? "tool"}:orphan:${orphanN}`;
-        journalAppend(mem, { type: "tool-result", id: taskId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null }).catch(() => {});
+        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null };
+        journalAppend(mem, log).catch(() => {});
+        durableRuns.appendLog(executionId, log, `tool-result:${callId}`).catch(() => {});
+        durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
+          heartbeatFailed = true;
+          try { orch?.abort?.(); } catch { /* already stopped */ }
+        });
       }
     };
     // Bind the RUN-BOUND prompt attestation: lib/agent.js captures the EXACT
@@ -1273,13 +1386,22 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // attempts). The callback is bound for THIS execution, UNBOUND in the
     // finally, and its slot is FINALIZED so a late emission can never leak
     // into a later run's records.
-    const executionId = newExecutionId();
     beginExecution(executionId, taskId);
     // Everything after beginExecution is inside this try: orchestrator/key
     // establishment can fail too, and even that pre-model failure must seal the
     // slot. This run builds a management toolset that CAPTURES executionId.
     let abortNow = null;
     let orch = null;
+    let heartbeatFailed = false;
+    let taskJournalReceipt = null;
+    let taskJournalGuard = null;
+    let taskJournalAttempted = false;
+    const durableHeartbeat = setInterval(() => {
+      durableRuns.heartbeat(executionId).catch(() => {
+        heartbeatFailed = true;
+        try { orch?.abort?.(); } catch { /* already stopped */ }
+      });
+    }, 15_000);
     try {
       orch = await ensureOrchestrator(
         journalingProgress,
@@ -1290,6 +1412,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         agentRole,
         executionId,
       );
+      durableRunAborters.set(executionId, () => {
+        try { orch?.abort?.(); } catch { /* already stopped */ }
+      });
+      // Close the cancel-before-aborter race: cancellation removes durable
+      // ownership before stopping live work, so this immediate check prevents
+      // task/tool commits if Cancel landed while the orchestrator initialized.
+      await durableRuns.heartbeat(executionId);
       const attestKeyState = await attestationKeyState();
       orch.setAttestation?.((att) => {
         const bound = {
@@ -1334,12 +1463,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // Thread the fence as the journal's COMMIT guard so the ownership check is
       // adjacent to the setTrusted commit (not merely before the journalAppend's
       // internal `get` await) — the round-21 stale-commit finding.
-      const journalGuard = fence
+      taskJournalGuard = fence
         ? async () => {
           await fence.assertOwned();
         }
         : null;
-      await journalAppend(mem, {
+      const taskLog = {
         type: "task",
         id: taskId,
         task,
@@ -1349,6 +1478,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // which composed system prompt this run sent, provable against the
         // Settings → Advanced preview without leaking the prompt text.
         prompt: orch.promptInfo ?? undefined,
+        executionId,
         attachments: Array.isArray(attachments) ? attachments.map((a) => ({
           name: a?.name ?? "attachment",
           type: a?.type ?? "",
@@ -1356,7 +1486,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           kind: a?.kind ?? "file",
           dataURL: typeof a?.dataURL === "string" ? a.dataURL : "",
         })) : undefined,
-      }, journalGuard);
+      };
+      // The receipt-capable task append is committed before orch.run reaches
+      // the provider. A later native storage refusal can therefore restore the
+      // exact absent/empty/nonempty journal state without guessing.
+      taskJournalAttempted = true;
+      taskJournalReceipt = await journalAppendWithReceipt(mem, taskLog, taskJournalGuard);
+      await durableRuns.appendLog(executionId, taskLog, "task");
       // Re-check durable ownership AFTER the task journal COMMIT (never only
       // before — the round-19 blocker: journal ownership was checked before the
       // awaited commit, never after).
@@ -1392,7 +1528,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // the agent controller — must surface as {ok:false, aborted:true},
         // never a generic provider error and never a success.
         if ((e instanceof RunAbortedError) || isAbortShape(e) || (fence?.signal?.aborted === true) || (typeof orch.isAborted === "function" && orch.isAborted())) {
-          return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
+          const aborted = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted", executionId };
+          const terminal = await durableRuns.settle(executionId, { ...aborted, logicalId: taskId });
+          return terminal?.phase === "cancelled"
+            ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
+            : aborted;
         }
         throw e;
       }
@@ -1401,11 +1541,18 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // result append + done status on it). The RETURNED per-run outcome is
       // authoritative (a queued next run can never overwrite it); the durable
       // flag + the fence signal back it up.
-      if ((fence?.signal?.aborted === true) || runOutcome?.aborted === true || (typeof orch.isAborted === "function" && orch.isAborted())) {
-        return { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" };
+      if (heartbeatFailed || (fence?.signal?.aborted === true) || runOutcome?.aborted === true || (typeof orch.isAborted === "function" && orch.isAborted())) {
+        const aborted = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted", executionId };
+        const terminal = await durableRuns.settle(executionId, { ...aborted, logicalId: taskId });
+        return terminal?.phase === "cancelled"
+          ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
+          : aborted;
       }
       await fence?.assertOwned?.();
-      await journalAppend(mem, { type: "result", id: taskId, result }, journalGuard);
+      const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId });
+      if (terminal?.phase === "cancelled") {
+        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+      }
       await fence?.assertOwned?.();
       if (scheduled) {
         await fence?.assertOwned?.();
@@ -1438,8 +1585,42 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // Re-check ownership AFTER the notification commit as well.
         await fence?.assertOwned?.();
       }
-      return { ok: true, result };
+      return { ok: true, result, executionId };
+    } catch (error) {
+      if (isNativeQuotaExceededError(error)) {
+        // Settling allocates a retained payload and terminal outbox before it
+        // can journal, so it is impossible (and can strand more state) when
+        // the bounded filesystem is full. Compensate only the registry's own
+        // persisted, publicly read-back zero-progress execution. Progressed or
+        // uncertain work fails closed and remains for explicit recovery.
+        // If the receipt-capable append itself threw before returning its exact
+        // receipt, journal state is uncertain: preserve authority for recovery.
+        if (!taskJournalAttempted || taskJournalReceipt) {
+          await durableRuns.rollbackUnprogressedQuota(executionId, error, {
+            journalReceipt: taskJournalReceipt,
+            journalStore: mem,
+            journalGuard: taskJournalGuard,
+          }).catch(() => null);
+        }
+        return durableQuotaResponse(error, executionId);
+      }
+      const desc = describeError(error);
+      const terminal = await durableRuns.settle(executionId, {
+        ok: false,
+        error: desc.message,
+        errorCategory: desc.category,
+        errorReason: desc.reason,
+        errorAction: desc.action,
+        logicalId: taskId,
+      }).catch(() => null);
+      if (terminal?.phase === "cancelled") {
+        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+      }
+      try { error.executionId = executionId; } catch { /* immutable error */ }
+      throw error;
     } finally {
+      clearInterval(durableHeartbeat);
+      durableRunAborters.delete(executionId);
       // Seal THIS execution: unbind the attestation callback from the (cached)
       // orchestrator and finalize the execution slot, so no late/duplicate
       // emission can be recorded against this — or a later — run (the ring
@@ -2332,6 +2513,9 @@ const handlers = {
         id: m.id,
         task: m.task,
         attachments: bounded,
+        clientCorrelationId: m.runId ?? null,
+        threadId,
+        agentRole: "hub",
         onProgress: (event) => {
           if (event?.type === "tool-call") lastTool = event.toolName ?? null;
           broadcastProgress({
@@ -2361,6 +2545,7 @@ const handlers = {
       });
       result = {
         ok: false,
+        executionId: e?.executionId ?? null,
         error: desc.message,
         errorCategory: desc.category,
         errorReason: desc.reason,
@@ -2384,7 +2569,7 @@ const handlers = {
         const journal = (await masterMemory().get("journal").catch(() => null)) ?? [];
         const rows = Array.isArray(journal) ? journal : [];
         const toolRows = rows
-          .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result") && r.id === m.id)
+          .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result") && r.executionId === result?.executionId)
           .slice(-50);
         if (toolRows.length) {
           const pairs = pairToolJournal(toolRows);
@@ -2402,25 +2587,9 @@ const handlers = {
           }
         }
       } catch { /* a thread tool-card write must never fail the run */ }
-      if (result && typeof result.result === "string" && result.result) {
-        await appendThreadMessage(threadId, { role: "assistant", content: result.result }).catch(() => {});
-      }
-      // On failure, persist the error DETAIL into the thread (the message + the
-      // failed tool) so the task's error view shows WHY it failed — not just a
-      // red dot. A success just marks the thread done (and clears any prior
-      // error via setThreadStatus).
-      if (result && !result.ok) {
-        await recordThreadError(threadId, {
-          message: String(result.error ?? "run failed"),
-          tool: result.failedTool ?? null,
-          category: result.errorCategory ?? "error",
-          reason: result.errorReason ?? null,
-          action: result.errorAction ?? null,
-          detail: result.errorDetail ?? null,
-        }).catch(() => {});
-      } else {
-        await setThreadStatus(threadId, result?.ok ? "done" : "error").catch(() => {});
-      }
+      // The terminal assistant/error message and status are committed by the
+      // durable outbox protocol, idempotently by result.executionId. This outer
+      // route only copies non-terminal tool cards.
     }
     result.threadId = threadId;
     if (dropped.length > 0) result.droppedAttachments = dropped;
@@ -2625,7 +2794,7 @@ const handlers = {
     }
     return { ok: true, refined };
   },
-  async "named-agent.run"({ id, task, attachments, runId }) {
+  async "named-agent.run"({ id, task, attachments, runId, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
     // RUN/DELEGATE a task to a named agent (the wider-goal review found named
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
@@ -2640,10 +2809,11 @@ const handlers = {
     // resolved model into THIS run so the agent uses its provider, not the
     // global. Absent override → the global model (getModelForAgent falls back).
     let modelOverride = null;
+    let overrideConfig = null;
     try {
-      const override = await getNamedAgentProvider(id);
-      if (override) modelOverride = await getModelForAgent(override);
-    } catch { modelOverride = null; }
+      overrideConfig = await getNamedAgentProvider(id);
+      if (overrideConfig) modelOverride = await getModelForAgent(overrideConfig);
+    } catch { modelOverride = null; overrideConfig = null; }
     // The agent-chat surface needs LIVE progress (the tool calls streaming) —
     // broadcast each event tagged with the runId + the agentId so the page's
     // listener renders ONLY this agent run's tool cards.
@@ -2654,6 +2824,16 @@ const handlers = {
         attachments: attachments ?? [],
         memory: mem,
         modelOverride,
+        providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
+        providerGateConfig: overrideConfig,
+        clientCorrelationId: runId ?? null,
+        runKind: "agent",
+        executionId: _executionId,
+        permissionResume: _permissionResume,
+        resumeToken: _resumeToken,
+        allowProviderChange: _allowProviderChange,
+        resumeRoute: "named-agent.run",
+        resumeRouteArgs: { id, runId: runTag },
         // The agent's OWN system-prompt scope (agent:<slug>) — a per-agent
         // override composes over the hub base (inheriting the hub override when
         // the agent has none), and its role rides as the agent-role layer.
@@ -3388,7 +3568,83 @@ const handlers = {
     return { ok: true, name, when };
   },
   async "run-task"(m) {
-    return await runTask({ id: m.id, task: m.task });
+    return await runTask({ id: m.id, task: m.task, clientCorrelationId: m.runId ?? null });
+  },
+  async "run.list"() {
+    await durableRecoveryReady;
+    return await durableRuns.list();
+  },
+  async "run.cancel"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    if (!executionId) return { ok: false, error: "executionId is required" };
+    // The durable tombstone and cancellation outbox commit BEFORE the live
+    // orchestrator is stopped. A crash at either side therefore recovers to
+    // cancelled and can never restart this same execution id.
+    return await durableRuns.cancel(executionId, {
+      reason: m?.reason ?? "explicit owner cancellation",
+      requestId: m?.requestId ?? null,
+      onAuthorityPersisted: () => {
+        const abort = durableRunAborters.get(executionId);
+        if (!abort) return false;
+        abort();
+        return true;
+      },
+    });
+  },
+  async "run.resume"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    if (!executionId) return { ok: false, error: "executionId is required" };
+    const snapshot = await durableRuns.list();
+    const run = snapshot.runs.find((row) => row.executionId === executionId);
+    if (!run) return { ok: false, error: "run_not_found", executionId };
+    if (["cancelled", "cancel-requested"].includes(run.phase)) {
+      return { ok: false, cancelled: true, error: "cancelled_requires_new_run", executionId };
+    }
+    const resumable = ["paused-permission", "paused-provider-change", "paused-side-effect-uncertain"];
+    if (!resumable.includes(run.phase)) return { ok: false, error: "run_not_resumable", executionId, run };
+    if (["paused-side-effect-uncertain", "paused-provider-change"].includes(run.phase) && m?.ownerConfirmed !== true) {
+      return { ok: false, error: run.phase === "paused-provider-change" ? "provider_change_confirmation_required" : "side_effect_retry_confirmation_required", executionId, run };
+    }
+    const resumed = await durableRuns.resumeAfterPermission(executionId);
+    if (!resumed.ok) return resumed;
+    const request = resumed.resumeRequest;
+    if (!request?.task) {
+      await durableRuns.failResumeDispatch(executionId, resumed.token, "paused run has no recoverable request");
+      return { ok: false, error: "run_missing_resume_request", executionId };
+    }
+    let result;
+    try {
+      if (request.route === "agent.delegate") {
+        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
+      } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
+        result = await handlers[request.route]({
+          ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
+          _executionId: executionId, _permissionResume: true, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change",
+        }, context);
+      } else {
+        result = await runTask({ ...request, memory: resolveMemory(request.memoryOrigin ?? "master"), executionId, permissionResume: true, resumeToken: resumed.token, allowProviderChange: run.phase === "paused-provider-change" });
+      }
+      if (result?.ok === false && !result?.paused && !result?.cancelled) {
+        await durableRuns.failResumeDispatch(executionId, resumed.token, result.error ?? "resume route refused");
+      }
+      return result;
+    } catch (error) {
+      await durableRuns.failResumeDispatch(executionId, resumed.token, error?.message ?? error);
+      throw error;
+    }
+  },
+  async "run.logs"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    return { ok: true, executionId, logs: await durableRuns.listLogs(executionId) };
   },
   async "task.list"() {
     // Owner-visible scheduled-task list (active + quarantined) so a quarantined
@@ -3441,6 +3697,8 @@ const handlers = {
     return await runTask({
       id: `recipe:${recipe.id}:${Date.now()}`,
       task: recipe.prompt,
+      runKind: "agent",
+      agentRole: `recipe:${recipe.id}`,
     });
   },
   async "background-agent.list"() {
@@ -3697,7 +3955,7 @@ const handlers = {
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
   },
-  async "background-agent.run"({ id, task, attachments, runId }) {
+  async "background-agent.run"({ id, task, attachments, runId, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
     const recipe = await resolveRecipe(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
@@ -3708,6 +3966,15 @@ const handlers = {
         task,
         attachments: attachments ?? [],
         memory: mem,
+        clientCorrelationId: runId ?? null,
+        runKind: "agent",
+        agentRole: `background:${recipe.id}`,
+        executionId: _executionId,
+        permissionResume: _permissionResume,
+        resumeToken: _resumeToken,
+        allowProviderChange: _allowProviderChange,
+        resumeRoute: "background-agent.run",
+        resumeRouteArgs: { id, runId: runTag },
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: `background:${recipe.id}` });
         },
@@ -4130,7 +4397,7 @@ const handlers = {
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task }) {
+  async "agent.delegate"({ origin, task, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
@@ -4144,19 +4411,76 @@ const handlers = {
       return { ok: false, error: `origin ${canonical} is not enrolled` };
     }
     const gen = snap.gen;
-    await ensureOrchestrator();
-    const a = orchestrator?.workers?.get(canonical);
-    if (!a) return { ok: false, error: `no agent for ${origin}` };
-    // The worker run is a SIDE-EFFECTING boundary: it must be fenced (an aborted
-    // run must not start a delegated worker) AND serialized with the master via
-    // withRunLock (the cached orchestrator's shared abort controller must never be
-    // clobbered by an explicit delegation racing a master run — the round-16 fence
-    // coverage finding).
-    if (runAborted()) {
-      return { ok: false, error: "run aborted — delegation not started" };
+    if (_resumeGeneration != null && _resumeGeneration !== gen) {
+      return { ok: false, error: "delegation enrollment changed; interrupted run cannot resume against a different generation" };
     }
-    let outcome;
+    const execId = _executionId || newExecutionId();
+    // Capture the provider config once. The durable resume request, gate, pause,
+    // and eventual dispatch are all bound to this exact non-secret identity and
+    // requested host scope.
+    const delegateProviderConfig = await getProviderConfig();
+    const delegateProviderBinding = providerResumeIdentity(delegateProviderConfig);
+    const logicalId = `delegate:${canonical}:${Date.now()}`;
+    await durableRecoveryReady;
+    const admissionFailure = await admitDurableRun(durableRuns, {
+      executionId: execId,
+      clientCorrelationId: logicalId,
+      kind: "delegate",
+      agentId: canonical,
+      taskPreview: task,
+      // The canonical terminal journal is master-owned so restart recovery can
+      // never recreate a site store after disenrollment. The per-site audit row
+      // below remains generation-fenced telemetry.
+      journalTarget: "master",
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), generation: gen, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+    });
+    // Failed admission was already compensated by start(); no readable
+    // authority exists, so rollback would be both unnecessary and unsafe.
+    if (admissionFailure) return admissionFailure;
+    if (_executionId) {
+      const activated = await durableRuns.activateResume(execId, _resumeToken, delegateProviderBinding, _allowProviderChange);
+      if (!activated.ok) return activated;
+    }
+    const delegateJournalStore = siteMemory(canonical);
+    const delegateJournalGuard = async () => {
+      const current = await enrollmentSnapshot(canonical);
+      if (!current.enrolled || current.gen !== gen) {
+        throw Object.assign(new Error("delegation enrollment generation changed"), { genMismatch: true });
+      }
+    };
+    let delegateJournalReceipt = null;
+    let delegateJournalAttempted = false;
+    let dispatched;
     try {
+      // Direct delegation has the same durable-before-provider task journal
+      // boundary as runTask; the executionId is immutable and receipt-bound.
+      delegateJournalAttempted = true;
+      delegateJournalReceipt = await journalAppendWithReceipt(delegateJournalStore, {
+        type: "task",
+        id: logicalId,
+        task,
+        delegated: true,
+        executionId: execId,
+      }, delegateJournalGuard);
+      dispatched = await dispatchDurableProviderRun({
+      executionId: execId,
+      providerConfig: delegateProviderConfig,
+      providerBinding: delegateProviderBinding,
+      durableRuns,
+      dispatch: async () => {
+        // Do not even initialize or look up the worker until the production
+        // provider gate has admitted this exact durable provider binding.
+        await ensureOrchestrator();
+        const a = orchestrator?.workers?.get(canonical);
+        // The worker run is a SIDE-EFFECTING boundary: it must be fenced (an aborted
+        // run must not start a delegated worker) AND serialized with the master via
+        // withRunLock (the cached orchestrator's shared abort controller must never be
+        // clobbered by an explicit delegation racing a master run — the round-16 fence
+        // coverage finding).
+        let outcome;
+    try {
+      if (!a) throw new Error(`no agent for ${origin}`);
+      if (runAborted()) throw new RunAbortedError("run aborted — delegation not started");
       outcome = await withRunLock(async () => {
       if (runAborted()) {
         throw new RunAbortedError("run aborted — delegation not started");
@@ -4174,9 +4498,16 @@ const handlers = {
       // Bind THIS delegation's own immutable execution id, prompt attestation,
       // and progress stream inside the lock. No callback from this attempt may
       // survive into a later cached-worker run.
-      const execId = newExecutionId();
-      const logicalId = `delegate:${canonical}:${Date.now()}`;
       beginExecution(execId, logicalId);
+      durableRunAborters.set(execId, () => {
+        try { a.abort?.(); } catch { /* already stopped */ }
+      });
+      await durableRuns.heartbeat(execId);
+      const delegateHeartbeat = setInterval(() => {
+        durableRuns.heartbeat(execId).catch(() => {
+          try { a.abort?.(); } catch { /* already stopped */ }
+        });
+      }, 15_000);
       try {
         const attestKeyState = await attestationKeyState();
         a.setAttestation?.((att) => {
@@ -4199,17 +4530,25 @@ const handlers = {
         });
         a.setProgress?.((ev) => {
           try { broadcastProgress({ ...ev, runId: execId, agentId: canonical }); } catch { /* best-effort */ }
+          durableRuns.heartbeat(execId, { progressed: true }).catch(() => {
+            try { a.abort?.(); } catch { /* already stopped */ }
+          });
         });
         // Thread the captured generation into a.run so the worker's memory/usage
         // commits revalidate THAT immutable identity (the round-22 ABA blocker).
         return await a.run(task, "", [], gen);
       } finally {
+        clearInterval(delegateHeartbeat);
+        durableRunAborters.delete(execId);
         try { a.setProgress?.(null); } catch { /* best-effort */ }
         try { a.setAttestation?.(null); } catch { /* best-effort */ }
         finalizeExecution(execId);
       }
       });
     } catch (e) {
+      // Preserve native storage identity for the established-run compensation
+      // boundary; do not relabel it as an ordinary delegated worker error.
+      if (isNativeQuotaExceededError(e)) throw e;
       // A typed abort (pre-start, fence, mid-run) → the failed delegation.
       if (e instanceof RunAbortedError || isAbortShape(e)) {
         outcome = { error: "delegation aborted", aborted: true };
@@ -4221,6 +4560,18 @@ const handlers = {
     // and map an aborted delegation to failure, never success with partial text.
     const delegatedAborted = !!(outcome && typeof outcome === "object" && outcome.aborted === true);
     const result = (outcome && typeof outcome === "object" && typeof outcome.text === "string") ? outcome.text : outcome;
+    const delegatedOk = !delegatedAborted && !(outcome && typeof outcome === "object" && "error" in outcome);
+    const terminal = await durableRuns.settle(execId, {
+      ok: delegatedOk,
+      result: delegatedOk ? result : undefined,
+      error: delegatedOk ? undefined : String(outcome?.error ?? "delegation failed"),
+      aborted: delegatedAborted,
+      errorCategory: delegatedAborted ? "aborted" : "error",
+      logicalId,
+    });
+    if (terminal?.phase === "cancelled") {
+      return { ok: false, cancelled: true, aborted: true, executionId: execId, error: "run cancelled by owner", errorCategory: "cancelled", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again." };
+    }
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the
     // journalAppend and resurrect the tombstoned directory (the round-16
@@ -4243,7 +4594,8 @@ const handlers = {
       // store.
       await journalAppend(siteMemory(canonical), {
         type: "delegated-result",
-        id: `delegate:${canonical}:${Date.now()}`,
+        id: logicalId,
+        executionId: execId,
         task,
         // an aborted delegation journals the TERMINAL aborted status — never
         // the partial output as an ordinary delegated-result
@@ -4265,9 +4617,37 @@ const handlers = {
         }
       });
       return delegatedAborted
-        ? { ok: false, aborted: true, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted" }
-        : { ok: true, origin: canonical, result };
+        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted" }
+        : delegatedOk
+          ? { ok: true, origin: canonical, result, executionId: execId }
+          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId };
+        });
+      },
     });
+    } catch (error) {
+      if (!isNativeQuotaExceededError(error)) throw error;
+      // Admission succeeded, so persisted authority exists. Roll back only a
+      // publicly readable unprogressed run; progressed/uncertain runs remain.
+      if (!delegateJournalAttempted || delegateJournalReceipt) {
+        await durableRuns.rollbackUnprogressedQuota(execId, error, {
+          journalReceipt: delegateJournalReceipt,
+          journalStore: delegateJournalStore,
+          journalGuard: delegateJournalGuard,
+        }).catch(() => null);
+      }
+      return durableQuotaResponse(error, execId);
+    }
+    if (dispatched?.providerBlocked) {
+      await durableRuns.settle(execId, {
+        ok: false,
+        error: dispatched.error,
+        errorCategory: dispatched.errorCategory,
+        errorReason: dispatched.errorReason,
+        errorAction: dispatched.errorAction,
+        logicalId,
+      });
+    }
+    return dispatched;
   },
   async "agent.listAll"() {
     const origins = await listOrigins();
@@ -4321,6 +4701,84 @@ const handlers = {
     return securityClear();
   },
 };
+
+async function resumeInterruptedRuns() {
+  await durableRecoveryReady;
+  const snapshot = await durableRuns.list();
+  let resumed = 0;
+  for (const run of snapshot.runs.filter((row) => row.phase === "paused-interruption")) {
+    const claimed = await durableRuns.resumeAfterInterruption(run.executionId);
+    if (!claimed.ok) continue;
+    const request = claimed.resumeRequest;
+    if (!request?.task) {
+      await durableRuns.failResumeDispatch(run.executionId, claimed.token, "paused run has no recoverable request");
+      continue;
+    }
+    let result;
+    try {
+      if (request.route === "agent.delegate") {
+        result = await handlers["agent.delegate"]({
+          origin: request.origin,
+          task: request.task,
+          _executionId: run.executionId,
+          _resumeGeneration: request.generation,
+          _resumeToken: claimed.token,
+        }, { principal: "extension", documentId: "internal-interruption-recovery" });
+      } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
+        result = await handlers[request.route]({
+          ...(request.routeArgs ?? {}),
+          task: request.task,
+          attachments: request.attachments ?? [],
+          _executionId: run.executionId,
+          _permissionResume: true,
+          _resumeToken: claimed.token,
+        }, { principal: "extension", documentId: "internal-interruption-recovery" });
+      } else {
+        result = await runTask({
+          ...request,
+          memory: resolveMemory(request.memoryOrigin ?? "master"),
+          executionId: run.executionId,
+          permissionResume: true,
+          resumeToken: claimed.token,
+        });
+      }
+      if (result?.ok === false && !result?.paused && !result?.cancelled) {
+        await durableRuns.failResumeDispatch(run.executionId, claimed.token, result.error ?? "resume route refused");
+      }
+    } catch (error) {
+      await durableRuns.failResumeDispatch(run.executionId, claimed.token, error?.message ?? error);
+    }
+    resumed += 1;
+  }
+  return { resumed };
+}
+
+async function resumePausedPermissionRuns() {
+  await durableRecoveryReady;
+  const gate = await providerRunGate(await getProviderConfig());
+  if (!gate.ok) return { resumed: 0 };
+  const snapshot = await durableRuns.list();
+  let resumed = 0;
+  for (const run of snapshot.runs.filter((row) => row.phase === "paused-permission")) {
+    const result = await handlers["run.resume"](
+      { executionId: run.executionId },
+      { principal: "extension", documentId: "internal-permission-resolution" },
+    );
+    if (result?.ok || result?.cancelled === false) resumed += 1;
+  }
+  return { resumed };
+}
+
+// Permission resolution is the only automatic resume trigger. UI/tab/service-
+// worker teardown needs no special action because the durable authority and
+// recovery sweep are independent of a mounted surface.
+chrome.permissions?.onAdded?.addListener(() => {
+  resumePausedPermissionRuns().catch(() => {});
+});
+durableRecoveryReady.then(async () => {
+  await resumeInterruptedRuns();
+  await resumePausedPermissionRuns();
+}).catch(() => {});
 
 // A page's content script may ONLY route tool-report operations. Everything else
 // (memory, agents, provider, usage, browser-control, run-task, etc.) is extension-only.
@@ -4550,6 +5008,8 @@ async function dispatchHook(hookId, payload) {
       // (not the per-run timestamp), so its journal + read-only memory are
       // isolated from the master and from every other hook/recipe.
       memory: backgroundAgentMemory(sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`),
+      runKind: "agent",
+      agentRole: sub.recipeId ? `recipe:${sub.recipeId}` : `hook:${hookId}`,
     }).catch((e) => {
       // A provider failure (missing host permission / open breaker / a model
       // that returns no output) must not flood the console per tab event —

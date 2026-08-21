@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { runConversationTurn, subscribeProgress, appendBubble, pairToolJournal } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
@@ -15,6 +15,8 @@ import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
 import { renderDurabilityState } from "../lib/durability-ui.js";
+import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../lib/task-sidebar-lifecycle.js";
+import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
 
 import {
   installPageDiagnostics,
@@ -23,7 +25,27 @@ import {
 } from "../shared/diagnostics-client.js";
 
 const statusEl = document.getElementById("status");
+const durableRunRegistry = document.getElementById("durable-run-registry");
 let statusTimer;
+
+if (durableRunRegistry) {
+  subscribeRunRegistry(({ runs }) => { durableRunRegistry.runs = runs; });
+  durableRunRegistry.addEventListener("run-cancel", async (event) => {
+    const result = await cancelDurableRun(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+    event.detail.complete(result);
+    setStatus(result.ok ? "Run cancelled. Retained logs are still available." : `Cancel failed: ${result.error}`, result.ok === true);
+  });
+  durableRunRegistry.addEventListener("run-resume", async (event) => {
+    const result = await resumePermissionPausedRun(event.detail.executionId, { ownerConfirmed: event.detail.ownerConfirmed }).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+    event.detail.complete(result);
+    setStatus(result.ok ? "Run resumed." : `Resume failed: ${result.error}`, result.ok === true);
+  });
+  durableRunRegistry.addEventListener("run-logs", async (event) => {
+    const result = await loadDurableRunLogs(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+    event.detail.complete(result);
+    setStatus(result.ok ? "Retained logs loaded." : `Log load failed: ${result.error}`, result.ok === true);
+  });
+}
 
 function setStatus(text, ready = true) {
   statusEl.innerHTML =
@@ -495,11 +517,24 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-async function renderTasks(activeId = null) {
+const taskSidebarLifecycle = createTaskSidebarLifecycle({
+  // A list message can wake a restarting MV3 worker before its routes are
+  // ready. Retry that failed authoritative read once, using the existing 400ms
+  // boot grace period; every render remains event/navigation-driven.
+  loadThreads: () => loadThreadsWithOneRestartRetry(
+    () => send("thread.list"),
+    () => new Promise((resolve) => setTimeout(resolve, 400)),
+  ),
+  commitThreads: renderTaskRows,
+});
+
+function renderTasks(activeId = currentThreadId) {
+  return taskSidebarLifecycle.render(activeId);
+}
+
+function renderTaskRows(threads, activeId = null) {
   const el = document.getElementById("thread-sidebar");
   if (!el) return;
-  const res = await send("thread.list").catch(() => ({ threads: [] }));
-  const threads = Array.isArray(res.threads) ? res.threads : [];
   el.replaceChildren();
   if (!threads.length) {
     const empty = document.createElement("div");
@@ -635,6 +670,45 @@ function hideThreadView() {
   withViewTransition(hideThreadViewInner);
 }
 
+function renderThreadProjection(thread) {
+  threadTitle.textContent = thread?.name || "Task";
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  // The thread's TOOL rows (persisted by the SW with callId + ok) replay as
+  // ONE TERMINAL card per call via the same pairing the journal surfaces use —
+  // a reopened or terminally reconciled thread replaces the projection and
+  // therefore restores each durable result exactly once.
+  const toolRows = pairToolJournal(
+    messages
+      .filter((m) => m.role === "tool")
+      .map((m) => ({
+        type: m.toolStatus === "running" ? "tool-call" : "tool-result",
+        callId: m.toolCallId ?? null,
+        run: null,
+        tool: m.toolName ?? "tool",
+        args: m.toolArgs ?? null,
+        result: m.toolResult ?? null,
+        ok: m.toolOk ?? null,
+        ts: typeof m.ts === "number" ? m.ts : null,
+      })),
+  );
+  const toolCards = toolRows.map((t) => ({ role: "tool", name: t.tool, status: t.status, args: t.args ?? null, result: t.result ?? null, ts: t.ts ?? null }));
+  const rendered = [
+    ...messages
+      .filter((m) => m.role !== "tool")
+      .map((m) => ({ role: m.role, content: m.content, ts: m.ts ?? null, reason: m.reason ?? null, action: m.action ?? null })),
+    ...toolCards,
+  ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  threadConversation.setMessages?.(rendered);
+}
+
+const terminalThreadProjectionLifecycle = createTerminalThreadProjectionLifecycle({
+  loadThread: (id) => send("thread.get", { id }),
+  commitThread: (thread) => renderThreadProjection(thread),
+  getOpenOwnerThreadId: () => !threadView.hidden && currentAgentId === null ? currentThreadId : null,
+  captureSurfaceOwner: () => runSurfaceOwner.current(),
+  ownsSurfaceOwner: (owner) => runSurfaceOwner.owns(owner),
+});
+
 async function openThread(id) {
   const owner = runSurfaceOwner.claim();
   currentThreadId = id;
@@ -663,33 +737,7 @@ async function openThread(id) {
   // every following title/message/status write as one owner-bound commit.
   if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
   const thread = res.ok ? res.thread : null;
-  threadTitle.textContent = thread?.name || "Task";
-  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-  // The thread's TOOL rows (persisted by the SW with callId + ok) replay as
-  // ONE TERMINAL card per call via the same pairing the journal surfaces use —
-  // a reopened thread restores the tool cards, never a stale running card.
-  const toolRows = pairToolJournal(
-    messages
-      .filter((m) => m.role === "tool")
-      .map((m) => ({
-        type: m.toolStatus === "running" ? "tool-call" : "tool-result",
-        callId: m.toolCallId ?? null,
-        run: null,
-        tool: m.toolName ?? "tool",
-        args: m.toolArgs ?? null,
-        result: m.toolResult ?? null,
-        ok: m.toolOk ?? null,
-        ts: typeof m.ts === "number" ? m.ts : null,
-      })),
-  );
-  const toolCards = toolRows.map((t) => ({ role: "tool", name: t.tool, status: t.status, args: t.args ?? null, result: t.result ?? null, ts: t.ts ?? null }));
-  const rendered = [
-    ...messages
-      .filter((m) => m.role !== "tool")
-      .map((m) => ({ role: m.role, content: m.content, ts: m.ts ?? null, reason: m.reason ?? null, action: m.action ?? null })),
-    ...toolCards,
-  ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-  threadConversation.setMessages?.(rendered);
+  renderThreadProjection(thread);
   showThreadView();
   renderRunStatus({ state: "idle" });
   renderTasks(id);
@@ -1401,6 +1449,14 @@ document.getElementById("provider-status")?.addEventListener("click", () => {
   if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
 });
 
+// A durable thread-bound run update means the authoritative thread index may
+// have changed. Refresh from thread.list while the run is still active; run
+// events are only a signal and never become a second task authority.
+subscribeRunRegistry((snapshot) => {
+  taskSidebarLifecycle.onRunSnapshot(snapshot, currentThreadId);
+  terminalThreadProjectionLifecycle.onRunSnapshot(snapshot);
+});
+
 // Re-render the named agents (main area + the sidebar) when the registry
 // changes — a task that creates an agent must show it in the sidebar without a
 // page reload. The SW broadcasts a named-agent-changed progress event on
@@ -1569,6 +1625,10 @@ function openView(path, title) {
 }
 function closeView() {
   withViewTransition(hideViewInner);
+  // Returning from Settings/Directory is an owner navigation boundary. A
+  // fresh authoritative read both restores the row promptly and fences any
+  // older delayed sidebar read that began before the view switch.
+  renderTasks(currentThreadId);
 }
 
 document.getElementById("view-back")?.addEventListener("click", closeView);

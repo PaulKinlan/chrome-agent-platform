@@ -27,7 +27,7 @@ const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
 // reserved from the MODEL's `memory_set` too: the wider-goal review proved a
 // forged `threads` index could be written through `masterMemory().set` and
 // `listThreads()` returned it. Internal thread code uses `setTrusted`.
-const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets", "threads", "scripts"]);
+const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets", "threads", "scripts", "run-registry"]);
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -152,6 +152,18 @@ async function writeEntry(dir, name, value, version) {
   await w.close();
 }
 
+// A non-enumerated tombstone keeps versions monotonic across delete/recreate.
+// Without it an absent key reset to version 0 and a recreated identical value
+// reused version 1: the real round-27 ABA remnant.
+function versionName(key) { return `.${encodeURIComponent(String(key))}.version`; }
+async function readVersion(dir, key, entry = null) {
+  const marker = await readJson(dir, versionName(key));
+  return Math.max(entry?.v ?? 0, Number.isSafeInteger(marker) && marker >= 0 ? marker : 0);
+}
+async function writeVersion(dir, key, version) {
+  await writeJson(dir, versionName(key), version);
+}
+
 /** Open a directory WITHOUT creating missing segments; returns null when the
  * path does not exist. Read paths (get/has/keys/CAS-compare) use this so a read
  * or a failed CAS can never RECREATE a directory that cleanup just removed
@@ -237,8 +249,10 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // Reserve both exact keys AND the `thread:` PREFIX on the master store: a
   // forged `thread:t_...` body must be as unreachable as a forged `threads`
   // index (the wider-goal review's thread-authority finding).
-  const threadPrefix = isMaster && k.startsWith("thread:");
-  if (!trusted && (reserved.has(k) || threadPrefix)) {
+  const trustedPrefix = isMaster && (
+    k.startsWith("thread:") || k.startsWith("run:") || k.startsWith("run-outbox:") || k.startsWith("run-log:") || k.startsWith("run-resume:") || k.startsWith("run-payload:")
+  );
+  if (!trusted && (reserved.has(k) || trustedPrefix)) {
     throw new Error(`key "${key}" is reserved on this store`);
   }
   let serialized;
@@ -268,8 +282,9 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
     oldBytes = (await fh.getFile()).size;
     isNew = false;
     const entry = await readEntry(dir, `${key}.json`);
-    prevVersion = entry?.v ?? 0;
+    prevVersion = await readVersion(dir, key, entry);
   } catch { /* absent → new key */ }
+  if (isNew) prevVersion = await readVersion(dir, key);
   // Aggregate quotas: a store may not grow past MAX_KEYS_PER_ORIGIN keys or
   // MAX_BYTES_PER_ORIGIN bytes (and the global tree past MAX_BYTES_GLOBAL).
   // The delta is positive for BOTH new keys AND replacements that grow — a
@@ -291,6 +306,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // a same-value write made under a different enrollment (the round-27 blocker).
   const version = prevVersion + 1;
   await writeEntry(dir, `${key}.json`, value, version);
+  await writeVersion(dir, key, version);
   return version;
 }
 
@@ -317,10 +333,13 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
   return withWriteLock(async () => {
     const dir = await openDirOptional(path);
     const current = dir ? await readEntry(dir, `${key}.json`) : null;
-    const currentVersion = current?.v ?? 0;
+    const currentVersion = dir ? await readVersion(dir, key, current) : 0;
     if (currentVersion !== expectedVersion) return false;
     if (nextValue === undefined) {
       if (dir) {
+        // Publish the next token before removing the value, so absence itself
+        // has a durable identity and recreation cannot reuse expectedVersion.
+        await writeVersion(dir, key, expectedVersion + 1);
         try {
           await dir.removeEntry(`${key}.json`);
         } catch { /* absent */ }
@@ -331,6 +350,7 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
     // directory (creating it) ONLY for the actual mutation, never for a compare.
     const targetDir = dir ?? await openDir(path);
     await writeEntry(targetDir, `${key}.json`, nextValue, expectedVersion + 1);
+    await writeVersion(targetDir, key, expectedVersion + 1);
     return true;
   });
 }
@@ -364,12 +384,25 @@ function memoryStoreAt(path, { isMaster, origin }) {
         return false;
       }
     },
+    /** Atomic value/existence/version receipt under the same write mutex used by
+     * all trusted writes and CAS compensation. */
+    async snapshot(key) {
+      return await withWriteLock(async () => {
+        const dir = await openDirOptional(path);
+        if (!dir) return { exists: false, value: null, version: 0 };
+        const entry = await readEntry(dir, `${key}.json`);
+        const version = await readVersion(dir, key, entry);
+        return entry
+          ? { exists: true, value: structuredClone(entry.value), version }
+          : { exists: false, value: null, version };
+      });
+    },
     /** The key's CURRENT durable version token (0 when absent). */
     async getVersion(key) {
       const dir = await openDirOptional(path);
       if (!dir) return 0;
       const entry = await readEntry(dir, `${key}.json`);
-      return entry?.v ?? 0;
+      return await readVersion(dir, key, entry);
     },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
@@ -405,10 +438,17 @@ function memoryStoreAt(path, { isMaster, origin }) {
       return out.sort();
     },
     async delete(key) {
-      const dir = await openDir(path);
-      try {
-        await dir.removeEntry(`${key}.json`);
-      } catch { /* absent */ }
+      await withWriteLock(async () => {
+        const dir = await openDirOptional(path);
+        if (!dir) return;
+        const entry = await readEntry(dir, `${key}.json`);
+        if (!entry) return;
+        const version = await readVersion(dir, key, entry);
+        await writeVersion(dir, key, version + 1);
+        try {
+          await dir.removeEntry(`${key}.json`);
+        } catch { /* absent */ }
+      });
     },
     async clear() {
       // Delete THIS store's own directory (the `path` passed to memoryStoreAt),
@@ -567,16 +607,50 @@ function withJournalLock(fn) {
   return run;
 }
 
-export async function journalAppend(store, entry, guard = null) {
+const MAX_JOURNAL_ENTRY_TEXT = 16 * 1024;
+const MAX_JOURNAL_BYTES = 200 * 1024;
+
+function boundJournal(entries) {
+  let bounded = entries.slice(-500);
+  while (bounded.length > 1 && utf8Bytes(JSON.stringify(bounded)) > MAX_JOURNAL_BYTES) {
+    bounded = bounded.slice(1);
+  }
+  return bounded;
+}
+
+async function exactStoreSnapshot(store, key) {
+  if (typeof store.snapshot === "function") return await store.snapshot(key);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const beforeVersion = await store.getVersion(key);
+    const exists = await store.has(key);
+    const value = exists ? await store.get(key) : null;
+    const afterVersion = await store.getVersion(key);
+    const afterExists = await store.has(key);
+    if (beforeVersion === afterVersion && exists === afterExists) {
+      return { exists, version: afterVersion, value: exists ? value : null };
+    }
+  }
+  throw new Error(`could not capture stable ${key} snapshot`);
+}
+
+async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
   return withJournalLock(async () => {
-  const MAX_ENTRY_TEXT = 16 * 1024;
-  const MAX_JOURNAL_BYTES = 200 * 1024;
-  // Capture the EXACT pre-append state so compensation can RESTORE it (the
-  // round-23 blocker: compensation did `entries.slice(0, -1)`, which removed the
-  // new row but did NOT restore the oldest row evicted by the 500-entry cap or
-  // the byte-budget trim — a 500-row journal came back 499 rows with `old-0`
-  // permanently lost).
-  const original = (await store.get("journal")) ?? [];
+  const MAX_ENTRY_TEXT = MAX_JOURNAL_ENTRY_TEXT;
+  // Capture the exact value, existence and version as one stable receipt.
+  const pre = await exactStoreSnapshot(store, "journal");
+  const original = pre.exists ? pre.value : [];
+  if (!Array.isArray(original)) throw new Error("journal is not an array");
+  // Terminal recovery is keyed by immutable executionId. A repeated outbox
+  // reconciliation observes the already-committed row and becomes a no-op
+  // under the same journal mutex, so no crash boundary can duplicate a result.
+  if (
+    idempotencyExecutionId &&
+    original.some((row) => row?.type === (entry?.type ?? "result") && row?.executionId === idempotencyExecutionId)
+  ) {
+    return receiptCapable
+      ? { schemaVersion: 1, key: "journal", executionId: String(entry?.executionId ?? idempotencyExecutionId), preState: structuredClone(pre), postState: structuredClone(original), writeVersion: pre.version, appended: false }
+      : original;
+  }
   const journal = original.slice();
   const bounded = { ...entry };
   for (const k of ["result", "task"]) {
@@ -585,14 +659,8 @@ export async function journalAppend(store, entry, guard = null) {
     }
   }
   journal.push({ ts: Date.now(), ...bounded });
-  let entries = journal.slice(-500); // cap count
-  // The byte budget must use UTF-8 BYTES, not UTF-16 `.length` (which under-
-  // counts non-ASCII result text — the round-18 medium finding).
-  while (
-    entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_JOURNAL_BYTES
-  ) {
-    entries = entries.slice(1); // cap bytes
-  }
+  // The byte budget uses UTF-8 bytes, not UTF-16 `.length`.
+  const entries = boundJournal(journal);
   // Re-check the caller's fence IMMEDIATELY before the commit (no other await
   // between this check and setTrusted).
   if (guard) await guard();
@@ -633,7 +701,135 @@ export async function journalAppend(store, entry, guard = null) {
       throw e;
     }
   }
-  return entries;
+  if (!receiptCapable) return entries;
+  const actualExecutionId = String(entries.at(-1)?.executionId ?? "");
+  if (!actualExecutionId || actualExecutionId !== String(entry?.executionId ?? "")) {
+    throw new Error("receipt-capable journal append requires the actual executionId");
+  }
+  return {
+    schemaVersion: 1,
+    key: "journal",
+    executionId: actualExecutionId,
+    preState: structuredClone(pre),
+    postState: structuredClone(entries),
+    writeVersion: wroteVersion,
+    appended: true,
+  };
+  });
+}
+
+export async function journalAppend(store, entry, guard = null, idempotencyExecutionId = null) {
+  return journalAppendInternal(store, entry, guard, idempotencyExecutionId, false);
+}
+
+/** Internal append used by exact quota compensation. */
+export async function journalAppendWithReceipt(store, entry, guard = null) {
+  if (!entry?.executionId) throw new Error("journalAppendWithReceipt requires executionId");
+  return journalAppendInternal(store, entry, guard, null, true);
+}
+
+function sameJson(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Version/fence-scoped removal of one execution's journal rows. */
+export async function journalCompensateExecution(store, receipt, guard = null) {
+  return withJournalLock(async () => {
+    if (!receipt || receipt.schemaVersion !== 1 || receipt.key !== "journal" || !receipt.executionId) {
+      throw new Error("invalid journal compensation receipt");
+    }
+    const fence = async () => {
+      if (!guard) return null;
+      try { await guard(); return null; } catch (error) {
+        return { ok: false, compensated: false, preserved: true, reason: error?.genMismatch ? "generation_mismatch" : "journal_fence_failed" };
+      }
+    };
+    const refused = await fence();
+    if (refused) return refused;
+    const current = await exactStoreSnapshot(store, "journal");
+    if (receipt.compensatedState && current.exists === receipt.compensatedState.exists && sameJson(current.value, receipt.compensatedState.value)) {
+      return { ok: true, compensated: true, idempotent: true };
+    }
+    const pre = receipt.preState;
+    if (current.exists === pre.exists && sameJson(current.value, pre.value)) {
+      if (receipt.appended === false) {
+        receipt.compensatedState = structuredClone(current);
+        return { ok: true, compensated: true, idempotent: true };
+      }
+      return { ok: false, compensated: false, preserved: true, reason: "journal_version_mismatch" };
+    }
+    if (!current.exists || !Array.isArray(current.value) || !Array.isArray(receipt.postState)) {
+      return { ok: false, compensated: false, preserved: true, reason: "journal_state_unprovable" };
+    }
+
+    let next;
+    if (current.version === receipt.writeVersion && sameJson(current.value, receipt.postState)) {
+      next = pre.exists ? structuredClone(pre.value) : undefined;
+    } else {
+      if (sameJson(current.value, receipt.postState)) {
+        return { ok: false, compensated: false, preserved: true, reason: "journal_version_mismatch" };
+      }
+      // Prove append-only concurrency from a surviving suffix of our post-state.
+      // If the whole anchor was evicted, exact restoration is ambiguous.
+      let matched = -1;
+      for (let removed = 0; removed < receipt.postState.length; removed += 1) {
+        const suffix = receipt.postState.slice(removed);
+        if (suffix.length <= current.value.length && sameJson(current.value.slice(0, suffix.length), suffix)) {
+          matched = removed;
+          break;
+        }
+      }
+      if (matched < 0) {
+        return { ok: false, compensated: false, preserved: true, reason: "journal_concurrency_unprovable" };
+      }
+      const later = current.value.slice(receipt.postState.length - matched);
+      if (!sameJson(boundJournal([...receipt.postState, ...later]), current.value)) {
+        return { ok: false, compensated: false, preserved: true, reason: "journal_version_mismatch" };
+      }
+      const foreignLater = later.filter((row) => row?.executionId !== receipt.executionId);
+      next = boundJournal([...(pre.exists ? pre.value : []), ...foreignLater]);
+    }
+
+    const preCommitRefusal = await fence();
+    if (preCommitRefusal) return preCommitRefusal;
+    const swapped = next === undefined
+      ? await store.compareAndDelete("journal", current.version)
+      : await store.compareAndRestore("journal", current.version, next);
+    if (!swapped) return { ok: false, compensated: false, preserved: true, reason: "journal_cas_mismatch" };
+
+    const postCommitRefusal = await fence();
+    if (postCommitRefusal) {
+      // Undo only this compensation; a concurrent append makes the CAS refuse.
+      await store.compareAndRestore("journal", current.version + 1, current.value).catch(() => false);
+      return postCommitRefusal;
+    }
+    const after = await exactStoreSnapshot(store, "journal");
+    receipt.compensatedState = structuredClone(after);
+    return { ok: true, compensated: true, idempotent: false, concurrentRowsPreserved: current.version !== receipt.writeVersion };
+  });
+}
+
+/** Append one journal row for an immutable execution, or return the existing
+ * journal unchanged. The check and write share journalAppend's mutex. */
+export async function journalAppendOnce(store, entry, guard = null, executionId = entry?.executionId) {
+  if (!executionId) throw new Error("journalAppendOnce requires executionId");
+  return journalAppend(store, { ...entry, executionId }, guard, executionId);
+}
+
+/** Commit explicit owner cancellation as the sole terminal journal row for an
+ * execution. Cancellation authority may be persisted after an ordinary result
+ * row but before its terminal CAS; replacing that row is therefore required to
+ * make the durable tombstone win without producing two terminal outcomes. */
+export async function journalCommitCancellation(store, entry, executionId = entry?.executionId) {
+  if (!executionId) throw new Error("journalCommitCancellation requires executionId");
+  return withJournalLock(async () => {
+    const original = (await store.get("journal")) ?? [];
+    const kept = original.filter((row) => !(
+      row?.executionId === executionId && ["result", "cancelled"].includes(row?.type)
+    ));
+    kept.push({ ts: Date.now(), ...entry, type: "cancelled", executionId, cancelled: true });
+    await store.setTrusted("journal", kept);
+    return kept;
   });
 }
 

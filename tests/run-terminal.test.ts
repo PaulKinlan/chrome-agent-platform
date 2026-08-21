@@ -38,6 +38,7 @@ function installChromeMock(permissionSummary = { provider: "demo", local: true, 
   return {
     sent, held,
     emit: (event) => { if (portListener) portListener({ type: "progress", event }); },
+    emitMessage: (message) => { if (portListener) portListener(message); },
     disconnect() { if (disconnectListener) disconnectListener(); },
     resolveRun(ok, result = "", opts = {}) {
       const h = held.shift();
@@ -99,6 +100,34 @@ Deno.test("provider preflight is redacted and pauses before model execution when
   assertEquals(mock.held.length, 0, "agent.run must not be sent");
   assertEquals(mock.sent.map((message) => message.type), ["provider.permission-summary"]);
   assert(!JSON.stringify(mock.sent).includes("apiKey"), "full provider configuration must not enter the conversation page");
+});
+
+Deno.test("run replay: snapshot then updates reject stale per-run revisions", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const snapshots = [];
+  const unsubscribe = conv.subscribeRunRegistry((snapshot) => snapshots.push(snapshot));
+  mock.emitMessage({
+    type: "run-snapshot",
+    policy: { cancellation: "explicit-owner-terminal-new-run-required" },
+    runs: [{ executionId: "exec-replay-1", revision: 3, phase: "running" }],
+  });
+  mock.emitMessage({
+    type: "run-update",
+    executionId: "exec-replay-1",
+    revision: 2,
+    run: { executionId: "exec-replay-1", revision: 2, phase: "orphaned" },
+  });
+  mock.emitMessage({
+    type: "run-update",
+    executionId: "exec-replay-1",
+    revision: 4,
+    run: { executionId: "exec-replay-1", revision: 4, phase: "terminal" },
+  });
+  assertEquals(snapshots.length, 2, "the stale revision is not dispatched");
+  assertEquals(snapshots[1].runs[0].phase, "terminal");
+  assertEquals(snapshots[1].policy.cancellation, "explicit-owner-terminal-new-run-required");
+  unsubscribe();
 });
 
 Deno.test("run-terminal: PORT-before-response — an ok:false tool-result marks the card error; the late response is a no-op", async () => {

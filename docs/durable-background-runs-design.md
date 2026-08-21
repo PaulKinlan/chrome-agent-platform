@@ -1,8 +1,10 @@
 # DESIGN — Durable user-visible background runs (CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01)
 
-Status: DESIGN (research only — no implementation). Public-safe: no local
-paths, session/relay identifiers, credentials, or personal data. All
-references are repository-relative at `origin/main` `5e5c81e`.
+Status: HISTORICAL DESIGN, realized by the Durable integration candidate. Public-safe:
+no local paths, session/relay identifiers, credentials, or personal data. The
+current-behavior map below remains the 2026-08-19 baseline at `origin/main`
+`5e5c81e`; it is not a description of the integrated runtime. The implemented
+source and exact accepted evidence are mapped in `docs/DURABLE-RUN-ARCHITECTURE.md`.
 
 > Owner ask (paraphrased): task and agent runs must continue through task/view
 > switches, Settings navigation, tab closure, and later reopen — the mounted
@@ -10,7 +12,7 @@ references are repository-relative at `origin/main` `5e5c81e`.
 > exactly one terminal result; restart recovery is idempotent; stale UI owners
 > cannot commit.
 
-## 1. Current behavior map (verified against source)
+## 1. Historical pre-Durable behavior map (verified against the recorded base)
 
 ### 1.1 Scheduled/background runs (`task`/`recipe:<id>`)
 
@@ -66,9 +68,10 @@ references are repository-relative at `origin/main` `5e5c81e`.
   request/replay — a reopened page cannot distinguish "still running" from
   "lost".
 - MV3 timers do not guarantee worker survival: heartbeats are **freshness
-  evidence and fail-closed detection**, not a liveness guarantee. Honest
-  orphaning after genuine worker death is the documented default (and must
-  disclose that external tool side effects may already have occurred).
+  evidence and fail-closed detection**, not a liveness guarantee. The resolved
+  policy durably pauses an interrupted execution and automatically reclaims the
+  same execution ID after restart. A cancellation tombstone always overrides
+  this recovery and can never be resumed.
 
 ## 2. Design — durable run registry (the run authority lives in the SW, durably)
 
@@ -95,8 +98,10 @@ references are repository-relative at `origin/main` `5e5c81e`.
 ```
 run:<executionId> = { executionId, clientCorrelationId, threadId?,
   scheduleName?, kind: "task"|"agent"|"scheduled"|"delegate", agentId?,
-  taskPreview (bounded, redacted), phase: running|settling|terminal|orphaned,
+  taskPreview (bounded, redacted),
+  phase: running|settling|resume-dispatching|paused-interruption|paused-permission|paused-provider-change|paused-side-effect-uncertain|cancel-requested|cancelled|terminal,
   revision (monotonic, see §2.5), startedAt, heartbeatAt, progressCount,
+  resumeAttemptCount (bounded), resumeState?, retentionPolicyVersion: "run-retention-v1", cancellation?, pause?,
   terminal?: { ok, at, summary } }
 ```
 
@@ -152,58 +157,86 @@ into ONE protocol; no step may be observed without its counterpart:
 On SW startup, in this exact order:
 1. **Outbox reconciliation FIRST**: every outbox entry is completed to its
    full terminal state (journal result row, idempotent thread commit, CAS
-   `terminal` transition, then outbox removal) BEFORE any orphaning decision
-   — a stale `settling` record with an outbox entry is completed, never
-   orphaned (never both result and orphan).
-2. **Orphaning SECOND**: any `running|settling` record whose heartbeat is
-   stale beyond the lease window, whose execution is not in the same-boot
-   `activeRuns` map, AND which has NO outbox entry becomes `orphaned` (last
-   known phase recorded, with the disclosure that external side effects may
-   have occurred).
+   `terminal` transition, then outbox removal) BEFORE any interruption-recovery
+   decision — a stale `settling` record with an outbox entry is completed,
+   never resumed as unfinished (never both result and interruption retry).
+2. **Interruption recovery SECOND**: any `running|settling` record not owned by
+   the current boot and with no terminal outbox becomes `paused-interruption`.
+   Startup reclaims that same execution ID and request automatically. A durable
+   `cancel-requested` tombstone is reconciled to `cancelled` first and is never
+   eligible for either automatic or manual resume.
 3. Scheduled tasks reconcile via the EXISTING scheduler boot-clear/re-arm
    semantics (§1.1), which the registry must not duplicate.
 
-## 3. Acceptance criteria (for the future implementation)
+## 3. Original acceptance criteria (implemented and scoped-proof accepted)
 
 1. Ad-hoc run + tab close + reopen: reconnect shows the run in-flight (via
    `run.list`/port replay) within one bounded interval; exactly one terminal
    result; no duplicate.
-2. Genuine SW kill mid-run: the sweep marks the run `orphaned` with its last
-   phase; the UI shows loss truthfully (incl. side-effect disclosure); no
-   zombie "working" state.
+2. Genuine SW kill mid-run: the sweep marks the run `paused-interruption`,
+   then automatically resumes the same immutable execution ID from its private
+   recoverable request; no stale mounted UI owns the execution.
 3. View-switch matrix (hub → thread → Settings → Directory → thread): run
    record untouched; banners reattach via the fence; stale surfaces cannot
    commit (existing fence regression suite stays green).
 4. Heartbeat freshness advances while the run is active (asserted on the
    durable record) — as detection evidence, never as a survival claim.
-5. Exactly-once terminal across the full fault matrix (§2.4.4): never both
-   result and orphan, never terminal without result, never two results.
-6. Bounded memory: terminal/orphaned records fold beyond a cap; `run.list`
-   bounded and redacted.
+5. Exactly-once terminal across the full fault matrix (§2.4.4): never both an
+   ordinary and cancellation terminal, never terminal without a journal/thread
+   result, never two cancellation results.
+6. Retain-all v1: run records and per-run log rows are never automatically
+   evicted, compacted, truncated, age-expired or silently cleared. Storage or
+   quota rejection fails a new acceptance without modifying old runs; changing
+   policy requires an explicit versioned migration.
 7. Scheduled-run duplicate window (§1.1) is either closed (schedule removal
    joined into the §2.4 protocol) or explicitly surfaced; never silently
    at-least-once.
 8. Direct site-agent `agent.delegate` runs appear in the registry with the
    same identity/replay semantics.
 
-## 4. Open policy questions (explicitly OPEN — no choice made)
+## 4. Resolved owner policy (2026-08-20)
 
-1. **Ad-hoc run cancellation**: owner-facing cancel from the global surface?
-   Cooperative-cancellation limits (a started page side effect cannot be
-   unwound) constrain the UX contract.
-2. **Orphaned-run retention**: how long orphaned records stay visible.
-3. **Reconnection progress granularity/provenance**: how much phase detail
-   (tool names, counts) is shown on reconnection — especially page-derived
-   Site Agent data (labeled-provenance question).
-4. **Cross-restart RESUME vs honest orphaning**: resume requires replay-safe
-   tool semantics; the default is honest orphaning, which must also disclose
-   that external tool side effects may already have occurred.
+1. **Explicit cancellation is terminal**: the owner UI confirms that restart is
+   impossible and logs remain, then persists an owner-authority tombstone. The
+   exact live abort callback fires immediately after that CAS and before outbox,
+   journal or thread completion; a thrown callback gets at most one immediate
+   idempotent retry outside the registry mutex, with both errors and the final
+   outcome recorded, while recovery still finishes cancellation. Repeated cancel is idempotent. Neither automatic
+   recovery nor `run.resume` may restart that execution ID; only a new explicit
+   run request creates a new ID.
+2. **Retain all logs for now**: `run-retention-v1` is `retain-all`, with
+   `automaticCompaction:false`, `automaticEviction:false`, and
+   `explicitClearOnly:true`. Every run/log row binds that version. Legacy
+   unversioned records migrate non-destructively; unknown future versions fail
+   closed. Any future storage policy requires an explicit versioned migration.
+3. **Interruption recovery is bounded and fail-safe**: UI/view/tab teardown does
+   not own execution. Before any tool progress, worker/browser interruption may
+   automatically prepare a tokenized same-ID dispatch. It becomes `running` only
+   after the route claims that token; refusal re-pauses visibly and the third
+   failed or crash-interrupted dispatch commits exactly one terminal resume
+   failure rather than permitting attempt four or an indefinitely paused run.
+   After tool progress, replay safety is unknown, so the run becomes
+   `paused-side-effect-uncertain` with `requiresOwnerDecision: true` and only explicit owner Retry
+   or Cancel may continue. The execution ID is supplied as a deterministic
+   idempotency key, but universal external exactly-once behavior is not claimed.
+4. **Permission/provider pause is distinct**: the resume request binds provider,
+   model and narrow origin scope without secrets. A missing matching host grant
+   becomes `paused-permission`; provider/override changes become
+   `paused-provider-change` and require explicit owner confirmation rather than
+   silently rerouting. There is no per-invocation nagging or automatic broad grant.
+5. **Owner controls and logs**: the subscribed run-registry component renders
+   native Cancel/Resume/View logs buttons with task-bound names, confirmation,
+   pending suppression, focus-visible styling and polite status/error feedback.
+   Full retained logs remain owner-only through `run.logs`.
 
 ## 5. Acceptance fixtures (for the future harness)
 
 - `fixture-run-adhoc-close` — ad-hoc run + tab close + reopen; reconnect truth.
-- `fixture-run-sw-kill` — genuine SW termination mid-run; orphaned marker +
-  side-effect disclosure.
+- `fixture-run-sw-kill` — genuine SW termination before progress; bounded tokenized same-ID recovery.
+- `fixture-run-side-effect-counter` — synthetic mutating counter interrupted after uncertain completion; no blind replay, explicit Retry only.
+- `fixture-run-owner-controls` — keyboard Cancel/Resume/View logs, confirmations, duplicate suppression, focus and AX names.
+- `fixture-run-provider-switch` — provider identity/scope mismatch pauses visibly; no implicit reroute.
+- `fixture-run-quota-retain-all` — forced quota rejection preserves every old log and leaves no stranded run/index row; replaces the predecessor v13 200-cap journey.
 - `fixture-run-view-switch` — hub/thread/Settings/Directory matrix.
 - `fixture-run-heartbeat` — heartbeat freshness on the durable record.
 - `fixture-run-fault-matrix` — crash at every §2.4 persistence boundary.

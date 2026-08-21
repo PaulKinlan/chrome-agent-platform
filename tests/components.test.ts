@@ -21,7 +21,6 @@ class HTMLElementStub {
   addEventListener() {}
   querySelector() { return null; }
   querySelectorAll() { return []; }
-  get _root() { return this; }
 }
 class ShadowRootStub {
   get innerHTML() { return ""; }
@@ -73,7 +72,61 @@ const COMPONENTS = [
   "streaming-text",
   "approval-card",
   "prompt-bar",
+  "durable-run-registry",
 ];
+
+Deno.test("durable run registry: action visibility matrix is fail-closed", async () => {
+  const mod = await import("../extension/shared/components.js");
+  for (const phase of ["running", "settling", "paused-permission", "paused-interruption", "paused-side-effect-uncertain", "paused-provider-change", "resume-dispatching"]) {
+    if (!mod.durableRunActionsForPhase(phase).cancel) throw new Error(`Cancel missing for ${phase}`);
+  }
+  for (const phase of ["paused-permission", "paused-provider-change", "paused-side-effect-uncertain"]) {
+    if (!mod.durableRunActionsForPhase(phase).resume) throw new Error(`Resume missing for ${phase}`);
+  }
+  for (const phase of ["terminal", "cancelled", "resume-dispatching", "running"]) {
+    if (mod.durableRunActionsForPhase(phase).resume) throw new Error(`Resume incorrectly shown for ${phase}`);
+  }
+  for (const phase of ["terminal", "cancelled"]) {
+    if (mod.durableRunActionsForPhase(phase).cancel) throw new Error(`Cancel incorrectly shown for ${phase}`);
+    if (!mod.durableRunActionsForPhase(phase).logs) throw new Error(`Logs missing for ${phase}`);
+  }
+});
+
+Deno.test("durable run registry: confirmation is terminal, context-bound, and retains logs", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const text = mod.durableCancelConfirmationText({ taskPreview: "Publish report", executionId: "exec_test_0001" });
+  for (const expected of ["Publish report", "terminal", "not restart automatically", "Retained logs"]) {
+    if (!text.includes(expected)) throw new Error(`confirmation missing ${expected}`);
+  }
+  const Klass = registry.get("durable-run-registry");
+  const element = new Klass();
+  let answer = false;
+  globalThis.confirm = (message) => { if (message !== text) throw new Error("wrong confirmation text"); return answer; };
+  if (element._confirmCancel({ taskPreview: "Publish report" }) !== false) throw new Error("dismissed confirmation accepted");
+  answer = true;
+  if (element._confirmCancel({ taskPreview: "Publish report" }) !== true) throw new Error("confirmed cancellation refused");
+});
+
+Deno.test("durable run registry: exact-ID dispatch suppresses duplicates and exposes success/error completion", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = registry.get("durable-run-registry");
+  const element = new Klass();
+  element._render = () => {};
+  element._wire = () => {};
+  element._runs = [{ executionId: "exec_exact_0001", taskPreview: "Exact task", phase: "running" }];
+  const events = [];
+  element.dispatchEvent = (event) => { events.push(event); return true; };
+  element._emitAction("run-cancel", element._runs[0], "Cancel");
+  element._emitAction("run-cancel", element._runs[0], "Cancel");
+  if (events.length !== 1 || events[0].detail.executionId !== "exec_exact_0001") throw new Error("duplicate/exact-ID suppression failed");
+  events[0].detail.complete({ ok: false, error: "visible failure" });
+  if (element._error !== "visible failure") throw new Error("error was not made visible");
+  element._emitAction("run-logs", element._runs[0], "View logs");
+  events[1].detail.complete({ ok: true, logs: [{ type: "terminal" }] });
+  if (!element._message.includes("succeeded") || element._logs.get("exec_exact_0001").length !== 1) throw new Error("success/log completion failed");
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  for (const marker of ['<button type="button"', ":focus-visible", "disabled", "role=\"status\""]) if (!source.includes(marker)) throw new Error(`native/a11y marker missing: ${marker}`);
+});
 
 Deno.test("components: every design-system element registers as a custom element", async () => {
   await import("../extension/shared/components.js");

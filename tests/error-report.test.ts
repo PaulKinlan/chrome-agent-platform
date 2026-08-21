@@ -21,6 +21,12 @@ Deno.test("error-report: unwraps a 401 APICallError into provider-auth with the 
   assertStringIncludes(d.detail, "status: 401");
 });
 
+Deno.test("error-report: native quota exhaustion is storage, never provider rate-limit", () => {
+  const d = describeError(new DOMException("Quota exceeded while writing OPFS", "QuotaExceededError"));
+  assertEquals(d.category, ERROR_CATEGORY.STORAGE);
+  assertStringIncludes(d.action.toLowerCase(), "browser storage");
+});
+
 Deno.test("error-report: unwraps a 429 rate-limit", () => {
   const e = Object.assign(new Error("[AI_APICallError] 429"), {
     name: "AI_APICallError",

@@ -23,6 +23,35 @@ import { summarizeToolResult } from "../lib/tool-summary.js";
 // master run is serialized, so a page receives events for its own run).
 let port = null;
 const listeners = new Set();
+const runListeners = new Set();
+const runRecords = new Map();
+let runPolicy = null;
+
+function dispatchRunSnapshot(message) {
+  runRecords.clear();
+  for (const run of (Array.isArray(message?.runs) ? message.runs : [])) {
+    if (run?.executionId && Number.isFinite(run?.revision)) runRecords.set(run.executionId, run);
+  }
+  runPolicy = message?.policy ?? null;
+  const snapshot = { policy: runPolicy, runs: [...runRecords.values()] };
+  for (const fn of [...runListeners]) {
+    try { fn(snapshot); } catch { /* observer isolation */ }
+  }
+}
+
+function dispatchRunUpdate(message) {
+  const run = message?.run;
+  if (!run?.executionId || !Number.isFinite(run?.revision)) return;
+  const previous = runRecords.get(run.executionId);
+  // Client-side stale-event rejection is the final half of the revisioned
+  // register-buffer-snapshot-drain protocol.
+  if (previous && run.revision <= previous.revision) return;
+  runRecords.set(run.executionId, run);
+  const snapshot = { policy: runPolicy, runs: [...runRecords.values()] };
+  for (const fn of [...runListeners]) {
+    try { fn(snapshot); } catch { /* observer isolation */ }
+  }
+}
 
 function ensurePort() {
   if (port) return port;
@@ -38,6 +67,10 @@ function ensurePort() {
           fn(msg.event);
         } catch { /* a listener error must not kill the dispatch */ }
       }
+    } else if (msg?.type === "run-snapshot") {
+      dispatchRunSnapshot(msg);
+    } else if (msg?.type === "run-update") {
+      dispatchRunUpdate(msg);
     }
   });
   port.onDisconnect.addListener(() => {
@@ -59,6 +92,32 @@ export function subscribeProgress(fn) {
   listeners.add(fn);
   ensurePort();
   return () => listeners.delete(fn);
+}
+
+/** Subscribe to bounded durable run snapshots. Newer per-run revisions replace
+ * older state; stale buffered/live events are rejected. Policy-dependent
+ * cancellation/retention/progress/resume states pass through explicitly. */
+export function subscribeRunRegistry(fn, { emitCurrent = true } = {}) {
+  runListeners.add(fn);
+  ensurePort();
+  if (emitCurrent && (runRecords.size || runPolicy)) {
+    fn({ policy: runPolicy, runs: [...runRecords.values()] });
+  }
+  return () => runListeners.delete(fn);
+}
+
+/** Owner-surface durable controls. Cancel is terminal for this execution ID;
+ * retrying always uses the ordinary run flow and therefore gets a fresh ID. */
+export async function cancelDurableRun(executionId, reason = "explicit owner cancellation") {
+  return await send("run.cancel", { executionId, reason, requestId: crypto.randomUUID?.() ?? String(Date.now()) });
+}
+
+export async function resumePermissionPausedRun(executionId, { ownerConfirmed = false } = {}) {
+  return await send("run.resume", { executionId, ownerConfirmed });
+}
+
+export async function loadDurableRunLogs(executionId) {
+  return await send("run.logs", { executionId });
 }
 
 // ── conversation history (the persistent thread) ───────────────────────────

@@ -2,20 +2,37 @@
 
 ## Status and evidence boundary
 
-This reference describes the implementation candidate at commit
-`ac1c4fe6c058961a7e963bdc2d58ae435e7586a9`, tree
-`e175833c6f5ee9425a7b5a69dca8d082e15a89d6`, release `0.2.110`. The candidate
-is pending integration onto public main; public main was
-`300bea14c68472340a38a21a583d62e286c008a4` when this document was written.
-The source citations below resolve against that candidate, not against public
-main.
+This reference describes the independently reviewed and browser-proven Durable
+source at commit `dd41258f7401dda8ccf8b561b955b5f4b919baa0`, tree
+`80ca97f0c55cbd0e8a2c306b82764f3a4aa1a860`, release `0.2.113`. That exact
+source is accepted for integration onto public main
+`7f1f7aee216c2a87a69df584f059d526bbf07a4c` (public release `0.2.109`). Source
+citations below resolve against `dd41258f`; the final integration intentionally
+changes only integration/version documentation around byte-identical Durable
+runtime and test blobs.
 
-Review iterations v1-v39 produced no final whole-product authority. Their
-reports are not acceptance evidence. The candidate's static tests exercise the
-registry, fault boundaries, quota compensation, routes, and page-local owner
-fence, but they do not prove the loaded extension UI. No browser screenshots
-for the seven-step sequence in [Browser proof required before landing](#browser-proof-required-before-landing)
-are claimed to exist.
+Review iterations v1-v39 remain candid history and produced no final
+whole-product authority. They are not acceptance evidence. Final source reviews
+independently passed the exact quota, live Tasks-sidebar, terminal owner-thread
+projection, and hard-reload recovery commits. A separate independent evidence
+review accepted the exact loaded-extension seven-shot journey as
+`PASS_FOR_INTEGRATION`. This accepts the Durable product delta for integration;
+it does **not** accept unrelated product areas or declare whole-product release
+acceptance. The current-main integration diff still requires independent review,
+and the browser-security suite remains a post-integration residual gate because
+this integration run is explicitly no-Chrome.
+
+The accepted evidence binds one host-backed loaded-MV3 journey to the exact
+source tree and loaded runtime bytes:
+
+- Evidence execution: `exec:a2a68c2b-b80e-4f68-9309-b75574953b4c`
+- Thread: `t_1787316135082_vbvmtdr0`
+- Source archive SHA-256: `3e644a31c72aba2b3363aede08694a423f7da01542372c8c0b427f7271bbd520`
+- Active service worker SHA-256: `e1f11b0dff7b0359278ee13aa1fdf38d29278f613c7c8ff13f5eaf7dc519a9d9`
+- Active Options bundle SHA-256: `eced6094f26e1348ec304a260ac135bedd72bfbc8602fadcaa24e182e26e775b`
+- Evidence manifest SHA-256: `787e5adb5fa1796f6bb7650ab796f4bf6b453418fe6fb923806e2b000e4e0047`
+- Evidence checksum index SHA-256: `785ab1b42c32ead048ac5884459b545804ececbb54b523fcfa5772bfb2819c9f`
+- Root bindings SHA-256: `95c86d9683ed274fa9f79ed6affcb822ea4f21cace582d0948ea11f2785a9734`
 
 The candidate establishes these boundaries:
 
@@ -278,80 +295,58 @@ thread body still comes from `thread:<threadId>`.
 | UI owner token | `extension/shared/run-surface-owner.js`; `extension/ntp/ntp.js:593-715,1260-1313` | `tests/run-surface-owner.test.ts:7-24` |
 | Owner controls | `extension/shared/components.js:5184-5292`; `extension/ntp/ntp.js:25-45` | `tests/components.test.ts:75-128`; `tests/durable-runs.test.ts:976-996` |
 
-## Browser proof required before landing
+## Accepted seven-shot loaded-extension proof
 
-Landing remains blocked until a loaded candidate at exact commit `ac1c4fe` is
-driven through this sequence in Chrome. Capture all seven PNGs under
-`test-artifacts/durable-runs/`, bind the evidence manifest to the candidate
-commit and loaded extension bytes, and retain console/runtime assertions next
-to the images. A screenshot is required for every step; raw assertions do not
-replace a missing visible state.
+The exact `dd41258f` source was freshly reconstructed as tree `80ca97f0`, built,
+and loaded as a 103-file MV3 extension. One direct Chromium launch submitted one
+prompt once, creating one task, execution, and thread. There were zero
+retries/relaunches/resumes. Navigation, native owner controls, authoritative
+thread/sidebar replacement, terminal projection, retained logs, and hard-reload
+recovery were driven in the real UI. The independent review directly inspected
+all seven 1600×1200 PNGs, paired raw-CDP records, the contact sheet, DOM and
+accessibility snapshots, runtime state, and integrity bindings.
 
-Static inspection already identifies a step-4 risk: the candidate NTP recognizes
-an omnibox hash but has no `#tasks` hash route, the registry is mounted inside
-the thread view, and `<durable-run-registry>` does not render `progressCount`
-(`extension/ntp/ntp.js:1686-1695`; `extension/ntp/ntp.html:664-679`;
-`extension/shared/components.js:5236-5251`). The required browser run must treat
-a missing task-panel route or visible counter as a failure rather than replacing
-the visible assertion with raw `run.list` state.
+The proof uses the actual product UI: the Tasks sidebar's native thread row and
+its standard click/keyboard behavior, the durable run registry/status card, and
+the visible retained-log viewer. There is no `#tasks` route and no requirement
+for a visible numeric `progressCount`; revision/progress counts are raw registry
+evidence while visible progression is shown by genuine tool lifecycle cards,
+run status, owner controls, and retained logs.
 
-1. **`01-task-start.png`** — on
-   `chrome-extension://<id>/ntp/ntp.html`, type a multi-step task and click Run.
-   - Visible: composer shows the prompt and active state; the user bubble is in
-     the thread; status changes from idle to starting/working.
-   - Raw: the send response exposes one valid `executionId`; `run.list` returns
-     that ID in `running`; its `threadId` matches the opened thread; no console
-     error occurred.
-2. **`02-task-running-progress.png`** — remain in the thread while a real tool
-   call is in flight.
-   - Visible: a structured tool-call card shows `running`; the thinking
-     indicator is active.
-   - Raw: the same run's `heartbeatAt`, `revision`, and `progressCount` advance;
-     retained logs contain the matching `tool-call`; there is still no terminal
-     thread message for the execution.
-3. **`03-navigate-away.png`** — navigate to
-   `chrome-extension://<id>/options/options.html` while the run remains active.
-   - Visible: Settings, including provider and model selectors, is fully
-     rendered; the old thread is not visible; no broken overlay appears.
-   - Raw: the run retains the same `executionId` and remains nonterminal; a
-     delayed old-thread callback cannot change the Settings DOM or the newly
-     selected surface; console and unhandled-rejection collections remain empty.
-4. **`04-task-panel-background-continues.png`** — open
-   `chrome-extension://<id>/ntp/ntp.html#tasks` before the tool finishes.
-   - Visible: `<durable-run-registry>` shows the active card with phase
-     `running`, redacted task preview, the execution ID, an enabled native
-     “Cancel <task>” button, and a visibly advancing background tool counter.
-   - Raw: the card's `data-execution-id` equals the original ID; `run.list`
-     reports a larger `progressCount`/revision than step 2; no second execution
-     ID or duplicate card exists. If the counter is not rendered, this step
-     fails even if the raw count advances.
-5. **`05-return-to-thread.png`** — reopen
-   `chrome-extension://<id>/ntp/ntp.html?thread=<id>`.
-   - Visible: complete prior history appears once; no user/result bubble or tool
-     card is duplicated; current tool activity resumes visibly.
-   - Raw: reconnect traffic records `run-snapshot` before drained `run-update`
-     events; every drained revision is greater than the snapshot revision;
-     applied revisions are strictly increasing for the execution ID.
-6. **`06-terminal-result-logs.png`** — wait for completion, then click View logs.
-   - Visible: one final assistant bubble has status `done`; the status banner is
-     complete; the run card shows `terminal`; the focusable
-     `<pre class="logs">` displays retained `accepted`, `tool-call`,
-     `tool-result`, and `terminal` rows.
-   - Raw: `run.list` reports `terminal`; the journal has one terminal row for
-     the execution; the thread has one execution-bound terminal message;
-     `run-outbox:<executionId>` is absent; terminal payload/log retrieval returns
-     the full retained result.
-7. **`07-reload-persistence.png`** — hard reload the NTP with F5 or
-   `location.reload()`.
-   - Visible: the sidebar container reports `data-durability="durable"`; the
-     full conversation, final assistant result, and tool cards are restored;
-     the run registry keeps the same execution ID; no zombie spinner or
-     duplicate card is visible.
-   - Raw: after reconnect, the same terminal record and one terminal thread
-     message remain; retained log types and payload are unchanged; no new
-     execution ID was created; console and unhandled-rejection collections are
-     empty.
+1. **`01-task-start.png`** — the submitted prompt, native Tasks row, and run
+   registry show the sole execution starting/running with Cancel and View logs.
+2. **`02-task-running-progress.png`** — the same execution remains running while
+   a genuine successful `memory_set` tool card and result are visible; raw state
+   advances to revision 4 / progress count 2.
+3. **`03-navigate-away.png`** — Settings and its provider/model controls are
+   fully rendered while the same execution remains nonterminal in service-worker
+   authority.
+4. **`04-task-panel-restored-nonterminal.png`** — returning through the native
+   Tasks sidebar restores the same owner thread and running registry card (same
+   execution ID, revision 5 / progress count 2) without a duplicate execution.
+5. **`05-task-panel-progress-logs.png`** — native View logs exposes visible
+   retained accepted/tool lifecycle rows while the same run continues (revision
+   7 / progress count 4).
+6. **`06-terminal-result-logs.png`** — the same execution reaches terminal
+   revision 12 / progress count 6; one assistant result, one registry record,
+   and complete visible accepted/tool-call/tool-result/terminal logs remain.
+7. **`07-reload-persistence.png`** — after a hard reload, the same stable native
+   Tasks row/title, thread, terminal execution/result/registry, and retained logs
+   are visible. A 1000 ms plus two-frame interaction barrier observed document
+   animations settle from six to zero before the native View logs click; the
+   log viewer then scrolled `0 → 527`. No spinner, duplicate, or new ID appears.
 
-Static green tests can support these assertions, but only the loaded-extension
-sequence can show that navigation, reconnection, owner controls, and restored
-DOM state are wired to the candidate bytes.
+Exact screenshot SHA-256 digests, in order:
+
+- `01-task-start.png`: `5bdcdeade3e9d1f6bae8cf377636cc25299f8f74d436eb153e725475a9df704f`
+- `02-task-running-progress.png`: `be2e179cd8980bcb9e1e9b136bb8320c92eae51ca1e6abfa9e07aa12d94022f9`
+- `03-navigate-away.png`: `069c8c1e7fc8e93eff85a19af8fbe08b6da79fb1d375e71f89379294a19e750e`
+- `04-task-panel-restored-nonterminal.png`: `957adb9e57b7d024f7cf3b394b57b9c7d6e926d80137037759f6aaa81e5884dd`
+- `05-task-panel-progress-logs.png`: `cf292c8dab6cb42573f927c90892ba6f6bd6171529fd393f7a1c71919b3199c1`
+- `06-terminal-result-logs.png`: `15b57e8ddaece425fdcb19546df8808c4f8bdaf31c2294370268eaa035e77900`
+- `07-reload-persistence.png`: `0bea8196cf65ab7deea0c42696e2b4da535b421a279fde7e8b36b5a5f275f5f0`
+
+The journey recorded zero browser exceptions, crashes, or websocket errors.
+One known nonfatal packaged Settings request for `CHANGELOG.md` returned
+`net::ERR_FILE_NOT_FOUND`; it did not affect the journey. The independent verdict
+is `PASS_FOR_INTEGRATION`, scoped to this exact Durable source and evidence.

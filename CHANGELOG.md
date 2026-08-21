@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.113] — 2026-08-21
+- feat(runs): integrate the reviewed Durable run authority and owner surfaces — service-worker execution with OPFS registry/outbox/log/resume/payload authority, idempotent terminal journal/thread projection, bounded recovery and owner Cancel/Retry/View logs controls, exact native-quota compensation, live authoritative Tasks-sidebar and terminal-thread reconciliation, and MV3 reload recovery. Exact source `dd41258f` / tree `80ca97f0`, release `0.2.113`, passed independent source review and the accepted 7/7 loaded-extension journey; this is scoped Durable integration evidence, not whole-product acceptance.
+
 ## [0.2.109] — 2026-08-21
 - docs(site): publish the review as a rendered page
 
@@ -11,9 +14,6 @@
 
 ## [0.2.106] — 2026-08-21
 - docs(review): land the 2026-08-21 independent architectural review
-
-## [Unreleased]
-- docs(runs): add the source map and browser-proof gate for durable-run candidate `ac1c4fe` (release 0.2.110 candidate), explicitly pending integration onto public main; no loaded-extension screenshots are claimed.
 
 ## [0.2.105] — 2026-08-20
 - docs(tasks): add semantic tool search and reprioritize run status

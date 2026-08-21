@@ -58,7 +58,22 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   symmetric gutters while expanded, and gutter-free scrollable lists in the
   collapsed rail so task dots, agent avatars, and + actions share one center.
   Task and agent rows share padding/radius/hover tokens; the task delete action
-  is centered on the row and remains keyboard-focusable.
+  is centered on the row and remains keyboard-focusable. Thread storage remains
+  the Tasks list authority: thread-bound durable run revisions only signal a
+  fresh `thread.list` replacement, never supply or duplicate row data. A failed
+  list read preserves the current rows and leaves its run revision unacknowledged
+  so an identical event can retry; each read gets at most one 400ms MV3-startup
+  retry. Each page-local render has a monotonic owner, so an older delayed list
+  response cannot overwrite a newer run/navigation-triggered sidebar state. When
+  a terminal/cancelled revision belongs to the already-open owner thread, it is
+  likewise only a signal for one targeted authoritative `thread.get` projection
+  replacement per execution/revision. The shared surface-owner token fences a
+  delayed projection read after navigation; replacement (not append) preserves
+  exactly one durable assistant/error result without resetting focus or
+  synthesizing conversation content from run logs. Exact source `dd41258f`
+  and its 7/7 loaded-extension journey independently verified these native
+  sidebar/thread behaviors for integration; that scoped evidence is not a
+  whole-product acceptance claim.
 - Settings → Approvals is the sole owner decision surface for destructive agent
   operations. Rows disclose only the normalized action and a 128-bit private
   install-scoped reference—never target, origin, id, payload, digest, execution

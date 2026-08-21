@@ -212,7 +212,8 @@ Deno.test("agent-abort: delegation UNWRAPS the per-run outcome — a string resu
 Deno.test("agent-abort: the PRODUCTION delegate_task fails on an aborted worker (real orchestrator path)", async () => {
   __resetUsage();
   const { createOrchestrator } = await import("../extension/lib/agent.js");
-  const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
+  const { createDemoModel, DEMO_SLOW_HOLD_MS } = await import("../extension/lib/models/demo-model.js");
+  assert(DEMO_SLOW_HOLD_MS >= 10_000, "@demo-slow must retain a deterministic multi-second cancellation window");
   const workerEvents = [];
   const orch = createOrchestrator({
     model: { model: createDemoModel(), modelId: "demo-local", providerName: "demo" },

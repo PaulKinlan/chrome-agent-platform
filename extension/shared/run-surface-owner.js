@@ -9,6 +9,9 @@ export function createRunSurfaceOwner() {
       current += 1;
       return current;
     },
+    current() {
+      return current;
+    },
     owns(owner) {
       return owner === current;
     },

@@ -145,6 +145,74 @@ On resume after a coordinator or worker loss:
 
 ## Active
 
+## [CAP-FB-20260821-DURABLE-SIDEBAR-LIVE-01] Live durable task in the Tasks sidebar
+- Feedback: 2026-08-21 — owner Tasks rows must remain native, live, unique, and recover after navigation and hard reload
+- Updated: 2026-08-21 13:55 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: integration writer
+- Workspace: active (local path private)
+- Branch: `integrate/durable-final`
+- Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: authoritative list-read failure preserves prior rows; successful owner-fenced replacement alone acknowledges invalidation; each event-driven read has at most one 400ms MV3-startup retry; terminal reload retains exactly one native Tasks row and visible retained logs
+- Review: exact source `dd41258f` independently PASSed; exact 7/7 loaded-extension evidence independently PASSed for integration; current-main integration review pending
+- Gates: source 14/14 focused, 692/692 full unit, 31/31 no-Chrome security/source, build/78-file scan; accepted screenshot sequence `01-task-start.png` through `07-reload-persistence.png`; integration gates recorded on the integration commit
+- Blockers: independent review of the current-main integration diff
+- Next: independent integration review, then run the residual browser-security suite before merge/push
+- Recover: `git show --stat --oneline integrate/durable-final && git diff 7f1f7ae..integrate/durable-final`
+- History:
+  - 2026-08-21 11:45 UTC — source recovery added fail-safe reads, success-only invalidation acknowledgement, one bounded startup retry, and stale-result fencing.
+  - 2026-08-21 12:40 UTC — exact 7/7 loaded-extension evidence passed and was independently accepted for integration at `dd41258f` / tree `80ca97f0`; no whole-product acceptance was inferred.
+  - 2026-08-21 13:55 UTC — replayed the accepted Durable source as one integration candidate on exact public main `7f1f7ae`; integration review remains pending.
+
+## [CAP-FB-20260821-DURABLE-TERMINAL-PROJECTION-01] Reconcile terminal result into an already-open owner thread
+- Feedback: 2026-08-21 — a terminal durable result must replace the authoritative open-thread projection without duplicates
+- Updated: 2026-08-21 13:55 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: integration writer
+- Workspace: active (local path private)
+- Branch: `integrate/durable-final`
+- Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: one authoritative `thread.get` replacement per terminal/cancelled execution revision; duplicate/nonterminal/other-thread signals do nothing; surface-owner changes fence delayed reads; exactly one result remains visible
+- Review: source implementation and exact 7/7 browser evidence independently PASSed for integration; current-main integration review pending
+- Gates: accepted shots show one terminal result with retained logs before and after hard reload; integration runtime/test blobs are bound to accepted source bytes
+- Blockers: independent review of the current-main integration diff
+- Next: independent integration review, then residual browser-security suite
+- Recover: `git diff 7f1f7ae..integrate/durable-final -- extension/ntp/ntp.js extension/lib/terminal-thread-projection-lifecycle.js extension/shared/run-surface-owner.js tests/terminal-thread-projection-lifecycle.test.ts`
+- History:
+  - 2026-08-21 11:12 UTC — implemented targeted event-driven terminal projection reconciliation with authoritative replacement and surface fencing.
+  - 2026-08-21 12:40 UTC — exact 7/7 loaded-extension evidence independently accepted this behavior for integration.
+  - 2026-08-21 13:55 UTC — included unchanged accepted runtime/test blobs in the current-main integration candidate.
+
+## [CAP-FB-20260821-DURABLE-QUOTA-EXACT-01] Exact native-quota compensation
+- Feedback: 2026-08-21 — preserve durable registry and journal state exactly when an admitted zero-progress run meets native storage quota
+- Updated: 2026-08-21 13:55 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: integration writer
+- Workspace: active (local path private)
+- Branch: `integrate/durable-final`
+- Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: registry compensation preserves absent-vs-empty state and concurrent IDs; journal rows compensate under version/generation fences; progressed or uncertain authority is retained; direct delegation has parity
+- Review: exact source independently PASSed at `ac1c4fe` and is contained unchanged in accepted `dd41258f`; current-main integration review pending
+- Gates: focused quota/memory tests, full source suite, build and no-Chrome scans pass on source and are rerun on integration
+- Blockers: independent review of the current-main integration diff
+- Next: independent integration review
+- Recover: `git diff 7f1f7ae..integrate/durable-final -- extension/lib/durable-runs.js extension/lib/durable-quota.js extension/lib/memory.js tests/durable-runs.test.ts tests/memory.test.ts`
+- History:
+  - 2026-08-21 04:20 UTC — exact source implementation entered review after focused compensation coverage passed.
+  - 2026-08-21 13:55 UTC — accepted source included byte-identically in the current-main integration candidate; no whole-product acceptance claimed.
+
 ## [CAP-FB-20260819-TRACKER-01] Repository-local task and bug recovery
 - Feedback: 2026-08-19 — product-owner recovery directive after task state was lost across coordinator failures
 - Updated: 2026-08-19 17:29 UTC
@@ -571,27 +639,56 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01] Durable runs independent of mounted UI
 - Feedback: 2026-08-19 — task and agent runs must continue through task/view switches, Settings navigation, tab closure, and later reopen rather than being owned by mounted conversation UI
-- Updated: 2026-08-19 19:56 UTC
-- Status: OPEN
+- Updated: 2026-08-21 13:55 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: `docs/durable-background-runs` (research complete; implementation unassigned)
-- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
-- Candidate: —
+- Owner: integration writer
+- Workspace: active (local path private)
+- Branch: `integrate/durable-final`
+- Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: workflow/service-worker state is the run authority; switching task, agent, Settings, or full views and closing/reopening the tab never cancels or loses an accepted run; reconnect shows bounded progress and exactly one terminal result; restart recovery is idempotent and stale UI owners cannot commit
-- Review: design research complete (docs/durable-background-runs-design.md); independent review of the research pending, then the OPEN policy decisions (ad-hoc cancellation, orphan retention, reconnection progress granularity, resume-vs-orphan); subsequent independent architecture, crash-recovery, concurrency, and loaded-MV3 review required before implementation
-- Gates: deterministic overlap/switch/view/reload/tab-close journeys; genuine service-worker termination and wake; persisted run identity and journal/result equality; reconnect progress; duplicate/loss checks; raw AX status; zero orphaned terminal or mounted-UI ownership
-- Blockers: must extend, not replace, the surface fencing in `CAP-FB-20260818-RUN-STATUS-01`; permission waits must remain compatible with `CAP-FB-20260819-PERMISSIONS-01`
-- Next: independent review of the completed lifecycle map and design (docs/durable-background-runs-design.md), then the owner's policy decisions — ad-hoc run cancellation, orphaned-record retention, reconnection progress granularity, and resume-vs-honest-orphaning (all explicitly OPEN); no implementation before those decisions
-- Recover: `git show bbeff7b:TASKS.md && git grep -n "runSurfaceOwner\|progress" bbeff7b -- extension`
+- Review: exact source `dd41258f` and its exact 7/7 loaded-extension proof independently PASSed for integration; current-main integration review pending
+- Gates: exact accepted commit/tree/release `dd41258f` / `80ca97f0` / `0.2.113`; execution `exec:a2a68c2b-b80e-4f68-9309-b75574953b4c`; seven direct-CDP screenshots, retained logs, one thread/result/registry identity, zero retry/relaunch/resume; focused/full/build/no-Chrome gates rerun on integration
+- Blockers: independent integration review and residual browser-security suite; this evidence accepts the Durable lane for integration, not the whole product
+- Next: review the one-commit current-main integration, then run the residual browser-security suite before merge/push
+- Recover: `git show ecf657fe:TASKS.md && git diff ecf657fe..feat/durable-runs-current-main -- TASKS.md extension tests`
 - History:
+  - 2026-08-21 03:25 UTC — prepared the 0.2.109 early-admission successor from exact `4f57ad89`/tree `848de1b5`: `addToIndex` now participates in `start()` compensation; add-to-index-first native quota leaves no remnants; run-task and direct delegation return normalized fulfilled storage responses without mutating immutable exceptions or invoking rollback before readable authority exists. Established later native quota still attempts zero-progress rollback before response settlement, while progressed/uncertain authority is preserved. Focused/full/static gates and independent review remain required.
+  - 2026-08-21 02:45 UTC — prepared the 0.2.108 quota-atomicity successor after v24 proved `navigator.storage.estimate()` can report ample quota while the bounded OPFS filesystem is full: native `QuotaExceededError` now bypasses impossible terminal settlement, compensates only a persisted public-shape running record with `progressCount === 0`, deletes execution-owned bytes before rewriting the registry, verifies zero remnants, and remains retry-safe after partial deletion. Progressed, paused, cancelled, terminal, and side-effect-uncertain executions are preserved for explicit recovery. Focused/full/static gates and independent source review remain required.
+  - 2026-08-20 09:38 UTC — addressed coordinator final review after k3's `f05a1da4` PASS: the third prepared resume now terminalizes exactly once after a crash, an already-at-ceiling paused record terminalizes instead of allowing attempt four, cancellation still wins, the dead `paused-resume-failed` phase was removed, side-effect uncertainty now truthfully requires an owner decision, and a thrown live-abort callback gets at most one immediate idempotent retry with both errors/final outcome retained. Fresh final-delta review and loaded-MV3 acceptance remain pending.
+  - 2026-08-20 08:40 UTC — addressed independent FIX_REQUESTED: added owner-reachable native run controls with terminal cancellation confirmation/live errors, split cancellation so the live abort fires immediately after authoritative tombstone CAS, added bounded tokenized resume dispatch with visible re-pause, bound non-secret provider identity/scope across resume, fail-safe `paused-side-effect-uncertain`, stable dispatch idempotency keys, hostile execution-ID rejection, and quota/no-stranded-run coverage. Fresh independent and loaded-MV3 review remain mandatory.
+  - 2026-08-20 08:12 UTC — implemented the resolved policy as a source-review/browser-pending successor: explicit owner cancellation persists a terminal tombstone before abort and wins every outbox boundary; cancelled IDs cannot resume; interruptions automatically reclaim the same ID; narrow provider permission failures pause visibly and resume only after resolution; `run-retention-v1` retains all per-run logs with no automatic compaction/eviction and non-destructive legacy migration. The prepared core v13 run's reported 64/64 remains provisional evidence under independent review and is not authority for this successor.
+  - 2026-08-20 03:47 UTC — replaced the invalid symlinked dependency root with a bounded real-tree copy inside the current worktree and reran the required focused/full unit, security, build, gallery, and changelog checks green; symlink-backed runs are non-evidence. Exact-commit independent source review and loaded-MV3 browser acceptance remain pending.
+  - 2026-08-20 03:47 UTC — ownership: unassigned → implementation worker (current-main replay); replayed the accepted non-policy durable-run PRODUCT/TEST/TASK intent from `8de8a157` onto exact public main `ecf657fe` as the prepared 0.2.105 successor. Historical v6 browser evidence (64/64) remains accepted only for the stale old-base source; no current-main browser acceptance is claimed.
+  - 2026-08-19 21:09 UTC — implemented the approved non-policy foundations from exact public `af1163be`: trusted immutable-execution registry, outbox-first idempotent journal/thread/registry terminal protocol, revisioned register-buffer-snapshot-drain reconnect, direct `agent.delegate` coverage, boot/heartbeat truth, and outbox-first recovery before honest orphaning. Deterministic failure injection covers every terminal persistence boundary and forbids terminal-result/orphan double state. Cancellation, retention, progress provenance/granularity, and cross-restart resume remain explicit unsupported/pending-policy states; Status remains OPEN pending independent and loaded-MV3 browser review.
   - 2026-08-19 18:13 UTC — captured as a new durability goal rather than broadening the already-pushed visible lifecycle task after delivery.
   - 2026-08-19 19:35 UTC — research completed and frozen in docs/durable-background-runs-design.md: exact current-behavior map (ad-hoc runs have no durable state/lease vs scheduled tasks' full durability; tab close is safe via SW authority + surface fencing; no live-state replay on reconnect), durable per-run registry design (heartbeat, running/settling/terminal/orphaned phases), idempotent startup recovery sweep, run.list + progress-port replay reconnection, six acceptance criteria and six fixtures. Policy questions (ad-hoc cancellation, orphan retention, progress granularity, resume-vs-orphan) remain explicitly OPEN and unapproved.
   - 2026-08-19 19:56 UTC — re-review BLOCK corrected (final finding): the outbox now persists the full recoverable terminal payload (or durable payload reference), never only a digest; the thread assistant/status terminal append is idempotent by executionId; startup reconciliation completes outbox entries BEFORE any orphaning decision (a stale settling record with an outbox is completed, never orphaned); the fault matrix now covers the thread-write and outbox acknowledgement/removal boundaries. Policy questions remain explicitly OPEN and unapproved.
   - 2026-08-19 19:50 UTC — independent review BLOCK corrected (8 findings): scheduled behavior re-mapped truthfully (in-memory same-boot authority, heartbeat as storage-failure canary, boot-identity lock clear, re-arm reconciliation, creation-only quarantine, and the at-least-once duplicate window between journal commit and schedule removal); ad-hoc map now includes the durable thread authority and its three exact crash windows; exactly-once terminal now specified as an explicit commit protocol (idempotent journal result keyed by immutable executionId + CAS run transition + durable outbox + full fault matrix); run registry requires a newly reserved trusted master-store prefix (model writes cannot forge it); reconnect replay uses monotonic per-run revision + buffered-snapshot-drain; direct site-agent agent.delegate runs are in scope; canonical SW-issued executionId separated from client correlation/thread/schedule ids; heartbeats documented as freshness evidence, not survival. Policy questions remain explicitly OPEN and unapproved.
+
+## [CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01] Durable replay safety for mutating tools
+- Feedback: 2026-08-20 — automatic interruption recovery must never pretend universal exactly-once behavior for external side effects
+- Updated: 2026-08-20 08:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: —
+- Branch: —
+- Base: `5721e9a9e86fe32e11dcbb927836488d2caf2463`
+- Candidate: —
+- Shipping: —
+- Acceptance: every tool declares replay safety; read-only/idempotent work may automatically resume with the stable execution idempotency key; mutating or unknown work interrupted after progress becomes `paused-side-effect-uncertain` and requires explicit owner Retry or Cancel; no UI or documentation claims universal exactly-once external effects
+- Review: pending architecture and security review
+- Gates: loaded-MV3 synthetic side-effect counter proves no blind replay after uncertain completion, explicit owner retry is the only repeat, cancellation wins, and retained logs preserve both attempts
+- Blockers: the current tool metadata does not provide a universal reliable mutating/idempotent classifier
+- Next: define reviewed replay-safety metadata at the tool registry/dispatch boundary and consume the durable execution idempotency key where product tools support it
+- Recover: `git show 5721e9a:TASKS.md && git grep -n "paused-side-effect-uncertain\|idempotencyKey" overnight/durable-policy-successor -- extension tests`
+- History:
+  - 2026-08-20 08:40 UTC — opened from independent source review; the policy successor now fails safe after any observed tool progress and exposes explicit owner Retry/Cancel, while reliable per-tool classification remains a separate OPEN architecture task.
 
 ## [CAP-FB-20260819-SITE-AGENT-STATUS-CLEANUP-01] Site Agents and Agent Dev status cleanup
 - Feedback: 2026-08-19 — basic task rows expose stale or noisy WebMCP injection and page-report status text that belongs in a diagnostic surface

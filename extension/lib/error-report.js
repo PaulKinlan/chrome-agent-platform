@@ -10,6 +10,7 @@
 // a malformed error falls back to a generic but still-actionable description.
 
 import { safeProviderError } from "./pure.js";
+import { isNativeQuotaExceededError } from "./storage-errors.js";
 
 /** Error categories — a stable tag the UI can style + group. */
 export const ERROR_CATEGORY = {
@@ -24,6 +25,7 @@ export const ERROR_CATEGORY = {
   PERMISSION: "permission",
   TIMEOUT: "timeout",
   ABORTED: "aborted",
+  STORAGE: "storage",
   UNKNOWN: "unknown",
 };
 
@@ -49,6 +51,8 @@ const ACTION = {
     "The request timed out — retry, or the provider is slow right now.",
   [ERROR_CATEGORY.ABORTED]:
     "The run was cancelled.",
+  [ERROR_CATEGORY.STORAGE]:
+    "Free browser storage, then retry. Progressed or uncertain runs remain available for explicit recovery.",
   [ERROR_CATEGORY.UNKNOWN]:
     "Something went wrong — see the detail below.",
 };
@@ -129,6 +133,18 @@ export function describeError(error, context = {}) {
   if (e?.statusCode != null) detailParts.push(`status: ${e.statusCode}`);
   const body = parseResponseBody(e?.responseBody ?? e?.data?.responseBody ?? "");
   if (body) detailParts.push(`body: ${body}`);
+
+  // Native filesystem/storage exhaustion is local storage truth, never a
+  // provider plan/rate-limit signal even though both may say "quota".
+  if (isNativeQuotaExceededError(e)) {
+    return build(
+      ERROR_CATEGORY.STORAGE,
+      raw || "browser storage quota was exceeded",
+      ACTION[ERROR_CATEGORY.STORAGE],
+      raw,
+      detailParts,
+    );
+  }
 
   // 0. The provider RUN GATE refusal (ProviderUnavailableError) — the
   //    host permission for the provider origin is not granted. This is the

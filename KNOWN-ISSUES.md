@@ -44,16 +44,10 @@ The findings below are the exceptions, not a re-litigation of the architecture.
   repository (local, unpushed; nothing deleted). Do not remove a worktree until its HEAD is
   reachable from a branch or one of those tags.
 
-### [Open] Runs are not durable — they execute inside a message handler — `CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01`
-- The `run-task` route calls `runTask()` directly inside `chrome.runtime.onMessage`. There
-  is no persisted in-flight run record; `activeRuns` in `lib/scheduler.js` is an in-memory
-  `Map`. The service worker's own comment states the dependency: *"The port keeps the SW
-  alive while a page is listening."*
-- A long run's survival therefore depends on a UI page holding the `agent-progress` port
-  open. Closing the hub tab loses the run — tool side effects already committed, no result,
-  no resume. Tool calls are journalled for replay, but the run cannot be reconstructed.
-- Recorded here as independent confirmation that the existing P0 task is correctly scoped
-  and rated, and that four branches of work already exist against it.
+### [Fixed in accepted source; integration review pending] Durable run authority — `CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01`
+- The 2026-08-21 architectural review correctly found public main had no persisted in-flight authority. Exact source `dd41258f7401dda8ccf8b561b955b5f4b919baa0` replaces mounted-page ownership with service-worker execution plus OPFS run records, outboxes, retained logs/payloads, recovery decisions, and owner controls.
+- Independent source reviews passed the quota, sidebar, terminal projection, and reload-recovery successors. The exact loaded-extension journey passed 7/7 with one execution/thread, navigation away and back, terminal result/logs, and the same native Tasks row/result/registry/logs after hard reload.
+- This closes the reproduced Durable defect for integration only. It is not whole-product acceptance; current-main integration review and the residual browser-security suite remain required before merge/push.
 
 ### [Open] Hub WebMCP discovery status renders outside its card — `CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01`
 - `extension/ntp/ntp.html` sets `.panel-body { padding: 4px 0; }`, so each row supplies its
@@ -142,6 +136,7 @@ reviewers keep re-deriving them. Detail in [`REVIEW-2026-08-21.md`](REVIEW-2026-
 - **MAIN cancel tombstones bounded:** bounded now; verify eviction under load.
 
 ### Acceptance-coverage gaps (test/evidence depth)
+- **[FIXED IN ACCEPTED SOURCE — integration review pending] Live Durable Tasks-sidebar row and terminal thread projection:** thread-bound revisions signal authoritative `thread.list` replacement; terminal/cancelled owner revisions trigger targeted `thread.get` replacement. The 0.2.113 recovery preserves prior rows on failed reads, acknowledges invalidation only after successful owner-fenced rendering, and permits one bounded 400ms MV3-startup retry. Exact `dd41258f` passed independent source review and exact 7/7 loaded-extension proof, including the same native Tasks row, terminal result, registry identity, and visible retained logs after hard reload. Accepted for Durable integration only; current-main integration review and residual browser-security execution remain.
 - **System-prompts surface (feat/system-prompt-settings, all known review blockers corrected; awaiting independent re-review):** the layered/versioned system-prompt architecture + Settings → Advanced UI. The blocked paths are now structurally closed: full `/skill:<id>` bodies compose before protected-last policy at the agent boundary (including foreign prompts); Prompt API generate/stream calls bind the exact session system message + role transcript; every attempt gets an immutable execution id with finalized/unbound attestation capture (including direct delegation); the HMAC key is route-secret, versioned/rotatable, and honestly labelled ephemeral without durable storage; all UI mutations require CAS; named-agent lifecycle locking/cleanup is coordinated; future store envelopes quarantine intact; and FIPS/RFC crypto + malformed-truncation vectors are covered. The full unit, build, gallery, security, Chrome, and real-extension feature gates are rerun on the corrective commit before re-review. No push until the standing independent review clears.
 - **No headed-browser screenshot success path** (headless can't grant arbitrary-tab capture; the active-tab path is documented). Needs a headed-browser test.
 - **No full real-enrollment lifecycle journey** (enroll → discover → invoke → cleanup → Retry) as a single headed acceptance.

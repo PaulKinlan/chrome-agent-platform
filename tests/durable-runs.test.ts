@@ -1,0 +1,996 @@
+// @ts-nocheck — deterministic in-memory durable-store/failure harness.
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import {
+  createDurableRunRegistry,
+  DURABLE_RUN_POLICY,
+  RUN_RETENTION_POLICY,
+} from "../extension/lib/durable-runs.js";
+import { dispatchDurableProviderRun } from "../extension/lib/durable-provider-dispatch.js";
+import { admitDurableRun, durableQuotaResponse } from "../extension/lib/durable-quota.js";
+
+class FakeStore {
+  values = new Map();
+  versions = new Map();
+  failNextCompareAndRestore = false;
+  failDeleteKey = null;
+  isMaster = true;
+  origin = "master";
+  async get(key) { return structuredClone(this.values.get(key) ?? null); }
+  async has(key) { return this.values.has(key); }
+  async getVersion(key) { return this.versions.get(key) ?? 0; }
+  async snapshot(key) {
+    return { exists: this.values.has(key), value: this.values.has(key) ? structuredClone(this.values.get(key)) : null, version: this.versions.get(key) ?? 0 };
+  }
+  async setTrusted(key, value) {
+    const version = (this.versions.get(key) ?? 0) + 1;
+    this.values.set(key, structuredClone(value));
+    this.versions.set(key, version);
+    return version;
+  }
+  async compareAndRestore(key, expected, value) {
+    if (this.failNextCompareAndRestore) {
+      this.failNextCompareAndRestore = false;
+      return false;
+    }
+    if ((this.versions.get(key) ?? 0) !== expected) return false;
+    await this.setTrusted(key, value);
+    return true;
+  }
+  async compareAndDelete(key, expected) {
+    if ((this.versions.get(key) ?? 0) !== expected) return false;
+    this.values.delete(key);
+    this.versions.set(key, expected + 1);
+    return true;
+  }
+  async delete(key) {
+    if (this.failDeleteKey === key) {
+      this.failDeleteKey = null;
+      throw new Error(`injected delete failure for ${key}`);
+    }
+    this.values.delete(key);
+    this.versions.set(key, (this.versions.get(key) ?? 0) + 1);
+  }
+  async keys() { return [...this.values.keys()].sort(); }
+}
+
+function harness(store, { bootId = "boot-a", failAt = null } = {}) {
+  const journal = [];
+  const thread = [];
+  let failed = false;
+  const registry = createDurableRunRegistry({
+    store,
+    bootId,
+    now: (() => { let n = 1_000; return () => ++n; })(),
+    resolveJournalStore: async () => ({ journal }),
+    appendJournal: async (target, entry, _guard, executionId) => {
+      if (!target.journal.some((row) => row.executionId === executionId && row.type === entry.type)) {
+        target.journal.push(structuredClone(entry));
+      }
+    },
+    replaceCancellationJournal: async (target, entry, executionId) => {
+      target.journal.splice(0, target.journal.length, ...target.journal.filter((row) => row.executionId !== executionId));
+      target.journal.push({ ...structuredClone(entry), type: "cancelled", executionId });
+    },
+    commitThread: async (threadId, executionId, terminal) => {
+      if (!thread.some((row) => row.executionId === executionId)) {
+        thread.push({ threadId, executionId, ...structuredClone(terminal) });
+      }
+    },
+    replaceCancellationThread: async (threadId, executionId, terminal) => {
+      const index = thread.findIndex((row) => row.executionId === executionId);
+      const row = { threadId, executionId, ...structuredClone(terminal), status: "cancelled" };
+      if (index >= 0) thread[index] = row;
+      else thread.push(row);
+    },
+    injectFailure: async (boundary) => {
+      if (!failed && boundary === failAt) {
+        failed = true;
+        throw new Error(`injected crash at ${boundary}`);
+      }
+    },
+  });
+  return { registry, journal, thread };
+}
+
+const executionId = "exec_durable_0001";
+const terminalPayload = {
+  ok: true,
+  result: "durable answer",
+  logicalId: "task-1",
+  summary: "durable answer",
+};
+
+function quotaError() {
+  return new DOMException("The bounded filesystem is full", "QuotaExceededError");
+}
+
+async function begin(registry) {
+  await registry.start({
+    executionId,
+    clientCorrelationId: "page-run-1",
+    threadId: "thread-1",
+    kind: "task",
+    taskPreview: "do durable work",
+    journalTarget: "master",
+    resumeRequest: { id: "task-1", task: "do durable work", memoryOrigin: "master", providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true }, idempotencyKey: executionId },
+  });
+}
+
+Deno.test("durable runs: addToIndex-first native quota is compensated and settles the message response", async () => {
+  class IndexQuotaStore extends FakeStore {
+    failIndexOnce = true;
+    constructor(publishBeforeThrow) {
+      super();
+      this.publishBeforeThrow = publishBeforeThrow;
+    }
+    async setTrusted(key, value) {
+      if (key === "run-registry" && this.failIndexOnce) {
+        this.failIndexOnce = false;
+        if (this.publishBeforeThrow) await super.setTrusted(key, value);
+        throw quotaError();
+      }
+      return await super.setTrusted(key, value);
+    }
+  }
+
+  for (const kind of ["task", "delegate"]) for (const timing of ["before", "after"]) {
+    const store = new IndexQuotaStore(timing === "after");
+    const registry = harness(store).registry;
+    const id = `exec_quota_${kind}_${timing}1`;
+    let outerRejected = false;
+    const response = await new Promise((resolve) => {
+      // Mirrors the MV3 dispatcher: a route result must reach sendResponse via
+      // fulfillment, never its outer rejection channel.
+      admitDurableRun(registry, {
+        executionId: id,
+        kind,
+        taskPreview: "quota admission",
+        journalTarget: "master",
+        resumeRequest: { task: "quota admission" },
+      }).then(resolve).catch(() => {
+        outerRejected = true;
+        resolve(null);
+      });
+    });
+
+    assertEquals(outerRejected, false, `${kind} admission does not reject the outer message channel`);
+    assertEquals(response, {
+      ok: false,
+      errorCategory: "storage",
+      errorReason: "The bounded filesystem is full",
+      errorAction: "Free browser storage, then retry. Progressed or uncertain runs remain available for explicit recovery.",
+      executionId: id,
+    });
+    assertEquals((await store.keys()).filter((key) => key.includes(id)), [], `${kind} failed admission leaves no execution-owned remnants`);
+    assertEquals((await store.get("run-registry") ?? []).includes(id), false, `${kind} failed admission leaves no registry reference`);
+    assertEquals((await registry.list()).runs, []);
+  }
+});
+
+Deno.test("durable runs: quota response accepts an immutable native error without mutation", () => {
+  const error = Object.preventExtensions(quotaError());
+  const before = Object.getOwnPropertyNames(error);
+  const response = durableQuotaResponse(error, executionId);
+  assertEquals(response.executionId, executionId);
+  assertEquals(response.errorCategory, "storage");
+  assertEquals(Object.getOwnPropertyNames(error), before);
+  assertEquals("executionId" in error, false);
+});
+
+Deno.test("durable runs: native quota rollback leaves exactly zero execution remnants", async () => {
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  await store.setTrusted(`run-outbox:${executionId}`, { executionId, partial: true });
+  await store.setTrusted(`run-payload:${executionId}:extra:000000`, { executionId });
+
+  const result = await run.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(result.ok, true);
+  assertEquals(result.remainingKeys, []);
+  assertEquals((await store.keys()).filter((key) => key.includes(executionId)), []);
+  assertEquals(await store.has("run-registry"), false, "an initially absent registry is restored as absent");
+  assertEquals(run.journal, [], "rollback never creates a terminal journal row");
+  assertEquals(run.thread, [], "rollback never creates a terminal thread row");
+});
+
+Deno.test("durable runs: registry compensation restores absent/empty and preserves old + concurrent IDs", async () => {
+  const emptyStore = new FakeStore();
+  await emptyStore.setTrusted("run-registry", []);
+  const emptyRun = harness(emptyStore);
+  await begin(emptyRun.registry);
+  const privateRecord = await emptyStore.get(`run:${executionId}`);
+  assertEquals(privateRecord.registryAdmission.preExists, true);
+  assertEquals(privateRecord.registryAdmission.preValue, []);
+  assertEquals("registryAdmission" in (await emptyRun.registry.list()).runs[0], false, "prior-state metadata stays private");
+  await emptyRun.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(await emptyStore.has("run-registry"), true);
+  assertEquals(await emptyStore.get("run-registry"), []);
+
+  const store = new FakeStore();
+  const registry = harness(store).registry;
+  const oldId = "exec_registry_old_0001";
+  const laterId = "exec_registry_later_01";
+  await registry.start({ executionId: oldId, taskPreview: "old", journalTarget: "master" });
+  await begin(registry);
+  await registry.start({ executionId: laterId, taskPreview: "later", journalTarget: "master" });
+  await store.setTrusted("unrelated", { bytes: "preserve-me" });
+  const rolled = await registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(rolled.ok, true);
+  assertEquals(await store.get("run-registry"), [laterId, oldId]);
+  assertEquals(await store.get("unrelated"), { bytes: "preserve-me" });
+  assert(await store.has(`run:${oldId}`));
+  assert(await store.has(`run:${laterId}`));
+});
+
+Deno.test("durable runs: journal compensation failure preserves authority and retry finalizes in safe order", async () => {
+  const store = new FakeStore();
+  let attempts = 0;
+  const registry = createDurableRunRegistry({
+    store,
+    bootId: "boot-journal-fail",
+    compensateJournal: async () => {
+      attempts += 1;
+      assertEquals((await store.keys()).some((key) => key.startsWith(`run-log:${executionId}:`)), false, "auxiliary bytes are freed before journal compensation");
+      assert(await store.has(`run:${executionId}`), "record authority remains during journal compensation");
+      assertEquals((await store.get("run-registry")).includes(executionId), true, "registry authority remains during journal compensation");
+      return attempts === 1
+        ? { ok: false, preserved: true, reason: "journal_cas_mismatch" }
+        : { ok: true, compensated: true };
+    },
+  });
+  await begin(registry);
+  const options = {
+    journalReceipt: { schemaVersion: 1, key: "journal", executionId },
+    journalStore: {},
+  };
+  const refused = await registry.rollbackUnprogressedQuota(executionId, quotaError(), options);
+  assertEquals(refused.reason, "journal_cas_mismatch");
+  assertEquals(refused.preserved, true);
+  assert(await store.has(`run:${executionId}`), "readable authority survives compensation failure");
+  assertEquals((await store.get("run-registry")).includes(executionId), true);
+
+  const retried = await registry.rollbackUnprogressedQuota(executionId, quotaError(), options);
+  assertEquals(retried.ok, true);
+  assertEquals(await store.has(`run:${executionId}`), false);
+  assertEquals(await store.has("run-registry"), false);
+});
+
+Deno.test("durable runs: progressed quota execution is preserved for explicit recovery", async () => {
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  await run.registry.heartbeat(executionId, { progressed: true });
+  const before = await store.keys();
+
+  const result = await run.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(result.ok, false);
+  assertEquals(result.preserved, true);
+  assertEquals(result.reason, "execution_progressed");
+  assertEquals(await store.keys(), before);
+  assertEquals((await run.registry.list()).runs[0].progressCount, 1);
+
+  const uncertainStore = new FakeStore();
+  const uncertain = harness(uncertainStore);
+  await begin(uncertain.registry);
+  const raw = await uncertainStore.get(`run:${executionId}`);
+  raw.phase = "paused-side-effect-uncertain";
+  raw.pause = { requiresOwnerDecision: true };
+  await uncertainStore.setTrusted(`run:${executionId}`, raw);
+  const uncertainBefore = await uncertainStore.keys();
+  const refused = await uncertain.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(refused.reason, "execution_side_effect_uncertain");
+  assertEquals(await uncertainStore.keys(), uncertainBefore, "uncertain authority is never deleted");
+});
+
+Deno.test("durable runs: quota rollback is idempotent", async () => {
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  const spoofed = Object.assign(new Error("QuotaExceededError: provider quota"), { name: "QuotaExceededError" });
+  await assertRejects(() => run.registry.rollbackUnprogressedQuota(executionId, spoofed), TypeError, "native QuotaExceededError");
+  assert(await store.has(`run:${executionId}`), "a provider/text quota spoof cannot authorize deletion");
+  const first = await run.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  const second = await run.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(first.idempotent, false);
+  assertEquals(second, { ok: true, rolledBack: true, idempotent: true, executionId, remainingKeys: [] });
+});
+
+Deno.test("durable runs: partial quota delete preserves authority and retry completes safely", async () => {
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  store.failDeleteKey = `run-log:${executionId}:accepted`;
+
+  await assertRejects(
+    () => run.registry.rollbackUnprogressedQuota(executionId, quotaError()),
+    Error,
+    "injected delete failure",
+  );
+  assert(await store.has(`run:${executionId}`), "read-back authority remains after a partial auxiliary delete");
+  assertEquals(await store.get("run-registry"), [executionId]);
+
+  const retried = await run.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(retried.ok, true);
+  assertEquals((await store.keys()).filter((key) => key.includes(executionId)), []);
+  assertEquals(await store.has("run-registry"), false, "retry restores the initially absent registry exactly");
+});
+
+Deno.test("durable runs: terminal fault matrix recovers exactly one journal and thread result", async (t) => {
+  const boundaries = [
+    "after-outbox",
+    "after-journal",
+    "after-thread",
+    "after-cas",
+    "after-outbox-ack",
+    "after-outbox-removal",
+  ];
+  for (const boundary of boundaries) {
+    await t.step(boundary, async () => {
+      const store = new FakeStore();
+      const first = harness(store, { failAt: boundary });
+      await begin(first.registry);
+      await assertRejects(() => first.registry.settle(executionId, terminalPayload), Error, "injected crash");
+
+      const restarted = createDurableRunRegistry({
+        store,
+        bootId: "boot-b",
+        now: () => 2_000,
+        resolveJournalStore: async () => ({ journal: first.journal }),
+        appendJournal: async (target, entry, _guard, id) => {
+          if (!target.journal.some((row) => row.executionId === id && row.type === entry.type)) {
+            target.journal.push(structuredClone(entry));
+          }
+        },
+        commitThread: async (threadId, id, terminal) => {
+          if (!first.thread.some((row) => row.executionId === id)) {
+            first.thread.push({ threadId, executionId: id, ...structuredClone(terminal) });
+          }
+        },
+      });
+      await restarted.recover();
+      const snapshot = await restarted.list();
+      const run = snapshot.runs.find((row) => row.executionId === executionId);
+      assertEquals(run.phase, "terminal");
+      assertEquals(first.journal.filter((row) => row.executionId === executionId).length, 1);
+      assertEquals(first.thread.filter((row) => row.executionId === executionId).length, 1);
+      assertEquals(await store.has(`run-outbox:${executionId}`), false);
+      assert(!snapshot.runs.some((row) => row.executionId === executionId && row.phase === "orphaned"));
+    });
+  }
+});
+
+Deno.test("durable runs: pre-outbox crash cannot create result+orphan double state; replayed payload settles once", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { failAt: "before-outbox" });
+  await begin(first.registry);
+  await assertRejects(() => first.registry.settle(executionId, terminalPayload));
+
+  const second = harness(store, { bootId: "boot-b" });
+  await second.registry.recover();
+  let run = (await second.registry.list()).runs[0];
+  assertEquals(run.phase, "paused-interruption");
+  assertEquals(first.journal.length, 0);
+  assertEquals(first.thread.length, 0);
+
+  // If the caller can re-present the exact terminal payload, idempotent replay
+  // upgrades the interrupted record to one terminal triple, never a double state.
+  const replay = createDurableRunRegistry({
+    store,
+    bootId: "boot-b",
+    resolveJournalStore: async () => ({ journal: first.journal }),
+    appendJournal: async (target, entry, _guard, id) => {
+      if (!target.journal.some((row) => row.executionId === id)) target.journal.push({ ...entry });
+    },
+    commitThread: async (threadId, id, terminal) => {
+      if (!first.thread.some((row) => row.executionId === id)) first.thread.push({ threadId, executionId: id, ...terminal });
+    },
+  });
+  await replay.settle(executionId, terminalPayload);
+  run = (await replay.list()).runs[0];
+  assertEquals(run.phase, "terminal");
+  assertEquals(first.journal.length, 1);
+  assertEquals(first.thread.length, 1);
+});
+
+Deno.test("durable runs: boot identity and heartbeat are truth; pre-boot active records pause for automatic interruption resume", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-a" });
+  await begin(first.registry);
+  const before = (await first.registry.list()).runs[0];
+  await first.registry.heartbeat(executionId);
+  const alive = (await first.registry.list()).runs[0];
+  assertEquals(alive.bootId, "boot-a");
+  assert(alive.heartbeatAt > before.heartbeatAt);
+  assertEquals(alive.progressCount, 0);
+
+  const second = harness(store, { bootId: "boot-b" });
+  const recovered = await second.registry.recover();
+  assertEquals(recovered.interrupted.length, 1);
+  const paused = (await second.registry.list()).runs[0];
+  assertEquals(paused.phase, "paused-interruption");
+  assertEquals(paused.pause.kind, "interruption");
+  const resumed = await second.registry.resumeAfterInterruption(executionId);
+  assertEquals(resumed.ok, true);
+  assertEquals(resumed.run.phase, "resume-dispatching");
+  const activated = await second.registry.activateResume(executionId, resumed.token, resumed.resumeRequest.providerBinding);
+  assertEquals(activated.run.phase, "running");
+});
+
+Deno.test("durable runs: reconnect sends snapshot then strictly newer revisioned updates", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  await begin(registry);
+  const messages = [];
+  let disconnect = null;
+  registry.attachPort({
+    postMessage(message) { messages.push(structuredClone(message)); },
+    onDisconnect: { addListener(fn) { disconnect = fn; } },
+  });
+  while (!messages.some((message) => message.type === "run-snapshot")) await new Promise((resolve) => setTimeout(resolve, 0));
+  const snapshot = messages.find((message) => message.type === "run-snapshot");
+  const snapshotRevision = snapshot.runs[0].revision;
+  await registry.heartbeat(executionId, { progressed: true });
+  const update = messages.find((message) => message.type === "run-update");
+  assert(update.revision > snapshotRevision);
+  assertEquals(update.executionId, executionId);
+  disconnect?.();
+});
+
+Deno.test("durable runs: service-worker integrates both runTask and direct agent.delegate paths", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const delegate = source.slice(source.indexOf('async "agent.delegate"'), source.indexOf('async "agent.listAll"'));
+  assert(delegate.includes("admitDurableRun"), "direct delegation registers its immutable executionId through compensated admission");
+  assert(delegate.includes("durableRuns.heartbeat"), "direct delegation advances durable heartbeat/progress truth");
+  assert(delegate.includes("durableRuns.settle"), "direct delegation commits through the terminal outbox");
+  assert(delegate.indexOf("journalAppendWithReceipt") < delegate.indexOf("dispatchDurableProviderRun"), "direct delegation journals its task before provider dispatch");
+  assert(
+    delegate.indexOf("admitDurableRun") < delegate.indexOf("dispatchDurableProviderRun") &&
+      delegate.indexOf("dispatchDurableProviderRun") < delegate.indexOf("ensureOrchestrator"),
+    "delegate persists first, then applies the production provider gate before worker initialization/dispatch",
+  );
+  const delegateEarly = delegate.slice(delegate.indexOf("admitDurableRun"), delegate.indexOf("dispatchDurableProviderRun"));
+  assert(delegateEarly.includes("return admissionFailure"), "delegate early quota settles a structured response");
+  assert(!delegateEarly.includes("rollbackUnprogressedQuota"), "delegate never rolls back a start that established no readable authority");
+  assert(delegate.includes("rollbackUnprogressedQuota(execId, error,"), "established delegate quota rolls back before response settlement");
+  assert(delegate.includes("return durableQuotaResponse(error, execId)"), "delegate returns truthful storage response");
+
+  const runTask = source.slice(source.indexOf("async function runTask"), source.indexOf("// ---- message router"));
+  assert(
+    runTask.indexOf("admitDurableRun") < runTask.indexOf("providerRunGate"),
+    "permission refusal is durably registered before entering a visible paused-permission state",
+  );
+  const runTaskEarly = runTask.slice(runTask.indexOf("admitDurableRun"), runTask.indexOf("providerRunGate"));
+  assert(runTaskEarly.includes("return admissionFailure"), "run-task early quota settles a structured response");
+  assert(!runTaskEarly.includes("rollbackUnprogressedQuota"), "run-task never rolls back a start that established no readable authority");
+  const quotaCatchStart = runTask.indexOf("if (isNativeQuotaExceededError(error))");
+  const ordinaryCatchStart = runTask.indexOf("const desc = describeError(error)", quotaCatchStart);
+  const quotaCatch = runTask.slice(quotaCatchStart, ordinaryCatchStart);
+  assert(quotaCatchStart >= 0 && ordinaryCatchStart > quotaCatchStart, "runTask has a native quota branch before ordinary settlement");
+  assert(quotaCatch.includes("rollbackUnprogressedQuota"), "established native quota invokes durable compensation");
+  assert(quotaCatch.indexOf("rollbackUnprogressedQuota") < quotaCatch.indexOf("return durableQuotaResponse"), "established quota rollback happens before response settlement");
+  assert(!quotaCatch.includes("durableRuns.settle"), "native quota never allocates a terminal payload/outbox or journal settlement");
+  assert(runTask.indexOf("journalAppendWithReceipt") < runTask.indexOf("orch.run("), "runTask journals the task before the provider run");
+  assert(source.includes('async "run.list"'), "the service worker exposes durable snapshots");
+});
+
+Deno.test("durable runs: agent.delegate start and resume pause before production provider dispatch", async () => {
+  const previousChrome = globalThis.chrome;
+  const providerConfig = {
+    provider: "openai-compatible",
+    model: "controlled-model",
+    baseURL: "https://durable-provider.invalid/v1",
+  };
+  const providerBinding = {
+    schemaVersion: 1,
+    provider: "openai-compatible",
+    model: "controlled-model",
+    requestedScope: "https://durable-provider.invalid/*",
+    local: false,
+  };
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  let dispatches = 0;
+  try {
+    globalThis.chrome = { permissions: { contains: async () => false } };
+    await registry.start({
+      executionId,
+      kind: "delegate",
+      taskPreview: "delegate through gated provider",
+      journalTarget: "master",
+      resumeRequest: { route: "agent.delegate", task: "delegate through gated provider", providerBinding },
+    });
+    const startResult = await dispatchDurableProviderRun({
+      executionId,
+      providerConfig,
+      providerBinding,
+      durableRuns: registry,
+      dispatch: async () => { dispatches += 1; return { ok: true }; },
+    });
+    assertEquals(startResult.ok, false);
+    assertEquals(startResult.paused, true);
+    assertEquals(startResult.pauseKind, "permission");
+    assertEquals(dispatches, 0, "start cannot dispatch a worker/provider while permission-paused");
+    assertEquals(startResult.run.phase, "paused-permission");
+    assertEquals(startResult.run.pause.visible, true);
+    assertEquals(startResult.run.pause.recoverable, true);
+    assertEquals(startResult.run.pause.providerBinding, providerBinding);
+
+    globalThis.chrome = { permissions: { contains: async () => true } };
+    const prepared = await registry.resumeAfterPermission(executionId);
+    const activated = await registry.activateResume(executionId, prepared.token, providerBinding);
+    assertEquals(activated.run.phase, "running");
+    globalThis.chrome = { permissions: { contains: async () => false } };
+    const resumeResult = await dispatchDurableProviderRun({
+      executionId,
+      providerConfig,
+      providerBinding,
+      durableRuns: registry,
+      dispatch: async () => { dispatches += 1; return { ok: true }; },
+    });
+    assertEquals(resumeResult.paused, true);
+    assertEquals(resumeResult.run.phase, "paused-permission");
+    assertEquals(dispatches, 0, "resume cannot dispatch a worker/provider while permission-paused");
+    const snapshot = await registry.list();
+    assertEquals(snapshot.runs[0].phase, "paused-permission", "paused delegate retains no running ownership");
+    assert(snapshot.runs[0].terminal == null, "permission pause is recoverable, not terminal");
+  } finally {
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
+});
+
+Deno.test("durable runs: agent.delegate permission scope mismatch fails closed without dispatch", async () => {
+  const previousChrome = globalThis.chrome;
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const retainedBinding = {
+    schemaVersion: 1,
+    provider: "openai-compatible",
+    model: "controlled-model",
+    requestedScope: "https://retained-provider.invalid/*",
+    local: false,
+  };
+  let dispatches = 0;
+  try {
+    globalThis.chrome = { permissions: { contains: async () => false } };
+    await registry.start({
+      executionId,
+      kind: "delegate",
+      taskPreview: "scope mismatch",
+      journalTarget: "master",
+      resumeRequest: { route: "agent.delegate", task: "scope mismatch", providerBinding: retainedBinding },
+    });
+    await assertRejects(
+      () => dispatchDurableProviderRun({
+        executionId,
+        providerConfig: { provider: "openai-compatible", model: "controlled-model", baseURL: "https://different-provider.invalid/v1" },
+        providerBinding: {
+          ...retainedBinding,
+          requestedScope: "https://different-provider.invalid/*",
+        },
+        durableRuns: registry,
+        dispatch: async () => { dispatches += 1; return { ok: true }; },
+      }),
+      Error,
+      "permission scope does not match bound provider identity",
+    );
+    assertEquals(dispatches, 0);
+    assertEquals((await registry.list()).runs[0].phase, "running", "mismatched scope cannot manufacture a pause");
+  } finally {
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
+});
+
+Deno.test("durable runs: execution identity grammar rejects prototype/path adversaries", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  for (const id of ["__proto__", "constructor", "prototype", "exec:../../escape", "exec:constructor", "random-id"]) {
+    await assertRejects(() => registry.start({ executionId: id, taskPreview: "bad", journalTarget: "master" }), Error, "invalid immutable executionId");
+  }
+});
+
+Deno.test("durable runs: resolved policy is versioned retain-all with terminal owner cancellation", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  await begin(registry);
+  const snapshot = await registry.list();
+  assertEquals(snapshot.policy, DURABLE_RUN_POLICY);
+  assertEquals(snapshot.retentionPolicy, RUN_RETENTION_POLICY);
+  assertEquals(snapshot.runs[0].policy.cancellation, "explicit-owner-terminal-new-run-required");
+  assertEquals(snapshot.runs[0].retentionPolicyVersion, "run-retention-v1");
+  assertEquals(snapshot.retentionPolicy.mode, "retain-all");
+  assertEquals(snapshot.retentionPolicy.automaticCompaction, false);
+  assertEquals(snapshot.retentionPolicy.automaticEviction, false);
+  assertEquals(snapshot.retentionPolicy.explicitClearOnly, true);
+});
+
+Deno.test("durable runs: explicit cancel is terminal, idempotent, and resume requires a new run", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  const cancelled = await first.registry.cancel(executionId, { requestId: "cancel-1" });
+  assertEquals(cancelled.ok, true);
+  assertEquals(cancelled.run.phase, "cancelled");
+  assertEquals(cancelled.run.cancellation.authority, "explicit-owner");
+  assertEquals(cancelled.run.cancellation.restartAllowed, false);
+  assert(cancelled.run.terminal.requestedAt === cancelled.run.cancellation.requestedAt);
+  assert(cancelled.run.terminal.reconciledAt >= (cancelled.abortAttempt?.attemptedAt ?? cancelled.run.cancellation.requestedAt));
+  assertEquals(cancelled.run.terminal.at, cancelled.run.terminal.reconciledAt);
+  assertEquals(first.journal[0].type, "cancelled", "cancellation journal truth must not be relabelled result");
+  assertEquals(first.journal[0].requestedAt, cancelled.run.cancellation.requestedAt);
+  assertEquals(first.journal[0].reconciledAt, cancelled.run.terminal.reconciledAt);
+  const repeated = await first.registry.cancel(executionId, { requestId: "cancel-2" });
+  assertEquals(repeated.idempotent, true);
+  assertEquals(first.journal.filter((row) => row.executionId === executionId && row.type === "cancelled").length, 1);
+  assertEquals(first.thread.filter((row) => row.executionId === executionId).length, 1);
+  assertEquals((await first.registry.resumeAfterPermission(executionId)).error, "cancelled_requires_new_run");
+  assertEquals((await first.registry.resumeAfterInterruption(executionId)).error, "cancelled_requires_new_run");
+  await first.registry.start({ executionId: "exec_durable_new2", taskPreview: "explicit retry", journalTarget: "master" });
+  assertEquals((await first.registry.list()).runs.find((row) => row.executionId === "exec_durable_new2").phase, "running");
+});
+
+Deno.test("durable runs: abort hook fires once immediately after tombstone and failure cannot roll it back", async () => {
+  const store = new FakeStore();
+  let abortCalls = 0;
+  let abortObservedBeforeOutbox = false;
+  const registry = createDurableRunRegistry({
+    store,
+    bootId: "boot-abort-hook",
+    now: (() => { let n = 10; return () => ++n; })(),
+    resolveJournalStore: async () => ({ journal: [] }),
+    appendJournal: async () => {}, replaceCancellationJournal: async () => {},
+    commitThread: async () => {}, replaceCancellationThread: async () => {},
+    injectFailure: async (boundary) => {
+      if (boundary === "after-cancel-abort-recorded") {
+        const durable = await store.get(`run:${executionId}`);
+        assertEquals(durable.cancellation.abortAttempt.attempted, true);
+        assert(durable.cancellation.abortAttempt.attemptedAt >= durable.cancellation.requestedAt);
+        assertEquals(await store.has(`run-outbox:${executionId}`), false);
+      }
+      if (boundary === "after-cancel-outbox") abortObservedBeforeOutbox = abortCalls === 1;
+    },
+  });
+  await begin(registry);
+  const first = await registry.cancel(executionId, { onAuthorityPersisted: () => { abortCalls += 1; } });
+  assertEquals(first.abortAttempt.ok, true);
+  assert(first.run.cancellation.requestedAt < first.abortAttempt.attemptedAt);
+  assert(first.run.terminal.at >= first.abortAttempt.attemptedAt, "terminal reconciliation cannot predate the recorded live abort attempt");
+  assertEquals(first.run.terminal.at, first.run.terminal.reconciledAt);
+  assertEquals(first.run.terminal.requestedAt, first.run.cancellation.requestedAt);
+  assertEquals(abortObservedBeforeOutbox, true);
+  await registry.cancel(executionId, { onAuthorityPersisted: () => { abortCalls += 1; } });
+  assertEquals(abortCalls, 1);
+
+  const slowStore = new FakeStore();
+  const slow = harness(slowStore);
+  await begin(slow.registry);
+  let releaseAbort;
+  let enteredAbort;
+  const entered = new Promise((resolve) => { enteredAbort = resolve; });
+  const release = new Promise((resolve) => { releaseAbort = resolve; });
+  let slowCalls = 0;
+  const firstCancel = slow.registry.cancel(executionId, { onAuthorityPersisted: async () => { slowCalls += 1; enteredAbort(); await release; } });
+  await entered;
+  const duplicateDuringAbort = await slow.registry.cancel(executionId, { onAuthorityPersisted: () => { slowCalls += 1; } });
+  assertEquals(duplicateDuringAbort.cancellationPending, true);
+  assertEquals(await slowStore.has(`run-outbox:${executionId}`), false, "outbox waits for the claimed abort callback");
+  releaseAbort();
+  await firstCancel;
+  assertEquals(slowCalls, 1);
+
+  const crashStore = new FakeStore();
+  const crashing = harness(crashStore, { failAt: "after-cancel-outbox" });
+  await begin(crashing.registry);
+  let crashAbort = 0;
+  await assertRejects(() => crashing.registry.cancel(executionId, { onAuthorityPersisted: () => { crashAbort += 1; } }), Error, "injected crash");
+  assertEquals(crashAbort, 1);
+  const recovered = harness(crashStore, { bootId: "boot-after-tombstone-abort" });
+  await recovered.registry.recover();
+  assertEquals((await recovered.registry.list()).runs[0].phase, "cancelled");
+
+  const retryStore = new FakeStore();
+  const retrying = harness(retryStore);
+  await begin(retrying.registry);
+  let retryCalls = 0;
+  const retriedAbort = await retrying.registry.cancel(executionId, { onAuthorityPersisted: () => {
+    retryCalls += 1;
+    if (retryCalls === 1) throw new Error("transient abort callback failure");
+  } });
+  assertEquals(retriedAbort.run.phase, "cancelled");
+  assertEquals(retriedAbort.abortAttempt.ok, true);
+  assertEquals(retriedAbort.abortAttempt.attemptCount, 2);
+  assertEquals(retriedAbort.abortAttempt.errors, ["transient abort callback failure"]);
+
+  const store2 = new FakeStore();
+  const throwing = harness(store2);
+  await begin(throwing.registry);
+  let throwCalls = 0;
+  const failedAbort = await throwing.registry.cancel(executionId, { onAuthorityPersisted: () => { throwCalls += 1; throw new Error(`abort callback failed ${throwCalls}`); } });
+  assertEquals(failedAbort.run.phase, "cancelled");
+  assertEquals(throwCalls, 2);
+  assertEquals(failedAbort.abortAttempt.ok, false);
+  assertEquals(failedAbort.abortAttempt.attemptCount, 2);
+  assertEquals(failedAbort.abortAttempt.errors, ["abort callback failed 1", "abort callback failed 2"]);
+
+  const casStore = new FakeStore();
+  const casFail = harness(casStore);
+  await begin(casFail.registry);
+  await assertRejects(
+    () => casFail.registry.cancel(executionId, { onAuthorityPersisted: () => {
+      casStore.failNextCompareAndRestore = true;
+      return true;
+    } }),
+    Error,
+    "abort-attempt record CAS failed",
+  );
+  const authorityOnly = await casStore.get(`run:${executionId}`);
+  assertEquals(authorityOnly.cancellation.abortAttempt.attempted, false, "a failed CAS cannot manufacture durable abort evidence");
+});
+
+Deno.test("durable runs: cancellation tombstone wins across every cancellation crash boundary", async (t) => {
+  const boundaries = [
+    "after-cancel-authority", "after-cancel-abort-recorded", "after-cancel-outbox", "after-cancel-journal",
+    "after-cancel-thread", "after-cancel-cas", "after-cancel-outbox-ack", "after-cancel-outbox-removal",
+  ];
+  for (const boundary of boundaries) await t.step(boundary, async () => {
+    const store = new FakeStore();
+    const first = harness(store, { failAt: boundary });
+    await begin(first.registry);
+    await assertRejects(() => first.registry.cancel(executionId), Error, "injected crash");
+    const restarted = harness(store, { bootId: "boot-restart" });
+    // Share observable authorities to prove replacement rather than duplicate.
+    restarted.journal.push(...first.journal);
+    restarted.thread.push(...first.thread);
+    await restarted.registry.recover();
+    const run = (await restarted.registry.list()).runs[0];
+    assertEquals(run.phase, "cancelled");
+    assertEquals(restarted.journal.filter((row) => row.executionId === executionId && row.type === "cancelled").length, 1);
+    assertEquals(restarted.thread.filter((row) => row.executionId === executionId).length, 1);
+    assertEquals(await store.has(`run-outbox:${executionId}`), false);
+  });
+});
+
+Deno.test("durable runs: cancel replaces partially committed ordinary outbox and late terminal cancel fails closed", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { failAt: "after-thread" });
+  await begin(first.registry);
+  await assertRejects(() => first.registry.settle(executionId, terminalPayload));
+  const cancelled = await first.registry.cancel(executionId);
+  assertEquals(cancelled.run.phase, "cancelled");
+  assertEquals(first.journal.filter((row) => row.executionId === executionId).length, 1);
+  assertEquals(first.journal[0].type, "cancelled");
+  assertEquals(first.thread.filter((row) => row.executionId === executionId).length, 1);
+
+  const store2 = new FakeStore();
+  const completed = harness(store2);
+  await begin(completed.registry);
+  await completed.registry.settle(executionId, terminalPayload);
+  assertEquals((await completed.registry.cancel(executionId)).error, "run_already_terminal");
+});
+
+Deno.test("durable runs: permission pause resumes only after resolution state and interruption auto-resume preserves identity", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  await assertRejects(() => first.registry.pauseForPermission(executionId, { code: "permission_required", requestedScope: "https://wrong.example/*" }), Error, "permission scope does not match");
+  const paused = await first.registry.pauseForPermission(executionId, { code: "permission_required", requestedScope: null });
+  assertEquals(paused.phase, "paused-permission");
+  assertEquals(paused.pause.visible, true);
+  const resumed = await first.registry.resumeAfterPermission(executionId);
+  assertEquals(resumed.run.phase, "resume-dispatching");
+  assertEquals(resumed.executionId, executionId);
+  await first.registry.activateResume(executionId, resumed.token, resumed.resumeRequest.providerBinding);
+
+  const restarted = harness(store, { bootId: "boot-after-kill" });
+  await restarted.registry.recover();
+  const interrupted = (await restarted.registry.list()).runs[0];
+  assertEquals(interrupted.phase, "paused-interruption");
+  const automatic = await restarted.registry.resumeAfterInterruption(executionId);
+  assertEquals(automatic.executionId, executionId);
+  assertEquals(automatic.run.resumeAttemptCount, 2);
+  await restarted.registry.activateResume(executionId, automatic.token, automatic.resumeRequest.providerBinding);
+});
+
+Deno.test("durable runs: rejected resume dispatch re-pauses visibly and bounds automatic attempts", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  const restarted = harness(store, { bootId: "boot-resume-bound" });
+  await restarted.registry.recover();
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const prepared = await restarted.registry.resumeAfterInterruption(executionId);
+    assertEquals(prepared.run.phase, "resume-dispatching");
+    const failed = await restarted.registry.failResumeDispatch(executionId, prepared.token, `missing route ${attempt}`);
+    assertEquals(failed.run.pause.visible, true);
+    if (attempt < 3) assertEquals(failed.run.phase, "paused-interruption");
+    else assertEquals(failed.run.phase, "terminal");
+  }
+  assertEquals((await restarted.registry.resumeAfterInterruption(executionId)).error, "run_not_resumable");
+  const snapshot = await restarted.registry.list();
+  assertEquals(snapshot.runs[0].resumeAttemptCount, 3);
+});
+
+Deno.test("durable runs: final prepared resume crash and pre-existing attempt ceiling terminalize exactly once", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  const restarted = harness(store, { bootId: "boot-resume-crash" });
+  await restarted.registry.recover();
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const prepared = await restarted.registry.resumeAfterInterruption(executionId);
+    await restarted.registry.failResumeDispatch(executionId, prepared.token, `missing route ${attempt}`);
+  }
+  const finalPrepared = await restarted.registry.resumeAfterInterruption(executionId);
+  assertEquals(finalPrepared.run.resumeAttemptCount, 3);
+  assertEquals(finalPrepared.run.phase, "resume-dispatching");
+
+  const afterCrash = harness(store, { bootId: "boot-after-final-prepare" });
+  await afterCrash.registry.recover();
+  await afterCrash.registry.recover();
+  const terminal = (await afterCrash.registry.list()).runs[0];
+  assertEquals(terminal.phase, "terminal");
+  assertEquals(terminal.resumeAttemptCount, 3);
+  assertEquals(afterCrash.journal.filter((row) => row.type === "result").length, 1);
+  assertEquals(afterCrash.thread.filter((row) => row.executionId === executionId).length, 1);
+  assertEquals((await afterCrash.registry.resumeAfterInterruption(executionId)).error, "run_not_resumable");
+
+  const ceilingStore = new FakeStore();
+  const ceiling = harness(ceilingStore);
+  await begin(ceiling.registry);
+  const record = await ceilingStore.get(`run:${executionId}`);
+  record.phase = "paused-interruption";
+  record.resumeAttemptCount = 3;
+  record.pause = { kind: "interruption", visible: true, automaticRetry: true };
+  await ceilingStore.setTrusted(`run:${executionId}`, record);
+  const refused = await ceiling.registry.resumeAfterInterruption(executionId);
+  assertEquals(refused.error, "resume_attempt_limit_reached");
+  assertEquals(refused.run.phase, "terminal");
+  assertEquals(ceiling.journal.filter((row) => row.type === "result").length, 1);
+  assertEquals(ceiling.thread.filter((row) => row.executionId === executionId).length, 1);
+});
+
+Deno.test("durable runs: interruption after tool progress pauses side-effect-uncertain instead of blind replay", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  await first.registry.heartbeat(executionId, { progressed: true });
+  const restarted = harness(store, { bootId: "boot-uncertain" });
+  await restarted.registry.recover();
+  const run = (await restarted.registry.list()).runs[0];
+  assertEquals(run.phase, "paused-side-effect-uncertain");
+  assertEquals(run.pause.kind, "side-effect-uncertain");
+  assertEquals(run.pause.requiresOwnerDecision, true);
+  assertEquals("recoverable" in run.pause, false);
+  assertEquals(run.pause.automaticRetry, false);
+});
+
+Deno.test("durable runs: cancellation wins a prepared resume before dispatch activation", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  const restarted = harness(store, { bootId: "boot-cancel-resume" });
+  await restarted.registry.recover();
+  const prepared = await restarted.registry.resumeAfterInterruption(executionId);
+  await restarted.registry.cancel(executionId);
+  const activation = await restarted.registry.activateResume(executionId, prepared.token, prepared.resumeRequest.providerBinding);
+  assertEquals(activation.error, "cancelled_requires_new_run");
+  assertEquals((await restarted.registry.list()).runs[0].phase, "cancelled");
+});
+
+Deno.test("durable runs: large recoverable requests are chunked outside the public record", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const large = "x".repeat(180_000);
+  await registry.start({
+    executionId,
+    taskPreview: "large attachment",
+    journalTarget: "master",
+    resumeRequest: { id: "large", task: "large attachment", attachments: [{ dataURL: large }], memoryOrigin: "master" },
+  });
+  const publicRun = (await registry.list()).runs[0];
+  assertEquals(publicRun.resumeAvailable, true);
+  assertEquals("resumeRequest" in publicRun, false);
+  assert((await store.keys()).filter((key) => key.startsWith(`run-resume:${executionId}:`)).length >= 4);
+  await registry.appendLog(executionId, { type: "tool-result", result: large }, "large-result");
+  const retained = await registry.listLogs(executionId);
+  assertEquals(retained.find((row) => row.idempotencyKey === "large-result").payload.result.length, large.length);
+  const restarted = harness(store, { bootId: "boot-large" });
+  await restarted.registry.recover();
+  const resumed = await restarted.registry.resumeAfterInterruption(executionId);
+  assertEquals(resumed.resumeRequest.attachments[0].dataURL.length, large.length);
+  const mismatch = await restarted.registry.activateResume(executionId, resumed.token, { ...resumed.resumeRequest.providerBinding, model: "switched" });
+  assertEquals(mismatch.error, "provider_identity_changed");
+  assertEquals(mismatch.run.phase, "paused-provider-change");
+});
+
+Deno.test("durable runs: terminal results retain full bytes beyond bounded journal previews", async () => {
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  const full = "result-".repeat(20_000);
+  await run.registry.settle(executionId, { ok: true, result: full, logicalId: "task-full" });
+  const logs = await run.registry.listLogs(executionId);
+  const terminal = logs.find((row) => row.type === "terminal");
+  assertEquals(terminal.payload.result.length, full.length);
+  assert(run.journal[0].result.length < full.length, "compatibility journal remains a bounded preview");
+});
+
+Deno.test("durable runs: retain-all logs survive restart; legacy metadata migrates and unknown future policy fails closed", async () => {
+  const store = new FakeStore();
+  const first = harness(store);
+  await begin(first.registry);
+  await first.registry.appendLog(executionId, { type: "tool-call", tool: "one" }, "call-1");
+  await first.registry.appendLog(executionId, { type: "tool-result", result: "kept" }, "result-1");
+  const restarted = harness(store, { bootId: "boot-b" });
+  assertEquals((await restarted.registry.listLogs(executionId)).length, 3); // accepted + two rows
+
+  const legacy = await store.get(`run:${executionId}`);
+  delete legacy.retentionPolicyVersion;
+  delete legacy.retentionMigration;
+  await store.setTrusted(`run:${executionId}`, legacy);
+  const migrated = (await restarted.registry.list()).runs[0];
+  assertEquals(migrated.retentionPolicyVersion, "run-retention-v1");
+  assertEquals(migrated.retentionMigration.from, "legacy-unversioned");
+  assertEquals((await restarted.registry.listLogs(executionId)).length, 3);
+
+  const unknown = await store.get(`run:${executionId}`);
+  unknown.retentionPolicyVersion = "run-retention-v999";
+  await store.setTrusted(`run:${executionId}`, unknown);
+  await assertRejects(() => restarted.registry.list(), Error, "unknown durable run retention policy");
+});
+
+Deno.test("durable runs: retain-all does not truncate or evict beyond the former 200-record cap", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  for (let index = 0; index < 205; index += 1) {
+    await registry.start({ executionId: `exec_retain_${String(index).padStart(4, "0")}`, taskPreview: `run ${index}`, journalTarget: "master" });
+  }
+  const snapshot = await registry.list();
+  assertEquals(snapshot.runs.length, 205);
+  assertEquals((await store.get("run-registry")).length, 205);
+});
+
+Deno.test("durable runs: quota rejection preserves all old logs and leaves no stranded run", async () => {
+  class QuotaStore extends FakeStore {
+    failKey = null;
+    async setTrusted(key, value) {
+      if (key === this.failKey) throw new Error("quota exceeded");
+      return await super.setTrusted(key, value);
+    }
+  }
+  const store = new QuotaStore();
+  const registry = harness(store).registry;
+  await begin(registry);
+  await registry.appendLog(executionId, { type: "tool-result", result: "old retained" }, "old-log");
+  const oldKeys = (await store.keys()).filter((key) => key.includes(executionId)).sort();
+  store.failKey = "run-log:exec_quota_new1:accepted";
+  await assertRejects(() => registry.start({ executionId: "exec_quota_new1", taskPreview: "new", journalTarget: "master", resumeRequest: { task: "new" } }), Error, "quota exceeded");
+  const ids = await store.get("run-registry");
+  assertEquals(ids.includes("exec_quota_new1"), false);
+  assertEquals((await store.keys()).filter((key) => key.includes("exec_quota_new1")), [], "failed start leaves zero run/resume/log/payload/outbox keys");
+  assertEquals((await store.keys()).filter((key) => key.includes(executionId)).sort(), oldKeys);
+  assertEquals((await registry.listLogs(executionId)).some((row) => row.result === "old retained"), true);
+});
+
+Deno.test("durable runs: service worker exposes owner-only cancel/resume/log routes and permission event recovery", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(source.includes('async "run.cancel"(m, context)'));
+  assert(source.includes('error: "cancelled_requires_new_run"'));
+  assert(source.includes('async "run.logs"(m, context)'));
+  assert(source.includes("chrome.permissions?.onAdded?.addListener"));
+  assert(source.includes("resumeInterruptedRuns"));
+  assert(source.includes("onAuthorityPersisted"));
+  assert(source.includes("const abort = durableRunAborters.get(executionId)"));
+  assert(source.includes("failResumeDispatch"));
+  assert(source.includes("providerResumeIdentity"));
+  const conversation = await Deno.readTextFile(new URL("../extension/shared/conversation.js", import.meta.url));
+  assert(conversation.includes("export async function cancelDurableRun"));
+  assert(conversation.includes("export async function resumePermissionPausedRun"));
+  assert(conversation.includes("export async function loadDurableRunLogs"));
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assert(ntp.includes("subscribeRunRegistry"));
+  assert(ntp.includes('addEventListener("run-cancel"'));
+  assert(ntp.includes('addEventListener("run-resume"'));
+  assert(ntp.includes('addEventListener("run-logs"'));
+});

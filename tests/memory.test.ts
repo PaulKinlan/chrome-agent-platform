@@ -6,7 +6,7 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { masterMemory, saveScreenshot, listScreenshots, journalAppend, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds } from "../extension/lib/memory.js";
+import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds } from "../extension/lib/memory.js";
 
 // ---- minimal in-memory OPFS fake ----
 // A directory tree: { kind, children: Map<name, node>, content?: string }
@@ -132,6 +132,28 @@ Deno.test("memory.has distinguishes a stored null from an absent key (round-22 n
   assertEquals(await mem.has(key), false, "deleted key must report has=false");
 });
 
+Deno.test("journalAppendOnce commits exactly one terminal row per immutable executionId", async () => {
+  const mem = masterMemory();
+  await mem.delete("journal");
+  await journalAppendOnce(mem, { type: "result", executionId: "exec-journal-001", result: "first" });
+  await journalAppendOnce(mem, { type: "result", executionId: "exec-journal-001", result: "duplicate" });
+  const rows = await mem.get("journal");
+  assertEquals(rows.filter((row) => row.executionId === "exec-journal-001").length, 1);
+  assertEquals(rows[0].result, "first");
+});
+
+Deno.test("journalCommitCancellation replaces a partial result with one cancellation row", async () => {
+  const mem = masterMemory();
+  await mem.delete("journal");
+  await journalAppendOnce(mem, { type: "result", executionId: "exec-cancel-001", result: "partial" });
+  await journalCommitCancellation(mem, { result: "Run cancelled by owner" }, "exec-cancel-001");
+  await journalCommitCancellation(mem, { result: "Run cancelled by owner" }, "exec-cancel-001");
+  const rows = await mem.get("journal");
+  assertEquals(rows.filter((row) => row.executionId === "exec-cancel-001").length, 1);
+  assertEquals(rows[0].type, "cancelled");
+  assertEquals(rows[0].cancelled, true);
+});
+
 Deno.test("journalAppend compensation restores the EXACT pre-append state at the 500-entry cap (round-23)", async () => {
   const mem = masterMemory();
   // Seed a FULL 500-entry journal so the append would evict old-0 via the ring cap.
@@ -242,7 +264,7 @@ Deno.test("compareAndSet does NOT recreate a directory on a mismatched CAS (roun
   assertEquals(await mem.has("never-written-key"), false, "no key must materialize");
 });
 
-Deno.test("thread authority keys are reserved from the model's memory_set (wider-goal)", async () => {
+Deno.test("thread and durable-run authority keys are reserved from the model's memory_set", async () => {
   const mem = masterMemory();
   // The model's `set` (not trusted) must reject the thread index AND any
   // `thread:<id>` body — the wider-goal review forged a `threads` index through
@@ -257,6 +279,13 @@ Deno.test("thread authority keys are reserved from the model's memory_set (wider
     /reserved/,
     "a forged thread body must be rejected",
   );
+  for (const key of ["run-registry", "run:exec_forged", "run-outbox:exec_forged", "run-log:exec_forged:row", "run-resume:exec_forged:manifest", "run-payload:exec_forged:manifest"]) {
+    await assertRejects(
+      () => mem.set(key, { phase: "terminal" }),
+      /reserved/,
+      `a forged ${key} authority value must be rejected`,
+    );
+  }
   // Internal TRUSTED writes still work (the thread module uses setTrusted).
   const version = await mem.setTrusted("threads", [{ id: "t_ok", name: "ok" }]);
   assert(typeof version === "number" && version > 0, "trusted write must return a version");
@@ -292,6 +321,70 @@ Deno.test("backgroundAgentMemory + namedAgentMemory are isolated from masterMemo
 // `activity.list` can aggregate their journals. Writes create the directories;
 // the lister then enumerates only REAL directories (never forges a worker from a
 // stale dir — but does surface one that actually has data).
+Deno.test("journal quota receipt restores absent vs empty and is idempotent", async () => {
+  const mem = masterMemory();
+  await mem.delete("journal");
+  const absent = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_absent", task: "x" });
+  assertEquals(absent.preState.exists, false);
+  assertEquals(absent.executionId, "exec_receipt_absent");
+  assertEquals((await journalCompensateExecution(mem, absent)).ok, true);
+  assertEquals(await mem.has("journal"), false);
+  assertEquals((await journalCompensateExecution(mem, absent)).idempotent, true);
+
+  await mem.setTrusted("journal", []);
+  const empty = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_empty", task: "x" });
+  assertEquals(empty.preState.exists, true);
+  assertEquals(empty.preState.value, []);
+  assertEquals((await journalCompensateExecution(mem, empty)).ok, true);
+  assertEquals(await mem.has("journal"), true);
+  assertEquals(await mem.get("journal"), []);
+});
+
+Deno.test("journal quota compensation removes task/prompt rows and preserves foreign append + ring eviction", async () => {
+  const mem = masterMemory();
+  const seed = Array.from({ length: 500 }, (_, i) => ({ ts: i, type: "history", id: `old-${i}` }));
+  await mem.setTrusted("journal", seed);
+  const receipt = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_rows", task: "x" });
+  await journalAppend(mem, { type: "prompt-attestation", executionId: "exec_receipt_rows", receipt: "opaque" });
+  await journalAppend(mem, { type: "progress", executionId: "exec_receipt_rows", phase: "starting" });
+  await journalAppend(mem, { type: "foreign", executionId: "exec_foreign_later", value: 7 });
+  const result = await journalCompensateExecution(mem, receipt);
+  assertEquals(result.ok, true);
+  const rows = await mem.get("journal");
+  assertEquals(rows.some((row) => row.executionId === "exec_receipt_rows"), false);
+  assertEquals(rows.at(-1).executionId, "exec_foreign_later");
+  assertEquals(rows.length, 500);
+  assertEquals(rows[0].id, "old-1", "target eviction is restored; only the foreign append evicts old-0");
+});
+
+Deno.test("journal quota compensation fails closed on ABA and generation mismatch", async () => {
+  const mem = masterMemory();
+  await mem.setTrusted("journal", [{ type: "history", id: "keep" }]);
+  const receipt = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_aba", task: "x" });
+  await mem.setTrusted("journal", receipt.postState); // identical-value ABA, newer token
+  const aba = await journalCompensateExecution(mem, receipt);
+  assertEquals(aba.reason, "journal_version_mismatch");
+  assertEquals((await mem.get("journal")).some((row) => row.executionId === receipt.executionId), true);
+
+  const fenced = await journalAppendWithReceipt(mem, { type: "task", executionId: "exec_receipt_generation", task: "x" });
+  const generation = await journalCompensateExecution(mem, fenced, async () => {
+    throw Object.assign(new Error("re-enrolled"), { genMismatch: true });
+  });
+  assertEquals(generation.reason, "generation_mismatch");
+  assertEquals((await mem.get("journal")).some((row) => row.executionId === fenced.executionId), true);
+});
+
+Deno.test("deleted key versions remain monotonic across absent ABA", async () => {
+  const mem = masterMemory();
+  const first = await mem.setTrusted("aba-delete", { same: true });
+  assertEquals(await mem.compareAndDelete("aba-delete", first), true);
+  const absentVersion = await mem.getVersion("aba-delete");
+  assert(absentVersion > first);
+  const recreated = await mem.setTrusted("aba-delete", { same: true });
+  assert(recreated > absentVersion);
+  assertEquals(await mem.compareAndDelete("aba-delete", first), false, "stale pre-delete token cannot delete recreation");
+});
+
 Deno.test("listNamedAgentIds + listBackgroundAgentIds enumerate the per-agent sandboxes", async () => {
   await journalAppend(namedAgentMemory("paul"), { type: "task", id: "t1", task: "hello" });
   await journalAppend(namedAgentMemory("reader"), { type: "result", id: "t2", result: "ok" });

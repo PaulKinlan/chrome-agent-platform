@@ -231,19 +231,21 @@ export async function providerRunGate(cfg) {
   // Local providers (demo + Prompt API) never fetch a remote origin — they
   // must not be gated by a host permission (or a stale baseURL inherited from
   // a previously-selected network provider).
-  if (isLocalProvider(cfg)) return { ok: true, reason: "" };
+  if (isLocalProvider(cfg)) return { ok: true, reason: "", code: "ready" };
   if (providerBreakerOpen()) {
-    return { ok: false, reason: `provider is temporarily unavailable (${lastReason || "recent failures"}) — paused, will retry automatically` };
+    return { ok: false, code: "provider_temporarily_unavailable", reason: `provider is temporarily unavailable (${lastReason || "recent failures"}) — paused, will retry automatically` };
   }
   const hasHost = await hasProviderHostAccess(cfg);
   if (!hasHost) {
     const pattern = providerOriginPattern(cfg);
     return {
       ok: false,
+      code: "permission_required",
+      requestedScope: pattern ?? null,
       reason: `network access to the provider (${pattern ?? cfg?.baseURL ?? "unknown"}) is not granted — click "Use"/"Test connection" in Settings to grant it`,
     };
   }
-  return { ok: true, reason: "" };
+  return { ok: true, reason: "", code: "ready" };
 }
 
 /** A clear, user-facing run refusal (the gate or a config problem). */

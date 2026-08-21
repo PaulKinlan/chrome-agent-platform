@@ -6,6 +6,10 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 ## Open
 
+### Live durable Tasks sidebar and terminal owner-thread projection (2026-08-21 — accepted for integration)
+- Thread-bound durable revisions trigger authoritative `thread.list` replacement while active; terminal/cancelled owner revisions trigger one authoritative `thread.get` replacement. Native click/keyboard behavior, unique rows/results, stale-surface fencing, and prior-row preservation on transient MV3 startup failure remain intact.
+- Exact source `dd41258f` / tree `80ca97f0` passed independent source review and exact 7/7 loaded-extension proof. The accepted sequence visibly retains the same native Tasks row, terminal result, registry identity, and logs after hard reload (`07-reload-persistence.png`). This is Durable-lane integration evidence, not whole-product acceptance; independent current-main integration review remains open.
+
 ### Permission preflight (Paul 2026-08-19 — presentation-critical)
 - Recovery is PARTIAL: unsafe async grant/retry behavior was removed and missing exact provider access now pauses truthfully before execution, but the reusable owner-button preflight and its loaded-MV3/a11y/visual acceptance remain open. Settings is currently the only genuine provider grant surface.
 

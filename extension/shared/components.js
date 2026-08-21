@@ -5181,6 +5181,116 @@ class SystemPromptEditor extends Component {
 }
 customElements.define("system-prompt-editor", SystemPromptEditor);
 
+export function durableRunActionsForPhase(phase) {
+  return {
+    cancel: ["running", "settling", "paused-permission", "paused-interruption", "paused-side-effect-uncertain", "paused-provider-change", "resume-dispatching"].includes(phase),
+    resume: ["paused-permission", "paused-provider-change", "paused-side-effect-uncertain"].includes(phase),
+    logs: true,
+  };
+}
+
+export function durableCancelConfirmationText(run) {
+  const context = String(run?.taskPreview || run?.agentId || run?.kind || "run").slice(0, 120);
+  return `Cancel ${context}? This is terminal: the run will not restart automatically. Retained logs will remain available.`;
+}
+
+/* <durable-run-registry> — owner-visible retained run controls. Data is set
+ * through `.runs`; actions are native buttons and emit exact-ID events with a
+ * completion callback so pending/error/live state remains inside the component. */
+class DurableRunRegistry extends Component {
+  constructor() {
+    super();
+    this._runs = [];
+    this._pending = new Set();
+    this._logs = new Map();
+    this._message = "";
+    this._error = "";
+  }
+  set runs(value) { this._runs = Array.isArray(value) ? structuredClone(value) : []; this._render(); this._wire(); }
+  get runs() { return structuredClone(this._runs); }
+  setLogs(executionId, logs) { this._logs.set(executionId, Array.isArray(logs) ? structuredClone(logs) : []); this._render(); this._wire(); }
+  _context(run) { return String(run.taskPreview || run.agentId || run.kind || "run").slice(0, 120); }
+  _cancellable(phase) { return durableRunActionsForPhase(phase).cancel; }
+  _resumable(phase) { return durableRunActionsForPhase(phase).resume; }
+  _confirmCancel(run) { return globalThis.confirm?.(durableCancelConfirmationText(run)) === true; }
+  _complete(executionId, action, result) {
+    this._pending.delete(executionId);
+    const ok = result?.ok === true || result?.cancelled === true;
+    this._message = ok ? `${action} succeeded for ${this._context(this._runs.find((run) => run.executionId === executionId) || {})}.` : "";
+    this._error = ok ? "" : String(result?.error || `${action} failed`);
+    if (action === "View logs" && ok) this._logs.set(executionId, result.logs || []);
+    this._render(); this._wire();
+  }
+  _emitAction(type, run, action) {
+    if (this._pending.has(run.executionId)) return;
+    this._pending.add(run.executionId);
+    this._message = `${action} pending for ${this._context(run)}.`;
+    this._error = "";
+    this._render(); this._wire();
+    this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true, detail: {
+      executionId: run.executionId,
+      ownerConfirmed: type === "run-resume" && ["paused-side-effect-uncertain", "paused-provider-change"].includes(run.phase),
+      complete: (result) => this._complete(run.executionId, action, result),
+    } }));
+  }
+  _render() {
+    const items = this._runs.map((run, index) => {
+      const context = this._context(run);
+      const descriptionId = `durable-run-${index}-description`;
+      const pending = this._pending.has(run.executionId);
+      const logs = this._logs.get(run.executionId);
+      return `<li class="run" data-execution-id="${escapeHtml(run.executionId)}" ${pending ? 'aria-busy="true"' : ""}>
+        <div class="summary"><strong>${escapeHtml(context)}</strong><span class="phase">${escapeHtml(run.phase || "unknown")}</span></div>
+        <p class="description" id="${descriptionId}">Execution ${escapeHtml(run.executionId)}. ${escapeHtml(run.pause?.reason || run.terminal?.summary || "Retained run history.")}</p>
+        <div class="actions">
+          ${this._cancellable(run.phase) ? `<button type="button" data-action="cancel" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>Cancel ${escapeHtml(context)}</button>` : ""}
+          ${this._resumable(run.phase) ? `<button type="button" data-action="resume" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>${run.phase === "paused-side-effect-uncertain" ? "Retry" : "Resume"} ${escapeHtml(context)}</button>` : ""}
+          <button type="button" data-action="logs" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>View logs for ${escapeHtml(context)}</button>
+        </div>
+        ${logs ? `<pre class="logs" tabindex="0" aria-label="Retained logs for ${escapeHtml(context)}">${escapeHtml(JSON.stringify(logs, null, 2))}</pre>` : ""}
+      </li>`;
+    }).join("");
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:0; }
+      .heading { margin:0 0 .5rem; font-size:1rem; color:var(--ink,#1d1b18); }
+      ul { list-style:none; margin:0; padding:0; display:grid; gap:.625rem; }
+      .run { min-inline-size:0; padding:.75rem; border:1px solid var(--border,#e3e0d9); border-radius:.75rem; background:var(--panel,#fff); }
+      .summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:.375rem .75rem; min-inline-size:0; }
+      strong { overflow-wrap:anywhere; }
+      .phase { color:var(--muted,#635e56); font-size:.8125rem; }
+      .description { margin:.375rem 0; color:var(--muted,#635e56); font-size:.8125rem; overflow-wrap:anywhere; }
+      .actions { display:flex; flex-wrap:wrap; gap:.5rem; }
+      button { min-block-size:2.25rem; max-inline-size:100%; padding:.4rem .75rem; border:1px solid var(--border,#e3e0d9); border-radius:.5rem; background:var(--panel,#fff); color:var(--ink,#1d1b18); font:inherit; cursor:pointer; overflow-wrap:anywhere; }
+      button[data-action="cancel"] { color:var(--danger,#b3261e); }
+      button:hover:not(:disabled) { border-color:var(--accent,#0e6e63); }
+      button:focus-visible, .logs:focus-visible { outline:.1875rem solid var(--accent,#0e6e63); outline-offset:.125rem; }
+      button:disabled { cursor:wait; opacity:.6; }
+      .logs { max-block-size:14rem; overflow:auto; margin:.625rem 0 0; padding:.625rem; border-radius:.5rem; background:var(--panel-2,#efede8); white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; }
+      .status { min-block-size:1.25rem; margin:.5rem 0 0; color:var(--muted,#635e56); }
+      .error { color:var(--danger,#b3261e); }
+    `, `<section><h2 class="heading">Run history and controls</h2><ul role="list">${items || '<li class="description">No retained runs yet.</li>'}</ul><p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
+  }
+  _wire() {
+    for (const button of this._root.querySelectorAll("button[data-action]")) {
+      button.addEventListener("click", () => {
+        const row = button.closest(".run");
+        const run = this._runs.find((item) => item.executionId === row?.dataset.executionId);
+        if (!run) return;
+        const action = button.dataset.action;
+        if (action === "cancel") {
+          if (!this._confirmCancel(run)) return;
+          this._emitAction("run-cancel", run, "Cancel");
+        } else if (action === "resume") {
+          if (run.phase === "paused-side-effect-uncertain" && globalThis.confirm?.(`Retry ${this._context(run)}? A previous side effect may have completed, so retrying can repeat it.`) !== true) return;
+          if (run.phase === "paused-provider-change" && globalThis.confirm?.(`Resume ${this._context(run)} with the newly selected provider? The original provider identity is no longer active.`) !== true) return;
+          this._emitAction("run-resume", run, "Resume");
+        } else this._emitAction("run-logs", run, "View logs");
+      });
+    }
+  }
+}
+customElements.define("durable-run-registry", DurableRunRegistry);
+
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs
  * showcase both call this.
