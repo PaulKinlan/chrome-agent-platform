@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.123] — 2026-08-21
+- fix(tasks): execute streamed tool calls mislabeled as stop (CAP-FB-20260821-LIVE-TOOL-PROJECTION-01)
+
 ## [0.2.122] — 2026-08-21
 - fix(tasks): scope run controls to active conversation (CAP-FB-20260821-TASK-RUN-SCOPE-01)
 

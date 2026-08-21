@@ -9,6 +9,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { wrapLanguageModel } from "ai";
 import { normaliseModelId } from "./model-name.js";
 import { thoughtSignatureMiddleware } from "./thought-signature-middleware.js";
+import { toolCallFinishMiddleware } from "./tool-call-finish-middleware.js";
 import { safeProviderError } from "../pure.js";
 
 // A single, deduped per-(url,status) log so a failing provider logs its HTTP
@@ -87,6 +88,9 @@ export function createOpenAICompatibleModel(config) {
   // providerOptions.google — patch that mismatch so tool calls don't 400.
   return wrapLanguageModel({
     model: provider,
-    middleware: thoughtSignatureMiddleware(),
+    middleware: [
+      thoughtSignatureMiddleware(),
+      toolCallFinishMiddleware(),
+    ],
   });
 }
