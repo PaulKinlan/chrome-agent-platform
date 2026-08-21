@@ -52,6 +52,26 @@ const MAX_KEYS_PER_ORIGIN = 500;
 const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024; // 8 MiB per origin
 const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
 
+// Durable execution authority is not model memory. Older builds stored every
+// `run:*`/log/outbox/payload file beside owner keys in `memory/master`, so the
+// 500-key safety bound was eventually consumed by retained execution history.
+// Keep the constitutional bounds unchanged while isolating each execution in
+// its own bounded store. The registry is a separate one-key store.
+const DURABLE_ROOT = "durable-runs";
+const DURABLE_INDEX_KEY = "run-registry";
+const DURABLE_PREFIXES = ["run:", "run-outbox:", "run-log:", "run-resume:", "run-payload:"];
+const EXECUTION_ID_SOURCE = "(?:exec:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|exec_[A-Za-z0-9][A-Za-z0-9_-]{7,194})";
+const DURABLE_KEY_RE = new RegExp(`^(?:run|run-outbox|run-log|run-resume|run-payload):(${EXECUTION_ID_SOURCE})(?::|$)`, "i");
+
+export class MemoryStoreQuotaError extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.name = "MemoryStoreQuotaError";
+    this.code = kind === "key-count" ? "memory_key_count_bound" : `memory_${kind}_bound`;
+    this.kind = kind;
+  }
+}
+
 /** Canonicalize an origin string (https://example.com:443 → https://example.com). */
 export function canonicalOrigin(value) {
   try {
@@ -291,7 +311,10 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // replacement that enlarges an existing value must also be budgeted (the
   // round-16 finding: the global limit was only checked for new keys).
   if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
-    throw new Error(`key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`);
+    throw new MemoryStoreQuotaError(
+      "key-count",
+      `key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`,
+    );
   }
   const delta = newBytes - oldBytes;
   if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
@@ -507,6 +530,138 @@ export function backgroundAgentMemory(id) {
   const slug = String(id || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed-background";
   const path = [ROOT, "background", encodeURIComponent(slug)];
   return memoryStoreAt(path, { isMaster: false, origin: `background:${slug}` });
+}
+
+function durableExecutionId(key) {
+  if (String(key) === DURABLE_INDEX_KEY) return null;
+  return DURABLE_KEY_RE.exec(String(key))?.[1] ?? null;
+}
+
+function isLegacyDurableKey(key) {
+  const value = String(key);
+  return value === DURABLE_INDEX_KEY || DURABLE_PREFIXES.some((prefix) => value.startsWith(prefix));
+}
+
+function durableStoreForKey(key) {
+  if (String(key) === DURABLE_INDEX_KEY) {
+    return memoryStoreAt([ROOT, DURABLE_ROOT, "registry"], { isMaster: false, origin: "durable:registry" });
+  }
+  const executionId = durableExecutionId(key);
+  if (!executionId) throw new Error(`invalid durable-run key: ${String(key)}`);
+  return memoryStoreAt(
+    [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(executionId)],
+    { isMaster: false, origin: `durable:${executionId}` },
+  );
+}
+
+async function durableExecutionStores() {
+  const root = await openDirOptional([ROOT, DURABLE_ROOT, "executions"]);
+  if (!root) return [];
+  const stores = [];
+  for await (const [leaf, handle] of root.entries()) {
+    if (handle.kind !== "directory") continue;
+    let executionId;
+    try { executionId = decodeURIComponent(leaf); } catch { continue; }
+    if (!new RegExp(`^${EXECUTION_ID_SOURCE}$`, "i").test(executionId)) continue;
+    stores.push(memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "executions", leaf],
+      { isMaster: false, origin: `durable:${executionId}` },
+    ));
+  }
+  return stores;
+}
+
+async function migrateLegacyDurableKey(key) {
+  const legacy = masterMemory();
+  const target = durableStoreForKey(key);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const source = await legacy.snapshot(key);
+    if (!source.exists) return { key, migrated: false, absent: true };
+    const existing = await target.snapshot(key);
+    if (!existing.exists || JSON.stringify(existing.value) !== JSON.stringify(source.value)) {
+      await target.setTrusted(key, source.value);
+    }
+    const verified = await target.snapshot(key);
+    if (!verified.exists || JSON.stringify(verified.value) !== JSON.stringify(source.value)) {
+      throw new Error(`durable migration verification failed for ${key}`);
+    }
+    if (await legacy.compareAndDelete(key, source.version)) {
+      return { key, migrated: true };
+    }
+    // A concurrent legacy update won the CAS. Re-copy its newer value; never
+    // delete authority that was not exactly the value we verified.
+  }
+  throw new Error(`durable migration did not converge for ${key}`);
+}
+
+/** Copy-verify-delete migration for pre-isolation durable authority. Owner/model
+ * keys are never selected or removed. It is idempotent across worker death: a
+ * copied-but-not-deleted key is verified again, while a deleted source simply
+ * becomes a no-op. */
+export async function migrateLegacyDurableRunMemory() {
+  const legacy = masterMemory();
+  const keys = (await legacy.keys()).filter(isLegacyDurableKey);
+  let migrated = 0;
+  // Move execution bodies before the registry pointer. Reads remain dual-store
+  // throughout, so interruption at any key boundary is safe.
+  keys.sort((a, b) => Number(a === DURABLE_INDEX_KEY) - Number(b === DURABLE_INDEX_KEY));
+  for (const key of keys) {
+    const result = await migrateLegacyDurableKey(key);
+    if (result.migrated) migrated += 1;
+  }
+  return { migrated, retained: keys.length };
+}
+
+/** Durable-run key/value adapter. New authority is routed to one bounded store
+ * per execution; legacy master values remain readable until the idempotent boot
+ * migration copy-verifies and removes them. */
+export function durableRunMemory() {
+  const legacy = masterMemory();
+  async function selected(key) {
+    const target = durableStoreForKey(key);
+    if (await target.has(key)) return target;
+    if (await legacy.has(key)) return legacy;
+    return target;
+  }
+  return {
+    isMaster: false,
+    origin: "durable-runs",
+    async get(key) { return await (await selected(key)).get(key); },
+    async has(key) { return await (await selected(key)).has(key); },
+    async snapshot(key) { return await (await selected(key)).snapshot(key); },
+    async getVersion(key) { return await (await selected(key)).getVersion(key); },
+    async set(key, value) { return await durableStoreForKey(key).set(key, value); },
+    async setTrusted(key, value) {
+      const store = await selected(key);
+      return await store.setTrusted(key, value);
+    },
+    async compareAndDelete(key, expectedVersion) {
+      return await (await selected(key)).compareAndDelete(key, expectedVersion);
+    },
+    async compareAndRestore(key, expectedVersion, value) {
+      return await (await selected(key)).compareAndRestore(key, expectedVersion, value);
+    },
+    async delete(key) {
+      const target = durableStoreForKey(key);
+      await target.delete(key);
+      // Cleanup can safely remove an interrupted migration's legacy duplicate.
+      if (await legacy.has(key)) await legacy.delete(key);
+    },
+    async keys() {
+      const keys = new Set();
+      const registry = durableStoreForKey(DURABLE_INDEX_KEY);
+      for (const key of await registry.keys()) keys.add(key);
+      for (const store of await durableExecutionStores()) {
+        for (const key of await store.keys()) keys.add(key);
+      }
+      for (const key of await legacy.keys()) if (isLegacyDurableKey(key)) keys.add(key);
+      return [...keys].sort();
+    },
+    async clear() {
+      const parent = await openDir([ROOT]);
+      try { await parent.removeEntry(DURABLE_ROOT, { recursive: true }); } catch { /* absent */ }
+    },
+  };
 }
 
 /** Enumerate the named-agent ids that have an OPFS sandbox directory. (Read-only

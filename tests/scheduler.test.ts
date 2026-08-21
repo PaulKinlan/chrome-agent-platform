@@ -6,20 +6,21 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { INFLIGHT_LEASE_MS } from "../extension/lib/scheduler.js";
 import { freshScheduler } from "./test-hooks.js";
+import { isMemoryKeyQuotaError } from "../extension/lib/storage-errors.js";
 
 // Module isolation: scheduler.js owns `activeRuns` + `BOOT_AT` in CLOSURE, so a
 // simulated worker restart is a FRESH module instance (cache-busted), not a
 // mutation of shipped state. The functions below are re-bound to the fresh
 // instance's exports by initScheduler(), so bare references stay stable across
 // the mid-test `await initScheduler()` restarts.
-let cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
-  markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight,
+let blockScheduledTaskForStorage, cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
+  markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight, retryScheduledTask,
   scheduleTask, tryAcquireInflight;
 async function initScheduler() {
   const m = await freshScheduler();
   ({
-    cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
-    markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight,
+    blockScheduledTaskForStorage, cancelScheduledTask, clearStaleInflight, heartbeatInflight, listScheduledTasks,
+    markScheduledDone, ownsInflight, reconcileScheduledTasks, releaseInflight, retryScheduledTask,
     scheduleTask, tryAcquireInflight,
   } = m);
 }
@@ -757,6 +758,97 @@ Deno.test("cancelScheduledTask aborts a live same-boot run + reports pending unt
     chrome.alarms.clear = origClear;
     chrome.alarms.get = origGet;
     await releaseInflight("task_running", lock.token);
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("memory key quota classification is exact and follows bounded causes", async () => {
+  const quota = Object.assign(new Error("key count exceeds the 500-key bound"), { code: "memory_key_count_bound" });
+  assertEquals(isMemoryKeyQuotaError(new Error("tool failed", { cause: quota })), true);
+  assertEquals(isMemoryKeyQuotaError(new Error("provider quota exceeded")), false);
+  assertEquals(isMemoryKeyQuotaError(new Error("key count exceeds the 499-key bound")), false);
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes("if (isMemoryKeyQuotaError(e))"));
+  assert(sw.includes("blockScheduledTaskForStorage(alarm.name, e)"));
+  assert(sw.indexOf("if (isMemoryKeyQuotaError(e))") < sw.indexOf("else if (isProviderError(e))"));
+  assert(sw.includes("if (task.storageBlocked) return;"), "stale alarm delivery is silent");
+});
+
+Deno.test("storage quota circuit breaker disarms and surfaces a periodic task exactly once", async () => {
+  await chrome.storage.local.set({
+    "cap:scheduledTasks": {
+      "recipe:dedupe-tabs": {
+        name: "recipe:dedupe-tabs",
+        task: "dedupe tabs",
+        at: Date.now() + 60_000,
+        periodInMinutes: 30,
+      },
+    },
+  });
+  let clears = 0;
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  chrome.alarms.clear = async () => { clears += 1; return true; };
+  chrome.alarms.get = async () => undefined;
+  try {
+    const first = await blockScheduledTaskForStorage(
+      "recipe:dedupe-tabs",
+      Object.assign(new Error("key count exceeds the 500-key bound"), { code: "memory_key_count_bound" }),
+    );
+    const duplicate = await blockScheduledTaskForStorage(
+      "recipe:dedupe-tabs",
+      new Error("key count exceeds the 500-key bound"),
+    );
+    assertEquals(first.newlyBlocked, true);
+    assertEquals(first.alarmAbsent, true);
+    assertEquals(duplicate.newlyBlocked, false);
+    assertEquals(clears, 1, "repeated failure delivery cannot clear/log hundreds of times");
+    const [task] = await listScheduledTasks();
+    assertEquals(task.storageBlocked, true);
+    assertEquals(task.storageError.code, "memory_key_count_bound");
+    assert(task.remediation.includes("Retry"));
+    await reconcileScheduledTasks();
+    assertEquals(clears, 1, "reconciliation never rearms or mutates a blocked task");
+  } finally {
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
+    await chrome.storage.local.set({ "cap:scheduledTasks": {} });
+  }
+});
+
+Deno.test("owner retry clears storage-blocked state and rearms the same logical task", async () => {
+  const origCreate = chrome.alarms.create;
+  const origClear = chrome.alarms.clear;
+  const origGet = chrome.alarms.get;
+  const created = [];
+  chrome.alarms.create = async (name, info) => { created.push({ name, info }); };
+  chrome.alarms.clear = async () => true;
+  chrome.alarms.get = async () => undefined;
+  try {
+    await chrome.storage.local.set({
+      "cap:scheduledTasks": {
+        "recipe:dedupe-tabs": {
+          name: "recipe:dedupe-tabs",
+          task: "dedupe tabs",
+          at: Date.now() - 1000,
+          periodInMinutes: 30,
+          storageBlocked: true,
+          storageBlockedAt: Date.now(),
+          storageError: { code: "memory_key_count_bound" },
+        },
+      },
+    });
+    const result = await retryScheduledTask("recipe:dedupe-tabs");
+    assertEquals(result.ok, true);
+    assertEquals(created.length, 1);
+    assertEquals(created[0].name, "recipe:dedupe-tabs");
+    const [task] = await listScheduledTasks();
+    assertEquals(task.storageBlocked, false);
+    assertEquals(task.periodInMinutes, 30);
+  } finally {
+    chrome.alarms.create = origCreate;
+    chrome.alarms.clear = origClear;
+    chrome.alarms.get = origGet;
     await chrome.storage.local.set({ "cap:scheduledTasks": {} });
   }
 });

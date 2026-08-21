@@ -293,16 +293,35 @@ async function renderTasks() {
   for (const t of tasks) {
     const row = document.createElement("task-row");
     row.setAttribute("name", t.name || "task");
-    row.setAttribute("status", t.quarantined ? "failed" : "running");
-    const when = t.periodInMinutes
-      ? `every ${t.periodInMinutes} min`
-      : (typeof t.at === "number" ? new Date(t.at).toLocaleString() : "");
+    row.setAttribute("status", (t.quarantined || t.storageBlocked) ? "failed" : "running");
+    const when = t.storageBlocked
+      ? "Storage full — retry or cancel"
+      : (t.periodInMinutes
+        ? `every ${t.periodInMinutes} min`
+        : (typeof t.at === "number" ? new Date(t.at).toLocaleString() : ""));
     if (when) row.setAttribute("time", when);
+    if (t.storageBlocked) {
+      row.setAttribute("retryable", "");
+      row.title = t.remediation || "Execution storage was full. Retry or cancel this task.";
+    }
     row.addEventListener("open", () => {
       // A recipe task belongs to its background agent — open its conversation.
       const m = /^recipe:(.+)$/.exec(String(t.name ?? ""));
       if (!m) return;
       openAgentByRef(`background:${m[1]}`);
+    });
+    row.addEventListener("retry", async () => {
+      row.removeAttribute("retryable");
+      row.setAttribute("status", "running");
+      row.setAttribute("time", "Retrying…");
+      const result = await send("task.retry", { name: t.name }).catch(() => null);
+      if (!result?.ok) {
+        row.setAttribute("status", "failed");
+        row.setAttribute("time", result?.error || "Retry failed");
+        row.setAttribute("retryable", "");
+      } else {
+        await renderTasks();
+      }
     });
     row.addEventListener("delete", async () => {
       row.setAttribute("status", "completed");

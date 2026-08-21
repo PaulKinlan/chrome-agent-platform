@@ -228,8 +228,68 @@ export async function listScheduledTasks() {
       quarantinedAt: t.quarantinedAt ?? null,
       cancelling: Boolean(t.cancelling),
       cancellingAt: t.cancellingAt ?? null,
+      storageBlocked: Boolean(t.storageBlocked),
+      storageBlockedAt: t.storageBlockedAt ?? null,
+      storageError: t.storageError ?? null,
+      remediation: t.storageBlocked
+        ? "Execution storage was full. Retry now that retained run data has been isolated, or cancel this task."
+        : null,
     }));
   });
+}
+
+/** Stop a quota-failing alarm from flooding every tick. The task stays visible
+ * and owner-controlled; no task, journal, run, or memory data is evicted. */
+export async function blockScheduledTaskForStorage(name, error) {
+  return withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    const tasks = { ...(store[TASK_KEY] ?? {}) };
+    const task = tasks[name];
+    if (!task) return { ok: false, name, error: "no such task" };
+    if (task.storageBlocked) {
+      return { ok: true, name, blocked: true, newlyBlocked: false, alarmAbsent: null };
+    }
+    const newlyBlocked = true;
+    tasks[name] = {
+      ...task,
+      storageBlocked: true,
+      storageBlockedAt: Date.now(),
+      storageError: {
+        code: "memory_key_count_bound",
+        message: "Execution storage reached its safe key limit. No owner data was removed.",
+      },
+    };
+    await kvSet({ [TASK_KEY]: tasks });
+    const alarms = alarmsApi();
+    let alarmAbsent = true;
+    if (alarms) {
+      try { await alarms.clear(name); } catch { /* get below is authority */ }
+      try { alarmAbsent = (await alarms.get(name)) == null; } catch { alarmAbsent = false; }
+    }
+    return { ok: true, name, blocked: true, newlyBlocked, alarmAbsent };
+  });
+}
+
+/** Explicit owner retry for a storage-blocked schedule. Reuses the same logical
+ * name/configuration but creates a fresh alarm after clearing blocked state. */
+export async function retryScheduledTask(name) {
+  const task = await withLock(async () => {
+    const store = await kvGet(TASK_KEY);
+    return structuredClone(store[TASK_KEY]?.[name] ?? null);
+  });
+  if (!task) return { ok: false, name, error: "no such task" };
+  if (!task.storageBlocked && !task.quarantined) {
+    return { ok: false, name, error: "task is not blocked" };
+  }
+  const scheduled = await scheduleTask({
+    name,
+    task: task.task,
+    delayMs: 1000,
+    periodInMinutes: task.periodInMinutes,
+    attachments: task.attachments ?? [],
+    scriptId: task.scriptId,
+  });
+  return { ok: true, name, retried: true, when: scheduled.when };
 }
 
 /** Authoritatively CANCEL a scheduled task (an owner-visible route for a
@@ -588,7 +648,7 @@ export async function reconcileScheduledTasks() {
     // A CANCELLING task (a cancel that failed closed because the alarm was still
     // armed) must also never be re-armed — it is cancel-pending, retryable via the
     // owner's cancel route (the round-24 fail-closed cancel blocker).
-    if (task?.quarantined || task?.cancelling) continue;
+    if (task?.quarantined || task?.cancelling || task?.storageBlocked) continue;
     if (!existing.has(name)) {
       // The alarm is missing (fired + consumed, or the worker restarted). Recreate
       // it if the task is still in the future; a past one-shot is resumable.

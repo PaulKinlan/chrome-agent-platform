@@ -12,6 +12,11 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 
 ## Open — independent architectural review (2026-08-21)
 
+### [Fixed locally; independent + loaded-MV3 gates pending] Scheduled-memory key-bound flood — `CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01`
+- Retain-all Durable authority used the same `memory/master` directory and 500-key budget as owner/model memory. After enough run records/logs/outboxes/payloads, every new scheduled admission failed and periodic alarms repeated the same console error.
+- The local successor keeps every existing quota unchanged, routes the registry and each execution into dedicated bounded stores, and copy-verifies legacy authority before removing only its exact version from master. No owner value or retained run is evicted.
+- Exact key-quota alarm failures now become one owner-visible storage-blocked task with Retry/Cancel and a disarmed alarm; stale delivery is silent. Independent review and a short loaded-extension migration/retry check remain required.
+
 An independent Claude/Opus 5 session with no prior custody reviewed exact
 `origin/main@300bea1` (`0.2.105`) by building it and driving it, not by reading trackers.
 Full rationale, evidence and the ordered work queue are in

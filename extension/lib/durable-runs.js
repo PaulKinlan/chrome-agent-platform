@@ -7,6 +7,7 @@
 
 import {
   backgroundAgentMemory,
+  durableRunMemory,
   journalAppendOnce,
   journalCommitCancellation,
   journalCompensateExecution,
@@ -106,7 +107,7 @@ function newBootId() {
  * can deterministically terminate and recreate a worker around the same store.
  */
 export function createDurableRunRegistry({
-  store = masterMemory(),
+  store = durableRunMemory(),
   now = () => Date.now(),
   bootId = newBootId(),
   resolveJournalStore = storeForTarget,

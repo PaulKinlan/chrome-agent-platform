@@ -145,6 +145,27 @@ On resume after a coordinator or worker loss:
 
 ## Active
 
+## [CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01] Scheduled runs must not exhaust owner memory or flood errors
+- Feedback: 2026-08-21 — hundreds of `handleAlarm` failures reported for one-shot and background-recipe schedules after retained durable authority consumed the master store's 500-key safety budget
+- Updated: 2026-08-21 19:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: scheduled-memory quota implementation worker
+- Workspace: active (local path private)
+- Branch: `fix/scheduled-memory-quota-flood-46a3e6d`
+- Base: `46a3e6df9a9a63e31ceb8da2fde6551f1a8eb621`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: retain the 500-key/store, 8 MiB/store, 64 MiB global and 256 KiB/value limits without eviction; isolate registry and per-execution durable authority from model-writable master memory; copy-verify-delete legacy authority idempotently without losing owner values or retained runs/logs; let new scheduled runs reach terminal state; and disarm/surface an exact key-quota failure once with owner Retry/Cancel rather than flooding every alarm tick
+- Review: independent source/security/storage review pending
+- Gates: focused migration, capacity, interruption, retain-all, scheduler circuit-breaker, retry and task-row tests; full unit/build/package/scan/security/gallery/changelog checks pending
+- Blockers: exact source review and loaded-extension migration/retry verification
+- Next: finish exact-source gates, commit, then assign an independent reviewer before a short bounded loaded-MV3 gate
+- Recover: `git log --all --oneline --grep='CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01'`
+- History:
+  - 2026-08-21 19:55 UTC — root cause identified: retained `run:*`, `run-log:*`, outbox, resume and payload authority shared `memory/master` with owner keys, so normal retain-all operation consumed the per-store key ceiling. Implementation isolates durable authority by execution while preserving every constitutional quota and adds a one-transition scheduled-task storage circuit breaker with owner retry/cancel.
+
 ## [CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01] Task-view transition must not ghost the obsolete hub
 - Feedback: 2026-08-21 — accepted Durable-run evidence exposed the old hub composer and dashboard cross-fading beneath the opening task view while the View Transition top layer was active; immutable v2 review later isolated remaining task→full-view pixels to `::view-transition-old(overlay-view)`
 - Updated: 2026-08-21 16:45 UTC

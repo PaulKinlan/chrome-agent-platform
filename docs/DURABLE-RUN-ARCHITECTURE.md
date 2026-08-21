@@ -99,10 +99,14 @@ cross-boot authority.
 
 ## OPFS records and projections
 
-All keys below are values in an OPFS-backed memory store. Durable run authority
-uses the trusted master store; `journalTarget` can point terminal journal
-projection at master, named-agent, background-agent, or canonical HTTP(S)
-site-agent memory.
+All keys below are values in OPFS-backed memory stores. Durable run authority
+uses a dedicated one-key registry store plus one independently bounded store per
+execution; it never consumes the owner/model `memory/master` key budget.
+`journalTarget` can still point terminal journal projection at master,
+named-agent, background-agent, or canonical HTTP(S) site-agent memory. At boot,
+legacy authority is copied to the matching dedicated store, read back, and only
+then version-CAS-deleted from master. Interrupted migration remains dual-readable
+and idempotent; owner keys are never selected or evicted.
 
 | Key | Writer/reader | Contents and lifetime |
 | --- | --- | --- |
@@ -122,10 +126,11 @@ Large-request and full-terminal retention are covered by
 `tests/durable-runs.test.ts:593-606,919-952`.
 
 `RUN_RETENTION_POLICY` names this behavior `run-retention-v1`, disables automatic
-run compaction/eviction, and requires explicit clearing. That policy can exhaust
-the store's existing per-value, per-store, or global limits; it is an audit
-choice, not unlimited storage (`extension/lib/durable-runs.js:29-37`;
-`extension/lib/memory.js:20-53`).
+run compaction/eviction, and requires explicit clearing. Each execution still
+fails closed at 500 keys or 8 MiB, each value at 256 KiB, and the full OPFS tree
+at 64 MiB; isolation prevents retained authority for unrelated runs from
+exhausting owner memory without weakening any bound (`extension/lib/durable-runs.js:29-37`;
+`extension/lib/memory.js`).
 
 ## Settlement order
 

@@ -24,7 +24,7 @@ import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js"
 import { testProvider } from "../lib/provider-test.js";
 import { acquireLease, settleLease, leaseState } from "../lib/perm-lease.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
-import { isNativeQuotaExceededError } from "../lib/storage-errors.js";
+import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -37,6 +37,7 @@ import {
   listScreenshots,
   loadScreenshot,
   masterMemory,
+  migrateLegacyDurableRunMemory,
   backgroundAgentMemory,
   namedAgentMemory,
   saveScreenshot,
@@ -280,6 +281,7 @@ import {
 } from "../lib/hooks.js";
 import {
   INFLIGHT_HEARTBEAT_MS,
+  blockScheduledTaskForStorage,
   cancelScheduledTask,
   heartbeatInflight,
   listScheduledTasks,
@@ -287,6 +289,7 @@ import {
   markScheduledDone,
   ownsInflight,
   releaseInflight,
+  retryScheduledTask,
   scheduleTask,
   tryAcquireInflight,
 } from "../lib/scheduler.js";
@@ -372,7 +375,7 @@ const progressPorts = new Set();
 // OPFS entirely; do not probe it there. Any real recovery rejection remains the
 // awaited fail-closed result for every durable run path.
 const durableRecoveryReady = typeof globalThis.navigator?.storage?.getDirectory === "function"
-  ? durableRuns.recover()
+  ? migrateLegacyDurableRunMemory().then(() => durableRuns.recover())
   : Promise.resolve({ recoveredOutboxes: 0, orphaned: [] });
 durableRecoveryReady.catch(() => {});
 function broadcastProgress(event) {
@@ -484,6 +487,10 @@ async function handleAlarm(alarm) {
       console.warn("scheduled task is quarantined/cancelling — not running", alarm.name);
       return;
     }
+    // A key-quota failure disarms and marks the task once. If Chrome delivers a
+    // stale already-queued alarm after that transition, skip it silently rather
+    // than recreating the console flood.
+    if (task.storageBlocked) return;
     // Run FIRST, delete only on success (durable across worker interruption).
     // A script-backed schedule runs the agent-generated JS SANDBOXED (no model
     // re-invocation — the same script every tick, no token burn).
@@ -544,7 +551,15 @@ async function handleAlarm(alarm) {
     // same way instead of logging a line every tick.
     let cfg = null;
     try { cfg = await getProviderConfig(); } catch { cfg = null; }
-    if (isProviderError(e)) {
+    if (isMemoryKeyQuotaError(e)) {
+      const blocked = await blockScheduledTaskForStorage(alarm.name, e);
+      if (blocked.newlyBlocked) {
+        console.error(
+          "scheduled task paused — execution storage was full; no owner data was removed. Retry or cancel it from Tasks.",
+          alarm.name,
+        );
+      }
+    } else if (isProviderError(e)) {
       // UNWRAP the AI SDK wrapper + log the UNDERLYING reason (a 401, a rate
       // limit, a network failure) ONCE, not per tick.
       logGateOnce(formatError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" }));
@@ -3652,6 +3667,11 @@ const handlers = {
     // delivery blocker: a quarantined task must not run, but it must be VISIBLE
     // and CANCELLABLE).
     return { tasks: await listScheduledTasks() };
+  },
+  async "task.retry"(m) {
+    const name = String(m?.name ?? "");
+    if (!name) return { ok: false, error: "task name is required" };
+    return await retryScheduledTask(name);
   },
   async "task.cancel"(m) {
     // Authoritative owner cancellation of a scheduled (or quarantined) task:

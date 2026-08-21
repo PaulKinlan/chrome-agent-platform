@@ -6,7 +6,8 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds } from "../extension/lib/memory.js";
+import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory } from "../extension/lib/memory.js";
+import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 
 // ---- minimal in-memory OPFS fake ----
 // A directory tree: { kind, children: Map<name, node>, content?: string }
@@ -399,4 +400,85 @@ Deno.test("listNamedAgentIds + listBackgroundAgentIds enumerate the per-agent sa
   // The named + background stores are ISOLATED (a named store never collides
   // with a background store, and neither with the master).
   assertEquals((await namedAgentMemory("paul").get("journal")).length > 0, true);
+});
+
+Deno.test("durable authority migrates out of a full master store without eviction and new runs complete", async () => {
+  // Isolate this capacity fixture from the earlier memory tests.
+  root.children.clear();
+  const master = masterMemory();
+  for (const [key, value] of [["owner-a", 1], ["owner-b", 2], ["owner-c", 3], ["owner-d", 4]]) {
+    await master.set(key, value);
+  }
+  const ids = Array.from({ length: 99 }, (_, i) =>
+    `exec:00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`
+  );
+  await master.setTrusted("run-registry", ids);
+  for (const id of ids) {
+    await master.setTrusted(`run:${id}`, { executionId: id, phase: "terminal", revision: 1 });
+    await master.setTrusted(`run-log:${id}:task`, { executionId: id, type: "task" });
+    await master.setTrusted(`run-log:${id}:terminal`, { executionId: id, type: "result" });
+    await master.setTrusted(`run-payload:${id}:body:000000`, { executionId: id, data: "retained" });
+    await master.setTrusted(`run-payload:${id}:body:manifest`, { executionId: id, chunkCount: 1 });
+  }
+  assertEquals((await master.keys()).length, 500, "owner + legacy authority exactly fill the master key budget");
+  await assertRejects(() => master.set("owner-blocked", true), Error, "key count exceeds the 500-key bound");
+
+  const migration = await migrateLegacyDurableRunMemory();
+  assertEquals(migration.migrated, 496);
+  assertEquals(await master.keys(), ["owner-a", "owner-b", "owner-c", "owner-d"], "only durable authority moved");
+  assertEquals(await master.get("owner-c"), 3, "owner value preserved exactly");
+  await master.set("owner-after-migration", true);
+  assertEquals(await master.get("owner-after-migration"), true, "owner memory has capacity again");
+
+  const durable = durableRunMemory();
+  assertEquals(await durable.get("run-registry"), ids, "every retained run stays indexed");
+  for (const id of ids) {
+    assertEquals((await durable.get(`run:${id}`))?.executionId, id);
+    assertEquals((await durable.get(`run-log:${id}:terminal`))?.type, "result");
+  }
+  const again = await migrateLegacyDurableRunMemory();
+  assertEquals(again.migrated, 0, "restart migration is idempotent");
+
+  const registry = createDurableRunRegistry({
+    store: durable,
+    bootId: "boot-isolated",
+    now: (() => { let n = 10_000; return () => ++n; })(),
+    resolveJournalStore: async () => ({}),
+    appendJournal: async () => {},
+    replaceCancellationJournal: async () => {},
+    commitThread: async () => {},
+    replaceCancellationThread: async () => {},
+  });
+  const freshId = "exec:00000000-0000-4000-8000-999999999999";
+  const started = await registry.start({
+    executionId: freshId,
+    kind: "scheduled",
+    scheduleName: "recipe:dedupe-tabs",
+    taskPreview: "dedupe tabs",
+    journalTarget: "background:recipe:dedupe-tabs",
+    resumeRequest: { id: "recipe:dedupe-tabs", task: "dedupe tabs" },
+  });
+  assertEquals(started.phase, "running");
+  const terminal = await registry.settle(freshId, { ok: true, result: "done", logicalId: "recipe:dedupe-tabs" });
+  assertEquals(terminal.phase, "terminal", "new scheduled execution reaches terminal authority");
+  assertEquals((await master.keys()).some((key) => key.startsWith("run:")), false, "new runs consume zero master keys");
+});
+
+Deno.test("each durable execution store keeps the 500/501 key bound and global byte limits unchanged", async () => {
+  root.children.clear();
+  const durable = durableRunMemory();
+  const id = "exec:11111111-1111-4111-8111-111111111111";
+  for (let i = 0; i < 500; i += 1) {
+    await durable.setTrusted(`run-log:${id}:${String(i).padStart(6, "0")}`, { i });
+  }
+  await assertRejects(
+    () => durable.setTrusted(`run-log:${id}:overflow`, { overflow: true }),
+    Error,
+    "key count exceeds the 500-key bound",
+  );
+  const source = await Deno.readTextFile(new URL("../extension/lib/memory.js", import.meta.url));
+  assert(source.includes("const MAX_VALUE_BYTES = 256 * 1024"));
+  assert(source.includes("const MAX_KEYS_PER_ORIGIN = 500"));
+  assert(source.includes("const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024"));
+  assert(source.includes("const MAX_BYTES_GLOBAL = 64 * 1024 * 1024"));
 });

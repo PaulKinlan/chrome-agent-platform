@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.120] — 2026-08-21
+- fix(storage): isolate durable runs from owner memory (CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01)
+
 ## [0.2.119] — 2026-08-21
 - fix(ui): compose covered nub with transition focus (CAP-FB-20260819-COVERED-NUB-VISIBILITY-01)
 

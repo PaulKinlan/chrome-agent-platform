@@ -129,6 +129,16 @@ Deno.test("durable run registry: exact-ID dispatch suppresses duplicates and exp
   for (const marker of ['<button type="button"', ":focus-visible", "disabled", "role=\"status\""]) if (!source.includes(marker)) throw new Error(`native/a11y marker missing: ${marker}`);
 });
 
+Deno.test("task-row exposes the owner retry affordance for storage-blocked schedules", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = registry.get("task-row");
+  if (!Klass.observedAttributes.includes("retryable")) throw new Error("task-row retryable state is not reactive");
+  const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  for (const token of ['class="retry"', 'this._emit("retry")', "Retry ${escapeHtml(name)}"]) {
+    if (!source.includes(token)) throw new Error(`task-row retry contract missing ${token}`);
+  }
+});
+
 Deno.test("components: every design-system element registers as a custom element", async () => {
   await import("../extension/shared/components.js");
   for (const name of COMPONENTS) {

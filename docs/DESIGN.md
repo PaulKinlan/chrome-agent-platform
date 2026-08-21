@@ -82,7 +82,10 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   synthesizing conversation content from run logs. Exact source `dd41258f`
   and its 7/7 loaded-extension journey independently verified these native
   sidebar/thread behaviors for integration; that scoped evidence is not a
-  whole-product acceptance claim.
+  whole-product acceptance claim. A scheduled row blocked by the exact memory
+  key ceiling uses the failed indicator, concise “Storage full — retry or cancel”
+  text, and a labelled keyboard-focusable Retry action beside Delete. Retry
+  rearms the same logical schedule; Delete remains the authoritative cancel.
 - Settings → Approvals is the sole owner decision surface for destructive agent
   operations. Rows disclose only the normalized action and a 128-bit private
   install-scoped reference—never target, origin, id, payload, digest, execution
