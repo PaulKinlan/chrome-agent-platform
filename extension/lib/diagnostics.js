@@ -175,16 +175,20 @@ export function installDiagnosticCapture() {
   const origWarn = selfRef.console?.warn?.bind(selfRef.console);
   if (origError) {
     selfRef.console.error = (...args) => {
-      const safe = args.slice(0, 16).map(scrubPrimitive).join(" ");
-      push("error", safe, "service-worker", "error");
-      try { origError(safe); } catch { /* never throw from a logger */ }
+      try {
+        const safe = args.slice(0, 16).map(scrubPrimitive).join(" ");
+        push("error", safe, "service-worker", "error");
+        origError(safe);
+      } catch { /* never throw from a logger */ }
     };
   }
   if (origWarn) {
     selfRef.console.warn = (...args) => {
-      const safe = args.slice(0, 16).map(scrubPrimitive).join(" ");
-      push("warn", safe, "service-worker", "warning");
-      try { origWarn(safe); } catch { /* never throw from a logger */ }
+      try {
+        const safe = args.slice(0, 16).map(scrubPrimitive).join(" ");
+        push("warn", safe, "service-worker", "warning");
+        origWarn(safe);
+      } catch { /* never throw from a logger */ }
     };
   }
 }

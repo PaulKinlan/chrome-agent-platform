@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.134] — 2026-08-21
+- fix(diagnostics): contain hostile console arguments (CAP-FB-20260818-BOUNDS-01)
+
 ## [0.2.133] — 2026-08-21
 - fix(scheduler): integrate the reviewed alarm lifecycle onto the public onboarding tip 5236cac (CAP-FB-20260821-SCHEDULED-MEMORY-BOUND-01)
 
