@@ -20,6 +20,7 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+import { normalizeConversationRunStatus } from "./run-status.js";
 import { safeParse, buildTree, subtreeJson, safeJsonStringify } from "./tool-tree.js";
 
 const ARIA_HIDDEN = "aria-hidden";
@@ -3033,6 +3034,57 @@ class LoadingState extends Component {
   }
 }
 customElements.define("loading-state", LoadingState);
+
+/* <conversation-run-status state="queued|running|retrying|waiting-for-permission|completed|failed|cancelled">
+ * is the ONE lifecycle surface in every task/agent conversation. It uses the
+ * preferred pixel grid for every state (animated only while active), one atomic
+ * live region, and an optional recovery action. No nested spinner/live region. */
+class ConversationRunStatus extends Component {
+  static get observedAttributes() {
+    return ["state", "activity", "message", "error-reason", "action-label"];
+  }
+  _render() {
+    const status = normalizeConversationRunStatus({
+      state: this.getAttribute("state"),
+      activity: this.getAttribute("activity"),
+      message: this.getAttribute("message"),
+      errorReason: this.getAttribute("error-reason"),
+    });
+    if (!status) {
+      mountTemplate(this, ":host { display:none; }", "");
+      return;
+    }
+    const actionLabel = this.getAttribute("action-label")?.trim() || "";
+    const cells = Array.from({ length: 9 }, (_, i) =>
+      `<span class="px" style="animation-delay:${i * 60}ms" aria-hidden="true"></span>`
+    ).join("");
+    mountTemplate(this, `
+      :host { display:block; min-width:0; }
+      .surface { display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 12px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); }
+      .grid { display:grid; grid-template-columns:repeat(3,4px); gap:3px; inline-size:18px; block-size:18px; flex:0 0 auto; color:var(--muted,#635e56); }
+      .px { inline-size:4px; block-size:4px; border-radius:1px; background:currentColor; opacity:.65; }
+      .surface[data-tone="accent"] .grid { color:var(--accent,#0e6e63); }
+      .surface[data-tone="success"] .grid { color:var(--success,#1a7f37); }
+      .surface[data-tone="danger"] .grid { color:var(--danger,#b3261e); }
+      .surface[data-active="true"] .px { animation:cap-run-grid 1.4s ease-in-out infinite; }
+      .label { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; font-size:13px; line-height:1.4; }
+      .action { flex:0 0 auto; min-height:36px; padding:6px 10px; border:1px solid var(--accent,#0e6e63); border-radius:var(--radius-sm,8px); background:transparent; color:var(--accent,#0e6e63); font:inherit; font-size:12px; font-weight:650; cursor:pointer; }
+      .action:hover { background:var(--accent,#0e6e63); color:var(--on-accent,#fff); }
+      .action:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @keyframes cap-run-grid { 0%,100% { opacity:.25; } 50% { opacity:1; } }
+      @media (prefers-reduced-motion:reduce) { .surface[data-active="true"] .px { animation:none; opacity:.7; } }
+      @media (max-width:480px) { .surface { align-items:flex-start; flex-wrap:wrap; } .action { margin-inline-start:30px; } }
+    `, `<div class="surface" data-state="${status.state}" data-tone="${status.tone}" data-active="${status.active}" role="status" aria-live="polite" aria-atomic="true">
+      <span class="grid" aria-hidden="true">${cells}</span>
+      <span class="label">${escapeHtml(status.label)}</span>
+      ${actionLabel ? `<button class="action" type="button">${escapeHtml(actionLabel)}</button>` : ""}
+    </div>`);
+  }
+  _wire() {
+    this._root.querySelector(".action")?.addEventListener("click", () => this._emit("action"));
+  }
+}
+customElements.define("conversation-run-status", ConversationRunStatus);
 
 /* <thinking-trace label="reasoning" open steps='[{"label","text"}]'> — an
  * expandable reasoning trace (the BeautifulUI "Thinking" primitive). A muted,

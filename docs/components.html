@@ -161,6 +161,20 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;conversation-run-status&gt;</code> — the single conversation lifecycle surface</h3>
+        <div class="stage column" style="max-width:560px">
+          <conversation-run-status state="queued"></conversation-run-status>
+          <conversation-run-status state="running" activity="Reading the active tabs"></conversation-run-status>
+          <conversation-run-status state="retrying"></conversation-run-status>
+          <conversation-run-status state="waiting-for-permission" error-reason="the provider origin is not granted" action-label="Fix in Settings"></conversation-run-status>
+          <conversation-run-status state="completed"></conversation-run-status>
+          <conversation-run-status state="failed" error-reason="The runtime disconnected" action-label="Fix in Settings"></conversation-run-status>
+          <conversation-run-status state="cancelled"></conversation-run-status>
+        </div>
+        <p class="caption">one atomic live region for queued, running, retrying, waiting-for-permission, completed, failed, and cancelled; the pixel grid animates only during active states.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;thinking-trace&gt;</code> — an expandable reasoning trace</h3>
         <div class="stage column" style="max-width:520px">
           <thinking-trace label="reasoning · 3 steps" steps='[{"label":"List the tabs","text":"tab_list returned 12 tabs across 2 windows."},{"label":"Group by domain","text":"github.com ×4, news.ycombinator.com ×3, others ×5."},{"label":"Name each group","text":"Use the domain, colour from the hash."}]'></thinking-trace>

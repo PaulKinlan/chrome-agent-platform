@@ -362,9 +362,14 @@ agentComposer.addEventListener("send", async (ev) => {
     agentId: target.id,
     agentKind: target.kind,
     onStatus: (s) => {
-      if (s?.state === "working") setDetailStatus(s.activity || "Working…");
-      else if (s?.state === "done") setDetailStatus("");
-      else if (s?.state === "error") setDetailStatus(s.errorReason || s.message || "error", true);
+      // The conversation turn emits the canonical lifecycle vocabulary
+      // (extension/shared/run-status.js); map it onto the detail status line.
+      if (s?.state === "queued") setDetailStatus("Queued");
+      else if (s?.state === "running" || s?.state === "retrying") setDetailStatus(s.activity || "Working…");
+      else if (s?.state === "waiting-for-permission") setDetailStatus(s.errorReason || s.message || "waiting for permission", true);
+      else if (s?.state === "completed") setDetailStatus("");
+      else if (s?.state === "cancelled") setDetailStatus(s.errorReason || "cancelled", true);
+      else if (s?.state === "failed") setDetailStatus(s.errorReason || s.message || "error", true);
     },
   });
   if (res?.ok === false) setDetailStatus(res.error ?? "run failed", true);

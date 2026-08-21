@@ -88,11 +88,11 @@ The findings below are the exceptions, not a re-litigation of the architecture.
 - There is no onboarding flow in the extension; grepping for `first-run`, `onboard` and
   `welcome` finds only unrelated hits.
 
-### [Open] Standalone run-status banner still live on main — `CAP-FB-20260819-CONVERSATION-RUN-STATUS-01`
-- `extension/ntp/ntp.js:1192` still binds `document.getElementById("run-status")` and sets
-  a generic top-of-thread state. `ffbdf28` fixed lifecycle *ownership fencing* and was
-  mistaken for fixing the *presentation*. Any agent taking this task must confirm it
-  understands that distinction before starting.
+### [Corrective successor local; independent + loaded-MV3 gates pending] Conversation run status and projection — `CAP-FB-20260819-CONVERSATION-RUN-STATUS-01`
+- The current successor removes the legacy banner/spinner and renders one conversation-owned `<conversation-run-status>` grid surface at the bottom of the transcript, with the canonical queued/running/retrying/waiting/completed/failed/cancelled vocabulary and in-context Settings recovery.
+- Transition browser evidence then exposed a separate pre-existing no-tools ordering race: the durable terminal signal could complete an authoritative `thread.get` replacement before the response completion handler appended its local result, briefly rendering two adjacent byte-identical assistant bubbles. The earlier streamed-text guard did not cover a no-tools turn.
+- The current-main composition records each authoritative thread projection by thread id, immutable execution id, page-local surface owner and monotonic render generation. Completion suppresses only an already-projected byte-identical assistant result for that same attempt. Different bytes, other executions, other owners and post-reload owners remain distinct; thread data stays authoritative and no polling or synthesized client message is added. Current task-scoped run controls and streamed tool-call finish normalization remain intact.
+- Independent review of the current-main conflict resolutions and fresh loaded-MV3 cancellation/fencing/status evidence remain open. The browser contract must enumerate transcript bubbles after every conversation journey, not only named-agent completion. The previously approved exact-`43e395d` headed package is superseded until a package is rebuilt for the accepted successor.
 
 ### [Open] Route surface concentration — `CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01`
 - `extension/background/service-worker.js` is 4,799 lines exposing **127 message routes**

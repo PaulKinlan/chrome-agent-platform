@@ -20,7 +20,7 @@ export function createTerminalThreadProjectionLifecycle({
     if (!ownsSurfaceOwner(owner) || getOpenOwnerThreadId() !== threadId) return false;
     const thread = response?.ok === true ? response.thread : null;
     if (!thread || thread.id !== threadId) return false;
-    commitThread(thread, run);
+    commitThread(thread, run, owner);
     return true;
   }
 

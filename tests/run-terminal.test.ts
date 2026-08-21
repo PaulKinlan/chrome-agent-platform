@@ -60,7 +60,10 @@ function makeContainer() {
     appendAgent(text) { this.calls.push(["agent", text]); },
     appendSystem() {},
     appendError(text, o = {}) { this.calls.push(["error", text, o]); },
-    appendThinking() { return { remove() {}, setAttribute() {} }; },
+    appendThinking() {
+      this.calls.push(["thinking"]);
+      return { remove() {}, setAttribute() {} };
+    },
     appendTool(m = {}) {
       const attrs = { "tool-name": m.name ?? "", "tool-status": m.status ?? "running" };
       const card = {
@@ -90,6 +93,39 @@ async function waitFor(cond, label, timeoutMs = 2000) {
 }
 
 const freshConv = () => import("../extension/shared/conversation.js?t=" + Math.random());
+
+Deno.test("run-terminal: one status owner reports queued → running → completed with no thinking bubble", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const container = makeContainer();
+  const statuses = [];
+  const runP = conv.runConversationTurn(container, { text: "t", onStatus: (status) => statuses.push(status) });
+  await waitFor(() => mock.held.length > 0, "agent.run sent");
+  assertEquals(statuses.slice(0, 2).map((s) => s.state), ["queued", "running"]);
+  assertEquals(container.calls.some((call) => call[0] === "thinking"), false, "no duplicate thinking bubble");
+  mock.emit({ type: "thinking", step: 0, totalSteps: 2, runId: mock.runId() });
+  await sleep(5);
+  assertEquals(container.calls.some((call) => call[0] === "thinking"), false, "progress stays in the status surface");
+  assertEquals(statuses.at(-1)?.state, "running");
+  assertEquals(statuses.at(-1)?.activity, "Thinking · step 1 of 2");
+  mock.resolveRun(true, "done");
+  await runP;
+  assertEquals(statuses.at(-1)?.state, "completed");
+});
+
+Deno.test("run-terminal: an aborted run reports cancelled, never completed", async () => {
+  const conv = await freshConv();
+  const mock = installChromeMock();
+  const container = makeContainer();
+  const statuses = [];
+  const runP = conv.runConversationTurn(container, { text: "t", onStatus: (status) => statuses.push(status) });
+  await waitFor(() => mock.held.length > 0, "agent.run sent");
+  mock.emit({ type: "done", aborted: true, runId: mock.runId() });
+  mock.resolveRun(false, "", { aborted: true });
+  await runP;
+  assertEquals(statuses.at(-1)?.state, "cancelled");
+  assertEquals(statuses.some((s) => s.state === "completed"), false, "an aborted run never reports completed");
+});
 
 Deno.test("provider preflight is redacted and pauses before model execution when the exact origin is missing", async () => {
   const conv = await freshConv();

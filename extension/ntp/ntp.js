@@ -17,6 +17,10 @@ import { initialAvatar } from "../lib/avatar.js";
 import { renderDurabilityState } from "../lib/durability-ui.js";
 import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../lib/task-sidebar-lifecycle.js";
 import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
+import {
+  clearAuthoritativeThreadProjection,
+  recordAuthoritativeThreadProjection,
+} from "../shared/thread-projection-authority.js";
 import { createViewFocusController } from "../lib/view-focus.js";
 import {
   createViewTransitionRunner,
@@ -746,7 +750,8 @@ function hideThreadView({
   });
 }
 
-function renderThreadProjection(thread) {
+let threadProjectionGeneration = 0;
+function renderThreadProjection(thread, owner = runSurfaceOwner.current()) {
   threadTitle.textContent = thread?.name || "Task";
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   // The thread's TOOL rows (persisted by the SW with callId + ok) replay as
@@ -775,11 +780,21 @@ function renderThreadProjection(thread) {
     ...toolCards,
   ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
   threadConversation.setMessages?.(rendered);
+  if (typeof thread?.id === "string" && thread.id && owner != null) {
+    recordAuthoritativeThreadProjection(threadConversation, {
+      threadId: thread.id,
+      owner,
+      generation: ++threadProjectionGeneration,
+      messages,
+    });
+  } else {
+    clearAuthoritativeThreadProjection(threadConversation);
+  }
 }
 
 const terminalThreadProjectionLifecycle = createTerminalThreadProjectionLifecycle({
   loadThread: (id) => send("thread.get", { id }),
-  commitThread: (thread) => renderThreadProjection(thread),
+  commitThread: (thread, _run, owner) => renderThreadProjection(thread, owner),
   getOpenOwnerThreadId: () => !threadView.hidden && currentAgentId === null ? currentThreadId : null,
   captureSurfaceOwner: () => runSurfaceOwner.current(),
   ownsSurfaceOwner: (owner) => runSurfaceOwner.owns(owner),
@@ -814,7 +829,7 @@ async function openThread(id) {
   // every following title/message/status write as one owner-bound commit.
   if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
   const thread = res.ok ? res.thread : null;
-  renderThreadProjection(thread);
+  renderThreadProjection(thread, owner);
   showThreadView();
   renderRunStatus({ state: "idle" });
   renderTasks(id);
@@ -1313,50 +1328,45 @@ async function buildAgentConfigDialog(opts) {
   nameField.el.focus();
 }
 
-// ── the live run-status banner (the user must SEE it is working) ──────────
+// ── the ONE shared conversation run-status surface ───────────────────────
 const runStatusEl = document.getElementById("run-status");
 function renderRunStatus(s) {
   if (!runStatusEl) return;
-  const state = s?.state;
-  if (!state || state === "idle") { runStatusEl.hidden = true; runStatusEl.replaceChildren(); return; }
+  const state = typeof s?.state === "string" ? s.state : "";
+  if (!state || state === "idle") {
+    runStatusEl.hidden = true;
+    for (const name of ["state", "activity", "message", "error-reason", "action-label"]) {
+      runStatusEl.removeAttribute(name);
+    }
+    return;
+  }
   runStatusEl.hidden = false;
-  runStatusEl.className = "run-status" + (state === "done" ? " done" : state === "error" ? " error" : "");
-  runStatusEl.replaceChildren();
-  if (state === "working") {
-    // The BeautifulUI-inspired working indicator (a pixel-grid loader + the
-    // live activity label), reused from the shared design system.
-    const loader = document.createElement("loading-state");
-    loader.setAttribute("label", s.activity || "thinking…");
-    loader.setAttribute("active", "");
-    runStatusEl.append(loader);
+  runStatusEl.setAttribute("state", state);
+  const attrs = {
+    activity: s?.activity,
+    message: s?.message,
+    "error-reason": s?.errorReason,
+  };
+  for (const [name, value] of Object.entries(attrs)) {
+    if (typeof value === "string" && value.trim()) runStatusEl.setAttribute(name, value);
+    else runStatusEl.removeAttribute(name);
+  }
+  // A provider/config failure OR a permission wait gets the inline actionable
+  // recovery path ("Fix in Settings"), not just the message.
+  const recoverable = /host-permission|provider-auth|model-config|network/i.test(s?.errorCategory ?? "");
+  if ((state === "failed" || state === "error" || state === "waiting-for-permission") && recoverable) {
+    runStatusEl.setAttribute("action-label", "Fix in Settings");
   } else {
-    const label = document.createElement("span");
-    label.className = "rs-label";
-    if (state === "done") {
-      label.textContent = "Done";
-    } else if (state === "error") {
-      label.textContent = "Failed — " + (s.errorReason || s.message || "error");
-    } else if (state === "waiting-for-permission") {
-      // The explicit paused state (the partial permission recovery): a run
-      // that is WAITING on an owner grant must SAY so — never an empty banner.
-      label.textContent = "Waiting for permission — " + (s.errorReason || s.message || "an owner grant is required");
-    }
-    runStatusEl.append(label);
-    // A provider/config failure OR a permission wait gets an inline "Fix in
-    // Settings" button (the actionable path), not just the message.
-    const cat = s?.errorCategory ?? "";
-    if ((state === "error" || state === "waiting-for-permission") && /host-permission|provider-auth|model-config|network/i.test(cat)) {
-      const fix = document.createElement("button");
-      fix.type = "button";
-      fix.className = "rs-fix";
-      fix.textContent = "Fix in Settings";
-      fix.addEventListener("click", () => {
-        if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
-      });
-      runStatusEl.append(fix);
-    }
+    runStatusEl.removeAttribute("action-label");
   }
 }
+runStatusEl?.addEventListener("action", () => {
+  // The run-status action is an NTP surface: route IN-CONTEXT like every other
+  // Settings entry. chrome.runtime.openOptionsPage() creates no new target from
+  // the NTP (it IS the new-tab page) and would strand the user outside the
+  // thread view; openView shows the options surface in place and focuses it.
+  openView("options/options.html", "Settings");
+});
 
 /** Which run owner last wrote the global #status (so a superseded run's
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
@@ -1384,6 +1394,7 @@ async function runThreadTurn(text, attachments = []) {
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
     isStale: () => !owns(),
+    projectionOwner: owner,
   });
   // The fence: a superseded run mutates NO global surface state. If THIS run
   // was the last status writer, reset its orphaned "running…" (a run parked

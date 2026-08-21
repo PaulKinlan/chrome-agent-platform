@@ -7,15 +7,15 @@
 //     tool-call / tool-result / text / done) from the service worker,
 //   - rendering the persisted journal as a conversation (task → user bubble,
 //     result → agent bubble) so reopening shows the history,
-//   - the run flow: append the user turn → show a thinking indicator → render
-//     the live progress (structured tool cards + a collapsible thinking trace)
-//     → append the final result.
+//   - the run flow: append the user turn → update the single lifecycle surface
+//     + structured tool cards → append the final result.
 //
 // The container is an <agent-conversation> element (the Web Component that owns
 // the message rendering: markdown, code blocks, tool cards, thinking traces).
 
 import { send } from "../lib/messages.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
+import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
 
 // ── the live progress port ────────────────────────────────────────────────
 // A single long-lived port per page. The SW broadcasts progress to every
@@ -198,7 +198,7 @@ export async function loadJournal() {
 //
 //   runConversationTurn(container, { text, attachments, history })
 //     1. appends the user turn,
-//     2. shows a thinking indicator (upgraded to a collapsible trace),
+//     2. owns queued/running/retrying state through one lifecycle callback,
 //     3. streams live progress (structured tool cards below it),
 //     4. returns the final { ok, result } and appends the result bubble.
 //
@@ -437,7 +437,7 @@ export function pairToolJournal(entries) {
   return out;
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
   // this turn no longer owns the surface (a newer turn started, or the user
@@ -449,6 +449,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
     catch { return false; }
   };
   const status = (s) => { if (!stale()) onStatus?.(s); };
+  // Surface the accepted turn immediately, including while provider capability
+  // checks are pending. This is the sole queued signal for the conversation.
+  status({ state: "queued" });
 
   // Do not treat the original Run click as a live gesture after an asynchronous
   // provider lookup: calling permissions.request after that round-trip is
@@ -496,37 +499,31 @@ export async function runConversationTurn(container, { text, attachments = [], h
   };
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
-  // A superseded earlier turn can leave its LIVE thinking indicator behind
-  // (its own cleanup events are fenced off) — a new turn on this surface
-  // clears those leftovers before its first write.
-  for (const el of c.querySelectorAll?.('message-bubble[role="thinking"]') ?? []) {
-    el.remove();
-  }
   appendBubble(c, "user", text, attachments);
+  // The lifecycle surface is the sole owner of queued/working feedback. Do not
+  // append a second thinking bubble/spinner to the conversation log.
 
   // Keep run + result rendering in one attempt-scoped function. Every attempt
   // owns its runId, queue, arbiter, and listener, so stale events from another
   // page or attempt are never accepted.
+  let attempt = 0;
   const executeTurn = async () => {
   // A grant-retry re-enters here after its own permission awaits — re-check.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
   const runId = newRunId();
-
-  // 2. a thinking indicator (a spinner; upgraded in-place to a collapsible
-  //    trace when reasoning arrives).
-  let thinking = typeof c.appendThinking === "function"
-    ? c.appendThinking("thinking…")
-    : appendBubble(c, "thinking", "thinking…");
-  status({ state: "working", activity: "thinking…" });
+  attempt += 1;
+  status({ state: attempt > 1 ? "retrying" : "running", activity: attempt > 1 ? "Retrying…" : "Thinking…" });
   // Per-call tool cards: a FIFO queue per tool NAME so parallel same-name calls
   // are matched in order and a completed card is never duplicated (the
   // wider-goal review's finding that a single `lastTool` left A's card running
   // and created a duplicate completed card when calls interleave).
   const toolCards = createToolCardQueue();
-  const clearThinking = () => {
-    thinking?.remove();
-    thinking = null;
-  };
+  // The live `text` progress event already projects the assistant's final
+  // words when tool calls ran; the completion handler would otherwise append
+  // the IDENTICAL res.result as a second terminal bubble (the late-settled
+  // duplicate-projection defect). Remember what was streamed; the completion
+  // append fires only when the authoritative result differs.
+  let streamedAgentText = null;
   // The terminal arbiter: settles the queue + unsubscribes EXACTLY ONCE on the
   // first authoritative terminal (the port's done/error or the run response —
   // which carries the final outcome incl. aborted). No timing dependency.
@@ -544,10 +541,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (!ev || typeof ev !== "object") return;
     // a port DISCONNECT settles fail-closed (the terminal can no longer arrive)
     if (ev.type === "disconnect") {
-      clearThinking();
       terminal.onPortError();
-      // The banner must not stick on "working" when the progress port dies.
-      status({ state: "error", message: "lost connection to the agent runtime", errorReason: "the progress connection dropped", errorAction: "the result is journaled — reopen the thread to check", errorCategory: "network" });
+      // The lifecycle surface must not stick on running when the port dies.
+      status({ state: "failed", message: "lost connection to the agent runtime", errorReason: "the progress connection dropped", errorAction: "the result is journaled — reopen the thread to check", errorCategory: "network" });
       return;
     }
     // Only render THIS attempt's events — FAIL-CLOSED on the exact runId.
@@ -562,17 +558,15 @@ export async function runConversationTurn(container, { text, attachments = [], h
     switch (ev.type) {
       case "thinking": {
         const step = ev.step != null ? ev.step + 1 : null;
-        if (thinking) {
-          const trace = ev.tokensSoFar ? String(ev.tokensSoFar) : "";
-          thinking.setAttribute("step", step ?? "");
-          if (ev.totalSteps != null) thinking.setAttribute("total-steps", String(ev.totalSteps));
-          if (trace) thinking.setAttribute("content", trace);
-        }
+        const total = ev.totalSteps != null ? ` of ${ev.totalSteps}` : "";
+        status({
+          state: attempt > 1 ? "retrying" : "running",
+          activity: step != null ? `Thinking · step ${step}${total}` : "Thinking…",
+        });
         break;
       }
       case "tool-call": {
-        clearThinking();
-        status({ state: "working", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        status({ state: attempt > 1 ? "retrying" : "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
         const card = typeof c.appendTool === "function"
           ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
           : appendBubble(c, "tool", `→ ${ev.toolName}`);
@@ -601,26 +595,26 @@ export async function runConversationTurn(container, { text, attachments = [], h
         break;
       }
       case "text":
-        clearThinking();
-        if (ev.text && ev.hasToolCalls) appendBubble(c, "agent", ev.text);
+        if (ev.text && ev.hasToolCalls) {
+          appendBubble(c, "agent", ev.text);
+          streamedAgentText = ev.text;
+        }
         break;
       case "done":
-        clearThinking();
         // The port's done is AUTHORITATIVE (aborted → error): settles the
         // queue once; a later response is a no-op. An ABORTED run must never
         // report a successful "done" status.
         terminal.onPortDone(ev.aborted === true);
         if (ev.aborted === true) {
-          status({ state: "error", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
+          status({ state: "cancelled", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
         } else {
-          status({ state: "done" });
+          status({ state: "completed" });
         }
         break;
       case "error":
-        clearThinking();
         terminal.onPortError();
         status({
-          state: "error",
+          state: "failed",
           message: ev.reason ?? ev.message ?? "error",
           errorReason: ev.reason ?? null,
           errorAction: ev.action ?? null,
@@ -695,11 +689,22 @@ export async function runConversationTurn(container, { text, attachments = [], h
   //    abort controls the OVERALL run outcome, not just the card colours.
   // The fence: a stale turn appends NOTHING — its result lives in the journal.
   if (stale()) return res;
-  clearThinking();
   const outcome = terminal.status ?? (res?.ok === true ? "success" : "error");
   if (outcome === "success" && res?.ok) {
-    status({ state: "done" });
-    if (typeof res.result === "string" && res.result) {
+    status({ state: "completed" });
+    const projectedThreadId = res?.threadId ?? threadId;
+    const authoritativeAlreadyProjected = isAuthoritativeThreadResultProjected(c, {
+      threadId: projectedThreadId,
+      executionId: res?.executionId,
+      owner: projectionOwner,
+      content: res?.result,
+    });
+    if (
+      typeof res.result === "string" &&
+      res.result &&
+      res.result !== streamedAgentText &&
+      !authoritativeAlreadyProjected
+    ) {
       appendBubble(c, "agent", res.result);
     }
   } else {
@@ -711,7 +716,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     const category = res?.errorCategory ?? (res?.aborted ? "aborted" : null);
     const msg = res?.error ?? (res?.aborted ? "run aborted" : "unknown error");
     status({
-      state: "error",
+      state: res?.aborted ? "cancelled" : "failed",
       message: reason ?? msg,
       errorReason: reason,
       errorAction: action,

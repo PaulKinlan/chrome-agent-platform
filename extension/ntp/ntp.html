@@ -213,40 +213,13 @@
     /* Every rail row centres its single remaining icon when collapsed. */
     .side.collapsed .side-label-row { justify-content: center; }
     .side.collapsed .new-task { inline-size: 34px; block-size: 34px; margin-inline-start: 0; }
-    /* the live run status banner (item: the user must see it is working). */
-    .run-status {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--panel);
-      font-size: 13px;
-      color: var(--text);
-      margin-bottom: 8px;
-    }
-    .run-status .spin {
-      width: 14px;
-      height: 14px;
-      border: 2px solid var(--accent);
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: sc-runspin 1s linear infinite;
-      flex: 0 0 auto;
-    }
-    @keyframes sc-runspin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .run-status .spin { animation: none; } }
-    .run-status.done { border-color: var(--success); color: var(--success); }
-    .run-status.error { border-color: var(--danger); color: var(--danger); }
-    .run-status .rs-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .run-status .rs-fix { font: inherit; font-size: 12px; font-weight: 600; color: var(--accent, #0e6e63); background: transparent; border: 1px solid var(--accent, #0e6e63); border-radius: 6px; padding: 3px 9px; cursor: pointer; flex: 0 0 auto; }
-    .run-status .rs-fix:hover { background: var(--accent, #0e6e63); color: #fff; }
+    /* One shared grid-based lifecycle surface owns conversation run status,
+       rendered once at the bottom of the transcript (never top-of-thread). */
+    .run-status { display: block; margin-block-start: 8px; }
     /* the provider-status warning chip (the user must know BEFORE a run) */
     .provider-status { font: inherit; font-size: 12px; font-weight: 600; color: var(--danger, #b3261e); background: transparent; border: 1px solid var(--danger, #b3261e); border-radius: 999px; padding: 2px 10px; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .provider-status:hover { background: var(--danger, #b3261e); color: #fff; }
-    /* the .run-status { display:flex } above would override the UA [hidden]
-       display:none, so an empty banner stayed visible — restore it. */
+    /* Author styles beat the UA hidden rule; keep the hidden surface absent. */
     .run-status[hidden] { display: none; }
     /* Author styles beat the UA hidden rule; a covered nub stays absent. */
     .side-toggle[hidden] { display: none; }
@@ -706,9 +679,9 @@
         <button class="back subtle" id="edit-agent" type="button" aria-label="Edit agent" hidden>Edit</button>
       </div>
       <div class="thread-body">
-        <div class="run-status" id="run-status" hidden role="status" aria-live="polite"></div>
-        <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
         <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
+        <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
+        <conversation-run-status class="run-status" id="run-status" hidden></conversation-run-status>
         <agent-composer id="thread-composer" placeholder="Reply, or @mention a site agent…" send-label="Send"></agent-composer>
       </div>
     </div>

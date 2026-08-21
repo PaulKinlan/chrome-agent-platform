@@ -67,6 +67,7 @@ const COMPONENTS = [
   "security-shield",
   // BeautifulUI-inspired primitives
   "loading-state",
+  "conversation-run-status",
   "thinking-trace",
   "tool-chips",
   "task-row",

@@ -79,7 +79,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   replacement per execution/revision. The shared surface-owner token fences a
   delayed projection read after navigation; replacement (not append) preserves
   exactly one durable assistant/error result without resetting focus or
-  synthesizing conversation content from run logs. Exact source `dd41258f`
+  synthesizing conversation content from run logs. A page-local projection
+  record binds the authoritative thread, immutable execution, surface owner and
+  monotonic render generation; if that projection wins the race with a live
+  completion, only the byte-identical same-execution append is suppressed.
+  Different terminal bytes and new attempts remain visible, and no polling or
+  client-synthesized message becomes an authority. Exact source `dd41258f`
   and its 7/7 loaded-extension journey independently verified these native
   sidebar/thread behaviors for integration; that scoped evidence is not a
   whole-product acceptance claim. A scheduled row blocked by the exact memory

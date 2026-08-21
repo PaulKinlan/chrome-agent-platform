@@ -40,9 +40,10 @@ function harness({ loadThread } = {}) {
         },
       };
     },
-    commitThread: (thread, terminalRun) => commits.push({
+    commitThread: (thread, terminalRun, projectionOwner) => commits.push({
       thread: structuredClone(thread),
       run: structuredClone(terminalRun),
+      owner: projectionOwner,
     }),
     getOpenOwnerThreadId: () => openThreadId,
     captureSurfaceOwner: () => owner.current(),
@@ -69,6 +70,7 @@ Deno.test("terminal thread projection: same-thread terminal transition performs 
     role: "assistant",
     content: "finished durably",
   });
+  assertEquals(h.commits[0].owner, 1, "the projection commit carries the captured surface owner");
 });
 
 Deno.test("terminal thread projection: duplicate terminal snapshot and revision are no-ops", async () => {
