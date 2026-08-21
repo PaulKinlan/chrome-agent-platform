@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.106] — 2026-08-21
+- docs(review): land the 2026-08-21 independent architectural review
+
 ## [Unreleased]
 - docs(runs): add the source map and browser-proof gate for durable-run candidate `ac1c4fe` (release 0.2.110 candidate), explicitly pending integration onto public main; no loaded-extension screenshots are claimed.
 

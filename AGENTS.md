@@ -117,6 +117,23 @@ there. The reviewer agents check against it.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
 
+## The current review (2026-08-21) — read before picking up work
+
+[`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) is an independent architectural review of
+exact `origin/main@300bea1`, executed rather than read from trackers. It confirms the
+baseline healthy (build clean, 632 unit pass, 126/126 Chrome journeys, 62 ms hub render)
+and identifies why delivery stalled. **Section 6 is an ordered work queue.** Every finding
+carries a `CAP-FB-*` ID that exists in [`TASKS.md`](TASKS.md) with full acceptance criteria
+and gates; defects also appear in [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md).
+
+Take work by following the atomic-ownership procedure in `TASKS.md`, never from the review
+alone. Two behaviours the review calls out specifically:
+
+- **Put the `CAP-FB-*` ID in the commit subject.** Only 2 of 430 commits do today, which is
+  why every `Recover:` command in the tracker fails to find its own work.
+- **Never create a `-vN+1` attempt with no commit in `-vN`.** Stop and escalate instead.
+  Seventeen worktrees currently hold zero work; ten share one versioned prep name.
+
 ## Repository-local task recovery (2026-08-19)
 
 Root [`TASKS.md`](TASKS.md) is the durable, public-safe product task record.

@@ -20,6 +20,15 @@ what's landed vs what's next.
 - **Modern web guidance** throughout.
 - **No external-project references** — usage-logging is an in-repo pattern, not a reference to another project.
 
+## Independent architectural review (2026-08-21)
+
+[`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) verified the baseline by building and driving
+exact `origin/main@300bea1`: build clean, 632 unit tests pass, **126/126 Chrome journeys**,
+hub render 62 ms, fresh-profile boot clean. Code quality is not the constraint — delivery is.
+Landed commits per day fell 83 → 65 → 20 → 3 → 0 between 17 and 21 August, with 0 of 31 tasks
+reaching a terminal state and 46 branches of reviewed work unmerged. The review's §6 work
+queue supersedes the ordering of the backlog below until its P0 items are cleared.
+
 ## Status (2026-08-17)
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
 - [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)

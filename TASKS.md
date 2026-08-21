@@ -20,6 +20,9 @@ Workspace paths and transport receipts stay in the private coordination ledger.
 
 - `TASKS.md` — canonical delivery/task state and crash recovery.
 - `KNOWN-ISSUES.md` — canonical review and system findings.
+- `REVIEW-2026-08-21.md` — the independent architectural review: verified baseline,
+  the measured delivery diagnosis, the reproduced defects, and the ordered work queue.
+  It is the rationale; this file is the contract. Never take work from it alone.
 - `AGENTS.md`, `PLAN.md`, and `README.md` — repository-wide operating rules,
   roadmap, and overview; these correctly remain at the root.
 - `docs/DESIGN.md`, `docs/CONSTITUTION.md`, `docs/OPEN-QUESTIONS.md`, and
@@ -806,6 +809,216 @@ On resume after a coordinator or worker loss:
 - History:
   - 2026-08-20 15:21 UTC — opened as research-first semantic tool retrieval across built-in, extension, declared WebMCP and inferred WebMCP sources; no database, embedding model, threshold or runtime was inferred from the request.
 
+## [CAP-FB-20260821-WORKTREE-HYGIENE-01] Durable worktrees and evidence off the RAM-backed temp filesystem
+- Feedback: 2026-08-21 — independent architectural review found the build host's temporary filesystem at 100% inode use, which failed the unit suite, and found reviewed work and retained gate evidence stored only on tmpfs
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: the build host's temporary filesystem reports headroom sufficient to run the full unit and Chrome journey suites without an `ENOSPC`/inode failure; no git worktree and no retained gate-evidence bundle referenced by any `Gates:` field in this tracker resides on a RAM-backed filesystem; every worktree HEAD is reachable from a branch or an explicit rescue tag before that worktree is removed; worktrees holding no commits beyond `origin/main` are removed and `git worktree prune` reports a clean list; a written convention records where worktrees and evidence live and is added to `AGENTS.md`
+- Review: independent verification that no commit reachable only from a removed worktree was lost, by comparing the pre-removal HEAD set against branch and tag reachability
+- Gates: pre-removal inventory of every worktree HEAD with reachability classification; `df -i` before and after; `git worktree list` and `git worktree prune` output; `git fsck --unreachable` diff showing no newly unreachable commit; full unit suite green on the reclaimed host
+- Blockers: seven detached candidates were reachable only from temp-filesystem worktree HEADs; they are preserved as local `rescue/tmp-detached-*` tags and must not be pruned until each is either merged, superseded on a branch, or explicitly abandoned in this tracker
+- Next: inventory every worktree HEAD and classify it as reachable-from-branch, rescue-tagged, or unreachable; remove only the zero-work and duplicate-HEAD worktrees; then relocate the survivors to durable storage
+- Recover: `git worktree list --porcelain && git tag -l 'rescue/*' && git fsck --unreachable`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D1/D2). Seven at-risk commits were tagged `rescue/tmp-detached-*` locally before this entry was written; no worktree, branch, or object was deleted.
+
+## [CAP-FB-20260821-TRACKER-GIT-RECONCILE-01] Reconcile this tracker with the repository
+- Feedback: 2026-08-21 — independent architectural review found at least nine tasks recorded as unassigned with no branch that have committed implementation work, and found only 2 of 430 commits carry a `CAP-FB-*` identifier
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: every task whose implementation exists in the repository records that branch and its exact tip commit in `Branch` and `Candidate`, with a `Status` no more advanced than the evidence supports; every task recorded as unassigned with no branch has been checked against `git for-each-ref` and `git worktree list` and genuinely has no work; each `Recover:` command, run verbatim, returns the task's own material; a commit-message convention requiring the `CAP-FB-*` identifier is added to `AGENTS.md` and enforced by a check
+- Review: an independent session re-derives the task-to-branch mapping from the repository alone and confirms it matches the tracker, without consulting the private coordination ledger
+- Gates: for every task with a recorded candidate, `git cat-file -e <sha>^{commit}` and `git merge-base --is-ancestor <base> <candidate>`; a verbatim run of every `Recover:` command with its output; a count of commits carrying a `CAP-FB-*` identifier before and after the convention lands
+- Blockers: ownership transfers must follow the atomic compare-and-swap procedure in this file; a competing tracker commit is reconciled, never overwritten
+- Next: enumerate every branch and worktree ahead of `origin/main`, map each to its task, and commit one reconciliation that writes the real `Branch`/`Candidate`/`Status` into the affected entries
+- Recover: `git for-each-ref --format='%(refname:short)' refs/heads/ && git log --all --oneline --grep='CAP-FB' | wc -l`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.4). The nine confirmed task-to-branch mismatches are listed there; this task exists to correct them in the tracker, not to advance any of their statuses.
+
+## [CAP-FB-20260821-STALE-BRANCH-TRIAGE-01] Land or abandon the unmerged branch backlog
+- Feedback: 2026-08-21 — independent architectural review found 46 branches ahead of `origin/main`, several holding independently reviewed work, stalled by repeated base-change re-review
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: every branch ahead of `origin/main` reaches an explicit terminal disposition — merged, superseded by a named successor, or abandoned with a recorded reason — and the disposition is written into its owning task; the merged set passes the full unit and Chrome journey suites at the resulting tip; branch count ahead of `origin/main` is reduced to the actively worked lanes only; no branch is silently deleted
+- Review: independent review of the merged range as one integration, and independent confirmation that each abandoned branch's task records why
+- Gates: full unit suite and `scripts/chrome-journeys.ts` green at the post-triage tip; a per-branch disposition table with commit ranges; `git branch --merged` and `git branch --no-merged` before and after
+- Blockers: requires a declared freeze window on `origin/main` — triaging against a moving base reproduces the exact failure this task exists to end; the freeze is an owner decision recorded under `CAP-FB-20260821-DELIVERY-LIFECYCLE-01`
+- Next: obtain the freeze window, then produce the per-branch disposition table before merging anything
+- Recover: `git for-each-ref --format='%(refname:short)' refs/heads/ | while read b; do echo "$b $(git rev-list --count origin/main..$b)"; done`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.2). No branch disposition is asserted here; the triage itself is the deliverable.
+
+## [CAP-FB-20260821-DELIVERY-LIFECYCLE-01] Simplify the delivery lifecycle
+- Feedback: 2026-08-21 — independent architectural review measured a 96% collapse in landed commits over 72 hours, correlated with the nine-state lifecycle and mandatory handoff protocol, with zero tasks reaching the terminal state
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: the owner records an explicit decision on each proposed rule change in `REVIEW-2026-08-21.md` §7; `AGENTS.md`, `TASKS.md` and this repository's stated lifecycle are updated to match that decision in one commit; the two retained hard rules — independent review by a different model, and real-browser verification — remain stated and enforced; tasks that are shipped can reach a terminal state without a per-task owner interaction, or the terminal state is redefined so they can
+- Review: owner decision required before any rule is changed; an independent session then verifies the documentation is internally consistent across `AGENTS.md`, `TASKS.md`, `PLAN.md` and `REVIEW-2026-08-21.md`
+- Gates: a written decision per proposed rule; a cross-document consistency check for the lifecycle state list; landed-commits-per-day measured for one week after the change
+- Blockers: this is a process decision reserved to the product owner; no agent may change the lifecycle unilaterally
+- Next: obtain the owner's decision on each of the six proposed rule changes, then land the documentation change as one commit
+- Recover: `git show cdc1a65:AGENTS.md && git show cdc1a65:TASKS.md`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.1, §2.3, §7). The measured evidence is recorded there; the proposed rules are explicitly proposals awaiting an owner decision.
+
+## [CAP-FB-20260821-PUSHED-TASK-CLOSEOUT-01] Close out the shipped-but-unconfirmed tasks
+- Feedback: 2026-08-21 — independent architectural review found four tasks at `PUSHED` awaiting only product-owner confirmation, some since 2026-08-18, blocking three further tasks that name them as dependencies
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: `CAP-FB-20260818-RUN-STATUS-01`, `CAP-FB-20260818-WEBMCP-01`, `CAP-FB-20260818-AGENT-ACCESS-01` and `CAP-FB-20260818-SYSPROMPT-01` each reach a terminal state and move intact to Archive, or record a specific named regression preventing it; the tasks blocked on them (`CAP-FB-20260818-SIDEBAR-01`, `CAP-FB-20260818-TOOL-TREE-01`, `CAP-FB-20260818-SIDEPANEL-PARITY-01`) are unblocked or re-blocked on a different, stated reason
+- Review: a current-main regression check covering the four features, presented to the owner as one confirmation request rather than four
+- Gates: `scripts/chrome-journeys.ts` at the current tip (the independent review recorded 126/126 at `300bea1`, a documentation-only ancestor of the current tip); each shipped commit confirmed as an ancestor of `origin/main` with `git merge-base --is-ancestor`
+- Blockers: terminal closure currently requires explicit product-owner confirmation per task; if `CAP-FB-20260821-DELIVERY-LIFECYCLE-01` changes that rule, apply the new rule instead
+- Next: run one regression pass covering all four features and present a single consolidated confirmation request
+- Recover: `git merge-base --is-ancestor ffbdf28 origin/main && git merge-base --is-ancestor 215d815 origin/main`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.1). No confirmation is inferred and no status of the four tasks is changed by this entry.
+
+## [CAP-FB-20260821-FIRST-RUN-ONBOARDING-01] First-run setup and the session-only storage cliff
+- Feedback: 2026-08-21 — independent architectural review reproduced a fresh install showing empty states plus a red error badge, with no onboarding path, and confirmed an API key entered without the optional storage permission is lost on the next service-worker restart
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: a first run with zero granted permissions presents a clear path to a working state — choose a provider, supply a key, grant storage in the same owner gesture, and complete one seeded task that produces a visible artifact; entering a credential while storage is ungranted warns at the point of entry that the value will not survive a worker restart, and offers the grant inline; the ungranted-storage condition is presented as a setup step, not as an error-console fault; the extension still boots and degrades gracefully with zero permissions; no permission is requested outside a genuine owner gesture and none becomes model-callable
+- Review: independent permission-model, first-run information-architecture, accessibility and exact loaded-MV3 review
+- Gates: fresh-profile loaded-MV3 walkthrough with before/after screenshots; assert the credential warning renders before the value is accepted; service-worker restart after a granted and an ungranted save, asserting retention and loss respectively; keyboard-complete and screen-reader labelling of the setup path; zero-permission boot still clean
+- Blockers: must not weaken the all-optional permission model or pre-request any capability; must compose with `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01` rather than duplicate its remediation surface
+- Next: inventory every state a zero-permission fresh profile can reach, then specify the minimum setup path and the credential-durability warning contract before building UI
+- Recover: `git grep -n "storage permission not granted\|session-only" -- extension && git grep -n "permissions.request" -- extension/options`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D5). The existing warning is honest and is not treated as a defect in itself; the defect is the absence of a path forward and the silent credential loss.
+
+## [CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01] Hub WebMCP discovery status renders outside its card
+- Feedback: 2026-08-21 — independent architectural review reproduced the hub's WebMCP discovery status line rendering flush to the panel edge, misaligned with every sibling row and breaking the card boundary
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: the discovery status line aligns with every other row inside its panel across expanded, collapsed, narrow, wide, RTL and every shipped theme; the fix is expressed once in shared style rather than as a one-off override; no sibling row's geometry regresses; the status text remains bounded and truthful about attested-versus-page-reported values
+- Review: independent visual, geometry and accessibility review against exact loaded-MV3 screenshots
+- Gates: loaded-MV3 before/after screenshots at wide and narrow viewports, RTL, and at least two themes; computed inline-start padding asserted equal to sibling rows; no change to the status text contract
+- Blockers: `.panel-body` sets `padding: 4px 0`, so each row supplies its own inline padding; `#webmcp-hub-status` has no rule in the repository and is written directly via `textContent` at `extension/ntp/ntp.js:113`. Fix the shared row treatment rather than adding another one-off, per the heavy-componentization rule in `AGENTS.md`
+- Next: reproduce at the current tip, then correct the shared panel-row treatment and capture before/after evidence
+- Recover: `git grep -n "webmcp-hub-status\|panel-body" -- extension/ntp`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D4). Reproduced on a clean build of `300bea1`; present in no prior tracker.
+
+## [CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01] Remove superseded surfaces and the published mock site
+- Feedback: 2026-08-21 — independent architectural review found six stale design mocks duplicated into the published documentation site, a published front page titled "UI mocks", and two shipped surfaces that no longer carry a job
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: the `mock/` directory and its duplicated copies under `docs/` are removed; the published front page presents the component gallery and a real product screenshot rather than dead mocks, or is withdrawn; the Chrome Prompt API and demo-local providers are removed from the user-facing provider picker while remaining reachable for internal testing if still needed; the side panel's Page tab is either given a stated job or folded into the Agents view; every removal is checked for inbound references across code, docs, tests and the gallery sync before it lands
+- Review: independent review that no live surface, test, gallery entry or documentation link references a removed file
+- Gates: full unit suite, `scripts/chrome-journeys.ts`, `npm run check:gallery` and `npm run test:components` green after removal; a repository-wide grep for each removed path returning no hits; a loaded-MV3 screenshot of the provider picker without the internal entries
+- Blockers: removing providers from the picker must not remove a provider a user has already selected without a stated migration; the Page-tab decision is a product decision, not a cleanup
+- Next: produce the removal inventory with inbound-reference counts per item, then land the uncontroversial removals separately from the Page-tab decision
+- Recover: `git ls-files mock docs && git grep -n "prompt-api\|demo" -- extension/options extension/lib/provider.js`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §4). The provider-picker removal restates a backlog item standing since 2026-08-17 and is folded here so it has acceptance criteria and a gate.
+
+## [CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01] Split the service-worker route surface
+- Feedback: 2026-08-21 — independent architectural review found 127 message routes in a single 4,799-line flat handler object, identifying it as a structural cause of cross-lane merge conflict and the serialized integration queue
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: routes are grouped into modules by subsystem behind a thin dispatcher; the sender-authorization decision, the page-route allowlist and the error-shaping path remain single authorities and are not duplicated per module; the external message contract is byte-identical — every route name, request shape and response shape unchanged; the bundle contains no new `eval`/`new Function`; no behavior change is bundled with the move
+- Review: independent security review specifically confirming the page-route allowlist and sender authorization cannot be bypassed through any new module boundary
+- Gates: full unit suite and `scripts/chrome-journeys.ts` green; `npm run test:security`; a diff-derived list proving the set of route names before and after is identical; bundle size and service-worker registration time compared before and after
+- Blockers: must not start until `CAP-FB-20260821-STALE-BRANCH-TRIAGE-01` completes — a wide mechanical move performed while 46 branches are outstanding would invalidate all of them
+- Next: after the branch triage, produce the route-to-module map and confirm the authorization seams before moving any code
+- Recover: `git grep -c '^  \(async \)\?"' -- extension/background/service-worker.js`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D7). Explicitly sequenced after the branch triage to avoid invalidating outstanding work.
+
+## [CAP-FB-20260821-RECIPES-SKILLS-RENAME-01] Finish the recipes to skills rename
+- Feedback: 2026-08-21 — independent architectural review found the product concept named "Skills" in the UI while the code still ships a recipes directory, a 655-line recipes module and a `RECIPES` import, the drift `AGENTS.md` already cites as its worked example
+- Updated: 2026-08-21 09:55 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P3
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
+- Candidate: —
+- Shipping: —
+- Acceptance: one vocabulary is used end to end — directory names, module names, exported symbols, route names, slash commands, autocomplete entries, UI copy, tests and documentation; a repository-wide grep for the retired term returns only intentional historical references in changelog or archive entries; stored user data written under the old naming continues to load, or a stated migration converts it
+- Review: independent cross-subsystem review covering the composer, command registry, autocomplete, settings, hub and gallery
+- Gates: full unit suite, `scripts/chrome-journeys.ts`, `npm run check:gallery` and `npm run test:components` green; a repository-wide grep for the retired term with each remaining hit justified; a loaded-MV3 pass over every surface that names the concept; a fixture proving pre-rename stored data still loads
+- Blockers: the couplings named in `AGENTS.md` — composer, command registry, autocomplete, skills/agents registry — must all be updated together; a partial rename is what produced this entry
+- Next: produce the full occurrence inventory across code, storage keys, routes, tests and docs before renaming anything
+- Recover: `git grep -in "recipe" -- extension lib tests scripts docs`
+- History:
+  - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D8).
+
 ---
 
 ## Archive
@@ -820,3 +1033,4 @@ complete field set and History.
 - 2026-08-19 17:25 UTC — reconciled k3 tracker PASS, usage `d6030b7` REVIEW_PASSED, Assets successor `202b85e` REVIEWING, explicit gemini permission attribution, and old-base Directory/artifact READY_FOR_BROWSER classifications. No private coordination identifiers were copied.
 - 2026-08-19 18:18 UTC — captured thirteen distinct product-feedback tasks on exact public `bbeff7b`; linked prior run-status, agent-access, sidebar, Directory, WebMCP, tool-tree, permission, and artifact-transaction tasks without merging or rewriting their histories. The additions retain unresolved enrollment-versus-tool-approval and agent-artifact-disposition decisions as research, treat intermittent whole-UI flashing as a trace-first investigation, keep Recent Activity layout/data/error truth separate from historical renderer evidence, and separate user-facing permission remediation from the existing orchestration candidate. New entries contain only public role custody, repository objects, acceptance criteria, and conservative OPEN/BLOCKED states.
 - 2026-08-20 15:21 UTC — on exact public `ecf657f`, opened semantic tool retrieval across all four tool sources and strengthened the already-open conversation-status presentation task after repeated feedback proved the standalone top-of-task banner remains. No implementation or prior lifecycle acceptance was inferred.
+- 2026-08-21 09:55 UTC — reconciled against an independent architectural review of exact public `300bea1` (documentation-only ancestor of `cdc1a65`). The review executed the build, the unit suite (632 pass, one environment-caused failure), the Chrome journey suite (126/126) and five surface captures. Ten new tasks were opened on exact `cdc1a65` covering worktree/evidence durability, tracker-to-repository reconciliation, the unmerged branch backlog, the delivery lifecycle decision, shipped-task closeout, first-run setup, one reproduced hub alignment defect, superseded-surface removal, service-worker route modularization and the unfinished recipes rename. No existing task's status, owner or evidence was altered, and no prior acceptance was inferred. Full rationale and the ordered work queue are in `REVIEW-2026-08-21.md`.

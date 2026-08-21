@@ -10,6 +10,103 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 - The core architecture is confirmed solid (all-optional permissions, enrollment lifecycle, alarm scheduler fencing, screenshot capture, memory/journal CAS).
 - The open findings are deep concurrency edge-cases + acceptance-coverage gaps, NOT basic-functionality bugs.
 
+## Open — independent architectural review (2026-08-21)
+
+An independent Claude/Opus 5 session with no prior custody reviewed exact
+`origin/main@300bea1` (`0.2.105`) by building it and driving it, not by reading trackers.
+Full rationale, evidence and the ordered work queue are in
+[`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md); the tasks are in [`TASKS.md`](TASKS.md).
+
+**Baseline confirmed healthy at that commit:** build clean, **633 unit tests pass, 0 fail**
+(green only with `TMPDIR` on durable storage — see the inode finding below),
+**126/126 Chrome journeys pass**,
+hub `domContentLoaded` 62 ms, fresh-profile boot clean with zero permissions and zero CSP
+violations. `agent-do` is genuinely imported; sender-origin authorization, zod tool-schema
+validation and escaping at all 65 non-`dist` `innerHTML` sites hold up under reading.
+The findings below are the exceptions, not a re-litigation of the architecture.
+
+### [Open] Build-host temp filesystem at 100% inode use — `CAP-FB-20260821-WORKTREE-HYGIENE-01`
+- The build host's temporary filesystem reported **1,043,303 of 1,048,576 inodes used**.
+  The same unit suite on the same commit is **633/0** with `TMPDIR` on durable storage and
+  fails outright on the default temp filesystem. It fails any process on that host needing
+  a temp file — not only this project. Any gate result produced there currently measures
+  the disk, not the code. Roughly 60 full git worktrees live there at ~7,560 inodes
+  each, plus several hundred retained evidence bundles.
+- **That filesystem is RAM-backed.** A reboot destroys those worktrees and every retained
+  gate-evidence bundle referenced by a `Gates:` field in `TASKS.md`. Evidence whose only
+  copy is on tmpfs is not durable evidence.
+
+### [Open — mitigated] Seven commits reachable only from RAM-backed worktree HEADs — `CAP-FB-20260821-WORKTREE-HYGIENE-01`
+- Seven detached worktrees held commits unreachable from any branch. One is
+  `b4a0a6f feat(composer): route agent mentions canonically across named, background and
+  site agents` — an implementation of a task the tracker records as unstarted.
+- Mitigated: all seven are tagged `rescue/tmp-detached-<short-sha>` in the local
+  repository (local, unpushed; nothing deleted). Do not remove a worktree until its HEAD is
+  reachable from a branch or one of those tags.
+
+### [Open] Runs are not durable — they execute inside a message handler — `CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01`
+- The `run-task` route calls `runTask()` directly inside `chrome.runtime.onMessage`. There
+  is no persisted in-flight run record; `activeRuns` in `lib/scheduler.js` is an in-memory
+  `Map`. The service worker's own comment states the dependency: *"The port keeps the SW
+  alive while a page is listening."*
+- A long run's survival therefore depends on a UI page holding the `agent-progress` port
+  open. Closing the hub tab loses the run — tool side effects already committed, no result,
+  no resume. Tool calls are journalled for replay, but the run cannot be reconstructed.
+- Recorded here as independent confirmation that the existing P0 task is correctly scoped
+  and rated, and that four branches of work already exist against it.
+
+### [Open] Hub WebMCP discovery status renders outside its card — `CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01`
+- `extension/ntp/ntp.html` sets `.panel-body { padding: 4px 0; }`, so each row supplies its
+  own inline padding. `#webmcp-hub-status` carries that class but has **no CSS rule
+  anywhere in the repository**, and `extension/ntp/ntp.js:113` writes straight into
+  `el.textContent`. The status line sits flush to the panel edge, ~14 px left of every
+  sibling row, visibly breaking the card boundary.
+- Reproduced in a screenshot of a clean build of the baseline. Present in no prior tracker.
+
+### [Open] Fresh install looks broken and offers no path forward — `CAP-FB-20260821-FIRST-RUN-ONBOARDING-01`
+- New profile, zero permissions: empty states plus a red error-console badge reading **1**.
+  The entry is honest (*storage ungranted, changes are session-only*) but reads as a fault.
+- Without the optional `storage` permission `lib/kv.js` degrades to an in-memory `Map`
+  owned by the service worker, and MV3 terminates idle workers after roughly 30 seconds.
+  A user who enters an API key without granting storage loses it almost immediately, with
+  no warning at the point of entry.
+- There is no onboarding flow in the extension; grepping for `first-run`, `onboard` and
+  `welcome` finds only unrelated hits.
+
+### [Open] Standalone run-status banner still live on main — `CAP-FB-20260819-CONVERSATION-RUN-STATUS-01`
+- `extension/ntp/ntp.js:1192` still binds `document.getElementById("run-status")` and sets
+  a generic top-of-thread state. `ffbdf28` fixed lifecycle *ownership fencing* and was
+  mistaken for fixing the *presentation*. Any agent taking this task must confirm it
+  understands that distinction before starting.
+
+### [Open] Route surface concentration — `CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01`
+- `extension/background/service-worker.js` is 4,799 lines exposing **127 message routes**
+  in one flat handler object; `extension/shared/components.js` is 5,193 lines with 33
+  custom elements; `extension/options/options.js` is 1,775 lines. This is a structural
+  cause of cross-lane merge conflict, and part of what the serialized integration queue is
+  compensating for. Sequenced after the branch triage.
+
+### [Open] recipes → skills rename unfinished — `CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`
+- The UI says "Skills"; the code ships `extension/recipes/`, a 655-line `lib/recipes.js`
+  and a `RECIPES` import in `options.js`, against a 39-line `lib/skills.js`.
+  `extension/ntp/ntp.js:1586` reads `openView("recipes/index.html", "Skills")`.
+  `AGENTS.md` cites this rename as its worked example of cross-subsystem drift.
+
+### Delivery-process findings (not code defects)
+Recorded here because they are the measured cause of the delivery stall, and because
+reviewers keep re-deriving them. Detail in [`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md).
+- Landed commits per day on `origin/main`: 83 (17 Aug) → 65 → 20 → 3 (20 Aug) → 0 (21 Aug).
+- 0 of 31 tracked tasks are `CONFIRMED`; 4 are `PUSHED` awaiting only owner confirmation.
+- 46 branches ahead of `origin/main`, several holding independently reviewed work stalled
+  by repeated base-change re-review. → `CAP-FB-20260821-STALE-BRANCH-TRIAGE-01`
+- At least 9 tasks recorded as `Owner: unassigned` / `Branch: none` have committed work;
+  only 2 of 430 commits carry a `CAP-FB-*` identifier, so the tracker's own `Recover:`
+  commands cannot find their own material.
+  → `CAP-FB-20260821-TRACKER-GIT-RECONCILE-01`
+- 17 worktrees hold zero commits beyond `origin/main`; ten share one versioned prep naming
+  pattern. An agent creating a `-vN+1` attempt with no commit in `-vN` should stop and
+  escalate. → `CAP-FB-20260821-DELIVERY-LIFECYCLE-01`
+
 ## Open (as of round 27)
 
 ### Permission orchestration recovery (PARTIAL — 2026-08-19)

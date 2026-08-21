@@ -118,7 +118,9 @@ table (cost tracking + spending limits work out of the box).
 
 ## The plan, the history, and the remaining work
 
-This README is the overview. **The plan — the landed state, the in-flight work, the
+This README is the overview. **The current independent architectural review — the verified
+baseline, the delivery diagnosis, and the ordered work queue — is
+[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md).** **The plan — the landed state, the in-flight work, the
 open questions, and the proactive backlog — lives in [PLAN.md](PLAN.md)** (the single
 source of truth for what's done vs what's next). Historical detail and the open review
 findings live in root **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** +
