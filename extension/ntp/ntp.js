@@ -680,8 +680,18 @@ function hideViewInner() {
 function showThreadView({ focusAfter = threadTitle } = {}) {
   // Already open (a follow-up/nudge in the same surface): restarting the view
   // transition would flash the thread + the run-status banner mid-run (the
-  // review's working-state screenshot finding). No-op instead.
-  if (!threadView.hidden) return;
+  // review's working-state screenshot finding). No-op instead, but route focus
+  // to focusAfter so same-surface agent switches retain focus on the composer.
+  if (!threadView.hidden) {
+    if (focusAfter && focusAfter.isConnected !== false) {
+      try {
+        focusAfter.focus?.();
+      } catch {
+        // Focus routing is progressive enhancement; transition cleanup must win.
+      }
+    }
+    return;
+  }
   const sourceRoute = activeViewRoute;
   withViewTransition(() => {
     // Only ONE overlay at a time (item 48): the thread view replaces the

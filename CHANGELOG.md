@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.117] — 2026-08-21
+- fix(ntp): retain composer focus on same-surface task-to-agent switches (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+
+## [0.2.116] — 2026-08-21
+- fix(ntp): retain composer focus on same-surface task-to-agent switches (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+
 ## [0.2.115] — 2026-08-21
 - fix(ntp): provisionally reconcile task-boundary transition routing onto Directory main — suppress obsolete old root and named-overlay pixels in both directions, retain the incoming named overlay and unrelated transitions, preserve covered-view inert/focus behavior, and ship the canonical changelog in clean builds (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
 

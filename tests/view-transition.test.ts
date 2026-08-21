@@ -405,3 +405,100 @@ Deno.test("current-main task routing composes with Directory covered-state and f
     "closing a full view restores the initiating trigger after the top layer settles",
   );
 });
+
+Deno.test("showThreadView already-open branch routes focus to focusAfter synchronously without view transition", () => {
+  let starts = 0;
+  const dummyDoc = {
+    startViewTransition: (update) => {
+      starts += 1;
+      update?.();
+      return { finished: Promise.resolve() };
+    },
+  };
+  const runner = createViewTransitionRunner({
+    document: dummyDoc,
+    prefersReducedMotion: () => false,
+  });
+
+  // Replicate the showThreadView pattern for testing the branch contract
+  function makeShowThreadView(threadView, activeViewRouteRef) {
+    return function showThreadView({ focusAfter } = {}) {
+      if (!threadView.hidden) {
+        if (focusAfter && focusAfter.isConnected !== false) {
+          try {
+            focusAfter.focus?.();
+          } catch {
+            // Focus routing is progressive enhancement
+          }
+        }
+        return;
+      }
+      runner(() => {
+        threadView.hidden = false;
+        activeViewRouteRef.current = VIEW_ROUTE.TASK;
+      }, {
+        sourceRoute: activeViewRouteRef.current,
+        targetRoute: VIEW_ROUTE.TASK,
+        focusAfter,
+      });
+    };
+  }
+
+  // Case 1: threadView is already open (!threadView.hidden) -> routes focus synchronously, 0 transitions
+  let focusedCount = 0;
+  const focusTarget = { isConnected: true, focus: () => { focusedCount += 1; } };
+  const openThreadView = { hidden: false };
+  const routeRef1 = { current: VIEW_ROUTE.TASK };
+  const showOpen = makeShowThreadView(openThreadView, routeRef1);
+
+  showOpen({ focusAfter: focusTarget });
+  assertEquals(focusedCount, 1, "connected focusAfter receives focus synchronously");
+  assertEquals(starts, 0, "no view transition is started when threadView is already open");
+
+  // Case 2: focusAfter is disconnected -> focus is skipped
+  let disconnectedFocusCount = 0;
+  const disconnectedTarget = { isConnected: false, focus: () => { disconnectedFocusCount += 1; } };
+  showOpen({ focusAfter: disconnectedTarget });
+  assertEquals(disconnectedFocusCount, 0, "disconnected target does not receive focus");
+  assertEquals(starts, 0, "still no view transition started");
+
+  // Case 3: focusAfter focus throws -> swallowed gracefully
+  const throwingTarget = {
+    isConnected: true,
+    focus: () => { throw new Error("focus failed"); },
+  };
+  showOpen({ focusAfter: throwingTarget });
+  assertEquals(starts, 0, "exception during focus does not escape or trigger transition");
+
+  // Case 4: threadView is hidden -> starts view transition
+  const closedThreadView = { hidden: true };
+  const routeRef2 = { current: VIEW_ROUTE.HUB };
+  const showClosed = makeShowThreadView(closedThreadView, routeRef2);
+  showClosed({ focusAfter: focusTarget });
+  assertEquals(starts, 1, "closed threadView starts a view transition");
+  assertEquals(closedThreadView.hidden, false, "threadView is unhidden inside transition update");
+  assertEquals(routeRef2.current, VIEW_ROUTE.TASK, "active route is updated to TASK");
+});
+
+Deno.test("NTP showThreadView preserves composer focus on same-surface task-to-agent switches", async () => {
+  const js = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+
+  assert(
+    /function showThreadView\(\{ focusAfter = threadTitle \} = \{\}\)\s*\{[\s\S]*?if \(!threadView\.hidden\) \{[\s\S]*?if \(focusAfter && focusAfter\.isConnected !== false\) \{[\s\S]*?focusAfter\.focus\?\.\(\);[\s\S]*?\}[\s\S]*?return;\s*\}/
+      .test(js),
+    "showThreadView routes focus to focusAfter when already open before returning",
+  );
+  assert(
+    /async function openAgentSurface\(\{ kind, id, name \}\)\s*\{[\s\S]*?showThreadView\(\{ focusAfter: threadComposer \}\);/
+      .test(js),
+    "openAgentSurface routes focus to threadComposer",
+  );
+  assert(
+    /async function openBackgroundAgentChat\(id, name\)\s*\{[\s\S]*?showThreadView\(\{ focusAfter: threadComposer \}\);/
+      .test(js),
+    "openBackgroundAgentChat routes focus to threadComposer",
+  );
+});
+
