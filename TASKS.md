@@ -146,7 +146,7 @@ On resume after a coordinator or worker loss:
 ## Active
 
 ## [CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01] Scheduled runs must not exhaust owner memory or flood errors
-- Feedback: 2026-08-21 — hundreds of `handleAlarm` failures reported for one-shot and background-recipe schedules after retained durable authority consumed the master store's 500-key safety budget
+- Feedback: 2026-08-21 — hundreds of `handleAlarm` failures reported for one-shot and background-recipe schedules after retained durable authority consumed the master store's former 500-key budget
 - Updated: 2026-08-21 19:55 UTC
 - Status: OPEN
 - Resume: —
@@ -157,7 +157,7 @@ On resume after a coordinator or worker loss:
 - Base: `46a3e6df9a9a63e31ceb8da2fde6551f1a8eb621`
 - Candidate: this tracker commit
 - Shipping: —
-- Acceptance: retain the 500-key/store, 8 MiB/store, 64 MiB global and 256 KiB/value limits without eviction; isolate registry and per-execution durable authority from model-writable master memory; copy-verify-delete legacy authority idempotently without losing owner values or retained runs/logs; let new scheduled runs reach terminal state; and disarm/surface an exact key-quota failure once with owner Retry/Cancel rather than flooding every alarm tick
+- Acceptance: remove the arbitrary key-count limit while retaining the 8 MiB/store, 64 MiB global and 256 KiB/value limits; isolate registry and per-execution durable authority from model-writable master memory; copy-verify-delete legacy authority idempotently without losing owner values or retained runs/logs; let new scheduled runs reach terminal state; and disarm/surface a genuine storage-quota failure once with owner Retry/Cancel rather than flooding every alarm tick
 - Review: independent source/security/storage review pending
 - Gates: focused migration, capacity, interruption, retain-all, scheduler circuit-breaker, retry and task-row tests; full unit/build/package/scan/security/gallery/changelog checks pending
 - Blockers: exact source review and loaded-extension migration/retry verification

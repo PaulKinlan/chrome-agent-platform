@@ -763,10 +763,10 @@ Deno.test("cancelScheduledTask aborts a live same-boot run + reports pending unt
 });
 
 Deno.test("memory key quota classification is exact and follows bounded causes", async () => {
-  const quota = Object.assign(new Error("key count exceeds the 500-key bound"), { code: "memory_key_count_bound" });
+  const quota = Object.assign(new Error("store exceeds the 8388608-byte bound"), { code: "memory_bytes_bound" });
   assertEquals(isMemoryKeyQuotaError(new Error("tool failed", { cause: quota })), true);
   assertEquals(isMemoryKeyQuotaError(new Error("provider quota exceeded")), false);
-  assertEquals(isMemoryKeyQuotaError(new Error("key count exceeds the 499-key bound")), false);
+  assertEquals(isMemoryKeyQuotaError(new Error("key count exceeds the 500-key bound")), true);
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assert(sw.includes("if (isMemoryKeyQuotaError(e))"));
   assert(sw.includes("blockScheduledTaskForStorage(alarm.name, e)"));

@@ -7,7 +7,7 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 ## Open
 
 ### Scheduled task storage-full flood (2026-08-21 — local successor)
-- Retained Durable authority exhausted the owner/model master store's 500-key ceiling, causing one-shot and recipe alarms to repeat a generic console failure. The local fix isolates each execution's authority without changing or evicting any quota/data.
+- Retained Durable authority exhausted the owner/model master store's former 500-key ceiling, causing one-shot and recipe alarms to repeat a generic console failure. The fix removes that arbitrary count ceiling, retains byte quotas, isolates each execution's authority, and evicts no data.
 - A storage-blocked scheduled row now shows the failed state plus **Storage full — retry or cancel**, exposes a labelled keyboard-focusable Retry action, and retains Delete as owner cancellation. The exact alarm is disarmed after the first transition; a stale already-queued delivery is silent.
 - Still open: independent source/a11y review and a short loaded-extension migration → retry → terminal check.
 

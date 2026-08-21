@@ -402,7 +402,7 @@ Deno.test("listNamedAgentIds + listBackgroundAgentIds enumerate the per-agent sa
   assertEquals((await namedAgentMemory("paul").get("journal")).length > 0, true);
 });
 
-Deno.test("durable authority migrates out of a full master store without eviction and new runs complete", async () => {
+Deno.test("durable authority migrates out of master store without eviction and new runs complete with >500 keys", async () => {
   // Isolate this capacity fixture from the earlier memory tests.
   root.children.clear();
   const master = masterMemory();
@@ -420,15 +420,18 @@ Deno.test("durable authority migrates out of a full master store without evictio
     await master.setTrusted(`run-payload:${id}:body:000000`, { executionId: id, data: "retained" });
     await master.setTrusted(`run-payload:${id}:body:manifest`, { executionId: id, chunkCount: 1 });
   }
-  assertEquals((await master.keys()).length, 500, "owner + legacy authority exactly fill the master key budget");
-  await assertRejects(() => master.set("owner-blocked", true), Error, "key count exceeds the 500-key bound");
+  assertEquals((await master.keys()).length, 500, "owner + legacy authority initially fill 500 keys in master");
 
   const migration = await migrateLegacyDurableRunMemory();
   assertEquals(migration.migrated, 496);
   assertEquals(await master.keys(), ["owner-a", "owner-b", "owner-c", "owner-d"], "only durable authority moved");
   assertEquals(await master.get("owner-c"), 3, "owner value preserved exactly");
-  await master.set("owner-after-migration", true);
-  assertEquals(await master.get("owner-after-migration"), true, "owner memory has capacity again");
+
+  // >500 tiny owner keys succeed without key count limitation (up to byte quota)
+  for (let i = 0; i < 550; i += 1) {
+    await master.set(`owner-tiny-${i}`, i);
+  }
+  assertEquals(await master.get("owner-tiny-549"), 549, ">500 tiny owner keys succeed");
 
   const durable = durableRunMemory();
   assertEquals(await durable.get("run-registry"), ids, "every retained run stays indexed");
@@ -464,21 +467,19 @@ Deno.test("durable authority migrates out of a full master store without evictio
   assertEquals((await master.keys()).some((key) => key.startsWith("run:")), false, "new runs consume zero master keys");
 });
 
-Deno.test("each durable execution store keeps the 500/501 key bound and global byte limits unchanged", async () => {
+Deno.test("stores allow >500 tiny keys per execution until byte limits and keep byte limits unchanged", async () => {
   root.children.clear();
   const durable = durableRunMemory();
   const id = "exec:11111111-1111-4111-8111-111111111111";
-  for (let i = 0; i < 500; i += 1) {
+  for (let i = 0; i < 550; i += 1) {
     await durable.setTrusted(`run-log:${id}:${String(i).padStart(6, "0")}`, { i });
   }
-  await assertRejects(
-    () => durable.setTrusted(`run-log:${id}:overflow`, { overflow: true }),
-    Error,
-    "key count exceeds the 500-key bound",
-  );
+  const read549 = await durable.get(`run-log:${id}:000549`);
+  assertEquals(read549?.i, 549, ">500 keys per execution succeed without key count limitation");
+
   const source = await Deno.readTextFile(new URL("../extension/lib/memory.js", import.meta.url));
   assert(source.includes("const MAX_VALUE_BYTES = 256 * 1024"));
-  assert(source.includes("const MAX_KEYS_PER_ORIGIN = 500"));
+  assert(!source.includes("const MAX_KEYS_PER_ORIGIN"));
   assert(source.includes("const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024"));
   assert(source.includes("const MAX_BYTES_GLOBAL = 64 * 1024 * 1024"));
 });

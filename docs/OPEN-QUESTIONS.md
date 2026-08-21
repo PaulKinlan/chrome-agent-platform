@@ -13,7 +13,7 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 7. **co-do double-iframe generative UI** — RESOLVED (built): generated HTML artifacts render inside the sandboxed double iframe with the artifact gallery/viewer plus CSP, network, and navigation guards.
 8. **Hub sidebar Tasks/Agents layout** — RESOLVED (Paul, 2026-08-18): both sections use the same panel/list/overflow/scrollbar treatment and aligned inline-end + actions; collapsed content must remain centered and unobstructed by scrollbars.
 9. **Full Agent Directory presentation** — RESOLVED (Paul, 2026-08-19): a full Directory view hides/inerts covered sidebar controls; focus enters after reveal and returns safely on close; each function presents canonical description/schema metadata and its own accessible source/approval state in semantic responsive order.
-10. **Durable retention versus owner memory quota** — RESOLVED (Paul, 2026-08-21): keep the 500-key/store and byte ceilings as safety boundaries, retain all Durable history without automatic eviction, and isolate execution authority from owner/model master memory so routine schedules cannot consume its key budget or flood errors.
+10. **Durable retention versus owner memory quota** — RESOLVED (Paul, 2026-08-21): remove the arbitrary key-count ceiling, keep byte ceilings, retain all Durable history without automatic eviction, and isolate execution authority from owner/model master memory so routine schedules cannot crowd owner data or flood errors. OPFS search/indexing improvements are deferred.
 
 ## Open
 

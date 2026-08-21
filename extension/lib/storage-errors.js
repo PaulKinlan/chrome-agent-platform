@@ -11,9 +11,9 @@ export function isNativeQuotaExceededError(error) {
     error.name === "QuotaExceededError";
 }
 
-/** Exact product-level key quota predicate. AI/tool wrappers may preserve the
- * original error only in `cause`, so inspect that bounded chain; never classify
- * generic provider messages that merely mention quota. */
+/** Exact product-level storage quota predicate (key count, store bytes, global bytes, or native OPFS quota).
+ * AI/tool wrappers may preserve the original error only in `cause`, so inspect that bounded chain;
+ * never classify generic provider messages that merely mention quota. */
 export function isMemoryKeyQuotaError(error) {
   const seen = new Set();
   let current = error;
@@ -21,9 +21,17 @@ export function isMemoryKeyQuotaError(error) {
     seen.add(current);
     if (
       current?.code === "memory_key_count_bound" ||
-      /^key count exceeds the 500-key bound$/i.test(String(current?.message ?? ""))
+      current?.code === "memory_bytes_bound" ||
+      current?.code === "memory_global_bound" ||
+      current?.name === "MemoryStoreQuotaError" ||
+      isNativeQuotaExceededError(current) ||
+      /^key count exceeds/i.test(String(current?.message ?? "")) ||
+      /exceeds the \d+-byte bound/i.test(String(current?.message ?? "")) ||
+      /global memory exceeds/i.test(String(current?.message ?? ""))
     ) return true;
     current = current?.cause;
   }
   return false;
 }
+
+export const isMemoryStorageQuotaError = isMemoryKeyQuotaError;

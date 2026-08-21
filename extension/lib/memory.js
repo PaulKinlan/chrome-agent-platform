@@ -45,18 +45,16 @@ const SITE_RESERVED_KEYS = new Set([
 ]);
 
 // OPFS aggregate quotas (Constitution §4): stores — not just individual values
-// — must be bounded. A site may hold at most this many keys and this many total
-// serialized bytes; beyond that, `set`/`setTrusted` fail closed rather than
-// growing without bound (the round-15 aggregate-unbounded finding).
-const MAX_KEYS_PER_ORIGIN = 500;
+// — must be bounded. A site may hold at most this many total serialized bytes
+// (and 64 MiB across all origins); beyond that, `set`/`setTrusted` fail closed
+// rather than growing without bound (the round-15 aggregate-unbounded finding).
 const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024; // 8 MiB per origin
 const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
 
 // Durable execution authority is not model memory. Older builds stored every
-// `run:*`/log/outbox/payload file beside owner keys in `memory/master`, so the
-// 500-key safety bound was eventually consumed by retained execution history.
-// Keep the constitutional bounds unchanged while isolating each execution in
-// its own bounded store. The registry is a separate one-key store.
+// `run:*`/log/outbox/payload file beside owner keys in `memory/master`, where an
+// arbitrary file-count ceiling blocked routine work. Isolate each execution in
+// its own byte-bounded store; the registry uses a separate store.
 const DURABLE_ROOT = "durable-runs";
 const DURABLE_INDEX_KEY = "run-registry";
 const DURABLE_PREFIXES = ["run:", "run-outbox:", "run-log:", "run-resume:", "run-payload:"];
@@ -305,23 +303,23 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
     prevVersion = await readVersion(dir, key, entry);
   } catch { /* absent → new key */ }
   if (isNew) prevVersion = await readVersion(dir, key);
-  // Aggregate quotas: a store may not grow past MAX_KEYS_PER_ORIGIN keys or
-  // MAX_BYTES_PER_ORIGIN bytes (and the global tree past MAX_BYTES_GLOBAL).
+  // Aggregate quotas: a store may not grow past MAX_BYTES_PER_ORIGIN bytes
+  // (and the global tree past MAX_BYTES_GLOBAL).
   // The delta is positive for BOTH new keys AND replacements that grow — a
   // replacement that enlarges an existing value must also be budgeted (the
   // round-16 finding: the global limit was only checked for new keys).
-  if (isNew && usage.keys + 1 > MAX_KEYS_PER_ORIGIN) {
-    throw new MemoryStoreQuotaError(
-      "key-count",
-      `key count exceeds the ${MAX_KEYS_PER_ORIGIN}-key bound`,
-    );
-  }
   const delta = newBytes - oldBytes;
   if (usage.bytes + Math.max(0, delta) > MAX_BYTES_PER_ORIGIN) {
-    throw new Error(`store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`);
+    throw new MemoryStoreQuotaError(
+      "bytes",
+      `store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`,
+    );
   }
   if ((await globalUsage()) + Math.max(0, delta) > MAX_BYTES_GLOBAL) {
-    throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
+    throw new MemoryStoreQuotaError(
+      "global",
+      `global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`,
+    );
   }
   // Bump the version and write the ENVELOPE. The returned version is the write's
   // durable identity token — callers capture it and pass it to the version-scoped

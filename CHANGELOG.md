@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.121] — 2026-08-21
+- fix(storage): remove arbitrary OPFS key ceiling (CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01)
+
 ## [0.2.120] — 2026-08-21
 - fix(storage): isolate durable runs from owner memory (CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01)
 

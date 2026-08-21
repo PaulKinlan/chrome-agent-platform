@@ -126,11 +126,11 @@ Large-request and full-terminal retention are covered by
 `tests/durable-runs.test.ts:593-606,919-952`.
 
 `RUN_RETENTION_POLICY` names this behavior `run-retention-v1`, disables automatic
-run compaction/eviction, and requires explicit clearing. Each execution still
-fails closed at 500 keys or 8 MiB, each value at 256 KiB, and the full OPFS tree
-at 64 MiB; isolation prevents retained authority for unrelated runs from
-exhausting owner memory without weakening any bound (`extension/lib/durable-runs.js:29-37`;
-`extension/lib/memory.js`).
+run compaction/eviction, and requires explicit clearing. There is no arbitrary
+file-count ceiling: each store remains byte-bounded at 8 MiB, each value at
+256 KiB, and the full OPFS tree at 64 MiB. Per-execution isolation prevents
+retained authority for unrelated runs from crowding owner memory
+(`extension/lib/durable-runs.js:29-37`; `extension/lib/memory.js`).
 
 ## Settlement order
 
