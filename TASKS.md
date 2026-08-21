@@ -289,26 +289,28 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260818-USAGE-RECORDING-01] Model usage records are missing or misattributed
 - Feedback: 2026-08-18 — repeated product-owner report invalidated earlier fixed claims
-- Updated: 2026-08-19 17:12 UTC
-- Status: REVIEW_PASSED
+- Updated: 2026-08-21 21:17 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
-- Owner: release coordinator
+- Owner: usage-attribution integration writer
 - Workspace: active (local path private)
-- Branch: `usage-retry-fix`
-- Base: `fc6975196bc68731b66ac205883a24cb67fd30d3`
-- Candidate: `d6030b722f3df97899564595536ff040d29a2238`
+- Branch: `rapid/usage-598fb12`
+- Base: `598fb12a004287753ebb78f8cc385d56e0206f77`
+- Candidate: this integration commit (`0.2.125`)
 - Shipping: —
 - Acceptance: each real provider attempt records the correct attempt identity exactly once across async retry, synchronous throw, abort, and plain stream-object returns
-- Review: deepseek-flash PASS on exact clean `d6030b7`
-- Gates: independently verified hostile authority 40, probes 1–11, unit 535, security 7, and build; browser gate remains
-- Blockers: public main advanced; the independently accepted range needs a fresh `ffbdf28` integration and browser gate
-- Next: integrate `d6030b7` on current main, independently review exact integration bytes, then run loaded-MV3 usage/Chrome acceptance
-- Recover: `git show --stat d6030b7 && git merge-base --is-ancestor fc69751 d6030b7`
+- Review: deepseek-flash PASS on exact clean `d6030b7`; reviewed integration precedent `963b411`; exact current-main reconciliation review pending
+- Gates: current-main content reconciliation confirms accepted provider-bound runtime/probes are exact Git blobs; focused usage/provider/agent tests and build pass; loaded-MV3 usage proof remains
+- Blockers: independent review of this integration commit and loaded-MV3 usage evidence
+- Next: independently review the exact `598fb12` integration diff; if it passes, drive the real loaded-MV3 usage journey before merge
+- Recover: `git diff 598fb12..rapid/usage-598fb12 -- TASKS.md CHANGELOG.md KNOWN-ISSUES.md PLAN.md docs/usage-precedent-review.md package.json package-lock.json extension/manifest.json`
 - History:
   - 2026-08-18 18:20 UTC — opened after usage remained empty despite earlier claims.
   - 2026-08-19 16:58 UTC — reviewer reproduced synchronous-throw identity leakage and plain-object incompatibility on `fc69751`.
   - 2026-08-19 17:12 UTC — independent re-review PASSed narrow successor `d6030b7`; integration and browser acceptance remain open.
+  - 2026-08-21 13:30 UTC — prior current-main candidate `1ea0d6d4` verified reviewed runtime/test blobs on `0f86e60`, but later serialized integrations overwrote its tracker/release-only reconciliation while retaining the accepted runtime.
+  - 2026-08-21 21:17 UTC — reconciled by content on exact public `598fb12`: accepted runtime/probes remain byte-identical, later provider adapters, Durable records, task scoping, and UI changes are preserved, and a documentation/version-only `0.2.125` candidate entered independent review after focused no-Chrome gates.
 
 ## [CAP-FB-20260818-RUN-STATUS-01] Visible task run-status lifecycle
 - Feedback: 2026-08-18 — visible thinking/loading state repeatedly stuck or crossed task surfaces

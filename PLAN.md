@@ -39,7 +39,7 @@ attestation machinery is removed. See `AGENTS.md` for the normative rules.
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
 - [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)
 - [x] Provider options — a DEDICATED settings pane (options page): Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt-API/demo, multi-agent (1-vs-N) hub, theme picker (4 themes), scoped browser-control grant, usage log, per-origin memory (Paul 2026-08-15: the inline dropdown was not a config pane)
-- [x] Usage logging (per-call token/cost records, 7-day rolling window, aggregation)
+- [x] Usage logging (per-call token/cost records, 7-day rolling window, aggregation) — current-main reconciliation for `CAP-FB-20260818-USAGE-RECORDING-01` preserves accepted attempt-bound identity across synchronous/async failure, plain stream-object returns, AI SDK retries, and aborts; loaded-MV3 usage proof remains pending
 - [x] Browser control + event listening (tabs, alarms, capture)
 - [x] Recipes (4 pre-baked utility agents) + management tools (create/delete/list agents)
 - [x] Glow effect (reduced-motion-aware) + theme picker (midnight/sunlit/neon/terminal, default sunlit) + mood board

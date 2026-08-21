@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.126] — 2026-08-21
+- docs(usage): reconcile accepted attribution authority (CAP-FB-20260818-USAGE-RECORDING-01)
+
 ## [0.2.125] — 2026-08-21
 - fix(artifacts): reconcile crash-safe transaction authority (CAP-FB-20260818-ARTIFACT-TX-01)
 

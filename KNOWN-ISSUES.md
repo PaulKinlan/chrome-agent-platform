@@ -49,6 +49,11 @@ The findings below are the exceptions, not a re-litigation of the architecture.
   repository (local, unpushed; nothing deleted). Do not remove a worktree until its HEAD is
   reachable from a branch or one of those tags.
 
+### [Fixed in current source; integration review and browser proof pending] Usage attempt attribution — `CAP-FB-20260818-USAGE-RECORDING-01`
+- Exact current base `598fb12` contains the accepted usage runtime and deterministic probes byte-identically to correction `d6030b7` and reviewed integration `963b411`; no stale-base runtime replay is needed.
+- Provider-attempt identity is queued at the real `doGenerate`/`doStream` boundary. A synchronous throw or asynchronous rejection removes only that attempt; a plain stream object remains a valid model return; an AI SDK retry records the successful attempt's immutable ID/time/ordinal; abort/finalization clears residual entries so later runs cannot inherit them.
+- The `0.2.125` candidate restores current-main tracker/release provenance without replacing later provider, Durable-run, task-scope, or UI files. Focused no-Chrome gates and build pass; independent integration review and loaded-MV3 usage proof remain.
+
 ### [Fixed in accepted source; integration review pending] Durable run authority — `CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01`
 - The 2026-08-21 architectural review correctly found public main had no persisted in-flight authority. Exact source `dd41258f7401dda8ccf8b561b955b5f4b919baa0` replaces mounted-page ownership with service-worker execution plus OPFS run records, outboxes, retained logs/payloads, recovery decisions, and owner controls.
 - Independent source reviews passed the quota, sidebar, terminal projection, and reload-recovery successors. The exact loaded-extension journey passed 7/7 with one execution/thread, navigation away and back, terminal result/logs, and the same native Tasks row/result/registry/logs after hard reload.
