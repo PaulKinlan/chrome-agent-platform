@@ -898,11 +898,11 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260821-DELIVERY-LIFECYCLE-01] Simplify the delivery lifecycle
 - Feedback: 2026-08-21 — independent architectural review measured a 96% collapse in landed commits over 72 hours, correlated with the nine-state lifecycle and mandatory handoff protocol, with zero tasks reaching the terminal state
-- Updated: 2026-08-21 10:15 UTC
-- Status: MERGED
+- Updated: 2026-08-21 10:30 UTC
+- Status: DONE
 - Resume: —
 - Priority: P0
-- Owner: review author (landing the owner's decision)
+- Owner: review author (landed the owner's decision)
 - Workspace: active (local path private)
 - Branch: `origin/main`
 - Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
@@ -912,10 +912,11 @@ On resume after a coordinator or worker loss:
 - Review: owner decision required before any rule is changed; an independent session then verifies the documentation is internally consistent across `AGENTS.md`, `TASKS.md`, `PLAN.md` and `REVIEW-2026-08-21.md`
 - Gates: a written decision per proposed rule; a cross-document consistency check for the lifecycle state list; landed-commits-per-day measured for one week after the change
 - Blockers: —
-- Next: run the Chrome journey suite at the merged tip and move to `DONE`; then measure landed-commits-per-day for one week against the pre-change baseline recorded in `REVIEW-2026-08-21.md` §2
+- Next: measure landed-commits-per-day for one week against the pre-change baseline in `REVIEW-2026-08-21.md` §2 — the change is in force, this is the follow-up measurement
 - Recover: `git show cdc1a65:AGENTS.md && git log --oneline -- AGENTS.md TASKS.md`
 - History:
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.1, §2.3, §7). The measured evidence is recorded there; the proposed rules are explicitly proposals awaiting an owner decision.
+  - 2026-08-21 10:30 UTC — `DONE`: merged as `6fa954e` on `origin/main` with **126/126 Chrome journeys passing at that exact tip** (built and driven in a clean worktree). This is the first task closed under the new rule that `DONE` is merged-plus-verified rather than merged-plus-owner-confirmation.
   - 2026-08-21 10:15 UTC — **product owner approved all six proposed rule changes.** `AGENTS.md` and `TASKS.md` now state `OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps; `DONE` no longer requires a per-task owner interaction. The two load-bearing rules are retained verbatim: a different model/session reviews every change, and real-browser verification with evidence. Content-addressed gate evidence, live remote attestation, versioned acceptance packages and the five intermediate states are removed. Rules 3–6 (review validity by content not base; `CAP-FB-*` in the commit subject; no worktree or evidence on a RAM-backed filesystem; no `-vN+1` without a commit in `-vN`) are recorded in `AGENTS.md`. Existing entries are deliberately NOT rewritten — a documented legacy-state mapping is published instead, so no prior status, evidence or acceptance is silently reclassified.
 
 ## [CAP-FB-20260821-PUSHED-TASK-CLOSEOUT-01] Close out the shipped-but-unconfirmed tasks
