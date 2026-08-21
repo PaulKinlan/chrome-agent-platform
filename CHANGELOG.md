@@ -1,5 +1,8 @@
 # Changelog
 
+## [Unreleased]
+- docs(runs): add the source map and browser-proof gate for durable-run candidate `ac1c4fe` (release 0.2.110 candidate), explicitly pending integration onto public main; no loaded-extension screenshots are claimed.
+
 ## [0.2.105] — 2026-08-20
 - docs(tasks): add semantic tool search and reprioritize run status
 

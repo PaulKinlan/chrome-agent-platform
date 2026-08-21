@@ -5,7 +5,10 @@ Every agent (human or model) working on this repo reads this first.
 ## The project
 A Chrome extension (MV3) that makes Chrome the agent platform: a new-tab agent
 hub, per-site sub-agents (WebMCP/inferred tools), origin-keyed OPFS memory,
-browser control, recipes, and a chat surface. See docs/DESIGN.md + PLAN.md.
+browser control, recipes, and a chat surface. See docs/DESIGN.md + PLAN.md. The
+candidate durable-run authority is mapped in
+[docs/DURABLE-RUN-ARCHITECTURE.md](docs/DURABLE-RUN-ARCHITECTURE.md), including
+its pending-integration and browser-proof status.
 
 ## The constitution
 **docs/CONSTITUTION.md is non-negotiable.** Every change must satisfy the

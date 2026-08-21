@@ -1,7 +1,10 @@
 # DESIGN.md — Chrome Agent Platform (visual system)
 
 The visual system for the agent hub. Product truth lives in PRODUCT.md; this file
-records the durable visual decisions.
+records the durable visual decisions. Run ownership, OPFS records, recovery, and
+the browser-proof gate are documented separately in
+[DURABLE-RUN-ARCHITECTURE.md](DURABLE-RUN-ARCHITECTURE.md); that reference
+currently describes candidate `ac1c4fe`, not public main.
 
 ## Direction — "Quiet instrument"
 A calm technical command center. The surface is a precise instrument: quiet,
