@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.137] — 2026-08-21
+- fix(ntp): integrate the hub 360px overflow fix (CAP-FB-20260821-HUB-360-OVERFLOW-01)
+
 ## [0.2.136] — 2026-08-21
 - feat(composer): canonical agent mention routing (CAP-FB-20260819-COMPOSER-AGENT-MENTIONS-01)
 

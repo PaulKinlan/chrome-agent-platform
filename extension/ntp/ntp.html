@@ -382,6 +382,12 @@
       margin: 0 auto;
       padding: 32px 24px 48px;
     }
+    /* narrow: reclaim the fixed 24px gutters so the composer controls fit
+       beside the 240px rail without a horizontal scroll
+       (CAP-FB-20260821-HUB-360-OVERFLOW-01). */
+    @media (max-width: 600px) {
+      .main-wrap { padding-inline: 12px; }
+    }
 
     /* ── header ── */
     .top {

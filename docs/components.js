@@ -3044,6 +3044,15 @@ class AgentComposer extends Component {
       .tab-picker .tp-title { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .tab-picker .tp-url { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .tab-picker .tp-empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
+      /* narrow: let the fixed mic/attach/send controls wrap instead of forcing
+         the whole column wide (CAP-FB-20260821-HUB-360-OVERFLOW-01). The send
+         button rides the end of its own line; the textarea drops its intrinsic
+         20-col min-width so the column can shrink below it. */
+      @media (max-width: 600px) {
+        agent-composer .composer .row { flex-wrap: wrap; }
+        agent-composer .composer .send { margin-inline-start: auto; }
+        agent-composer .composer textarea { min-width: 0; }
+      }
     `, html);
     this._input = this._root.querySelector("#task-input");
     this._mic = this._root.querySelector("#mic");
