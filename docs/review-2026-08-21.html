@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chrome Agent Platform — architectural review</title>
+<meta name="description" content="Independent architectural review of the Chrome Agent Platform, 2026-08-21: verified baseline, delivery diagnosis, reproduced defects, and the ordered work queue.">
+<link rel="icon" href="favicon.png">
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0}</style>
+</head>
+<body>
+<style>
+  :root {
+    --ground: #F3F4F2;
+    --surface: #FBFCFA;
+    --surface-2: #EDEFEC;
+    --ink: #161A18;
+    --ink-2: #3B4441;
+    --muted: #5C6663;
+    --hair: #D9DEDA;
+    --hair-strong: #C2C9C4;
+    --accent: #0B6157;
+    --accent-soft: #D9E8E4;
+    --critical: #A33420;
+    --critical-soft: #F3DED8;
+    --warn: #856112;
+    --warn-soft: #F2E7CD;
+    --good: #2D6B4C;
+    --good-soft: #DBEBE0;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+
+    --step--1: 0.8125rem;
+    --step-0: 1rem;
+    --step-1: 1.1875rem;
+    --step-2: 1.5rem;
+    --step-3: 2rem;
+    --step-4: 2.75rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #121513;
+      --surface: #191D1B;
+      --surface-2: #1F2422;
+      --ink: #E4E8E5;
+      --ink-2: #C2CBC7;
+      --muted: #8E9C97;
+      --hair: #282E2B;
+      --hair-strong: #39413D;
+      --accent: #4FB8A6;
+      --accent-soft: #1C2E2B;
+      --critical: #E0866A;
+      --critical-soft: #33201B;
+      --warn: #D6A94A;
+      --warn-soft: #2E2718;
+      --good: #6BBD90;
+      --good-soft: #1B2A21;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #121513;
+    --surface: #191D1B;
+    --surface-2: #1F2422;
+    --ink: #E4E8E5;
+    --ink-2: #C2CBC7;
+    --muted: #8E9C97;
+    --hair: #282E2B;
+    --hair-strong: #39413D;
+    --accent: #4FB8A6;
+    --accent-soft: #1C2E2B;
+    --critical: #E0866A;
+    --critical-soft: #33201B;
+    --warn: #D6A94A;
+    --warn-soft: #2E2718;
+    --good: #6BBD90;
+    --good-soft: #1B2A21;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: var(--step-0);
+    line-height: 1.65;
+    margin: 0;
+    padding: 0 1.25rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 60rem; margin: 0 auto; }
+  .prose { max-width: 44rem; }
+
+  /* ---- masthead ---- */
+  header.mast {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 3.5rem 0 1.75rem;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  h1 {
+    font-size: var(--step-4);
+    line-height: 1.05;
+    letter-spacing: -0.028em;
+    font-weight: 660;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: var(--step-1);
+    line-height: 1.5;
+    color: var(--ink-2);
+    margin: 0;
+    max-width: 40rem;
+    text-wrap: pretty;
+  }
+
+  /* ---- instrument strip ---- */
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1px;
+    background: var(--hair);
+    border: 1px solid var(--hair);
+    margin: 2rem 0 3rem;
+  }
+  .cell {
+    background: var(--surface);
+    padding: 0.9rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .cell .k {
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .cell .v {
+    font-family: var(--mono);
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .cell .n { font-size: var(--step--1); color: var(--muted); line-height: 1.35; }
+  .v.is-good { color: var(--good); }
+  .v.is-warn { color: var(--warn); }
+  .v.is-crit { color: var(--critical); }
+
+  /* ---- sections ---- */
+  section { margin: 0 0 3.5rem; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--hair-strong);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  h2 {
+    font-size: var(--step-2);
+    letter-spacing: -0.02em;
+    font-weight: 640;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: var(--step-1);
+    letter-spacing: -0.012em;
+    font-weight: 620;
+    margin: 2rem 0 0.5rem;
+    text-wrap: balance;
+  }
+  h4 {
+    font-size: var(--step-0);
+    font-weight: 640;
+    margin: 1.5rem 0 0.4rem;
+  }
+  p { margin: 0 0 1rem; text-wrap: pretty; }
+  ul, ol { margin: 0 0 1rem; padding-left: 1.25rem; }
+  li { margin-bottom: 0.45rem; }
+  li::marker { color: var(--muted); }
+  strong { font-weight: 640; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.875em;
+    background: var(--surface-2);
+    border: 1px solid var(--hair);
+    border-radius: 3px;
+    padding: 0.05em 0.32em;
+    word-break: break-word;
+  }
+
+  /* ---- callout ---- */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-left: 3px solid var(--accent);
+    padding: 1rem 1.1rem;
+    margin: 1.5rem 0;
+  }
+  .callout.crit { border-left-color: var(--critical); }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .lbl {
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+
+  /* ---- chart ---- */
+  figure { margin: 1.75rem 0; }
+  figcaption {
+    font-size: var(--step--1);
+    color: var(--muted);
+    margin-top: 0.75rem;
+    max-width: 40rem;
+  }
+  .chart {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    padding: 1.25rem 1.25rem 1rem;
+  }
+  .chart-title { font-size: var(--step--1); font-weight: 620; margin-bottom: 1rem; }
+  .bars { display: flex; flex-direction: column; gap: 0.55rem; }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr 3.25rem;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .bar-lab {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-track { background: var(--surface-2); height: 14px; position: relative; }
+  .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 0 4px 4px 0;
+    min-width: 2px;
+  }
+  .bar-row.is-now .bar-fill { background: var(--critical); }
+  .bar-val {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--ink-2);
+  }
+  .bar-row.is-now .bar-val { color: var(--critical); font-weight: 640; }
+
+  /* ---- findings ---- */
+  .find {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-left: 3px solid var(--hair-strong);
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+  }
+  .find.sev-crit { border-left-color: var(--critical); }
+  .find.sev-warn { border-left-color: var(--warn); }
+  .find.sev-note { border-left-color: var(--accent); }
+  .find h4 { margin: 0 0 0.5rem; font-size: var(--step-0); }
+  .find p { margin: 0 0 0.6rem; font-size: 0.9375rem; }
+  .find p:last-child { margin-bottom: 0; }
+  .find-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.6rem;
+  }
+  .pill {
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.45rem;
+    border-radius: 2px;
+    border: 1px solid var(--hair-strong);
+    color: var(--muted);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  .pill.crit { color: var(--critical); background: var(--critical-soft); border-color: transparent; }
+  .pill.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .pill.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .pill.acc { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+
+  /* ---- tables ---- */
+  .scroller { overflow-x: auto; margin: 1.25rem 0; border: 1px solid var(--hair); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.875rem; background: var(--surface); }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--hair);
+    vertical-align: top;
+  }
+  thead th {
+    font-family: var(--mono);
+    font-size: 0.625rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { font-variant-numeric: tabular-nums; font-family: var(--mono); white-space: nowrap; }
+  td.mono { font-family: var(--mono); font-size: 0.8125rem; }
+
+  /* ---- details ---- */
+  details {
+    border: 1px solid var(--hair);
+    background: var(--surface);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+  }
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9375rem;
+    list-style-position: outside;
+  }
+  details[open] summary { margin-bottom: 0.75rem; }
+
+  /* ---- step list ---- */
+  .steps { list-style: none; padding: 0; counter-reset: s; }
+  .steps > li {
+    counter-increment: s;
+    display: grid;
+    grid-template-columns: 2rem 1fr;
+    gap: 0.85rem;
+    padding: 0.9rem 0;
+    border-top: 1px solid var(--hair);
+    margin: 0;
+  }
+  .steps > li::before {
+    content: counter(s);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 640;
+    color: var(--accent);
+    background: var(--accent-soft);
+    width: 1.6rem;
+    height: 1.6rem;
+    display: grid;
+    place-items: center;
+    border-radius: 2px;
+    margin-top: 0.15rem;
+  }
+  /* Each li has THREE grid children (::before, h4, p) in a 2-column grid, so
+     without this the <p> auto-places into the 2rem counter column and renders
+     one word per line. Pin the text children to column 2. */
+  .steps h4 { margin: 0 0 0.25rem; grid-column: 2; }
+  .steps p { margin: 0; font-size: 0.9375rem; color: var(--ink-2); grid-column: 2; }
+
+  footer {
+    border-top: 1px solid var(--hair-strong);
+    padding-top: 1.25rem;
+    margin-top: 3rem;
+    font-size: var(--step--1);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 40rem) {
+    h1 { font-size: 2.125rem; }
+    .bar-row { grid-template-columns: 4.5rem 1fr 2.5rem; }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <span class="eyebrow">Architectural review · 21 Aug 2026 · origin/main @ 300bea1 · v0.2.105</span>
+  <h1>The Chrome Agent Platform is healthy. Its delivery process is not.</h1>
+  <p class="standfirst">The code builds, 632 unit tests and 126 real-browser journeys pass, and the hub renders in 65 ms. Meanwhile shipping has fallen from 83 commits a day to zero, 46 branches of finished work sit unmerged, and the machinery built to guarantee correctness is now the thing preventing delivery.</p>
+</header>
+
+<div class="strip">
+  <div class="cell">
+    <span class="k">Chrome journeys</span>
+    <span class="v is-good">126/126</span>
+    <span class="n">Run today at 300bea1</span>
+  </div>
+  <div class="cell">
+    <span class="k">Unit tests</span>
+    <span class="v is-good">633/0</span>
+    <span class="n">green on durable disk</span>
+  </div>
+  <div class="cell">
+    <span class="k">Commits, 20 Aug</span>
+    <span class="v is-crit">3</span>
+    <span class="n">was 83 on 17 Aug</span>
+  </div>
+  <div class="cell">
+    <span class="k">Git worktrees</span>
+    <span class="v is-crit">100</span>
+    <span class="n">17 hold zero work</span>
+  </div>
+  <div class="cell">
+    <span class="k">Unmerged branches</span>
+    <span class="v is-warn">46</span>
+    <span class="n">ahead of origin/main</span>
+  </div>
+  <div class="cell">
+    <span class="k">Open handoffs</span>
+    <span class="v is-crit">322</span>
+    <span class="n">152 BLOCKED, 0 closed</span>
+  </div>
+  <div class="cell">
+    <span class="k">/tmp inodes</span>
+    <span class="v is-crit">100%</span>
+    <span class="n">1,043,303 of 1,048,576</span>
+  </div>
+  <div class="cell">
+    <span class="k">Tasks confirmed</span>
+    <span class="v is-crit">0/31</span>
+    <span class="n">nothing has reached done</span>
+  </div>
+</div>
+
+<section class="prose">
+  <div class="sec-head">
+    <h2>What it's supposed to be</h2>
+    <span class="eyebrow">From PLAN · PRODUCT · CONSTITUTION</span>
+  </div>
+
+  <p>Reading <code>PRODUCT.md</code>, <code>PLAN.md</code>, <code>README.md</code> and <code>docs/CONSTITUTION.md</code> together, the intent is coherent and genuinely distinctive:</p>
+
+  <p><strong>Chrome itself becomes the agent runtime.</strong> Not a chat window that happens to live in a browser — the new-tab page is replaced by a command center where you start a task, watch it run, and drill into what the agents did. Everything an agent needs is a browser primitive: tabs, alarms, OPFS, capture, the page's own JavaScript.</p>
+
+  <p>Four ideas carry the product:</p>
+
+  <ul>
+    <li><strong>Persistent named agents.</strong> Each agent — named, background, or per-site — gets its own origin-keyed OPFS sandbox holding memory, run history, installed skills, and a <code>memory_grep</code> tool. A master hub agent creates, delegates to, and deletes them. Agents are durable identities, not chat sessions.</li>
+    <li><strong>Sites as sub-agents.</strong> Any origin you visit can expose tools — declared through WebMCP, linked via <code>agent.md</code>, or inferred from <code>window.*</code> functions. The agent discovers them and invokes them with per-tool first-run approval. This is the bet that makes the whole thing interesting: <em>the web becomes the tool catalog</em>.</li>
+    <li><strong>Generative UI as artifacts.</strong> An agent writes HTML, it renders in a sandboxed double-iframe, and the result is a first-class saved artifact you can reopen, reuse, or attach to the next task.</li>
+    <li><strong>All permissions optional.</strong> The manifest ships <code>"permissions": []</code>. Every capability is requested on a real user gesture at the moment of need. No <code>debugger</code>, no <code>&lt;all_urls&gt;</code>. This is the hardest self-imposed constraint in the project and it shapes almost every design decision downstream.</li>
+  </ul>
+
+  <p>Around that sits a design position — <em>"Operate. The tool must disappear into the work"</em> — warm-neutral paper, one petrol-teal accent, inline SVG icons, no decorative motion. And a delivery position: never accept "it serves" as "it works"; drive real behavior in a real browser; independent review by a different model before push.</p>
+
+  <p>The plan is good. It is not the problem.</p>
+</section>
+
+<section class="prose">
+  <div class="sec-head">
+    <h2>What it actually is</h2>
+    <span class="eyebrow">Verified today, not read from docs</span>
+  </div>
+
+  <p>I built and drove the current public head rather than trusting the trackers. Everything in this section is something I ran.</p>
+
+  <table style="margin-bottom:1.5rem">
+    <tbody>
+      <tr><td><strong>Build</strong></td><td><code>node build.mjs</code> succeeds. Bundles the AI SDK + zod into a 2.8 MB service worker, strips one <code>new Function</code> site and two probes, runs an AST scan over 72 shipped files, syncs the component gallery.</td></tr>
+      <tr><td><strong>Unit</strong></td><td><strong>633 pass, 0 fail</strong> — but only with <code>TMPDIR</code> pointed at durable storage. On the host's default temp filesystem the suite dies at <code>tests/cdp-client.test.ts</code> with <em>"No space left on device"</em>. Same commit, same code, two results.</td></tr>
+      <tr><td><strong>Browser</strong></td><td><code>scripts/chrome-journeys.ts</code>: <strong>126/126 pass</strong> against a real loaded MV3 extension — enrollment, disenroll races, management tools, owner approvals across a service-worker restart, no SW console errors, clean profile teardown.</td></tr>
+      <tr><td><strong>Render</strong></td><td>Hub reaches <code>domContentLoaded</code> in 62 ms, load in 65 ms. Well inside the 1 s budget.</td></tr>
+      <tr><td><strong>Boot posture</strong></td><td>Fresh profile: zero granted permissions, zero CSP violations, one warning (<em>"storage permission not granted — changes are session-only"</em>).</td></tr>
+    </tbody>
+  </table>
+
+  <p>The hub renders correctly and looks like the product brief: paper ground, teal accent, SVG icons, a composer, agent groupings, artifacts, activity. <code>agent-do</code> really is imported from npm and bundled — <code>lib/agent.js</code> wraps the library rather than reimplementing it. The security model in the code is not theatre: sender authorization derives origin from the content script's own realm, page senders hit a route allowlist, tool descriptors get zod-validated, untrusted strings go through <code>escapeHtml</code>/<code>escapeAttr</code> at all 65 <code>innerHTML</code> sites I checked.</p>
+
+  <div class="callout">
+    <span class="lbl">Bottom line on the code</span>
+    <p>This is <em>above-average</em> extension engineering — better reasoned than most production MV3 code I've read. The comments explain threat models and race conditions rather than restating the line below them. Whatever has gone wrong here, it is not code quality.</p>
+  </div>
+
+  <p>What it is <em>not</em> yet: a product anyone can pick up. On first install you get an empty hub, a red error badge, and no onboarding. Nothing works until you find Settings → Permissions and Settings → Providers yourself. The Agent Directory page ships unstyled with no navigation. The side panel's Page tab is a URL field and a status line.</p>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Where it went off the rails</h2>
+    <span class="eyebrow">The diagnosis</span>
+  </div>
+
+  <div class="prose">
+    <p>You said it feels off the plan. Here is the shape of it, measured.</p>
+  </div>
+
+  <figure>
+    <div class="chart">
+      <div class="chart-title">Commits landing on <code>origin/main</code>, per day</div>
+      <div class="bars">
+        <div class="bar-row"><span class="bar-lab">14 Aug</span><span class="bar-track"><span class="bar-fill" style="width:4.8%"></span></span><span class="bar-val">4</span></div>
+        <div class="bar-row"><span class="bar-lab">15 Aug</span><span class="bar-track"><span class="bar-fill" style="width:66.3%"></span></span><span class="bar-val">55</span></div>
+        <div class="bar-row"><span class="bar-lab">16 Aug</span><span class="bar-track"><span class="bar-fill" style="width:84.3%"></span></span><span class="bar-val">70</span></div>
+        <div class="bar-row"><span class="bar-lab">17 Aug</span><span class="bar-track"><span class="bar-fill" style="width:100%"></span></span><span class="bar-val">83</span></div>
+        <div class="bar-row"><span class="bar-lab">18 Aug</span><span class="bar-track"><span class="bar-fill" style="width:78.3%"></span></span><span class="bar-val">65</span></div>
+        <div class="bar-row"><span class="bar-lab">19 Aug</span><span class="bar-track"><span class="bar-fill" style="width:24.1%"></span></span><span class="bar-val">20</span></div>
+        <div class="bar-row is-now"><span class="bar-lab">20 Aug</span><span class="bar-track"><span class="bar-fill" style="width:3.6%"></span></span><span class="bar-val">3</span></div>
+        <div class="bar-row is-now"><span class="bar-lab">21 Aug</span><span class="bar-track"><span class="bar-fill" style="width:0"></span></span><span class="bar-val">0</span></div>
+      </div>
+    </div>
+    <figcaption>Delivery collapsed 96% in 72 hours. Nine <code>pi</code> sessions are running right now, seven of them continuously for more than a day. Zero Chromium processes are running, so no browser acceptance is in progress either.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p>The collapse starts on <strong>19 August</strong>. That is the day <code>bbeff7b docs(project): integrate crash-recoverable task tracker</code> landed, and it is the day after the intercom handoff lifecycle became mandatory in your journal's <code>CLAUDE.md</code>.</p>
+
+    <p>Those two artifacts are individually reasonable. Together they created a delivery process with the following properties:</p>
+
+    <h3>1. The gate is unreachable by construction</h3>
+
+    <p>The lifecycle is <code>OPEN → IN_PROGRESS → REVIEWING → REVIEW_PASSED → READY_FOR_BROWSER → INTEGRATING → GATED → PUSHED → CONFIRMED</code>. Nine states. <code>CONFIRMED</code> requires <em>explicit product-owner confirmation</em> — you, personally, per task.</p>
+
+    <p>Across 31 tracked tasks: <strong>zero are CONFIRMED</strong>. Four sit at <code>PUSHED</code> with <em>"Next: obtain confirmation"</em> — some since 18 August. Because nothing can retire, the tracker only grows, and every new task inherits a dependency graph of unretired ancestors. Six of the fifteen currently-open tasks name another open task as a blocker.</p>
+
+    <h3>2. Rebasing became the work</h3>
+
+    <p>Read the tracker's own language. <code>CAP-FB-20260819-AGENT-DIRECTORY-01</code>: <em>"READY_FOR_BROWSER only on old base; not deliverable… the accepted Directory delta must be recreated and independently checked on <code>ffbdf28</code> before browser use."</em> The same sentence appears on <code>ARTIFACT-TX-01</code> and <code>USAGE-RECORDING-01</code>.</p>
+
+    <p>Work passes review, main advances, the review is voided by the base change, the work is recreated on the new base, and it needs review again. With serialized integration and one browser queue, a lane can never catch up. This is the mechanism that turned finished code into 46 permanently-stale branches.</p>
+
+    <h3>3. Evidence became the deliverable</h3>
+
+    <p>The handoff ledger holds <strong>322 records</strong>. None are closed. The distribution is the tell:</p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Handoff state</th><th class="num">Count</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">BLOCKED</td><td class="num">152</td><td>Stopped, awaiting an owner or a predecessor</td></tr>
+          <tr><td class="mono">FIX_REQUESTED</td><td class="num">82</td><td>Review rejected it; correction owed</td></tr>
+          <tr><td class="mono">INTEGRATING</td><td class="num">62</td><td>Queued behind the serialized browser gate</td></tr>
+          <tr><td class="mono">REVIEW_PASSED</td><td class="num">15</td><td>Approved, not integrated</td></tr>
+          <tr><td class="mono">PUSHED</td><td class="num">5</td><td>Shipped, unconfirmed</td></tr>
+          <tr><td class="mono">REVIEWING / RECEIPT_ACKED</td><td class="num">6</td><td>In flight</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>72% of all handoffs are BLOCKED or FIX_REQUESTED. The fleet is spending its time producing versioned acceptance <em>packages</em> — v7, v8, v9, v10, v11, v14, v15, v16 of the same lane — that get statically reviewed and rejected before a browser ever runs. In your journal's project file the phrase <em>"no browser result exists"</em> appears repeatedly.</p>
+
+    <h3>4. The tracker lost contact with the repository</h3>
+
+    <p>This is the finding I'd act on first, because it means the tracker is actively misleading you.</p>
+
+    <p>Fifteen tasks read <code>Owner: unassigned</code>, <code>Branch: none</code>, <code>Candidate: —</code>. At least nine of them have <strong>committed implementation work sitting in branches right now</strong>:</p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Task (tracker says OPEN / unassigned / no branch)</th><th>Work that actually exists</th></tr></thead>
+        <tbody>
+          <tr><td>CONVERSATION-RUN-STATUS-01 <span class="pill crit">P0</span></td><td class="mono">feat/overnight-conversation-status-nub</td></tr>
+          <tr><td>COMPOSER-AGENT-MENTIONS-01 <span class="pill warn">P1</span></td><td class="mono">feat/composer-agent-mentions (+3), b4a0a6f</td></tr>
+          <tr><td>DURABLE-BACKGROUND-RUNS-01 <span class="pill crit">P0</span></td><td class="mono">4 branches, up to 6 commits ahead</td></tr>
+          <tr><td>PERMISSION-REMEDIATION-UX-01 <span class="pill crit">P0</span></td><td class="mono">docs/permission-remediation-design (+5)</td></tr>
+          <tr><td>AGENT-DELETION-LIFECYCLE-01 <span class="pill warn">P1</span></td><td class="mono">docs/agent-deletion-lifecycle (+3)</td></tr>
+          <tr><td>SITE-AGENT-STATUS-CLEANUP-01</td><td class="mono">fix/site-agent-copy-status-cleanup (+2)</td></tr>
+          <tr><td>LOCAL-MODEL-MANAGEMENT-01</td><td class="mono">feat/gemma4-catalog-preflight</td></tr>
+          <tr><td>PAGE-SCOPED-SITE-IDENTITY-01 <span class="pill warn">P1</span></td><td class="mono">75e2acf (detached, /tmp only)</td></tr>
+          <tr><td>DIRECTORY-TOOL-EXPLORER-01 <span class="pill warn">P1</span></td><td class="mono">3 directory branches</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The join key is broken at the root: the tracker exists so a stable <code>CAP-FB-*</code> ID links a task to its commits. <strong>2 of 430 commits mention a CAP-FB ID.</strong> Every <code>Recover:</code> field in the tracker prescribes a <code>git grep</code> that will not find its own work.</p>
+
+    <h3>5. Some agents are producing nothing at all</h3>
+
+    <p>Seventeen worktrees sit at exactly <code>origin/main</code> with zero commits. Ten of them are <code>/tmp/cap-page-identity-directory-prep-v3</code> through <code>-v13</code> — identical checkouts of the same tip, no work in any of them. That is a loop: create a versioned prep directory, fail a static review, increment the version, repeat. The same shape appears in the scheduled-task lane (v14, v15, v16) and the durable lane (v9, v10, v11).</p>
+
+    <p>That is what your dissatisfaction with the other agent is actually measuring.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Verified defects</h2>
+    <span class="eyebrow">Reproduced, not inferred</span>
+  </div>
+
+  <div class="find sev-crit">
+    <div class="find-meta">
+      <span class="pill crit">Critical</span>
+      <span class="pill">Environment</span>
+      <span class="pill acc">Reproduced</span>
+    </div>
+    <h4>/tmp inodes are 100% exhausted — this machine is currently degraded</h4>
+    <p><code>df -i /tmp</code> reports 1,043,303 of 1,048,576 inodes used. The same unit suite on the same commit is <strong>633/0</strong> with <code>TMPDIR</code> on durable storage and fails outright on the default temp filesystem — so any gate result produced on this machine right now measures its disk, not the code. It will fail any process needing a temp file, not just this project. Roughly 60 full git worktrees live in /tmp at about 7,560 inodes each, alongside 235 <code>cap-picker-full-*</code> and 104 <code>cap-run-status-evidence-*</code> retained evidence bundles.</p>
+    <p><strong>/tmp is tmpfs — RAM-backed.</strong> A reboot destroys all 60+ worktrees and every retained evidence bundle referenced by the tracker's <code>Gates:</code> fields.</p>
+  </div>
+
+  <div class="find sev-crit">
+    <div class="find-meta">
+      <span class="pill crit">Critical</span>
+      <span class="pill">Data loss risk</span>
+      <span class="pill good">Mitigated</span>
+    </div>
+    <h4>Seven commits were reachable only from RAM-backed worktree HEADs</h4>
+    <p>Seven detached worktrees in /tmp held commits not reachable from any branch. The objects live in the main repo, but the only refs pointing at them were the worktree HEADs — on reboot they become unreachable and eligible for <code>git gc</code>. One is <code>b4a0a6f feat(composer): route agent mentions canonically across named, background and site agents</code> — implementation of a task the tracker calls unstarted.</p>
+    <p>I tagged all seven as <code>rescue/tmp-detached-*</code> in the main repository. That is additive and reversible; nothing was deleted. Run <code>git tag -l 'rescue/*'</code> to see them.</p>
+  </div>
+
+  <div class="find sev-crit">
+    <div class="find-meta">
+      <span class="pill crit">P0</span>
+      <span class="pill">Architecture</span>
+      <span class="pill acc">Code-confirmed</span>
+    </div>
+    <h4>Runs are not durable — they live inside a message handler</h4>
+    <p>The <code>run-task</code> route calls <code>runTask()</code> directly inside <code>chrome.runtime.onMessage</code>. There is no persisted in-flight run record; <code>activeRuns</code> in <code>lib/scheduler.js</code> is an in-memory <code>Map</code>. The service worker's own comment is explicit: <em>"The port keeps the SW alive while a page is listening."</em></p>
+    <p>So a long agent run's survival depends on a UI page holding the <code>agent-progress</code> port open. Close the hub tab and the run is gone — tool side effects already committed, no result, no resume. Tool calls are journalled for replay, but the run cannot be reconstructed from them.</p>
+    <p>This is <code>CAP-FB-20260819-DURABLE-BACKGROUND-RUNS-01</code>, correctly rated P0, and it has four branches of work against it while the tracker lists it unassigned.</p>
+  </div>
+
+  <div class="find sev-warn">
+    <div class="find-meta">
+      <span class="pill warn">Major</span>
+      <span class="pill">First run</span>
+      <span class="pill acc">Reproduced</span>
+    </div>
+    <h4>A fresh install looks broken and offers no way forward</h4>
+    <p>New profile, zero permissions: the hub shows an empty state and a red error-console badge reading <strong>1</strong>. The entry is honest — <em>"storage permission not granted — changes are session-only until enabled in Settings"</em> — but a first-time user reads a red badge as a fault.</p>
+    <p>The deeper issue is what "session-only" means under MV3. Without the optional <code>storage</code> permission, <code>lib/kv.js</code> degrades to an in-memory Map owned by the service worker. MV3 terminates idle workers after roughly 30 seconds. So a user who enters an API key without granting storage loses it almost immediately, with no warning at the point of entry. There is no onboarding flow anywhere in the extension — I grepped for one.</p>
+  </div>
+
+  <div class="find sev-warn">
+    <div class="find-meta">
+      <span class="pill warn">Major</span>
+      <span class="pill">UI</span>
+      <span class="pill acc">Reproduced</span>
+    </div>
+    <h4>WebMCP discovery status renders outside its card</h4>
+    <p>In <code>ntp/ntp.html</code>, <code>.panel-body { padding: 4px 0; }</code> — no horizontal padding, so each row supplies its own. <code>#webmcp-hub-status</code> carries the <code>panel-body</code> class but has <strong>no CSS rule anywhere in the repo</strong>, and <code>ntp.js:113</code> writes straight into <code>el.textContent</code>. Result: <em>"Discovery has not run yet."</em> sits flush against the panel edge, roughly 14px left of every sibling row, breaking the card boundary.</p>
+    <p>Visible in the screenshot of a clean build of current main. Not in any tracker.</p>
+  </div>
+
+  <div class="find sev-warn">
+    <div class="find-meta">
+      <span class="pill warn">Major</span>
+      <span class="pill">P0 — still live</span>
+    </div>
+    <h4>The standalone run-status banner is still on main</h4>
+    <p><code>ntp/ntp.js:1192</code> still binds <code>document.getElementById("run-status")</code> and sets a generic top-of-thread state. <code>CAP-FB-20260819-CONVERSATION-RUN-STATUS-01</code> is P0 precisely because <code>ffbdf28</code> fixed lifecycle <em>ownership fencing</em> and was mistaken for fixing the <em>presentation</em>. Worth confirming this distinction is understood before the next attempt — it is the kind of thing that gets re-closed without being fixed.</p>
+  </div>
+
+  <div class="find sev-note">
+    <div class="find-meta">
+      <span class="pill acc">Structural</span>
+      <span class="pill">Maintainability</span>
+    </div>
+    <h4>Three files carry too much of the system</h4>
+    <p><code>background/service-worker.js</code> is 4,799 lines exposing <strong>127 message routes</strong> in one flat handler object. <code>shared/components.js</code> is 5,193 lines with 33 custom elements. <code>options/options.js</code> is 1,775 lines.</p>
+    <p>This is why every change needs cross-subsystem review and why merges conflict so readily — the serialized integration queue is partly a consequence of this shape. It is also why <code>AGENTS.md</code> needs a rule reminding agents to grep for couplings: the couplings aren't expressible in the module structure.</p>
+  </div>
+
+  <div class="find sev-note">
+    <div class="find-meta">
+      <span class="pill acc">Structural</span>
+      <span class="pill">Incomplete rename</span>
+    </div>
+    <h4>recipes → skills never finished</h4>
+    <p>The UI says "Skills". The code ships <code>extension/recipes/</code>, <code>lib/recipes.js</code> at 655 lines, and <code>options.js</code> importing <code>RECIPES</code> — while <code>lib/skills.js</code> is 39 lines. <code>ntp.js:1586</code> reads <code>openView("recipes/index.html", "Skills")</code>. Your own <code>AGENTS.md</code> cites this rename as the example of cross-subsystem drift; it's still drifting.</p>
+  </div>
+</section>
+
+<section class="prose">
+  <div class="sec-head">
+    <h2>What to cut</h2>
+    <span class="eyebrow">Reduce surface before adding</span>
+  </div>
+
+  <ul>
+    <li><strong><code>mock/</code> and its copies in <code>docs/</code>.</strong> Six stale HTML design mocks, duplicated into the published site. The real extension supersedes them.</li>
+    <li><strong>The GitHub Pages front page.</strong> <code>docs/index.html</code> is titled <em>"Chrome Agent Platform — UI mocks"</em> and links four dead mocks. That is the public face of the repository. Make it the component gallery plus a real screenshot, or take it down.</li>
+    <li><strong>Chrome Prompt API and "Demo local" from the provider picker.</strong> Already on your backlog since 17 August. Gemini Nano is too weak for tool-calling and its presence in a user-facing picker invites a bad first run.</li>
+    <li><strong>The side panel's Page tab.</strong> Once the preview iframe and morph stub were removed for security, what remains is a URL field and a status line. Either fold it into the Agents view or give it a job.</li>
+    <li><strong>The versioned acceptance-package ritual.</strong> No lane that reached v8+ has produced a browser result. Static review of a frozen tarball is not catching real defects; it is generating them.</li>
+    <li><strong>Most of the 100 worktrees.</strong> Only about ten represent distinct live lanes. Detail and a safe procedure below.</li>
+  </ul>
+</section>
+
+<section class="prose">
+  <div class="sec-head">
+    <h2>Opportunities</h2>
+    <span class="eyebrow">Where the plan is under-exploited</span>
+  </div>
+
+  <h3>Lead with sites-as-sub-agents</h3>
+  <p>This is the genuinely novel claim and the one nothing else does. Right now it's buried behind an unstyled Directory page and a discovery status line that renders outside its card. A curated set of five real origins that expose useful WebMCP tools, reachable in two clicks from the hub, would demonstrate the entire thesis in thirty seconds. Everything else in the product is table stakes by comparison.</p>
+
+  <h3>Make the permission model the feature, not the tax</h3>
+  <p><code>"permissions": []</code> is a real differentiator against every other agent extension, and it is currently experienced as friction. The <code>docs/permission-remediation-design.md</code> work already specifies the right thing: a failed run names the exact tool, capability, origin, and rationale, then offers the minimal grant and resumes the same run. Shipping that turns your hardest constraint into the thing people notice first.</p>
+
+  <h3>Semantic tool search is the right next architectural bet</h3>
+  <p><code>CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01</code> is well-aimed. With 127 message routes, a management toolset, and an unbounded catalog of per-site WebMCP tools, context pressure is going to be the binding constraint long before model quality is. A local hybrid semantic + lexical top-k over the tool catalogue is genuinely load-bearing. I'd raise its priority — but only <em>after</em> durable runs, because it is meaningless if runs die when a tab closes.</p>
+
+  <h3>A first-run flow</h3>
+  <p>Three steps: pick a provider and paste a key, grant storage in the same gesture, run one seeded example task that produces a visible artifact. That single path converts an empty hub with a red badge into a working demo, and it is a day of work.</p>
+
+  <h3>Split the service worker along the routes that already exist</h3>
+  <p>The 127 routes cluster cleanly — agents, memory, provider, tools/WebMCP, artifacts, permissions, diagnostics. Extracting them into route modules with a thin dispatcher would let lanes touch disjoint files, which is the actual fix for the merge-conflict tax that the serialized queue is compensating for.</p>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Worktree and branch reconciliation</h2>
+    <span class="eyebrow">You asked whether they're really in progress</span>
+  </div>
+
+  <div class="prose">
+    <p>Short answer: <strong>about ten distinct lanes are live. The other ninety are residue.</strong> Counts below exclude your main checkout and the temporary worktree I made for this review, leaving 98.</p>
+  </div>
+
+  <div class="scroller">
+    <table>
+      <thead><tr><th>Class</th><th class="num">Count</th><th>Disposition</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Genuinely active</strong><br><span style="color:var(--muted);font-size:0.8125rem">HEAD commit dated 20–21 Aug</span></td>
+          <td class="num">14</td>
+          <td>About ten distinct lanes once duplicate pairs collapse: durable product successor (+6), durable policy (+5), scheduled-task v3, Gemma 4 preflight, page-directory snapshot, provider-perm, docs. <strong>Keep.</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Stale</strong><br><span style="color:var(--muted);font-size:0.8125rem">HEAD commit before 20 Aug</span></td>
+          <td class="num">67</td>
+          <td>Includes real reviewed work: <code>usage-retry-fix</code> (REVIEW_PASSED), <code>picker-harness-cdp</code> (+25), <code>integrate/provider-5e5c81e</code> (+28), assets, artifact-tx, directory. <strong>Triage: land or abandon. Do not rebase again.</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Zero work</strong><br><span style="color:var(--muted);font-size:0.8125rem">sitting at origin/main exactly</span></td>
+          <td class="num">17</td>
+          <td>Ten are <code>cap-page-identity-directory-prep-v3…v13</code>. <strong>Delete — nothing is lost.</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Redundant copies</strong><br><span style="color:var(--muted);font-size:0.8125rem">sharing a HEAD with another worktree</span></td>
+          <td class="num">27</td>
+          <td>73 distinct HEADs across 100 worktrees. e.g. <code>cap-durable-product-successor-fa3c51c</code> and <code>-2998258</code> both sit at <code>2998258</code>. <strong>Keep one each.</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Orphan-risk detached</strong><br><span style="color:var(--muted);font-size:0.8125rem">/tmp-only refs</span></td>
+          <td class="num">7</td>
+          <td><strong>Now tagged <code>rescue/tmp-detached-*</code>.</strong> Safe to prune the worktrees.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <div class="callout warn">
+      <span class="lbl">Also worth knowing</span>
+      <p>Your primary checkout at <code>~/chrome-agent-platform</code> is on a <strong>detached HEAD at <code>5e5c81e</code>, eleven commits behind <code>origin/main</code></strong>. If you've been inspecting the product there, you have been looking at 19 August's build, not 20 August's. It's also missing <code>fake-indexeddb</code> because its <code>node_modules</code> is a symlink into <code>/tmp/cap-assets-ui/</code> — a directory that vanishes on reboot.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>What I'd do</h2>
+    <span class="eyebrow">In this order</span>
+  </div>
+
+  <ol class="steps">
+    <li>
+      <h4>Reclaim /tmp today</h4>
+      <p>The machine is degraded now. Delete the 17 zero-work worktrees and the retained evidence bundles, then move all remaining worktrees to <code>~/cap-worktrees/</code> so a reboot stops being a data-loss event. The rescue tags mean nothing is lost either way.</p>
+    </li>
+    <li>
+      <h4>Restore the primary checkout</h4>
+      <p><code>git checkout main &amp;&amp; git pull &amp;&amp; npm install</code>. Stop testing eleven commits behind.</p>
+    </li>
+    <li>
+      <h4>Confirm or abandon the four PUSHED tasks in one pass</h4>
+      <p>RUN-STATUS, WEBMCP, AGENT-ACCESS, SYSPROMPT are all shipped and waiting only on you. The 126/126 journey run in this review is the regression evidence they're blocked on. Closing them unblocks the three tasks that name them as dependencies.</p>
+    </li>
+    <li>
+      <h4>Reconcile the tracker against git before anything else is planned</h4>
+      <p>Nine "unassigned" tasks have real branches. Write those branch names and commit SHAs into their entries. Then make <code>CAP-FB-…</code> in the commit subject a hard rule — today it's 2 commits out of 430, which means the tracker's own recovery instructions don't work.</p>
+    </li>
+    <li>
+      <h4>Freeze main for a triage window</h4>
+      <p>The rebase treadmill is the single largest waste. Stop advancing main, land or abandon the ~37 stale branches against a fixed base, then reopen. Nothing else fixes the "reviewed on an old base, must be recreated" loop.</p>
+    </li>
+    <li>
+      <h4>Cut the lifecycle to four states</h4>
+      <p><code>OPEN → IN_REVIEW → MERGED → DONE</code>. Keep the two rules that are load-bearing — a different model reviews, and a real browser drives it — and delete the rest. Nine states with content-addressed gate evidence and remote attestation has produced 322 open handoffs and zero confirmations. Optimise for one shipped increment per day, not for an unfalsifiable audit trail.</p>
+    </li>
+    <li>
+      <h4>Then ship durable runs, then the first-run flow</h4>
+      <p>Durable runs first because everything else is unreliable without it. First-run second because it converts the project from a thing you can inspect into a thing someone else can use. Both already have code or a design doc; neither needs new research.</p>
+    </li>
+  </ol>
+</section>
+
+<section class="prose">
+  <div class="sec-head">
+    <h2>The one-sentence version</h2>
+  </div>
+  <p>The Chrome Agent Platform is a well-built, genuinely novel extension that passes every gate you set for it, and it stopped shipping because the process you built to protect its quality now costs more than the quality it protects — so the fix isn't more engineering, it's retiring the tracker, landing the 46 branches of finished work, and getting back to one visible increment a day.</p>
+</section>
+
+<footer>
+  <p>Evidence gathered 21 Aug 2026 against <code>origin/main@300bea14c68472340a38a21a583d62e286c008a4</code> (v0.2.105) in a clean worktree. Build, the 633-test unit suite, the 126-check Chrome journey suite, and five surface screenshots were run today; git, worktree, handoff-ledger and tracker figures are measured, not quoted. Seven <code>rescue/tmp-detached-*</code> tags were added to the local repository to prevent commit loss; no tags were pushed.</p>
+  <p>This review now lives in the repository as <code>REVIEW-2026-08-21.md</code>, landed on <code>origin/main@ce2e45f</code> (v0.2.106) together with ten new <code>CAP-FB-20260821-*</code> entries in <code>TASKS.md</code> and the defects in <code>KNOWN-ISSUES.md</code>. That commit is documentation-only. Agents should work from the repository copy, which is the version under version control.</p>
+</footer>
+
+</div>
+</body>
+</html>
