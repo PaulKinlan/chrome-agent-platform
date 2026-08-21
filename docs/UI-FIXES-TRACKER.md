@@ -22,6 +22,11 @@ Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in 
 
 ## Done (verified in the committed code)
 
+### Agent Directory presentation (Paul 2026-08-19)
+- The full Directory covered-view state now hides and inerts both the sidebar and its edge nub without changing their thread-view stacking behavior; focus enters the frame only after that reveal, and close removes the inert/AX markers, restores the prior sidebar state, and returns focus only to a still-visible initiating control.
+- Each canonical registry function renders through shared `<tool-directory-card>` in semantic name → description/schema metadata → per-function state order. Long registry content wraps inside its own card; source and approval labels carry function-specific accessible names.
+- The old-base accepted source `ac72ae19` passed loaded-MV3 acceptance 20/20 (geometry, overflow, hit-testing, restore, exact AX-name, error-free, narrow, RTL, Midnight) with before/after screenshots; the current-main reconciliation of that content (CAP-FB-20260819-AGENT-DIRECTORY-01) carries the same browser evidence requirement — fresh loaded-MV3 runs on the new base remain pending.
+
 ### Settings
 - Duplicate back buttons removed (a single back path).
 - The "Multiple agents" + "Browser control" + hooks toggles use the shared `<switch-toggle>` Web Component (the root cause was a hand-rolled `<label class="switch">` colliding with theme.css — fixed).

@@ -1,4 +1,5 @@
-// directory/directory.js — render the agent directory + per-tool approval.
+// directory/directory.js — render the canonical production tool registry with
+// per-function source, schema metadata, and approval state.
 
 import { send } from "../lib/messages.js";
 
@@ -9,39 +10,65 @@ async function render() {
   const list = Array.isArray(origins) ? origins : [];
   rowsEl.replaceChildren();
   if (!list.length) {
-    rowsEl.append(Object.assign(document.createElement("p"), { textContent: "No sites enrolled yet. Browse the web with the extension installed; each origin becomes a sub-agent.", style: "color:var(--muted)" }));
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No sites enrolled yet. Browse the web with the extension installed; each enrolled origin becomes a site agent.";
+    rowsEl.append(empty);
     return;
   }
-  for (const origin of list) {
-    const tools = await send("tools.list", { origin });
+
+  for (const [originIndex, origin] of list.entries()) {
+    const [tools, pending] = await Promise.all([
+      send("tools.list", { origin }),
+      send("tools.pending", { origin }),
+    ]);
     const toolList = Array.isArray(tools) ? tools : [];
-    const pending = await send("tools.pending", { origin });
+    const pendingNames = new Set(
+      (Array.isArray(pending) ? pending : []).map((tool) => tool?.name).filter(Boolean),
+    );
 
-    const row = document.createElement("div");
-    row.className = "row";
-    const o = document.createElement("span");
-    o.className = "origin";
-    o.textContent = origin;
-    const t = document.createElement("span");
-    t.className = "tools";
-    t.textContent = toolList.map((x) => x.name).join(" · ") || "(no tools)";
-    row.append(o, t);
+    const section = document.createElement("section");
+    section.className = "site-group";
+    const heading = document.createElement("h2");
+    heading.className = "site-heading";
+    heading.id = `site-${originIndex}`;
+    heading.textContent = origin;
+    section.setAttribute("aria-labelledby", heading.id);
 
-    for (const tool of toolList) {
-      const src = document.createElement("span");
-      src.className = "src " + (tool.source ?? "inferred");
-      src.textContent = tool.source ?? "inferred";
-      row.append(src);
-      const approved = !(pending.some((p) => p.name === tool.name));
-      if (!approved) {
-        const btn = document.createElement("button");
-        btn.className = "approve";
-        btn.textContent = "approve";
-        btn.onclick = async () => { await send("tools.approve", { origin, name: tool.name, decision: true }); render(); };
-        row.append(btn);
-      }
+    if (!toolList.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "No functions currently available.";
+      section.append(heading, empty);
+      rowsEl.append(section);
+      continue;
     }
-    rowsEl.append(row);
+
+    const functionList = document.createElement("ul");
+    functionList.className = "tool-list";
+    for (const tool of toolList) {
+      const item = document.createElement("li");
+      const card = document.createElement("tool-directory-card");
+      card.tool = {
+        ...tool,
+        origin,
+        approved: !pendingNames.has(tool.name),
+      };
+      card.addEventListener("approve", async (event) => {
+        const { origin: approvedOrigin, name } = event.detail ?? {};
+        if (!approvedOrigin || !name) return;
+        await send("tools.approve", {
+          origin: approvedOrigin,
+          name,
+          decision: true,
+        });
+        await render();
+      });
+      item.append(card);
+      functionList.append(item);
+    }
+    section.append(heading, functionList);
+    rowsEl.append(section);
   }
 }
 

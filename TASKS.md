@@ -330,26 +330,27 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260819-AGENT-DIRECTORY-01] Agent Directory overlay and function cards
 - Feedback: 2026-08-19 — full Directory must own the covered view and present truthful per-function metadata
-- Updated: 2026-08-19 17:23 UTC
-- Status: READY_FOR_BROWSER
+- Updated: 2026-08-21 15:20 UTC
+- Status: OPEN
 - Resume: —
 - Priority: P2
-- Owner: release coordinator
+- Owner: k3 (reconciliation worker)
 - Workspace: active (local path private)
-- Branch: `integrate/agent-directory-ac72ae1` (old-base reviewed candidate)
-- Base: reviewed parent `d2d7fe825c396804b6bd4296c23d42e351bd98df`; required new target `ffbdf282013717b34c80c4a2135dd6fa8992f63a`
-- Candidate: `38cdb15b19efe1ed5719354b7064bce112753974` (READY_FOR_BROWSER only on old base; not deliverable)
+- Branch: `fix/agent-directory-01`
+- Base: `0f86e60a3935b196e4a2c3ae13306a05a3ea6105`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: covered sidebar controls are inert/hidden and restored exactly; responsive cards expose canonical descriptions, schema metadata, and function-specific accessible states
 - Review: gemini static review classified exact old-base `38cdb15` READY_FOR_BROWSER; fresh current-main integration review pending
 - Gates: old-base integration reported unit 542, static security 19, components 13, build/gallery/parse; no current-main browser evidence
 - Blockers: public main advanced; the accepted Directory delta must be recreated and independently checked on `ffbdf28` before browser use
-- Next: create one clean integration on `ffbdf28`, re-review exact bytes, then run Directory and broad Chrome journeys
-- Recover: `git show --stat 38cdb15 && git show --stat ffbdf28`
+- Next: independent different-model review of the reconciled candidate, then Directory and broad Chrome journeys on the new base
+- Recover: `git show --stat ac72ae19 && git show --stat 993bc9e && git show --stat 0f86e60`
 - History:
   - 2026-08-19 13:20 UTC — opened from overlay and function-card feedback.
   - 2026-08-19 15:55 UTC — one-commit old-main integration froze with reviewed exclusive blobs preserved.
   - 2026-08-19 17:23 UTC — gemini static review classified `38cdb15` READY_FOR_BROWSER, but `origin/main` had advanced to `ffbdf28`; reintegration is mandatory before any browser or push claim.
+  - 2026-08-21 15:20 UTC — reconciled the reviewed Directory lineage (accepted source `ac72ae19` with 20/20 old-base loaded-MV3 evidence; current-main integration `e5e3d01` + focus-restore `993bc9e`) onto exact `0f86e60` under the delivery-lifecycle content rule. Scope kept to the Directory overlay/covered-view state, responsive `<tool-directory-card>` function cards with schema metadata, the view focus trap/restore controller, and exact owner/source labels; Assets, the generalized covered-nub policy, scheduled memory, run-status, transitions, and onboarding are deliberately excluded; Durable/provider/permission logic preserved. No-Chrome gates on the candidate: full unit suite, build, gallery, security, diff checks. Independent review and fresh loaded-MV3 evidence remain open.
 
 ## [CAP-FB-20260819-ASSETS-01] Assets browser and quick access
 - Feedback: 2026-08-19 — make Assets inspectable, reusable, safely previewable, and reachable without losing full-browser navigation

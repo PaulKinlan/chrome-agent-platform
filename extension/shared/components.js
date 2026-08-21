@@ -1137,6 +1137,103 @@ class SiteAgentCard extends Component {
 }
 customElements.define("site-agent-card", SiteAgentCard);
 
+/* <tool-directory-card> — one production-registry function in semantic order:
+ * name → bounded registry description/schema metadata → per-function states.
+ * The component owns its responsive geometry so Directory embeds cannot detach
+ * a source/approval badge from the function it describes. */
+export function summarizeInputSchema(schema) {
+  if (!schema || typeof schema !== "object") return "Input schema unavailable";
+  const properties = schema.properties && typeof schema.properties === "object"
+    ? Object.keys(schema.properties)
+    : [];
+  const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
+  if (!properties.length) {
+    return schema.type === "object" ? "No inputs" : `${String(schema.type || "unknown")} input`;
+  }
+  const shown = properties.slice(0, 6).map((name) => `${name}${required.has(name) ? " (required)" : ""}`);
+  const remainder = properties.length - shown.length;
+  return `Inputs: ${shown.join(", ")}${remainder > 0 ? `, +${remainder} more` : ""}`;
+}
+
+class ToolDirectoryCard extends Component {
+  constructor() {
+    super();
+    this._tool = {};
+  }
+  set tool(value) {
+    this._tool = value && typeof value === "object" ? value : {};
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get tool() { return this._tool; }
+  _render() {
+    const tool = this._tool;
+    const name = String(tool.name || "Unnamed function");
+    const origin = String(tool.origin || "Unknown site");
+    const description = String(tool.description || "").trim() || "No description provided";
+    const source = String(tool.source || "inferred");
+    const sourceLabel = source === "declared" ? "Declared" : source === "linked" ? "Linked" : "Inferred";
+    const approved = tool.approved === true;
+    const titleId = `tool-title-${Math.random().toString(36).slice(2)}`;
+    const descriptionId = `${titleId}-description`;
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:0; container-type:inline-size; }
+      article { display:grid; grid-template-columns:minmax(0,1fr); gap:8px;
+        min-inline-size:0; padding:14px 16px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-md,12px); background:var(--panel,#fff); }
+      .tool-name { margin:0; min-inline-size:0; color:var(--text,#1d1b18);
+        font:600 var(--text-base,14px)/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+        overflow-wrap:anywhere; word-break:break-word; }
+      .tool-description { margin:0; min-inline-size:0; color:var(--text,#1d1b18);
+        max-inline-size:72ch; overflow-wrap:anywhere; }
+      .tool-metadata { display:flex; flex-wrap:wrap; gap:4px 12px; margin:0;
+        min-inline-size:0; color:var(--muted,#635e56); font-size:var(--text-xs,12px); }
+      .tool-metadata div { display:flex; flex-wrap:wrap; min-inline-size:0; gap:4px; }
+      .tool-metadata dt { font-weight:600; }
+      .tool-metadata dd { margin:0; min-inline-size:0; overflow-wrap:anywhere; }
+      .tool-states { display:flex; flex-wrap:wrap; align-items:safe center; gap:8px;
+        min-inline-size:0; }
+      .tool-status { display:inline-flex; align-items:center; min-inline-size:0;
+        max-inline-size:100%; padding:3px 8px; border:1px solid var(--border,#e3e0d9);
+        border-radius:999px; color:var(--muted,#635e56); background:var(--bg,#f7f6f3);
+        font-size:var(--text-xs,12px); font-weight:600; line-height:1.4; overflow-wrap:anywhere; }
+      .tool-status.source { color:var(--accent,#0e6e63); border-color:currentColor; }
+      .tool-status.approved { color:var(--success,#1a7f37); border-color:currentColor; }
+      .tool-status.pending { color:var(--warning,#9a6700); border-color:currentColor; }
+      .approve { min-block-size:36px; max-inline-size:100%; padding:6px 10px;
+        border:0; border-radius:var(--radius-sm,6px); background:var(--accent,#0e6e63);
+        color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1.4 inherit;
+        white-space:normal; overflow-wrap:anywhere; }
+      .approve:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @container (min-inline-size:520px) {
+        article { grid-template-columns:minmax(0,1fr) fit-content(260px); column-gap:20px; }
+        .tool-name, .tool-description, .tool-metadata { grid-column:1; }
+        .tool-states { grid-column:2; grid-row:1 / span 3; align-self:start; justify-content:flex-end; }
+      }
+      @media (forced-colors:active) {
+        article, .tool-status, .approve { border:1px solid CanvasText; forced-color-adjust:auto; }
+      }
+    `, `<article class="tool-card" aria-labelledby="${titleId}" aria-describedby="${descriptionId}">
+      <h3 class="tool-name" id="${titleId}">${escapeHtml(name)}</h3>
+      <p class="tool-description" id="${descriptionId}">${escapeHtml(description)}</p>
+      <dl class="tool-metadata">
+        <div><dt>Site:</dt><dd>${escapeHtml(origin)}</dd></div>
+        <div><dt>Schema:</dt><dd>${escapeHtml(summarizeInputSchema(tool.inputSchema))}</dd></div>
+      </dl>
+      <div class="tool-states" aria-label="States for ${escapeHtml(name)}">
+        <span class="tool-status source" role="status" aria-label="${escapeHtml(name)}: ${sourceLabel}">${sourceLabel}</span>
+        <span class="tool-status ${approved ? "approved" : "pending"}" role="status" aria-label="${escapeHtml(name)}: ${approved ? "Approved" : "Approval required"}">${approved ? "Approved" : "Approval required"}</span>
+        ${approved ? "" : `<button class="approve" type="button" aria-label="Approve ${escapeHtml(name)} for ${escapeHtml(origin)}">Approve</button>`}
+      </div>
+    </article>`);
+  }
+  _wire() {
+    this._root.querySelector(".approve")?.addEventListener("click", () => {
+      this._emit("approve", { origin: this._tool.origin, name: this._tool.name });
+    });
+  }
+}
+customElements.define("tool-directory-card", ToolDirectoryCard);
+
 /* <capability-row name description icon action="run|toggle" enabled last-run>
  * The reusable capability/recipe row. A strict grid — icon (fixed) | label
  * column (name + description STACKED, never run together) | action

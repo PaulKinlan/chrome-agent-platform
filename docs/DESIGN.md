@@ -22,6 +22,11 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - **Themes**: Sunlit (default light), Midnight (dark), Neon, Terminal. All
   restyle the same tokens (matching `extension/shared/theme.css`).
 
+## Directory function cards
+- A function is one semantic unit in source order: name, truthful bounded registry description (or “No description provided”), site/schema metadata, then its own source and approval states.
+- `<tool-directory-card>` owns responsive behavior with intrinsic/logical sizing, `min-inline-size: 0`, wrapping state controls, and a card-level container query. Badges never float outside or detach from their function in narrow or RTL layouts.
+- Full settings/directory/skills views deactivate covered hub controls as view state; task threads remain the only overlay where the sidebar edge control stays available. Covered controls are hidden/inert, not raised through a z-index contest. Focus enters the frame only after reveal and returns on close only if the initiating control is still connected and visible.
+
 ## Typography
 - Workhorse system sans (SF/Segoe/Roboto), antialiased, `cv02/cv03/cv04/cv11`.
 - Fixed rem scale: 12 / 13 / 14 / 16 / 20 / 24. Base 14px.

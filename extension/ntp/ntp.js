@@ -17,6 +17,7 @@ import { initialAvatar } from "../lib/avatar.js";
 import { renderDurabilityState } from "../lib/durability-ui.js";
 import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../lib/task-sidebar-lifecycle.js";
 import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
+import { createViewFocusController } from "../lib/view-focus.js";
 
 import {
   installPageDiagnostics,
@@ -109,7 +110,7 @@ async function renderSiteAgents() {
       );
       row.setAttribute("icon", "");
       row.setAttribute("action", "run");
-      row.addEventListener("run", () => openView("directory/directory.html", "Directory"));
+      row.addEventListener("run", () => openView("directory/directory.html", "Directory", row));
       el.append(row);
     }
     if (agents.length > 6) {
@@ -348,7 +349,7 @@ async function renderBackgroundAgents() {
     el.innerHTML = `<div class="empty">No background agents running — <a href="#" class="hint-link" data-open-bg>enable one in Settings</a>.</div>`;
     el.querySelector("[data-open-bg]")?.addEventListener("click", (e) => {
       e.preventDefault();
-      openView("options/options.html", "Settings");
+      openView("options/options.html", "Settings", e.currentTarget);
     });
   } else {
     for (const a of active) {
@@ -630,8 +631,21 @@ function syncComposerScope() {
 // open, the hub is hidden + its scroll is frozen so the BACKGROUND page cannot
 // scroll behind the overlay (the scrollbar belongs to the ACTIVE view only).
 function syncViewOpen() {
-  const anyOpen = !threadView.hidden || !viewOverlay.hidden;
+  const fullViewOpen = !viewOverlay.hidden;
+  const anyOpen = !threadView.hidden || fullViewOpen;
   document.body.classList.toggle("view-open", anyOpen);
+  document.body.classList.toggle("full-view-open", fullViewOpen);
+
+  // The full Directory/Settings/Skills view covers the whole hub. Keep the
+  // covered sidebar and its edge nub out of pointer, keyboard, and AX flows;
+  // remove every state marker on close so their prior expanded/collapsed state
+  // and interactions resume unchanged. Task threads keep both controls active.
+  for (const covered of [side, sideToggle]) {
+    if (!covered) continue;
+    covered.inert = fullViewOpen;
+    if (fullViewOpen) covered.setAttribute("aria-hidden", "true");
+    else covered.removeAttribute("aria-hidden");
+  }
 }
 function hideThreadViewInner() {
   runSurfaceOwner.claim(); // leaving fences any in-flight run (its outcome still journals)
@@ -663,8 +677,8 @@ function showThreadView() {
     // settings/directory/recipes view.
     if (!viewOverlay.hidden) hideViewInner();
     threadView.hidden = false;
+    syncViewOpen();
   });
-  syncViewOpen();
 }
 function hideThreadView() {
   withViewTransition(hideThreadViewInner);
@@ -1610,21 +1624,23 @@ function withViewTransition(fn) {
 const viewOverlay = document.getElementById("view");
 const viewFrame = document.getElementById("view-frame");
 const viewTitle = document.getElementById("view-title");
+const viewFocus = createViewFocusController();
 
-function openView(path, title) {
+function openView(path, title, trigger) {
   viewFrame.src = chrome.runtime.getURL(path);
+  viewFrame.title = title;
   viewTitle.textContent = title;
-  withViewTransition(() => {
+  withViewTransition(() => viewFocus.open(trigger, () => {
     // Only ONE overlay at a time (item 48): the settings/directory/recipes
-    // view replaces the task thread.
+    // view replaces the task thread. Synchronise covered-view state inside the
+    // transition callback: startViewTransition applies this callback later.
     if (!threadView.hidden) hideThreadViewInner();
     viewOverlay.hidden = false;
-  });
-  syncViewOpen();
-  viewFrame.focus();
+    syncViewOpen();
+  }, viewFrame));
 }
 function closeView() {
-  withViewTransition(hideViewInner);
+  withViewTransition(() => viewFocus.close(hideViewInner));
   // Returning from Settings/Directory is an owner navigation boundary. A
   // fresh authoritative read both restores the row promptly and fences any
   // older delayed sidebar read that began before the view switch.
@@ -1635,25 +1651,25 @@ document.getElementById("view-back")?.addEventListener("click", closeView);
 
 document.getElementById("open-settings")?.addEventListener(
   "click",
-  () => openView("options/options.html", "Settings"),
+  (event) => openView("options/options.html", "Settings", event.currentTarget),
 );
 document.getElementById("open-directory")?.addEventListener(
   "click",
-  () => openView("directory/directory.html", "Directory"),
+  (event) => openView("directory/directory.html", "Directory", event.currentTarget),
 );
 document.getElementById("open-recipes")?.addEventListener(
   "click",
-  () => openView("recipes/index.html", "Skills"),
+  (event) => openView("recipes/index.html", "Skills", event.currentTarget),
 );
 
 document.getElementById("bg-configure")?.addEventListener(
   "click",
-  (e) => { e.preventDefault(); openView("options/options.html", "Settings"); },
+  (e) => { e.preventDefault(); openView("options/options.html", "Settings", e.currentTarget); },
 );
 
 document.getElementById("browse-artifacts")?.addEventListener(
   "click",
-  (e) => { e.preventDefault(); openView("artifacts/index.html", "Artifacts"); },
+  (e) => { e.preventDefault(); openView("artifacts/index.html", "Artifacts", e.currentTarget); },
 );
 
 document.getElementById("discover-page")?.addEventListener(

@@ -147,6 +147,7 @@ reviewers keep re-deriving them. Detail in [`REVIEW-2026-08-21.md`](REVIEW-2026-
 
 ## Verified-fixed (27 rounds)
 - Current-main hub sidebar regression: Tasks/Agents now have parity for panel/list overflow and gutters, inline-end + alignment, expanded/collapsed/RTL/dark geometry, row formatting, and centered keyboard/pointer task-delete behavior; duplicate Site discovery copy removed. Real-extension acceptance: `scripts/sidebar-parity.ts`.
+- **Agent Directory covered-view and function-row geometry (source-corrected; browser rerun pending):** the sidebar/nub are hidden, inert, and absent from hit testing only while a full view is active; canonical tool descriptions/schema metadata render per function via shared `<tool-directory-card>`; source/approval states stay inside the same responsive card; frame focus enters inside the deferred reveal and close restores focus only to a still-connected, still-visible initiating control. The reviewed old-base source `ac72ae19` passed 20/20 loaded-MV3 checks (normal/narrow/RTL/Midnight, exact AX names, exact restoration); the current-main reconciliation (`fix/agent-directory-01` on `0f86e60`) still requires its own independent review and browser rerun before this is claimed fixed on main.
 - All permissions optional (manifest permissions = []); no debugger; screenshots via captureVisibleTab + activeTab.
 - Re-entrant mutex deadlock (saveScreenshot).
 - Alarm scheduler: execution fencing, crash-safe cancel, one-shot replay loop, owner tokens.

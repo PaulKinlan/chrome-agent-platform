@@ -50,6 +50,7 @@ const COMPONENTS = [
   "permission-row",
   "capability-row",
   "site-agent-card",
+  "tool-directory-card",
   "artifact-card",
   "code-block",
   "message-bubble",
@@ -164,6 +165,24 @@ Deno.test("components: navigation views cover hub/chat/directory/settings", asyn
   const expected = ["hub", "chat", "directory", "settings"];
   if (JSON.stringify(ids) !== JSON.stringify(expected)) {
     throw new Error(`views ${ids} != ${expected}`);
+  }
+});
+
+Deno.test("components: tool-directory schema summary is bounded and truthful", async () => {
+  const mod = await import("../extension/shared/components.js");
+  const summary = mod.summarizeInputSchema({
+    type: "object",
+    required: ["title"],
+    properties: {
+      title: { type: "string" }, startsAt: { type: "string" }, attendees: { type: "array" },
+      location: { type: "string" }, notes: { type: "string" }, colour: { type: "string" }, extra: { type: "string" },
+    },
+  });
+  if (summary !== "Inputs: title (required), startsAt, attendees, location, notes, colour, +1 more") {
+    throw new Error(`unexpected schema summary: ${summary}`);
+  }
+  if (mod.summarizeInputSchema({ type: "object", properties: {} }) !== "No inputs") {
+    throw new Error("empty object schema was not reported truthfully");
   }
 });
 

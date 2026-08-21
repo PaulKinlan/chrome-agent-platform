@@ -26,6 +26,14 @@
     body.view-open main.content {
       display: none;
     }
+    /* A full in-context view covers the hub entirely. Hide and de-activate the
+       covered sidebar + edge control as state, rather than trying to out-stack
+       the overlay. The task-thread view intentionally does not set this class. */
+    body.full-view-open .side,
+    body.full-view-open .side-toggle {
+      visibility: hidden;
+      pointer-events: none;
+    }
     .side {
       inline-size: 240px;
       flex: 0 0 240px;

@@ -82,6 +82,14 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;tool-directory-card&gt;</code> — one registry function with attached states</h3>
+        <div class="stage column" style="max-width:720px">
+          <tool-directory-card id="tool-directory-demo"></tool-directory-card>
+        </div>
+        <p class="caption">semantic name → description/schema → source/approval order; the card reflows from wide to narrow without detaching badges.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;artifact-card&gt;</code> — a generated artifact (the gallery card)</h3>
         <div class="stage row" style="max-width:820px">
           <artifact-card id="demo-1" name="A to-do list" type="html" size="1204" origin="master" time="1723921200000"></artifact-card>
@@ -353,6 +361,20 @@
           row.addEventListener("disable", () => { row.removeAttribute("granted"); log("#hub-log", `disable: ${p.id}`); });
           permRoot.appendChild(row);
         });
+      }
+
+      // Directory function card uses the same production descriptor shape.
+      const toolDirectoryDemo = document.getElementById("tool-directory-demo");
+      if (toolDirectoryDemo) {
+        toolDirectoryDemo.tool = {
+          origin: "https://calendar.example",
+          name: "calendar.create_event",
+          description: "Creates a calendar event for a supplied title and start time.",
+          source: "declared",
+          approved: false,
+          inputSchema: { type: "object", required: ["title", "startsAt"], properties: { title: { type: "string" }, startsAt: { type: "string" }, attendees: { type: "array" } } },
+        };
+        toolDirectoryDemo.addEventListener("approve", () => log("#hub-log", "tool-directory-card: approve"));
       }
 
       // composer sends

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.114] — 2026-08-21
+- fix(directory): reconcile reviewed Directory overlay and function cards — CAP-FB-20260819-AGENT-DIRECTORY-01
+
 ## [0.2.113] — 2026-08-21
 - feat(runs): integrate the reviewed Durable run authority and owner surfaces — service-worker execution with OPFS registry/outbox/log/resume/payload authority, idempotent terminal journal/thread projection, bounded recovery and owner Cancel/Retry/View logs controls, exact native-quota compensation, live authoritative Tasks-sidebar and terminal-thread reconciliation, and MV3 reload recovery. Exact source `dd41258f` / tree `80ca97f0`, release `0.2.113`, passed independent source review and the accepted 7/7 loaded-extension journey; this is scoped Durable integration evidence, not whole-product acceptance.
 
