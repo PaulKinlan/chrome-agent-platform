@@ -635,6 +635,10 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   const hashGet = await dispatch({ type: "provider.get" }, ownerHashSender);
   assert(hashGet?.provider === "openai-compatible" && hashGet?.model === "hash-model-sentinel", "provider.get accepts the product hash");
   assert(hashGet?.hasApiKey === true && !JSON.stringify(hashGet).includes("hash-key-sentinel"), "provider.get remains redacted");
+  const hashSummary = await dispatch({ type: "provider.summary" }, ownerHashSender);
+  assertEquals(hashSummary?.configured, true, "provider.summary exposes only keyed setup readiness");
+  assert(!Object.hasOwn(hashSummary, "apiKey") && !Object.hasOwn(hashSummary, "model"), "provider.summary never exposes key/model");
+  assert(!JSON.stringify(hashSummary).includes("hash-key-sentinel"), "provider.summary contains no key bytes");
   const hashTest = await dispatch({ type: "provider.test", provider: "demo", baseURL: "", apiKey: "", model: "" }, ownerHashSender);
   assert(hashTest?.ok === true, "provider.test accepts the product hash");
   const failClosed = await dispatch({ type: "provider.status" }, ownerHashSender);

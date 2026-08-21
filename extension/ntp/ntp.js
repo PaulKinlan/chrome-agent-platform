@@ -29,6 +29,10 @@ import {
 } from "../shared/thread-projection-authority.js";
 import { createViewFocusController } from "../lib/view-focus.js";
 import {
+  FIRST_RUN_TASK_PROMPT,
+  loadFirstRunGuideState,
+} from "../lib/first-run-onboarding.js";
+import {
   createViewTransitionRunner,
   focusExplicitRouteTarget,
   VIEW_ROUTE,
@@ -112,6 +116,59 @@ function escapeHtml(s) {
 function shortOrigin(o) {
   return String(o).replace(/^https?:\/\//, "").replace(/\/.*/, "");
 }
+
+// ── first-run path ────────────────────────────────────────────────────────
+// The guide is progress, not a permission authority. It remains visible until
+// the owner creates the first artifact (or dismisses it), and every optional
+// grant still happens on a native Settings click.
+const firstRunGuide = document.getElementById("first-run-guide");
+let returningFromFirstRunSettings = false;
+const FIRST_RUN_DISMISSED_KEY = "cap:first-run-guide-dismissed";
+
+function firstRunDismissed() {
+  try { return localStorage.getItem(FIRST_RUN_DISMISSED_KEY) === "1"; }
+  catch { return false; }
+}
+
+async function renderFirstRunGuide() {
+  if (!firstRunGuide) return;
+  const state = await loadFirstRunGuideState({
+    containsStorage: () => chrome.permissions?.contains?.({ permissions: ["storage"] }) ?? false,
+    readProvider: async () => {
+      const [summary, status] = await Promise.all([
+        send("provider.summary"),
+        send("provider.status"),
+      ]);
+      return {
+        provider: summary?.provider,
+        configured: summary?.configured === true && status?.ok === true,
+      };
+    },
+    listArtifacts: async () => {
+      const result = await send("asset.list", { origin: "master" });
+      return Array.isArray(result?.assets) ? result.assets : [];
+    },
+    dismissed: firstRunDismissed(),
+  });
+  firstRunGuide.hidden = !state.show;
+  firstRunGuide.toggleAttribute("storage-ready", state.storageGranted);
+  firstRunGuide.toggleAttribute("provider-ready", state.providerReady);
+}
+
+firstRunGuide?.addEventListener("open-settings", (event) => {
+  returningFromFirstRunSettings = true;
+  openView("options/options.html#providers", "Provider settings", event.detail?.sourceEvent?.currentTarget ?? firstRunGuide);
+});
+firstRunGuide?.addEventListener("seed-task", () => {
+  composer.value = FIRST_RUN_TASK_PROMPT;
+  composer.focus();
+  setStatus("Starter task ready — review it, then choose Run task.");
+});
+firstRunGuide?.addEventListener("dismiss-guide", () => {
+  try { localStorage.setItem(FIRST_RUN_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }
+  firstRunGuide.hidden = true;
+  composer.focus();
+});
 
 function prefersReducedMotion() {
   try {
@@ -1421,6 +1478,10 @@ async function runThreadTurn(text, attachments = []) {
     return res;
   }
   if (res.ok) {
+    // A first task may create an artifact. Refresh the shipped Recent artifacts
+    // surface and onboarding completion state from their real authorities.
+    await Promise.all([renderArtifacts(), renderFirstRunGuide()]);
+    if (!owns()) return res;
     if (!agentAtStart) {
       // The SW created (or reused) the thread; capture its id for continuation.
       if (res.threadId && currentThreadId === threadAtStart) {
@@ -1530,6 +1591,7 @@ renderWebmcpHubStatus();
 renderNamedAgents();
 renderBackgroundAgents();
 renderArtifacts();
+renderFirstRunGuide();
 renderTasks();
 renderRunLog();
 renderHubUsage();
@@ -1692,9 +1754,10 @@ const viewTitle = document.getElementById("view-title");
 const viewFocus = createViewFocusController();
 
 function embeddedViewRoute(path) {
-  if (path === "options/options.html") return VIEW_ROUTE.SETTINGS;
-  if (path === "directory/directory.html") return VIEW_ROUTE.DIRECTORY;
-  if (path === "recipes/index.html") return VIEW_ROUTE.SKILLS;
+  const routePath = String(path ?? "").split(/[?#]/, 1)[0];
+  if (routePath === "options/options.html") return VIEW_ROUTE.SETTINGS;
+  if (routePath === "directory/directory.html") return VIEW_ROUTE.DIRECTORY;
+  if (routePath === "recipes/index.html") return VIEW_ROUTE.SKILLS;
   return VIEW_ROUTE.ARTIFACTS;
 }
 
@@ -1737,6 +1800,11 @@ function closeView() {
   // fresh authoritative read both restores the row promptly and fences any
   // older delayed sidebar read that began before the view switch.
   renderTasks(currentThreadId);
+  const shouldRestoreGuideFocus = returningFromFirstRunSettings;
+  returningFromFirstRunSettings = false;
+  renderFirstRunGuide().then(() => {
+    if (shouldRestoreGuideFocus && !firstRunGuide?.hidden) firstRunGuide.focusNextAction?.();
+  });
 }
 
 document.getElementById("view-back")?.addEventListener("click", closeView);

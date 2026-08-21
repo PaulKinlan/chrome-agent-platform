@@ -8,6 +8,7 @@ import {
   requestCapability,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
+import { bindProviderSetDefault } from "../lib/provider-options-save.js";
 import { modelsForVendor } from "../lib/model-prices.js";
 import {
   LOCAL_MODEL_CATALOG,
@@ -15,6 +16,10 @@ import {
   preflightLocalModel,
 } from "../lib/local-model-catalog.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
+import {
+  credentialNeedsDurableStorage,
+  requestStorageFromOwnerClick,
+} from "../lib/first-run-onboarding.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
@@ -118,6 +123,78 @@ const storage = {
     return await chrome.runtime.sendMessage({ type: "kv.remove", keys });
   },
 };
+
+let storageGranted = false;
+
+async function refreshStoragePermission() {
+  try {
+    storageGranted = await chrome.permissions.contains({ permissions: ["storage"] });
+  } catch {
+    storageGranted = false;
+  }
+  return storageGranted;
+}
+
+function syncCredentialWarning(warning, { focused = false, existing = false } = {}) {
+  const input = warning?._credentialInput;
+  if (!warning || !input) return;
+  const active = !storageGranted && (focused || input.value.length > 0 || existing);
+  warning.toggleAttribute("active", active);
+  if (storageGranted) warning.removeAttribute("state");
+}
+
+function syncAllCredentialWarnings() {
+  document.querySelectorAll("storage-durability-warning").forEach((warning) =>
+    syncCredentialWarning(warning, {
+      focused: warning._credentialInput === document.activeElement,
+      existing: warning._existingCredential === true,
+    }));
+}
+
+function wireCredentialDurability(input, warning, { existing = false } = {}) {
+  if (!input || !warning) return;
+  warning._credentialInput = input;
+  warning._existingCredential = existing;
+  const sync = () => syncCredentialWarning(warning, {
+    focused: input === document.activeElement,
+    existing,
+  });
+  input.addEventListener("focus", sync);
+  input.addEventListener("input", sync);
+  input.addEventListener("blur", sync);
+  warning.addEventListener("enable-storage", async (event) => {
+    warning.setAttribute("busy", "");
+    const result = await requestStorageFromOwnerClick({
+      event: event.detail?.sourceEvent,
+      userActivation: navigator.userActivation,
+      permissionsApi: chrome.permissions,
+    });
+    warning.removeAttribute("busy");
+    warning.setAttribute("state", result.reason);
+    if (result.granted) {
+      storageGranted = true;
+      syncAllCredentialWarnings();
+      saveFlash("Storage enabled — API keys saved from now on survive extension restarts.");
+    } else if (result.reason === "owner-click-required") {
+      saveFlash("Use the Enable storage button directly to grant optional storage.");
+      warning.setAttribute("active", "");
+      warning.focusAction?.();
+    } else {
+      saveFlash("Storage was not enabled — the API key has not been saved.");
+      warning.setAttribute("active", "");
+      warning.focusAction?.();
+    }
+  });
+  sync();
+}
+
+function blockSessionOnlyCredentialSave(input, warning) {
+  if (!credentialNeedsDurableStorage({ enteredKey: input?.value ?? "", storageGranted })) return false;
+  warning?.setAttribute("active", "");
+  warning?.focusAction?.();
+  saveFlash("Enable storage before saving this API key — it would otherwise be lost on restart.");
+  return true;
+}
 
 async function providerStatusChanged() {
   // Re-read the (redacted) provider status + re-render the status surface so a
@@ -240,7 +317,8 @@ async function renderProviders(restoreFocus = false) {
         }
         ${
           p.needsKey || p.needsModel
-            ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="…" autocomplete="off"></label>`
+            ? `<label class="field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="…" autocomplete="off"></label>
+              ${p.needsKey ? `<storage-durability-warning id="${escapeAttr(`storage-warning-${p.id}`)}" provider="${escapeAttr(p.name)}"></storage-durability-warning>` : ""}`
             : ""
         }
         ${
@@ -253,34 +331,36 @@ async function renderProviders(restoreFocus = false) {
     }
       <div class="test-status" role="status" hidden></div>
     `;
-    card.querySelector(".set-default")?.addEventListener("click", async () => {
-      // The raw key NEVER enters the page: an entered key is sent; a BLANK
-      // field sends apiKey: undefined and the SW preserves the stored key for
-      // the SAME provider (the final review's HIGH). The page's cfg is already
-      // redacted (apiKey: "" + hasApiKey) — it cannot read the stored key.
-      const isActive = cfg.provider === p.id;
-      const enteredKey = card.querySelector(".api-key")?.value ?? "";
-      const fields = {
-        baseURL: card.querySelector(".base-url")?.value ?? (isActive ? (cfg.baseURL || p.baseURL) : p.baseURL),
-        apiKey: enteredKey || undefined, // undefined → the SW preserves (same provider)
-        model: effectiveModel(card),
-      };
-      // Route through the worker's provider.set so the running agent's cached
-      // model/orchestrator is invalidated immediately (no stale provider).
-      // FIRST request the provider's OPTIONAL host permission (this click is the
-      // user gesture) — without it, the service worker's fetch to the provider
-      // fails with "Failed to fetch" (the root cause Paul hit).
-      const host = await requestProviderHostAccess(fields);
-      await chrome.runtime.sendMessage({
-        type: "provider.set",
-        config: { provider: p.id, ...fields },
-      });
-      await saveFlash(
-        host.granted === false
-          ? `Saved ${p.name}, but network access was NOT granted — the agent can't reach it. Re-enable it when Chrome asks.`
-          : (isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`),
-      );
-      renderProviders(true);
+    const credentialInput = card.querySelector(".api-key");
+    const durabilityWarning = card.querySelector("storage-durability-warning");
+    wireCredentialDurability(credentialInput, durabilityWarning, {
+      existing: cfg.provider === p.id && cfg.hasApiKey === true,
+    });
+    // The synchronous durability guard MUST run before the replacement save
+    // path starts either the host request or provider.set. Once allowed, the
+    // existing owner click starts optional host access and provider persistence
+    // without awaiting native permission settlement.
+    bindProviderSetDefault({
+      card,
+      provider: p,
+      currentConfig: cfg,
+      shouldBlock: () =>
+        blockSessionOnlyCredentialSave(credentialInput, durabilityWarning),
+      requestHostAccess: requestProviderHostAccess,
+      sendMessage: (message) => chrome.runtime.sendMessage(message),
+      onAccess(access) {
+        const isActive = cfg.provider === p.id;
+        if (access.status === "pending") {
+          saveFlash(`Saved ${p.name}. Chrome's network-access decision is still pending; provider requests remain blocked until access is granted.`);
+        } else if (access.status === "denied") {
+          saveFlash(`Saved ${p.name}, but network access was not granted — provider requests remain blocked. Re-enable it when Chrome asks.`);
+        } else {
+          saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
+        }
+      },
+      onSaved() {
+        renderProviders(true);
+      },
     });
     card.querySelector(".test-connection")?.addEventListener("click", async () => {
       const testBtn = card.querySelector(".test-connection");
@@ -585,6 +665,7 @@ function agentProviderRowHtml(a, cur, globalCfg) {
     <model-picker class="ag-model" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(cur.model ?? "")}" label="Model id" placeholder="${models.length ? "Search or type a model id…" : "model id"}" ${provider ? "" : "disabled"}></model-picker>
     <label class="field ag-base-url" ${needsBaseURL ? "" : "hidden"}><span class="field-label">Base URL</span><input class="agent-provider-base-url" type="text" placeholder="https://your-endpoint/v1" value="${escapeAttr(baseURLDefault)}"></label>
     <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${cur.provider ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${cur.provider ? "A saved key is kept when this field is left blank" : "API key"}"></label>
+    <storage-durability-warning id="${escapeAttr(`agent-storage-warning-${a.id}`)}" provider="${escapeAttr(a.name)}"></storage-durability-warning>
     <div class="ag-actions">
       <button class="btn small set-agent-provider" type="button">Save</button>
       ${cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
@@ -689,6 +770,11 @@ async function renderAgentProviders() {
     // the key is entered (and only ever written, never read back).
     const cur = a.provider ?? {};
     row.innerHTML = agentProviderRowHtml(a, cur, globalCfg);
+    const agentCredentialInput = row.querySelector(".agent-provider-key");
+    const agentDurabilityWarning = row.querySelector("storage-durability-warning");
+    wireCredentialDurability(agentCredentialInput, agentDurabilityWarning, {
+      existing: cur.hasApiKey === true,
+    });
 
     // Provider change → swap the model catalogue + base-URL field to the
     // selected provider (the row stays a labeled grid; only the dependent
@@ -743,10 +829,11 @@ async function renderAgentProviders() {
     });
     row.querySelector(".set-agent-provider").addEventListener("click", async (event) => {
       const trigger = event.currentTarget;
-      trigger.disabled = true;
       const provider = row.querySelector(".ag-provider")?.value ?? "";
       const model = row.querySelector(".ag-model")?.value?.trim() ?? "";
-      const apiKey = row.querySelector(".agent-provider-key").value;
+      const apiKey = agentCredentialInput.value;
+      if (blockSessionOnlyCredentialSave(agentCredentialInput, agentDurabilityWarning)) return;
+      trigger.disabled = true;
       const customBaseURL = row.querySelector(".agent-provider-base-url")?.value.trim() ?? "";
       let config = null;
       if (provider) {
@@ -1870,7 +1957,20 @@ document.querySelectorAll(".nav-item").forEach((a) => {
 // exact pattern+generation); no passive listener here. The status chip
 // re-reads from the SW on focus so a grant landed anywhere is reflected.
 window.addEventListener("focus", () => { providerStatusChanged(); }, { once: true });
+chrome.permissions?.onAdded?.addListener((change) => {
+  if (change?.permissions?.includes("storage")) {
+    storageGranted = true;
+    syncAllCredentialWarnings();
+  }
+});
+chrome.permissions?.onRemoved?.addListener((change) => {
+  if (change?.permissions?.includes("storage")) {
+    storageGranted = false;
+    syncAllCredentialWarnings();
+  }
+});
 
+await refreshStoragePermission();
 await renderProviders();
 await renderLocalModels();
 await renderAgents();

@@ -650,6 +650,136 @@ function mountTemplate(host, style, markup) {
  * Atomic components
  * ────────────────────────────────────────────────────────────────────────── */
 
+/* <storage-durability-warning provider="OpenAI" active busy>
+ * A point-of-entry data-loss warning. It emits `enable-storage` only from its
+ * native button and carries the originating click for the trusted page to
+ * verify; the component itself has no chrome.* authority. */
+class StorageDurabilityWarning extends Component {
+  static get observedAttributes() { return ["provider", "active", "busy", "state"]; }
+  _render() {
+    const provider = this.getAttribute("provider") || "provider";
+    const busy = this.hasAttribute("busy");
+    const state = this.getAttribute("state") || "idle";
+    const followup = state === "denied"
+      ? "Storage was not enabled. This key has not been saved."
+      : state === "owner-click-required"
+      ? "Use the Enable storage button directly to continue."
+      : state === "request-failed"
+      ? "Chrome could not open the storage prompt. Try again."
+      : "";
+    mountTemplate(this, `
+      :host { display:block; grid-column:1 / -1; color:var(--text,#1d1b18); }
+      :host(:not([active])) { display:none; }
+      .warning { display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+        align-items:center; gap:12px; padding:12px; border:1px solid var(--warning,#9a6700);
+        border-radius:var(--radius-sm,6px); background:var(--panel,#fff); }
+      .icon { display:inline-flex; color:var(--warning,#9a6700); }
+      .copy { min-width:0; font-size:13px; line-height:1.45; }
+      .copy strong, .copy span { display:block; }
+      .copy span { color:var(--muted,#635e56); }
+      .followup { margin-top:4px; color:var(--warning,#9a6700) !important; }
+      button { min-height:var(--control,36px); padding:0 12px; border:0;
+        border-radius:var(--radius-sm,6px); background:var(--accent,#0e6e63);
+        color:var(--btn-fg,#fff); font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+      button:disabled { opacity:.55; cursor:default; }
+      button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      @media (max-width:560px) { .warning { grid-template-columns:auto 1fr; }
+        button { grid-column:1 / -1; width:100%; } }
+    `, `<div class="warning" role="alert">
+      <span class="icon" aria-hidden="true">${ICONS.alert}</span>
+      <div class="copy"><strong>This API key needs durable storage.</strong>
+        <span>Without storage, the ${escapeHtml(provider)} key will be lost when the extension worker restarts.</span>
+        ${followup ? `<span class="followup">${escapeHtml(followup)}</span>` : ""}
+      </div>
+      <button type="button"${busy ? " disabled aria-busy=\"true\"" : ""}>${busy ? "Enabling…" : "Enable storage"}</button>
+    </div>`);
+  }
+  _wire() {
+    this._root.querySelector("button")?.addEventListener("click", (sourceEvent) => {
+      if (this.hasAttribute("busy")) return;
+      this._emit("enable-storage", { sourceEvent });
+    });
+  }
+  focusAction() { this._root.querySelector("button")?.focus(); }
+}
+customElements.define("storage-durability-warning", StorageDurabilityWarning);
+
+/* <first-run-guide storage-ready provider-ready>
+ * A compact, optional path to first value. It never runs a task or asks for a
+ * permission: owner actions are emitted for the NTP/options surfaces to wire. */
+class FirstRunGuide extends Component {
+  static get observedAttributes() { return ["storage-ready", "provider-ready"]; }
+  _render() {
+    const storageReady = this.hasAttribute("storage-ready");
+    const providerReady = this.hasAttribute("provider-ready");
+    const canSeed = storageReady && providerReady;
+    const check = `<span class="check" aria-hidden="true">${ICONS.check}</span>`;
+    mountTemplate(this, `
+      :host { display:block; margin-block-end:24px; color:var(--text,#1d1b18); }
+      :host([hidden]) { display:none; }
+      .guide { position:relative; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-md,12px); background:var(--panel,#fff); padding:20px; }
+      h2 { margin:0 40px 4px 0; font-size:16px; letter-spacing:-.01em; }
+      .intro { margin:0 0 16px; max-width:68ch; color:var(--muted,#635e56); font-size:13px; }
+      ol { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px;
+        margin:0; padding:0; list-style:none; counter-reset:setup; }
+      li { counter-increment:setup; min-width:0; display:grid; grid-template-columns:28px 1fr;
+        gap:8px; align-content:start; }
+      .marker { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center;
+        border-radius:50%; background:var(--panel-2,#efede8); color:var(--muted,#635e56);
+        font-size:12px; font-weight:700; }
+      .marker::before { content:counter(setup); }
+      li.ready .marker { background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
+      li.ready .marker::before { content:""; }
+      .check { display:inline-flex; }
+      .step strong, .step span { display:block; }
+      .step strong { font-size:13px; margin-bottom:2px; }
+      .step span { color:var(--muted,#635e56); font-size:12px; line-height:1.4; }
+      .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+      button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 12px;
+        border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
+        font:inherit; font-weight:600; cursor:pointer; }
+      button.primary { border-color:var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
+      button:hover:not(:disabled) { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      button.primary:hover:not(:disabled) { color:var(--btn-fg,#fff); }
+      button:disabled { opacity:.5; cursor:default; }
+      button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .dismiss { position:absolute; inset-block-start:12px; inset-inline-end:12px; width:36px; padding:0;
+        display:inline-flex; align-items:center; justify-content:center; color:var(--muted,#635e56); }
+      .dismiss svg { width:16px; height:16px; }
+      @media (max-width:720px) { ol { grid-template-columns:1fr; } }
+    `, `<section class="guide" aria-labelledby="first-run-title">
+      <button class="dismiss" type="button" aria-label="Dismiss first-run setup">${ICONS.close}</button>
+      <h2 id="first-run-title">Set up your first task</h2>
+      <p class="intro">Connect one provider, keep its key across restarts, then ask the agent to create a visible artifact.</p>
+      <ol>
+        <li class="${providerReady ? "ready" : ""}"><span class="marker">${providerReady ? check : ""}</span><div class="step"><strong>Choose a provider</strong><span>${providerReady ? "Provider and key are ready." : "Pick a model service and enter its key."}</span></div></li>
+        <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is enabled." : "Enable optional storage from the key warning."}</span></div></li>
+        <li><span class="marker"></span><div class="step"><strong>Create an artifact</strong><span>Use the starter task, review it, then choose Run task.</span></div></li>
+      </ol>
+      <div class="actions">
+        <button class="open-settings" type="button">${providerReady && storageReady ? "Review provider settings" : "Open provider settings"}</button>
+        <button class="primary seed-task" type="button"${canSeed ? "" : " disabled"}>Use starter task</button>
+      </div>
+    </section>`);
+  }
+  _wire() {
+    this._root.querySelector(".open-settings")?.addEventListener("click", (sourceEvent) =>
+      this._emit("open-settings", { sourceEvent }));
+    this._root.querySelector(".seed-task")?.addEventListener("click", (sourceEvent) => {
+      if (!this.hasAttribute("storage-ready") || !this.hasAttribute("provider-ready")) return;
+      this._emit("seed-task", { sourceEvent });
+    });
+    this._root.querySelector(".dismiss")?.addEventListener("click", (sourceEvent) =>
+      this._emit("dismiss-guide", { sourceEvent }));
+  }
+  focusNextAction() {
+    const seed = this._root.querySelector(".seed-task:not(:disabled)");
+    (seed ?? this._root.querySelector(".open-settings"))?.focus();
+  }
+}
+customElements.define("first-run-guide", FirstRunGuide);
+
 /* <run-task-button label="Run task" loading disabled> */
 class RunTaskButton extends Component {
   static get observedAttributes() { return ["label", "loading", "disabled"]; }

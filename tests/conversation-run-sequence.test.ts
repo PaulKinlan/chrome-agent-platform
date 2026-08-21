@@ -362,6 +362,12 @@ Deno.test("conversation run sequence: real ntp.js event routing — thread follo
       setAttribute: (k: string, v: unknown) => attributes.set(k, String(v)),
       removeAttribute: (k: string) => attributes.delete(k),
       hasAttribute: (k: string) => attributes.has(k),
+      toggleAttribute: (k: string, force?: boolean) => {
+        const present = force === undefined ? !attributes.has(k) : force;
+        if (present) attributes.set(k, "");
+        else attributes.delete(k);
+        return present;
+      },
       addEventListener: (t: string, fn: (ev: any) => void) => {
         if (!listeners.has(t)) listeners.set(t, []);
         listeners.get(t)!.push(fn);

@@ -86,7 +86,10 @@ function clone(v) {
 function warnOnce() {
   if (!warned) {
     warned = true;
-    console.warn(
+    // Permissionless storage is an expected first-run setup state, not an
+    // error-console fault. Keep the diagnostic visible to developers at info
+    // level while the owner-facing guide provides the path forward.
+    console.info(
       "storage permission not granted — changes are session-only until enabled in Settings",
     );
   }

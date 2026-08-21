@@ -10,6 +10,7 @@ import {
   resolveModelFromConfig,
   setProviderConfig,
 } from "../lib/provider.js";
+import { keyedProviderConfigured } from "../lib/first-run-onboarding.js";
 import {
   providerRunGate,
   recordProviderFailure,
@@ -2323,10 +2324,14 @@ const handlers = {
   },
   async "provider.summary"() {
     // A REDACTED summary for non-Settings surfaces (which provider is active,
-    // and the baseURL — needed for the host-permission pattern, not a
-    // credential). The apiKey never crosses into a non-settings DOM.
+    // the baseURL needed for the host-permission pattern, and a boolean setup
+    // state). Neither the raw key nor the model crosses into a non-Settings DOM.
     const cfg = await getProviderConfig();
-    return { provider: cfg.provider, baseURL: cfg.baseURL ?? "" };
+    return {
+      provider: cfg.provider,
+      baseURL: cfg.baseURL ?? "",
+      configured: keyedProviderConfigured(cfg),
+    };
   },
   async "provider.permission-summary"() {
     // Permission preflight must not pull the provider key/model/base URL into a

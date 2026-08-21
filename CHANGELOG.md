@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.132] — 2026-08-21
+- feat(onboarding): add durable provider setup and owner-only storage guidance (CAP-FB-20260821-FIRST-RUN-ONBOARDING-01)
+
 ## [0.2.131] — 2026-08-21
 - fix(conversation): prevent completed status before assistant bubble projection (CAP-FB-20260819-CONVERSATION-RUN-STATUS-02)
 
