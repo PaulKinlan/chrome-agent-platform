@@ -24,6 +24,7 @@ import {
   VIEW_ROUTE,
 } from "./view-transition.js";
 import { applySidebarNubPolicy } from "./view-policy.js";
+import { actionableRunsForSurface } from "../lib/run-scope.js";
 
 import {
   installPageDiagnostics,
@@ -34,9 +35,28 @@ import {
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
 let statusTimer;
+let currentThreadId = null;
+let currentAgentId = null;
+let currentAgentKind = null;
+let latestDurableRuns = [];
+
+function syncConversationRunControls() {
+  if (!durableRunRegistry) return;
+  const runs = actionableRunsForSurface(latestDurableRuns, {
+    threadId: currentThreadId,
+    agentId: currentAgentId,
+    agentKind: currentAgentKind,
+  });
+  durableRunRegistry.runs = runs;
+  durableRunRegistry.hidden = runs.length === 0;
+}
 
 if (durableRunRegistry) {
-  subscribeRunRegistry(({ runs }) => { durableRunRegistry.runs = runs; });
+  durableRunRegistry.hidden = true;
+  subscribeRunRegistry(({ runs }) => {
+    latestDurableRuns = Array.isArray(runs) ? runs : [];
+    syncConversationRunControls();
+  });
   durableRunRegistry.addEventListener("run-cancel", async (event) => {
     const result = await cancelDurableRun(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
     event.detail.complete(result);
@@ -614,9 +634,8 @@ const threadTitle = document.getElementById("thread-title");
 const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
 const editAgentBtn = document.getElementById("edit-agent");
-let currentThreadId = null;
-let currentAgentId = null; // when set, the thread surface is an AGENT chat (item 43)
-let currentAgentKind = null; // null | "named" | "background" — which agent kind the chat is scoped to
+// Current conversation identity is declared before the run-registry subscription
+// so even an immediate snapshot is projected into the correct surface.
 let activeViewRoute = VIEW_ROUTE.HUB;
 // Every async surface open and run owns one immutable token. A later open/run
 // replaces it, so an older continuation can keep journaling in the SW without
@@ -673,6 +692,7 @@ function hideThreadViewInner() {
   currentAgentId = null;
   currentAgentKind = null;
   syncComposerScope();
+  syncConversationRunControls();
   threadConversation.clear?.();
   renderRunStatus({ state: "idle" });
   syncViewOpen();
@@ -770,6 +790,7 @@ async function openThread(id) {
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
+  syncConversationRunControls();
   // Hide the previous run's banner at the ownership hand-off, not after the
   // asynchronous thread read. The old run continues and journals in the SW.
   renderRunStatus({ state: "idle" });
@@ -807,6 +828,7 @@ async function openBackgroundAgentChat(id, name) {
   currentAgentId = id;
   currentAgentKind = "background";
   currentThreadId = null;
+  syncConversationRunControls();
   renderRunStatus({ state: "idle" });
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
@@ -852,6 +874,7 @@ async function openAgentSurface({ kind, id, name }) {
   currentAgentId = id;
   currentAgentKind = kind;
   currentThreadId = null;
+  syncConversationRunControls();
   renderRunStatus({ state: "idle" });
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
@@ -1377,6 +1400,7 @@ async function runThreadTurn(text, attachments = []) {
       // The SW created (or reused) the thread; capture its id for continuation.
       if (res.threadId && currentThreadId === threadAtStart) {
         currentThreadId = res.threadId;
+        syncConversationRunControls();
         const t = await send("thread.get", { id: res.threadId }).catch(() => ({}));
         // Re-check after the nested await: the surface may have moved on
         // while the thread title loaded.
@@ -1400,6 +1424,7 @@ composer.addEventListener("send", async (ev) => {
   const { text: task, attachments, agent } = ev.detail;
   runSurfaceOwner.claim(); // a NEW task replaces the surface — fence any in-flight run
   currentThreadId = null; // a new task → a new thread
+  syncConversationRunControls();
   threadConversation.clear?.();
   if (agent?.ref) {
     // The unified agent routing (CAP-FB-20260818-AGENT-ACCESS-01): the + menu's
@@ -1412,6 +1437,7 @@ composer.addEventListener("send", async (ev) => {
   }
   currentAgentId = null; // the hub composer is the MASTER agent, not a named-agent chat
   currentAgentKind = null;
+  syncConversationRunControls();
   threadTitle.textContent = "New task";
   await runThreadTurn(task, attachments);
 });

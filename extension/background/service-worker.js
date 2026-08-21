@@ -1238,7 +1238,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSurfaceRef = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false }) {
   // Serialize master execution: the cached orchestrator is shared, so a second
   // run must queue behind the first rather than clobber its abort controller.
   return await withRunLock(async () => {
@@ -1267,6 +1267,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true },
       promptScope: promptScope ?? null,
       agentRole: String(agentRole ?? ""),
+      agentSurfaceRef: agentSurfaceRef == null ? null : String(agentSurfaceRef),
       clientCorrelationId: clientCorrelationId ?? null,
       threadId: threadId ?? null,
       scheduleName: scheduleName ?? null,
@@ -1279,7 +1280,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       threadId,
       scheduleName,
       kind: runKind ?? (scheduled ? "scheduled" : (agentRole ? "agent" : "task")),
-      agentId: agentRole || null,
+      agentId: agentSurfaceRef || null,
       taskPreview: task,
       journalTarget: mem.origin,
       resumeRequest,
@@ -2854,6 +2855,7 @@ const handlers = {
         // the agent has none), and its role rides as the agent-role layer.
         promptScope: `agent:${slug}`,
         agentRole: agent.role ?? "",
+        agentSurfaceRef: `named:${slug}`,
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null });
         },
@@ -3989,6 +3991,7 @@ const handlers = {
         clientCorrelationId: runId ?? null,
         runKind: "agent",
         agentRole: `background:${recipe.id}`,
+        agentSurfaceRef: `background:${recipe.id}`,
         executionId: _executionId,
         permissionResume: _permissionResume,
         resumeToken: _resumeToken,

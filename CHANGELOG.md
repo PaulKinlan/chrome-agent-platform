@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.122] — 2026-08-21
+- fix(tasks): scope run controls to active conversation (CAP-FB-20260821-TASK-RUN-SCOPE-01)
+
 ## [0.2.121] — 2026-08-21
 - fix(storage): remove arbitrary OPFS key ceiling (CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01)
 

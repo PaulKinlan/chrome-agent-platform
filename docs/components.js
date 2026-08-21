@@ -5356,6 +5356,7 @@ class DurableRunRegistry extends Component {
     }).join("");
     mountTemplate(this, `
       :host { display:block; min-inline-size:0; }
+      :host([hidden]) { display:none; }
       .heading { margin:0 0 .5rem; font-size:1rem; color:var(--ink,#1d1b18); }
       ul { list-style:none; margin:0; padding:0; display:grid; gap:.625rem; }
       .run { min-inline-size:0; padding:.75rem; border:1px solid var(--border,#e3e0d9); border-radius:.75rem; background:var(--panel,#fff); }
@@ -5372,7 +5373,7 @@ class DurableRunRegistry extends Component {
       .logs { max-block-size:14rem; overflow:auto; margin:.625rem 0 0; padding:.625rem; border-radius:.5rem; background:var(--panel-2,#efede8); white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; }
       .status { min-block-size:1.25rem; margin:.5rem 0 0; color:var(--muted,#635e56); }
       .error { color:var(--danger,#b3261e); }
-    `, `<section><h2 class="heading">Run history and controls</h2><ul role="list">${items || '<li class="description">No retained runs yet.</li>'}</ul><p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
+    `, `<section aria-label="Current conversation run controls"><h2 class="heading">Current run</h2><ul role="list">${items}</ul><p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
   }
   _wire() {
     for (const button of this._root.querySelectorAll("button[data-action]")) {
