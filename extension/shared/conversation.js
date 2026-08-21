@@ -607,8 +607,6 @@ export async function runConversationTurn(container, { text, attachments = [], h
         terminal.onPortDone(ev.aborted === true);
         if (ev.aborted === true) {
           status({ state: "cancelled", message: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted" });
-        } else {
-          status({ state: "completed" });
         }
         break;
       case "error":
@@ -691,7 +689,6 @@ export async function runConversationTurn(container, { text, attachments = [], h
   if (stale()) return res;
   const outcome = terminal.status ?? (res?.ok === true ? "success" : "error");
   if (outcome === "success" && res?.ok) {
-    status({ state: "completed" });
     const projectedThreadId = res?.threadId ?? threadId;
     const authoritativeAlreadyProjected = isAuthoritativeThreadResultProjected(c, {
       threadId: projectedThreadId,
@@ -707,6 +704,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     ) {
       appendBubble(c, "agent", res.result);
     }
+    status({ state: "completed" });
   } else {
     // A provider/config failure must be CLEAR + ACTIONABLE, not a generic
     // "Error: …" — surface the UNWRAPPED reason + the "what to do" + a

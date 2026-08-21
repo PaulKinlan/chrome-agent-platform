@@ -237,3 +237,481 @@ Deno.test("conversation run sequence: re-submission after a fenced first run exp
   owner = 3; // release both turns so the test exits promptly
   await Promise.allSettled([first, second]);
 });
+
+Deno.test("conversation run sequence: no-tools turn guarantees assistant bubble is present in DOM before completed status fires (no Completed-before-result race)", async () => {
+  const sw: FakeSw = { runHoldMs: 100, resultText: "[demo] no-tools response", lastRunId: null };
+  installChromeStub(sw);
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+
+  const bubbles: Bubble[] = [];
+  const container = makeContainer(bubbles);
+  let agentBubbleCountAtCompleted: number | null = null;
+  const statuses: Status[] = [];
+
+  const turn = runConversationTurn(container as never, {
+    text: "plain no-tools query",
+    onStatus: (s: Status) => {
+      statuses.push(s);
+      if (s.state === "completed") {
+        agentBubbleCountAtCompleted = bubbles.filter((b) => b.role === "agent").length;
+      }
+    },
+  } as never);
+
+  await waitForCondition(() => sw.lastRunId !== null && portState.listener !== null, 500, "run dispatch + port");
+
+  // Premature port done event (arrives before sendMessage response settles).
+  // This must NOT cause a transient Completed status while the result bubble is still missing.
+  portState.listener!({
+    type: "progress",
+    event: { type: "done", runId: sw.lastRunId, aborted: false },
+  });
+
+  // At this moment, before sendMessage settles, status must NOT yet be completed.
+  assertEquals(statuses.some((s) => s.state === "completed"), false,
+    "premature port done must not flip state to completed before result is appended");
+
+  await turn;
+
+  assertEquals(statuses.at(-1)?.state, "completed");
+  assertEquals(agentBubbleCountAtCompleted, 1,
+    "the new assistant bubble must be in the DOM at the exact moment completed status fires");
+  assertEquals(bubbles.filter((b) => b.role === "agent")[0]?.content, "[demo] no-tools response");
+});
+
+Deno.test("conversation run sequence: ungranted provider preflight transitions queued -> waiting-for-permission with actionable details", async () => {
+  (globalThis as Record<string, unknown>).chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(msg: { type: string }, cb: (res: unknown) => void) {
+        if (msg.type === "provider.permission-summary") {
+          queueMicrotask(() => cb({
+            ok: true,
+            provider: "openai",
+            local: false,
+            origin: "http://127.0.0.1:9/*",
+          }));
+          return;
+        }
+        queueMicrotask(() => cb({ ok: true }));
+      },
+      connect() {
+        return {
+          onMessage: { addListener() {} },
+          onDisconnect: { addListener() {} },
+          postMessage() {},
+        };
+      },
+    },
+    permissions: { contains: () => Promise.resolve(false) },
+  };
+
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const bubbles: Bubble[] = [];
+  const container = makeContainer(bubbles);
+  const statuses: Status[] = [];
+
+  const res = await runConversationTurn(container as never, {
+    text: "query with ungranted provider",
+    onStatus: (s: Status) => statuses.push(s),
+  } as never);
+
+  assertEquals(res.ok, false);
+  assertEquals(res.waitingForPermission, true);
+  assertEquals(res.errorCategory, "host-permission");
+  assertEquals(statuses[0]?.state, "queued", "accepted turn emits queued first");
+  assertEquals(statuses.at(-1)?.state, "waiting-for-permission", "transitions to waiting-for-permission");
+  const errBubbles = bubbles.filter((b) => b.role === "error");
+  assertEquals(errBubbles.length, 1, "exactly one error bubble appended");
+  assert(errBubbles[0].content.includes("127.0.0.1:9"), "error bubble names the ungranted origin");
+});
+
+Deno.test("conversation run sequence: real ntp.js event routing — thread follow-up (J2) -> thread-back -> hub composer submit (J3)", async () => {
+  const dispatchedRuns: Array<{ task: string; threadId?: string | null; runId?: string }> = [];
+  const responses: Record<string, string> = {
+    "turn 1": "result 1",
+    "turn 2": "result 2",
+    "turn 3": "result 3",
+  };
+
+  const elements = new Map<string, any>();
+  function getOrCreateElement(id: string, tagName = "div") {
+    if (elements.has(id)) return elements.get(id);
+    const listeners = new Map<string, Array<(ev: any) => void>>();
+    const attributes = new Map<string, string>();
+    const classList = new Set<string>();
+    const children: any[] = [];
+    const el = {
+      id,
+      tagName: tagName.toUpperCase(),
+      hidden: id === "thread-view" || id === "view" || id === "run-status" || id === "durable-run-registry",
+      textContent: "",
+      innerHTML: "",
+      style: {},
+      classList: {
+        add: (c: string) => classList.add(c),
+        remove: (c: string) => classList.delete(c),
+        toggle: (c: string, force?: boolean) => {
+          if (force === undefined) {
+            if (classList.has(c)) classList.delete(c); else classList.add(c);
+          } else if (force) classList.add(c); else classList.delete(c);
+        },
+        contains: (c: string) => classList.has(c),
+      },
+      getAttribute: (k: string) => attributes.get(k) ?? null,
+      setAttribute: (k: string, v: unknown) => attributes.set(k, String(v)),
+      removeAttribute: (k: string) => attributes.delete(k),
+      hasAttribute: (k: string) => attributes.has(k),
+      addEventListener: (t: string, fn: (ev: any) => void) => {
+        if (!listeners.has(t)) listeners.set(t, []);
+        listeners.get(t)!.push(fn);
+      },
+      removeEventListener: (t: string, fn: (ev: any) => void) => {
+        const arr = listeners.get(t);
+        if (arr) {
+          const i = arr.indexOf(fn);
+          if (i >= 0) arr.splice(i, 1);
+        }
+      },
+      dispatchEvent: (ev: any) => {
+        const arr = listeners.get(ev.type) ?? [];
+        for (const fn of [...arr]) fn(ev);
+        return true;
+      },
+      append: (...nodes: any[]) => children.push(...nodes),
+      appendUser: (text: string) => {
+        const b = getOrCreateElement(`bubble_${Math.random().toString(36).slice(2, 8)}`, "message-bubble");
+        b.setAttribute("role", "user");
+        b.setAttribute("content", text);
+        children.push(b);
+        return b;
+      },
+      appendAgent: (text: string) => {
+        const b = getOrCreateElement(`bubble_${Math.random().toString(36).slice(2, 8)}`, "message-bubble");
+        b.setAttribute("role", "agent");
+        b.setAttribute("content", text);
+        children.push(b);
+        return b;
+      },
+      appendError: (text: string) => {
+        const b = getOrCreateElement(`bubble_${Math.random().toString(36).slice(2, 8)}`, "message-bubble");
+        b.setAttribute("role", "error");
+        b.setAttribute("content", text);
+        children.push(b);
+        return b;
+      },
+      appendChild: (node: any) => { children.push(node); return node; },
+      replaceChildren: (...nodes: any[]) => { children.splice(0, children.length, ...nodes); },
+      removeChild: (node: any) => {
+        const i = children.indexOf(node);
+        if (i >= 0) children.splice(i, 1);
+        return node;
+      },
+      contains: (node: any) => children.includes(node),
+      scrollIntoView: () => {},
+      querySelector: (sel: string) => {
+        if (sel === ".dot") return { style: {} };
+        return null;
+      },
+      querySelectorAll: (_sel: string) => [],
+      focus: () => {},
+      clear: () => { children.length = 0; },
+      setMessages: (msgs: any[]) => { children.splice(0, children.length, ...msgs); },
+      get children() { return children; },
+    };
+    elements.set(id, el);
+    return el;
+  }
+
+  // Pre-seed the known IDs queried by ntp.js
+  const knownIds = [
+    "status", "durable-run-registry", "site-agents", "webmcp-hub-status",
+    "named-agents", "side-agents", "background-agents", "agent-count",
+    "artifacts", "run-log", "hub-usage", "thread-sidebar", "thread-view",
+    "thread-title", "thread-conversation", "thread-composer", "edit-agent",
+    "run-status", "composer", "thread-back", "provider-status", "side",
+    "side-toggle", "sidebar-durability-hint", "new-task", "new-agent",
+    "view", "view-frame", "view-title", "view-back", "open-settings",
+    "open-directory", "open-recipes", "bg-configure", "browse-artifacts",
+    "discover-page",
+  ];
+  for (const id of knownIds) getOrCreateElement(id);
+
+  const rootClassList = new Set<string>();
+  const bodyClassList = new Set<string>();
+
+  (globalThis as Record<string, unknown>).document = {
+    getElementById: (id: string) => getOrCreateElement(id),
+    querySelector: (sel: string) => {
+      if (sel === ".composer") return { classList: { toggle() {} } };
+      if (sel === "#thread-sidebar [aria-current=\"true\"]") return null;
+      return null;
+    },
+    querySelectorAll: (_sel: string) => [],
+    createElement: (tag: string) => getOrCreateElement(`dyn_${Math.random().toString(36).slice(2, 8)}`, tag),
+    documentElement: {
+      classList: {
+        add: (c: string) => rootClassList.add(c),
+        remove: (c: string) => rootClassList.delete(c),
+        toggle: (c: string) => rootClassList.has(c) ? rootClassList.delete(c) : rootClassList.add(c),
+        contains: (c: string) => rootClassList.has(c),
+      },
+    },
+    body: {
+      classList: {
+        add: (c: string) => bodyClassList.add(c),
+        remove: (c: string) => bodyClassList.delete(c),
+        toggle: (c: string, force?: boolean) => {
+          if (force === undefined) {
+            if (bodyClassList.has(c)) bodyClassList.delete(c); else bodyClassList.add(c);
+          } else if (force) bodyClassList.add(c); else bodyClassList.delete(c);
+        },
+        contains: (c: string) => bodyClassList.has(c),
+      },
+    },
+    startViewTransition: (update: () => void) => {
+      update();
+      return { finished: Promise.resolve() };
+    },
+  };
+
+  (globalThis as Record<string, unknown>).window = globalThis;
+  (globalThis as Record<string, unknown>).matchMedia = () => ({ matches: false });
+  (globalThis as Record<string, unknown>).HTMLElement = class HTMLElement {};
+  (globalThis as Record<string, unknown>).customElements = { define() {} };
+  (globalThis as Record<string, unknown>).CustomEvent = class CustomEvent {
+    type: string;
+    detail: any;
+    constructor(type: string, init: any = {}) {
+      this.type = type;
+      this.detail = init.detail;
+    }
+  };
+
+  (globalThis as Record<string, unknown>).location = { hash: "" };
+  (globalThis as Record<string, unknown>).chrome = {
+    runtime: {
+      lastError: null,
+      onMessage: { addListener() {}, removeListener() {} },
+      sendMessage(msg: { type: string; task?: string; runId?: string; threadId?: string; id?: string }, cb: (res: unknown) => void) {
+        if (msg.type === "provider.permission-summary") {
+          queueMicrotask(() => cb({ ok: true, local: true }));
+          return;
+        }
+        if (msg.type === "agent.run") {
+          dispatchedRuns.push({ task: msg.task ?? "", threadId: msg.threadId ?? null, runId: msg.runId });
+          const text = msg.task ?? "";
+          const result = responses[text] ?? `result for ${text}`;
+          const threadId = msg.threadId || `t_${dispatchedRuns.length}`;
+          setTimeout(() => cb({
+            ok: true,
+            threadId,
+            executionId: `exec:${msg.runId}`,
+            result,
+          }), 30);
+          return;
+        }
+        if (msg.type === "thread.get") {
+          queueMicrotask(() => cb({ ok: true, thread: { id: msg.id ?? msg.threadId ?? "t_1", name: "Task" } }));
+          return;
+        }
+        if (msg.type === "thread.list") {
+          queueMicrotask(() => cb({ ok: true, threads: [] }));
+          return;
+        }
+        if (msg.type === "named-agent.list") {
+          queueMicrotask(() => cb({ ok: true, agents: [] }));
+          return;
+        }
+        if (msg.type === "agent.list") {
+          queueMicrotask(() => cb({ ok: true, origins: [] }));
+          return;
+        }
+        if (msg.type === "background-agent.list") {
+          queueMicrotask(() => cb({ ok: true, recipes: [] }));
+          return;
+        }
+        if (msg.type === "asset.list") {
+          queueMicrotask(() => cb({ ok: true, assets: [] }));
+          return;
+        }
+        if (msg.type === "memory.get") {
+          queueMicrotask(() => cb([]));
+          return;
+        }
+        queueMicrotask(() => cb({ ok: true }));
+      },
+      connect() {
+        return {
+          onMessage: { addListener(fn: (msg: unknown) => void) { portState.listener = fn; } },
+          onDisconnect: { addListener() {} },
+          postMessage() {},
+        };
+      },
+    },
+    permissions: { contains: () => Promise.resolve(true) },
+  };
+
+  // Import and initialize the real production ntp.js module!
+  await import(`../extension/ntp/ntp.js?exec=${Date.now()}`);
+
+  const composerEl = getOrCreateElement("composer");
+  const threadComposerEl = getOrCreateElement("thread-composer");
+  const threadBackEl = getOrCreateElement("thread-back");
+  const threadViewEl = getOrCreateElement("thread-view");
+  const threadConvEl = getOrCreateElement("thread-conversation");
+  const runStatusEl = getOrCreateElement("run-status");
+
+  // Step 1: Submit turn 1 via real hub composer listener
+  composerEl.dispatchEvent({ type: "send", detail: { text: "turn 1", attachments: [], agent: null } });
+  await waitForCondition(() => dispatchedRuns.length === 1 && threadConvEl.children.length === 2, 1000, "turn 1 execution");
+  assertEquals(threadViewEl.hidden, false, "thread view shown by real showThreadView");
+  assertEquals(runStatusEl.getAttribute("state"), "completed");
+  assertEquals(threadConvEl.children.map((c: any) => c.getAttribute("content") || c.content), ["turn 1", "result 1"]);
+
+  // Step 2: Submit turn 2 (J2) via real thread composer listener
+  threadComposerEl.dispatchEvent({ type: "send", detail: { text: "turn 2", attachments: [], agent: null } });
+  await waitForCondition(() => dispatchedRuns.length === 2 && threadConvEl.children.length === 4, 1000, "turn 2 execution");
+  assertEquals(dispatchedRuns[1].threadId, "t_1", "turn 2 passed existing threadId");
+  assertEquals(runStatusEl.getAttribute("state"), "completed");
+  assertEquals(threadConvEl.children.map((c: any) => c.getAttribute("content") || c.content), ["turn 1", "result 1", "turn 2", "result 2"]);
+
+  // Step 3: Click thread-back via real listener (hideThreadView)
+  threadBackEl.dispatchEvent({ type: "click" });
+  assertEquals(threadViewEl.hidden, true, "thread view hidden by real hideThreadView");
+  assertEquals(runStatusEl.hidden, true, "runStatus hidden (idle)");
+  assertEquals(threadConvEl.children.length, 0, "conversation cleared for hub");
+
+  // Step 4: Submit turn 3 (J3) via real hub composer listener
+  composerEl.dispatchEvent({ type: "send", detail: { text: "turn 3", attachments: [], agent: null } });
+  await waitForCondition(() => dispatchedRuns.length === 3 && threadConvEl.children.length === 2, 1000, "turn 3 execution");
+  assertEquals(threadViewEl.hidden, false, "thread view re-shown by real showThreadView");
+  assertEquals(dispatchedRuns[2].threadId, null, "turn 3 allocated fresh thread");
+  assertEquals(runStatusEl.getAttribute("state"), "completed");
+  assertEquals(threadConvEl.children.map((c: any) => c.getAttribute("content") || c.content), ["turn 3", "result 3"]);
+});
+
+Deno.test("conversation run sequence: hub submit while previous thread follow-up is slow fences previous turn and commits third turn cleanly", async () => {
+  const dispatchedRuns: Array<{ task: string; threadId?: string | null; runId?: string }> = [];
+
+  (globalThis as Record<string, unknown>).chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(msg: { type: string; task?: string; runId?: string; threadId?: string }, cb: (res: unknown) => void) {
+        if (msg.type === "provider.permission-summary") {
+          queueMicrotask(() => cb({ ok: true, local: true }));
+          return;
+        }
+        if (msg.type === "agent.run") {
+          dispatchedRuns.push({ task: msg.task ?? "", threadId: msg.threadId ?? null, runId: msg.runId });
+          const delay = msg.task === "slow follow-up" ? 250 : 30;
+          setTimeout(() => cb({
+            ok: true,
+            threadId: msg.threadId || `t_${dispatchedRuns.length}`,
+            executionId: `exec:${msg.runId}`,
+            result: `result for ${msg.task}`,
+          }), delay);
+          return;
+        }
+        if (msg.type === "thread.get") {
+          queueMicrotask(() => cb({ ok: true, thread: { id: msg.threadId ?? "t_1", name: "Task" } }));
+          return;
+        }
+        queueMicrotask(() => cb({ ok: true }));
+      },
+      connect() {
+        return {
+          onMessage: { addListener(fn: (msg: unknown) => void) { portState.listener = fn; } },
+          onDisconnect: { addListener() {} },
+          postMessage() {},
+        };
+      },
+    },
+    permissions: { contains: () => Promise.resolve(true) },
+  };
+
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  const { createRunSurfaceOwner } = await import("../extension/shared/run-surface-owner.js");
+
+  const runSurfaceOwner = createRunSurfaceOwner();
+  let currentThreadId: string | null = null;
+  let currentAgentId: string | null = null;
+  let currentAgentKind: string | null = null;
+  const threadView = { hidden: true };
+  const bubbles: Bubble[] = [];
+  const threadConversation = makeContainer(bubbles);
+  const statusHistory: Status[] = [];
+
+  function renderRunStatus(s: Status) {
+    statusHistory.push(s);
+  }
+
+  function showThreadView() {
+    threadView.hidden = false;
+  }
+
+  function hideThreadViewInner() {
+    runSurfaceOwner.claim();
+    threadView.hidden = true;
+    currentThreadId = null;
+    currentAgentId = null;
+    currentAgentKind = null;
+    threadConversation.clear();
+    renderRunStatus({ state: "idle" });
+  }
+
+  async function runThreadTurn(text: string, attachments: unknown[] = []) {
+    const owner = runSurfaceOwner.claim();
+    showThreadView();
+    const agentAtStart = currentAgentId;
+    const kindAtStart = currentAgentKind;
+    const threadAtStart = currentThreadId;
+    const owns = () => runSurfaceOwner.owns(owner) && currentAgentId === agentAtStart && currentAgentKind === kindAtStart;
+    const res = await runConversationTurn(threadConversation as never, {
+      text,
+      attachments,
+      history: [],
+      threadId: threadAtStart,
+      onStatus: (state: Status) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
+      agentId: agentAtStart,
+      agentKind: kindAtStart,
+      isStale: () => !owns(),
+      projectionOwner: owner,
+    } as never);
+    if (!owns()) return res;
+    if (res.ok && !agentAtStart && res.threadId) {
+      currentThreadId = res.threadId;
+    }
+    return res;
+  }
+
+  // 1. Initial run
+  runSurfaceOwner.claim();
+  currentThreadId = null;
+  threadConversation.clear();
+  await runThreadTurn("turn 1");
+  assertEquals(currentThreadId, "t_1");
+
+  // 2. Start slow follow-up (in-flight)
+  const slowPromise = runThreadTurn("slow follow-up");
+
+  // 3. User navigates back mid-run
+  hideThreadViewInner();
+  assertEquals(threadView.hidden, true);
+
+  // 4. User immediately submits new task on hub
+  runSurfaceOwner.claim();
+  currentThreadId = null;
+  threadConversation.clear();
+  const fastPromise = runThreadTurn("new hub prompt");
+
+  const [, resFast] = await Promise.all([slowPromise, fastPromise]);
+
+  assertEquals(resFast.ok, true);
+  assertEquals(threadView.hidden, false);
+  assertEquals(currentThreadId, "t_2");
+  // Fenced slow turn must not have appended to the new surface
+  assertEquals(bubbles.filter((b) => b.content.includes("slow")).length, 0,
+    "fenced slow turn never appends bubbles to successor surface");
+  assertEquals(bubbles.map((b) => b.content), ["new hub prompt", "result for new hub prompt"]);
+});
