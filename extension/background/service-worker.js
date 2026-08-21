@@ -3352,13 +3352,19 @@ const handlers = {
   },
 
   async "memory.get"({ origin, key }) {
+    // The internal namespace is never readable by the MODEL (the reviewer's
+    // finding: __tx/assetRepair/assets/asset:/__epoch were readable/listed).
+    if (/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(String(key ?? ""))) {
+      return { ok: false, error: `key "${key}" is reserved on this store` };
+    }
     return await resolveMemory(origin).get(key);
   },
   async "memory.set"({ origin, key, value }) {
     return await resolveMemory(origin).set(key, value);
   },
   async "memory.list"({ origin }) {
-    return await resolveMemory(origin).keys();
+    const all = await resolveMemory(origin).keys();
+    return all.filter((k) => !/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(k));
   },
   async "memory.clear"({ origin }) {
     return await resolveMemory(origin).clear();

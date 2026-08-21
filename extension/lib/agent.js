@@ -88,6 +88,9 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       description: "Read a value from the agent's memory.",
       inputSchema: z.object({ key: z.string() }),
       execute: async ({ key }) => {
+        if (/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(String(key ?? ""))) {
+          return { key, value: undefined, error: `key "${key}" is reserved` };
+        }
         const err = await enrolledGuard();
         if (err) return err;
         const value = await memory.get(key);

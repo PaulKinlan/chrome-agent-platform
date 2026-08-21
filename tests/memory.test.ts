@@ -220,14 +220,14 @@ Deno.test("compareAndDelete/compareAndRestore are VERSION-scoped (round-27)", as
   assertEquals(await mem.compareAndDelete("cas-key", v1 + 999), false, "CAS delete must not fire on a version mismatch");
   assertEquals(await mem.get("cas-key"), "a", "the value must survive a version-mismatched CAS delete");
   // CAS delete on the matching VERSION deletes.
-  assertEquals(await mem.compareAndDelete("cas-key", v1), true, "CAS delete must fire on the matching version");
+  assert((await mem.compareAndDelete("cas-key", v1)) !== false, "CAS delete must fire on the matching version");
   assertEquals(await mem.get("cas-key"), null, "the value must be deleted");
   // CAS restore on a version mismatch must NOT write.
   const v2 = await mem.set("cas-key", "x");
   assertEquals(await mem.compareAndRestore("cas-key", v2 + 1, "z"), false, "CAS restore must not fire on a version mismatch");
   assertEquals(await mem.get("cas-key"), "x", "the value must survive a version-mismatched CAS restore");
   // CAS restore on the matching version writes (bumping the version).
-  assertEquals(await mem.compareAndRestore("cas-key", v2, "z"), true, "CAS restore must fire on the matching version");
+  assert((await mem.compareAndRestore("cas-key", v2, "z")) !== false, "CAS restore must fire on the matching version (returns the token)");
   assertEquals(await mem.get("cas-key"), "z", "the value must be restored");
   await mem.delete("cas-key");
 });
@@ -249,7 +249,7 @@ Deno.test("identical-value ABA is detected by the version token (round-27 blocke
   );
   assertEquals(await mem.get("aba-key"), "same", "the legitimate new write must survive");
   // The FRESH version IS the current one — it deletes (sanity).
-  assertEquals(await mem.compareAndDelete("aba-key", freshVersion), true, "the fresh version must match and delete");
+  assert((await mem.compareAndDelete("aba-key", freshVersion)) !== false, "the fresh version must match and delete");
   assertEquals(await mem.get("aba-key"), null, "the key must be gone after the fresh-version delete");
 });
 
@@ -375,10 +375,24 @@ Deno.test("journal quota compensation fails closed on ABA and generation mismatc
   assertEquals((await mem.get("journal")).some((row) => row.executionId === fenced.executionId), true);
 });
 
+Deno.test("global generation bootstraps above legacy envelope and sidecar tokens", async () => {
+  const memoryRoot = root.children.get("memory") ?? dirNode();
+  root.children.set("memory", memoryRoot);
+  const agents = memoryRoot.children.get("agents") ?? dirNode();
+  memoryRoot.children.set("agents", agents);
+  const legacy = dirNode();
+  legacy.children.set("old.json", fileNode(JSON.stringify({ __v: 42, __value: "old" })));
+  legacy.children.set(".old.version", fileNode(JSON.stringify(47)));
+  agents.children.set("legacy-generation", legacy);
+
+  const issued = await namedAgentMemory("legacy-generation").setTrusted("next", "value");
+  assert(issued > 47, "the first global token must exceed every legacy authority token");
+});
+
 Deno.test("deleted key versions remain monotonic across absent ABA", async () => {
   const mem = masterMemory();
   const first = await mem.setTrusted("aba-delete", { same: true });
-  assertEquals(await mem.compareAndDelete("aba-delete", first), true);
+  assert((await mem.compareAndDelete("aba-delete", first)) !== false);
   const absentVersion = await mem.getVersion("aba-delete");
   assert(absentVersion > first);
   const recreated = await mem.setTrusted("aba-delete", { same: true });

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.125] — 2026-08-21
+- fix(artifacts): reconcile crash-safe transaction authority (CAP-FB-20260818-ARTIFACT-TX-01)
+
 ## [0.2.124] — 2026-08-21
 - fix(ntp): align WebMCP hub status row (CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01)
 

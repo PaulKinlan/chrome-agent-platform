@@ -13,6 +13,155 @@
 const ROOT = "memory";
 const MASTER = "master";
 
+// The DURABLE VERSION AUTHORITY (the re-review's finding: the "store-global"
+// counter was an in-memory Map keyed by a path ARRAY — a restart reset it and
+// separate instances of the same store issued colliding sequences). The
+// generation is a DURABLE per-store file (`__gen.json`): every write (plain,
+// trusted, and CAS) issues the next generation from it under the global write
+// mutex, so the sequence is monotonic, restart-safe, and consistent across
+// every store instance of the same path.
+const GEN_FILE = "__gen.json";
+// The BOUNDED ABSENCE AUTHORITY: per-key tombstones live in a single
+// `__tombs.json` value (a map key→generation) + a monotonic FLOOR (the highest
+// folded generation). The floor is NOT a shared "current version": it only
+// advances each absent key's DERIVED per-key version (a stale pre-fold token
+// never matches, and two absent keys never share a token — the reviewer's
+// cross-key + prune-ABA findings).
+const MAX_TOMBSTONES = 512;
+const TOMBS_FILE = "__tombs.json";
+const INTERNAL_FILE_RE = /^(?:__gen\.json|__tombs\.json|__epoch\.json|.*\.tomb)$/;
+
+/** FNV-1a 32-bit (a deterministic per-key absence seed). */
+function fnv1a32(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** A per-key, NEGATIVE absence version — disjoint from the positive write
+ * generations, distinct across keys (the low 20 bits are the key's hash), and
+ * monotonic in the folded floor (an advancing floor changes every absent
+ * version, so a stale pre-fold token never matches a post-fold absent key). */
+function absentVersion(key, floor) {
+  const f = Number.isSafeInteger(floor) && floor >= 0 ? floor : 0;
+  return -((f + 1) * 0x100000 + (fnv1a32(String(key)) & 0xfffff) + 1);
+}
+
+/** Bootstrap the global generation when upgrading from the former per-key
+ * envelope/sidecar scheme. This runs only while `__gen.json` is absent and
+ * takes the maximum durable token found in live envelopes, legacy `.version`
+ * sidecars, the clear epoch, and tombstone authority. */
+async function legacyGenerationFloor(dir) {
+  let max = 0;
+  for await (const [name] of dir.entries()) {
+    if (name === GEN_FILE) continue;
+    try {
+      if (name === "__epoch.json") {
+        const epoch = await readJsonStrict(dir, name, { allowAbsent: true });
+        if (Number.isSafeInteger(epoch?.gen) && epoch.gen >= 0) max = Math.max(max, epoch.gen);
+      } else if (name === TOMBS_FILE) {
+        const raw = await readJsonStrict(dir, name, { allowAbsent: true });
+        if (Number.isSafeInteger(raw?.floor) && raw.floor >= 0) max = Math.max(max, raw.floor);
+        for (const value of Object.values(raw?.map ?? {})) {
+          if (Number.isSafeInteger(value) && value >= 0) max = Math.max(max, value);
+        }
+      } else if (name.endsWith(".json")) {
+        const entry = await readEntry(dir, name, true);
+        if (Number.isSafeInteger(entry?.v) && entry.v >= 0) max = Math.max(max, entry.v);
+      } else if (name.startsWith(".") && name.endsWith(".version")) {
+        const marker = await readJsonStrict(dir, name, { allowAbsent: true });
+        if (Number.isSafeInteger(marker) && marker >= 0) max = Math.max(max, marker);
+      }
+    } catch {
+      // Any corrupt legacy authority fails the migration closed; resetting the
+      // sequence could let stale compensation target a newer value.
+      throw new Error("the legacy generation authority is corrupt");
+    }
+  }
+  return max;
+}
+
+/** Issue the next durable generation for a store directory. The caller holds
+ * the global write mutex (atomic). Returns the generation. */
+async function issueVersion(dir) {
+  let genRaw;
+  try {
+    genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
+  } catch {
+    // The authority file is corrupt — fail closed, never reset the sequence.
+    throw new Error("the durable generation authority is corrupt");
+  }
+  const prev = genRaw == null ? await legacyGenerationFloor(dir) : genRaw.gen;
+  if (!Number.isSafeInteger(prev) || prev < 0) {
+    throw new Error("the durable generation authority is corrupt");
+  }
+  if (prev >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("the durable generation authority is exhausted");
+  }
+  const gen = prev + 1;
+  await writeJson(dir, GEN_FILE, { gen });
+  return gen;
+}
+
+/** Read the bounded tombstone authority: { map: {key→gen}, floor } or null. */
+async function readTombs(dir) {
+  const raw = await readJsonStrict(dir, TOMBS_FILE, { allowAbsent: true });
+  if (raw == null) return { map: new Map(), floor: 0 };
+  if (typeof raw !== "object" || raw.map == null || typeof raw.map !== "object" ||
+      (raw.floor != null && (!Number.isSafeInteger(raw.floor) || raw.floor < 0))) {
+    throw new Error("the tombstone authority is corrupt");
+  }
+  const map = new Map();
+  for (const [k, v] of Object.entries(raw.map)) {
+    if (!Number.isSafeInteger(v) || v < 0) throw new Error("the tombstone authority is corrupt");
+    map.set(k, v);
+  }
+  return { map, floor: Number.isSafeInteger(raw.floor) ? raw.floor : 0 };
+}
+
+/** Persist the bounded tombstone authority (map + floor), folding the oldest
+ * entries into the floor when over the bound (a folded key NEVER returns to
+ * version 0 — its absence resolves through the per-key DERIVED version). */
+async function writeTombs(dir, tombs) {
+  let entries = [...tombs.map.entries()];
+  let floor = tombs.floor;
+  if (entries.length > MAX_TOMBSTONES) {
+    entries.sort((a, b) => a[1] - b[1]);
+    const folded = entries.slice(0, entries.length - MAX_TOMBSTONES);
+    for (const [, v] of folded) if (v > floor) floor = v;
+    entries = entries.slice(entries.length - MAX_TOMBSTONES);
+  }
+  const obj = {};
+  for (const [k, v] of entries) obj[k] = v;
+  await writeJson(dir, TOMBS_FILE, { map: obj, floor });
+  return { map: new Map(entries), floor };
+}
+
+/** The current durable version of a key:
+ *  1. the LIVE value envelope's version (a live key always reports its write
+ *     token — the reviewer's floor-shadows-live finding),
+ *  2. else the per-key tombstone generation (a deleted key),
+ *  3. else a DERIVED per-key NEGATIVE absence version (never-created / folded) —
+ *     per-key distinct (no cross-key token reuse) + never 0 (no expected-0 ABA). */
+async function currentVersion(dir, key) {
+  // Read the tombstone authority FIRST so a corrupt `__tombs.json` fails closed
+  // on EVERY read (never a silent reset), then let the LIVE envelope WIN over
+  // any tombstone/floor (the reviewer's floor-shadows-live finding).
+  const tombs = await readTombs(dir);
+  const entry = await readEntry(dir, `${key}.json`, true);
+  if (entry) {
+    if (!Number.isSafeInteger(entry.v) || entry.v < 0) {
+      throw new Error("a value envelope authority is corrupt");
+    }
+    return entry.v;
+  }
+  if (tombs.map.has(key)) return tombs.map.get(key);
+  return absentVersion(key, tombs.floor);
+}
+
 import { kvGet } from "./kv.js";
 
 const ENROLL_KEY = "cap:enrollment";
@@ -27,7 +176,20 @@ const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
 // reserved from the MODEL's `memory_set` too: the wider-goal review proved a
 // forged `threads` index could be written through `masterMemory().set` and
 // `listThreads()` returned it. Internal thread code uses `setTrusted`.
-const MASTER_RESERVED_KEYS = new Set(["origins", "enrolled", "assets", "threads", "scripts", "run-registry"]);
+const MASTER_RESERVED_KEYS = new Set([
+  "origins",
+  "enrolled",
+  "assets",
+  "threads",
+  "scripts",
+  "run-registry",
+]);
+// The INTERNAL namespace + the artifact/repair prefixes are reserved on EVERY
+// store — the model's memory_set can never write the generation authority,
+// the WAL, a tombstone, or an artifact body/repair record.
+const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs)/;
+// The full hidden namespace (keys()/get/list exclusion + set reservation).
+const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/;
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -111,12 +273,31 @@ async function rootDir() {
 }
 
 async function readJson(dir, name) {
+  return readJsonStrict(dir, name, { allowAbsent: true });
+}
+
+/** STRICT JSON read: a missing file → null; a parse/corruption/I-O failure
+ * THROWS (the generation/envelope authority never silently resets to a
+ * default — the reviewer's finding). */
+async function readJsonStrict(dir, name, { allowAbsent = false } = {}) {
+  let fh;
   try {
-    const fh = await dir.getFileHandle(name);
+    fh = await dir.getFileHandle(name);
+  } catch (e) {
+    if (allowAbsent && isNotFound(e)) return null;
+    throw e;
+  }
+  let text;
+  try {
     const f = await fh.getFile();
-    return JSON.parse(await f.text());
-  } catch {
-    return null;
+    text = await f.text();
+  } catch (e) {
+    throw e;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`durable authority file ${name} is corrupt`);
   }
 }
 
@@ -142,24 +323,47 @@ async function writeJson(dir, name, value) {
 // outer envelope's `__value` and round-trips intact).
 
 /** Read a store key's versioned entry: `{ v, value }` or null when absent.
- * Legacy raw values (no envelope) are version 0. */
-async function readEntry(dir, name) {
+ * Legacy raw values (no envelope) are version 0. When `strict` is true a REAL
+ * read/corruption failure (not a missing key) THROWS — never silently treated
+ * as absent (the artifact-transaction finding). */
+async function readEntry(dir, name, strict = false) {
+  let fh;
   try {
-    const fh = await dir.getFileHandle(name);
-    const f = await fh.getFile();
-    const parsed = JSON.parse(await f.text());
-    if (
-      parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
-      typeof parsed.__v === "number" && Number.isFinite(parsed.__v) &&
-      "__value" in parsed
-    ) {
-      return { v: parsed.__v, value: parsed.__value };
-    }
-    // Legacy raw value (pre-versioning): version 0.
-    return { v: 0, value: parsed };
-  } catch {
+    fh = await dir.getFileHandle(name);
+  } catch (e) {
+    if (strict && !isNotFound(e)) throw e;
     return null;
   }
+  let text;
+  try {
+    const f = await fh.getFile();
+    text = await f.text();
+  } catch (e) {
+    if (strict) throw e;
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    if (strict) throw e;
+    return null;
+  }
+  if (
+    parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+    typeof parsed.__v === "number" && Number.isFinite(parsed.__v) &&
+    "__value" in parsed
+  ) {
+    return { v: parsed.__v, value: parsed.__value };
+  }
+  return { v: 0, value: parsed };
+}
+
+/** Is this error a benign "missing entry"? */
+function isNotFound(e) {
+  const name = e?.name ?? "";
+  const msg = String(e?.message ?? "");
+  return name === "NotFoundError" || msg.includes("not found") || msg.includes("no file") || msg.includes("missing");
 }
 
 /** Write a store key's versioned entry. */
@@ -168,18 +372,6 @@ async function writeEntry(dir, name, value, version) {
   const w = await fh.createWritable();
   await w.write(JSON.stringify({ __v: version, __value: value }));
   await w.close();
-}
-
-// A non-enumerated tombstone keeps versions monotonic across delete/recreate.
-// Without it an absent key reset to version 0 and a recreated identical value
-// reused version 1: the real round-27 ABA remnant.
-function versionName(key) { return `.${encodeURIComponent(String(key))}.version`; }
-async function readVersion(dir, key, entry = null) {
-  const marker = await readJson(dir, versionName(key));
-  return Math.max(entry?.v ?? 0, Number.isSafeInteger(marker) && marker >= 0 ? marker : 0);
-}
-async function writeVersion(dir, key, version) {
-  await writeJson(dir, versionName(key), version);
 }
 
 /** Open a directory WITHOUT creating missing segments; returns null when the
@@ -205,7 +397,7 @@ async function storeUsage(dir) {
   let keys = 0;
   let bytes = 0;
   for await (const [name, handle] of dir.entries()) {
-    if (!name.endsWith(".json")) continue;
+    if (!name.endsWith(".json") || INTERNAL_FILE_RE.test(name)) continue;
     keys++;
     try {
       const f = await handle.getFile();
@@ -268,9 +460,15 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // forged `thread:t_...` body must be as unreachable as a forged `threads`
   // index (the wider-goal review's thread-authority finding).
   const trustedPrefix = isMaster && (
-    k.startsWith("thread:") || k.startsWith("run:") || k.startsWith("run-outbox:") || k.startsWith("run-log:") || k.startsWith("run-resume:") || k.startsWith("run-payload:")
+    k.startsWith("thread:") || k.startsWith("run:") ||
+    k.startsWith("run-outbox:") || k.startsWith("run-log:") ||
+    k.startsWith("run-resume:") || k.startsWith("run-payload:")
   );
-  if (!trusted && (reserved.has(k) || trustedPrefix)) {
+  // The internal namespace + artifact prefixes are reserved on EVERY store;
+  // trusted product code alone may write them through setTrusted.
+  const internal = INTERNAL_PREFIX_RE.test(k) || k === "assetRepair" ||
+    k.startsWith("asset:");
+  if (!trusted && (reserved.has(k) || trustedPrefix || internal)) {
     throw new Error(`key "${key}" is reserved on this store`);
   }
   let serialized;
@@ -293,16 +491,10 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // monotonic — a per-key version token that is NEVER reused (the round-27 CAS
   // blocker: value equality is not identity; the version is).
   let oldBytes = 0;
-  let isNew = true;
-  let prevVersion = 0;
   try {
     const fh = await dir.getFileHandle(`${key}.json`);
     oldBytes = (await fh.getFile()).size;
-    isNew = false;
-    const entry = await readEntry(dir, `${key}.json`);
-    prevVersion = await readVersion(dir, key, entry);
-  } catch { /* absent → new key */ }
-  if (isNew) prevVersion = await readVersion(dir, key);
+  } catch { /* absent → new key (or a deleted key with a tombstone) */ }
   // Aggregate quotas: a store may not grow past MAX_BYTES_PER_ORIGIN bytes
   // (and the global tree past MAX_BYTES_GLOBAL).
   // The delta is positive for BOTH new keys AND replacements that grow — a
@@ -321,13 +513,19 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
       `global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`,
     );
   }
-  // Bump the version and write the ENVELOPE. The returned version is the write's
-  // durable identity token — callers capture it and pass it to the version-scoped
-  // compareAndDelete/compareAndRestore so compensation targets THIS write, never
-  // a same-value write made under a different enrollment (the round-27 blocker).
-  const version = prevVersion + 1;
+  // Issue the DURABLE generation and write the ENVELOPE. The returned version
+  // is the write's durable identity token — callers capture it and pass it to
+  // the version-scoped compareAndDelete/compareAndRestore so compensation
+  // targets THIS write, never a same-value write (the round-27 blocker). A
+  // recreate also clears any tombstone (the key is live again).
+  const version = await issueVersion(dir);
   await writeEntry(dir, `${key}.json`, value, version);
-  await writeVersion(dir, key, version);
+  // A recreate clears the key from the tombstone MAP (the key is live again).
+  const tombs = await readTombs(dir);
+  if (tombs.map.has(key)) {
+    tombs.map.delete(key);
+    await writeTombs(dir, tombs);
+  }
   return version;
 }
 
@@ -353,26 +551,46 @@ async function setValue(path, key, value, { isMaster, trusted = false }) {
 async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
   return withWriteLock(async () => {
     const dir = await openDirOptional(path);
-    const current = dir ? await readEntry(dir, `${key}.json`) : null;
-    const currentVersion = dir ? await readVersion(dir, key, current) : 0;
-    if (currentVersion !== expectedVersion) return false;
+    const cur = dir ? await currentVersion(dir, key) : 0;
+    if (cur !== expectedVersion) {
+      // Idempotent delete: retrying an already-tombstoned delete returns the
+      // existing token. A recreated key clears that tombstone and returns false.
+      if (nextValue === undefined && dir) {
+        const existing = await readTombs(dir);
+        if (existing.map.has(key)) return existing.map.get(key);
+      }
+      return false;
+    }
     if (nextValue === undefined) {
+      // ATOMIC delete authority (the reviewer's finding): the tombstone (a
+      // NEWLY ISSUED generation) is persisted FIRST via the BOUNDED authority;
+      // the live value removal follows best-effort (the reads honor the
+      // tombstone — the orphan is invisible + retried by a later delete/clear).
+      // The delete RETURNS the exact deleted generation.
+      const targetDir = dir ?? await openDir(path);
+      const deletedGen = await issueVersion(targetDir);
+      const tombs = await readTombs(targetDir);
+      tombs.map.set(key, deletedGen);
+      await writeTombs(targetDir, tombs);
       if (dir) {
-        // Publish the next token before removing the value, so absence itself
-        // has a durable identity and recreation cannot reuse expectedVersion.
-        await writeVersion(dir, key, expectedVersion + 1);
         try {
           await dir.removeEntry(`${key}.json`);
-        } catch { /* absent */ }
+        } catch { /* the reads honor the tombstone */ }
       }
-      return true;
+      return deletedGen;
     }
     // A CAS-restore onto a fresh/absent store legitimately writes: open the
     // directory (creating it) ONLY for the actual mutation, never for a compare.
     const targetDir = dir ?? await openDir(path);
-    await writeEntry(targetDir, `${key}.json`, nextValue, expectedVersion + 1);
-    await writeVersion(targetDir, key, expectedVersion + 1);
-    return true;
+    const version = await issueVersion(targetDir);
+    await writeEntry(targetDir, `${key}.json`, nextValue, version);
+    // A CAS-restore/recreate clears the key from the tombstone MAP.
+    const tombs = await readTombs(targetDir);
+    if (tombs.map.has(key)) {
+      tombs.map.delete(key);
+      await writeTombs(targetDir, tombs);
+    }
+    return version; // exact token of this write
   });
 }
 
@@ -386,18 +604,41 @@ function memoryStoreAt(path, { isMaster, origin }) {
     isMaster,
     origin,
     async get(key) {
+      // The AUTHORITY files are never readable (the model-facing memory.get
+      // route + the agent memory_get tool apply the same refusal); the artifact
+      // internals are read via getStrict by the transaction code.
+      if (/^(?:__gen|__tx|__wal|__epoch|__tombs)$/.test(String(key))) {
+        throw new Error(`key "${key}" is reserved on this store`);
+      }
       const dir = await openDirOptional(path);
       if (!dir) return null;
-      const entry = await readEntry(dir, `${key}.json`);
+      // The TOMBSTONE authority is honored: a deleted key reads as absent even
+      // if a live orphan file coexists (the reviewer's tomb+live finding).
+      const tombs = await readTombs(dir);
+      if (tombs.map.has(key)) return null;
+      const entry = await readEntry(dir, `${key}.json`, true);
+      return entry?.value ?? null;
+    },
+    /** STRICT read: returns the unwrapped value or null when ABSENT (or a
+     * tombstone exists), but THROWS on a real read/corruption failure (never
+     * silently treats an unreadable store as empty). */
+    async getStrict(key) {
+      const dir = await openDirOptional(path);
+      if (!dir) return null;
+      const tombs = await readTombs(dir);
+      if (tombs.map.has(key)) return null;
+      const entry = await readEntry(dir, `${key}.json`, true);
       return entry?.value ?? null;
     },
     /** Whether `key` EXISTS (a stored `null` value is still present, distinct
      * from an absent key — `get` returns `null` for both, so compensation logic
-     * must not conflate them). Non-creating read (does not recreate a deleted
-     * store). */
+     * must not conflate them). Honors the tombstone authority (a tombstoned key
+     * with a live orphan file is ABSENT). */
     async has(key) {
       const dir = await openDirOptional(path);
       if (!dir) return false;
+      const tombs = await readTombs(dir);
+      if (tombs.map.has(key)) return false;
       try {
         await dir.getFileHandle(`${key}.json`);
         return true;
@@ -411,19 +652,21 @@ function memoryStoreAt(path, { isMaster, origin }) {
       return await withWriteLock(async () => {
         const dir = await openDirOptional(path);
         if (!dir) return { exists: false, value: null, version: 0 };
-        const entry = await readEntry(dir, `${key}.json`);
-        const version = await readVersion(dir, key, entry);
+        const tombs = await readTombs(dir);
+        const entry = tombs.map.has(key)
+          ? null
+          : await readEntry(dir, `${key}.json`, true);
+        const version = await currentVersion(dir, key);
         return entry
           ? { exists: true, value: structuredClone(entry.value), version }
           : { exists: false, value: null, version };
       });
     },
-    /** The key's CURRENT durable version token (0 when absent). */
+    /** The key's current durable token; deleted keys retain a tombstone token. */
     async getVersion(key) {
       const dir = await openDirOptional(path);
       if (!dir) return 0;
-      const entry = await readEntry(dir, `${key}.json`);
-      return await readVersion(dir, key, entry);
+      return await currentVersion(dir, key);
     },
     async set(key, value) {
       return await setValue(path, key, value, { isMaster });
@@ -452,45 +695,66 @@ function memoryStoreAt(path, { isMaster, origin }) {
     async keys() {
       const dir = await openDirOptional(path);
       if (!dir) return [];
+      const tombs = await readTombs(dir);
       const out = [];
       for await (const [name] of dir.entries()) {
-        if (name.endsWith(".json")) out.push(name.slice(0, -5));
+        if (name.endsWith(".json") && !INTERNAL_FILE_RE.test(name)) {
+          const key = name.slice(0, -5);
+          if (!tombs.map.has(key)) out.push(key);
+        }
       }
-      return out.sort();
+      // The FULL internal namespace is hidden from logical enumeration (the
+      // reviewer's finding: __tx/assetRepair/assets/asset:/__epoch were
+      // listed).
+      return out.filter((k) => !INTERNAL_KEY_RE.test(k)).sort();
     },
     async delete(key) {
+      // Plain delete is serialized and publishes the durable tombstone before
+      // removing the value. A tombstone failure therefore leaves the live value.
       await withWriteLock(async () => {
-        const dir = await openDirOptional(path);
-        if (!dir) return;
-        const entry = await readEntry(dir, `${key}.json`);
-        if (!entry) return;
-        const version = await readVersion(dir, key, entry);
-        await writeVersion(dir, key, version + 1);
+        const dir = await openDir(path);
+        const deletedGen = await issueVersion(dir);
+        const tombs = await readTombs(dir);
+        tombs.map.set(key, deletedGen);
+        await writeTombs(dir, tombs);
         try {
           await dir.removeEntry(`${key}.json`);
-        } catch { /* absent */ }
+        } catch { /* reads honor the tombstone */ }
       });
     },
     async clear() {
-      // Delete THIS store's own directory (the `path` passed to memoryStoreAt),
-      // not a hardcoded origins path — the wider-goal review found clear() was
-      // deleting `memory/origins/<origin>` even for named/background agents
-      // (memory/agents/<slug>, memory/background/<slug>), leaving their sandboxes.
-      if (isMaster) {
-        const parent = await openDir([ROOT]);
-        try {
-          await parent.removeEntry(MASTER, { recursive: true });
-        } catch { /* absent */ }
-        return;
-      }
-      // The store lives at `path` = [ROOT, <bucket>, <leaf>] — remove the leaf
-      // from its parent bucket so the whole per-store subtree is gone.
-      const leaf = path[path.length - 1];
-      const parentPath = path.slice(0, -1);
-      const parent = await openDir(parentPath);
-      try {
-        await parent.removeEntry(leaf, { recursive: true });
-      } catch { /* absent */ }
+      // Serialized under the write mutex. PRESERVES the generation authority
+      // AND every per-key TOMBSTONE — a stale expected-0 token can never land
+      // after never-created → create → clear → absent (the reviewer's ABA
+      // finding: clear reopened expected-0).
+      await withWriteLock(async () => {
+        const dir = await openDir(path);
+        let genRaw = null;
+        try { genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); } catch { genRaw = null; }
+        const removedKeys = [];
+        for await (const [name] of dir.entries()) {
+          if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json") continue;
+          if (name.endsWith(".json")) {
+            const key = name.slice(0, -5);
+            if (!INTERNAL_KEY_RE.test(key)) removedKeys.push(key);
+          }
+          try {
+            await dir.removeEntry(name, { recursive: true });
+          } catch { /* absent */ }
+        }
+        // Every removed logical value gets a tombstone. Legacy `.version`
+        // sidecars and internal transaction files are removed but never exposed
+        // as user keys in the new authority.
+        const tombs = await readTombs(dir);
+        for (const key of removedKeys) {
+          const deletedGen = await issueVersion(dir);
+          tombs.map.set(key, deletedGen);
+        }
+        await writeTombs(dir, tombs);
+        if (genRaw && typeof genRaw.gen === "number") {
+          await writeJson(dir, "__epoch.json", { gen: genRaw.gen });
+        }
+      });
     },
   };
 }
