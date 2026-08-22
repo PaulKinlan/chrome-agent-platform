@@ -51,7 +51,7 @@ isolated OPFS memory, run history, skills, and avatar.
   scratch/output quotas, recovers interrupted writes, garbage-collects only validated
   terminal jobs, and promotes output only through content-digest-bound keyed artifact
   WAL creates. No message, provider, package, or execution route reaches the wrapper;
-  loaded-MV3 use remains blocked on the runtime probe.
+  loaded-MV3 use remains blocked on a separately reviewed route/Worker successor.
 - **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
   immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
   and an exact-token package registry WAL record bundled metadata only. Import module
@@ -61,6 +61,14 @@ isolated OPFS memory, run history, skills, and avatar.
   fail before admission. This release contains zero Wasm binaries and no install,
   owner, provider, Worker, network, permission, OPFS, or execution route; signer
   metadata is recorded but not verified.
+- **Pure WASI Preview 1 host contract (source candidate)** — two unreachable modules
+  define frozen errno/rights/job/context/quota/FD types and a synchronous host-call
+  table over injected bounded memory and workspace adapters. The table implements the
+  initial 37-rebuild import union plus bounded args, empty environment, stdio, fd
+  read/write/seek/tell/close/stat, fd3 `.` preopen, normalized workspace path open/stat,
+  64 KiB random, monotonic clock, explicit realtime `ENOTSUP`, quotas, cancellation and
+  typed `proc_exit`. It constructs no OPFS handle and contains no Worker, offscreen,
+  route, provider, network, package-byte load, Wasm instantiation or execution path.
 - **Retained code-diff artifacts (source candidate)** — strict Unicode owner paths and
   add/update/delete/rename/binary documents bind producer, run, inputs, base and result
   digests. Bounded base/result bytes are preflighted, retained through digest-keyed

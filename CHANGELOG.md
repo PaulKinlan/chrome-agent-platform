@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.155] — 2026-08-22
+- feat(wasm): define pure WASI host contract (CAP-FB-20260822-WASM-EXECUTION-HOST-01)
+
 ## [0.2.154] — 2026-08-22
 - fix(wasm): allow exact bounded WASI imports (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
 

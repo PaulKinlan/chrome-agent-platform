@@ -5,14 +5,14 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 15:50 UTC. Reconciled against exact public
-> `origin/main@c23e6eb004cfa8860e5b67f3a8d2991f519b96b1` (`0.2.153`). Lazy,
+> Snapshot: 2026-08-22 16:03 UTC. Reconciled against exact public
+> `origin/main@8be457e716cfa50e9ef024fa5317b72b2859dcdc` (`0.2.154`). Lazy,
 > package freshness and security-suite serialization remain `DONE`; the catalog
 > remains `MERGED`; OPFS, bundled-package, public code-diff and Chrome-capability
-> records remain `IN_REVIEW` with Shipping `—`. This branch corrects only the
-> bundled Wasm manifest import grammar and explicit WASI allowlist after review;
-> it admits no reconstructed binary and adds no route, runtime or owner lane.
-> Branch status counts: **15 OPEN · 11 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> records remain `IN_REVIEW` with Shipping `—`. Gate 0's exploratory MV3 probe
+> independently passed; this branch adds only the unreachable pure WASI host
+> contract over injected memory/workspace adapters, with no product integration.
+> Branch status counts: **14 OPEN · 12 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
 > 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived terminal entries
 > below are the complete 68-entry state.
 
@@ -587,15 +587,15 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — executable packages need artifact-grade identity,
   provenance and crash recovery rather than a name-keyed archive/storage model
-- Updated: 2026-08-22 15:50 UTC
+- Updated: 2026-08-22 16:03 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: bounded Wasm import-policy hotfix owner
-- Workspace: active (local path private)
-- Branch: `fix/wasm-import-allowlist-c23e6eb`
+- Owner: bundled-package review owner
+- Workspace: none
+- Branch: `main`
 - Base: `c23e6eb004cfa8860e5b67f3a8d2991f519b96b1`
-- Candidate: this tracker commit
+- Candidate: `8be457e716cfa50e9ef024fa5317b72b2859dcdc`
 - Shipping: —
 - Acceptance: one unreachable library accepts only bounded canonical raw
   manifests after duplicate-key detection before materialization; unknown fields
@@ -715,39 +715,64 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — reviewed packages require a least-privilege host with
   hard termination, quotas and Durable replay integration
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 16:03 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: pure WASI host Gate 1 owner
+- Workspace: active (local path private)
+- Branch: `feat/wasm-execution-host-8be457e`
+- Base: `8be457e716cfa50e9ef024fa5317b72b2859dcdc`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: the service worker authorizes and records each job before
-  dispatch; an offscreen host creates a fresh dedicated Worker per invocation
-  with inspected imports and capability-specific host objects; no main-thread
-  fallback, generic Chrome/fetch/DOM/credentials or unrestricted OPFS;
-  wall/output/memory/file/host-call quotas, cancellation, termination, output
-  validation, artifact promotion and bounded receipts compose with stable
-  per-call replay keys and unknown-by-default safety
-- Review: independent isolation, confused-deputy, quota, credential, network,
-  replay, cancellation, interruption and cleanup review required
-- Gates: all runtime-probe gates plus capability import matrix;
-  credentials/cookies/provider-key nondisclosure; timeout/abort/revoke races;
-  service-worker/offscreen restart; stale Worker response; duplicate-effect
-  fixtures for each replay class; output schema/media/path validation; no orphan
-  Worker/handles
-- Blockers: depends on accepted runtime probe, package authority and OPFS
-  workspace authority
-- Next: after dependencies, implement one bundled read-only vertical slice with
-  no network and no artifact mutation
+- Acceptance: exactly two unreachable source libraries define frozen strict WASI
+  errno/flag/right/filetype/path-class/hard-limit/default-quota records and
+  job/context/quota/FD constructors, then expose a synchronous
+  `wasi_snapshot_preview1` table over injected bounded byte-memory and workspace
+  adapters; no OPFS handle is constructed; args, empty environment, fd 0/1/2,
+  fd3 exact `.` preopen, read/write/seek/tell/close/fdstat/filestat, path stat/
+  open, random, monotonic clock, realtime `ENOTSUP` and typed `proc_exit` obey
+  wasm32 little-endian pointer/iovec/u64 bounds, preflighted alias/OOB checks,
+  partial IO, cancellation and host/stdin/stdout/stderr/path/dynamic-FD/file-byte/
+  file-size quotas; normalized UTF-8 relative paths reject traversal and symlink
+  following; `inputs/` is read-only, `scratch/` read-write and `output/` write-
+  only; the exact nine-function import union measured across 37 non-Emscripten
+  rebuilds is recorded and foreign module/kind/function imports fail explicitly;
+  shared package tiny/default scanner readback is revalidated and large remains
+  blocked; no service-worker/offscreen/Worker/route/OPFS construction/network/
+  provider/package-byte load/WebAssembly compile-or-instantiate/execution exists
+- Review: host design v2 SHA-256
+  `c7fe9de72c42fada04b1f79d546f2f4b7e518a5e1c50d4c034a13feea9c122e1`
+  independently PASSed review SHA-256
+  `85c436846542c2c483beb771c5ae632132ad6984fd6679eede423c7413b53bfd`;
+  reviewer additions `fd_tell` and `CLOCK_REALTIME` id 0 → `ENOTSUP` included;
+  exact Gate 1 implementation review pending
+- Gates: Gate 0 authorized probe retry independently PASSed 10/10, review SHA-256
+  `7b0524498e7e4556018a79b256ca8ab25147d47a6294afa0f58c6b392b5bd895`;
+  reported pure host 16/16 and composed host/package/OPFS 43/43; canonical
+  full no-Chrome 1029/1029 across 14 steps; 110-file production build with zero
+  Wasm binaries; exact 136-entry package/validate; gallery/changelog/tracker/
+  privacy/diff/release/clean; every syscall KAT; strict/frozen
+  types; exact import/memory-tier revalidation; hostile pointer/iovec/alias/u64/
+  UTF-8/NUL/traversal/rights; fd3 preopen; partial IO/seek/tell/stat/close/reuse;
+  random cap/mock; monotonic/realtime clocks; quota/cancel/cleanup; source scan
+  proving no product import, route, Worker, OPFS, network or instantiation
+- Blockers: source candidate requires independent security review; Gate 2
+  offscreen/fresh-Worker/session fencing/termination and all product routes remain
+  separate; package and OPFS exact reviews, provenance-clean binaries and the
+  Apache-2.0-root versus MIT-metadata licence blocker remain; no reconstructed
+  tool is admitted or executable
+- Next: commit one `0.2.155` pure-source release for exact review, then leave all
+  offscreen/Worker/route/package-byte/instantiation and browser evidence to a
+  separately authorized Gate 2 successor
 - Recover:
-  `git grep -n "WASM-EXECUTION-HOST\|tool-replay-safety\|perCallIdempotencyKey\|offscreen" -- TASKS.md docs extension tests`
+  `git show feat/wasm-execution-host-8be457e -- extension/lib/wasm-host-types.js extension/lib/wasi-preview1-runtime.js tests/wasi-preview1-runtime.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — opened with fresh-Worker-only and unknown-replay
     defaults; Co-do's main-thread fallback is explicitly not adopted.
+  - 2026-08-22 16:03 UTC — independently reviewed Gate 0 probe passed all 10
+    checks; began only the design-PASSed pure Gate 1 source slice on exact public
+    `8be457e`, with every product integration and execution primitive absent.
 
 ## [CAP-FB-20260822-BUILTIN-WASM-TOOLS-01] Provenance-clean bundled Wasm tool tranche
 
@@ -859,11 +884,11 @@ On resume after a coordinator or worker loss:
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: Chrome lazy metadata first-slice owner
-- Workspace: active (local path private)
-- Branch: `feat/chrome-lazy-tools-34ced55`
+- Owner: Chrome lazy metadata review owner
+- Workspace: none
+- Branch: `main`
 - Base: `34ced55a71d871fcf209c4756b51ff1556639632`
-- Candidate: this tracker commit
+- Candidate: `c23e6eb004cfa8860e5b67f3a8d2991f519b96b1`
 - Shipping: —
 - Acceptance: one frozen bounded data-only table covers exactly all nine
   `browserToolset(false)` and 29 `managementToolset` names with stable source

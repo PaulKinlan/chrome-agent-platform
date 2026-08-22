@@ -1,6 +1,6 @@
 # Tool Platform Architecture
 
-Status: shadow catalog and loaded-MV3 lazy capture public; OPFS workspace and bundled-only Wasm package authorities in source review; provider/runtime cutover remains planned.
+Status: shadow catalog and loaded-MV3 lazy capture public; exploratory MV3 Wasm probe Gate 0 independently passed; OPFS, bundled-package and pure WASI host authorities remain in source review; provider/runtime cutover remains planned.
 
 ## Provenance and factual precedent
 
@@ -226,8 +226,9 @@ owned wrapper for strict `tool-jobs/<execution>/<call>/` roots:
   content digest. The existing unkeyed `createAsset` contract remains unchanged.
 
 The wrapper exposes no runtime message, provider, package, Worker or model tool.
-It does not make OPFS or a fresh Worker usable in MV3. Execution remains blocked
-on the loaded-MV3 runtime probe and a separately reviewed route/host successor.
+It does not make OPFS or a fresh Worker usable in product. The exploratory
+loaded-MV3 probe passed independently, but execution remains blocked on a
+separately reviewed route/offscreen/Worker successor.
 
 ## Source-only bundled Wasm package authority
 
@@ -274,6 +275,52 @@ install UI, model/provider binding, Worker, runtime API, network, permission,
 OPFS, artifact or executable path. The build scans any newly appearing `.wasm`
 and fails it as unmanifested; because this slice has no binary, the measured
 fixture audit exists in tests only.
+
+## Pure source WASI Preview 1 execution-host contract
+
+Gate 0's exploratory loaded-MV3 probe independently passed all ten runtime,
+termination, offscreen, OPFS-isolation and service-worker-rotation checks. That
+evidence authorizes only Gate 1 source work; it does not ship an execution path.
+
+`CAP-FB-20260822-WASM-EXECUTION-HOST-01` Gate 1 adds exactly two unreachable
+libraries:
+
+- `wasm-host-types.js` owns frozen WASI errno, file type, flag, right, path-class,
+  hard-limit and default-quota records. Strict frozen job/context/quota/FD
+  constructors reject unknown/accessor fields, invalid IDs/origins/workspace
+  roots, oversized/non-well-formed argv/stdin, blocked tiers and out-of-range
+  rights or offsets;
+- `wasi-preview1-runtime.js` takes injected synchronous bounded byte-memory and
+  workspace adapters. It never constructs an OPFS handle. Its fixed
+  `wasi_snapshot_preview1` object implements bounded argv, an exactly empty
+  environment, fd 0/1/2 streams, fd 3 preopen name `.`, file read/write/seek/
+  tell/close/fdstat/filestat, preopen/path stat/open, 64 KiB random, monotonic
+  clock, explicit `CLOCK_REALTIME` `ENOTSUP`, and typed `proc_exit`;
+- wasm32 pointers and iovec tables are snapshotted and checked as little-endian
+  u32 spans before side effects. Control/data alias, wrap, OOB, aggregate iovec,
+  unsafe BigInt offset and file-size overflow fail as errno. Every syscall checks
+  cancellation and the host-call quota; stdin/stdout/stderr/path/dynamic-FD/
+  cumulative-file-byte and file-size quotas remain bounded;
+- fd rights are reduced by path class: `inputs/` is read-only, `scratch/` is
+  read-write and `output/` is write-only. Output content cannot be read back and
+  inputs cannot be created, truncated or written. Relative UTF-8 paths reject
+  absolute/backslash/NUL/control/empty/dot/dotdot traversal, overlong segments
+  and symlink-follow requests;
+- the measured union from the 37 non-Emscripten rebuilt modules is recorded as
+  nine WASI function imports. The host supports only its fixed initial syscall
+  set (including reviewer addition `fd_tell`; realtime clock id 0 is explicit
+  `ENOTSUP`) and rejects any foreign module, non-function or unknown function
+  explicitly. A helper
+  revalidates package-scanner readback against the exact shared tiny/default
+  tiers while keeping large blocked;
+- syscalls return WASI errno rather than throw. The only typed signal is a valid
+  `proc_exit`. Partial IO, close/reuse, adapter failures, deny rules and every
+  call shape are exercised through an in-memory adapter.
+
+No product file imports either library. This slice has no service-worker,
+offscreen, Worker, route, provider, network, package-byte fetch, OPFS
+construction, `WebAssembly.compile`/`instantiate`, artifact promotion or
+execution. Those belong to a separately reviewed Gate 2 successor.
 
 ## Source-only retained code-diff artifacts
 
@@ -364,8 +411,9 @@ unresolved.
 1. **Lazy protocol:** public shadow capture verified; provider exposure/cutover
    remains gated. Live source reauthorization exists only in the unreachable
    injectable core.
-2. **MV3 runtime probe:** prove Wasm CSP, offscreen/nested Worker, OPFS,
-   timeout/termination, import, and memory behavior in a loaded extension.
+2. **MV3 runtime probe:** exploratory Gate 0 independently passed Wasm CSP,
+   offscreen/fresh-Worker, OPFS, timeout/termination, import, memory and
+   service-worker-rotation checks; it does not authorize product execution.
 3. **Package authority:** bundled-only source candidate implements immutable
    manifest/module/capability/inventory identity, measured raw audit, explicit
    unverified signer metadata, SBOM/licence provenance, revocation and exact-
@@ -373,8 +421,10 @@ unresolved.
 4. **OPFS workspaces:** source candidate implements per-job read-only inputs,
    bounded scratch/output, journaled quota reservation, cleanup, cross-job
    isolation and keyed artifact promotion; no execution route consumes it.
-5. **Execution host:** fresh Worker per invocation; strict import objects; no
-   main-thread fallback; durable job records; replay integration.
+5. **Execution host:** Gate 1 defines only the unreachable pure WASI table and
+   injected adapter contracts. Gate 2 still requires a separately reviewed fresh
+   Worker per invocation, strict cross-context fencing, no main-thread fallback,
+   durable job records and replay integration.
 6. **Built-ins:** provenance-clean bundled tranche, starting with operating
    essentials.
 7. **Code-diff artifacts:** source candidate retains strict base/result CAS and
@@ -406,9 +456,10 @@ maximum does not cap the whole Worker heap.
 
 ## Explicit non-goals of this slice
 
-- no Wasm ABI, loader, runtime, Worker, install, owner-package, signature
-  verification, grant or execution route; the OPFS and bundled-package
-  authorities are source-only and unreachable;
+- no product Wasm loader, compilation, instantiation, Worker, offscreen host,
+  install, owner-package, signature verification, grant or execution route; the
+  pure WASI ABI table, OPFS and bundled-package authorities are source-only and
+  unreachable;
 - no embeddings, SQLite, Vectorize, or storage-engine decision;
 - no permission additions or `chrome.permissions.request` calls;
 - no provider binding or eager-binding cutover for the lazy protocol;
