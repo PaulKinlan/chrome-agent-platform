@@ -5,15 +5,16 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 15:00 UTC. Reconciled against exact public
-> `origin/main@03dc09910a11afd4c1611a985411c6d97139bfb7` (`0.2.151`). Lazy,
+> Snapshot: 2026-08-22 15:29 UTC. Reconciled against exact public
+> `origin/main@34ced55a71d871fcf209c4756b51ff1556639632` (`0.2.152`). Lazy,
 > package freshness and security-suite serialization remain `DONE`; the catalog
-> remains `MERGED`; OPFS and bundled-package records intentionally remain
-> `IN_REVIEW` with Shipping `—`. This branch adds only the unreachable retained
-> code-diff first slice; apply/reject/undo and every workspace mutation remain
-> unavailable. Branch status counts: **16 OPEN · 10 IN_REVIEW · 2 MERGED ·
-> 4 BLOCKED · 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived
-> terminal entries below are the complete 68-entry state.
+> remains `MERGED`; OPFS, bundled-package and public code-diff records remain
+> `IN_REVIEW` with Shipping `—`. This branch adds only canonical 9-browser/
+> 29-management capability metadata and selected-only Settings shadow summaries;
+> provider, permission, grant, eager binding and dispatch remain unchanged.
+> Branch status counts: **15 OPEN · 11 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived terminal entries
+> below are the complete 68-entry state.
 
 ## Safety boundary
 
@@ -776,15 +777,15 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-22 — tool-produced code changes need owner-visible
   base/result identity and reversible application rather than direct workspace
   mutation
-- Updated: 2026-08-22 15:00 UTC
+- Updated: 2026-08-22 15:29 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: retained code-diff first-slice owner
-- Workspace: active (local path private)
-- Branch: `feat/code-diff-artifacts-03dc099`
+- Owner: retained code-diff review owner
+- Workspace: none
+- Branch: `main`
 - Base: `03dc09910a11afd4c1611a985411c6d97139bfb7`
-- Candidate: this tracker commit
+- Candidate: `34ced55a71d871fcf209c4756b51ff1556639632`
 - Shipping: —
 - Acceptance: one unreachable library getter-safely snapshots strict canonical
   add/update/delete/rename/binary documents; user paths accept valid UTF-8 and
@@ -823,51 +824,81 @@ On resume after a coordinator or worker loss:
   genuine owner UI/approval route, stale-base checks and crash-recoverable
   multi-file WAL; accessibility/theme/narrow/RTL evidence belongs to that future
   rendered owner-review lane, not this source-only slice
-- Next: commit one `0.2.152` source-only release, obtain independent artifact/
-  path/CAS/view review, and leave every mutation to a separate successor
+- Next: obtain independent exact-candidate artifact/path/CAS/view review and
+  leave every mutation to a separate successor
 - Recover:
-  `git show feat/code-diff-artifacts-03dc099 -- extension/lib/code-diff-artifacts.js tests/code-diff-artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
+  `git show 34ced55a71d871fcf209c4756b51ff1556639632 -- extension/lib/code-diff-artifacts.js tests/code-diff-artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — split from the P0 program; a line-LCS precedent alone
     does not provide CAP transaction or owner-review authority.
   - 2026-08-22 15:00 UTC — implemented only reviewed v2 schema/identity/views/
     retention plus fail-closed unavailable mutation stubs on exact public
     `03dc099`; no workspace or execution route was added.
+  - 2026-08-22 15:29 UTC — exact candidate `34ced55` became public `0.2.152`;
+    lifecycle remains IN_REVIEW with Shipping `—` pending exact review.
 
 ## [CAP-FB-20260822-CHROME-LAZY-TOOLS-01] Chrome API descriptors behind lazy discovery
 
 - Feedback: 2026-08-22 — browser tools should share one discovery protocol
   without collapsing their existing least-privilege permission and grant checks
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 15:29 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: Chrome lazy metadata first-slice owner
+- Workspace: active (local path private)
+- Branch: `feat/chrome-lazy-tools-34ced55`
+- Base: `34ced55a71d871fcf209c4756b51ff1556639632`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: browser/Chrome descriptors enter the lazy catalog and provider
-  only when selected; execution still calls the unchanged browser tool functions
-  and rechecks optional Chrome permission, product grant, target origin/tab
-  identity, durable run fence and post-mutation authority; discovery never
-  requests or grants permissions
-- Review: independent permission, grant, activeTab, origin/tab ABA, run-fence,
-  provider-context and route-dispatch review required
-- Gates: selected/non-selected provider capture; every browser tool
-  permission/grant denial and revoke race; source/destination origin; activeTab
-  owner gesture; service-worker restart; no model-callable permission route;
-  canonical browser lifecycle suite
-- Blockers: depends on lazy protocol; owner remediation remains under existing
-  permission tasks
-- Next: map each current `browserToolset()` descriptor to its exact capability
-  summary and leave dispatch byte-identical
+- Acceptance: one frozen bounded data-only table covers exactly all nine
+  `browserToolset(false)` and 29 `managementToolset` names with stable source
+  kind, distinct namespaced capability token(s), backing optional permissions,
+  product-grant scope kind, replay and trusted-replay class, owner-gesture flag,
+  mutation class and route family; missing/extra/unknown inventory fails closed,
+  management capabilities never collapse to `management.route`, and replay rows
+  match the existing trusted replay authority; only the pre-existing
+  Settings-shadow `capabilitiesByTool` construction consumes the table; selected
+  capture rows add bounded `capabilitySummary`, `capabilityDigest` and
+  `trustedReplaySafety`, while every non-selected descriptor contributes only a
+  bounded top-level count with no name/schema/capability; all 38 remain cataloged
+  and the unsafe-for-cutover list is policy metadata, not runtime filtering;
+  `providerBound`, `eagerBindingChanged`, `canExecute` and `canGrant` remain
+  false; browser/management tool maps, validators, lazy dispatch wrappers, route
+  handlers, eager provider binding, permission/grant/runtime dispatch remain
+  byte- and behavior-unchanged
+- Review: source map SHA-256
+  `e55b1190a3d4f02d6c06251d9e1e92e11e48ec641fbb379491cfabfdeffeb037`
+  independently PASSed review SHA-256
+  `874d31c8b6b7295fb2db8402889090bab12cea421d68de0a0a05ef6c494d6194`;
+  exact implementation capability/capture/parity/no-authority review pending
+- Gates: reported focused capability/catalog/shadow/lazy 39/39; canonical full
+  no-Chrome 1011/1011 across 14 steps; 108-file production build with zero Wasm
+  binaries; exact 134-entry package/validate; gallery/changelog/tracker/privacy/
+  diff/release/clean; exact 9+29 completeness/no extras/unknown refusal;
+  schema/token/permission/
+  grant/replay/gesture/mutation/route bounds; distinct management tokens;
+  capability digest recomputation; source-map execute/schema/safeParse
+  `Object.is` custody and validator-result parity without invocation; selected-
+  only capture and non-selected-count nondisclosure; source generation/stale ref
+  and replay drift; no permission request/grant/runtime-send/provider/execute
+  path; parent dispatch-source blob equality
+- Blockers: exact source candidate requires independent review; provider cutover
+  remains blocked on loaded-MV3 optional-permission, grant absent/expired/scope,
+  revoke/regrant ABA, run-loss compensation, activeTab owner-vs-model, stale-ref,
+  source-rebuild, page-caller and interrupted-mutation evidence; flagged tools
+  remain unexposed until their specific gates pass
+- Next: commit one `0.2.153` metadata-only release, obtain independent table/
+  capture/parity review, and leave provider exposure/execution to a separately
+  authorized loaded-MV3 successor
 - Recover:
-  `git grep -n "CHROME-LAZY-TOOLS\|browserToolset\|chrome.permissions\|browser control" -- TASKS.md docs extension tests`
+  `git show feat/chrome-lazy-tools-34ced55 -- extension/lib/chrome-tool-capabilities.js extension/lib/lazy-tool-wire.js extension/lib/tool-catalog-shadow.js extension/background/service-worker.js tests/chrome-tool-capabilities.test.ts TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — opened separately from Wasm execution so a shared
     catalog cannot become a shared confused-deputy dispatcher.
+  - 2026-08-22 15:29 UTC — implemented only the independently PASSed safe map:
+    canonical 9+29 metadata and selected-only Settings capture summaries on
+    exact public `34ced55`; no provider or execution authority was added.
 
 ## [CAP-FB-20260822-TOOL-LIBRARY-UI-01] Owner Tool Library, provenance and diagnostics UI
 

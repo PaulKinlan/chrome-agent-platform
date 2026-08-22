@@ -1,0 +1,245 @@
+// @ts-nocheck — exact shipped tool maps and metadata-only adapters.
+import { assert, assertEquals, assertMatch, assertThrows } from "jsr:@std/assert@1";
+import { browserToolset } from "../extension/lib/browser-tools.js";
+import {
+  MANAGEMENT_TOOL_NAMES,
+  managementToolset,
+} from "../extension/lib/management-tools.js";
+import {
+  BROWSER_TOOL_NAMES,
+  capabilitiesByTool,
+  CHROME_TOOL_CAPABILITY_BOUNDS,
+  CHROME_TOOL_CAPABILITY_TABLE,
+  chromeToolCapability,
+  FLAGGED_FOR_LATER_PROVIDER_CUTOVER,
+  MANAGEMENT_CAPABILITY_TOOL_NAMES,
+  selectedCapabilitySummary,
+} from "../extension/lib/chrome-tool-capabilities.js";
+import {
+  adaptBrowserTools,
+  adaptManagementTools,
+  buildToolCatalog,
+} from "../extension/lib/tool-catalog.js";
+import { sha256Hex } from "../extension/lib/pure.js";
+import { replaySafetyForTool } from "../extension/lib/tool-replay-safety.js";
+import {
+  executableBrowserToolRecords,
+  executableManagementToolRecords,
+} from "../extension/lib/lazy-tool-protocol.js";
+import { ShadowToolCatalogController } from "../extension/lib/tool-catalog-shadow.js";
+import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
+
+const enc = new TextEncoder();
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+function context() {
+  return {
+    version: "0.2.153",
+    sourceGeneration: "extension:0.2.153",
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+  };
+}
+function refFactory() {
+  let value = 0;
+  return () => `sel_${(++value).toString(16).padStart(36, "0")}`;
+}
+
+Deno.test("chrome capability table is exact and complete for 9 browser + 29 management tools", () => {
+  const browser = browserToolset(false);
+  const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
+  assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
+  assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
+  assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 38);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 9);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 29);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
+    browserTools: 9,
+    managementTools: 29,
+    totalTools: 38,
+    maxCapabilityTokens: 4,
+    maxCapabilityTokenBytes: 96,
+    maxPermissions: 8,
+    maxPermissionBytes: 32,
+    maxRouteFamilyBytes: 64,
+  });
+  const unknown = assertThrows(() => chromeToolCapability("not_a_tool", "chrome-api"));
+  assertEquals(unknown.code, "unknown_capability_entry");
+  const mismatch = assertThrows(() => capabilitiesByTool({ ...browser, injected: {} }, "chrome-api"));
+  assertEquals(mismatch.code, "capability_table_inventory_mismatch");
+});
+
+Deno.test("chrome capability metadata is bounded, canonical data only, and namespaced", () => {
+  const identities = new Set();
+  for (const row of CHROME_TOOL_CAPABILITY_TABLE) {
+    assertEquals(Object.isFrozen(row), true);
+    assertEquals(Object.isFrozen(row.capabilityTokens), true);
+    assertEquals(Object.isFrozen(row.optionalPermissions), true);
+    assert(!Object.values(row).some((value) => typeof value === "function"));
+    assert(!identities.has(`${row.sourceKind}:${row.toolName}`));
+    identities.add(`${row.sourceKind}:${row.toolName}`);
+    assert(row.capabilityTokens.length >= 1 && row.capabilityTokens.length <= CHROME_TOOL_CAPABILITY_BOUNDS.maxCapabilityTokens);
+    for (const token of row.capabilityTokens) {
+      assertMatch(token, /^(?:chrome|management)\.[a-z0-9]+(?:[.-][a-z0-9]+)*$/u);
+      assert(enc.encode(token).byteLength <= CHROME_TOOL_CAPABILITY_BOUNDS.maxCapabilityTokenBytes);
+    }
+    assert(row.optionalPermissions.length <= CHROME_TOOL_CAPABILITY_BOUNDS.maxPermissions);
+    assert(["none", "destination-origin", "tab-scoped", "global", "owner-gesture-activeTab"].includes(row.productGrantScopeKind));
+    assert(["read-only", "idempotent", "mutating", "unknown"].includes(row.replayClass));
+    assertEquals(row.trustedReplaySafety, row.replayClass);
+    assert(["read", "idempotent", "mutating"].includes(row.mutationClass));
+    assertMatch(row.routeFamily, /^(?:browser|management)\./u);
+  }
+  const serialized = JSON.stringify(CHROME_TOOL_CAPABILITY_TABLE);
+  for (const forbidden of ["execute", "dispatch", "validator", "callRoute", "selectionRef"]) assert(!serialized.includes(`\"${forbidden}\"`));
+});
+
+Deno.test("canonical replay metadata cannot drift from the existing trusted replay authority", () => {
+  for (const row of CHROME_TOOL_CAPABILITY_TABLE) {
+    assertEquals(row.replayClass, replaySafetyForTool(row.toolName), row.toolName);
+    assertEquals(row.trustedReplaySafety, replaySafetyForTool(row.toolName), row.toolName);
+    if (row.replayClass === "read-only") assertEquals(row.mutationClass, "read");
+    if (row.replayClass === "idempotent") assertEquals(row.mutationClass, "idempotent");
+    if (row.replayClass === "mutating") assertEquals(row.mutationClass, "mutating");
+  }
+});
+
+Deno.test("management capabilities are tool-specific and never collapse to management.route", () => {
+  const management = CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management");
+  const primary = management.map((row) => row.capabilityTokens[0]);
+  assertEquals(new Set(primary).size, MANAGEMENT_CAPABILITY_TOOL_NAMES.length);
+  assert(!primary.includes("management.route"));
+  assertEquals(chromeToolCapability("get_asset", "management").capabilityTokens, ["management.asset.get"]);
+  assertEquals(chromeToolCapability("delete_asset", "management").capabilityTokens, ["management.asset.delete"]);
+  assertEquals(chromeToolCapability("run_script", "management").capabilityTokens, ["management.script.run"]);
+});
+
+Deno.test("catalog descriptors consume exact canonical capabilities and capability digests", () => {
+  const browser = browserToolset(false);
+  const management = managementToolset({ callRoute: () => { throw new Error("must not dispatch"); } });
+  const inputs = [
+    ...adaptBrowserTools(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") }),
+    ...adaptManagementTools(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") }),
+  ];
+  const catalog = buildToolCatalog(inputs);
+  assertEquals(catalog.descriptors.length, 38);
+  for (const descriptor of catalog.descriptors) {
+    const row = chromeToolCapability(descriptor.name, descriptor.sourceKind);
+    assertEquals(descriptor.capabilities, row.capabilityTokens);
+    assertEquals(descriptor.capabilityDigest, sha256Hex(canonicalJson(row.capabilityTokens)));
+    assertEquals(descriptor.trustedReplaySafety, row.trustedReplaySafety);
+  }
+});
+
+Deno.test("unbound lazy browser/management records preserve source closure and validator custody without invocation", async () => {
+  let routeCalls = 0;
+  const browser = browserToolset(false);
+  const management = managementToolset({ callRoute: () => { routeCalls++; throw new Error("must not dispatch"); } });
+  const eager = new Map();
+  for (const [name, aiTool] of Object.entries({ ...browser, ...management })) {
+    eager.set(name, { execute: aiTool.execute, safeParse: aiTool.inputSchema.safeParse, schema: aiTool.inputSchema });
+  }
+  const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
+  const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
+  assertEquals(browserRecords.length, 9);
+  assertEquals(managementRecords.length, 29);
+  for (const record of [...browserRecords, ...managementRecords]) {
+    const name = record.descriptorInput.toolId;
+    const sourceMap = record.descriptorInput.sourceKind === "chrome-api" ? browser : management;
+    // The unbound record resolves back to the exact eager source object; the
+    // adapter never clones/replaces either authority closure or Zod validator.
+    assert(Object.is(sourceMap[name].execute, eager.get(name).execute));
+    assert(Object.is(sourceMap[name].inputSchema, eager.get(name).schema));
+    assert(Object.is(sourceMap[name].inputSchema.safeParse, eager.get(name).safeParse));
+    const expected = await eager.get(name).schema.safeParse({});
+    const actual = await record.validateArguments({});
+    assertEquals(actual.ok, expected.success);
+  }
+  assertEquals(routeCalls, 0);
+});
+
+Deno.test("shadow capture discloses bounded selected capability summaries and only a non-selected count", async () => {
+  let routeCalls = 0;
+  const browser = browserToolset(false);
+  const management = managementToolset({ callRoute: () => { routeCalls++; throw new Error("must not dispatch"); } });
+  const inputs = [
+    ...adaptBrowserTools(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") }),
+    ...adaptManagementTools(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") }),
+  ];
+  const controller = new ShadowToolCatalogController({
+    readInputs: () => inputs,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const capture = await controller.inspect({
+    action: "capture",
+    query: "tabs",
+    limit: 2,
+    runId: "run-1",
+    agentId: "hub",
+    origin: "",
+    documentId: "",
+  });
+  assertEquals(capture.mode, "shadow-lazy-provider-capture");
+  assertEquals(capture.providerBound, false);
+  assertEquals(capture.eagerBindingChanged, false);
+  assertEquals(capture.canExecute, false);
+  assertEquals(capture.canGrant, false);
+  assertEquals(capture.selectedCount, capture.selectedDescriptors.length);
+  assertEquals(capture.nonSelectedCount, 38 - capture.selectedCount);
+  assertEquals(capture.omittedNonSelected, true);
+  assert(capture.selectedCount > 0 && capture.selectedCount <= 2);
+  for (const selected of capture.selectedDescriptors) {
+    assertMatch(selected.capabilityDigest, /^[0-9a-f]{64}$/u);
+    assertEquals(selected.trustedReplaySafety, replaySafetyForTool(selected.name));
+    const row = chromeToolCapability(selected.name, selected.sourceKind);
+    assertEquals(selected.capabilitySummary.capabilityTokens, row.capabilityTokens);
+    assertEquals(selected.capabilitySummary.optionalPermissions, row.optionalPermissions);
+    assertEquals(selected.capabilitySummary.productGrantScopeKind, row.productGrantScopeKind);
+    assertEquals(selected.capabilitySummary.routeFamily, row.routeFamily);
+    assertEquals(selected.authorizes, false);
+    assertEquals(selected.requiresLiveAuthorization, true);
+    assertEquals("execute" in selected, false);
+    assertEquals("grant" in selected, false);
+  }
+  const topKeys = Object.keys(capture).sort();
+  assertEquals(topKeys, ["canExecute", "canGrant", "eagerBindingChanged", "mode", "nonSelectedCount", "ok", "omittedNonSelected", "protocolTools", "providerBound", "selectedCount", "selectedDescriptors"].sort());
+  assertEquals(routeCalls, 0);
+});
+
+Deno.test("selected capability summary is bounded for non-Chrome catalog sources", () => {
+  const summary = selectedCapabilitySummary(
+    "page_tool",
+    "webmcp-declared",
+    Array.from({ length: 20 }, (_, index) => `webmcp.capability.${index}`),
+    "unknown",
+  );
+  assertEquals(summary.capabilityTokens.length, CHROME_TOOL_CAPABILITY_BOUNDS.maxCapabilityTokens);
+  assertEquals(summary.optionalPermissions, []);
+  assertEquals(summary.productGrantScopeKind, "none");
+  assertEquals(summary.replayClass, "unknown");
+});
+
+Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 38-record catalog", () => {
+  for (const name of ["run_script", "schedule_task", "set_agent_provider", "capture_screenshot", "open_side_panel"]) {
+    assert(FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes(name));
+  }
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 38);
+  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 38);
+});
+
+Deno.test("shadow metadata wiring contains no permission request, grant, runtime-send, provider or execute path", async () => {
+  const files = [
+    "extension/lib/chrome-tool-capabilities.js",
+    "extension/lib/lazy-tool-wire.js",
+    "extension/lib/tool-catalog-shadow.js",
+  ];
+  const source = (await Promise.all(files.map((file) => Deno.readTextFile(file)))).join("\n");
+  for (const forbidden of ["permissions.request", "runtime.sendMessage", "setGlobalBrowserControlGrant", "setOriginBrowserControlGrant", "execute(args", ".execute(", "setProvider", "bindModel"] ) assert(!source.includes(forbidden), forbidden);
+  const worker = await Deno.readTextFile("extension/background/service-worker.js");
+  assert(worker.includes('context?.principal !== "owner-options"'));
+  assert(!worker.includes("search_tools"));
+  assert(!worker.includes("execute_tool"));
+});

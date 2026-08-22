@@ -106,7 +106,12 @@ export class ShadowToolCatalogController {
         catalog,
         { ttlMs: ownData(request, "ttlMs") },
       );
-      return buildLazyProviderCapture(selected);
+      return buildLazyProviderCapture(selected, {
+        nonSelectedCount: Math.max(
+          0,
+          catalog.descriptors.length - selected.results.length,
+        ),
+      });
     }
     return Object.freeze({ ok: false, error: "unknown-shadow-action" });
   }

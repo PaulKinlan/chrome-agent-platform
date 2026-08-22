@@ -176,6 +176,9 @@ import {
   TOOL_CATALOG_BOUNDS,
 } from "../lib/tool-catalog.js";
 import { ShadowToolCatalogController } from "../lib/tool-catalog-shadow.js";
+import {
+  capabilitiesByTool as canonicalChromeCapabilitiesByTool,
+} from "../lib/chrome-tool-capabilities.js";
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -1772,28 +1775,11 @@ const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
 // dispatcher, provider binding, grant, permission, install, or execute path.
 // Every inspection rebuilds from live source authority so disappeared/revoked
 // page tools cannot survive in the derived index.
-function shadowCapabilitiesFor(name, source) {
-  if (source === "builtin") {
-    if (name === "memory_set") return ["memory.write"];
-    if (name === "delegate_task") return ["agent.delegate"];
-    if (name === "list_agents") return ["agent.list"];
-    return ["memory.read"];
-  }
-  if (source === "browser") {
-    const map = {
-      open_side_panel: ["chrome.sidePanel"],
-      open_tab: ["chrome.tabs.write"],
-      navigate_tab: ["chrome.tabs.write"],
-      read_page: ["chrome.scripting.read"],
-      capture_screenshot: ["chrome.tabs.capture"],
-      list_tabs: ["chrome.tabs.read"],
-      close_tab: ["chrome.tabs.write"],
-      recent_browser_events: ["chrome.events.read"],
-      schedule_task: ["chrome.alarms.write"],
-    };
-    return map[name] ?? ["chrome.unknown"];
-  }
-  return ["management.route"];
+function shadowCapabilitiesForBuiltin(name) {
+  if (name === "memory_set") return ["memory.write"];
+  if (name === "delegate_task") return ["agent.delegate"];
+  if (name === "list_agents") return ["agent.list"];
+  return ["memory.read"];
 }
 
 async function readShadowCatalogInputs() {
@@ -1818,7 +1804,7 @@ async function readShadowCatalogInputs() {
       capabilitiesByTool: Object.fromEntries(
         Object.keys(builtinTools).map((name) => [
           name,
-          shadowCapabilitiesFor(name, "builtin"),
+          shadowCapabilitiesForBuiltin(name),
         ]),
       ),
     }),
@@ -1826,22 +1812,18 @@ async function readShadowCatalogInputs() {
       version,
       sourceGeneration,
       scope: hubScope,
-      capabilitiesByTool: Object.fromEntries(
-        Object.keys(browserTools).map((name) => [
-          name,
-          shadowCapabilitiesFor(name, "browser"),
-        ]),
+      capabilitiesByTool: canonicalChromeCapabilitiesByTool(
+        browserTools,
+        "chrome-api",
       ),
     }),
     ...adaptManagementTools(managementTools, {
       version,
       sourceGeneration,
       scope: hubScope,
-      capabilitiesByTool: Object.fromEntries(
-        Object.keys(managementTools).map((name) => [
-          name,
-          shadowCapabilitiesFor(name, "management"),
-        ]),
+      capabilitiesByTool: canonicalChromeCapabilitiesByTool(
+        managementTools,
+        "management",
       ),
     }),
   ];

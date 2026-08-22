@@ -5,6 +5,8 @@
 // or execution import.
 
 import { TOOL_SEARCH_BOUNDS } from "./tool-search.js";
+import { selectedCapabilitySummary } from "./chrome-tool-capabilities.js";
+import { TOOL_CATALOG_BOUNDS } from "./tool-catalog.js";
 
 function ownData(value, key) {
   try {
@@ -54,7 +56,28 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
   }),
 ]);
 
-export function buildLazyProviderCapture(searchResult) {
+function capabilitySummary(result) {
+  try {
+    return selectedCapabilitySummary(
+      ownData(result, "name"),
+      ownData(result, "sourceKind"),
+      ownData(result, "capabilities"),
+      ownData(result, "trustedReplaySafety"),
+    );
+  } catch {
+    return Object.freeze({
+      capabilityTokens: Object.freeze([]),
+      optionalPermissions: Object.freeze([]),
+      productGrantScopeKind: "none",
+      replayClass: "unknown",
+      requiresOwnerGesture: false,
+      mutationClass: "mutating",
+      routeFamily: "catalog.unknown",
+    });
+  }
+}
+
+export function buildLazyProviderCapture(searchResult, options = {}) {
   const selected = Array.isArray(searchResult?.results)
     ? searchResult.results.slice(0, TOOL_SEARCH_BOUNDS.maxTopK)
     : [];
@@ -70,10 +93,26 @@ export function buildLazyProviderCapture(searchResult) {
       sourceGeneration: ownData(result, "sourceGeneration"),
       availability: ownData(result, "availability"),
       selectionRef: ownData(result, "selectionRef"),
+      capabilityDigest: ownData(result, "capabilityDigest"),
+      trustedReplaySafety: ownData(result, "trustedReplaySafety") ?? "unknown",
+      capabilitySummary: capabilitySummary(result),
       authorizes: false,
       requiresLiveAuthorization: true,
     })
   );
+  const rawNonSelected = ownData(options, "nonSelectedCount") ??
+    ownData(searchResult, "nonSelectedCount") ?? 0;
+  const requestedNonSelected = typeof rawNonSelected === "number"
+    ? rawNonSelected
+    : typeof rawNonSelected === "string" && /^\d{1,7}$/u.test(rawNonSelected)
+    ? Number(rawNonSelected)
+    : 0;
+  const nonSelectedCount = Number.isFinite(requestedNonSelected)
+    ? Math.max(0, Math.min(
+      Math.trunc(requestedNonSelected),
+      TOOL_CATALOG_BOUNDS.maxDescriptors,
+    ))
+    : 0;
   return Object.freeze({
     ok: searchResult?.ok === true,
     mode: "shadow-lazy-provider-capture",
@@ -82,6 +121,8 @@ export function buildLazyProviderCapture(searchResult) {
     protocolTools: LAZY_PROTOCOL_TOOL_WIRE,
     selectedDescriptors: Object.freeze(projected),
     selectedCount: projected.length,
+    nonSelectedCount,
+    omittedNonSelected: nonSelectedCount > 0,
     canExecute: false,
     canGrant: false,
   });

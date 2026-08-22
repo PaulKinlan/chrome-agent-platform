@@ -304,6 +304,36 @@ A separate reviewed slice must settle conditional workspace writes, owner UI,
 stale-base rechecks, recoverable multi-file semantics and its WAL before any of
 those actions can exist.
 
+## Source-only Chrome lazy capability metadata
+
+`CAP-FB-20260822-CHROME-LAZY-TOOLS-01` adds metadata—not Chrome authority:
+
+- `chrome-tool-capabilities.js` is a frozen data-only table for the exact nine
+  `browserToolset(false)` and 29 `managementToolset` names. Every row carries
+  exact source kind, distinct namespaced capability token(s), backing optional
+  permission names, product-grant scope kind, replay/trusted-replay class,
+  owner-gesture requirement, mutation class and route family;
+- the table fails closed on missing/extra inventory. Management reads, hook
+  idempotents and mutations have distinct tokens; `management.route` no longer
+  collapses all 29 descriptors. Replay rows are tested against the existing
+  replay-safety authority;
+- only the existing `capabilitiesByTool` construction in the Settings shadow
+  consumes the table. Browser and management source tool maps, Zod validators,
+  dispatcher wrappers, route handlers and eager provider binding are unchanged;
+- selected capture rows add `capabilityDigest`, `trustedReplaySafety` and a
+  bounded capability summary. Non-selected descriptors contribute only a
+  bounded `nonSelectedCount`; no non-selected names, schemas, capabilities or
+  tool rows cross the capture boundary;
+- all 38 descriptors remain cataloged. `run_script`, scheduled scripts,
+  provider changes, destructive deletes/updates, screenshots and side-panel
+  opening remain explicitly flagged for later loaded denial/revoke/race gates.
+  The list is policy documentation, not runtime filtering and not exposure.
+
+The capture remains Settings-only with `providerBound:false`,
+`eagerBindingChanged:false`, `canExecute:false` and `canGrant:false`. No
+permission request, product grant, provider cutover, execution route or changed
+dispatch exists in this slice.
+
 ## Distribution lanes and Store policy
 
 Two lanes remain explicitly separate:
@@ -342,8 +372,9 @@ unresolved.
 7. **Code-diff artifacts:** source candidate retains strict base/result CAS and
    derives bounded non-authoritative views; owner-visible apply/reject/undo and
    every workspace mutation remain a separate unavailable successor.
-8. **Chrome lazy tools:** same discovery protocol without weakening optional
-   permissions, grants, run fences, or route dispatch.
+8. **Chrome lazy tools:** source candidate canonicalizes exact 9+29 metadata
+   and selected-only summaries while provider exposure and every execution path
+   remain absent; loaded denial/revoke/race proof gates any later cutover.
 9. **Tool Library UI:** reusable components for provenance, versions,
    capabilities, grants, revocation, quotas, and diagnostics.
 10. **Owner install lane:** only after package UI and distribution policy are

@@ -1,6 +1,6 @@
 # Open questions for Paul
 
-Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom. Security-suite serialization and the verified shadow lazy capture are completed implementation custody, not product-policy questions. Provider cutover remains a separate parity/lifecycle gate. The source-only OPFS workspace, bundled-only Wasm package records and retained code-diff artifact authority likewise make no product-policy choice. The diff slice has no apply/reject/undo owner route or workspace mutation. Owner-package enablement, signer trust/verification, large-tier evidence and the future owner-approved diff mutation/WAL design remain explicitly open decisions.
+Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom. Security-suite serialization and the verified shadow lazy capture are completed implementation custody, not product-policy questions. Canonical 9-browser/29-management capability metadata adds no provider exposure or authority; provider cutover remains a separate loaded denial/revoke/race gate. The source-only OPFS workspace, bundled-only Wasm package records and retained code-diff artifact authority likewise make no product-policy choice. The diff slice has no apply/reject/undo owner route or workspace mutation. Owner-package enablement, signer trust/verification, large-tier evidence and the future owner-approved diff mutation/WAL design remain explicitly open decisions.
 
 ## Resolved
 

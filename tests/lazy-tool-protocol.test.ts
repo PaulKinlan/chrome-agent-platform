@@ -571,7 +571,7 @@ Deno.test("lazy provider capture: only two fixed protocol tools and selected sch
       type: "object",
       properties: { NON_SELECTED_PROPERTY: { type: "string" } },
     },
-    capabilities: ["memory.read"],
+    capabilities: ["nonselected.secret.capability"],
     scope: HUB_SCOPE,
     sourceGeneration: "extension:1",
     availability: "ready",
@@ -600,12 +600,18 @@ Deno.test("lazy provider capture: only two fixed protocol tools and selected sch
   ]);
   assertEquals(capture.selectedDescriptors.length, 1);
   assertEquals(capture.selectedDescriptors[0].name, "selected_tool");
+  assertEquals(capture.selectedDescriptors[0].capabilitySummary.capabilityTokens, ["memory.read"]);
+  assertEquals(capture.selectedDescriptors[0].trustedReplaySafety, "unknown");
+  assertMatch(capture.selectedDescriptors[0].capabilityDigest, /^[0-9a-f]{64}$/u);
+  assertEquals(capture.nonSelectedCount, 1);
+  assertEquals(capture.omittedNonSelected, true);
   assertEquals(capture.canExecute, false);
   assertEquals(capture.canGrant, false);
   const wire = JSON.stringify(capture);
   assertStringIncludes(wire, "selected_marker");
   assert(!wire.includes("NON_SELECTED_SECRET_SCHEMA_MARKER"));
   assert(!wire.includes("NON_SELECTED_PROPERTY"));
+  assert(!wire.includes("nonselected.secret.capability"));
   assert(!wire.includes("not_selected_tool"));
 });
 

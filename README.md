@@ -39,10 +39,13 @@ isolated OPFS memory, run history, skills, and avatar.
 - **Shadow tool catalog + lazy capture** — Settings-only metadata diagnostics derive
   bounded stable descriptors from the real built-in, browser, management, and WebMCP
   sources, with deterministic lexical search and expiring non-authorizing references.
-  The public, loaded-MV3-verified shadow captures a fixed two-tool lazy wire plus one
-  selected bounded summary only and repeatedly re-resolves live authority around the
-  existing dispatcher closures. It is not provider-bound: eager tools remain unchanged
-  and the capture cannot execute, grant or install.
+  A canonical data-only table covers the exact 9 browser + 29 management tools with
+  namespaced capability, optional-permission, grant-scope, replay, gesture, mutation,
+  and route-family metadata. Capture projects that summary and digest for selected
+  descriptors only; every other descriptor is represented only by a bounded count.
+  The fixed two-tool wire remains shadow-only and repeatedly re-resolves live authority
+  around unchanged source closures. It is not provider-bound: eager tools remain
+  unchanged and capture cannot execute, request permission, grant, or install.
 - **Per-job OPFS workspace authority (source candidate)** — a service-worker-owned
   wrapper projects hash-verified read-only inputs into strict job roots, journals bounded
   scratch/output quotas, recovers interrupted writes, garbage-collects only validated
