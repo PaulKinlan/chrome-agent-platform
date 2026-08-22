@@ -5,12 +5,11 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 10:23 UTC. The reviewed shadow-catalog source was
-> semantically reconciled onto exact public-at-start
-> `bee002331bb4c5eafa314cd4bd200d4ba65fc6fc` (`0.2.145`) as integration candidate
-> `fb0ce235ca5400e14385fb3df219eff76cd1c01f` (`0.2.146`). This candidate makes no
-> shipping claim before its serialized browser gate and remote attestation. Branch
-> status counts: **22 OPEN · 8 IN_REVIEW · 1 MERGED · 4 BLOCKED · 33 DONE ·
+> Snapshot: 2026-08-22 11:10 UTC. Reconciled against exact public
+> `origin/main@a8985af8af2af76d714cd0be29781c18c08d7a7f` (`0.2.146`). The bounded
+> shadow catalog is public and therefore `MERGED`; this branch adds the P0
+> archive-freshness candidate without making a shipping claim for it. Branch status
+> counts: **21 OPEN · 8 IN_REVIEW · 2 MERGED · 4 BLOCKED · 33 DONE ·
 > 0 ABANDONED**. The 35 active entries and 33 archived terminal entries below are
 > the complete 68-entry branch state at this snapshot.
 
@@ -482,20 +481,41 @@ On resume after a coordinator or worker loss:
     search/compression/database/media 1 each. No Co-do code or binary is
     accepted by this record.
 
+## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
+- Feedback: 2026-08-22 — production packaging copied the entire local extension tree and updated an existing ZIP in place, allowing ignored/untracked artifacts and files removed since a prior package to survive into a release archive
+- Updated: 2026-08-22 11:10 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: package-archive implementer
+- Workspace: active (local path private)
+- Branch: `fix/package-archive-freshness-a8985af`
+- Base: `a8985af8af2af76d714cd0be29781c18c08d7a7f`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: each package is assembled only from Git's exact tracked regular-file inventory under `extension/`, the current generated `dist` authority, and a byte-identical generated extension changelog; ignored/untracked files never enter; tracked/generated symlinks and special files, duplicate/nonportable paths, missing required dist files, stale changelog, unexpected ZIP entries and content-hash mismatches fail closed; ZIP output is written from a fresh exact staging tree to one unique nonexistent same-directory temp file, verified for exact inventory/no duplicates/no stale entries/current hashes/portable regular files, then atomically renamed over the final archive; failure preserves the old final and removes stage/temp residue
+- Review: independent code, archive-security, source-inventory, portability, atomicity and regression review pending
+- Gates: executable regression poisons the existing final ZIP and ignored `extension/options/options.bundle.js`, packages twice after a tracked removal and current-dist replacement, and proves stale/ignored/duplicate/symlink entries absent plus failure cleanup/final preservation; focused tests; canonical full unit; production build; package + validate-only; gallery/changelog/order/diff/release/clean-tree checks; no Chrome and no `npm run test:security`
+- Blockers: —
+- Next: commit the exact candidate and obtain independent review before any integration or push
+- Recover: `git show fix/package-archive-freshness-a8985af -- scripts/package-extension.mjs scripts/package-archive.mjs tests/package-extension-freshness.test.ts tests/package-extension-freshness-driver.mjs TASKS.md`
+- History:
+  - 2026-08-22 11:10 UTC — replaced whole-tree/in-place ZIP packaging with an exact tracked-plus-generated inventory, fresh temp archive, extracted hash verification and atomic replacement; added poison/removal/current-dist/symlink/special/failure-cleanup regressions on exact public `a8985af`.
+
 ## [CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01] Canonical bounded shadow tool catalog
 
 - Feedback: 2026-08-22 — the P0 tool platform needs one metadata contract before
   selecting a runtime, storage engine, embedding model or package policy
-- Updated: 2026-08-22 09:30 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-22 11:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
-- Owner: catalog-contract implementer
-- Workspace: active (local path private)
-- Branch: `feat/tool-catalog-contract-30afd5a`
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: this implementation commit
-- Shipping: —
+- Owner: catalog integration owner
+- Workspace: none
+- Branch: `main`
+- Base: `bee002331bb4c5eafa314cd4bd200d4ba65fc6fc`
+- Candidate: `a8985af8af2af76d714cd0be29781c18c08d7a7f`
+- Shipping: `origin/main@a8985af8af2af76d714cd0be29781c18c08d7a7f`
 - Acceptance: canonical bounded descriptors bind source kind, package/tool ID,
   version, metadata digest, capability digest, scope and source generation; real
   adapters cover current extension built-ins, browser tools, management tools
@@ -505,27 +525,25 @@ On resume after a coordinator or worker loss:
   remain metadata-only, create no grant and expose no execution path; hostile
   text is inert data, collisions and stale authority fail closed, WebMCP replay
   safety defaults unknown, and only Settings may inspect shadow diagnostics
-- Review: independent
-  code/security/bounds/Unicode/collision/freshness/provider-nondisclosure review
-  pending; this slice is not Wasm or lazy-provider acceptance
-- Gates: hostile metadata/accessor/Proxy/Unicode/schema/collision/bounds tests;
-  actual-source adapters; deterministic ranking; top-k/result/per-run/ref/TTL
-  caps; source revocation/generation/expiry tests; provider/prompt
-  nondisclosure; exact route-owner check; full unit, pure no-Chrome security,
-  build/gallery/changelog/diff and clean tree before source review; canonical
-  `npm run test:security` is deferred because it launches Chromium and lacks
-  self-serialization (tracked separately)
-- Blockers: none for the shadow slice; provider cutover, execution and package
-  authority are explicitly separate
-- Next: obtain independent source review, then integrate without claiming lazy
-  provider binding or executable Wasm
+- Review: independent source, security, bounds, Unicode, collision, freshness,
+  provider-nondisclosure and integration reviews passed; this scoped slice is
+  not Wasm, lazy-provider, package-execution or owner-install acceptance
+- Gates: source candidate reported focused 58/58, full unit 931/931, pure
+  no-Chrome security 157/157 and build 102 shipped JS; exact public integration
+  and its metadata-only route are merged without provider/dispatch/permission
+  cutover; whole-product browser regression remains the separate `MERGED`→`DONE` gate
+- Blockers: —
+- Next: advance to `DONE` only after the exact public tip's canonical browser journey is green
 - Recover:
-  `git show feat/tool-catalog-contract-30afd5a -- extension/lib/tool-catalog.js extension/lib/tool-search.js extension/lib/tool-selection.js extension/lib/tool-catalog-shadow.js docs/tool-platform-architecture.md tests/tool-catalog*.test.ts tests/tool-search.test.ts tests/tool-selection.test.ts`
+  `git show a8985af8af2af76d714cd0be29781c18c08d7a7f -- extension/lib/tool-catalog.js extension/lib/tool-search.js extension/lib/tool-selection.js extension/lib/tool-catalog-shadow.js docs/tool-platform-architecture.md tests/tool-catalog*.test.ts tests/tool-search.test.ts tests/tool-selection.test.ts`
 - History:
   - 2026-08-22 09:30 UTC — implemented the owner-decision-free metadata shadow
     on exact public `30afd5a`; current provider binding, source dispatchers,
     permissions, grants, Durable authority and package/runtime absence remain
     unchanged.
+  - 2026-08-22 11:00 UTC — independently reviewed integration landed on public
+    main as `a8985af8af2af76d714cd0be29781c18c08d7a7f` (`0.2.146`); lifecycle advanced
+    truthfully to `MERGED` with exact Shipping provenance.
 
 ## [CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01] Run-bound lazy search and execute protocol
 

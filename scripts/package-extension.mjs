@@ -1,66 +1,59 @@
-// scripts/package-extension.mjs — deterministic PACKAGING (the review's
-// portability finding): builds a ZIP that DEREFERENCES the dist pointer into a
-// real directory (no symlink in the artifact — loads on any OS/Chromium),
-// then validates the archive loads as an unpacked extension (structure,
-// manifest routing, dist completeness) — the packaging gate.
+// scripts/package-extension.mjs — freshness-safe production ZIP packaging.
 //
-//   node scripts/package-extension.mjs [out.zip]   # default: dist-archives/cap-<version>-<sha>.zip
+//   node scripts/package-extension.mjs [out.zip]
 //   node scripts/package-extension.mjs --validate-only <zip>
-import { createWriteStream } from "node:fs";
-import { readFile, mkdir, rm, stat } from "node:fs/promises";
+//
+// The implementation never copies extension/ wholesale. See
+// package-archive.mjs for the exact tracked + generated inventory authority,
+// symlink/special-file refusals, fresh same-directory temp ZIP, exact archive
+// verification and atomic replacement.
+
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import {
+  collectPackageInventory,
+  packageExtensionArchive,
+  verifyPackageArchive,
+} from "./package-archive.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const EXT_DIR = path.join(ROOT, "extension");
-const DIST = path.join(EXT_DIR, "dist");
-
-// 0) Prune stray SYMLINK entries under dist-versions (lstat only — never
-// follow; a real directory is never pruned).
-import { lstat, readdir as rd } from "node:fs/promises";
-for (const n of await rd(path.join(EXT_DIR, "dist-versions")).catch(() => [])) {
-  const p = path.join(EXT_DIR, "dist-versions", n);
-  if ((await lstat(p).catch(() => null))?.isSymbolicLink()) {
-    await rm(p, { force: true });
-  }
+const args = process.argv.slice(2);
+const validateOnly = args[0] === "--validate-only";
+if (validateOnly && (!args[1] || args.length !== 2)) {
+  throw new Error(
+    "usage: node scripts/package-extension.mjs --validate-only <zip>",
+  );
+}
+if (!validateOnly && args.length > 1) {
+  throw new Error("usage: node scripts/package-extension.mjs [out.zip]");
 }
 
-// 1) A FLAT staging copy of extension/ with EVERY symlink DEREFERENCED
-// (cp -L follows links — dist AND any internal links become real files; the
-// artifact is portable to any OS/Chromium and loads unpacked).
-const STAGE = path.join(ROOT, ".package-stage");
-await rm(STAGE, { recursive: true, force: true });
-await mkdir(STAGE, { recursive: true });
-execSync(`cp -aL ${JSON.stringify(EXT_DIR + "/.")} ${JSON.stringify(STAGE + "/")}`);
-// No build scratch inside the artifact.
-await rm(path.join(STAGE, "dist-versions"), { recursive: true, force: true }).catch(() => {});
+const manifest = JSON.parse(
+  await readFile(path.join(ROOT, "extension", "manifest.json"), "utf8"),
+);
+const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+  cwd: ROOT,
+  encoding: "utf8",
+}).trim();
+const archive = path.resolve(
+  validateOnly ? args[1] : args[0] ??
+    path.join(ROOT, "dist-archives", `cap-${manifest.version}-${sha}.zip`),
+);
 
-// 2) VALIDATE: manifest → dist files exist; the marker exists; no symlinks remain.
-const manifest = JSON.parse(await readFile(path.join(STAGE, "manifest.json"), "utf8"));
-const sw = path.join(STAGE, manifest.background.service_worker);
-const optsBundle = path.join(STAGE, "dist/options.bundle.js");
-const shippedChangelog = path.join(STAGE, "CHANGELOG.md");
-for (const f of [sw, optsBundle, shippedChangelog, path.join(STAGE, "dist/dist.complete")]) {
-  const st = await stat(f).catch(() => null);
-  if (!st?.isFile()) throw new Error(`packaging validation failed: ${f} missing`);
-  if (st.isSymbolicLink?.()) throw new Error(`packaging validation failed: ${f} is a symlink`);
+if (validateOnly) {
+  const inventory = await collectPackageInventory({ root: ROOT });
+  const result = await verifyPackageArchive({
+    archive,
+    expected: inventory,
+    scratchParent: path.dirname(archive),
+  });
+  console.log(
+    `validated ${archive} (${result.entries} exact entries; portable; no stale/duplicate/symlink content; sha256 ${result.sha256})`,
+  );
+} else {
+  const result = await packageExtensionArchive({ root: ROOT, archive });
+  console.log(
+    `packaged ${result.archive} (${result.entries} exact tracked+generated entries; atomic fresh ZIP; portable; sha256 ${result.archiveSha256})`,
+  );
 }
-const [canonicalChangelog, packagedChangelog] = await Promise.all([
-  readFile(path.join(ROOT, "CHANGELOG.md")),
-  readFile(shippedChangelog),
-]);
-if (Buffer.compare(canonicalChangelog, packagedChangelog) !== 0) {
-  throw new Error("packaging validation failed: generated CHANGELOG.md is missing or stale");
-}
-// No symlinks anywhere in the artifact.
-const findSymlinks = execSync(`find ${JSON.stringify(STAGE)} -type l`, { encoding: "utf8" }).trim();
-if (findSymlinks) throw new Error(`packaging validation failed: symlinks remain:\n${findSymlinks}`);
-
-// 3) ZIP deterministically.
-const version = manifest.version;
-const sha = execSync("git rev-parse --short HEAD", { cwd: ROOT, encoding: "utf8" }).trim();
-const archive = process.argv[2]?.replace(/^--validate-only$/, "") ?? path.join(ROOT, "dist-archives", `cap-${version}-${sha}.zip`);
-await mkdir(path.dirname(archive), { recursive: true });
-execSync(`cd ${JSON.stringify(STAGE)} && zip -qr ${JSON.stringify(archive)} . -x '.DS_Store'`);
-await rm(STAGE, { recursive: true, force: true });
-console.log(`packaged ${archive} (dist DEREFERENCED — portable, validated, no symlinks)`);

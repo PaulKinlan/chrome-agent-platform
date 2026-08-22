@@ -66,10 +66,17 @@ npm test               # unit tests
 npm run test:chrome    # the CDP journeys (drives the real extension)
 npm run test:components  # the component gallery smoke
 npm run test:security  # the sandbox-boundary security suite
+npm run package        # fresh exact-inventory production ZIP
 ```
 
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked**
 → select the `extension/` directory. The new-tab page becomes the hub.
+
+Production packaging never copies the local `extension/` tree wholesale. It
+combines Git-tracked regular files with the current generated `dist` and the
+byte-identical generated changelog, rejects symlinks/special files, verifies a
+fresh ZIP's exact names and hashes, then atomically replaces the final archive.
+Ignored local bundles and files removed since an older ZIP cannot survive.
 
 ## Architecture
 

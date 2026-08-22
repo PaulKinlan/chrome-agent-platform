@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.147] — 2026-08-22
+- fix(package): publish fresh exact-inventory archives (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01)
+
 ## [0.2.146] — 2026-08-22
 - feat(tools): add the bounded shadow catalog contract (CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01)
 

@@ -46,11 +46,14 @@ Deno.test("changelog sync materializes a missing generated package file and dete
 });
 
 Deno.test("production build and package gates own the ignored shipped changelog", async () => {
-  const [ignore, build, pack] = await Promise.all([
+  const [ignore, build, pack, archive] = await Promise.all([
     Deno.readTextFile(new URL("../.gitignore", import.meta.url)),
     Deno.readTextFile(new URL("../build.mjs", import.meta.url)),
     Deno.readTextFile(
       new URL("../scripts/package-extension.mjs", import.meta.url),
+    ),
+    Deno.readTextFile(
+      new URL("../scripts/package-archive.mjs", import.meta.url),
     ),
   ]);
 
@@ -64,8 +67,11 @@ Deno.test("production build and package gates own the ignored shipped changelog"
     "a clean-archive production build materializes and verifies the shipped file",
   );
   assert(
-    pack.includes("shippedChangelog") &&
-      pack.includes("Buffer.compare(canonicalChangelog, packagedChangelog)"),
-    "packaging fails closed when the shipped changelog is absent or stale",
+    pack.includes("collectPackageInventory") &&
+      archive.includes(
+        "generated extension/CHANGELOG.md is missing or stale",
+      ) &&
+      archive.includes("canonicalBytes.equals(shippedBytes)"),
+    "packaging fails closed when the generated shipped changelog is absent or stale",
   );
 });

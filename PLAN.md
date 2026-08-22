@@ -39,13 +39,15 @@ attestation machinery is removed. See `AGENTS.md` for the normative rules.
 
 Paul elevated the Co-do-style browser-native Wasm/tool operating layer to P0. The public architecture is [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md), based on source inspection of [PaulKinlan/Co-do](https://github.com/PaulKinlan/Co-do) at exact `d3ebdbd5066f16a2bb8a2b8cb8af4b57c8ae324a` (39 factual built-ins across nine functional categories; no code or binaries copied).
 
-The first owner-decision-free slice, `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01`, is in review: bounded canonical descriptors, stable source/package/tool/version/digest/capability/scope/generation identity, real adapters for current built-in/browser/management/declared+inferred WebMCP sources, an in-memory deterministic exact/alias/lexical index, and expiring non-authorizing selection references. The only runtime exposure is a Settings-only shadow diagnostic route. Existing eager provider binding and every source dispatcher/permission/grant remain unchanged.
+The first owner-decision-free slice, `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01`, is merged on public `a8985af`: bounded canonical descriptors, stable source/package/tool/version/digest/capability/scope/generation identity, real adapters for current built-in/browser/management/declared+inferred WebMCP sources, an in-memory deterministic exact/alias/lexical index, and expiring non-authorizing selection references. The only runtime exposure is a Settings-only shadow diagnostic route. Existing eager provider binding and every source dispatcher/permission/grant remain unchanged.
 
 Next in dependency order: lazy protocol/provider capture; loaded-MV3 runtime probe; package authority and per-job OPFS workspaces; fresh-Worker execution host; provenance-clean bundled tools; diff artifacts; Chrome lazy tools; Tool Library; owner install only after distribution-policy resolution; spreadsheet tools; continuous abuse gates. The existing semantic-search task remains the sole semantic authority and is P0; embeddings/SQLite are not selected by the lexical slice.
 
 Store and owner-package lanes remain separate. Store builds execute bundled reviewed Wasm only until written Chrome Web Store remotely hosted code guidance says otherwise. Unpacked/enterprise/developer owner-selected packages remain a separate lane. Co-do's Apache-2.0 root versus MIT package/manifest metadata is unresolved provenance, not permission to copy binaries.
 
 The existing `npm run test:security` launches real Chromium without self-serializing. `CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01` is a separate P0 safety task for lock capability, owned PGID, hard timeout, fresh profile, durable evidence and guarded cleanup; historical unsynchronized runs are noncanonical observations rather than product failures.
+
+`CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01` is in review on exact public `a8985af`. Production ZIPs are assembled from Git's tracked extension inventory plus the current generated dist and byte-identical generated changelog—never a wholesale local-tree copy. A fresh same-directory temp ZIP is exact-inventory/hash verified before atomic replacement, so ignored artifacts and removed files cannot survive from local state or an older final archive.
 
 ## Status (2026-08-17)
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
@@ -91,10 +93,10 @@ The existing `npm run test:security` launches real Chromium without self-seriali
 - Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only) — see the task backlog.
 - The screenshot / media-capture permission flows (ask-on-need, not fail).
 - The UI polish + the review backlog (see [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) + root [KNOWN-ISSUES.md](KNOWN-ISSUES.md)).
-- The extension rename/packaging (still "Chrome Agent Platform").
+- The extension rename/distribution decision (still "Chrome Agent Platform"; archive freshness is implemented separately).
 
 ## Open questions for Paul
-- The extension rename/packaging (still "Chrome Agent Platform").
+- The extension rename/distribution decision (still "Chrome Agent Platform"; archive freshness is implemented separately).
 
 ## Feature: Artifacts (Paul 2026-08-16)
 Agents create things for the user in the context of a task (generated pages, files, UI, data). We need:

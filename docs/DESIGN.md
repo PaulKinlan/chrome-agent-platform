@@ -120,6 +120,15 @@ the current child and its exact nonce. Teardown removes the outer frame and the
 privileged staging entry; repeated async preview renders clean the prior listener
 and stage exactly one replacement.
 
+## Distribution archive boundary
+The production ZIP is a projection, not a copy of the developer's local
+`extension/` directory. Its only authorities are Git-tracked regular extension
+files, the current generated dist tree, and the byte-identical generated
+changelog. A unique fresh temp archive is checked for exact names, duplicate or
+stale entries, regular-file portability, and content hashes before an atomic
+same-filesystem replacement. Ignored/untracked files, symlinks, special files,
+and content retained from an older ZIP are never distribution UI or runtime.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.
