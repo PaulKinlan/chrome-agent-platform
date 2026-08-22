@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.164] — 2026-08-22
+- feat(js-minifier): add bounded bundled JS-minifier Worker lane (disabled, no provider)
+
 ## [0.2.163] — 2026-08-22
 - feat(wasm): ship immutable bundled tool packages, disabled until the execution host (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
 

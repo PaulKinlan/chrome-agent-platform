@@ -253,3 +253,46 @@ Deno.test("scan: lookalike/suffix paths NEVER inherit the canonical exemptions",
     assert(v.length >= 1, `worker-host lookalike ${JSON.stringify(file)} must violate`);
   }
 });
+
+const MINIFIER_CANONICAL_REL = "extension/lib/js-minifier-lifecycle.js";
+
+async function minifierLifecycleContents() {
+  return await Deno.readTextFile(
+    new URL("../extension/lib/js-minifier-lifecycle.js", import.meta.url),
+  );
+}
+
+Deno.test("scan: the minifier's canonical WorkerCtor host is accepted at its exact location", async () => {
+  const source = await minifierLifecycleContents();
+  const v = await scanShippedJs([MINIFIER_CANONICAL_REL], { readText: async () => source });
+  assertEquals(v.length, 0, "the canonical minifier host with the exact new WorkerCtor node stays clean");
+});
+
+Deno.test("scan: lookalike WorkerCtor hosts NEVER inherit the minifier exemption", async () => {
+  const source = await minifierLifecycleContents();
+  const lookalikes = [
+    `/repo/${MINIFIER_CANONICAL_REL}.evil`,
+    `/repo/${MINIFIER_CANONICAL_REL}/..`,
+    `/repo/xx${MINIFIER_CANONICAL_REL}`,
+    `/repo/extension/lib/not-js-minifier-lifecycle.js`,
+    `/repo/extension/lib/js-minifier-lifecycle.js\u0000x`,
+  ];
+  for (const file of lookalikes) {
+    const v = await scanShippedJs([file], { readText: async () => source });
+    assert(v.length >= 1, `minifier worker-host lookalike ${JSON.stringify(file)} must violate`);
+  }
+});
+
+Deno.test("scan: the minifier worker bundles are statically eval/Function/importScripts-free (no dynamic-eval exemption)", async () => {
+  for (const bundle of [
+    "terser-bounded.worker.js",
+    "csso-bounded.worker.js",
+    "html-minifier-terser-bounded.worker.js",
+  ]) {
+    const source = await Deno.readTextFile(
+      new URL(`../extension/lib/${bundle}`, import.meta.url),
+    );
+    const v = await scanShippedJs([`extension/lib/${bundle}`], { readText: async () => source });
+    assertEquals(v.length, 0, `${bundle} must contain no eval/Function/importScripts/Worker sink`);
+  }
+});

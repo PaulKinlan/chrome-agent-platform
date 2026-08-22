@@ -1,0 +1,1378 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "terser_bounded:root",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "86b954e059e70d536a7918fdf7f2f74292e81e03f30a9ab4bd281484e7c9edfc"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "terser",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        },
+        {
+          "name": "cap:admitted",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/terser@5.44.0",
+      "type": "library",
+      "version": "5.44.0"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/gen-mapping",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1cb85258e2d18bcef9ce38cc1bfafe36fd28096f2e9866f4060121c97ddd0d7dde83066d07c3ea2e78f3df279db7c4794ad06bcdc838681a6787c500f43d41a1"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/gen-mapping",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fgen-mapping@0.3.3",
+      "type": "library",
+      "version": "0.3.3"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/resolve-uri",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1769ac95aded69df8c7e1b79709abb2d25dc76e74a4d6095614830ea92c538e1d24ed6658fa496358029f8086ea8b9967413b65f984facb72ef1c54ff1fcb6f3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/resolve-uri",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fresolve-uri@3.1.0",
+      "type": "library",
+      "version": "3.1.0"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/set-array",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c6792c7ae3400ccd20b766ecf81be13b4a7bf0c93beb662765db2ecc5574d7c3681b54a3d52090be94aa6bb5d46936a6e6f0066ac00157da9701230a9c533033"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/set-array",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fset-array@1.1.2",
+      "type": "library",
+      "version": "1.1.2"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/source-map",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "513600523ff0be2c1db0c7f3a1226ca49c5b907e68d6c9f3c17d3fff410d5f5bbfe7992465991c4d93fabbd6f028692ff9d924f5ab789b50a9b74b98f3491ca5"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/source-map",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fsource-map@0.3.5",
+      "type": "library",
+      "version": "0.3.5"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/sourcemap-codec",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "785dabc4246e9442971d34620eb0f2e9eacc616a8dc382cf750f14400e21baec5a42c55e44f165da833ca031b130584951665ff4c7292ed25ab030d96ff0697a"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/sourcemap-codec",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fsourcemap-codec@1.4.15",
+      "type": "library",
+      "version": "1.4.15"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/trace-mapping",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c3e9e2258ccc1dd77b5127621f653af3af67aa10f69db7d95cd0f9629f77a886c49a70cd93b3c3e3ca3e61c851569ccc53b33a8d509b7a74d1ecf03514b43da4"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/trace-mapping",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Ftrace-mapping@0.3.18",
+      "type": "library",
+      "version": "0.3.18"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/@jridgewell/trace-mapping/node_modules/@jridgewell/sourcemap-codec",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "5cf4891d69a2dfde1fb94bb30e71b3d7088aa967e8d725de70740c45fda5ea1ced4cefa73ebbbae7c0320e781a05eee2b08c44911b0f47715987eb3b8956b853"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/sourcemap-codec",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fsourcemap-codec@1.4.14",
+      "type": "library",
+      "version": "1.4.14"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/acorn",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "359c896ab05f2fb9d6c08abe1432fa669ff21c485e3cc3679c9d32dea7e2782ae636f61cb7cbafb62578d54be549ee9aa407e4d1f63515b5b1f8dc1f9a9bed4e"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "acorn",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/acorn@8.15.0",
+      "type": "library",
+      "version": "8.15.0"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/buffer-from",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "13e5d0091c126da6a20a1b6fea4e83c2073e6f1f81b3abee2891c7979928c7f05a29b8625f3a903b02b870edb6c84946a763829a3c15853dc79b18323c69c97d"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "buffer-from",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/buffer-from@1.1.2",
+      "type": "library",
+      "version": "1.1.2"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/commander",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1a956498cf2f176bd05248f62ef6660f7e49c5e24e2c2c09f5c524ba0ca4da7ba16efdfe989be92d862dfb4f9448cc44fa88fe7b2fe52449e1670ef9c7f38c71"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "commander",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/commander@2.20.3",
+      "type": "library",
+      "version": "2.20.3"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/source-map-support",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b811d4dcbddccec232617297f3c7ddac6a2fc5d482a13183459e92617b524712d95331e0e4fffae87b7aba85251eef4466877e8a75e12a8dea420c17513ff2d7"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "source-map-support",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/source-map-support@0.5.21",
+      "type": "library",
+      "version": "0.5.21"
+    },
+    {
+      "bom-ref": "terser_bounded:node_modules/source-map-support/node_modules/source-map",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "52381aa6e99695b3219018334fb624739617513e3a17488abbc4865ead1b7303f9773fe1d0f963e9e9c9aa3cf565bab697959aa989eb55bc16396332177178ee"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "source-map",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/source-map@0.6.1",
+      "type": "library",
+      "version": "0.6.1"
+    },
+    {
+      "bom-ref": "csso_bounded:root",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f7605918aff2de20dd00b741edbc888f0f8ec0f79c060745c987a1ef50e54fd8"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "csso",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "csso_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        },
+        {
+          "name": "cap:admitted",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/csso@5.0.5",
+      "type": "library",
+      "version": "5.0.5"
+    },
+    {
+      "bom-ref": "csso_bounded:node_modules/css-tree",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ef2df67333745412fc5a47af842fe6ac79e81ce990689d56be9f2c8d1b93cfafe7f5c8cbf378d0694aeed8cbcfee4ce3a46570ad2cb9084e17c9039b58620741"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "css-tree",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "csso_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/css-tree@2.2.0",
+      "type": "library",
+      "version": "2.2.0"
+    },
+    {
+      "bom-ref": "csso_bounded:node_modules/mdn-data",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "6b294873b67dcb8cb31d800936e1121b785f842fb421ba7f30032268e66036fe29984745c9f6618619f2e0c36201f59d050d5143699f0d698cd71f12bc6ca9f2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "CC0-1.0"
+          }
+        }
+      ],
+      "name": "mdn-data",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "csso_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/mdn-data@2.0.28",
+      "type": "library",
+      "version": "2.0.28"
+    },
+    {
+      "bom-ref": "csso_bounded:node_modules/source-map-js",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e3e4cdd9bdeda8e09dfe4686449fec4d8034b51d26757c76ea2a5da25c5cc2d255a849ea358be5080b75ab7ca9cb840c958bacf99877e1136d60ba2ada843820"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "source-map-js",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "csso_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/source-map-js@1.0.1",
+      "type": "library",
+      "version": "1.0.1"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:root",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "eb47bb99cc849885fc0d2da65e86bab238c6536af1017bf8c6c51cc3a41fad03"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "html-minifier-terser",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        },
+        {
+          "name": "cap:admitted",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/html-minifier-terser@7.2.0",
+      "type": "library",
+      "version": "7.2.0"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/gen-mapping",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1cb85258e2d18bcef9ce38cc1bfafe36fd28096f2e9866f4060121c97ddd0d7dde83066d07c3ea2e78f3df279db7c4794ad06bcdc838681a6787c500f43d41a1"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/gen-mapping",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fgen-mapping@0.3.3",
+      "type": "library",
+      "version": "0.3.3"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/resolve-uri",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1769ac95aded69df8c7e1b79709abb2d25dc76e74a4d6095614830ea92c538e1d24ed6658fa496358029f8086ea8b9967413b65f984facb72ef1c54ff1fcb6f3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/resolve-uri",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fresolve-uri@3.1.0",
+      "type": "library",
+      "version": "3.1.0"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/set-array",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c6792c7ae3400ccd20b766ecf81be13b4a7bf0c93beb662765db2ecc5574d7c3681b54a3d52090be94aa6bb5d46936a6e6f0066ac00157da9701230a9c533033"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/set-array",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fset-array@1.1.2",
+      "type": "library",
+      "version": "1.1.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/source-map",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "6fe7ec65778b622f5f1142e67c1ae1c67e08acf94835ff1f88d6abcd3a1fd34e2fde515d9ed7706bd3c5eef149aa6de683bb3e49c24cc57684dc0729d62ad972"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/source-map",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fsource-map@0.3.3",
+      "type": "library",
+      "version": "0.3.3"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/sourcemap-codec",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "785dabc4246e9442971d34620eb0f2e9eacc616a8dc382cf750f14400e21baec5a42c55e44f165da833ca031b130584951665ff4c7292ed25ab030d96ff0697a"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/sourcemap-codec",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fsourcemap-codec@1.4.15",
+      "type": "library",
+      "version": "1.4.15"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/trace-mapping",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c3e9e2258ccc1dd77b5127621f653af3af67aa10f69db7d95cd0f9629f77a886c49a70cd93b3c3e3ca3e61c851569ccc53b33a8d509b7a74d1ecf03514b43da4"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/trace-mapping",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Ftrace-mapping@0.3.18",
+      "type": "library",
+      "version": "0.3.18"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/@jridgewell/trace-mapping/node_modules/@jridgewell/sourcemap-codec",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "5cf4891d69a2dfde1fb94bb30e71b3d7088aa967e8d725de70740c45fda5ea1ced4cefa73ebbbae7c0320e781a05eee2b08c44911b0f47715987eb3b8956b853"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "@jridgewell/sourcemap-codec",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/%40jridgewell%2Fsourcemap-codec@1.4.14",
+      "type": "library",
+      "version": "1.4.14"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/acorn",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c63218804f0706b92977fb09a8e18db297fcb871be34e1c63b0e9afd4ae3f2d68cd845df74d007da815c3de2057ecbf7fa4cff989ad2e55b8ca9b34b8c26b6bf"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "acorn",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/acorn@8.8.2",
+      "type": "library",
+      "version": "8.8.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/buffer-from",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "13e5d0091c126da6a20a1b6fea4e83c2073e6f1f81b3abee2891c7979928c7f05a29b8625f3a903b02b870edb6c84946a763829a3c15853dc79b18323c69c97d"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "buffer-from",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/buffer-from@1.1.2",
+      "type": "library",
+      "version": "1.1.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/camel-case",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "83119606b4d3d49b8cc7a47ea393d35cc9949e19d5ccb43d48dbad0f862a2ad23a6a9f3deedded28409895aea0096124a655e794dc9b124660f46106c4a14283"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "camel-case",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/camel-case@4.1.2",
+      "type": "library",
+      "version": "4.1.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/clean-css",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "25525b33e7f777743bd38ac5e1ba90e545324edb89d0944a35b4ca5447ae8c2081a0c764122f95f9ef2892d3bda8640d4af1eb15333a259457ad4bc6475733c3"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "clean-css",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/clean-css@5.3.2",
+      "type": "library",
+      "version": "5.3.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/commander",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "cd2e4f9d3236d8521133aca5356f06e00a742043b293ad9f84b483d3eb87453f4c71108b1a991536f6a8e1b8e29a92bf1928729f2424145c4787031c11399db8"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "commander",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/commander@10.0.0",
+      "type": "library",
+      "version": "10.0.0"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/dot-case",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "2afe672a587ac91addac6bf1789d9ee72d9e454a64528b085b8036012dfccf04b3dbbceeeee7c3c103e2e4986cdd702518d7ad9776e69c6850b0cb642899e3df"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "dot-case",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/dot-case@3.0.4",
+      "type": "library",
+      "version": "3.0.4"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/entities",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "a18a7bd79e923fc2e47860f4185f3969dd57f408bbf56b51b19da0c49aad06ecc7fbdf18515ea390710a95990c6dcae326321524d2033ffdd62fdc109283db58"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "entities",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/entities@4.4.0",
+      "type": "library",
+      "version": "4.4.0"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/lower-case",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "edf9b797734017d59f37a5b724e99fe5daf0a55a97efc26da0627703a5b46ba66795d338d70d9f5790f8f74a6c2854e931db3c4c9b1efde1cb145b0d1c78c782"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "lower-case",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/lower-case@2.0.2",
+      "type": "library",
+      "version": "2.0.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/no-case",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7e000dde318087e468c541991d348e2c922a51cdb09a8070191e2d6e93402a69a8bc5a16ab439d4646f456495d45e3b66b68814ff384ba51bd5d251cd74af7ce"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "no-case",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/no-case@3.0.4",
+      "type": "library",
+      "version": "3.0.4"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/param-case",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "457963ef3098a2445ea96a4e3c7f68622bd4ccb619e6f00f21f1260933558a8b02efc17c1741fdcbb4fb806d8cdfdca682eb7117981c144b326504a987d069dc"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "param-case",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/param-case@3.0.4",
+      "type": "library",
+      "version": "3.0.4"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/pascal-case",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b969464f76129caf71dc140968e75c670ae757a84fa5df23147d7fb9ca622d13e1ff6cc2549292d7d1381af607bda09c0029f77e85d9d1c2c1f56af1d4a19ee6"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "pascal-case",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/pascal-case@3.1.2",
+      "type": "library",
+      "version": "3.1.2"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/relateurl",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1b4f03c6f9b888337730b33412c3fad840d5f48ba15cf47a6e5373e94b5ca7bcf2577b6be0754d20db7a32969159bc683874f743b60dd8ffa36875fcbd46e0a2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "relateurl",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/relateurl@0.2.7",
+      "type": "library",
+      "version": "0.2.7"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/source-map",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "52381aa6e99695b3219018334fb624739617513e3a17488abbc4865ead1b7303f9773fe1d0f963e9e9c9aa3cf565bab697959aa989eb55bc16396332177178ee"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "source-map",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/source-map@0.6.1",
+      "type": "library",
+      "version": "0.6.1"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/terser",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1cf6bf15d4c1f57188d87d7f91e2c5647c65e9636f008e186a51c6b4341394c9c9728a9269bd54c0be25d6118486cebf1a62c7059220fd8801fbe8dc6f3a0e12"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "terser",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/terser@5.16.9",
+      "type": "library",
+      "version": "5.16.9"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/terser/node_modules/commander",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "1a956498cf2f176bd05248f62ef6660f7e49c5e24e2c2c09f5c524ba0ca4da7ba16efdfe989be92d862dfb4f9448cc44fa88fe7b2fe52449e1670ef9c7f38c71"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "commander",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/commander@2.20.3",
+      "type": "library",
+      "version": "2.20.3"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/terser/node_modules/source-map-support",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b811d4dcbddccec232617297f3c7ddac6a2fc5d482a13183459e92617b524712d95331e0e4fffae87b7aba85251eef4466877e8a75e12a8dea420c17513ff2d7"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "source-map-support",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/source-map-support@0.5.21",
+      "type": "library",
+      "version": "0.5.21"
+    },
+    {
+      "bom-ref": "html_minifier_terser_bounded:node_modules/tslib",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "df7ea2570debb67d8150aece45d2001d3cb11c64481d545ea24091dd78db72424c2bb9acf05cac05f84b47c2179c0832ed3d0f4cf34158a887e75e05396fd64a"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "0BSD"
+          }
+        }
+      ],
+      "name": "tslib",
+      "properties": [
+        {
+          "name": "cap:candidateId",
+          "value": "html_minifier_terser_bounded"
+        },
+        {
+          "name": "cap:includedInBundle",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/tslib@2.5.0",
+      "type": "library",
+      "version": "2.5.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "terser_bounded:root",
+        "csso_bounded:root",
+        "html_minifier_terser_bounded:root"
+      ],
+      "ref": "cap-js-minifiers-bounded"
+    },
+    {
+      "dependsOn": [
+        "terser_bounded:node_modules/@jridgewell/gen-mapping",
+        "terser_bounded:node_modules/@jridgewell/resolve-uri",
+        "terser_bounded:node_modules/@jridgewell/set-array",
+        "terser_bounded:node_modules/@jridgewell/source-map",
+        "terser_bounded:node_modules/@jridgewell/sourcemap-codec",
+        "terser_bounded:node_modules/@jridgewell/trace-mapping",
+        "terser_bounded:node_modules/@jridgewell/trace-mapping/node_modules/@jridgewell/sourcemap-codec",
+        "terser_bounded:node_modules/acorn",
+        "terser_bounded:node_modules/buffer-from",
+        "terser_bounded:node_modules/commander",
+        "terser_bounded:node_modules/source-map-support",
+        "terser_bounded:node_modules/source-map-support/node_modules/source-map"
+      ],
+      "ref": "terser_bounded:root"
+    },
+    {
+      "dependsOn": [
+        "csso_bounded:node_modules/css-tree",
+        "csso_bounded:node_modules/mdn-data",
+        "csso_bounded:node_modules/source-map-js"
+      ],
+      "ref": "csso_bounded:root"
+    },
+    {
+      "dependsOn": [
+        "html_minifier_terser_bounded:node_modules/@jridgewell/gen-mapping",
+        "html_minifier_terser_bounded:node_modules/@jridgewell/resolve-uri",
+        "html_minifier_terser_bounded:node_modules/@jridgewell/set-array",
+        "html_minifier_terser_bounded:node_modules/@jridgewell/source-map",
+        "html_minifier_terser_bounded:node_modules/@jridgewell/sourcemap-codec",
+        "html_minifier_terser_bounded:node_modules/@jridgewell/trace-mapping",
+        "html_minifier_terser_bounded:node_modules/@jridgewell/trace-mapping/node_modules/@jridgewell/sourcemap-codec",
+        "html_minifier_terser_bounded:node_modules/acorn",
+        "html_minifier_terser_bounded:node_modules/buffer-from",
+        "html_minifier_terser_bounded:node_modules/camel-case",
+        "html_minifier_terser_bounded:node_modules/clean-css",
+        "html_minifier_terser_bounded:node_modules/commander",
+        "html_minifier_terser_bounded:node_modules/dot-case",
+        "html_minifier_terser_bounded:node_modules/entities",
+        "html_minifier_terser_bounded:node_modules/lower-case",
+        "html_minifier_terser_bounded:node_modules/no-case",
+        "html_minifier_terser_bounded:node_modules/param-case",
+        "html_minifier_terser_bounded:node_modules/pascal-case",
+        "html_minifier_terser_bounded:node_modules/relateurl",
+        "html_minifier_terser_bounded:node_modules/source-map",
+        "html_minifier_terser_bounded:node_modules/terser",
+        "html_minifier_terser_bounded:node_modules/terser/node_modules/commander",
+        "html_minifier_terser_bounded:node_modules/terser/node_modules/source-map-support",
+        "html_minifier_terser_bounded:node_modules/tslib"
+      ],
+      "ref": "html_minifier_terser_bounded:root"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "cap-js-minifiers-bounded",
+      "name": "cap-js-minifiers-bounded",
+      "type": "application",
+      "version": "0.0.0-experimental"
+    },
+    "tools": {
+      "components": [
+        {
+          "name": "esbuild",
+          "type": "application",
+          "version": "0.25.12"
+        },
+        {
+          "name": "node",
+          "type": "application",
+          "version": "26.4.0"
+        }
+      ]
+    }
+  },
+  "serialNumber": "urn:uuid:3dc6e989-7cc6-5f4c-b9bc-92beb4dc55ee",
+  "specVersion": "1.5",
+  "version": 1
+}

@@ -130,6 +130,7 @@ function memberPropertyName(node) {
 const CODE_LOADING_SINKS = new Set([
   "Worker",
   "SharedWorker",
+  "WorkerCtor",
   "importScripts",
   "fetch",
 ]);
@@ -214,6 +215,13 @@ const EXECUTION_HOST_ALLOWED_ARG1_PROP = "imports";
 const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
 const WORKER_HOST_CANONICAL_LOCATION = { line: 200, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// The bounded JS-minifier host constructs its fresh Worker through an injected
+// `WorkerCtor` (the `{ WorkerCtor = globalThis.Worker }` dependency). It is a
+// SEPARATE canonical entry bound to the exact line/column + the exact
+// `new WorkerCtor(` shape, never a broad exemption for the minifier files.
+const MINIFIER_WORKER_HOST_CANONICAL_PATH = "extension/lib/js-minifier-lifecycle.js";
+const MINIFIER_WORKER_HOST_CANONICAL_LOCATION = { line: 13, column: 13 };
+const MINIFIER_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -400,14 +408,23 @@ export async function scanShippedJs(files, {
       // become a hidden Wasm/package execution host.
       if (node.type === "NewExpression") {
         const workerSink = sinkName(node.callee, sinkAliases);
-        if (workerSink === "Worker" || workerSink === "SharedWorker") {
+        if (workerSink === "Worker" || workerSink === "SharedWorker" || workerSink === "WorkerCtor") {
           const value = foldString(node.arguments?.[0]);
-          const isCanonicalWorkerHost = isCanonicalScannedPath(file, WORKER_HOST_CANONICAL_PATH) &&
+          const isCanonicalWorkerHost = (
+            isCanonicalScannedPath(file, WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "Worker" &&
             node.loc?.start?.line === WORKER_HOST_CANONICAL_LOCATION.line &&
             node.loc?.start?.column === WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
-            (text.match(WORKER_HOST_ALLOWED_RE) ?? []).length === 1;
+            (text.match(WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, MINIFIER_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "WorkerCtor" &&
+            node.loc?.start?.line === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(MINIFIER_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);
           } else if (
