@@ -157,6 +157,7 @@ import {
 import { getRecipe, RECIPES, backgroundRecipes, intentOf } from "../lib/recipes.js";
 import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js";
 import { durableRuns } from "../lib/durable-runs.js";
+import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
@@ -1353,6 +1354,14 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
         durableRuns.appendLog(executionId, log, `tool-call:${callId}`).catch(() => {});
+        // Record the tool's DECLARED replay safety (fail-closed): an unknown or
+        // mutating tool makes this run non-auto-resumable after an interruption
+        // (paused-side-effect-uncertain + owner Retry/Cancel). Read-only/
+        // idempotent progress keeps the run auto-resumable with the stable
+        // execution idempotency key.
+        // Best-effort: a recordToolSafety failure keeps the fail-closed
+        // default (mutating → no auto-resume), which is the SAFE direction.
+        durableRuns.recordToolSafety(executionId, replaySafetyForTool(event.toolName)).catch(() => {});
         durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
           heartbeatFailed = true;
           try { orch?.abort?.(); } catch { /* already stopped */ }

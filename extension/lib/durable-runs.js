@@ -15,6 +15,7 @@ import {
   namedAgentMemory,
   siteMemory,
 } from "./memory.js";
+import { REPLAY_MUTATING, worstSafety } from "./tool-replay-safety.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 
@@ -401,6 +402,7 @@ export function createDurableRunRegistry({
         startedAt: at,
         heartbeatAt: at,
         progressCount: 0,
+        toolSafety: null, // UNRECORDED until a tool's declared safety is recorded; the gate treats null as mutating (fail-closed)
         policy: DURABLE_RUN_POLICY,
         retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
         resumeRequestRef,
@@ -545,6 +547,32 @@ export function createDurableRunRegistry({
         throw new Error(`quota rollback verification failed for ${executionId}`);
       }
       return { ok: true, rolledBack: true, idempotent: false, executionId, remainingKeys: [] };
+    });
+  }
+
+  /** Record the WORST progressed-tool replay safety so recovery can decide
+   * auto-resume vs paused-side-effect-uncertain from the declaration, never
+   * the progress count alone. Fail-closed: a missing/unknown/mutating tool
+   * makes the run non-auto-resumable. */
+  async function recordToolSafety(executionId, classification) {
+    return locked(async () => {
+      if (!active.has(executionId)) throw new Error("execution is not active in this boot");
+      const key = `${RUN_PREFIX}${executionId}`;
+      const current = await readRecord(executionId);
+      if (!current || current.bootId !== bootId || !["running", "settling"].includes(current.phase)) {
+        throw new Error("durable run ownership lost");
+      }
+      // The FIRST recorded classification is authoritative for the first tool;
+      // later tools worst-merge (mutating always wins). A null (unrecorded)
+      // current value must NOT poison the merge as mutating.
+      const next = await writeRecord({
+        ...current,
+        toolSafety: current.toolSafety == null
+          ? classification
+          : worstSafety(current.toolSafety, classification),
+      }, current.revision);
+      if (!next) throw new Error("durable run toolSafety CAS failed");
+      return publicRecord(next);
     });
   }
 
@@ -1041,7 +1069,14 @@ export function createDurableRunRegistry({
           continue;
         }
         const dispatchInterrupted = record.phase === "resume-dispatching";
-        const uncertain = !dispatchInterrupted && (record.progressCount ?? 0) > 0;
+        // The replay-safety gate: an interruption after progress is uncertain
+        // ONLY when the progressed tools were not explicitly read-only/idempotent.
+        // Fail-closed — the record defaults to mutating until a tool's declared
+        // safety is recorded (unknown/missing/mutating -> uncertain).
+        const progressed = (record.progressCount ?? 0) > 0;
+        const progressedSafety = record.toolSafety ?? REPLAY_MUTATING;
+        const uncertain = !dispatchInterrupted && progressed &&
+          progressedSafety !== "read-only" && progressedSafety !== "idempotent";
         const phase = dispatchInterrupted
           ? (record.resumeState?.fromPhase || "paused-interruption")
           : uncertain ? "paused-side-effect-uncertain" : "paused-interruption";
@@ -1119,6 +1154,7 @@ export function createDurableRunRegistry({
     bootId,
     start,
     heartbeat,
+    recordToolSafety,
     rollbackUnprogressedQuota,
     settle,
     cancel,

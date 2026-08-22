@@ -994,3 +994,83 @@ Deno.test("durable runs: service worker exposes owner-only cancel/resume/log rou
   assert(ntp.includes('addEventListener("run-resume"'));
   assert(ntp.includes('addEventListener("run-logs"'));
 });
+
+
+// CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01: the recovery gate is
+// driven by the RECORDED per-tool replay safety, never the progress count.
+Deno.test("durable runs: a MUTATING progressed run pauses as paused-side-effect-uncertain (owner decision, never auto-resume)", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-m" });
+  await begin(first.registry);
+  // A mutating tool progressed (the fail-closed default after any unknown/
+  // mutating tool-call; explicit for clarity).
+  await first.registry.recordToolSafety(executionId, "mutating");
+  await first.registry.heartbeat(executionId, { progressed: true });
+
+  const second = harness(store, { bootId: "boot-n" });
+  const recovered = await second.registry.recover();
+  assertEquals(recovered.interrupted.length, 1);
+  const paused = (await second.registry.list()).runs[0];
+  assertEquals(paused.phase, "paused-side-effect-uncertain");
+  assertEquals(paused.pause.requiresOwnerDecision, true);
+  assertEquals(paused.pause.automaticRetry, false, "a mutating progressed run must never auto-retry");
+  // The owner decision surface (Retry/Cancel) is the only way forward.
+  const resumed = await second.registry.resumeAfterInterruption(executionId);
+  assertEquals(resumed.ok, false, "resumeAfterInterruption must refuse a side-effect-uncertain run");
+});
+
+Deno.test("durable runs: an explicitly READ-ONLY progressed run pauses as recoverable interruption and auto-resumes with the stable key", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-r" });
+  await begin(first.registry);
+  await first.registry.recordToolSafety(executionId, "read-only");
+  await first.registry.heartbeat(executionId, { progressed: true });
+  const dbgRaw = await store.get(`run:${executionId}`); console.log("DBG toolSafety field:", dbgRaw.toolSafety); console.log("DBG keys:", JSON.stringify(Object.keys(dbgRaw)));
+
+  const second = harness(store, { bootId: "boot-s" });
+  const recovered = await second.registry.recover();
+  const paused = (await second.registry.list()).runs[0];
+  assertEquals(paused.phase, "paused-interruption");
+  assertEquals(paused.pause.automaticRetry, true, "read-only progress is auto-resumable");
+  assertEquals(paused.pause.recoverable, true);
+  const resumed = await second.registry.resumeAfterInterruption(executionId);
+  assertEquals(resumed.ok, true, "read-only progress may auto-resume");
+  assertEquals(resumed.resumeRequest.idempotencyKey, executionId, "the stable execution idempotency key is reused");
+});
+
+Deno.test("durable runs: an UNKNOWN-safety progressed run fails closed to paused-side-effect-uncertain", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-u" });
+  await begin(first.registry);
+  // Progress WITHOUT any recorded safety (e.g. the recordToolSafety write
+  // failed) must fail closed — the record defaults to mutating.
+  await first.registry.heartbeat(executionId, { progressed: true });
+  const raw = await store.get(`run:${executionId}`);
+  assertEquals(raw.toolSafety, null, "the record must default to UNRECORDED (the gate treats null as mutating — fail-closed)");
+
+  const second = harness(store, { bootId: "boot-v" });
+  const recovered = await second.registry.recover();
+  const paused = (await second.registry.list()).runs[0];
+  assertEquals(paused.phase, "paused-side-effect-uncertain", "unknown safety pauses for the owner decision");
+});
+
+Deno.test("durable runs: an IDEMPOTENT progressed run auto-resumes (worst-merge keeps mutating authoritative)", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-i" });
+  await begin(first.registry);
+  await first.registry.recordToolSafety(executionId, "idempotent");
+  await first.registry.recordToolSafety(executionId, "read-only");
+  await first.registry.heartbeat(executionId, { progressed: true });
+  // The worst-merge: idempotent wins over read-only.
+  let raw = await store.get(`run:${executionId}`);
+  assertEquals(raw.toolSafety, "idempotent");
+
+  await first.registry.recordToolSafety(executionId, "mutating");
+  raw = await store.get(`run:${executionId}`);
+  assertEquals(raw.toolSafety, "mutating", "a later mutating tool overrides earlier read-only/idempotent progress");
+
+  const second = harness(store, { bootId: "boot-w" });
+  const recovered = await second.registry.recover();
+  const paused = (await second.registry.list()).runs[0];
+  assertEquals(paused.phase, "paused-side-effect-uncertain", "mutating progress always wins the recovery decision");
+});

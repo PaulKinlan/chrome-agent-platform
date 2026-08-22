@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.138] — 2026-08-22
+- feat(durable): fail-closed per-tool replay safety + recovery gating (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
+
 ## [0.2.137] — 2026-08-21
 - fix(ntp): integrate the hub 360px overflow fix (CAP-FB-20260821-HUB-360-OVERFLOW-01)
 
