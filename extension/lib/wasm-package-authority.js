@@ -13,6 +13,7 @@ export const WASM_PACKAGE_LIMITS = Object.freeze({
   MAX_TOOLS: 64,
   MAX_EXECUTABLES: 16,
   MAX_IMPORT_MODULES: 8,
+  MAX_IMPORT_MODULE_NAME_BYTES: 64,
   MAX_CAPABILITIES: 32,
   MAX_MANIFEST_BYTES: 128 * 1024,
   MAX_PACKAGES: 64,
@@ -37,7 +38,11 @@ const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 const PACKAGE_ID_RE = /^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/u;
 const SEMVER_RE = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]{1,16}(?:\.[0-9A-Za-z-]{1,16})*))?(?:\+([0-9A-Za-z-]{1,16}(?:\.[0-9A-Za-z-]{1,16})*))?$/u;
 const TOKEN_RE = /^[a-z][a-z0-9.-]{0,15}$/u;
-const IMPORT_RE = /^(?:\*|[A-Za-z0-9_.-]{1,8})$/u;
+const IMPORT_MODULE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
+export const BUNDLED_ALLOWED_IMPORT_MODULES = Object.freeze([
+  "wasi_snapshot_preview1",
+]);
+const BUNDLED_ALLOWED_IMPORT_MODULE_SET = new Set(BUNDLED_ALLOWED_IMPORT_MODULES);
 const PATH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u;
 const REPLAY = new Set(["read-only", "idempotent", "mutating", "unknown"]);
 const PACKAGE_TYPES = new Set(["tool-bundle", "runtime", "library", "model-support"]);
@@ -262,8 +267,16 @@ function validateManifestObject(manifest) {
       const values = executable.imports[field];
       if (!Array.isArray(values) || values.length > WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULES) fail("import_bound", `${path}.imports.${field}`);
       for (let item = 0; item < values.length; item++) {
-        if (!IMPORT_RE.test(assertAscii(values[item], `${path}.imports.${field}[${item}]`, { min: 1, max: 8 }))) fail("import_invalid", `${path}.imports.${field}[${item}]`);
-        if (field === "allowed" && values[item] === "*") fail("import_invalid", `${path}.imports.${field}[${item}]`);
+        const itemPath = `${path}.imports.${field}[${item}]`;
+        const module = assertAscii(values[item], itemPath, {
+          min: 1,
+          max: WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULE_NAME_BYTES,
+        });
+        if (field === "disallowed" && module === "*") continue;
+        if (!IMPORT_MODULE_RE.test(module)) fail("import_invalid", itemPath);
+        if (field === "allowed" && !BUNDLED_ALLOWED_IMPORT_MODULE_SET.has(module)) {
+          fail("import_not_allowed", itemPath, module);
+        }
       }
       if (new Set(values).size !== values.length || JSON.stringify(values) !== JSON.stringify([...values].sort())) fail("import_order", `${path}.imports.${field}`);
     }
@@ -446,7 +459,7 @@ export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMIT
         const name = section.name();
         const kind = section.byte();
         if (!Object.hasOwn(KIND_NAMES, kind)) fail("import_kind_invalid");
-        if (!executable.imports.allowed.includes(module) || executable.imports.disallowed.includes(module) || executable.imports.disallowed.includes("*")) fail("import_not_allowed", module);
+        if (!BUNDLED_ALLOWED_IMPORT_MODULE_SET.has(module) || !executable.imports.allowed.includes(module) || executable.imports.disallowed.includes(module) || executable.imports.disallowed.includes("*")) fail("import_not_allowed", module);
         imports.push({ module, name, kind: KIND_NAMES[kind] });
         if (kind === 0) section.u32();
         else if (kind === 1) { section.byte(); readTableLimits(section); }

@@ -54,9 +54,13 @@ isolated OPFS memory, run history, skills, and avatar.
   loaded-MV3 use remains blocked on the runtime probe.
 - **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
   immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
-  and an exact-token package registry WAL record bundled metadata only. This release
-  contains zero Wasm binaries and no install, owner, provider, Worker, network,
-  permission, OPFS, or execution route; signer metadata is recorded but not verified.
+  and an exact-token package registry WAL record bundled metadata only. Import module
+  names have a separate 64-byte ASCII bound from the eight-module count; the bundled
+  first slice allows only exact `wasi_snapshot_preview1`, while deny declarations may
+  use `*` or bounded module names. Arbitrary `env`, typos and wildcards in `allowed`
+  fail before admission. This release contains zero Wasm binaries and no install,
+  owner, provider, Worker, network, permission, OPFS, or execution route; signer
+  metadata is recorded but not verified.
 - **Retained code-diff artifacts (source candidate)** — strict Unicode owner paths and
   add/update/delete/rename/binary documents bind producer, run, inputs, base and result
   digests. Bounded base/result bytes are preflighted, retained through digest-keyed

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.154] — 2026-08-22
+- fix(wasm): allow exact bounded WASI imports (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+
 ## [0.2.153] — 2026-08-22
 - feat(tools): canonicalize Chrome lazy metadata (CAP-FB-20260822-CHROME-LAZY-TOOLS-01)
 

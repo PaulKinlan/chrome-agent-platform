@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   auditWasmBinary,
+  BUNDLED_ALLOWED_IMPORT_MODULES,
   canonicalJson,
   WasmPackageAuthority,
   WasmPackageAuthorityError,
@@ -26,7 +27,9 @@ const section = (id, payload) => new Uint8Array([id, ...leb(payload.length), ...
 const moduleBytes = (...sections) => new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, ...sections.flatMap((value) => [...value])]);
 const memorySection = ({ flags = 1, min = 1, max = 2, count = 1 } = {}) => section(5, [count, ...Array.from({ length: count }, () => [flags, min, ...(flags & 1 ? [max] : [])]).flat()]);
 const asciiName = (value) => [value.length, ...enc.encode(value)];
-const importedMemory = ({ module = "env", name = "memory", flags = 1, min = 1, max = 2 } = {}) => section(2, [1, ...asciiName(module), ...asciiName(name), 2, flags, min, ...(flags & 1 ? [max] : [])]);
+const importedMemory = ({ module = "wasi_snapshot_preview1", name = "memory", flags = 1, min = 1, max = 2 } = {}) => section(2, [1, ...asciiName(module), ...asciiName(name), 2, flags, min, ...(flags & 1 ? [max] : [])]);
+const typeSection = () => section(1, [1, 0x60, 0, 0]);
+const functionImport = ({ module = "wasi_snapshot_preview1", name = "fd_write", typeIndex = 0 } = {}) => section(2, [1, ...asciiName(module), ...asciiName(name), 0, typeIndex]);
 const expectCode = async (fn, code) => {
   let caught;
   try { await fn(); } catch (error) { caught = error; }
@@ -75,7 +78,7 @@ class FakeStore {
 
 function capabilityDigest(values = ["compute"]) { return sha256Hex(canonicalJson(values)); }
 
-async function manifestObject({ version = "1.0.0", wasm = moduleBytes(memorySection()), capabilities = ["compute"], tier = "tiny", keyId = "release-key", sig = undefined } = {}) {
+async function manifestObject({ version = "1.0.0", wasm = moduleBytes(memorySection()), capabilities = ["compute"], imports = { allowed: [], disallowed: [] }, tier = "tiny", keyId = "release-key", sig = undefined } = {}) {
   const wasmDigest = await digest(wasm);
   const sbomBytes = enc.encode('{"bomFormat":"CycloneDX"}');
   const sbomDigest = await digest(sbomBytes);
@@ -85,7 +88,7 @@ async function manifestObject({ version = "1.0.0", wasm = moduleBytes(memorySect
     tools: [{ toolId: "transform", digest: "a".repeat(64), capabilityDigest: capabilityDigest(capabilities), replayClass: "read-only", capabilities }],
     executables: [{
       id: "transform_wasm", sha256: wasmDigest, size: wasm.byteLength,
-      imports: { allowed: [], disallowed: [] },
+      imports: structuredClone(imports),
       memory: { tier, initialPages: 1, maxPages: tier === "tiny" ? 8 : tier === "default" ? 64 : 4096 },
       runtimeCompat: ["wasm32"], replayClass: "read-only", capabilities,
       capabilityDigest: capabilityDigest(capabilities),
@@ -153,6 +156,37 @@ Deno.test("wasm manifest: canonical strict schema accepts one bounded bundled re
   assertEquals((await s.authority.loadInventory()).files, 5);
 });
 
+Deno.test("wasm manifest/import policy: only exact WASI P1 is allowlisted; declarations remain bounded, sorted and fail closed", async () => {
+  assertEquals(BUNDLED_ALLOWED_IMPORT_MODULES, ["wasi_snapshot_preview1"]);
+  assert(Object.isFrozen(BUNDLED_ALLOWED_IMPORT_MODULES));
+  assertEquals(WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULES, 8);
+  assertEquals(WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULE_NAME_BYTES, 64);
+  const base = await scenario();
+  const variants = [
+    [{ allowed: ["env"], disallowed: [] }, "import_not_allowed"],
+    [{ allowed: ["wasi_snapshot_previewl"], disallowed: [] }, "import_not_allowed"],
+    [{ allowed: ["wasi_unstable"], disallowed: [] }, "import_not_allowed"],
+    [{ allowed: ["wasí_snapshot_preview1"], disallowed: [] }, "manifest_non_ascii"],
+    [{ allowed: ["a".repeat(65)], disallowed: [] }, "manifest_string_bound"],
+    [{ allowed: ["*"], disallowed: [] }, "import_invalid"],
+    [{ allowed: [], disallowed: [".env"] }, "import_invalid"],
+    [{ allowed: ["wasi_snapshot_preview1", "wasi_snapshot_preview1"], disallowed: [] }, "import_order"],
+    [{ allowed: [], disallowed: ["env", "*"] }, "import_order"],
+    [{ allowed: [], disallowed: ["env", "env"] }, "import_order"],
+    [{ allowed: [], disallowed: Array.from({ length: 9 }, (_, index) => `module${index}`) }, "import_bound"],
+  ];
+  for (const [imports, code] of variants) {
+    const object = structuredClone(base.object);
+    object.executables[0].imports = imports;
+    assertEquals(base.authority.validateManifest(canonicalJson(object)).error, code, JSON.stringify(imports));
+  }
+  for (const disallowed of [["*"], ["env"], ["a".repeat(64)], ["wasi_snapshot_preview1"]]) {
+    const object = structuredClone(base.object);
+    object.executables[0].imports = { allowed: ["wasi_snapshot_preview1"], disallowed };
+    assert(base.authority.validateManifest(canonicalJson(object)).ok, JSON.stringify(disallowed));
+  }
+});
+
 Deno.test("wasm manifest: duplicate keys are rejected before materialization including escaped/nested forms", async () => {
   const authority = new WasmPackageAuthority();
   for (const raw of [
@@ -216,15 +250,72 @@ Deno.test("wasm scanner: canonical framing measures one defined/imported memory 
   assertEquals(measured.measured.memoryMax, 2);
   assertEquals(measured.measured.imported, false);
   const imported = moduleBytes(importedMemory());
-  const importedBuilt = await manifestObject({ wasm: imported });
-  importedBuilt.object.executables[0].imports.allowed = ["env"];
+  const importedBuilt = await manifestObject({
+    wasm: imported,
+    imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] },
+  });
   const measuredImport = auditWasmBinary(imported, importedBuilt.object.executables[0]);
   assertEquals(measuredImport.measured.imported, true);
-  assertEquals(measuredImport.imports[0].kind, "memory");
+  assertEquals(measuredImport.imports[0], {
+    module: "wasi_snapshot_preview1",
+    name: "memory",
+    kind: "memory",
+  });
   const withSkipped = moduleBytes(section(1, []), memorySection(), section(10, []));
   const skippedBuilt = await manifestObject({ wasm: withSkipped });
   const skipped = auditWasmBinary(withSkipped, skippedBuilt.object.executables[0]);
   assertEquals(skipped.skippedSections.map((row) => row.name), ["type", "code"]);
+});
+
+Deno.test("wasm scanner/import policy: exact WASI function imports are inspected and disallowed declarations block admission", async () => {
+  const wasi = moduleBytes(typeSection(), functionImport(), memorySection());
+  assert(WebAssembly.validate(wasi), "bounded WASI function-import fixture is a valid Wasm module");
+  const admitted = await scenario({
+    wasm: wasi,
+    imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] },
+  });
+  const manifest = admitted.authority.validateManifest(admitted.raw);
+  assert(manifest.ok);
+  const measured = auditWasmBinary(wasi, admitted.object.executables[0]);
+  assertEquals(measured.imports, [{
+    module: "wasi_snapshot_preview1",
+    name: "fd_write",
+    kind: "function",
+  }]);
+  assertEquals(measured.measured, {
+    memoryInitial: 1,
+    memoryMax: 2,
+    imported: false,
+    tier: "tiny",
+  });
+  assert((await admitted.authority.admitBundled({
+    manifest: admitted.raw,
+    files: admitted.admissionFiles,
+  })).ok);
+
+  for (const disallowed of [["*"], ["wasi_snapshot_preview1"]]) {
+    const built = await manifestObject({
+      wasm: wasi,
+      imports: { allowed: ["wasi_snapshot_preview1"], disallowed },
+    });
+    await expectCode(
+      () => Promise.resolve(auditWasmBinary(wasi, built.object.executables[0])),
+      "import_not_allowed",
+    );
+  }
+  const unrelatedBlock = await manifestObject({
+    wasm: wasi,
+    imports: { allowed: ["wasi_snapshot_preview1"], disallowed: ["env"] },
+  });
+  assertEquals(auditWasmBinary(wasi, unrelatedBlock.object.executables[0]).imports[0].module, "wasi_snapshot_preview1");
+
+  const env = moduleBytes(typeSection(), functionImport({ module: "env" }), memorySection());
+  const forged = await manifestObject({ wasm: env });
+  forged.object.executables[0].imports.allowed = ["env"];
+  await expectCode(
+    () => Promise.resolve(auditWasmBinary(env, forged.object.executables[0])),
+    "import_not_allowed",
+  );
 });
 
 Deno.test("wasm scanner: malformed/noncanonical/order/duplicate/framing and import policy fail closed", async () => {
@@ -240,8 +331,10 @@ Deno.test("wasm scanner: malformed/noncanonical/order/duplicate/framing and impo
   ];
   for (const [bytes, code] of cases) await expectCode(() => Promise.resolve(auditWasmBinary(bytes, executable)), code);
   const imported = moduleBytes(importedMemory({ module: "evil" }));
-  const importedBuilt = await manifestObject({ wasm: imported });
-  importedBuilt.object.executables[0].imports.allowed = ["env"];
+  const importedBuilt = await manifestObject({
+    wasm: imported,
+    imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] },
+  });
   await expectCode(() => Promise.resolve(auditWasmBinary(imported, importedBuilt.object.executables[0])), "import_not_allowed");
   const unknownFlags = moduleBytes(memorySection({ flags: 9 }));
   const unknownBuilt = await manifestObject({ wasm: unknownFlags });
@@ -259,8 +352,10 @@ Deno.test("wasm scanner: memory64/shared/missing-max/multi-memory/measured ceili
     await expectCode(() => Promise.resolve(auditWasmBinary(bytes, built.object.executables[0])), code);
   }
   const importedAndDefined = moduleBytes(importedMemory(), memorySection());
-  const unionBuilt = await manifestObject({ wasm: importedAndDefined });
-  unionBuilt.object.executables[0].imports.allowed = ["env"];
+  const unionBuilt = await manifestObject({
+    wasm: importedAndDefined,
+    imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] },
+  });
   await expectCode(() => Promise.resolve(auditWasmBinary(importedAndDefined, unionBuilt.object.executables[0])), "multi_memory_rejected");
   const over = moduleBytes(memorySection({ max: 9 }));
   const overBuilt = await manifestObject({ wasm: over });

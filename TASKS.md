@@ -5,13 +5,13 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 15:29 UTC. Reconciled against exact public
-> `origin/main@34ced55a71d871fcf209c4756b51ff1556639632` (`0.2.152`). Lazy,
+> Snapshot: 2026-08-22 15:50 UTC. Reconciled against exact public
+> `origin/main@c23e6eb004cfa8860e5b67f3a8d2991f519b96b1` (`0.2.153`). Lazy,
 > package freshness and security-suite serialization remain `DONE`; the catalog
-> remains `MERGED`; OPFS, bundled-package and public code-diff records remain
-> `IN_REVIEW` with Shipping `—`. This branch adds only canonical 9-browser/
-> 29-management capability metadata and selected-only Settings shadow summaries;
-> provider, permission, grant, eager binding and dispatch remain unchanged.
+> remains `MERGED`; OPFS, bundled-package, public code-diff and Chrome-capability
+> records remain `IN_REVIEW` with Shipping `—`. This branch corrects only the
+> bundled Wasm manifest import grammar and explicit WASI allowlist after review;
+> it admits no reconstructed binary and adds no route, runtime or owner lane.
 > Branch status counts: **15 OPEN · 11 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
 > 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived terminal entries
 > below are the complete 68-entry state.
@@ -587,25 +587,30 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — executable packages need artifact-grade identity,
   provenance and crash recovery rather than a name-keyed archive/storage model
-- Updated: 2026-08-22 15:00 UTC
+- Updated: 2026-08-22 15:50 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: bundled-package review owner
-- Workspace: none
-- Branch: `main`
-- Base: `9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc`
-- Candidate: `03dc09910a11afd4c1611a985411c6d97139bfb7`
+- Owner: bounded Wasm import-policy hotfix owner
+- Workspace: active (local path private)
+- Branch: `fix/wasm-import-allowlist-c23e6eb`
+- Base: `c23e6eb004cfa8860e5b67f3a8d2991f519b96b1`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: one unreachable library accepts only bounded canonical raw
   manifests after duplicate-key detection before materialization; unknown fields
   fail at every schema depth and ASCII/semver/ID/path/order/count bounds cover
   package, tools, executables, imports, capabilities, runtime, signer, build,
-  source, SBOM, licence, notices and metadata; immutable release inventory and
-  CAS bytes recheck exact path, size and SHA-256 without writing extension bytes;
-  a bounded raw scanner enforces canonical LEB/framing/order/duplicates/imports,
-  exactly one imported-or-defined memory, mandatory max, memory64/shared/unknown
-  flag/multi-memory rejection, measured-max declaration+tier ceilings and honest
+  source, SBOM, licence, notices and metadata; imports separate the maximum eight
+  modules from a 64-byte printable-ASCII module-name grammar; bundled `allowed`
+  accepts only exact `wasi_snapshot_preview1`, while `disallowed` may contain `*`
+  or bounded valid module names and both lists remain sorted/duplicate-free;
+  immutable release inventory and CAS bytes recheck exact path, size and SHA-256
+  without writing extension bytes; a bounded raw scanner re-enforces the exact
+  WASI allowlist, measures exact module/field/kind including function imports,
+  and enforces canonical LEB/framing/order/duplicates/imports, exactly one
+  imported-or-defined memory, mandatory max, memory64/shared/unknown flag/
+  multi-memory rejection, measured-max declaration+tier ceilings and honest
   skipped-section records; tiny/default are allowed and large requires release
   evidence; mutable `wasmPkg` state uses reserved `__wasmTx` prepared→committed/
   compensated exact-generation recovery for admit/update/revoke, concurrent
@@ -616,24 +621,29 @@ On resume after a coordinator or worker loss:
 - Review: v2 design SHA-256 `1ad1035bc09bc85dcbb7d6ce6e0fa634b60ab4baa473582123a8fdb27dc31fe4`
   independently PASSed review SHA-256
   `b5381dd3fd33e3e29f5db2055e2ccdebc4f424760c4ee3da1317e2dd7663eb12`;
-  exact implementation review pending
-- Gates: reported pre-commit package/scanner/WAL/RHC 14/14 and composed memory/
-  scanner/package 56/56; canonical full no-Chrome 986/986 across 14 steps;
-  106-file production build with zero bundled binaries and exact 132-entry
-  package/validate PASS; gallery/changelog/tracker/privacy/diff/release/clean
-  checks; hostile duplicate/escaped/Unicode/schema/
-  substitution cases; malformed/noncanonical/order/import/memory/tier/bomb scan;
-  inventory mismatch; every install WAL transition, update/revoke crash recovery,
-  concurrent update/revoke, offline revocation, registry/WAL/token corruption,
-  grant epoch, provenance and no-route/no-execution static assertions
-- Blockers: owner-package admission and signer verification require written trust
-  and Store/RHC policy; large tier requires loaded-MV3 release evidence; execution
-  remains blocked on the MV3 runtime probe and a separately reviewed host; exact
-  source candidate requires independent review
-- Next: obtain independent exact-candidate supply-chain/scanner/WAL review and
-  leave all binary/runtime/install work to successors
+  exact implementation review pending; 39-tool bounded rebuild review SHA-256
+  `daa5725bb95004d444f0af12a68fcfbc8c2627c6bb8c7a6dedc35451085413d9`
+  found the prior eight-character import grammar blocked truthful WASI manifests
+- Gates: reported focused authority 16/16 and composed authority/memory/scanner
+  48/48; canonical full no-Chrome 1013/1013 across 14 steps; 108-file production
+  build with zero Wasm binaries; exact 134-entry package/validate; gallery/
+  changelog/tracker/privacy/diff/release/clean; exact valid bounded WASI
+  function-import fixture and admission; env/typo/Unicode/overlong/wildcard-
+  allowed refusal before admission; disallowed wildcard/module enforcement;
+  sorted/duplicate/count bounds; measured module/name/kind; unchanged hostile
+  duplicate/escaped/schema/substitution/framing/memory/tier/bomb, inventory, WAL,
+  revocation, corruption, provenance and no-route/no-execution assertions
+- Blockers: reconstructed tools remain blocked on the Apache-2.0 root versus MIT
+  package/manifest licence contradiction even after import-schema repair; owner-
+  package admission and signer verification require written trust and Store/RHC
+  policy; large tier requires loaded-MV3 release evidence; execution remains
+  blocked on the MV3 runtime probe and separately reviewed host; exact hotfix
+  requires independent security review
+- Next: commit one `0.2.154` import-policy correction for independent exact-source
+  review; do not admit the reconstructed tool set until licence/provenance clears,
+  and leave every binary/runtime/install path to separately reviewed successors
 - Recover:
-  `git show 03dc09910a11afd4c1611a985411c6d97139bfb7 -- extension/lib/wasm-package-authority.js extension/lib/memory.js scripts/scan-shipped.mjs build.mjs tests/wasm-package-authority.test.ts tests/memory.test.ts docs/tool-platform-architecture.md TASKS.md`
+  `git show fix/wasm-import-allowlist-c23e6eb -- extension/lib/wasm-package-authority.js tests/wasm-package-authority.test.ts README.md PLAN.md KNOWN-ISSUES.md docs/tool-platform-architecture.md docs/OPEN-QUESTIONS.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — opened with separate Store-bundled and owner-selected
     distribution lanes; owner packages remain policy-blocked.
@@ -642,6 +652,10 @@ On resume after a coordinator or worker loss:
     surface was added.
   - 2026-08-22 15:00 UTC — exact candidate `03dc099` became public `0.2.151`;
     lifecycle remains IN_REVIEW with Shipping `—` pending exact-candidate review.
+  - 2026-08-22 15:50 UTC — review of the 39 bounded rebuilds found the eight-
+    character import grammar could not truthfully declare their exact
+    `wasi_snapshot_preview1` dependency; started a minimal explicit-WASI hotfix
+    on exact public `c23e6eb`. The licence contradiction still blocks admission.
 
 ## [CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01] Isolated per-job OPFS tool workspaces
 

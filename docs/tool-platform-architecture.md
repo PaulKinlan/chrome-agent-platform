@@ -246,12 +246,20 @@ Store-bundled lane only. It intentionally ships zero Wasm binaries:
   relative path, size and SHA-256 and reject missing/extra files. Admission
   rechecks CAS bytes, manifest identity, SBOM/licence/notices and active/revoked
   bundled signer metadata but never writes extension bytes;
+- import declaration count and module-name syntax are separate bounds: at most
+  eight entries per list and at most 64 printable ASCII grammar bytes per module.
+  In the bundled first slice, `allowed` accepts only exact
+  `wasi_snapshot_preview1`; it rejects wildcard, arbitrary `env`, typos, Unicode
+  and overlong names before admission. `disallowed` may contain `*` or bounded
+  valid module names, and both lists remain sorted and duplicate-free;
 - the bounded raw scanner enforces magic/version, canonical u32 LEB framing,
-  section caps/order/duplicates, import allow/disallow policy and the union of
-  imported+defined memories. Exactly one memory with a maximum is required;
-  memory64, shared, unknown flags, multi-memory and measured maxima beyond the
-  declaration/tier fail. Other sections are byte-bounded and explicitly
-  recorded as `not_audited_in_authority_slice`;
+  section caps/order/duplicates, the exact WASI allowlist plus declarative deny
+  policy, and the union of imported+defined memories. It measures each import's
+  exact module, field name and kind, including function imports. Exactly one
+  memory with a maximum is required; memory64, shared, unknown flags,
+  multi-memory and measured maxima beyond the declaration/tier fail. Other
+  sections are byte-bounded and explicitly recorded as
+  `not_audited_in_authority_slice`;
 - `tiny` and `default` measured tiers may be recorded. `large` remains blocked
   unless the immutable release inventory contains matching loaded-MV3 memory
   evidence;
