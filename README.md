@@ -50,8 +50,10 @@ isolated OPFS memory, run history, skills, and avatar.
   requests its permission on a user gesture, at the moment of need — never silently.
 - **No `debugger`**, no broad `<all_urls>`; screenshots via `captureVisibleTab`/`activeTab`.
 - **Origin-keyed OPFS** — one agent/origin can never read another's memory.
-- **The standing security suite** (`npm run test:security`) proves network exfiltration,
-  sandbox escapes, and prompt-injection → destructive-tool are all blocked.
+- **The standing security suite** (`npm run test:security`) acquires the canonical
+  Chrome lock, supervises one fresh exact profile under a hard timeout, and proves
+  network exfiltration, sandbox escapes, and prompt-injection → destructive-tool
+  are all blocked. Do not execute `scripts/security-suite.ts` directly.
 - The review loop (sol / GLM / DeepSeek, independent sessions) reviews every change.
 
 See **docs/CONSTITUTION.md** for the full security/accessibility/design/memory

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.148] — 2026-08-22
+- fix(security): serialize the real Chromium suite (CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01)
+
 ## [0.2.147] — 2026-08-22
 - fix(package): publish fresh exact-inventory archives (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01)
 

@@ -17,10 +17,28 @@
 // only ACTS on validated messages (see the preference-percolation design), so
 // an untrusted frame's postMessage is observation, never action.
 //
-//   deno run -A scripts/security-suite.ts
+//   npm run test:security
+
+import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const CHROMIUM = "/usr/bin/chromium";
+
+// Refuse before servers, profiles, or Chromium unless the supervisor-issued
+// nonce/parent guard and inherited canonical flock open-file description are live.
+const serializationError = await verifyRunnerGuard({ env: Deno.env.toObject() });
+if (serializationError) {
+  console.error(`SECURITY-SUITE REFUSED: ${serializationError}. Run via npm run test:security only.`);
+  Deno.exit(2);
+}
+
+// The supervisor is the sole profile owner and cleanup authority.
+const providedProfile = Deno.env.get("CAP_SECURITY_PROFILE") ?? "";
+const profileCheck = await inspectExactProfile({ profile: providedProfile });
+if (!profileCheck.ok) {
+  console.error(`SECURITY-SUITE REFUSED: ${profileCheck.reason}.`);
+  Deno.exit(2);
+}
 
 let pass = 0;
 let fail = 0;
@@ -34,7 +52,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 //    can exfiltrate over the network, these counters move.
 let attackerRequests = 0;
 let attackerPaths: string[] = [];
-function attackerServer(): Promise<{ url: string; requests: () => number; close: () => Promise<void> }> {
+function attackerServer(): Promise<{ url: string; requests: () => number; paths: () => string[]; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const ac = new AbortController();
     const server = Deno.serve({ port: 0, signal: ac.signal, onListen: ({ port }) => {
@@ -44,7 +62,7 @@ function attackerServer(): Promise<{ url: string; requests: () => number; close:
         paths: () => attackerPaths,
         close: async () => { ac.abort(); await server.shutdown(); },
       });
-    } }, async () => {
+    } }, async (req) => {
       attackerRequests++;
       try { attackerPaths.push(new URL(req.url).pathname); } catch { attackerPaths.push(String(req.url)); }
       return new Response("leaked", { headers: { "access-control-allow-origin": "*" } });
@@ -149,7 +167,7 @@ async function main() {
   const fixture = fixtureHtml.replaceAll("__ATTACKER_URL__", attacker.url);
   const docs = await docsServer(fixture);
 
-  const tmp = await Deno.makeTempDir({ prefix: "cap-sec-" });
+  const tmp = providedProfile;
   const proc = new Deno.Command(CHROMIUM, {
     args: [
       "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",

@@ -5,13 +5,13 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 11:10 UTC. Reconciled against exact public
-> `origin/main@a8985af8af2af76d714cd0be29781c18c08d7a7f` (`0.2.146`). The bounded
-> shadow catalog is public and therefore `MERGED`; this branch adds the P0
-> archive-freshness candidate without making a shipping claim for it. Branch status
-> counts: **21 OPEN · 8 IN_REVIEW · 2 MERGED · 4 BLOCKED · 33 DONE ·
-> 0 ABANDONED**. The 35 active entries and 33 archived terminal entries below are
-> the complete 68-entry branch state at this snapshot.
+> Snapshot: 2026-08-22 12:38 UTC. Reconciled against exact public
+> `origin/main@1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624` (`0.2.147`). Package
+> archive freshness is public and verified, so it is `DONE`; this branch adds the
+> P0 security-suite serialization candidate without making a Chrome-run or shipping
+> claim for it. Branch status counts: **20 OPEN · 8 IN_REVIEW · 2 MERGED ·
+> 4 BLOCKED · 34 DONE · 0 ABANDONED**. The 34 active entries and 34 archived
+> terminal entries below are the complete 68-entry branch state at this snapshot.
 
 ## Safety boundary
 
@@ -480,27 +480,6 @@ On resume after a coordinator or worker loss:
     grouped as text 12, crypto 6, data 6, file 6, code 5,
     search/compression/database/media 1 each. No Co-do code or binary is
     accepted by this record.
-
-## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
-- Feedback: 2026-08-22 — production packaging copied the entire local extension tree and updated an existing ZIP in place, allowing ignored/untracked artifacts and files removed since a prior package to survive into a release archive
-- Updated: 2026-08-22 11:10 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P0
-- Owner: package-archive implementer
-- Workspace: active (local path private)
-- Branch: `fix/package-archive-freshness-a8985af`
-- Base: `a8985af8af2af76d714cd0be29781c18c08d7a7f`
-- Candidate: this tracker commit
-- Shipping: —
-- Acceptance: each package is assembled only from Git's exact tracked regular-file inventory under `extension/`, the current generated `dist` authority, and a byte-identical generated extension changelog; ignored/untracked files never enter; tracked/generated symlinks and special files, duplicate/nonportable paths, missing required dist files, stale changelog, unexpected ZIP entries and content-hash mismatches fail closed; ZIP output is written from a fresh exact staging tree to one unique nonexistent same-directory temp file, verified for exact inventory/no duplicates/no stale entries/current hashes/portable regular files, then atomically renamed over the final archive; failure preserves the old final and removes stage/temp residue
-- Review: independent code, archive-security, source-inventory, portability, atomicity and regression review pending
-- Gates: executable regression poisons the existing final ZIP and ignored `extension/options/options.bundle.js`, packages twice after a tracked removal and current-dist replacement, and proves stale/ignored/duplicate/symlink entries absent plus failure cleanup/final preservation; focused tests; canonical full unit; production build; package + validate-only; gallery/changelog/order/diff/release/clean-tree checks; no Chrome and no `npm run test:security`
-- Blockers: —
-- Next: commit the exact candidate and obtain independent review before any integration or push
-- Recover: `git show fix/package-archive-freshness-a8985af -- scripts/package-extension.mjs scripts/package-archive.mjs tests/package-extension-freshness.test.ts tests/package-extension-freshness-driver.mjs TASKS.md`
-- History:
-  - 2026-08-22 11:10 UTC — replaced whole-tree/in-place ZIP packaging with an exact tracked-plus-generated inventory, fresh temp archive, extracted hash verification and atomic replacement; added poison/removal/current-dist/symlink/special/failure-cleanup regressions on exact public `a8985af`.
 
 ## [CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01] Canonical bounded shadow tool catalog
 
@@ -1013,24 +992,25 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01] Serialize the real-Chromium security suite
 - Feedback: 2026-08-22 — source inspection confirmed `npm run test:security` launches real headless Chromium but does not self-acquire the canonical serialized Chrome lock
-- Updated: 2026-08-22 10:00 UTC
-- Status: OPEN
+- Updated: 2026-08-22 12:38 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: security-suite serialization implementer
+- Workspace: active (local path private)
+- Branch: `fix/security-suite-serialization-final-1fd65c6`
+- Base: `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: direct execution refuses without a wrapper-issued lock capability; the wrapper acquires `/tmp/cap-serialized-chrome-acceptance.lock` before any browser launch, uses a fresh profile and durable bounded evidence path, supervises an owned process group under a hard timeout, sends TERM then KILL only to the verified owned group, checks descendants, and removes only current-UID-owned non-symlink exact profile paths while preserving finalized evidence
-- Review: independent process-custody, lock-bypass, timeout, PID/PGID, symlink/ownership, cleanup, evidence and exact security-assertion review required before replacing the canonical command
-- Gates: no-Chrome mutant/self-tests for missing lock, forged capability, unverified PGID, timeout, signal and cleanup paths; shell/type/diff checks; one authorized serialized exact-commit run proving 7/7, no surviving Chromium/descendants/profile and immutable evidence receipt
-- Blockers: Chrome execution requires serialized authorization; the existing script has no self-lock and therefore must not be run directly by catalog or other source-review lanes
-- Next: build and independently review a fail-closed wrapper/runner contract, then perform one authorized exact-commit security run
-- Recover: `git grep -n "test:security\|security-suite.ts\|cap-serialized-chrome-acceptance.lock" -- package.json scripts TASKS.md`
+- Acceptance: direct runner execution refuses without the supervisor-issued nonce, live parent identity, exact inherited canonical flock fd and exact wrapper-owned profile; the shell acquires `/tmp/cap-serialized-chrome-acceptance.lock` before profile/evidence/server/browser side effects; production always uses the fixed runner and immutable 120-second timeout; only an explicit self-test token plus the exact repository fixture path and pinned SHA-256 may select a bounded fake runner; the supervisor creates durable bounded evidence and a fresh exact profile, launches one detached PID=PGID=SID group, enforces hard timeout and verified-group TERM then KILL, propagates runner exit/signal, detects exact observed descendants that escape the group, poisons on residue/unsafe cleanup, and removes only the exact current-UID-owned non-symlink profile through the shared live helper; the runner's seven security assertions remain unchanged
+- Review: prior semantic source established correct profile wiring and supervisor shape but was BLOCKed because source-string tests did not execute the failure paths; independent exact-candidate process-custody, lock-bypass, fixture-boundary, timeout, PID/PGID/SID, signal, symlink/ownership/prefix, residue/poison, cleanup, evidence and seven-assertion preservation review pending
+- Gates: executable no-Chrome tests drive the production helpers for direct/no-lock/stale-parent/stale-nonce/wrong-lock refusal, valid inherited-lock guard, fake-runner path/hash refusal, production runner/120-second immutability, PGID/SID mismatch, hard timeout, stubborn-group TERM→KILL/no-survivor, exit 37/signal propagation, real symlink/wrong-prefix cleanup refusal, injected wrong-owner refusal and escaped-survivor residue→POISON/nonzero with exact test cleanup; reported pre-commit focused 9/9, canonical full unit 944/944 across 14 steps, 102-file production build and exact 128-entry package/validate PASS; shell/Node/Deno, gallery/changelog/order/diff/release/clean-tree checks; no Chrome and no `npm run test:security` before independent review
+- Blockers: exact candidate independent review is required before one coordinator-authorized serialized Chrome run; historical unlocked security results remain noncanonical observations
+- Next: commit the single-release exact candidate, obtain independent review, then return execution authority to the coordinator
+- Recover: `git show fix/security-suite-serialization-final-1fd65c6 -- scripts/security-suite-supervisor.sh scripts/security-suite-supervisor.mjs scripts/security-suite-custody.mjs scripts/security-suite.ts tests/security-suite-custody.test.ts tests/fixtures/security-suite-fake-runner.mjs package.json TASKS.md`
 - History:
   - 2026-08-22 10:00 UTC — opened after correcting the assumption that the security suite was no-Chrome. Historical unsynchronized invocations are noncanonical evidence, not product failures; their assertion results remain observations only.
+  - 2026-08-22 12:38 UTC — recomposed the reviewed source shape once from exact public `1fd65c6`: actual wrapper profile wiring plus shared live custody helpers and hash-pinned no-Chrome fixture mutants replace the predecessor's non-executable source-string assertions; no Chrome or security-suite run performed.
 
 ## [CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01] Local semantic search over the complete tool catalog
 
@@ -1256,6 +1236,28 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Archive
+
+## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
+- Feedback: 2026-08-22 — production packaging copied the entire local extension tree and updated an existing ZIP in place, allowing ignored/untracked artifacts and files removed since a prior package to survive into a release archive
+- Updated: 2026-08-22 12:38 UTC
+- Status: DONE
+- Resume: —
+- Priority: P0
+- Owner: package-archive implementer
+- Workspace: none
+- Branch: `main`
+- Base: `a8985af8af2af76d714cd0be29781c18c08d7a7f`
+- Candidate: `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
+- Shipping: `origin/main@1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
+- Acceptance: each package is assembled only from Git's exact tracked regular-file inventory under `extension/`, the current generated `dist` authority, and a byte-identical generated extension changelog; ignored/untracked files never enter; tracked/generated symlinks and special files, duplicate/nonportable paths, missing required dist files, stale changelog, unexpected ZIP entries and content-hash mismatches fail closed; ZIP output is written from a fresh exact staging tree to one unique nonexistent same-directory temp file, verified for exact inventory/no duplicates/no stale entries/current hashes/portable regular files, then atomically renamed over the final archive; failure preserves the old final and removes stage/temp residue
+- Review: independent archive-security/source-inventory/portability/atomicity review PASS on the exact candidate; review report SHA-256 `6bae139d36ff5c7da165460f643eb8fc5e0f9d8efb178a3a4c3bf8e47dae5f35`
+- Gates: exact candidate focused 3/3, executable mutation driver 3/3, canonical full unit 935/935, 102-file production build, exact 128-entry package/validate, gallery/changelog/order/diff/release/clean-tree PASS; two consecutive public-tip packages were byte-identical at SHA-256 `75619127f951465659d6f50975bbc07e965ef2d44534380eb7b43bade2c6f0af`; no Chrome was required for this packaging-only slice
+- Blockers: —
+- Next: —
+- Recover: `git show 1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624 -- scripts/package-extension.mjs scripts/package-archive.mjs tests/package-extension-freshness.test.ts tests/package-extension-freshness-driver.mjs TASKS.md`
+- History:
+  - 2026-08-22 11:10 UTC — replaced whole-tree/in-place ZIP packaging with an exact tracked-plus-generated inventory, fresh temp archive, extracted hash verification and atomic replacement; added poison/removal/current-dist/symlink/special/failure-cleanup regressions on exact public `a8985af`.
+  - 2026-08-22 12:38 UTC — independent review PASSed; exact `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624` became public `0.2.147`, repeated real package/validate was byte-identical and free of the ignored stale bundle, and the task advanced to DONE.
 
 Entries that reached `DONE` or `ABANDONED`, preserved with their complete field set and History.
 

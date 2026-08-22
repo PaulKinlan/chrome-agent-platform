@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.147",
+  "version": "0.2.148",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -14,11 +14,11 @@
     "test:agent-access": "deno run -A scripts/agent-access-journeys.ts",
     "test:components": "deno run -A scripts/component-gallery-smoke.ts",
     "test:directory": "deno run -A scripts/agent-directory-ui.ts",
-    "test:security": "deno run -A scripts/security-suite.ts",
+    "test:security": "bash scripts/security-suite-supervisor.sh",
     "test:a11y": "deno run -A scripts/a11y-audit.ts",
     "test:perf": "deno run -A scripts/perf-leak-trace.ts",
     "test:capabilities": "deno run -A scripts/capability-lifecycle.ts",
-    "test:all": "deno test --allow-read --allow-sys=hostname --allow-env=OSTYPE tests/ && deno run -A scripts/security-suite.ts && deno run -A scripts/chrome-journeys.ts",
+    "test:all": "npm test && npm run test:security && npm run test:chrome",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",
     "version:major": "node scripts/bump-version.mjs major",
@@ -41,6 +41,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/node": "^24.13.3",
     "acorn": "^8.18.0",
     "esbuild": "^0.25.0",
     "fake-indexeddb": "^6.2.5"

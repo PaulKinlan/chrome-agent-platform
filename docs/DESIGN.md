@@ -129,6 +129,18 @@ stale entries, regular-file portability, and content hashes before an atomic
 same-filesystem replacement. Ignored/untracked files, symlinks, special files,
 and content retained from an older ZIP are never distribution UI or runtime.
 
+## Browser-test process custody
+The real-Chromium security suite runs only through its canonical lock-owning
+supervisor. Before servers or browser state exist, the runner must prove the
+supervisor-issued nonce, live parent identity, inherited canonical flock and
+exact current-UID non-symlink profile. Production always selects the repository
+runner and a 120-second host deadline; environment overrides cannot weaken either.
+The detached runner is accepted only after PID=PGID=SID attestation. Timeout or
+residual group members receive bounded TERM then KILL only after exact ownership
+verification. Observed descendants that escape that group poison the serialized
+slot, and profile removal reuses the same exact-prefix/owner/symlink helper tested
+by hostile no-Chrome mutants. Durable receipts survive the temporary profile.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.
