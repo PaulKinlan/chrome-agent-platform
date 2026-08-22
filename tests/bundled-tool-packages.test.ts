@@ -264,7 +264,7 @@ import { SUPPORTED_WASI_PREVIEW1_IMPORTS } from "../extension/lib/wasi-preview1-
 const SQLITE_MANIFEST_REL = "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json";
 const SQLITE_WASM_SHA = "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d";
 const SQLITE_IMPORTS_24 = ["clock_time_get","environ_get","environ_sizes_get","fd_close","fd_fdstat_get","fd_fdstat_set_flags","fd_filestat_get","fd_filestat_set_size","fd_prestat_dir_name","fd_prestat_get","fd_read","fd_seek","fd_sync","fd_write","path_create_directory","path_filestat_get","path_filestat_set_times","path_open","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff","proc_exit","random_get"];
-const SQLITE_GAP_9 = ["fd_fdstat_set_flags","fd_filestat_set_size","fd_sync","path_create_directory","path_filestat_set_times","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff"];
+const SQLITE_GAP_8 = ["fd_filestat_set_size","fd_sync","path_create_directory","path_filestat_set_times","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff"];
 
 Deno.test("SPDX: exact blessing token and composite admitted; every mutant rejected", () => {
   assert(isValidLicenseExpression("blessing"));
@@ -296,7 +296,7 @@ Deno.test("sqlite manifest: canonical bytes, composite licence, exact notice/SBO
   assert(!JSON.stringify(sbom).includes("Evaluation-Only") && !JSON.stringify(sbom).includes("pending-owner"), "stale evaluation/pending wording must be gone");
 });
 
-Deno.test("sqlite binary: exact 24 imports and the exact nine-function CAP runtime gap", async () => {
+Deno.test("sqlite binary: exact 24 imports and the exact EIGHT-function CAP runtime gap (fd_fdstat_set_flags now supported)", async () => {
   const wasm = await Deno.readFile(root(`extension/wasm/cas/${SQLITE_WASM_SHA}.wasm`));
   const audit = auditWasmBinary(wasm, JSON.parse(await Deno.readTextFile(root(SQLITE_MANIFEST_REL))).executables[0], {});
   const names = audit.imports.map((i) => i.name).sort();
@@ -305,9 +305,9 @@ Deno.test("sqlite binary: exact 24 imports and the exact nine-function CAP runti
   assertEquals(audit.measured.memoryInitial, 64);
   assertEquals(audit.measured.memoryMax, 512);
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
-  assertEquals(SQLITE_IMPORTS_24.filter((n) => !supported.has(n)).sort(), [...SQLITE_GAP_9].sort());
-  // the runtime must NOT have grown the nine in this commit
-  for (const gap of SQLITE_GAP_9) assert(!supported.has(gap), `runtime unexpectedly implements ${gap}`);
+  assertEquals(SQLITE_IMPORTS_24.filter((n) => !supported.has(n)).sort(), [...SQLITE_GAP_8].sort());
+  // the runtime must NOT have grown the remaining eight in this commit
+  for (const gap of SQLITE_GAP_8) assert(!supported.has(gap), `runtime unexpectedly implements ${gap}`);
 });
 
 Deno.test("sqlite descriptor: false/false/true posture with runtime-imports-unimplemented; no route anywhere", async () => {

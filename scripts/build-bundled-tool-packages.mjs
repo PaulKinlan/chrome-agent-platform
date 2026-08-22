@@ -193,7 +193,8 @@ function ship(rel, bytes) {
 // ── Package 26: sqlite3-query-bounded (SQLite 3.46.0 amalgamation + CAP-authored
 // wrapper/host). Exact upstream Blessing + Apache-2.0 authored provenance.
 // The binary imports 24 WASI functions; the CAP runtime implements 15 of them
-// (nine unimplemented) — the descriptor is disabled runtime-imports-unimplemented.
+// (eight unimplemented; fd_fdstat_set_flags is linkage-only callable but unauthorized) —
+// the descriptor is disabled runtime-imports-unimplemented.
 // No scanner exemption, no route, no runtime change.
 const SQLITE_EVIDENCE = PATHS.sqlite3;
 const SQLITE_EXPECT = {
@@ -423,7 +424,7 @@ writeFileSync(join(REPO, "packages/bundled/sqlite3/PROVENANCE.json"), JSON.strin
     "host/quota-sink.mjs": SQLITE_EXPECT.sources["host/quota-sink.mjs"],
     "host/run-query.mjs": SQLITE_EXPECT.sources["host/run-query.mjs"],
     "host/wasi-worker.mjs": SQLITE_EXPECT.sources["host/wasi-worker.mjs"] } },
-  binary: { sha256: SQLITE_EXPECT.wasm.sha256, bytes: SQLITE_EXPECT.wasm.bytes, tier: "tiny", memoryPages: { initial: 64, max: 512 }, importModule: "wasi_snapshot_preview1", importedFunctions: 24, capRuntimeGap: ["fd_fdstat_set_flags","fd_filestat_set_size","fd_sync","path_create_directory","path_filestat_set_times","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff"] },
+  binary: { sha256: SQLITE_EXPECT.wasm.sha256, bytes: SQLITE_EXPECT.wasm.bytes, tier: "tiny", memoryPages: { initial: 64, max: 512 }, importModule: "wasi_snapshot_preview1", importedFunctions: 24, capRuntimeGap: ["fd_filestat_set_size","fd_sync","path_create_directory","path_filestat_set_times","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff"] },
   buildReceipts: { byteIdentical: true, sqliteOmitAttachAbsent: true, sqliteOmitLoadExtension: true, toolchain: "wasi-sdk clang 18.1.2" },
   licenseExpression: "blessing AND Apache-2.0",
   blessingNoticeSha256: SQLITE_EXPECT.blessing.sha256,
@@ -434,8 +435,10 @@ writeFileSync(join(REPO, "packages/bundled/sqlite3/README.md"), `# sqlite3-query
 SQLite 3.46.0 amalgamation (upstream Blessing) + CAP-authored wrapper/host
 (Apache-2.0); licence expression "blessing AND Apache-2.0". Physically bundled
 and inventory-admissible; NOT executable in this release: the binary imports 24
-WASI functions, nine of which the CAP runtime does not yet implement (see
-PROVENANCE.json binary.capRuntimeGap). No route, grant, or catalog entry
+WASI functions, eight of which the CAP runtime does not yet implement (see
+PROVENANCE.json binary.capRuntimeGap; fd_fdstat_set_flags is linkage-only
+callable but UNAUTHORIZED — its change semantics are unsupported). No route,
+grant, or catalog entry
 consumes this package. Node host sources under host/ are public Apache-2.0
 provenance only — they are not shipped runtime code.
 `);

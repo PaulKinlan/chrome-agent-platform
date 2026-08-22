@@ -44,6 +44,7 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "environ_sizes_get",
   "fd_close",
   "fd_fdstat_get",
+  "fd_fdstat_set_flags",
   "fd_filestat_get",
   "fd_prestat_dir_name",
   "fd_prestat_get",
@@ -274,6 +275,20 @@ function validHandle(handle) {
   return ["close", "read", "stat", "write"].every((name) =>
     typeof handle[name] === "function"
   );
+}
+
+// PURE behavioral planner for fd_fdstat_set_flags (linkage-only slice). The
+// syscall delegates to it — the KAT tests exercise this exact function with
+// primitive inputs (no FD seeding, no rights mutation). Semantics: the
+// FD_FDSTAT_SET_FLAGS right is required (ENOTCAPABLE — no current descriptor
+// has it); a requested known-bit change → ENOTSUP; the exact no-change →
+// SUCCESS. Change semantics are deliberately unsupported in this slice.
+export function planFdstatSetFlags(currentFlags, rights, requested) {
+  if ((rights & WASI_RIGHTS.FD_FDSTAT_SET_FLAGS) !== WASI_RIGHTS.FD_FDSTAT_SET_FLAGS) {
+    return WASI_ERRNO.ENOTCAPABLE;
+  }
+  if (requested !== currentFlags) return WASI_ERRNO.ENOTSUP;
+  return WASI_ERRNO.SUCCESS;
 }
 
 export function createWasiPreview1Runtime({
@@ -668,6 +683,29 @@ export function createWasiPreview1Runtime({
       span(statPtr, 24);
       writeFdstat(statPtr, record);
       return WASI_ERRNO.SUCCESS;
+    },
+
+    // fd_fdstat_set_flags — least-authority linkage-only slice
+    // (CAP-FB-20260822-WASI-FDSTAT-FLAGS-01): the import is callable so the
+    // markdown binary links, but CHANGE semantics are deliberately unsupported
+    // in this slice. Error order: fdFor (EBADF) → the requested value shape
+    // (> 0xffff or any bit outside the known 0x1f mask → EINVAL) → requireRight
+    // (the FD_FDSTAT_SET_FLAGS right is never granted to any descriptor →
+    // ENOTCAPABLE for every current fd) → a known-bit change → ENOTSUP →
+    // exact no-change → SUCCESS. No rights grants and no flags/rights mutation
+    // anywhere. (Full APPEND/NONBLOCK semantics are explicitly deferred — see
+    // the GPT fd_fdstat_set_flags design, deferred by the coordinator.)
+    fd_fdstat_set_flags: (fdValue, flagsValue) => {
+      const record = fdFor(fdValue); // unknown fd → EBADF
+      const requested = asU32(flagsValue);
+      const knownFlags = WASI_FDFLAGS.APPEND | WASI_FDFLAGS.DSYNC |
+        WASI_FDFLAGS.NONBLOCK | WASI_FDFLAGS.RSYNC | WASI_FDFLAGS.SYNC;
+      if (requested > 0xffff || (requested & ~knownFlags) !== 0) {
+        // a value outside the u16 flags space or with unknown bits → EINVAL
+        fault(WASI_ERRNO.EINVAL);
+      }
+      // the pure behavioral planner decides — single source of truth, KAT-tested
+      return planFdstatSetFlags(record.flags, record.rights, requested);
     },
 
     fd_filestat_get: (fdValue, statPtr) => {

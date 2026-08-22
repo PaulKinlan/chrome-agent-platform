@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.173] — 2026-08-22
+- fix(wasm): least-authority fd_fdstat_set_flags import (linkage-only; markdown links; no change semantics) (CAP-FB-20260822-WASI-FDSTAT-FLAGS-01)
+
 ## [0.2.172] — 2026-08-22
 - feat(tools): B2 text tranche — sort/uniq/tr/grep/toml2json Settings previews + 4 MiB wasm cap (CAP-FB-20260822-TOOL-PREVIEW-EXEC-04)
 

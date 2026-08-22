@@ -5,19 +5,17 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 23:35 UTC. Reconciled against exact public
-> `origin/main@9dd581a15fb86f9e6fa0b5ef98e57344ae300446` (`0.2.165`). Lazy,
+> Snapshot: 2026-08-23 00:02 UTC. Reconciled against exact public
+> `origin/main@e793e9a081cf00ac73119c44f227554fbb9e42a2` (`0.2.172`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
-> package bytes, the Store static boundary and the tool-platform foundation
-> (vendored sources/recipes/licenses + disabled descriptors) remain exact; the
-> catalog remains `MERGED`; OPFS, bundled-package, public code-diff,
-> Chrome-capability, the Gate-2 fresh-Worker host source candidate and the
-> bundled JS-minifier lane remain `IN_REVIEW` with Shipping `—`. This branch
-> recomposes the PASSed read-only tabular-diff artifact custody candidate as
-> the `0.2.166` step — an unreachable source library with no route, execution,
-> UI, OPFS mutation, apply or patched-CSV export.
-> Branch status counts: **14 OPEN · 14 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 36 DONE · 0 ABANDONED**. The 34 active entries and 36 archived terminal
+> package bytes, the Store static boundary, the tool-platform foundation and
+> the Settings preview tranches (5 → 16 tools) remain exact; the catalog
+> remains `MERGED`. This branch adds the runtime-only least-authority
+> `fd_fdstat_set_flags` import (linkage-only; the markdown binary links; the
+> SQLite gap shrinks 9→8; no change semantics, no rights grants) as the
+> `0.2.173` step — no package admission, no UI/allowlist change.
+> Branch status counts: **13 OPEN · 14 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 37 DONE · 0 ABANDONED**. The 33 active entries and 37 archived terminal
 > entries below are the complete 70-entry state.
 
 ## Safety boundary
@@ -717,6 +715,36 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
+## [CAP-FB-20260822-WASI-FDSTAT-FLAGS-01] Least-authority fd_fdstat_set_flags (linkage-only, Release A)
+
+- Feedback: 2026-08-22 — the markdown binary imports fd_fdstat_set_flags, absent
+  from the runtime; the containment audit blocked its admission until a
+  least-authority implementation existed
+- Updated: 2026-08-23 00:02 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: runtime slice on this branch
+- Workspace: active (local path private)
+- Branch: `feat/wasi-fdstat-set-flags-e793e9a`
+- Base: `e793e9a081cf00ac73119c44f227554fbb9e42a2`
+- Candidate: `5eb7171…` (amended; 0.2.173)
+- Shipping: —
+- Acceptance: SUPPORTED imports 18→19 (fd_fdstat_set_flags); the method order
+  fdFor (EBADF) → u16/known-mask (EINVAL) → right (ENOTCAPABLE — never granted)
+  → known change (ENOTSUP) → exact no-change (SUCCESS) via the pure
+  planFdstatSetFlags planner (KAT-tested; no FD seeding/rights); zero rights
+  grants/mutation; the real markdown Worker run succeeds with the exact
+  counters (hostCalls 6, pathCalls 0, stdinBytesRead 4, stdoutBytes 12,
+  openDynamicFds 0) while the package stays disabled; the SQLite PROVENANCE
+  gap 9→8 (linkage-only callable but unauthorized; SQLite still disabled)
+- Gates: full 1167/1167, build rc 0, Store package/validate OK
+- History:
+  - 2026-08-22 23:44 UTC — Release A implemented + committed 5eb7171.
+  - 2026-08-23 00:02 UTC — GPT review REVISE (F1 SQLite provenance 9→8 +
+    linkage-only-unauthorized wording; F2 pure behavioral planner KAT +
+    counters on the markdown run test) — amended.
+
 
 - Feedback: 2026-08-22 — the reviewed package host needs hard termination,
   byte-bounded sync workspaces, an audit-before-instantiate scan and a bounded

@@ -22,7 +22,7 @@ import { createOffscreenWasmHost, validateOffscreenRequest } from "../extension/
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm } from "./wasm-fixture-builder.mjs";
 import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtime.js";
-import { WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS } from "../extension/lib/wasm-host-types.js";
+import { WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS } from "../extension/lib/wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
 
 const WORKER_URL = new URL("../extension/lib/wasm-execution-worker.js", import.meta.url).href;
@@ -142,6 +142,114 @@ Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT 
     assertEquals(res.phase, "completed", toolId);
     assertEquals(res.stdout, contract.expect, `${toolId} exact contract output`);
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// (B13) fd_fdstat_set_flags — least-authority runtime support (Release A)
+// ──────────────────────────────────────────────────────────────────────────
+function directRuntimeFlags(overrides = {}) {
+  return directRuntime(overrides, 1024 * 1024);
+}
+
+Deno.test("fd_fdstat_set_flags: import linkage — the wasi table exposes it + the audit accepts it", () => {
+  const { wasi } = directRuntimeFlags();
+  assertEquals(typeof wasi.fd_fdstat_set_flags, "function", "the runtime exposes fd_fdstat_set_flags");
+  // the SUPPORTED set now includes it (the markdown binary's 12 imports all audit-clean)
+  const rt = Deno.readTextFileSync(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url).pathname);
+  const m = rt.match(/SUPPORTED_WASI_PREVIEW1_IMPORTS = Object\.freeze\(\[([^\]]+)\]/);
+  assert(m, "supported import set found");
+  const names = [...m[1].matchAll(/"([a-z_0-9]+)"/g)].map((x) => x[1]);
+  assertEquals(names.includes("fd_fdstat_set_flags"), true, "supported set includes fd_fdstat_set_flags");
+  assertEquals(names.length, 19, "supported set is 18 → 19 (exactly one added)");
+});
+
+Deno.test("fd_fdstat_set_flags: error ORDER — unknown fd EBADF first; invalid bits EINVAL on a valid no-right fd; known change ENOTCAPABLE on a current fd", () => {
+  const { wasi } = directRuntimeFlags();
+  // 1. unknown fd → EBADF (fdFor fires first, regardless of the requested value)
+  assertEquals(wasi.fd_fdstat_set_flags(999, 0), WASI_ERRNO.EBADF, "unknown fd EBADF");
+  assertEquals(wasi.fd_fdstat_set_flags(999, WASI_FDFLAGS.APPEND), WASI_ERRNO.EBADF, "unknown fd EBADF regardless of flags");
+  // 2. invalid bits (outside the known 0x1f mask) → EINVAL, BEFORE the right gate
+  //    (the EINVAL precedence on a VALID no-right fd proves the order)
+  assertEquals(wasi.fd_fdstat_set_flags(0, 0x20), WASI_ERRNO.EINVAL, "unknown bit 0x20 → EINVAL on stdin");
+  assertEquals(wasi.fd_fdstat_set_flags(0, 0x1_0000), WASI_ERRNO.EINVAL, "value > 0xffff → EINVAL on stdin");
+  assertEquals(wasi.fd_fdstat_set_flags(0, 0xffff), WASI_ERRNO.EINVAL, "all-16-bits with unknown bits → EINVAL on stdin");
+  // 3. a KNOWN-bit change on a current fd → ENOTCAPABLE (the right gate fires
+  //    before the change check — the ENOTCAPABLE precedence over ENOTSUP)
+  assertEquals(wasi.fd_fdstat_set_flags(0, WASI_FDFLAGS.APPEND), WASI_ERRNO.ENOTCAPABLE, "known change on stdin → ENOTCAPABLE (right first)");
+  // 4. the exact no-change on a current fd is ALSO ENOTCAPABLE (no descriptor
+  //    has the right — the no-change SUCCESS is reachable only with a
+  //    right-bearing descriptor, which no current fd is)
+  assertEquals(wasi.fd_fdstat_set_flags(0, 0), WASI_ERRNO.ENOTCAPABLE, "no-change on stdin → ENOTCAPABLE");
+});
+
+Deno.test("fd_fdstat_set_flags: EVERY live fd is ENOTCAPABLE (no descriptor gains the right) + no state mutation", () => {
+  const { wasi, mem, ws } = directRuntimeFlags();
+  const v = new DataView(mem.buffer);
+  // stdio + preopen (only KNOWN-bit requests reach the right gate)
+  for (const fd of [0, 1, 2, 3]) {
+    assertEquals(wasi.fd_fdstat_set_flags(fd, 0), WASI_ERRNO.ENOTCAPABLE, `fd ${fd} no-change ENOTCAPABLE`);
+    assertEquals(wasi.fd_fdstat_set_flags(fd, WASI_FDFLAGS.APPEND), WASI_ERRNO.ENOTCAPABLE, `fd ${fd} change ENOTCAPABLE`);
+    assertEquals(wasi.fd_fdstat_set_flags(fd, WASI_FDFLAGS.NONBLOCK | WASI_FDFLAGS.SYNC), WASI_ERRNO.ENOTCAPABLE, `fd ${fd} known multi-bit change ENOTCAPABLE`);
+  }
+  // a real opened file (rights never include FD_FDSTAT_SET_FLAGS)
+  const putPath = (ptr, text) => { const b = new TextEncoder().encode(text); mem.set(b, ptr); return b.length; };
+  const pathLen = putPath(1000, "scratch/f.bin");
+  const rights = WASI_RIGHTS.FD_WRITE | WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_SEEK | WASI_RIGHTS.FD_TELL | WASI_RIGHTS.FD_FILESTAT_GET;
+  assertEquals(wasi.path_open(3, 0, 1000, pathLen, WASI_OFLAGS.CREAT, rights, 0n, 0, 2000), WASI_ERRNO.SUCCESS);
+  const fd = v.getUint32(2000, true);
+  assertEquals(wasi.fd_fdstat_set_flags(fd, 0), WASI_ERRNO.ENOTCAPABLE, "opened file fd ENOTCAPABLE");
+  // NO state mutation: fd_fdstat_get still shows the original flags (0) after the calls
+  wasi.fd_fdstat_get(fd, 3000);
+  const statFlags = new DataView(mem.buffer).getUint16(3000 + 2, true); // fs_flags at offset 2
+  assertEquals(statFlags, 0, "the fd's flags field is unchanged (no mutation)");
+});
+
+Deno.test("fd_fdstat_set_flags: BEHAVIORAL KAT of the pure planner (no FD seeding/rights — primitive inputs)", async () => {
+  const { planFdstatSetFlags } = await import("../extension/lib/wasi-preview1-runtime.js");
+  const RIGHT = WASI_RIGHTS.FD_FDSTAT_SET_FLAGS;
+  // 1. the right is required → ENOTCAPABLE for any no-right descriptor
+  assertEquals(planFdstatSetFlags(0, 0n, 0), WASI_ERRNO.ENOTCAPABLE, "no right → ENOTCAPABLE (no-change)");
+  assertEquals(planFdstatSetFlags(0, 0n, WASI_FDFLAGS.APPEND), WASI_ERRNO.ENOTCAPABLE, "no right → ENOTCAPABLE (change)");
+  assertEquals(planFdstatSetFlags(0, WASI_RIGHTS.FD_READ, 0), WASI_ERRNO.ENOTCAPABLE, "other rights only → ENOTCAPABLE");
+  // 2. right-bearing exact no-change → SUCCESS (the ONLY permitted write)
+  assertEquals(planFdstatSetFlags(0, RIGHT, 0), WASI_ERRNO.SUCCESS, "right-bearing no-change → SUCCESS");
+  assertEquals(planFdstatSetFlags(WASI_FDFLAGS.APPEND, RIGHT, WASI_FDFLAGS.APPEND), WASI_ERRNO.SUCCESS, "right-bearing APPEND no-change → SUCCESS");
+  // 3. right-bearing known change → ENOTSUP (fail closed)
+  assertEquals(planFdstatSetFlags(0, RIGHT, WASI_FDFLAGS.APPEND), WASI_ERRNO.ENOTSUP, "right-bearing change → ENOTSUP");
+  assertEquals(planFdstatSetFlags(WASI_FDFLAGS.APPEND, RIGHT, 0), WASI_ERRNO.ENOTSUP, "right-bearing APPEND→0 change → ENOTSUP");
+  assertEquals(planFdstatSetFlags(0, RIGHT, WASI_FDFLAGS.NONBLOCK | WASI_FDFLAGS.SYNC), WASI_ERRNO.ENOTSUP, "right-bearing multi-bit change → ENOTSUP");
+  // 4. the denial precedence: ENOTCAPABLE wins over a would-be ENOTSUP/SUCCESS
+  assertEquals(planFdstatSetFlags(0, 0n, WASI_FDFLAGS.APPEND), WASI_ERRNO.ENOTCAPABLE, "no-right change → ENOTCAPABLE (not ENOTSUP)");
+});
+
+Deno.test("fd_fdstat_set_flags: the DISABLED markdown binary now RUNS through the real Worker with zero set_flags calls (package remains disabled)", async () => {
+  const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  // markdown is NOT admitted (the 0.2.173 Release A is runtime-only)
+  const row = BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === "markdown");
+  assertEquals(row.admitted, false, "markdown stays disabled (Release A is runtime-only)");
+  const spec = PREVIEW_SPECS.markdown;
+  assert(!spec, "markdown is not in the preview allowlist yet");
+  const sha = "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91";
+  const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${sha}.wasm`));
+  // the audit now accepts the full 12-import set (fd_fdstat_set_flags included) and
+  // the binary RUNS — it never invokes set_flags (a plain stdin render).
+  const job = makeJob({ stdin: new Uint8Array(new TextEncoder().encode("# Hi")) });
+  const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+  const host = createOffscreenWasmHost({ executor, authority: { ...AUTHORITY } });
+  const res = await host.handleJob({ type: "wasm.job", job: { ...rehydrated, args: ["markdown"] }, wasmBytes });
+  assertEquals(res.ok, true, JSON.stringify(res));
+  assertEquals(res.phase, "completed", JSON.stringify(res));
+  assertEquals(res.stdout, "<h1>Hi</h1>\n", "the safe HTML renders");
+  // counters: the render used exactly the stdin/stdout path (no path/workspace
+  // ops, no dynamic fds, no set_flags) — the linkage-only proof
+  assertEquals(res.counters.hostCalls, 6, `hostCalls: ${JSON.stringify(res.counters)}`);
+  assertEquals(res.counters.pathCalls, 0, "no path calls (no file operands)");
+  assertEquals(res.counters.stdinBytesRead, 4, "# Hi is 4 bytes read");
+  assertEquals(res.counters.stdoutBytes, 12, "<h1>Hi</h1>\n is 12 bytes");
+  assertEquals(res.counters.openDynamicFds, 0, "no dynamic fds opened");
 });
 
 // ──────────────────────────────────────────────────────────────────────────
