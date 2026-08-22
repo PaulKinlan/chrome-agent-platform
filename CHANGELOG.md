@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.156] — 2026-08-22
+- feat(settings): add read-only Tool Library panel
+
 ## [0.2.155] — 2026-08-22
 - feat(wasm): define pure WASI host contract (CAP-FB-20260822-WASM-EXECUTION-HOST-01)
 

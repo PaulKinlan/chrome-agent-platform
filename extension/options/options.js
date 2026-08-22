@@ -217,6 +217,41 @@ async function providerStatusChanged() {
 }
 
 // ── Local publisher models (catalogue + bounded preflight only) ──
+// ── Tool library (READ-ONLY catalog diagnostics; CAP-FB-20260822-TOOL-LIBRARY-UI-01) ──
+// Data comes ONLY from the existing Settings-principal `tool-catalog.shadow`
+// route (the SW derives the owner-options principal from this exact sender).
+// This wiring requests the bounded summary and sets properties; it installs no
+// listener, issues no search, and wires no control — the component emits no
+// events and exposes no actions by construction.
+async function renderToolLibrary() {
+  const library = $("#tool-library-view");
+  if (!library) return;
+  library.state = "loading";
+  try {
+    const summary = await chrome.runtime.sendMessage({
+      type: "tool-catalog.shadow",
+      action: "summary",
+    });
+    if (!summary || summary.ok !== true) {
+      library.error = String(summary?.error ?? "the diagnostics route declined");
+      library.state = "error";
+      return;
+    }
+    library.summary = summary;
+    library.state = "ready";
+  } catch (error) {
+    // An older background worker without the shadow route rejects the message;
+    // that is the truthful unavailable state, not an error in this page.
+    const text = String(error?.message ?? error ?? "");
+    if (/does not exist|unknown message|no receiver|Could not establish/i.test(text)) {
+      library.state = "unavailable";
+    } else {
+      library.error = text;
+      library.state = "error";
+    }
+  }
+}
+
 async function renderLocalModels() {
   const catalog = $("#local-model-catalog");
   if (!catalog) return;
@@ -2014,6 +2049,7 @@ chrome.permissions?.onRemoved?.addListener((change) => {
 await refreshStoragePermission();
 await renderProviders();
 await renderLocalModels();
+await renderToolLibrary();
 await renderAgents();
 await renderBackgroundAgents();
 await renderEnroll();

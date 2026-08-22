@@ -6379,6 +6379,230 @@ class LocalModelCatalog extends Component {
 customElements.define("local-model-catalog", LocalModelCatalog);
 
 /* ──────────────────────────────────────────────────────────────────────────
+ * <tool-library> — READ-ONLY owner diagnostics for the tool catalog contract
+ * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice).
+ *
+ * HARD BOUNDARY: this component has NO events, NO buttons, and NO action
+ * surface of any kind — no install/update/revoke/grant/execute/verify/copy.
+ * It renders bounded metadata from the Settings-principal tool-catalog.shadow
+ * diagnostics route only (summary in production; rows when a future reviewed
+ * slice supplies bounded search results — the gallery exercises that path).
+ * It never imports the package authority, never queries the network, and never
+ * makes a signer-verification claim (there is no verification path in this
+ * build, so no claim can be truthful).
+ * ────────────────────────────────────────────────────────────────────────── */
+const TOOL_LIBRARY_SOURCE_LABELS = Object.freeze({
+  "extension-builtin": "Built-in",
+  "chrome-api": "Browser",
+  "management": "Management",
+  "webmcp-declared": "Site tools (declared)",
+  "webmcp-inferred": "Site tools (inferred)",
+});
+const TOOL_LIBRARY_AVAILABILITY = Object.freeze({
+  ready: "Ready",
+  "owner-action-required": "Owner action required",
+  stale: "Stale",
+  disabled: "Disabled",
+});
+
+class ToolLibrary extends Component {
+  constructor() {
+    super();
+    this._state = "loading"; // loading | ready | error | unavailable
+    this._summary = null;
+    this._results = null;
+    this._error = "";
+    this._announcedState = ""; // live-region-once: announce each state once
+  }
+  set state(value) {
+    this._state = ["loading", "ready", "error", "unavailable"].includes(value) ? value : "error";
+    if (this._rendered) this._render();
+  }
+  set summary(value) {
+    this._summary = value && typeof value === "object" ? value : null;
+    if (this._rendered) this._render();
+  }
+  set results(value) {
+    this._results = Array.isArray(value) ? value : null;
+    if (this._rendered) this._render();
+  }
+  set error(value) {
+    this._error = typeof value === "string" ? value.slice(0, 240) : "";
+    if (this._rendered) this._render();
+  }
+  _render() {
+    // Mount ONCE: the live region must be a STABLE node so a polite
+    // announcement fires exactly once per state transition. Re-renders update
+    // only .catalog — rebuilding the status-line node would either lose the
+    // announcement or re-announce the same text.
+    if (!this._root.querySelector(".status-line")) {
+      mountTemplate(this, `
+      :host { display:block; color:var(--text, #24211f); }
+      .framing { margin:0 0 12px; padding:10px 12px; border-radius:var(--radius-md,10px);
+        background:var(--bg, #f7f6f3); color:var(--muted, #625d57); font-size:13px; }
+      .groups { margin:0 0 16px; padding:0; list-style:none; display:grid; gap:6px; }
+      .groups li { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline;
+        padding:9px 12px; border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md,10px);
+        font-size:13px; min-inline-size:0; }
+      .groups .count { margin-inline-start:auto; font-variant-numeric:tabular-nums; font-weight:700; }
+      .rows { margin:12px 0 0; padding:0; list-style:none; display:grid; gap:10px; }
+      .tool { border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:12px; min-inline-size:0; }
+      .tool:first-child { border-block-start:0; padding-block-start:0; }
+      .tool-head { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; align-items:start; }
+      h4 { margin:0; font-size:14px; overflow-wrap:anywhere; }
+      .meta, .digest, .scope { color:var(--muted, #625d57); font-size:12px; overflow-wrap:anywhere;
+        min-inline-size:0; }
+      .digest { font-family:ui-monospace,monospace; word-break:break-all; }
+      .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; min-inline-size:0; }
+      .chip { font-size:11px; padding:2px 8px; border:1px solid var(--border, #ddd8d2);
+        border-radius:999px; color:var(--muted, #625d57); max-inline-size:100%; overflow-wrap:anywhere; }
+      .chip.avail-owner-action-required { border-color:var(--warning, #9a6b00); color:var(--warning, #9a6b00); }
+      .chip.avail-stale { border-color:var(--muted, #625d57); }
+      .chip.avail-disabled { border-color:var(--danger, #b3261e); color:var(--danger, #b3261e); }
+      .diag { margin-top:12px; }
+      .diag summary { cursor:pointer; font-size:13px; font-weight:600; }
+      .diag ul { margin:8px 0 0; padding:0; list-style:none; display:grid; gap:4px;
+        font-size:12px; color:var(--muted, #625d57); }
+      .packages { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
+      .packages h3 { margin:0 0 4px; font-size:15px; }
+      .status-line { min-block-size:1.25rem; margin:10px 0 0; font-size:13px; color:var(--muted, #625d57); }
+      .status-line.error { color:var(--danger, #b3261e); }
+      @media (max-width:560px) { .tool-head { grid-template-columns:1fr; } .groups .count { margin-inline-start:0; } }
+    `, `
+      <p class="framing">This is a read-only diagnostic view of the tools the platform can see.
+        It cannot run, install, grant, update, or remove anything.</p>
+      <div class="catalog"></div>
+      <div class="packages">
+        <h3>Bundled tool packages</h3>
+        <p class="meta">No bundled Wasm packages are admitted in this build. If a future reviewed
+          package host lands, admitted bundles and their pins will be listed here.</p>
+      </div>
+      <p class="status-line" role="status" aria-live="polite" aria-atomic="true"></p>
+    `);
+    }
+
+    const host = this._root.querySelector(".catalog");
+    const statusLine = this._root.querySelector(".status-line");
+
+    // Live-region-once: the status line only changes when the STATE changes, so
+    // a polite announcement fires exactly once per transition, never on re-render.
+    const stateCopy = {
+      loading: "Loading tool diagnostics…",
+      ready: "Tool diagnostics loaded.",
+      error: `Tool diagnostics unavailable${this._error ? ` — ${this._error}` : "."}`,
+      unavailable: "Tool diagnostics need a newer background worker. Reload the extension.",
+    };
+    if (this._announcedState !== this._state) {
+      this._announcedState = this._state;
+      statusLine.textContent = stateCopy[this._state] ?? "";
+    }
+    statusLine.classList.toggle("error", this._state === "error");
+    host.replaceChildren();
+
+    if (this._state === "loading" || this._state === "unavailable" || this._state === "error") return;
+
+    const s = this._summary;
+    if (s) {
+      const total = document.createElement("p");
+      total.className = "meta";
+      const gen = typeof s.catalogGeneration === "string" && s.catalogGeneration
+        ? ` · catalog generation ${s.catalogGeneration.slice(0, 12)}` : "";
+      total.textContent = `${s.descriptorCount ?? 0} tools visible to diagnostics${gen}`;
+      host.append(total);
+
+      const groups = document.createElement("ul");
+      groups.className = "groups";
+      groups.setAttribute("role", "list");
+      groups.setAttribute("aria-label", "Tools by source");
+      for (const [kind, label] of Object.entries(TOOL_LIBRARY_SOURCE_LABELS)) {
+        const count = s.bySource?.[kind] ?? 0;
+        const li = document.createElement("li");
+        const name = document.createElement("span");
+        name.textContent = label;
+        const n = document.createElement("span");
+        n.className = "count";
+        n.textContent = String(count);
+        li.append(name, n);
+        groups.append(li);
+      }
+      host.append(groups);
+
+      const diag = s.catalogDiagnostics ?? {};
+      const sel = s.selectionDiagnostics ?? {};
+      const lines = [];
+      if ((diag.rejected ?? 0) > 0) lines.push(`${diag.rejected} descriptors rejected by validation (fail-closed).`);
+      if ((diag.collisions ?? 0) > 0) lines.push(`${diag.collisions} tool name${diag.collisions === 1 ? "" : "s"} claimed by more than one source — all excluded.`);
+      if ((diag.duplicateStableIds ?? 0) > 0) lines.push(`${diag.duplicateStableIds} duplicate identities ignored.`);
+      if ((diag.truncated ?? 0) > 0) lines.push("Inspection input was truncated at its bound; some sources may be under-counted.");
+      lines.push(`Active diagnostic selections: ${sel.activeSelections ?? 0} across ${sel.activeRuns ?? 0} runs.`);
+      lines.push(`Grants created: ${sel.grantsCreated ?? 0} · Executable routes created: ${sel.executableRoutesCreated ?? 0}.`);
+      const details = document.createElement("details");
+      details.className = "diag";
+      const summaryEl = document.createElement("summary");
+      summaryEl.textContent = "Diagnostics detail";
+      const ul = document.createElement("ul");
+      ul.setAttribute("role", "list");
+      for (const line of lines) {
+        const li = document.createElement("li");
+        li.textContent = line;
+        ul.append(li);
+      }
+      details.append(summaryEl, ul);
+      host.append(details);
+    }
+
+    // Bounded diagnostic rows — present only when a caller supplies results
+    // (gallery specimens in this slice; production wiring passes none yet).
+    const rows = Array.isArray(this._results) ? this._results.slice(0, 64) : [];
+    if (rows.length) {
+      const list = document.createElement("ul");
+      list.className = "rows";
+      list.setAttribute("role", "list");
+      list.setAttribute("aria-label", "Tool diagnostics results");
+      for (const row of rows) {
+        const item = document.createElement("li");
+        item.className = "tool";
+        const head = document.createElement("div");
+        head.className = "tool-head";
+        const title = document.createElement("h4");
+        title.textContent = String(row?.name ?? "(unnamed tool)");
+        const avail = String(row?.availability ?? "ready");
+        const chip = document.createElement("span");
+        chip.className = `chip avail-${avail}`;
+        chip.textContent = TOOL_LIBRARY_AVAILABILITY[avail] ?? avail;
+        head.append(title, chip);
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${TOOL_LIBRARY_SOURCE_LABELS[row?.sourceKind] ?? String(row?.sourceKind ?? "unknown source")} · version ${String(row?.version ?? "unknown")} · replay ${String(row?.trustedReplaySafety ?? "unknown")}`;
+        const digest = document.createElement("div");
+        digest.className = "digest";
+        const full = String(row?.digest ?? "");
+        digest.textContent = `digest ${full.slice(0, 12)}${full.length > 12 ? "…" : ""}`;
+        if (full) digest.title = full;
+        item.append(head, meta, digest);
+        const caps = Array.isArray(row?.capabilities) ? row.capabilities.slice(0, 24) : [];
+        if (caps.length) {
+          const chips = document.createElement("div");
+          chips.className = "chips";
+          for (const cap of caps) {
+            const c = document.createElement("span");
+            c.className = "chip";
+            c.textContent = String(cap);
+            chips.append(c);
+          }
+          item.append(chips);
+        }
+        list.append(item);
+      }
+      host.append(list);
+    }
+  }
+  // Deliberately NO _wire(): there is nothing to listen to — no events, no
+  // buttons, no actions. The native <details> disclosure works without script.
+}
+customElements.define("tool-library", ToolLibrary);
+
+/* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs
  * showcase both call this.
  * ────────────────────────────────────────────────────────────────────────── */

@@ -1,0 +1,121 @@
+// @ts-nocheck — source-contract tests intentionally read shipped source bytes.
+// CAP-FB-20260822-TOOL-LIBRARY-UI-01 (panel-1 slice): the <tool-library>
+// component is a READ-ONLY owner diagnostics surface. These tests pin the HARD
+// boundary — no events, no buttons, no action verbs, no network, no
+// permissions, no signer-verification claims — plus the Settings wiring
+// contract, the gallery specimens, and the layout/a11y rules. No Chrome.
+import { assert, assertEquals, assertMatch, assertNotMatch } from "jsr:@std/assert@1";
+
+async function text(path: string) {
+  return await Deno.readTextFile(new URL(path, import.meta.url));
+}
+
+// The exact component block (from its banner comment to its define call).
+async function componentSource() {
+  const source = await text("../extension/shared/components.js");
+  const start = source.indexOf("<tool-library> — READ-ONLY owner diagnostics");
+  const end = source.indexOf('customElements.define("tool-library"');
+  assert(start > 0 && end > start, "the tool-library component block must exist");
+  return source.slice(start, end);
+}
+
+Deno.test("tool-library: registered component with zero events and zero controls", async () => {
+  const block = await componentSource();
+  assertNotMatch(block, /_emit\s*\(/, "the component emits no events");
+  assertNotMatch(block, /addEventListener/, "the component installs no listeners");
+  assertNotMatch(block, /<button|createElement\("button"/, "the component renders no buttons");
+  assertNotMatch(block, /\bfetch\s*\(|XMLHttpRequest|new WebSocket|sendMessage/, "the component performs no network/message calls itself");
+  assertNotMatch(block, /chrome\.permissions/, "the component touches no permissions");
+  // No action verbs as affordances anywhere in the component's own markup/copy.
+  assertNotMatch(block, />(?:\s*)(Install|Update|Revoke|Grant|Execute|Run|Verify|Copy|Download|Remove|Enable|Disable)</, "no action controls in markup");
+});
+
+Deno.test("tool-library: truthful framing + no verification claim can exist", async () => {
+  const block = await componentSource();
+  assertMatch(block, /read-only diagnostic view/i, "the anti-overclaim framing line is present");
+  assertMatch(block, /cannot run, install, grant, update, or remove/i, "the framing names the absent actions");
+  // There is no signature-verification path in this build, so no USER-VISIBLE
+  // copy may carry a verification claim. (The authority's field NAME
+  // `trustedReplaySafety` is API vocabulary in code, not a rendered claim —
+  // scope the check to rendered copy: the template + textContent literals.)
+  const renderedCopy = [
+    ...block.matchAll(/textContent = `([^`]*)`/g),
+    ...block.matchAll(/textContent = "([^"]*)"/g),
+    ...block.matchAll(/>([^<>{}]{6,})</g),
+  ].map((m) => m[1]).join("\n");
+  assertNotMatch(renderedCopy, /\bverified\b|\btrusted\b/i, "no 'verified'/'trusted' claim in rendered copy");
+  assertMatch(block, /No bundled Wasm packages are admitted in this build\./, "panel 2 is the static truthful no-package line");
+  assertNotMatch(block, /wasm-package-authority|registry\.read/, "panel 2 imports/uses NO registry route or authority lib");
+});
+
+Deno.test("tool-library: state machine + live-region-once + diagnostics vocabulary", async () => {
+  const block = await componentSource();
+  for (const state of ["loading", "ready", "error", "unavailable"]) {
+    assert(block.includes(`"${state}"`), `state ${state} handled`);
+  }
+  assertMatch(block, /role=\\?"status\\?"[^>]*aria-live=\\?"polite\\?"[^>]*aria-atomic=\\?"true\\?"/, "one polite atomic status region");
+  assert(block.includes("_announcedState"), "live-region-once guard present (announce per transition, not per render)");
+  assertMatch(block, /Mount ONCE/, "mount-once: the live region must be a stable node (re-render rebuilds only .catalog)");
+  assertMatch(block, /host\.replaceChildren\(\)/, "re-renders clear only the catalog container, never the status line");
+  // The authority's diagnostics vocabulary made legible.
+  assertMatch(block, /claimed by more than one source — all excluded/, "collision exclusion line");
+  assertMatch(block, /rejected by validation \(fail-closed\)/, "fail-closed rejection line");
+  assertMatch(block, /Grants created: /, "selection diagnostics rendered verbatim (grants stay 0)");
+  assertMatch(block, /groups\.className = "groups"/, "source groups receive the class consumed by layout and browser census");
+  // Availability chips cover the authority's full vocabulary.
+  for (const avail of ["ready", "owner-action-required", "stale", "disabled"]) {
+    assert(block.includes(avail), `availability ${avail} covered`);
+  }
+  // Digests truncate with the full value only in title (no copy control).
+  assertMatch(block, /slice\(0, 12\)/, "digest truncation present");
+  assertMatch(block, /digest\.title = full/, "full digest only via title");
+});
+
+Deno.test("tool-library: responsive/RTL/theme rules are logical-property only", async () => {
+  const block = await componentSource();
+  assertNotMatch(block, /(?:^|[\s{;])(?:margin-left|margin-right|padding-left|padding-right|border-left|border-right)\s*:/, "no physical inline properties (RTL-safe by construction)");
+  assertMatch(block, /@media \(max-width:560px\)/, "narrow reflow breakpoint present");
+  assertMatch(block, /min-inline-size:0|min-inline-size: 0/, "shrink-safe rows");
+  assertMatch(block, /overflow-wrap:anywhere/, "unbreakable digest/meta strings wrap");
+  assertMatch(block, /var\(--accent|var\(--border/, "design tokens consumed");
+});
+
+Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow summary", async () => {
+  const html = await text("../extension/options/options.html");
+  const nav = html.indexOf('data-section="tool-library"');
+  const localModels = html.indexOf('data-section="local-models"');
+  assert(localModels > 0 && nav > localModels && nav < html.indexOf('data-section="agents"'), "nav item sits between Local models and Agents");
+  const section = html.slice(html.indexOf('id="tool-library"'), html.indexOf('id="tool-library"') + 700);
+  assertNotMatch(section, /<button/, "the section markup contains no buttons");
+  assertMatch(section, /Read-only diagnostics/, "the section carries the truthful intro");
+  assertMatch(section, /id="tool-library-view"/, "the component has its own distinct id (no duplicate-id ambiguity)");
+  assertEquals([...html.matchAll(/id="tool-library"/g)].length, 1, "exactly one #tool-library id (the section)");
+
+  const js = await text("../extension/options/options.js");
+  assertMatch(js, /renderToolLibrary/, "the wiring exists");
+  assertMatch(js, /type:\s*"tool-catalog\.shadow"[\s\S]{0,80}action:\s*"summary"/, "the wiring requests ONLY the summary action");
+  assertNotMatch(js, /action:\s*"search"|action:\s*"capture"|action:\s*"resolve"/, "no search/capture/resolve in this slice");
+  const fnStart = js.indexOf("async function renderToolLibrary");
+  const fnEnd = js.indexOf("async function renderLocalModels");
+  const fn = js.slice(fnStart, fnEnd);
+  assertNotMatch(fn, /addEventListener/, "the wiring installs no listeners");
+  assertMatch(fn, /unavailable/, "older-worker unavailable state handled");
+});
+
+Deno.test("tool-library: gallery specimens exercise every state without a backend", async () => {
+  const gallery = await text("../docs/components.html");
+  for (const id of ["tl-ready", "tl-rows", "tl-loading", "tl-error", "tl-unavailable", "tl-empty"]) {
+    assert(gallery.includes(`id="${id}"`), `specimen ${id} present`);
+  }
+  const specimen = gallery.slice(gallery.indexOf('id="tool-library-specimen"'), gallery.indexOf('id="tool-library-specimen"') + 900);
+  assertNotMatch(specimen, /<button/, "the specimen markup contains no buttons");
+  // The fixture data covers the diagnostics vocabulary.
+  assert(gallery.includes("collisions: 2"), "collision-exclusion fixture");
+  assert(gallery.includes("grantsCreated: 0"), "zero-grants truth fixture");
+  assert(gallery.includes('"owner-action-required"') && gallery.includes('"stale"'), "availability fixtures");
+});
+
+Deno.test("tool-library: the component registers with the design system", async () => {
+  const source = await text("../extension/shared/components.js");
+  assertMatch(source, /customElements\.define\("tool-library", ToolLibrary\)/, "registered");
+});

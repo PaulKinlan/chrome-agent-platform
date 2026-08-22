@@ -637,8 +637,9 @@ export function truncateUtf8(text, maxBytes) {
  * sender is rejected even if it claims the extension URL.
  */
 const OPTIONS_PRODUCT_HASHES = new Set([
-  "#providers", "#agents", "#background", "#appearance", "#browser",
-  "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data",
+  "#providers", "#local-models", "#tool-library", "#agents", "#background",
+  "#appearance", "#browser", "#permissions", "#approvals", "#hooks",
+  "#prompts", "#usage", "#data", "#about",
 ]);
 
 export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {

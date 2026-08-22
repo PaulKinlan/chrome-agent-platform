@@ -176,7 +176,7 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
   assert(isExactOptionsSender(exact, id, url));
   assert(isExactOptionsSender({ id, url, documentId: "doc-2" }, id, url), "Chrome extension-page senders omit origin/frame/lifecycle metadata");
-  for (const hash of ["#providers", "#agents", "#background", "#appearance", "#browser", "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data"]) {
+  for (const hash of ["#providers", "#local-models", "#tool-library", "#agents", "#background", "#appearance", "#browser", "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data", "#about"]) {
     assert(isExactOptionsSender({ ...exact, url: url + hash }, id, url), `the exact Settings document owns ${hash}`);
   }
   assert(!isExactOptionsSender({ ...exact, url: url + "#foreign" }, id, url), "unknown fragments remain outside the owner surface");
@@ -190,6 +190,18 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   assert(isExactOptionsSender({ ...exact, frameId: 2, tab: { id: 1, url: ntp } }, id, url), "the exact private Settings document is trusted in the shipped NTP iframe");
   assert(!isExactOptionsSender({ ...exact, documentLifecycle: "prerender" }, id, url));
   assert(!isExactOptionsSender({ ...exact, documentId: "" }, id, url));
+});
+
+Deno.test("every shipped Settings navigation hash remains inside exact owner authority", () => {
+  const id = "abcdefghijklmnopabcdefghijklmnop";
+  const url = `chrome-extension://${id}/options/options.html`;
+  const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
+  const html = Deno.readTextFileSync(new URL("../extension/options/options.html", import.meta.url));
+  const hashes = [...html.matchAll(/<a\s+href="(#[^"]+)"\s+class="nav-item"/g)].map((match) => match[1]);
+  assertEquals(hashes.length, 14, "the complete Settings navigation is covered by this authority drift test");
+  for (const hash of hashes) {
+    assert(isExactOptionsSender({ ...exact, url: url + hash }, id, url), `Settings navigation hash ${hash} must retain owner authority`);
+  }
 });
 
 Deno.test("diagnostic redaction is Unicode-normalized, byte-bounded, and invokes zero hostile traps", () => {

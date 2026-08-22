@@ -5,15 +5,15 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 16:03 UTC. Reconciled against exact public
-> `origin/main@8be457e716cfa50e9ef024fa5317b72b2859dcdc` (`0.2.154`). Lazy,
-> package freshness and security-suite serialization remain `DONE`; the catalog
-> remains `MERGED`; OPFS, bundled-package, public code-diff and Chrome-capability
-> records remain `IN_REVIEW` with Shipping `—`. Gate 0's exploratory MV3 probe
-> independently passed; this branch adds only the unreachable pure WASI host
-> contract over injected memory/workspace adapters, with no product integration.
-> Branch status counts: **14 OPEN · 12 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived terminal entries
+> Snapshot: 2026-08-22 16:50 UTC. Reconciled against exact public
+> `origin/main@462d21d8da9bee640c2c12088dcafba6123e00fc` (`0.2.155`). Lazy,
+> package freshness, security-suite serialization and pure WASI Gate 1 are
+> `DONE`; the catalog remains `MERGED`; OPFS, bundled-package, public code-diff
+> and Chrome-capability records remain `IN_REVIEW` with Shipping `—`. This
+> branch adds only the read-only Tool Library panel-one `0.2.156` candidate;
+> no tool execution, package admission or provider authority is added.
+> Branch status counts: **13 OPEN · 12 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 37 DONE · 0 ABANDONED**. The 31 active entries and 37 archived terminal entries
 > below are the complete 68-entry state.
 
 ## Safety boundary
@@ -715,16 +715,16 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — reviewed packages require a least-privilege host with
   hard termination, quotas and Durable replay integration
-- Updated: 2026-08-22 16:03 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-22 16:50 UTC
+- Status: DONE
 - Resume: —
 - Priority: P0
-- Owner: pure WASI host Gate 1 owner
-- Workspace: active (local path private)
-- Branch: `feat/wasm-execution-host-8be457e`
+- Owner: integrated on public main
+- Workspace: none
+- Branch: `origin/main`
 - Base: `8be457e716cfa50e9ef024fa5317b72b2859dcdc`
-- Candidate: this tracker commit
-- Shipping: —
+- Candidate: `462d21d8da9bee640c2c12088dcafba6123e00fc`
+- Shipping: `origin/main@462d21d8da9bee640c2c12088dcafba6123e00fc`
 - Acceptance: exactly two unreachable source libraries define frozen strict WASI
   errno/flag/right/filetype/path-class/hard-limit/default-quota records and
   job/context/quota/FD constructors, then expose a synchronous
@@ -746,7 +746,8 @@ On resume after a coordinator or worker loss:
   independently PASSed review SHA-256
   `85c436846542c2c483beb771c5ae632132ad6984fd6679eede423c7413b53bfd`;
   reviewer additions `fd_tell` and `CLOCK_REALTIME` id 0 → `ENOTSUP` included;
-  exact Gate 1 implementation review pending
+  exact Gate 1 implementation independently PASSed at `462d21d8`, review
+  SHA-256 `97df51dd194ff02496740cbfbfca92243f76b586857decaebe3243ae4ac7845e`
 - Gates: Gate 0 authorized probe retry independently PASSed 10/10, review SHA-256
   `7b0524498e7e4556018a79b256ca8ab25147d47a6294afa0f58c6b392b5bd895`;
   reported pure host 16/16 and composed host/package/OPFS 43/43; canonical
@@ -757,22 +758,22 @@ On resume after a coordinator or worker loss:
   UTF-8/NUL/traversal/rights; fd3 preopen; partial IO/seek/tell/stat/close/reuse;
   random cap/mock; monotonic/realtime clocks; quota/cancel/cleanup; source scan
   proving no product import, route, Worker, OPFS, network or instantiation
-- Blockers: source candidate requires independent security review; Gate 2
-  offscreen/fresh-Worker/session fencing/termination and all product routes remain
-  separate; package and OPFS exact reviews, provenance-clean binaries and the
-  Apache-2.0-root versus MIT-metadata licence blocker remain; no reconstructed
-  tool is admitted or executable
-- Next: commit one `0.2.155` pure-source release for exact review, then leave all
-  offscreen/Worker/route/package-byte/instantiation and browser evidence to a
-  separately authorized Gate 2 successor
+- Blockers: none for the landed pure Gate 1 source contract. Gate 2 offscreen/
+  fresh-Worker/session fencing/termination, package bytes, routes and browser
+  evidence remain a separate task; no reconstructed tool is admitted/executable
+- Next: preserve this unreachable reviewed contract while Gate 2 proceeds as a
+  separately reviewed and browser-gated successor with no provider cutover
 - Recover:
-  `git show feat/wasm-execution-host-8be457e -- extension/lib/wasm-host-types.js extension/lib/wasi-preview1-runtime.js tests/wasi-preview1-runtime.test.ts docs/tool-platform-architecture.md TASKS.md`
+  `git show 462d21d8da9bee640c2c12088dcafba6123e00fc -- extension/lib/wasm-host-types.js extension/lib/wasi-preview1-runtime.js tests/wasi-preview1-runtime.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — opened with fresh-Worker-only and unknown-replay
     defaults; Co-do's main-thread fallback is explicitly not adopted.
   - 2026-08-22 16:03 UTC — independently reviewed Gate 0 probe passed all 10
     checks; began only the design-PASSed pure Gate 1 source slice on exact public
     `8be457e`, with every product integration and execution primitive absent.
+  - 2026-08-22 16:50 UTC — exact `462d21d8` landed as public `0.2.155` after
+    different-model PASS, 16/16 focused, 43/43 composed, 1029/1029 full,
+    build/package/load proof; the pure modules remain unreachable and Gate 2 is separate.
 
 ## [CAP-FB-20260822-BUILTIN-WASM-TOOLS-01] Provenance-clean bundled Wasm tool tranche
 
@@ -944,15 +945,15 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-22 — owners need one truthful place to inspect tools,
   packages, versions, capabilities, grants, quotas, selection diagnostics and
   revocation
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 19:02 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: K3 implementation; coordinator integration; independent Pro review
+- Workspace: active (local path private)
+- Branch: `integrate/tool-library-panel1-462d21d`
+- Base: `462d21d8da9bee640c2c12088dcafba6123e00fc`
+- Candidate: this commit (panel-one read-only source)
 - Shipping: —
 - Acceptance: reusable Web Components present
   source/package/tool/version/digest/signer/licence/SBOM/capabilities/quota/replay/availability;
@@ -969,13 +970,25 @@ On resume after a coordinator or worker loss:
   no secret/query leakage; screenshots before/after
 - Blockers: depends on catalog and package authority; install controls depend on
   distribution-policy lane
-- Next: design metadata/read-only diagnostics components first; do not expose
-  install/grant controls before their authorities exist
+- Next: independently review the corrected unique-ID/stable-live-region patch
+  and frozen 14-journey harness, then run exactly one serialized loaded-MV3
+  360/500/RTL/theme/keyboard/AX matrix; do not expose install/grant controls
 - Recover:
   `git grep -n "TOOL-LIBRARY-UI\|tool-catalog.shadow\|capabilityDigest" -- TASKS.md docs extension/shared extension/options tests`
 - History:
   - 2026-08-22 09:30 UTC — opened as an owner surface; the catalog slice
     intentionally adds no UI or new permission gesture.
+  - 2026-08-22 16:34 UTC — corrected panel one adds only a Settings read-only
+    summary/no-package surface. Harness preparation caught and fixed duplicate
+    section/component ids and a remounted live region; no package rows, actions,
+    grant/install/run route or provider authority exists. Browser matrix pending.
+  - 2026-08-22 19:02 UTC — the first loaded-MV3 run was a harness FAIL with
+    the product result indeterminate because failure capture did not bind the
+    destination document. Subsequent source review found the new deep-link hash
+    absent from exact Settings sender authority, which was independently
+    sufficient to deny the route if that destination executed. The successor
+    registers every shipped Settings navigation hash and adds a drift test;
+    browser evidence remains pending a fresh reviewed harness run.
 
 ## [CAP-FB-20260822-OWNER-WASM-INSTALL-01] Owner-selected Wasm package lifecycle
 

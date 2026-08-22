@@ -327,6 +327,19 @@
         <p class="caption">The SAME catalogue component Settings uses. The specimen shows exact installed payloads, hardware/Memory64/OPFS warnings, a disabled Download gate, and the explicit no-auto-eviction policy. Runtime and full OPFS installation remain unimplemented.</p>
       </div>
 
+      <div class="specimen" id="tool-library-specimen">
+        <h3 class="spec"><code class="tag">&lt;tool-library&gt;</code> — READ-ONLY tool catalog diagnostics (panel-1 slice)</h3>
+        <div class="stage column" style="max-width:720px">
+          <tool-library id="tl-ready"></tool-library>
+          <tool-library id="tl-rows"></tool-library>
+          <tool-library id="tl-loading"></tool-library>
+          <tool-library id="tl-error"></tool-library>
+          <tool-library id="tl-unavailable"></tool-library>
+          <tool-library id="tl-empty"></tool-library>
+        </div>
+        <p class="caption">The Settings Tool library component. HARD BOUNDARY: no events, no buttons, no actions (no install/update/revoke/grant/execute/verify/copy) — the only interactivity is the native <code>&lt;details&gt;</code> disclosure. States: ready (summary + diagnostics detail incl. fail-closed rejections and collision exclusions), bounded rows (availability chips: ready/stale/owner-action-required/disabled), loading, error, unavailable, empty. Panel 2 is the static truthful "No bundled Wasm packages are admitted in this build." One polite live region announces each state transition once. Digest values truncate with the full hex in <code>title</code> (no copy control in this slice).</p>
+      </div>
+
       <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;activity-explorer&gt;</code> — the browsable/searchable activity log</h3>
         <div class="stage column" style="max-width:680px">
@@ -480,6 +493,46 @@
         memory64: false,
         opfs: false,
       });
+
+      // <tool-library> specimens — fixture-driven READ-ONLY states (no backend,
+      // no network; the real surface calls the Settings-principal shadow route).
+      const tlSummary = {
+        ok: true,
+        mode: "shadow-metadata-only",
+        catalogGeneration: "gen-7f3a9c1e4b2d",
+        descriptorCount: 213,
+        bySource: {
+          "extension-builtin": 39,
+          "chrome-api": 24,
+          "management": 18,
+          "webmcp-declared": 97,
+          "webmcp-inferred": 35,
+        },
+        catalogDiagnostics: { input: 216, accepted: 213, rejected: 1, collisions: 2, duplicateStableIds: 0, truncated: 0, errors: {} },
+        selectionDiagnostics: { activeSelections: 3, activeRuns: 2, grantsCreated: 0, executableRoutesCreated: 0 },
+        canExecute: false,
+        canGrant: false,
+      };
+      const tlReady = document.getElementById("tl-ready");
+      tlReady.summary = tlSummary;
+      tlReady.state = "ready";
+      const tlRows = document.getElementById("tl-rows");
+      tlRows.summary = { ...tlSummary, catalogDiagnostics: { input: 4, accepted: 4, rejected: 0, collisions: 0, duplicateStableIds: 0, truncated: 0, errors: {} } };
+      tlRows.results = [
+        { stableId: "tool:v1:a", name: "memory_set", sourceKind: "extension-builtin", version: "1.4.0", digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", capabilityDigest: "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c", capabilities: ["memory.write"], scope: "origin", sourceGeneration: "g1", availability: "ready", trustedReplaySafety: "idempotent", dispatcherKind: "builtin" },
+        { stableId: "tool:v1:b", name: "page_report", sourceKind: "webmcp-declared", version: "0.3.2", digest: "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d", capabilityDigest: "c1f5f8b0f8ddc1a9e1a2f2b9a0a7d3c4e5f60718293a4b5c6d7e8f9a0b1c2d3e", capabilities: ["page.read"], scope: "origin:https://example.com", sourceGeneration: "g2", availability: "stale", trustedReplaySafety: "unknown", dispatcherKind: "webmcp" },
+        { stableId: "tool:v1:c", name: "enroll_site", sourceKind: "management", version: "2.0.0", digest: "2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3", capabilityDigest: "d2d2f7a2b8c1e3f40516273849a0b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c", capabilities: ["origin.enroll"], scope: "owner", sourceGeneration: "g1", availability: "owner-action-required", trustedReplaySafety: "mutating", dispatcherKind: "management" },
+        { stableId: "tool:v1:d", name: "legacy_capture", sourceKind: "chrome-api", version: "0.9.1", digest: "6dcd4ce23d88e2ee9568ba546c007c63d9131c1b1954e67b39e4f0b1f3b7b2f1a0", capabilityDigest: "e3e3a7b2c1d0f9e8d7c6b5a4938271605f4e3d2c1b0a99887766554433221100ff", capabilities: [], scope: "activeTab", sourceGeneration: "g0", availability: "disabled", trustedReplaySafety: "read-only", dispatcherKind: "browser" },
+      ];
+      tlRows.state = "ready";
+      document.getElementById("tl-loading").state = "loading";
+      const tlError = document.getElementById("tl-error");
+      tlError.error = "catalog inspection timed out at its bound";
+      tlError.state = "error";
+      document.getElementById("tl-unavailable").state = "unavailable";
+      const tlEmpty = document.getElementById("tl-empty");
+      tlEmpty.summary = { ...tlSummary, descriptorCount: 0, bySource: {}, catalogDiagnostics: { input: 0, accepted: 0, rejected: 0, collisions: 0, duplicateStableIds: 0, truncated: 0, errors: {} }, selectionDiagnostics: { activeSelections: 0, activeRuns: 0, grantsCreated: 0, executableRoutesCreated: 0 } };
+      tlEmpty.state = "ready";
 
       // <activity-explorer> example — seed demo entries (the gallery has no
       // extension backend; the real component queries activity.list).
