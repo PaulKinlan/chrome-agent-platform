@@ -492,7 +492,17 @@ export function createAgent({
         try { progressCb?.({ type: "text", text: e.text, step: e.step, hasToolCalls: e.hasToolCalls }); } catch { /* ignore */ }
       },
       onPreToolUse: async (e) => {
-        try { progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step }); } catch { /* ignore */ }
+        // The pre-tool progress callback is AWAITED: the SW persists the atomic
+        // pre-tool authority BEFORE any external effect runs. A durable
+        // refusal propagates so the tool execution is REFUSED (the run never
+        // mutates before its authority is durable); ordinary broadcast errors
+        // remain non-fatal.
+        try {
+          await progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step });
+        } catch (error) {
+          if (error?.durableRefusal === true) throw error;
+          /* ignore ordinary broadcast failures */
+        }
       },
       onPostToolUse: async (e) => {
         try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result), ok: !isToolResultFailure(e.result) }); } catch { /* ignore */ }

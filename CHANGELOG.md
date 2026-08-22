@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.140] — 2026-08-22
+- feat(durable): publish replay-safety candidate for hands-on testing (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
+
 ## [0.2.139] — 2026-08-22
 - chore: remove unreferenced root mocks (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
 

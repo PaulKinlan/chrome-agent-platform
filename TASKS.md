@@ -5,10 +5,10 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 07:58 UTC. Reconciled against exact public
-> `origin/main@b71e7a58f506f06a6fdb8bfaae2e10253f5be2d9` (`0.2.138`).
-> Current status counts: **11 OPEN · 5 IN_REVIEW · 3 BLOCKED · 33 DONE ·
-> 0 ABANDONED**. The 19 active entries and 33 archived terminal entries below
+> Snapshot: 2026-08-22 08:30 UTC. Reconciled against exact public
+> `origin/main@7b254e43c38569667045363405b3243e9951f926` (`0.2.139`).
+> Current status counts: **10 OPEN · 5 IN_REVIEW · 1 MERGED · 3 BLOCKED ·
+> 33 DONE · 0 ABANDONED**. The 19 active entries and 33 archived terminal entries below
 > are the complete 52-entry tracker state at this snapshot.
 
 ## Safety boundary
@@ -244,23 +244,24 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01] Durable replay safety for mutating tools
 - Feedback: 2026-08-20 — automatic interruption recovery must never pretend universal exactly-once behavior for external side effects
-- Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 08:30 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: —
-- Branch: —
-- Base: `5721e9a9e86fe32e11dcbb927836488d2caf2463`
-- Candidate: —
-- Shipping: —
+- Owner: hands-on integration coordinator
+- Workspace: active (local path private)
+- Branch: `origin/main`
+- Base: `7b254e43c38569667045363405b3243e9951f926`
+- Candidate: this integration commit
+- Shipping: `origin/main@this integration commit`
 - Acceptance: every tool declares replay safety; read-only/idempotent work may automatically resume with the stable execution idempotency key; mutating or unknown work interrupted after progress becomes `paused-side-effect-uncertain` and requires explicit owner Retry or Cancel; no UI or documentation claims universal exactly-once external effects
-- Review: pending architecture and security review
-- Gates: loaded-MV3 synthetic side-effect counter proves no blind replay after uncertain completion, explicit owner retry is the only repeat, cancellation wins, and retained logs preserve both attempts
-- Blockers: the current tool metadata does not provide a universal reliable mutating/idempotent classifier; the implementation must use the settled interruption/permissions policy (see the History)
-- Next: define reviewed replay-safety metadata at the tool registry/dispatch boundary and consume the durable execution idempotency key where product tools support it — fail-closed: unknown/missing/mutating after progress pauses as paused-side-effect-uncertain and requires the owner Retry/Cancel; only explicitly read-only/idempotent tools auto-resume with the stable execution idempotency key
-- Recover: `git show 5721e9a:TASKS.md && git grep -n "paused-side-effect-uncertain\|idempotencyKey" overnight/durable-policy-successor -- extension tests`
+- Review: two independent reviews BLOCKed exact source `f3d5516` on direct-delegation pre-tool authority, per-call key stability/effect-boundary propagation, complete metadata and production evidence; product owner explicitly requested this committed candidate on main for hands-on testing and will judge whether the findings impact use
+- Gates: source candidate reported 888/888 units, security/build/changelog/diff PASS; no exact-candidate loaded-MV3 side-effect-counter journey; product owner hands-on validation pending
+- Blockers: known review caveats are retained rather than hidden: direct `agent.delegate` pre-tool persistence and byte-identical per-call identity across replay are not established, and the synthetic duplicate-effect/parallel-reorder journey is absent
+- Next: product owner tests the integrated candidate hands-on; revisit the known review findings only if they impact use
+- Recover: `git show origin/main -- extension/lib/tool-replay-safety.js extension/lib/durable-runs.js extension/lib/agent.js extension/background/service-worker.js`
 - History:
+  - 2026-08-22 08:30 UTC — product owner explicitly requested the committed `f3d5516` candidate on main for hands-on testing despite the disclosed independent BLOCK findings; recomposed the product/test/doc delta onto current public `7b254e4` as one integration/release commit while preserving the caveats and deferring further patching.
   - Git reconcile at 2026-08-22 07:50 UTC: the durable interruption/permissions policy is settled per the recorded project history — UI/browser restart resumes; recoverable permission problems pause visibly and resume after resolution; explicit cancellation is terminal; grants are remembered at the narrowest practical scope with no per-invocation prompts and an explicit broad host grant allowed and revocable.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-20 08:40 UTC — opened from independent source review; the policy successor now fails safe after any observed tool progress and exposes explicit owner Retry/Cancel, while reliable per-tool classification remains a separate OPEN architecture task.

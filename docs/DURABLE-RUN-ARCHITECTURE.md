@@ -170,7 +170,8 @@ projection**, not universal exactly-once execution.
 | `running` | Current boot owns execution; heartbeat and progress revisions may advance. | Settle, pause, cancel, or classify after worker loss. |
 | `settling` | Terminal outbox exists or is being projected. | Startup finishes the outbox before interruption classification. |
 | `paused-interruption` | A prior boot ended before durable tool progress. | Startup may prepare an automatic same-ID resume. |
-| `paused-side-effect-uncertain` | The worker ended after `progressCount > 0`. An external effect may have completed. | No blind replay; owner must confirm Retry or Cancel. |
+| `paused-side-effect-uncertain` | The worker ended after a MUTATING/unknown tool progressed (the per-tool replay-safety declaration — CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01). An external effect may have completed. | No blind replay; owner must confirm Retry or Cancel. |
+| `paused-interruption` (auto-resumable) | The worker ended after ONLY explicitly read-only/idempotent tool progress (or before any tool). | Startup may prepare an automatic same-ID resume with the stable execution idempotency key. |
 | `paused-permission` | The exact retained provider scope is missing. | Permission addition can trigger automatic resume. |
 | `paused-provider-change` | Current provider identity differs from the retained binding. | Owner confirmation is required before rebinding and resume. |
 | `resume-dispatching` | A bounded, tokenized resume claim is being handed to a dispatch route. | Activate only with the matching token; failure returns to the prior pause or terminalizes at the limit. |
@@ -358,3 +359,33 @@ local task-view successor makes the clean-archive production build materialize
 and verify the ignored generated package copy; that correction still requires
 its own loaded-MV3 review and does not rewrite this evidence. The independent
 verdict is `PASS_FOR_INTEGRATION`, scoped to this exact Durable source and evidence.
+
+## Tool replay safety (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
+
+The interruption classifier is driven by the per-tool replay-safety declaration in
+`extension/lib/tool-replay-safety.js`, never by the progress count alone:
+
+- **read-only** tools (the explicit browser/memory/registry read sets) observe
+  only — safe to re-run automatically.
+- **idempotent** tools (key-bound writes such as `memory_set`) may re-run with the
+  STABLE per-tool-call idempotency key (`executionId:toolName:index` — the index
+  lives in the durable record's per-tool counter, byte-identical across resume).
+- **mutating / unknown** tools fail closed: an interruption after such progress
+  pauses as `paused-side-effect-uncertain` and requires the owner's explicit
+  Retry or Cancel. The canonical enum is `{read-only, idempotent, mutating,
+  unknown}` with the unknown default for anything undeclared (page/WebMCP tools);
+  hostile inputs (a throwing String, a getter/Proxy, a non-enum value) normalize
+  to unknown and the worst-merge can never let an invalid value retain a
+  read-only/idempotent classification.
+
+There is NO claim of universal exactly-once external effects: read-only/idempotent
+work auto-resumes, and everything else stops for an owner decision.
+
+The pre-tool authority is ATOMIC and fail-closed: before ANY tool executes, the
+`preToolUse` record (call identity + the normalized safety + the stable per-tool
+call index) is persisted in ONE locked write; the SW AWAITS it and REFUSES the
+tool execution if the persistence fails — a possibly-effectful tool never runs
+before its authority is durable, so the quota rollback never deletes a
+possibly-effectful execution. The durable run registry/journal authority, the
+task-scoping fences, the Gemini tool normalization, and the permission
+boundaries are unchanged.
