@@ -36,6 +36,11 @@ isolated OPFS memory, run history, skills, and avatar.
   (on a schedule/hook) in a sandboxed worker, without re-invoking the model.
 - **System hooks** — the full `chrome.*` `on*` event surface as candidate hooks, with
   an owner-only authoritative deny-list.
+- **Shadow tool catalog** — Settings-only metadata diagnostics derive bounded stable
+  descriptors from the real built-in, browser, management, and WebMCP sources, with
+  deterministic lexical search and expiring non-authorizing selection references.
+  This does not yet change provider binding or execute Wasm; see
+  [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.
 
@@ -81,6 +86,7 @@ extension/
   content/                      the WebMCP bridge + window.* tool inference (MAIN + isolated)
   shared/                       the single-source Web Components (the design system)
   lib/                          provider, memory, named-agents, skills, hooks, artifacts,
+                                tool-catalog/search/selection shadow authorities,
                                 script-host, management-tools, scheduler, system-prompts, ...
 ```
 

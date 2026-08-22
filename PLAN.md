@@ -35,6 +35,18 @@ longer requires a per-task owner interaction. Independent review by a different
 model/session and real-browser verification are retained unchanged; the gate-evidence and
 attestation machinery is removed. See `AGENTS.md` for the normative rules.
 
+## P0 tool operating platform (Paul, 2026-08-22)
+
+Paul elevated the Co-do-style browser-native Wasm/tool operating layer to P0. The public architecture is [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md), based on source inspection of [PaulKinlan/Co-do](https://github.com/PaulKinlan/Co-do) at exact `d3ebdbd5066f16a2bb8a2b8cb8af4b57c8ae324a` (39 factual built-ins across nine functional categories; no code or binaries copied).
+
+The first owner-decision-free slice, `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01`, is in review: bounded canonical descriptors, stable source/package/tool/version/digest/capability/scope/generation identity, real adapters for current built-in/browser/management/declared+inferred WebMCP sources, an in-memory deterministic exact/alias/lexical index, and expiring non-authorizing selection references. The only runtime exposure is a Settings-only shadow diagnostic route. Existing eager provider binding and every source dispatcher/permission/grant remain unchanged.
+
+Next in dependency order: lazy protocol/provider capture; loaded-MV3 runtime probe; package authority and per-job OPFS workspaces; fresh-Worker execution host; provenance-clean bundled tools; diff artifacts; Chrome lazy tools; Tool Library; owner install only after distribution-policy resolution; spreadsheet tools; continuous abuse gates. The existing semantic-search task remains the sole semantic authority and is P0; embeddings/SQLite are not selected by the lexical slice.
+
+Store and owner-package lanes remain separate. Store builds execute bundled reviewed Wasm only until written Chrome Web Store remotely hosted code guidance says otherwise. Unpacked/enterprise/developer owner-selected packages remain a separate lane. Co-do's Apache-2.0 root versus MIT package/manifest metadata is unresolved provenance, not permission to copy binaries.
+
+The existing `npm run test:security` launches real Chromium without self-serializing. `CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01` is a separate P0 safety task for lock capability, owned PGID, hard timeout, fresh profile, durable evidence and guarded cleanup; historical unsynchronized runs are noncanonical observations rather than product failures.
+
 ## Status (2026-08-17)
 - [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
 - [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)

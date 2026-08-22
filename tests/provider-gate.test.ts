@@ -556,6 +556,7 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
     runtime: {
       id: "test-extension-id",
       getURL: (p) => `chrome-extension://test-extension-id/${p}`,
+      getManifest: () => ({ version: "0.2.144" }),
       onMessage: { addListener: (fn) => listeners.push(fn) },
       onConnect: noop, onInstalled: noop,
       sendMessage: async () => {},
@@ -599,6 +600,22 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   assert(ntpRemove?.ok === false && /secret-controlled/.test(String(ntpRemove?.error)), "kv.remove secret namespaces DENIED from NTP");
   // Seed via the OWNER-PRINCIPAL dispatcher path (the attested Options shape):
   const ownerSender = { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html", documentId: "doc-options-1", documentLifecycle: "active" };
+  const shadowNtp = await dispatch(
+    { type: "tool-catalog.shadow", action: "summary" },
+    { url: "chrome-extension://test-extension-id/ntp/ntp.html" },
+  );
+  assert(
+    shadowNtp?.ok === false && /Settings surface/.test(String(shadowNtp?.error)),
+    "shadow catalog diagnostics refused from NTP",
+  );
+  const shadowOwner = await dispatch(
+    { type: "tool-catalog.shadow", action: "summary" },
+    ownerSender,
+  );
+  assertEquals(shadowOwner?.ok, true, "owner Settings can inspect shadow metadata");
+  assertEquals(shadowOwner?.canExecute, false);
+  assertEquals(shadowOwner?.canGrant, false);
+  assert(Number(shadowOwner?.descriptorCount) > 0, "actual built-in adapters produced descriptors");
   const seedRes = await dispatch({ type: "kv.set", values: {
     "cap:namedAgents": { probe: { name: MARKER_NAMED, provider: { provider: "deepseek", apiKey: "config-has-a-value" } } },
     "providerConfig": { provider: "deepseek", baseURL: "https://api.example", apiKey: "config-value", model: "m", note: MARKER_GLOBAL },

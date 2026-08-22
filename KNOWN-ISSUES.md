@@ -10,6 +10,15 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 - The core architecture is confirmed solid (all-optional permissions, enrollment lifecycle, alarm scheduler fencing, screenshot capture, memory/journal CAS).
 - The open findings are deep concurrency edge-cases + acceptance-coverage gaps, NOT basic-functionality bugs.
 
+## Open — P0 tool operating platform (2026-08-22)
+
+### [Shadow contract in review; execution not implemented] Co-do-style Wasm/tool OS — `CAP-FB-20260822-WASM-TOOL-PLATFORM-01`
+- CAP now has a bounded metadata-only shadow catalog, deterministic lexical index, and expiring run/agent/origin/document/catalog/source-generation selection references. Search creates no grant; selection references explicitly authorize nothing; WebMCP replay safety remains unknown; existing browser/management/WebMCP dispatch and eager provider binding are unchanged.
+- The execution platform is still open: loaded-MV3 Wasm/Worker/offscreen/OPFS behavior, import and memory validation, package WAL/CAS, signer/revocation/SBOM/licence authority, fresh-Worker termination, quotas, artifact promotion, diff review, Chrome lazy tools, Tool Library, owner install, bundled tools, spreadsheets, and abuse gates.
+- Chrome Web Store remotely hosted code treatment for uploaded/downloaded Wasm is unresolved. Store mode remains bundled-reviewed-executable-only. Owner-selected packages are a distinct unpacked/enterprise/developer lane until written policy clearance.
+- Co-do is factual precedent only: [PaulKinlan/Co-do](https://github.com/PaulKinlan/Co-do) at `d3ebdbd5066f16a2bb8a2b8cb8af4b57c8ae324a` has 39 built-ins; its Apache-2.0 root versus MIT package/generated-manifest metadata and per-binary provenance must be reconciled before reuse. No Co-do binary ships in this slice.
+- **Security-suite custody:** `npm run test:security` launches real headless Chromium without self-acquiring the canonical serialized lock. Direct source-review execution is deferred; `CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01` owns the wrapper/direct-run-refusal/PGID/timeout/profile/evidence correction. Historical unsynchronized results are noncanonical observations, not product failures.
+
 ## Open — independent architectural review (2026-08-21)
 
 ### [Fixed locally; independent + loaded-MV3 gates pending] Scheduled-memory key-bound flood — `CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01`

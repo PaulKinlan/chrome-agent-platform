@@ -62,7 +62,14 @@ import {
   requestCapability,
   revokeCapability,
 } from "../lib/capabilities.js";
-import { createAgent, createOrchestrator, RunAbortedError, isAbortShape } from "../lib/agent.js";
+import {
+  createAgent,
+  createOrchestrator,
+  delegationToolMetadata,
+  isAbortShape,
+  memoryToolset,
+  RunAbortedError,
+} from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
 import {
   diagnosticClear,
@@ -161,6 +168,14 @@ import { fetchSkillFromUrl, installImportedSkill } from "../lib/skill-import.js"
 import { durableRuns } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
+import {
+  adaptBrowserTools,
+  adaptBuiltinTools,
+  adaptManagementTools,
+  adaptWebMcpTools,
+  TOOL_CATALOG_BOUNDS,
+} from "../lib/tool-catalog.js";
+import { ShadowToolCatalogController } from "../lib/tool-catalog-shadow.js";
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -1752,6 +1767,115 @@ const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
 // stale document can never replace the bound tab's current snapshot.
 const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
 
+// Metadata-only shadow catalog (CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01).
+// It observes the REAL current tool maps and WebMCP directory, but owns no
+// dispatcher, provider binding, grant, permission, install, or execute path.
+// Every inspection rebuilds from live source authority so disappeared/revoked
+// page tools cannot survive in the derived index.
+function shadowCapabilitiesFor(name, source) {
+  if (source === "builtin") {
+    if (name === "memory_set") return ["memory.write"];
+    if (name === "delegate_task") return ["agent.delegate"];
+    if (name === "list_agents") return ["agent.list"];
+    return ["memory.read"];
+  }
+  if (source === "browser") {
+    const map = {
+      open_side_panel: ["chrome.sidePanel"],
+      open_tab: ["chrome.tabs.write"],
+      navigate_tab: ["chrome.tabs.write"],
+      read_page: ["chrome.scripting.read"],
+      capture_screenshot: ["chrome.tabs.capture"],
+      list_tabs: ["chrome.tabs.read"],
+      close_tab: ["chrome.tabs.write"],
+      recent_browser_events: ["chrome.events.read"],
+      schedule_task: ["chrome.alarms.write"],
+    };
+    return map[name] ?? ["chrome.unknown"];
+  }
+  return ["management.route"];
+}
+
+async function readShadowCatalogInputs() {
+  const version = String(chrome.runtime.getManifest()?.version ?? "0");
+  const sourceGeneration = `extension:${version}`;
+  const hubScope = { hub: true, agentId: "hub", origin: "", documentId: "" };
+  const builtinTools = {
+    ...memoryToolset(masterMemory(), null, null, false),
+    ...delegationToolMetadata(),
+  };
+  const browserTools = browserToolset(false);
+  // Construct the REAL management metadata map. Its route closure is inert
+  // because the shadow catalog never calls a tool's execute function.
+  const managementTools = managementToolset({
+    callRoute: () => Promise.reject(new Error("shadow catalog cannot dispatch")),
+  });
+  const inputs = [
+    ...adaptBuiltinTools(builtinTools, {
+      version,
+      sourceGeneration,
+      scope: hubScope,
+      capabilitiesByTool: Object.fromEntries(
+        Object.keys(builtinTools).map((name) => [
+          name,
+          shadowCapabilitiesFor(name, "builtin"),
+        ]),
+      ),
+    }),
+    ...adaptBrowserTools(browserTools, {
+      version,
+      sourceGeneration,
+      scope: hubScope,
+      capabilitiesByTool: Object.fromEntries(
+        Object.keys(browserTools).map((name) => [
+          name,
+          shadowCapabilitiesFor(name, "browser"),
+        ]),
+      ),
+    }),
+    ...adaptManagementTools(managementTools, {
+      version,
+      sourceGeneration,
+      scope: hubScope,
+      capabilitiesByTool: Object.fromEntries(
+        Object.keys(managementTools).map((name) => [
+          name,
+          shadowCapabilitiesFor(name, "management"),
+        ]),
+      ),
+    }),
+  ];
+  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  for (const origin of (await listOrigins()).slice(0, 200)) {
+    if (inputs.length >= TOOL_CATALOG_BOUNDS.maxDescriptors * 2) break;
+    const enrollment = await enrollmentSnapshot(origin);
+    const gate = gateMap[origin] ?? {};
+    const sourceGeneration = [
+      `enrollment:${enrollment.gen ?? 0}`,
+      `epoch:${gate.epoch ?? 0}`,
+      `seq:${gate.seq ?? 0}`,
+    ].join(":");
+    const documentId = typeof gate.documentId === "string"
+      ? gate.documentId
+      : "";
+    const currentDocument = enrollment.enrolled && documentId &&
+      Number.isFinite(gate.epoch) && gate.epoch > 0;
+    const remaining = TOOL_CATALOG_BOUNDS.maxDescriptors * 2 - inputs.length;
+    inputs.push(...adaptWebMcpTools(await listTools(origin), {
+      origin,
+      agentId: `site:${origin}`,
+      documentId,
+      sourceGeneration,
+      availability: currentDocument ? "ready" : "stale",
+    }).slice(0, remaining));
+  }
+  return inputs;
+}
+
+const shadowToolCatalog = new ShadowToolCatalogController({
+  readInputs: readShadowCatalogInputs,
+});
+
 // Per-document bridge MAC keys (cross-world transport integrity, NOT page
 // attestation): the nonce authenticating MAIN↔isolated messages is ISSUED HERE and
 // delivered out-of-band — to the MAIN world via chrome.scripting.executeScript
@@ -2236,6 +2360,21 @@ const handlers = mergeRouteMaps(
       managementTools: MANAGEMENT_TOOL_NAMES,
       generation,
     };
+  },
+  async "tool-catalog.shadow"(m, context) {
+    // Settings-only, metadata-only diagnostics. This route never dispatches a
+    // selected tool and selectionRef.authorizes is permanently false.
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `tool catalog diagnostics denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return {
+        ok: false,
+        error: "tool catalog diagnostics are restricted to the Settings surface",
+      };
+    }
+    return await shadowToolCatalog.inspect(m, context);
   },
   async "agent.run"(m) {
     // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust

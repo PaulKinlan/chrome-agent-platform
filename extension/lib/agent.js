@@ -671,6 +671,22 @@ export function createAgent({
   };
 }
 
+// The canonical metadata for the two orchestrator-owned built-ins. The runtime
+// and the shadow catalog consume the SAME objects so descriptions/schemas cannot
+// drift while dispatch remains inside createOrchestrator.
+export function delegationToolMetadata() {
+  return {
+    list_agents: {
+      description: "List the available site sub-agents.",
+      inputSchema: z.object({}),
+    },
+    delegate_task: {
+      description: "Delegate a task to a site sub-agent and return its result.",
+      inputSchema: z.object({ agentId: z.string(), task: z.string() }),
+    },
+  };
+}
+
 /**
  * Hub + per-site sub-agents. The hub is a single agent-do agent with delegation
  * tools; each worker is an agent-do agent for one site origin. `multiAgent`
@@ -730,17 +746,15 @@ export function createOrchestrator({
   // SCOPED (hook) runs must not delegate (the sol addendum): a hook-invoked
   // run is side-effect-free, so it gets NO delegate_task — an untrusted event
   // payload must not fan out into site workers that invoke page tools.
+  const delegateMetadata = delegationToolMetadata();
   const delegate = (multiAgent && !scoped)
     ? {
       list_agents: tool({
-        description: "List the available site sub-agents.",
-        inputSchema: z.object({}),
+        ...delegateMetadata.list_agents,
         execute: async () => ({ agents: [...workerAgents.keys()] }),
       }),
       delegate_task: tool({
-        description:
-          "Delegate a task to a site sub-agent and return its result.",
-        inputSchema: z.object({ agentId: z.string(), task: z.string() }),
+        ...delegateMetadata.delegate_task,
         execute: async ({ agentId, task }) => {
           // The model-facing delegate path must be fenced like every other
           // side-effecting tool (the round-15 finding: a cached deleted worker

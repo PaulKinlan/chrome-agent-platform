@@ -5,11 +5,14 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 09:00 UTC. Reconciled against exact public
-> `origin/main@5e05fa95f05e3b38715cbe22335209d7874d5503` (`0.2.143`).
-> Current status counts: **9 OPEN · 7 IN_REVIEW · 1 MERGED · 2 BLOCKED ·
-> 33 DONE · 0 ABANDONED**. The 19 active entries and 33 archived terminal entries below
-> are the complete 52-entry tracker state at this snapshot.
+> Snapshot: 2026-08-22 10:23 UTC. The reviewed shadow-catalog source was
+> semantically reconciled onto exact public-at-start
+> `bee002331bb4c5eafa314cd4bd200d4ba65fc6fc` (`0.2.145`) as integration candidate
+> `fb0ce235ca5400e14385fb3df219eff76cd1c01f` (`0.2.146`). This candidate makes no
+> shipping claim before its serialized browser gate and remote attestation. Branch
+> status counts: **22 OPEN · 8 IN_REVIEW · 1 MERGED · 4 BLOCKED · 33 DONE ·
+> 0 ABANDONED**. The 35 active entries and 33 archived terminal entries below are
+> the complete 68-entry branch state at this snapshot.
 
 ## Safety boundary
 
@@ -432,27 +435,655 @@ On resume after a coordinator or worker loss:
   - 2026-08-19 21:08 UTC — captured the local-model request as research-first OPEN work; no Ollama dependency, model identity, size, quantization, licence, runtime, or storage backend is inferred or approved from the uncertain voice transcription.
   - 2026-08-20 03:25 UTC — replayed the independently accepted public-safe task capture onto exact current public main; the extension-managed download goal remains OPEN, with no runtime, model identity or size, quantization, source or licence, update/version, storage/ownership/quota/eviction/atomicity/recovery, integrity, or supply-chain/security choice approved.
 
-## [CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01] Local semantic search over the complete tool catalog
-- Feedback: 2026-08-20 — product-owner requested WebMCP-relay/Modern-Web-Guidance-style retrieval so the model receives only the most relevant tools instead of every available definition
-- Updated: 2026-08-22 07:30 UTC
+## [CAP-FB-20260822-WASM-TOOL-PLATFORM-01] Co-do-style browser-native tool operating platform
+
+- Feedback: 2026-08-22 — product owner elevated a Co-do-style Wasm/tool
+  operating layer with lazy discovery, owner authority, provenance, OPFS
+  workspaces and artifact outputs to P0
+- Updated: 2026-08-22 09:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P1
+- Priority: P0
+- Owner: tool-platform program coordinator
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: the complete program delivers a metadata-first unified catalog,
+  bounded lazy provider protocol, loaded-MV3-proven fresh-Worker Wasm host,
+  artifact-grade package/provenance/revocation authority, isolated OPFS job
+  workspaces, provenance-clean bundled tools, code-diff artifacts, Chrome API
+  lazy discovery, owner-facing Tool Library, policy-separated owner install,
+  spreadsheet/data workflows and continuous abuse gates without weakening
+  existing owner grants, source dispatch, optional permissions,
+  run/origin/agent/document/generation fences or replay safety
+- Review: independent architecture/security/replay/privacy/Store-policy review
+  at each dependency boundary plus different-session source and exact loaded-MV3
+  review for every executable or UI slice
+- Gates: all 13 split tasks below satisfy their own gates in dependency order;
+  exact merged tip passes full unit/security/canonical Chrome, provider
+  nondisclosure, source revocation, credential/network capture, Store/RHC scan
+  and provenance/licence review
+- Blockers: owner-selected Wasm in a Chrome Web Store build remains blocked on
+  written remotely hosted code policy; Co-do's Apache-2.0 root versus MIT
+  package/generated-manifest metadata and per-binary provenance are unresolved;
+  runtime/resource numbers require loaded-MV3 measurements
+- Next: independently review and land the shadow catalog contract, then run the
+  MV3 runtime probe and lazy-protocol provider-capture work without enabling
+  execution or owner installs
+- Recover:
+  `git grep -n "CAP-FB-20260822-.*TOOL\|CAP-FB-20260822-.*WASM\|CAP-FB-20260822-.*OPFS\|CAP-FB-20260822-.*SPREADSHEET" -- TASKS.md docs/tool-platform-architecture.md`
+- History:
+  - 2026-08-22 09:30 UTC — opened the P0 master program from source research
+    pinned to [PaulKinlan/Co-do](https://github.com/PaulKinlan/Co-do) commit
+    `d3ebdbd5066f16a2bb8a2b8cb8af4b57c8ae324a`: exactly 39 factual built-ins
+    grouped as text 12, crypto 6, data 6, file 6, code 5,
+    search/compression/database/media 1 each. No Co-do code or binary is
+    accepted by this record.
+
+## [CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01] Canonical bounded shadow tool catalog
+
+- Feedback: 2026-08-22 — the P0 tool platform needs one metadata contract before
+  selecting a runtime, storage engine, embedding model or package policy
+- Updated: 2026-08-22 09:30 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: catalog-contract implementer
+- Workspace: active (local path private)
+- Branch: `feat/tool-catalog-contract-30afd5a`
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: this implementation commit
+- Shipping: —
+- Acceptance: canonical bounded descriptors bind source kind, package/tool ID,
+  version, metadata digest, capability digest, scope and source generation; real
+  adapters cover current extension built-ins, browser tools, management tools
+  and declared/inferred WebMCP without calling or changing dispatch; a
+  rebuildable in-memory exact/alias/deterministic lexical index and expiring
+  run/agent/origin/document/catalog/source-generation selection references
+  remain metadata-only, create no grant and expose no execution path; hostile
+  text is inert data, collisions and stale authority fail closed, WebMCP replay
+  safety defaults unknown, and only Settings may inspect shadow diagnostics
+- Review: independent
+  code/security/bounds/Unicode/collision/freshness/provider-nondisclosure review
+  pending; this slice is not Wasm or lazy-provider acceptance
+- Gates: hostile metadata/accessor/Proxy/Unicode/schema/collision/bounds tests;
+  actual-source adapters; deterministic ranking; top-k/result/per-run/ref/TTL
+  caps; source revocation/generation/expiry tests; provider/prompt
+  nondisclosure; exact route-owner check; full unit, pure no-Chrome security,
+  build/gallery/changelog/diff and clean tree before source review; canonical
+  `npm run test:security` is deferred because it launches Chromium and lacks
+  self-serialization (tracked separately)
+- Blockers: none for the shadow slice; provider cutover, execution and package
+  authority are explicitly separate
+- Next: obtain independent source review, then integrate without claiming lazy
+  provider binding or executable Wasm
+- Recover:
+  `git show feat/tool-catalog-contract-30afd5a -- extension/lib/tool-catalog.js extension/lib/tool-search.js extension/lib/tool-selection.js extension/lib/tool-catalog-shadow.js docs/tool-platform-architecture.md tests/tool-catalog*.test.ts tests/tool-search.test.ts tests/tool-selection.test.ts`
+- History:
+  - 2026-08-22 09:30 UTC — implemented the owner-decision-free metadata shadow
+    on exact public `30afd5a`; current provider binding, source dispatchers,
+    permissions, grants, Durable authority and package/runtime absence remain
+    unchanged.
+
+## [CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01] Run-bound lazy search and execute protocol
+
+- Feedback: 2026-08-22 — hundreds of tools must be discovered lazily instead of
+  eagerly appending every descriptor/schema to provider context
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
 - Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: an always-small `search_tools`/`execute_tool` protocol uses
+  current run-bound selection references; provider capture includes only bounded
+  selected descriptors and no non-selected schema; execute re-resolves live
+  catalog/source/package/agent/origin/document/generation authority, validates
+  arguments and delegates to the unchanged source dispatcher; unavailable tools
+  get explanation but no executable reference; retrieval grants no permission or
+  install authority
+- Review: independent provider-boundary, prompt-injection, authority-confusion,
+  stale-reference, privacy, cancellation and replay review required
+- Gates: provider wire capture for selected versus non-selected descriptors;
+  stale/run/agent/origin/document/source/package generation matrix;
+  top-k/result/token budgets; unavailable/no-ref cases; service-worker restart;
+  exact loaded-MV3 proof that non-selected tools are absent and uncallable
+- Blockers: depends on accepted `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01` and
+  composes with, but does not duplicate,
+  `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`
+- Next: define the minimal provider protocol and capture oracle on top of the
+  reviewed lexical catalog; do not remove eager binding until nondisclosure and
+  execution parity pass
+- Recover:
+  `git grep -n "tool-catalog.shadow\|search_tools\|execute_tool\|selectionRef" -- extension tests docs`
+- History:
+  - 2026-08-22 09:30 UTC — split from the P0 program after research identified
+    eager WebMCP/provider binding as a high-severity context and authority
+    problem; no cutover is present in the catalog slice.
+
+## [CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01] Loaded-MV3 Wasm runtime and termination probe
+
+- Feedback: 2026-08-22 — Wasm CSP, nested Worker, offscreen, OPFS, import and
+  termination behavior must be measured in the shipped extension before choosing
+  an ABI or host
+- Updated: 2026-08-22 10:16 UTC
+- Status: BLOCKED
+- Resume: IN_REVIEW
+- Priority: P0
+- Owner: unassigned
+- Workspace: active (local path private)
+- Branch: `feat/mv3-wasm-runtime-probe-30afd5a`
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: `cab69d262590d394dd5994b7cbfaf60ba320686e`
+- Shipping: —
+- Acceptance: an isolated loaded-MV3 experiment proves or rejects bundled Wasm
+  compilation under shipped CSP, offscreen-hosted fresh dedicated Workers,
+  Worker termination of an infinite loop, declared memory maxima, import
+  inspection, OPFS access strategy, service-worker/offscreen interruption and
+  zero main-thread fallback without changing production grants or installing
+  packages
+- Review: independent MV3/CSP/isolation/resource/cleanup review of the immutable
+  probe and evidence required
+- Gates: source/self-test candidate 19/19; exact bundled fixture hashes;
+  permitted/forbidden import matrix; infinite-loop deadline; memory
+  growth/compile bomb; Worker/offscreen/service-worker termination; OPFS
+  read/write isolation; console/CSP/network capture; no surviving Worker/profile;
+  canonical Chrome only under the serialized lock. `npm run test:security` is
+  DEFERRED because it launches unsynchronized Chromium; one prior unlocked
+  invocation is INVALID noncanonical evidence, not a product result
+- Blockers: the reviewed serialized run reached the loaded extension but the
+  driver sent `runtime.sendMessage` from the service worker to itself; Chrome
+  does not deliver that message back to the same worker listener, so the first
+  response was empty and all Wasm/isolation/OPFS rows were HARNESS failures.
+  The driver also lacks fail-fast/failed-run receipts, accepts restart
+  classification without a responsive replacement worker, misnames its JSON
+  hash manifest `.sha256`, and removes `run-init.json` on non-zero completion.
+  No Wasm runtime product result was observed
+- Next: parked. A successor must directly invoke the registered test route in
+  the service-worker context, fail fast with a durable receipt, require a
+  rotated and responsive replacement for restart PASS, retain failed-run init
+  evidence, and pass a new independent source/custody review before one newly
+  authorized serialized run
+- Recover:
+  `git grep -n "MV3-WASM-RUNTIME-PROBE\|wasm-unsafe-eval\|OFFSCREEN_DOCUMENT\|Worker" -- TASKS.md docs extension tests scripts`
+- History:
+  - 2026-08-22 09:30 UTC — opened as the second owner-decision-free technical
+    proof; Co-do's Worker/main-thread behavior is precedent only and cannot
+    substitute for loaded-MV3 evidence.
+  - 2026-08-22 10:16 UTC — candidate `cab69d2` passed final source/custody review;
+    its sole authorized run recorded 1 PASS / 9 FAIL with screenshot, AX,
+    redacted telemetry and valid hashes. Independent review classified the
+    failures as HARNESS plus minor EVIDENCE defects, not Wasm product failures,
+    because the driver self-messaged the service worker and never reached the
+    registered runtime route. The candidate is parked; no retry or shipping.
+
+## [CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01] Immutable Wasm package and revocation authority
+
+- Feedback: 2026-08-22 — executable packages need artifact-grade identity,
+  provenance and crash recovery rather than Co-do's name-keyed ZIP/storage model
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: strict manifests bind package/tool/version/executable
+  digest/capability digest/signer/build/SBOM/licence/runtime compatibility;
+  unknown fields/imports/capabilities fail closed; staged install/update/revoke
+  uses artifact-grade WAL/CAS and immutable identities; capability or executable
+  changes invalidate prior grants; Store-bundled and owner-package records
+  remain distinct
+- Review: independent supply-chain, crypto/signature, transaction, revocation,
+  rollback, licence, Web Store and storage-corruption review required
+- Gates: manifest hostile/unknown/Unicode/collision/archive-bomb/path traversal
+  fixtures; digest/signature/capability substitution; crash point at every WAL
+  transition; concurrent update/revoke; revocation/offline restart;
+  SBOM/licence/build provenance; RHC static scan
+- Blockers: owner-selected executable enablement remains blocked on written
+  Store/RHC policy, but bundled-package authority can proceed; Co-do licensing
+  and binary provenance are unresolved
+- Next: design the strict bundled-lane manifest and reuse artifact transaction
+  invariants without copying the weaker scripts-store pattern
+- Recover:
+  `git grep -n "WASM-PACKAGE-AUTHORITY\|signature\|capabilityDigest\|SBOM\|remotely hosted" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — opened with two distribution lanes: Store uses
+    bundled reviewed bytes only; unpacked/enterprise/developer owner packages
+    remain separate pending policy.
+
+## [CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01] Isolated per-job OPFS tool workspaces
+
+- Feedback: 2026-08-22 — tools need bounded files without direct access to agent
+  memory, package stores or artifact indexes
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: each execution/call gets a normalized
+  `tool-jobs/<execution>/<call>/` root with read-only projected inputs, writable
+  bounded scratch/output, reserved quotas and file counts, no
+  cross-job/package/artifact/agent access, deterministic cleanup and
+  transactional output promotion only through artifact authority
+- Review: independent path, quota, lock, OPFS eviction, concurrency, cleanup,
+  privacy and artifact-boundary review required
+- Gates: traversal/symlink-equivalent/name/Unicode tests; input immutability;
+  scratch/output/file-count/byte quotas; parallel jobs;
+  interruption/restart/orphan cleanup; cross-agent/origin/job denial; quota
+  reservation/release; artifact promotion rollback
+- Blockers: execution use depends on the MV3 runtime probe; schema and
+  transaction design can proceed independently
+- Next: define the job-root schema and quota ledger against current origin-keyed
+  OPFS and artifact transaction authorities
+- Recover:
+  `git grep -n "tool-jobs\|OPFS-TOOL-WORKSPACES\|artifact" -- TASKS.md docs extension/lib tests`
+- History:
+  - 2026-08-22 09:30 UTC — split from the P0 program; Co-do's user-selected
+    real-directory VFS is not CAP's OPFS workspace authority.
+
+## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
+
+- Feedback: 2026-08-22 — reviewed packages require a least-privilege host with
+  hard termination, quotas and Durable replay integration
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: the service worker authorizes and records each job before
+  dispatch; an offscreen host creates a fresh dedicated Worker per invocation
+  with inspected imports and capability-specific host objects; no main-thread
+  fallback, generic Chrome/fetch/DOM/credentials or unrestricted OPFS;
+  wall/output/memory/file/host-call quotas, cancellation, termination, output
+  validation, artifact promotion and bounded receipts compose with stable
+  per-call replay keys and unknown-by-default safety
+- Review: independent isolation, confused-deputy, quota, credential, network,
+  replay, cancellation, interruption and cleanup review required
+- Gates: all runtime-probe gates plus capability import matrix;
+  credentials/cookies/provider-key nondisclosure; timeout/abort/revoke races;
+  service-worker/offscreen restart; stale Worker response; duplicate-effect
+  fixtures for each replay class; output schema/media/path validation; no orphan
+  Worker/handles
+- Blockers: depends on accepted runtime probe, package authority and OPFS
+  workspace authority
+- Next: after dependencies, implement one bundled read-only vertical slice with
+  no network and no artifact mutation
+- Recover:
+  `git grep -n "WASM-EXECUTION-HOST\|tool-replay-safety\|perCallIdempotencyKey\|offscreen" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — opened with fresh-Worker-only and unknown-replay
+    defaults; Co-do's main-thread fallback is explicitly not adopted.
+
+## [CAP-FB-20260822-BUILTIN-WASM-TOOLS-01] Provenance-clean bundled Wasm tool tranche
+
+- Feedback: 2026-08-22 — the operating layer needs useful bundled tools,
+  beginning with filesystem/text/data essentials rather than arbitrary uploads
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: each admitted bundled binary has pinned source, digest,
+  licence/notices, SBOM, reproducible build where practical, declared
+  capabilities/resources/replay class and compatibility tests; Tranche A covers
+  gzip/archive, grep/search/replace, stat/tree/du/hash, diff/patch,
+  CSV/JSON/TOML/YAML, sort/uniq/join/cut/head/tail and selected formatters
+  without weakening global quotas
+- Review: independent per-binary provenance/licence/build/security/compatibility
+  review and loaded-MV3 execution evidence required
+- Gates: deterministic build/digest; licence/notices/SBOM; known-answer and
+  hostile input fixtures per tool; quota profiles; offline execution; no
+  network/credential access; cross-tool pipeline bounds; low-memory-device tiers
+- Blockers: depends on execution host and package provenance authority; Co-do
+  binaries are not accepted inputs until its licence/provenance contradiction is
+  resolved independently
+- Next: select one provenance-clean bundled gzip source only after the runtime
+  host passes, then expand by reviewed functional tranche
+- Recover:
+  `git grep -n "BUILTIN-WASM-TOOLS\|gzip\|SBOM\|Tranche A" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — factual Co-do inventory recorded as 39 tools across
+    nine functional categories; it is a prioritization precedent, not a binary
+    source.
+
+## [CAP-FB-20260822-CODE-DIFF-ARTIFACTS-01] Code patch artifact review and apply lifecycle
+
+- Feedback: 2026-08-22 — tool-produced code changes need owner-visible
+  base/result identity and reversible application rather than direct workspace
+  mutation
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: tool outputs become retained patch artifacts with source
+  tool/package/digests, input/base/result digests and bounded syntax-safe
+  unified/side-by-side views; owner apply/reject/undo is explicit, base mismatch
+  fails closed and all workspace mutation uses transaction/recovery authority
+- Review: independent artifact transaction, path, diff correctness,
+  XSS/rendering, owner-authority, accessibility and recovery review required
+- Gates: add/update/delete/rename/binary/large/Unicode patches; stale base and
+  concurrent edit; apply crash points; reject mutates nothing; undo and restart;
+  safe rendering; narrow/theme/RTL screenshots and raw accessibility tree
+- Blockers: depends on OPFS workspaces, artifact transaction authority and a
+  reviewed execution output contract
+- Next: specify patch artifact schema and base/result CAS before building any
+  code-writing Wasm tool
+- Recover:
+  `git grep -n "CODE-DIFF-ARTIFACTS\|baseDigest\|resultDigest\|patch" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — split from the P0 program; Co-do's line-LCS diff is
+    precedent only and does not provide CAP transaction or owner-review
+    authority.
+
+## [CAP-FB-20260822-CHROME-LAZY-TOOLS-01] Chrome API descriptors behind lazy discovery
+
+- Feedback: 2026-08-22 — browser tools should share one discovery protocol
+  without collapsing their existing least-privilege permission and grant checks
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: browser/Chrome descriptors enter the lazy catalog and provider
+  only when selected; execution still calls the unchanged browser tool functions
+  and rechecks optional Chrome permission, product grant, target origin/tab
+  identity, durable run fence and post-mutation authority; discovery never
+  requests or grants permissions
+- Review: independent permission, grant, activeTab, origin/tab ABA, run-fence,
+  provider-context and route-dispatch review required
+- Gates: selected/non-selected provider capture; every browser tool
+  permission/grant denial and revoke race; source/destination origin; activeTab
+  owner gesture; service-worker restart; no model-callable permission route;
+  canonical browser lifecycle suite
+- Blockers: depends on lazy protocol; owner remediation remains under existing
+  permission tasks
+- Next: map each current `browserToolset()` descriptor to its exact capability
+  summary and leave dispatch byte-identical
+- Recover:
+  `git grep -n "CHROME-LAZY-TOOLS\|browserToolset\|chrome.permissions\|browser control" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — opened separately from Wasm execution so a shared
+    catalog cannot become a shared confused-deputy dispatcher.
+
+## [CAP-FB-20260822-TOOL-LIBRARY-UI-01] Owner Tool Library, provenance and diagnostics UI
+
+- Feedback: 2026-08-22 — owners need one truthful place to inspect tools,
+  packages, versions, capabilities, grants, quotas, selection diagnostics and
+  revocation
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: reusable Web Components present
+  source/package/tool/version/digest/signer/licence/SBOM/capabilities/quota/replay/availability;
+  install/update capability diffs and narrow grant/revoke are owner-only;
+  diagnostics explain selected/excluded/stale/owner-action-required without
+  secrets or private query history; every action and state is
+  keyboard/screen-reader/narrow/theme/RTL correct
+- Review: independent information architecture, truth/accessibility, permission,
+  privacy, provenance and visual review using Impeccable and modern-web guidance
+  required
+- Gates: component gallery and loaded Settings;
+  empty/loading/error/corrupt/revoked/update states; exact AX labels/focus;
+  360/500px, RTL and all themes; capability diff and deny/cancel mutate nothing;
+  no secret/query leakage; screenshots before/after
+- Blockers: depends on catalog and package authority; install controls depend on
+  distribution-policy lane
+- Next: design metadata/read-only diagnostics components first; do not expose
+  install/grant controls before their authorities exist
+- Recover:
+  `git grep -n "TOOL-LIBRARY-UI\|tool-catalog.shadow\|capabilityDigest" -- TASKS.md docs extension/shared extension/options tests`
+- History:
+  - 2026-08-22 09:30 UTC — opened as an owner surface; the catalog slice
+    intentionally adds no UI or new permission gesture.
+
+## [CAP-FB-20260822-OWNER-WASM-INSTALL-01] Owner-selected Wasm package lifecycle
+
+- Feedback: 2026-08-22 — the long-term platform should let owners install
+  reviewed local packages without making installation model-callable or silently
+  broadening authority
+- Updated: 2026-08-22 09:30 UTC
+- Status: BLOCKED
+- Resume: OPEN
+- Priority: P0
+- Owner: distribution-policy owner
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: an explicit owner-selected file enters staged validation,
+  provenance/signature/licence/SBOM and capability/version diff review, then
+  atomic install/update/revoke; grants key exact immutable
+  package/tool/version/executable/capability identity and never survive relevant
+  change; model/page cannot install, update, trust a signer or grant capability
+- Review: independent Store/RHC legal-policy, supply-chain, owner-gesture,
+  package transaction, grant, accessibility and loaded-MV3 review required
+- Gates: owner cancel/deny,
+  malformed/archive-bomb/substitution/signature/revocation/update, grant
+  invalidation, concurrent install, crash recovery, offline restart, no
+  network/provider credentials, static RHC scan and distribution-specific
+  packaging
+- Blockers: Chrome Web Store execution of owner-uploaded/downloaded Wasm
+  requires written policy clearance; until then this is limited to a separately
+  packaged unpacked/enterprise/developer lane and Store mode remains
+  bundled-only
+- Next: obtain the distribution-policy determination after package authority and
+  Tool Library review; do not add owner execution to the Store build meanwhile
+- Recover:
+  `git grep -n "OWNER-WASM-INSTALL\|owner-selected\|remotely hosted code\|Store lane" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — intentionally BLOCKED at the distribution boundary;
+    digests, signatures and an owner click are not treated as automatic
+    Store-policy clearance.
+
+## [CAP-FB-20260822-SPREADSHEET-TOOLKIT-01] Bounded spreadsheet and table workflow toolkit
+
+- Feedback: 2026-08-22 — the P0 operating layer should support knowledge-work
+  table filtering, joins, grouping, pivots, formulas and useful artifact
+  previews
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: provenance-clean bundled tools perform bounded CSV/table filter,
+  join, group, aggregate, pivot and explicit-range formula evaluation; schemas
+  preserve data types and locale choices; large/full data remains local while
+  provider receives bounded summaries; previews and outputs are artifact-backed,
+  inspectable and reversible
+- Review: independent numerical/data correctness, formula safety,
+  locale/encoding, quota, privacy, artifact and accessible grid review required
+- Gates: golden CSV/TSV/Unicode/quoted/missing/type fixtures;
+  joins/group/pivot/formulas; row/column/cell/byte ceilings; hostile formulas;
+  low-memory/offline runs; provider capture; artifact preview screenshots and AX
+  grid semantics
+- Blockers: depends on bundled tool host and artifact UI; no spreadsheet engine
+  or formula language is selected yet
+- Next: define representative knowledge-work fixtures and error budgets after
+  the bundled execution tranche is accepted
+- Recover:
+  `git grep -n "SPREADSHEET-TOOLKIT\|pivot\|formula\|CSV" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — opened as a later functional tranche; this catalog
+    slice contains no spreadsheet runtime or UI.
+
+## [CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01] Tool platform abuse, quota and lifecycle gates
+
+- Feedback: 2026-08-22 — every tool-platform phase needs adversarial and
+  exact-browser gates rather than a security pass deferred until the end
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: security review coordinator
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: a cumulative matrix covers catalog prompt
+  injection/Unicode/collisions/bounds, package substitution/revocation/archive
+  bombs/imports, infinite loops/compile bombs/memory/output/host calls, OPFS
+  traversal/quota/locks/isolation, stale Worker responses, restart/replay
+  classes, grant/permission races, credentials/network/privacy, provider
+  nondisclosure, artifacts/diffs and Store/RHC rejection at every phase
+- Review: independent red-team/security/privacy/replay/performance and
+  loaded-MV3 review required continuously, not only at final release
+- Gates: pure hostile fixtures plus serialized fresh-profile loaded-MV3 cases;
+  exact source/build hashes; network and provider captures; no
+  credentials/cookies/tokens; Worker/profile/OPFS cleanup; crash points;
+  source/package/document/catalog revocation; canonical full
+  unit/security/Chrome at each merged tip
+- Blockers: evolves with every split task; arbitrary-package cases remain
+  distribution-lane blocked until policy allows them
+- Next: land catalog hostile-input and stale-reference tests as tranche one,
+  then extend the matrix with each runtime/package/workspace slice
+- Recover:
+  `git grep -n "TOOL-PLATFORM-ABUSE-GATES\|hostile\|selection-source-stale\|RHC" -- TASKS.md docs extension tests`
+- History:
+  - 2026-08-22 09:30 UTC — opened with the catalog slice's hostile metadata,
+    Unicode, collision, bound, source-revocation, expiry and
+    provider-nondisclosure tests as its first tranche.
+
+## [CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01] Serialize the real-Chromium security suite
+- Feedback: 2026-08-22 — source inspection confirmed `npm run test:security` launches real headless Chromium but does not self-acquire the canonical serialized Chrome lock
+- Updated: 2026-08-22 10:00 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
+- Candidate: —
+- Shipping: —
+- Acceptance: direct execution refuses without a wrapper-issued lock capability; the wrapper acquires `/tmp/cap-serialized-chrome-acceptance.lock` before any browser launch, uses a fresh profile and durable bounded evidence path, supervises an owned process group under a hard timeout, sends TERM then KILL only to the verified owned group, checks descendants, and removes only current-UID-owned non-symlink exact profile paths while preserving finalized evidence
+- Review: independent process-custody, lock-bypass, timeout, PID/PGID, symlink/ownership, cleanup, evidence and exact security-assertion review required before replacing the canonical command
+- Gates: no-Chrome mutant/self-tests for missing lock, forged capability, unverified PGID, timeout, signal and cleanup paths; shell/type/diff checks; one authorized serialized exact-commit run proving 7/7, no surviving Chromium/descendants/profile and immutable evidence receipt
+- Blockers: Chrome execution requires serialized authorization; the existing script has no self-lock and therefore must not be run directly by catalog or other source-review lanes
+- Next: build and independently review a fail-closed wrapper/runner contract, then perform one authorized exact-commit security run
+- Recover: `git grep -n "test:security\|security-suite.ts\|cap-serialized-chrome-acceptance.lock" -- package.json scripts TASKS.md`
+- History:
+  - 2026-08-22 10:00 UTC — opened after correcting the assumption that the security suite was no-Chrome. Historical unsynchronized invocations are noncanonical evidence, not product failures; their assertion results remain observations only.
+
+## [CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01] Local semantic search over the complete tool catalog
+
+- Feedback: 2026-08-20 — product-owner requested
+  WebMCP-relay/Modern-Web-Guidance-style retrieval so the model receives only
+  the most relevant tools instead of every available definition
+- Updated: 2026-08-22 09:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: tool-platform research owner
 - Workspace: none
 - Branch: none
 - Base: `ecf657fe2f9e32aee7b5e2043808f4f7978fd456`
 - Candidate: —
 - Shipping: —
-- Acceptance: one local versioned catalog indexes every callable built-in tool, extension-provided tool, declared WebMCP tool and positively inferred WebMCP tool with stable source, scope, generation/document identity, bounded description, schema summary and searchable text; each run retrieves a bounded top-k set by semantic/cosine relevance plus deterministic exact-name/alias and lexical fallback, and only that authorized set is exposed to the model; retrieval never grants permission, bypasses source-specific dispatch, crosses origin/agent boundaries, revives removed tools, or lets untrusted tool text alter ranking policy or protected prompts; index updates, removals, extension upgrades, navigation, service-worker restart and offline startup converge without sending the whole catalog; owner diagnostics explain selected, excluded, stale and fallback results without exposing secrets or private data
-- Review: research-first; independent architecture, retrieval-quality, security/privacy, lifecycle, performance and exact loaded-MV3 review required before implementation acceptance
-- Gates: compare SQLite/Wasm and IndexedDB storage/indexing under MV3 CSP, worker lifetime, migration, quota and crash semantics; compare local embedding choices, dimensions, update cost and deterministic lexical fallback; build a versioned bounded corpus spanning all four tool sources with relevance/precision/recall and token-budget targets plus measured budgets for catalog-scale warm-query latency, cold/offline startup, full index build, incremental add/update/remove, persisted index bytes and peak memory; establish explicit device/corpus tiers and pass/fail budgets during research before implementation; exact-name, paraphrase, multi-intent, low-confidence, collision and no-match queries; adversarial descriptions/schema/prompt-injection and oversized/Unicode fixtures; source/generation/origin/permission fencing; add/update/remove/navigation/restart/offline/corruption recovery; loaded-MV3 proof that only selected descriptors reach the provider while non-selected tools remain undisclosed and uncallable
-- Blockers: storage engine, local embedding model/runtime, ranking thresholds/top-k/token budget, hybrid semantic-versus-lexical policy, catalog schema, update authority and embedding provenance remain OPEN; the design must compose with `CAP-FB-20260818-WEBMCP-01`, page identity in `CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01`, canonical agent references in `CAP-FB-20260818-AGENT-ACCESS-01`, and permission remediation in `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`
-- Next: study the existing WebMCP-relay registry and Modern Web Guidance search implementation, inventory every current tool registration/dispatch path, then write a decision matrix for catalog schema, SQLite versus IndexedDB, local embeddings, hybrid ranking, invalidation and security before selecting an implementation
-- Recover: `git show ecf657f:TASKS.md && git grep -n "toolSetForOrigin\|MANAGEMENT_TOOL\|browserTools\|webmcpExpose\|document.modelContext" ecf657f -- extension`
+- Acceptance: one local versioned catalog indexes every callable built-in tool,
+  extension-provided tool, declared WebMCP tool and positively inferred WebMCP
+  tool with stable source, scope, generation/document identity, bounded
+  description, schema summary and searchable text; each run retrieves a bounded
+  top-k set by semantic/cosine relevance plus deterministic exact-name/alias and
+  lexical fallback, and only that authorized set is exposed to the model;
+  retrieval never grants permission, bypasses source-specific dispatch, crosses
+  origin/agent boundaries, revives removed tools, or lets untrusted tool text
+  alter ranking policy or protected prompts; index updates, removals, extension
+  upgrades, navigation, service-worker restart and offline startup converge
+  without sending the whole catalog; owner diagnostics explain selected,
+  excluded, stale and fallback results without exposing secrets or private data
+- Review: P0 tool-platform research fixes this as the sole semantic-retrieval
+  authority; the catalog contract's deterministic exact/alias/lexical fallback
+  is a prerequisite, not a duplicate semantic engine; independent architecture,
+  retrieval-quality, security/privacy, lifecycle, performance and exact
+  loaded-MV3 review required before semantic implementation acceptance
+- Gates: compare SQLite/Wasm and IndexedDB storage/indexing under MV3 CSP,
+  worker lifetime, migration, quota and crash semantics; compare local embedding
+  choices, dimensions, update cost and deterministic lexical fallback; build a
+  versioned bounded corpus spanning all four tool sources with
+  relevance/precision/recall and token-budget targets plus measured budgets for
+  catalog-scale warm-query latency, cold/offline startup, full index build,
+  incremental add/update/remove, persisted index bytes and peak memory;
+  establish explicit device/corpus tiers and pass/fail budgets during research
+  before implementation; exact-name, paraphrase, multi-intent, low-confidence,
+  collision and no-match queries; adversarial
+  descriptions/schema/prompt-injection and oversized/Unicode fixtures;
+  source/generation/origin/permission fencing;
+  add/update/remove/navigation/restart/offline/corruption recovery; loaded-MV3
+  proof that only selected descriptors reach the provider while non-selected
+  tools remain undisclosed and uncallable
+- Blockers: embedding model/runtime, ranking thresholds/top-k/token budget,
+  semantic storage engine (SQLite versus IndexedDB), device tiers, update
+  authority, telemetry and embedding provenance remain OPEN; the lexical shadow
+  slice selects none of them; the design must compose with
+  `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01`,
+  `CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01`, `CAP-FB-20260818-WEBMCP-01`, page
+  identity, canonical agent references and permission remediation
+- Next: measure candidate local embedding/index implementations against the
+  bounded canonical catalog and lexical baseline, then record the
+  engine/storage/device-tier decision before adding semantic ranking
+- Recover:
+  `git show ecf657f:TASKS.md && git grep -n "toolSetForOrigin\|MANAGEMENT_TOOL\|browserTools\|webmcpExpose\|document.modelContext" ecf657f -- extension`
 - History:
-  - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
-  - 2026-08-20 15:21 UTC — opened as research-first semantic tool retrieval across built-in, extension, declared WebMCP and inferred WebMCP sources; no database, embedding model, threshold or runtime was inferred from the request.
+  - 2026-08-22 09:30 UTC — Paul elevated the Co-do-style tool operating platform
+    and this existing semantic-retrieval task to P0. The ID remains
+    authoritative and unique; the new catalog slice implements only the required
+    deterministic lexical baseline and makes no embedding/SQLite choice.
+  - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN`
+    (unchanged semantics).
+  - 2026-08-20 15:21 UTC — opened as research-first semantic tool retrieval
+    across built-in, extension, declared WebMCP and inferred WebMCP sources; no
+    database, embedding model, threshold or runtime was inferred from the
+    request.
 
 ## [CAP-FB-20260821-WORKTREE-HYGIENE-01] Durable worktrees and evidence off the RAM-backed temp filesystem
 - Feedback: 2026-08-21 — independent architectural review found the build host's temporary filesystem at 100% inode use, which failed the unit suite, and found reviewed work and retained gate evidence stored only on tmpfs

@@ -15,7 +15,7 @@ import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
 import { ATTESTATION_KEY_STORE } from "../extension/lib/system-prompts.js";
 import { kvSet } from "../extension/lib/kv.js";
 
-// Canonical baseline route list (133 exact routes)
+// Canonical baseline route list (134 exact routes: 133 preserved + shadow diagnostics)
 const BASELINE_ROUTES = [
   "cap:fetch",
   "capabilities.status",
@@ -37,6 +37,7 @@ const BASELINE_ROUTES = [
   "provider.models",
   "invalidate-agent",
   "agent.orchestrator",
+  "tool-catalog.shadow",
   "agent.run",
   "agent.list",
   "thread.list",

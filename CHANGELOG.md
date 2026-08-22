@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.146] — 2026-08-22
+- feat(tools): add the bounded shadow catalog contract (CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01)
+
 ## [0.2.145] — 2026-08-22
 - chore(docs): withdraw the duplicated published mocks + the gallery redirect root, recomposed onto 30afd5a (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
 

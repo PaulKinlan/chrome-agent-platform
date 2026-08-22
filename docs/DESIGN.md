@@ -4,7 +4,12 @@ The visual system for the agent hub. Product truth lives in PRODUCT.md; this fil
 records the durable visual decisions. Run ownership, OPFS records, recovery, and
 the browser-proof gate are documented separately in
 [DURABLE-RUN-ARCHITECTURE.md](DURABLE-RUN-ARCHITECTURE.md); that reference
-currently describes candidate `ac1c4fe`, not public main.
+currently describes candidate `ac1c4fe`, not public main. The P0 metadata,
+search, selection, package, runtime, workspace, artifact, and distribution
+boundaries for the Co-do-style tool operating layer are recorded in
+[tool-platform-architecture.md](tool-platform-architecture.md). Its current
+shadow slice has no UI or provider cutover; future Tool Library UI must use the
+shared component and visual rules below.
 
 ## Direction — "Quiet instrument"
 A calm technical command center. The surface is a precise instrument: quiet,
