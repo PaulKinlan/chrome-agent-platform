@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.142] — 2026-08-22
+- chore(worktree-hygiene): read-only audit + public-safe convention, recomposed onto d50ea21 (CAP-FB-20260821-WORKTREE-HYGIENE-01)
+
 ## [0.2.141] — 2026-08-22
 - fix(provider): hide internal providers without migrating stored selections (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
 

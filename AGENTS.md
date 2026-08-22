@@ -160,6 +160,21 @@ record; `docs/KNOWN-ISSUES.md` remains a compatibility link.
   state/evidence requirements, atomic ownership, and recovery commands live in
   `TASKS.md`.
 
+## Worktree and evidence hygiene (Paul, 2026-08-22 — CAP-FB-20260821-WORKTREE-HYGIENE-01)
+
+- **Durable worktrees** for every lane live under `~/worktrees/` (durable storage), NEVER on the
+  RAM-backed tmpfs; the tmpfs is for transient build/evidence scratch only.
+- **Reachability before removal:** no worktree is removed/pruned/reset until its HEAD is provably
+  reachable from `origin/main` or an explicit `rescue/*` tag. Unreachable heads are bound under a
+  rescue tag BEFORE any cleanup, and dirty worktrees (tracked + untracked changes) are preserved —
+  never destroyed — until an owner decision reconciles them.
+- **Serialized Chrome evidence** (the canonical lock, acceptance runs, screenshots) is written
+  outside the tmpfs to a durable evidence path; the evidence survives reboots.
+- **The read-only audit** `node scripts/worktree-audit.mjs` inventories every registered worktree
+  (HEAD/branch/dirty tracked+untracked/reachability/rescue/location class) and REFUSES destructive
+  operations; private absolute paths are reported as class counts only, never committed.
+- Run the audit before any worktree/prune/cleanup decision and before reporting hygiene state.
+
 ## Review and delivery lifecycle (Paul, 2026-08-21 — replaces the nine-state model)
 
 **`OPEN → IN_REVIEW → MERGED → DONE`**, with `BLOCKED` and `ABANDONED` as the two
