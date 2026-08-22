@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.138] — 2026-08-22
+- docs(tasks): finalize exact-tip tracker reconciliation (CAP-FB-20260821-TRACKER-GIT-RECONCILE-01)
+
 ## [0.2.137] — 2026-08-21
 - fix(ntp): integrate the hub 360px overflow fix (CAP-FB-20260821-HUB-360-OVERFLOW-01)
 
