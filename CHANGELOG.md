@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.143] — 2026-08-22
+- test(worktree-hygiene): restore canonical TypeScript gate (CAP-FB-20260821-WORKTREE-HYGIENE-01)
+
 ## [0.2.142] — 2026-08-22
 - chore(worktree-hygiene): read-only audit + public-safe convention, recomposed onto d50ea21 (CAP-FB-20260821-WORKTREE-HYGIENE-01)
 

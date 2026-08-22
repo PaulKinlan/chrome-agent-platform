@@ -5,14 +5,14 @@ import { assertEquals, assert } from "jsr:@std/assert@1";
 
 const script = new URL("../scripts/worktree-audit.mjs", import.meta.url).pathname;
 
-function runIn(repo, args = []) {
+function runIn(repo: string, args: string[] = []) {
   const p = new Deno.Command("node", { args: [script, repo, ...args], stdout: "piped", stderr: "piped" }).outputSync();
   return { code: p.code, out: new TextDecoder().decode(p.stdout), err: new TextDecoder().decode(p.stderr) };
 }
 
-async function mkRepo(name) {
+async function mkRepo(name: string) {
   const dir = await Deno.makeTempDir({ prefix: `hygiene-${name}-` });
-  const git = (args) => new Deno.Command("git", { args, cwd: dir, stdout: "piped", stderr: "piped" }).outputSync();
+  const git = (args: string[]) => new Deno.Command("git", { args, cwd: dir, stdout: "piped", stderr: "piped" }).outputSync();
   git(["init", "-q", "-b", "main"]);
   Deno.writeTextFileSync(`${dir}/file.txt`, "x");
   git(["add", "."]);
@@ -56,7 +56,7 @@ Deno.test("audit: an unreachable detached head fails closed (refuses destructive
   git(["worktree", "add", "-q", "--detach", `${dir}-wt`, "orphan-branch"]);
   const result = runIn(dir);
   const audit = JSON.parse(result.out);
-  const orphanWt = audit.worktrees.find((w) => w.reach === "unreachable");
+  const orphanWt = audit.worktrees.find((w: { reach: string }) => w.reach === "unreachable");
   assert(orphanWt, "the detached linked head must be flagged unreachable");
   assert(audit.safeToOperate === false, "an unreachable head fails closed");
   assertEquals(result.code, 1);
@@ -74,7 +74,7 @@ Deno.test("audit: a rescue tag makes an otherwise-orphaned head reachable", asyn
   git(["tag", `rescue/fixture-${head.slice(0, 8)}`, head]);
   const result = runIn(dir);
   const audit = JSON.parse(result.out);
-  const wt = audit.worktrees.find((w) => w.reach.startsWith("rescue:"));
+  const wt = audit.worktrees.find((w: { reach: string }) => w.reach.startsWith("rescue:"));
   assert(wt, "the rescue tag binds the orphan head");
   assert(wt.rescueTagged === true);
 });
