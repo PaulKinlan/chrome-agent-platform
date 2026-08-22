@@ -48,8 +48,13 @@ isolated OPFS memory, run history, skills, and avatar.
   scratch/output quotas, recovers interrupted writes, garbage-collects only validated
   terminal jobs, and promotes output only through content-digest-bound keyed artifact
   WAL creates. No message, provider, package, or execution route reaches the wrapper;
-  loaded-MV3 use remains blocked on the runtime probe. See
-  [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
+  loaded-MV3 use remains blocked on the runtime probe.
+- **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
+  immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
+  and an exact-token package registry WAL record bundled metadata only. This release
+  contains zero Wasm binaries and no install, owner, provider, Worker, network,
+  permission, OPFS, or execution route; signer metadata is recorded but not verified.
+  See [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.
 

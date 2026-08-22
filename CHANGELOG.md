@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.151] — 2026-08-22
+- feat(wasm): add bundled package authority (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+
 ## [0.2.150] — 2026-08-22
 - feat(opfs): add isolated tool workspaces (CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01)
 

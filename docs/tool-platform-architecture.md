@@ -1,6 +1,6 @@
 # Tool Platform Architecture
 
-Status: shadow catalog and loaded-MV3 lazy capture public; OPFS workspace wrapper in source review; provider/runtime cutover remains planned.
+Status: shadow catalog and loaded-MV3 lazy capture public; OPFS workspace and bundled-only Wasm package authorities in source review; provider/runtime cutover remains planned.
 
 ## Provenance and factual precedent
 
@@ -229,6 +229,44 @@ The wrapper exposes no runtime message, provider, package, Worker or model tool.
 It does not make OPFS or a fresh Worker usable in MV3. Execution remains blocked
 on the loaded-MV3 runtime probe and a separately reviewed route/host successor.
 
+## Source-only bundled Wasm package authority
+
+`CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01` adds a record authority for the
+Store-bundled lane only. It intentionally ships zero Wasm binaries:
+
+- a bounded duplicate-key-aware pre-parser rejects repeated decoded keys before
+  `JSON.parse`; canonical manifests reject unknown fields at every schema depth,
+  non-ASCII/control text, loose semver/IDs, unsorted or undeclared capabilities,
+  and incomplete build/source/SBOM/licence/notices provenance;
+- package identity binds the canonical signature-stripped manifest, tool and
+  executable digests, capability digests, runtime compatibility and replay
+  class. Signer key/algorithm/signature-presence metadata is recorded with
+  `verified:false`; this slice invents no key distribution or crypto trust;
+- immutable release inventory reads verify every listed physical file by exact
+  relative path, size and SHA-256 and reject missing/extra files. Admission
+  rechecks CAS bytes, manifest identity, SBOM/licence/notices and active/revoked
+  bundled signer metadata but never writes extension bytes;
+- the bounded raw scanner enforces magic/version, canonical u32 LEB framing,
+  section caps/order/duplicates, import allow/disallow policy and the union of
+  imported+defined memories. Exactly one memory with a maximum is required;
+  memory64, shared, unknown flags, multi-memory and measured maxima beyond the
+  declaration/tier fail. Other sections are byte-bounded and explicitly
+  recorded as `not_audited_in_authority_slice`;
+- `tiny` and `default` measured tiers may be recorded. `large` remains blocked
+  unless the immutable release inventory contains matching loaded-MV3 memory
+  evidence;
+- mutable `wasmPkg` records use a reserved `__wasmTx` exact-generation WAL.
+  Prepared intents recover to committed only for the exact next record/token,
+  otherwise compensate only at the exact prior token. Updates/revocations are
+  version-fenced, revoked state survives restart, and `grantEpoch` changes with
+  version, executable or capability identity.
+
+No service-worker route imports the authority. It has no owner admission,
+install UI, model/provider binding, Worker, runtime API, network, permission,
+OPFS, artifact or executable path. The build scans any newly appearing `.wasm`
+and fails it as unmanifested; because this slice has no binary, the measured
+fixture audit exists in tests only.
+
 ## Distribution lanes and Store policy
 
 Two lanes remain explicitly separate:
@@ -253,9 +291,10 @@ unresolved.
    injectable core.
 2. **MV3 runtime probe:** prove Wasm CSP, offscreen/nested Worker, OPFS,
    timeout/termination, import, and memory behavior in a loaded extension.
-3. **Package authority:** immutable manifest/module/capability identity,
-   digest/signature/SBOM/licence, revocation, and artifact-grade WAL/CAS
-   install/update.
+3. **Package authority:** bundled-only source candidate implements immutable
+   manifest/module/capability/inventory identity, measured raw audit, explicit
+   unverified signer metadata, SBOM/licence provenance, revocation and exact-
+   generation WAL/CAS records; owner/install/execution lanes remain absent.
 4. **OPFS workspaces:** source candidate implements per-job read-only inputs,
    bounded scratch/output, journaled quota reservation, cleanup, cross-job
    isolation and keyed artifact promotion; no execution route consumes it.
@@ -290,8 +329,9 @@ maximum does not cap the whole Worker heap.
 
 ## Explicit non-goals of this slice
 
-- no Wasm ABI, loader, runtime, Worker, package, install, signature, grant or
-  execution route; the OPFS wrapper is source-only and unreachable;
+- no Wasm ABI, loader, runtime, Worker, install, owner-package, signature
+  verification, grant or execution route; the OPFS and bundled-package
+  authorities are source-only and unreachable;
 - no embeddings, SQLite, Vectorize, or storage-engine decision;
 - no permission additions or `chrome.permissions.request` calls;
 - no provider binding or eager-binding cutover for the lazy protocol;

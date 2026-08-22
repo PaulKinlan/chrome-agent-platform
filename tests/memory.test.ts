@@ -280,7 +280,7 @@ Deno.test("thread and durable-run authority keys are reserved from the model's m
     /reserved/,
     "a forged thread body must be rejected",
   );
-  for (const key of ["run-registry", "run:exec_forged", "run-outbox:exec_forged", "run-log:exec_forged:row", "run-resume:exec_forged:manifest", "run-payload:exec_forged:manifest"]) {
+  for (const key of ["run-registry", "run:exec_forged", "run-outbox:exec_forged", "run-log:exec_forged:row", "run-resume:exec_forged:manifest", "run-payload:exec_forged:manifest", "wasmPkg", "wasmPkgRepair", "__wasmTx"]) {
     await assertRejects(
       () => mem.set(key, { phase: "terminal" }),
       /reserved/,

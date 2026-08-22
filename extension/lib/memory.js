@@ -183,13 +183,15 @@ const MASTER_RESERVED_KEYS = new Set([
   "threads",
   "scripts",
   "run-registry",
+  "wasmPkg",
+  "wasmPkgRepair",
 ]);
-// The INTERNAL namespace + the artifact/repair prefixes are reserved on EVERY
+// The INTERNAL namespace + the artifact/repair/package prefixes are reserved on EVERY
 // store — the model's memory_set can never write the generation authority,
 // the WAL, a tombstone, or an artifact body/repair record.
-const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs)/;
+const INTERNAL_PREFIX_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx)/;
 // The full hidden namespace (keys()/get/list exclusion + set reservation).
-const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/;
+const INTERNAL_KEY_RE = /^(?:__gen|__tx|__wal|__epoch|__tombs|__wasmTx|assets|assetRepair|asset:|wasmPkg|wasmPkgRepair)/;
 // Authority/registry keys that the MODEL's `memory_set` must never write on a
 // SITE store: a worker that could write `approvals` or `toolDirectory` would
 // bypass the owner's first-run approval or forge its own tool directory, and
@@ -464,10 +466,10 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
     k.startsWith("run-outbox:") || k.startsWith("run-log:") ||
     k.startsWith("run-resume:") || k.startsWith("run-payload:")
   );
-  // The internal namespace + artifact prefixes are reserved on EVERY store;
-  // trusted product code alone may write them through setTrusted.
+  // The internal namespace + artifact/package prefixes are reserved on EVERY
+  // store; trusted product code alone may write them through setTrusted.
   const internal = INTERNAL_PREFIX_RE.test(k) || k === "assetRepair" ||
-    k.startsWith("asset:");
+    k === "wasmPkg" || k === "wasmPkgRepair" || k.startsWith("asset:");
   if (!trusted && (reserved.has(k) || trustedPrefix || internal)) {
     throw new Error(`key "${key}" is reserved on this store`);
   }

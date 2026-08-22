@@ -11,6 +11,7 @@
 // tests; the node:fs/promises read shim + acorn types are intentionally dynamic.
 
 import { parse } from "acorn";
+import { auditWasmBinary } from "../extension/lib/wasm-package-authority.js";
 
 // Test controls/oracles that must never appear in shipped code (scanned
 // case-insensitively over the RAW text so a renamed identifier is still caught
@@ -190,7 +191,25 @@ export async function scanShippedJs(files, { generatedBundles = new Set(), readT
           );
         }
       }
-      // (b) window/self/globalThis.__* oracle access (dot, bracket,
+      // (b) Dynamic Wasm construction/compilation and literal .wasm fetches
+      // are forbidden in shipped source. The bundled authority is record-only;
+      // a future host requires a separately reviewed static CAS route.
+      if (
+        node.type === "CallExpression" &&
+        node.callee?.type === "MemberExpression" &&
+        node.callee.object?.type === "Identifier" &&
+        node.callee.object.name === "WebAssembly"
+      ) {
+        violations.push(`${file}: calls dynamic WebAssembly API (execution host is absent)`);
+      }
+      if (
+        node.type === "CallExpression" &&
+        node.callee?.type === "Identifier" && node.callee.name === "fetch" &&
+        typeof node.arguments?.[0]?.value === "string" && /\.wasm(?:$|[?#])/iu.test(node.arguments[0].value)
+      ) {
+        violations.push(`${file}: fetches a .wasm resource (network Wasm is forbidden)`);
+      }
+      // (c) window/self/globalThis.__* oracle access (dot, bracket,
       //     template-literal, and statically foldable string concatenation).
       if (node.type === "MemberExpression") {
         const obj = node.object;
@@ -219,5 +238,30 @@ export async function scanShippedJs(files, { generatedBundles = new Set(), readT
     });
   }
 
+  return violations;
+}
+
+/** Audit a set of immutable bundled Wasm fixtures. Production build discovery
+ * passes every physical `.wasm`; a missing manifest mapping fails closed. */
+export async function scanBundledWasmFiles(files, {
+  readBytes,
+  manifestByFile = new Map(),
+} = {}) {
+  if (typeof readBytes !== "function") {
+    throw new Error("scanBundledWasmFiles requires readBytes(file)");
+  }
+  const violations = [];
+  for (const file of [...files].sort()) {
+    const executable = manifestByFile.get(file);
+    if (!executable) {
+      violations.push(`${file}: unmanifested_binary`);
+      continue;
+    }
+    try {
+      auditWasmBinary(new Uint8Array(await readBytes(file)), executable);
+    } catch (error) {
+      violations.push(`${file}: ${error?.code ?? "wasm_scan_failed"}`);
+    }
+  }
   return violations;
 }

@@ -50,7 +50,16 @@ async function walkJs(dir, out = []) {
   }
   return out;
 }
-const { scanShippedJs } = await import("./scripts/scan-shipped.mjs");
+async function walkWasm(dir, out = []) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory() && (entry.name === 'dist' || entry.name === 'dist-versions' || entry.name === 'dist-archives')) continue;
+    if (entry.isDirectory()) await walkWasm(p, out);
+    else if (entry.isFile() && extname(p) === ".wasm") out.push(p);
+  }
+  return out;
+}
+const { scanShippedJs, scanBundledWasmFiles } = await import("./scripts/scan-shipped.mjs");
 const shippedJs = await walkJs("extension");
 // The __zod_*/__vite_* oracle exemption applies ONLY inside the generated
 // dependency bundles (esbuild inlines the zod/vite source there) — never in
@@ -66,6 +75,20 @@ if (violations.length > 0) {
   );
 }
 console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files (AST export + oracle walk)`);
+
+// Bundled-lane Wasm is inventory-only in this slice. There are intentionally no
+// binaries today; if one appears without an exact manifest mapping the build
+// fails closed before packaging. A future release-inventory step supplies the
+// mapping only after separate review.
+const shippedWasm = await walkWasm("extension");
+const wasmViolations = await scanBundledWasmFiles(shippedWasm, {
+  readBytes: (file) => readFile(file),
+  manifestByFile: new Map(),
+});
+if (wasmViolations.length > 0) {
+  throw new Error(`bundled-Wasm scan failed (${wasmViolations.length} violation(s)):\n${wasmViolations.map((value) => `  - ${value}`).join("\n")}`);
+}
+console.log(`build assertion: ${shippedWasm.length} bundled Wasm binaries; exact manifest + bounded raw scan required`);
 
 // Sync the design-system source into the docs/ component gallery (single
 // source of truth = extension/shared/; see scripts/sync-gallery.mjs). The

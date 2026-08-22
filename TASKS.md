@@ -5,15 +5,15 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 13:58 UTC. Reconciled against exact public
-> `origin/main@8cd9bd0439fc4bcc4af435c086170a993a2e4ac6` (`0.2.149`). The lazy
-> shadow protocol is public and independently verified in loaded MV3, so it is
-> `DONE`; package freshness and security-suite serialization remain `DONE`, and
-> the catalog remains truthfully `MERGED` pending its whole-product journey gate.
-> This branch adds the source-only OPFS workspace recompose without a shipping or
-> execution claim. Branch status counts: **18 OPEN · 8 IN_REVIEW · 2 MERGED ·
-> 4 BLOCKED · 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived
-> terminal entries below are the complete 68-entry state.
+> Snapshot: 2026-08-22 14:36 UTC. Reconciled against exact public
+> `origin/main@9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc` (`0.2.150`). Lazy,
+> package freshness and security-suite serialization remain `DONE`; the catalog
+> remains `MERGED`, and the public OPFS wrapper intentionally remains `IN_REVIEW`
+> with no Shipping claim. This branch adds the source-only bundled Wasm package
+> authority without a binary, shipping or execution claim. Branch status counts:
+> **17 OPEN · 9 IN_REVIEW · 2 MERGED · 4 BLOCKED · 36 DONE · 0 ABANDONED**.
+> The 32 active entries and 36 archived terminal entries below are the complete
+> 68-entry state.
 
 ## Safety boundary
 
@@ -585,54 +585,74 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01] Immutable Wasm package and revocation authority
 
 - Feedback: 2026-08-22 — executable packages need artifact-grade identity,
-  provenance and crash recovery rather than Co-do's name-keyed ZIP/storage model
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+  provenance and crash recovery rather than a name-keyed archive/storage model
+- Updated: 2026-08-22 14:36 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: bundled-package authority owner
+- Workspace: active (local path private)
+- Branch: `feat/wasm-package-authority-9c03e4f`
+- Base: `9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: strict manifests bind package/tool/version/executable
-  digest/capability digest/signer/build/SBOM/licence/runtime compatibility;
-  unknown fields/imports/capabilities fail closed; staged install/update/revoke
-  uses artifact-grade WAL/CAS and immutable identities; capability or executable
-  changes invalidate prior grants; Store-bundled and owner-package records
-  remain distinct
-- Review: independent supply-chain, crypto/signature, transaction, revocation,
-  rollback, licence, Web Store and storage-corruption review required
-- Gates: manifest hostile/unknown/Unicode/collision/archive-bomb/path traversal
-  fixtures; digest/signature/capability substitution; crash point at every WAL
-  transition; concurrent update/revoke; revocation/offline restart;
-  SBOM/licence/build provenance; RHC static scan
-- Blockers: owner-selected executable enablement remains blocked on written
-  Store/RHC policy, but bundled-package authority can proceed; Co-do licensing
-  and binary provenance are unresolved
-- Next: design the strict bundled-lane manifest and reuse artifact transaction
-  invariants without copying the weaker scripts-store pattern
+- Acceptance: one unreachable library accepts only bounded canonical raw
+  manifests after duplicate-key detection before materialization; unknown fields
+  fail at every schema depth and ASCII/semver/ID/path/order/count bounds cover
+  package, tools, executables, imports, capabilities, runtime, signer, build,
+  source, SBOM, licence, notices and metadata; immutable release inventory and
+  CAS bytes recheck exact path, size and SHA-256 without writing extension bytes;
+  a bounded raw scanner enforces canonical LEB/framing/order/duplicates/imports,
+  exactly one imported-or-defined memory, mandatory max, memory64/shared/unknown
+  flag/multi-memory rejection, measured-max declaration+tier ceilings and honest
+  skipped-section records; tiny/default are allowed and large requires release
+  evidence; mutable `wasmPkg` state uses reserved `__wasmTx` prepared→committed/
+  compensated exact-generation recovery for admit/update/revoke, concurrent
+  version fencing, restart-stable revocation and version/executable/capability-
+  bound `grantEpoch`; signer metadata is recorded as explicitly unverified;
+  owner lane and every install/provider/model/Worker/runtime/OPFS/network/
+  permission/execution surface are absent; this slice ships zero Wasm binaries
+- Review: v2 design SHA-256 `1ad1035bc09bc85dcbb7d6ce6e0fa634b60ab4baa473582123a8fdb27dc31fe4`
+  independently PASSed review SHA-256
+  `b5381dd3fd33e3e29f5db2055e2ccdebc4f424760c4ee3da1317e2dd7663eb12`;
+  exact implementation review pending
+- Gates: reported pre-commit package/scanner/WAL/RHC 14/14 and composed memory/
+  scanner/package 56/56; canonical full no-Chrome 986/986 across 14 steps;
+  106-file production build with zero bundled binaries and exact 132-entry
+  package/validate PASS; gallery/changelog/tracker/privacy/diff/release/clean
+  checks; hostile duplicate/escaped/Unicode/schema/
+  substitution cases; malformed/noncanonical/order/import/memory/tier/bomb scan;
+  inventory mismatch; every install WAL transition, update/revoke crash recovery,
+  concurrent update/revoke, offline revocation, registry/WAL/token corruption,
+  grant epoch, provenance and no-route/no-execution static assertions
+- Blockers: owner-package admission and signer verification require written trust
+  and Store/RHC policy; large tier requires loaded-MV3 release evidence; execution
+  remains blocked on the MV3 runtime probe and a separately reviewed host; exact
+  source candidate requires independent review
+- Next: commit one `0.2.151` source-only release, obtain independent supply-chain/
+  scanner/WAL review, and leave all binary/runtime/install work to successors
 - Recover:
-  `git grep -n "WASM-PACKAGE-AUTHORITY\|signature\|capabilityDigest\|SBOM\|remotely hosted" -- TASKS.md docs extension tests`
+  `git show feat/wasm-package-authority-9c03e4f -- extension/lib/wasm-package-authority.js extension/lib/memory.js scripts/scan-shipped.mjs build.mjs tests/wasm-package-authority.test.ts tests/memory.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
-  - 2026-08-22 09:30 UTC — opened with two distribution lanes: Store uses
-    bundled reviewed bytes only; unpacked/enterprise/developer owner packages
-    remain separate pending policy.
+  - 2026-08-22 09:30 UTC — opened with separate Store-bundled and owner-selected
+    distribution lanes; owner packages remain policy-blocked.
+  - 2026-08-22 14:36 UTC — implemented only the reviewed bundled-record authority
+    on exact public `9c03e4f`; no binary, owner lane, route, runtime or execution
+    surface was added.
 
 ## [CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01] Isolated per-job OPFS tool workspaces
 
 - Feedback: 2026-08-22 — tools need bounded files without direct access to agent
   memory, package stores or artifact indexes
-- Updated: 2026-08-22 13:58 UTC
+- Updated: 2026-08-22 14:36 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: OPFS-workspace recompose owner
-- Workspace: active (local path private)
-- Branch: `feat/opfs-tool-workspaces-recompose-8cd9bd0`
+- Owner: OPFS-workspace review owner
+- Workspace: none
+- Branch: `main`
 - Base: `8cd9bd0439fc4bcc4af435c086170a993a2e4ac6`
-- Candidate: this tracker commit
+- Candidate: `9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc`
 - Shipping: —
 - Acceptance: each execution/call gets a strict normalized
   `tool-jobs/<execution>/<call>/` root; projected inputs are declared by digest,
@@ -661,16 +681,18 @@ On resume after a coordinator or worker loss:
 - Blockers: execution use depends on the loaded-MV3 runtime probe; this wrapper
   has no service-worker message, provider, package, Worker or model-tool route;
   exact current-parent recompose requires independent review
-- Next: commit one `0.2.150` release on exact public `8cd9bd0`, obtain independent
-  recompose/artifact-boundary review, and leave runtime wiring to a successor
+- Next: obtain independent exact-candidate recompose/artifact-boundary review;
+  leave runtime wiring to a successor
 - Recover:
-  `git show feat/opfs-tool-workspaces-recompose-8cd9bd0 -- extension/lib/opfs-tool-workspace.js extension/lib/artifacts.js tests/opfs-tool-workspace.test.ts tests/artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
+  `git show 9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc -- extension/lib/opfs-tool-workspace.js extension/lib/artifacts.js tests/opfs-tool-workspace.test.ts tests/artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — split from the P0 program; Co-do's user-selected
     real-directory VFS is not CAP's OPFS workspace authority.
   - 2026-08-22 13:58 UTC — recomposed the independently PASSed aggregate source
     semantics onto exact public `8cd9bd0` as one release candidate, preserving
     lazy/security/package bytes and keeping every execution route absent.
+  - 2026-08-22 14:36 UTC — candidate `9c03e4f` is the exact public `0.2.150` tip,
+    but remains IN_REVIEW with Shipping `—` pending exact-candidate review.
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
 

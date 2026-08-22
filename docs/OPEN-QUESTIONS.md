@@ -1,6 +1,6 @@
 # Open questions for Paul
 
-Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom. Security-suite serialization and the verified shadow lazy capture are completed implementation custody, not product-policy questions. Provider cutover remains a separate parity/lifecycle gate. The source-only OPFS workspace wrapper likewise makes no product-policy choice and remains unreachable until the MV3 runtime and execution-host gates.
+Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom. Security-suite serialization and the verified shadow lazy capture are completed implementation custody, not product-policy questions. Provider cutover remains a separate parity/lifecycle gate. The source-only OPFS workspace and bundled-only Wasm package record authorities likewise make no product-policy choice and remain unreachable until the MV3 runtime and execution-host gates. Owner-package enablement, signer trust/verification and large-tier evidence remain explicitly open policy decisions.
 
 ## Resolved
 
