@@ -39,10 +39,16 @@ isolated OPFS memory, run history, skills, and avatar.
 - **Shadow tool catalog + lazy capture** — Settings-only metadata diagnostics derive
   bounded stable descriptors from the real built-in, browser, management, and WebMCP
   sources, with deterministic lexical search and expiring non-authorizing references.
-  A review candidate captures a fixed two-tool lazy wire plus selected descriptors only
-  and repeatedly re-resolves live authority around existing dispatcher closures. It is
-  not provider-bound: eager tools remain unchanged and the capture cannot execute,
-  grant or install. See
+  The public, loaded-MV3-verified shadow captures a fixed two-tool lazy wire plus one
+  selected bounded summary only and repeatedly re-resolves live authority around the
+  existing dispatcher closures. It is not provider-bound: eager tools remain unchanged
+  and the capture cannot execute, grant or install.
+- **Per-job OPFS workspace authority (source candidate)** — a service-worker-owned
+  wrapper projects hash-verified read-only inputs into strict job roots, journals bounded
+  scratch/output quotas, recovers interrupted writes, garbage-collects only validated
+  terminal jobs, and promotes output only through content-digest-bound keyed artifact
+  WAL creates. No message, provider, package, or execution route reaches the wrapper;
+  loaded-MV3 use remains blocked on the runtime probe. See
   [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.

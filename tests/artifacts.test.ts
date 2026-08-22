@@ -9,6 +9,7 @@ import {
   ASSET_BOUNDS,
   ASSET_TYPES,
   createAsset,
+  createAssetKeyed,
   deleteAsset,
   getAsset,
   listAssets,
@@ -113,6 +114,37 @@ Deno.test("createAsset → list → get round-trips a hub artifact", async () =>
   assertEquals(got.asset.content, "<h1>hi</h1>", "content must round-trip");
   assertEquals(got.asset.type, "html");
   assertEquals(got.asset.name, "generated report");
+
+  // The existing UNKEYED contract is unchanged: the same body is a new create,
+  // not an implicit digest dedup.
+  const unkeyedAgain = await createAsset("master", {
+    type: "html",
+    name: "generated report",
+    content: "<h1>hi</h1>",
+  });
+  assert(unkeyedAgain.ok);
+  assert(unkeyedAgain.asset.id !== id, "unkeyed create still allocates a fresh id");
+
+  // createAssetKeyed deliberately trusts its CALLER-OWNED operation key. A
+  // same-key retry returns the prior asset even when the caller supplies new
+  // content, so every caller MUST include the bounded content digest in its key.
+  const keyedOrigin = "https://keyed-contract.example";
+  const keyedFirst = await createAssetKeyed(keyedOrigin, {
+    key: "caller-must-bind-content-digest",
+    type: "text",
+    name: "keyed",
+    content: "first",
+  });
+  const keyedRetry = await createAssetKeyed(keyedOrigin, {
+    key: "caller-must-bind-content-digest",
+    type: "text",
+    name: "keyed",
+    content: "different-content",
+  });
+  assert(keyedFirst.ok && keyedRetry.ok && keyedRetry.deduped === true);
+  assertEquals(keyedRetry.id, keyedFirst.asset.id, "same caller key dedupes to the same id");
+  const keyedBody = await getAsset(keyedOrigin, keyedRetry.id);
+  assertEquals(keyedBody.asset.content, "first", "same-key retry never replaces prior content");
 });
 
 Deno.test("updateAsset patches name/type/content", async () => {

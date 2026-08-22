@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.150] — 2026-08-22
+- feat(opfs): add isolated tool workspaces (CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01)
+
 ## [0.2.149] — 2026-08-22
 - feat(tools): add shadow lazy protocol capture (CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01)
 

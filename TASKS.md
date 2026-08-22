@@ -5,14 +5,15 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 13:09 UTC. Reconciled against exact public
-> `origin/main@0e47a63591c9c798043cc196f6049c410d2cd597` (`0.2.148`). Package
-> freshness and security-suite serialization are public, independently reviewed
-> and verified, so both are `DONE`; the catalog remains truthfully `MERGED` pending
-> its whole-product journey gate. This branch adds the shadow-only lazy-protocol
-> recompose without a shipping claim. Branch status counts: **19 OPEN ·
-> 8 IN_REVIEW · 2 MERGED · 4 BLOCKED · 35 DONE · 0 ABANDONED**. The 33 active
-> entries and 35 archived terminal entries below are the complete 68-entry state.
+> Snapshot: 2026-08-22 13:58 UTC. Reconciled against exact public
+> `origin/main@8cd9bd0439fc4bcc4af435c086170a993a2e4ac6` (`0.2.149`). The lazy
+> shadow protocol is public and independently verified in loaded MV3, so it is
+> `DONE`; package freshness and security-suite serialization remain `DONE`, and
+> the catalog remains truthfully `MERGED` pending its whole-product journey gate.
+> This branch adds the source-only OPFS workspace recompose without a shipping or
+> execution claim. Branch status counts: **18 OPEN · 8 IN_REVIEW · 2 MERGED ·
+> 4 BLOCKED · 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived
+> terminal entries below are the complete 68-entry state.
 
 ## Safety boundary
 
@@ -525,58 +526,6 @@ On resume after a coordinator or worker loss:
     main as `a8985af8af2af76d714cd0be29781c18c08d7a7f` (`0.2.146`); lifecycle advanced
     truthfully to `MERGED` with exact Shipping provenance.
 
-## [CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01] Run-bound lazy search and execute protocol
-
-- Feedback: 2026-08-22 — hundreds of tools must be discovered lazily instead of
-  eagerly appending every descriptor/schema to provider context
-- Updated: 2026-08-22 13:09 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P0
-- Owner: lazy-protocol recompose owner
-- Workspace: active (local path private)
-- Branch: `feat/lazy-tool-protocol-recompose-0e47a63`
-- Base: `0e47a63591c9c798043cc196f6049c410d2cd597`
-- Candidate: this tracker commit
-- Shipping: —
-- Acceptance: an always-small `search_tools`/`execute_tool` protocol uses
-  current run-bound selection references; provider capture includes only bounded
-  selected descriptors and no non-selected schema; execute re-resolves live
-  catalog/source/package/agent/origin/document/generation authority before
-  validation, before dispatch and after dispatch, validates getter-safe bounded
-  arguments and delegates only to the unchanged source closure; package identity
-  binds package ID, version, digest and capability digest; unavailable tools get
-  explanation but no executable reference; retrieval grants no permission or
-  install authority; this source slice remains shadow-only and cannot change eager
-  provider binding, execute, grant or install
-- Review: predecessor source semantics `ffdc2850bcf695608e5cecb29f8b46ee2d350bc6`
-  independently PASSed provider-boundary, authority-confusion, stale-reference,
-  privacy, cancellation, replay, bounds and dispatcher-parity review (report
-  SHA-256 `84ab4eddd10cde6fcf7fc86423420e13b979d8c7337f664c6648c8b697325cf0`);
-  exact current-main recompose review pending
-- Gates: reported pre-commit focused lazy/catalog/search/selection/route/provider
-  tests 75/75, canonical full no-Chrome unit suite 961/961 across 14 steps,
-  104-file production build and exact 130-entry package/validate PASS; gallery/
-  changelog/tracker/privacy/diff/release/clean-tree checks; later exact loaded-MV3
-  proof must show providers
-  and prompts unchanged, the two protocol tools absent and uncallable, selected-only
-  capture bounded, non-selected schemas absent, and lifecycle expiry/restart fail-closed
-- Blockers: provider cutover is explicitly excluded until exact loaded-MV3
-  nondisclosure/uncallability evidence and a separately reviewed successor;
-  this shadow-only candidate requires independent recompose review
-- Next: commit the exact one-release recompose, obtain independent review, then
-  return any browser-package preparation to the coordinator
-- Recover:
-  `git show feat/lazy-tool-protocol-recompose-0e47a63 -- extension/lib/lazy-tool-protocol.js extension/lib/lazy-tool-wire.js extension/lib/tool-catalog-shadow.js extension/lib/tool-catalog.js extension/lib/tool-selection.js tests/lazy-tool-protocol.test.ts tests/provider-gate.test.ts TASKS.md`
-- History:
-  - 2026-08-22 09:30 UTC — split from the P0 program after research identified
-    eager WebMCP/provider binding as a high-severity context and authority
-    problem; no cutover is present in the catalog slice.
-  - 2026-08-22 13:09 UTC — source semantics at `ffdc2850bcf695608e5cecb29f8b46ee2d350bc6`
-    independently PASSed; recomposed only that source/test/documentation delta onto
-    exact public `0e47a63` while preserving the reviewed security-suite and package
-    freshness authorities; no Chrome, security-suite run, provider cutover or push.
-
 ## [CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01] Loaded-MV3 Wasm runtime and termination probe
 
 - Feedback: 2026-08-22 — Wasm CSP, nested Worker, offscreen, OPFS, import and
@@ -675,36 +624,53 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — tools need bounded files without direct access to agent
   memory, package stores or artifact indexes
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 13:58 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: OPFS-workspace recompose owner
+- Workspace: active (local path private)
+- Branch: `feat/opfs-tool-workspaces-recompose-8cd9bd0`
+- Base: `8cd9bd0439fc4bcc4af435c086170a993a2e4ac6`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: each execution/call gets a normalized
-  `tool-jobs/<execution>/<call>/` root with read-only projected inputs, writable
-  bounded scratch/output, reserved quotas and file counts, no
-  cross-job/package/artifact/agent access, deterministic cleanup and
-  transactional output promotion only through artifact authority
-- Review: independent path, quota, lock, OPFS eviction, concurrency, cleanup,
-  privacy and artifact-boundary review required
-- Gates: traversal/symlink-equivalent/name/Unicode tests; input immutability;
-  scratch/output/file-count/byte quotas; parallel jobs;
-  interruption/restart/orphan cleanup; cross-agent/origin/job denial; quota
-  reservation/release; artifact promotion rollback
-- Blockers: execution use depends on the MV3 runtime probe; schema and
-  transaction design can proceed independently
-- Next: define the job-root schema and quota ledger against current origin-keyed
-  OPFS and artifact transaction authorities
+- Acceptance: each execution/call gets a strict normalized
+  `tool-jobs/<execution>/<call>/` root; projected inputs are declared by digest,
+  verified before write, write-once, re-read/hash-verified and exposed only as
+  bytes; scratch/output obey serialized byte/file reservations, bounded replay
+  keys and origin-storage pressure; `.quota.current`/`.quota.next` recover only
+  through monotonic sequence and trusted `.quota.anchor` digest continuity;
+  stale/corrupt partial state discards or quarantines fail closed; explicit GC
+  removes only validated terminal+expired exact job identities with a durable
+  interrupted-remove marker; output promotion uses the artifact WAL only through
+  `createAssetKeyed`, whose caller key binds execution, call, name and bounded
+  content digest; same-key retry returns the same exact asset; unkeyed
+  `createAsset` behavior remains unchanged; no route exposes this wrapper
+- Review: initial aggregate candidate `c16f18792540be296e8e86034cf7f4c2cd853522`
+  was FIX_REQUESTED; exact successor chain tip
+  `9b0497ac88c0a3d6e3129b93446861586b9d2890` independently PASSed source review
+  SHA-256 `d4f85f3e7c20d72451704b6c08c91f49e6a96e8bbecd972fdf9d654a668bf430`;
+  current one-release recompose review pending
+- Gates: reported pre-commit workspace 11/11 and focused artifact authority
+  31/31; canonical full no-Chrome 972/972 across 14 steps; 105-file production
+  build and exact 131-entry package/validate PASS; gallery/changelog/tracker/
+  privacy/diff/release/clean checks; real mid-write/close/move/remove and
+  QuotaExceeded fault injection; input conflict/interrupted completion; exactly-one
+  reserve race and bounded-key expiry GC; anchor match/quarantine; keyed promotion
+  retry/crash rollback; orphan-GC restart and cross-job denial; metadata no-secret
+- Blockers: execution use depends on the loaded-MV3 runtime probe; this wrapper
+  has no service-worker message, provider, package, Worker or model-tool route;
+  exact current-parent recompose requires independent review
+- Next: commit one `0.2.150` release on exact public `8cd9bd0`, obtain independent
+  recompose/artifact-boundary review, and leave runtime wiring to a successor
 - Recover:
-  `git grep -n "tool-jobs\|OPFS-TOOL-WORKSPACES\|artifact" -- TASKS.md docs extension/lib tests`
+  `git show feat/opfs-tool-workspaces-recompose-8cd9bd0 -- extension/lib/opfs-tool-workspace.js extension/lib/artifacts.js tests/opfs-tool-workspace.test.ts tests/artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — split from the P0 program; Co-do's user-selected
     real-directory VFS is not CAP's OPFS workspace authority.
+  - 2026-08-22 13:58 UTC — recomposed the independently PASSed aggregate source
+    semantics onto exact public `8cd9bd0` as one release candidate, preserving
+    lazy/security/package bytes and keeping every execution route absent.
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
 
@@ -1227,6 +1193,30 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Archive
+
+## [CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01] Run-bound lazy search and execute protocol
+
+- Feedback: 2026-08-22 — hundreds of tools must be discovered lazily instead of eagerly appending every descriptor/schema to provider context
+- Updated: 2026-08-22 13:58 UTC
+- Status: DONE
+- Resume: —
+- Priority: P0
+- Owner: lazy-protocol integration owner
+- Workspace: none
+- Branch: `main`
+- Base: `0e47a63591c9c798043cc196f6049c410d2cd597`
+- Candidate: `8cd9bd0439fc4bcc4af435c086170a993a2e4ac6`
+- Shipping: `origin/main@8cd9bd0439fc4bcc4af435c086170a993a2e4ac6`
+- Acceptance: the fixed always-small `search_tools`/`execute_tool` metadata wire uses run-bound non-authorizing references; selected summaries are bounded and no non-selected schema, provider data, key or secret crosses the shadow capture; the unreachable injectable core re-resolves live catalog/source/package/run/agent/origin/document authority before validation, before dispatch and after dispatch, validates getter-safe bounded arguments and delegates only to existing source closures; package identity binds package ID, version, digest and capability digest; retrieval grants no permission/install authority; eager provider binding and protected prompts remain unchanged
+- Review: exact recompose source review PASS SHA-256 `b27fef5bf8d841cb5327e54dc44144755534d27ae5b08f91ef1240908fd81515`; frozen loaded-MV3 package `/tmp/cap-lazy-shadow-browser-8cd9bd0` index SHA-256 `d30c83df430a8c2ce4db68c41a55c7fc09db2fc4f5b2208d274632f1cd1c8d52` and independent package review PASS SHA-256 `c0e1aa6afffc5052d224469629d65cc2485ca598efac5824a9a216863f5ff371`; independent run review PASS SHA-256 `719e7c7303ff4c72880e2d4d67efb947323010c3cb3fb3a67b9018bc9e424b79`
+- Gates: source focused 75/75, full no-Chrome 961/961, 104-file build and exact 130-entry package/validate PASS; loaded-MV3 evidence run `cap-lazy-shadow-8cd9bd0-20260822T134400Z` REPORT SHA-256 `827429a524a53c3fe99c86f8cb894b146a256cf4000703cc952a1f9ad9ad25ce` and evidence-index SHA-256 `ce6fdadd0dd9807a5539f22de5372d04382bb3273c4fd1be049a04cffd264eca` proved two fixed descriptors, one selected bounded summary, fresh non-authorizing refs, provider/eager/execute/grant flags false, exact NTP denial plus security event, zero forbidden messages, zero console/runtime/network errors, mandatory AX and reliable PNG; exit 0, no timeout/survivor/profile/poison. Known non-blocking harness note: finalizer appended to `wrapper.log` after hashing that log; all product-evidence hashes recomputed exact
+- Blockers: —
+- Next: —
+- Recover: `git show 8cd9bd0439fc4bcc4af435c086170a993a2e4ac6 -- extension/lib/lazy-tool-protocol.js extension/lib/lazy-tool-wire.js extension/lib/tool-catalog-shadow.js extension/lib/tool-catalog.js extension/lib/tool-selection.js tests/lazy-tool-protocol.test.ts tests/provider-gate.test.ts TASKS.md`
+- History:
+  - 2026-08-22 09:30 UTC — split from the P0 program after research identified eager WebMCP/provider binding as a high-severity context and authority problem; no cutover was present in the catalog slice.
+  - 2026-08-22 13:09 UTC — reviewed source semantics were recomposed onto exact public `0e47a63` without provider cutover.
+  - 2026-08-22 13:58 UTC — exact `8cd9bd0` became public `0.2.149`; the independently reviewed one-shot loaded-MV3 shadow run passed from genuine Settings and NTP surfaces, advancing the task to DONE while provider exposure remains a separate successor.
 
 ## [CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01] Serialize the real-Chromium security suite
 - Feedback: 2026-08-22 — source inspection confirmed `npm run test:security` launches real headless Chromium but does not self-acquire the canonical serialized Chrome lock

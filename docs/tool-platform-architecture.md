@@ -1,6 +1,6 @@
 # Tool Platform Architecture
 
-Status: shadow catalog public; shadow-only lazy protocol candidate in review; provider cutover remains planned.
+Status: shadow catalog and loaded-MV3 lazy capture public; OPFS workspace wrapper in source review; provider/runtime cutover remains planned.
 
 ## Provenance and factual precedent
 
@@ -150,10 +150,10 @@ authorization. The future `execute_tool` protocol must re-resolve the descriptor
 and re-run the current source dispatcher's complete live authority checks before
 invocation.
 
-## Shadow-only lazy protocol successor
+## Shadow-only lazy protocol
 
-`CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01` now has an owner-decision-free source
-candidate, but **no provider cutover**:
+`CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01` is public and its metadata-only capture
+has loaded-MV3 evidence, but **no provider cutover**:
 
 - `lazy-tool-wire.js` defines the fixed, always-small `search_tools` and
   `execute_tool` descriptors and is the only lazy module imported by the
@@ -180,7 +180,11 @@ candidate, but **no provider cutover**:
 The reusable execution core is not reachable from a service-worker message
 route or provider. It exists so dispatcher parity and every fence can be
 independently reviewed before exposure. The existing eager tool map remains the
-production behavior.
+production behavior. The exact public loaded extension proved that Settings
+received only the two fixed descriptors plus one bounded selected summary, the
+NTP caller was denied with a matching security event, and no full/non-selected
+schema, provider data, secret, execute, grant, install, package, permission or
+provider message crossed this shadow boundary.
 
 ## Provider nondisclosure and cutover boundary
 
@@ -190,11 +194,40 @@ contents are not appended to system prompts or model messages. The only runtime
 consumer remains the Settings-only diagnostic route, whose capture action is
 metadata-only and cannot invoke the execution core.
 
-Before provider exposure, exact loaded-MV3 capture must prove that non-selected
-descriptors and schemas are absent and uncallable, that selected dispatch is
-behaviorally identical across every existing source, and that expiry/restart/
-revocation/cancellation fences survive the real service-worker lifecycle. Eager
-binding is not removed by this candidate.
+The loaded-MV3 shadow gate proved bounded selected-only capture and absence of
+an execution action. Provider exposure remains a separate successor: it must
+prove selected dispatch parity across every existing source and expiry/restart/
+revocation/cancellation fences through the real service-worker lifecycle before
+eager binding may be removed.
+
+## Source-only OPFS workspace authority
+
+`CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01` adds an unreachable, service-worker-
+owned wrapper for strict `tool-jobs/<execution>/<call>/` roots:
+
+- path segments use a narrow ASCII grammar, reject reserved/traversal/encoded or
+  malformed names, and never return directory or writable-input handles;
+- `projectInput` rechecks job authority, verifies SHA-256 before write, writes
+  `inputs/<digest>.bin` once, completes only an interrupted empty projection,
+  re-reads/hash-verifies, and refuses conflicting or undeclared input;
+- a promise-chain mutex serializes journal changes; byte/file reservations use
+  bounded idempotency keys and origin-storage pressure checks;
+- `.quota.current`, `.quota.next` and a trusted `.quota.anchor` recover a newer
+  closed journal only when `prevSeq`/`prevDigest` continuity is proven; stale or
+  corrupt next state is discarded when current is valid, while unverifiable or
+  both-invalid state quarantines fail closed;
+- orphan GC scans only strict job identities, requires terminal+expired metadata,
+  writes a durable `.gc` marker before recursive removal, resumes interrupted
+  removal, and never removes a cross-job identity mismatch;
+- output promotion calls only `createAssetKeyed`. Its caller-owned key binds
+  execution ID, call index, filename and SHA-256 of the bounded content. The
+  keyed artifact authority deliberately treats a same key as the same operation
+  without comparing retry content, so every future caller must also include the
+  content digest. The existing unkeyed `createAsset` contract remains unchanged.
+
+The wrapper exposes no runtime message, provider, package, Worker or model tool.
+It does not make OPFS or a fresh Worker usable in MV3. Execution remains blocked
+on the loaded-MV3 runtime probe and a separately reviewed route/host successor.
 
 ## Distribution lanes and Store policy
 
@@ -215,16 +248,17 @@ unresolved.
 
 ## Planned authority split
 
-1. **Lazy protocol:** shadow source/capture candidate implemented; provider
-   exposure/cutover and loaded-MV3 nondisclosure remain gated. Live source
-   reauthorization is implemented only in the injectable core.
+1. **Lazy protocol:** public shadow capture verified; provider exposure/cutover
+   remains gated. Live source reauthorization exists only in the unreachable
+   injectable core.
 2. **MV3 runtime probe:** prove Wasm CSP, offscreen/nested Worker, OPFS,
    timeout/termination, import, and memory behavior in a loaded extension.
 3. **Package authority:** immutable manifest/module/capability identity,
    digest/signature/SBOM/licence, revocation, and artifact-grade WAL/CAS
    install/update.
-4. **OPFS workspaces:** per-job read-only inputs, bounded scratch/output, path
-   normalization, quota reservation, cleanup, and cross-job isolation.
+4. **OPFS workspaces:** source candidate implements per-job read-only inputs,
+   bounded scratch/output, journaled quota reservation, cleanup, cross-job
+   isolation and keyed artifact promotion; no execution route consumes it.
 5. **Execution host:** fresh Worker per invocation; strict import objects; no
    main-thread fallback; durable job records; replay integration.
 6. **Built-ins:** provenance-clean bundled tranche, starting with operating
@@ -256,8 +290,8 @@ maximum does not cap the whole Worker heap.
 
 ## Explicit non-goals of this slice
 
-- no Wasm ABI, loader, runtime, Worker, package, install, signature, grant,
-  execution, or OPFS job workspace;
+- no Wasm ABI, loader, runtime, Worker, package, install, signature, grant or
+  execution route; the OPFS wrapper is source-only and unreachable;
 - no embeddings, SQLite, Vectorize, or storage-engine decision;
 - no permission additions or `chrome.permissions.request` calls;
 - no provider binding or eager-binding cutover for the lazy protocol;

@@ -460,10 +460,11 @@ function boundAssetMeta({ type, name, content }) {
   return { ok: true, type: at, name: nm, size };
 }
 
-/** S0→S7 — create. */
-export async function createAsset(origin, { type, name, content, meta }) {
-  const store = assetStore(origin);
-  const o = canonical(origin);
+/** S0→S7 — create. The shared core runs under the per-origin lock; `pk` is
+ * the optional stable PROMOTION KEY (createAssetKeyed sets it — the exact-
+ * token dedup record in the row). The wrapper never calls this unkeyed path
+ * for promotion (a retry would create a duplicate). */
+async function createAssetLocked(store, origin, o, { type, name, content, meta, pk }) {
   const bounded = boundAssetMeta({ type, name, content });
   if (bounded.error) return { ok: false, error: bounded.error };
   const id = newId();
@@ -472,15 +473,17 @@ export async function createAsset(origin, { type, name, content, meta }) {
     id, type: bounded.type, name: bounded.name, origin: o,
     createdAt: now, updatedAt: now, size: bounded.size, content, meta: meta ?? {},
   };
-  return withAssetLock(origin, async () => {
-    await recoverTx(store); // crash recovery (the durable WAL)
-    await repairPendingLocked(store, origin);
-    const index = await readIndexStrict(store); // S0
-    if (index.length >= ASSET_BOUNDS.maxAssetsPerOrigin) {
-      return { ok: false, error: `asset limit reached (${ASSET_BOUNDS.maxAssetsPerOrigin})` };
-    }
-    const idxGen = await store.getVersion(INDEX_KEY);
-    const row = { id, type: bounded.type, name: bounded.name, origin: o, at: now, size: bounded.size };
+  await recoverTx(store); // crash recovery (the durable WAL)
+  await repairPendingLocked(store, origin);
+  const index = await readIndexStrict(store); // S0
+  if (index.length >= ASSET_BOUNDS.maxAssetsPerOrigin) {
+    return { ok: false, error: `asset limit reached (${ASSET_BOUNDS.maxAssetsPerOrigin})` };
+  }
+  const idxGen = await store.getVersion(INDEX_KEY);
+  const row = {
+    id, type: bounded.type, name: bounded.name, origin: o, at: now, size: bounded.size,
+    ...(pk ? { pk } : {}),
+  };
     const next = [...index, row];
     let idx = next;
     while (idx.length > 1 && utf8Bytes(JSON.stringify(idx)) > ASSET_BOUNDS.maxIndexBytes) {
@@ -614,6 +617,54 @@ export async function createAsset(origin, { type, name, content, meta }) {
       }
     }
     return { ok: true, asset: { ...asset, content: undefined }, index: idx };
+}
+
+/** S0→S7 — create (the UNKEYED path; never used for workspace promotion). */
+export async function createAsset(origin, { type, name, content, meta }) {
+  const store = assetStore(origin);
+  const o = canonical(origin);
+  const bounded = boundAssetMeta({ type, name, content });
+  if (bounded.error) return { ok: false, error: bounded.error };
+  return withAssetLock(origin, async () => createAssetLocked(store, origin, o, { type, name, content, meta, pk: null }));
+}
+
+/** The KEYED create — the promotion idempotency entry (the reviewed v3 §8
+ * exact-token dedup). A retry with the SAME stable key returns the SAME asset:
+ * the prior row's `pk` is the dedup record and the body must still exist at a
+ * valid token. CALLER CONTRACT: the key must bind the full operation identity,
+ * including a digest of the already-bounded content. This function deliberately
+ * does not compare retry content after a key match; a digest-free caller key
+ * would make different content look like the same operation. The OPFS workspace
+ * follows this contract. The create runs under the per-origin lock + the durable
+ * __tx WAL — a crash at any await is recovered by exact tokens (prepared →
+ * committed | compensated), never a direct index edit. */
+export async function createAssetKeyed(origin, { key, type, name, content, meta }) {
+  if (typeof key !== "string" || !key || key.length > ASSET_BOUNDS.maxNameLength) {
+    return { ok: false, error: "promotion key must be a non-empty string" };
+  }
+  const store = assetStore(origin);
+  const o = canonical(origin);
+  const bounded = boundAssetMeta({ type, name, content });
+  if (bounded.error) return { ok: false, error: bounded.error };
+  return withAssetLock(origin, async () => {
+    await recoverTx(store); // a crashed keyed create resolves BEFORE the dedup scan
+    await repairPendingLocked(store, origin);
+    const index = await readIndexStrict(store);
+    const prior = index.find((r) => r.pk === key);
+    if (prior) {
+      // EXACT-TOKEN dedup: the row is the record; the body must still exist.
+      const v = await store.getVersion(`asset:${prior.id}`).catch(() => 0);
+      if (v != null && v > 0) {
+        const asset = await store.get(`asset:${prior.id}`);
+        return { ok: true, deduped: true, id: prior.id, asset };
+      }
+      // A row with the key but NO body is a repair-in-progress/corruption
+      // state — FAIL CLOSED (never a silent duplicate row under the same key).
+      return { ok: false, error: "promotion body missing — repair in progress" };
+    }
+    const res = await createAssetLocked(store, origin, o, { type, name, content, meta, pk: key });
+    if (res?.ok && res.id == null) res.id = res.asset?.id;
+    return res;
   });
 }
 
