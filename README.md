@@ -113,7 +113,12 @@ Production packaging never copies the local `extension/` tree wholesale. It
 combines Git-tracked regular files with the current generated `dist` and the
 byte-identical generated changelog, rejects symlinks/special files, verifies a
 fresh ZIP's exact names and hashes, then atomically replaces the final archive.
-Ignored local bundles and files removed since an older ZIP cannot survive.
+`dist.complete` is canonical JSON bound to the Git commit, current indexed source
+bytes, and exact generated bundle hashes; lock owners, PIDs, stage paths and
+wall-clock timestamps remain build custody and never enter package bytes. The
+package step revalidates that marker around inventory hashing. Identical source
+builds therefore produce byte-identical markers and ZIPs, while ignored local
+bundles, stale markers, and files removed since an older ZIP cannot survive.
 
 ## Architecture
 

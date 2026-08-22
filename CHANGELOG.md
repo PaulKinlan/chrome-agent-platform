@@ -1,7 +1,11 @@
 # Changelog
 
+## [0.2.157] — 2026-08-22
+- fix(build): recompose deterministic archives after Tool Library (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01, CAP-FB-20260822-TOOL-LIBRARY-UI-01)
+
 ## [0.2.156] — 2026-08-22
 - feat(settings): add read-only Tool Library panel
+- fix(build): make extension archives reproducible (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01)
 
 ## [0.2.155] — 2026-08-22
 - feat(wasm): define pure WASI host contract (CAP-FB-20260822-WASM-EXECUTION-HOST-01)

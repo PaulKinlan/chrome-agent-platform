@@ -1,8 +1,9 @@
 // tests/build-bootstrap.test.ts — regression for the K3 finding: the
 // steady-state dist SYMLINK must NOT re-run the legacy-dir bootstrap, and
 // dangling v-boot symlink residue under dist-versions must be GC'd.
-// @ts-nocheck
+// @ts-nocheck: dynamic Node filesystem imports exercise real build pointers.
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { packageExtensionArchive } from "../scripts/package-archive.mjs";
 const fsMod = "node:fs/promises";
 const { lstat, symlink, readdir, readFile } = await import(fsMod);
 const cpMod = "node:child_process";
@@ -75,4 +76,45 @@ Deno.test("GC: exactly one live version remains after repeated builds", async ()
     1,
     `one live version, got ${dirs.map((d) => d.name)}`,
   );
+});
+
+Deno.test("two production builds produce byte-identical markers and ZIP archives", async () => {
+  const output = await Deno.makeTempDir({
+    prefix: "cap-deterministic-build-package-",
+  });
+  try {
+    build();
+    const firstMarker = await readFile(
+      path.join(DIST, "dist.complete"),
+      "utf8",
+    );
+    const first = await packageExtensionArchive({
+      root: ROOT,
+      archive: path.join(output, "first.zip"),
+    });
+
+    build();
+    const secondMarker = await readFile(
+      path.join(DIST, "dist.complete"),
+      "utf8",
+    );
+    const second = await packageExtensionArchive({
+      root: ROOT,
+      archive: path.join(output, "second.zip"),
+    });
+
+    assertEquals(secondMarker, firstMarker, "dist.complete bytes drifted");
+    assertEquals(
+      second.archiveSha256,
+      first.archiveSha256,
+      "two-build archive digest drifted",
+    );
+    assertEquals(
+      await Deno.readFile(path.join(output, "second.zip")),
+      await Deno.readFile(path.join(output, "first.zip")),
+      "two-build ZIP bytes drifted",
+    );
+  } finally {
+    await Deno.remove(output, { recursive: true });
+  }
 });

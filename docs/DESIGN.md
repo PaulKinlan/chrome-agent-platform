@@ -126,8 +126,15 @@ The production ZIP is a projection, not a copy of the developer's local
 files, the current generated dist tree, and the byte-identical generated
 changelog. A unique fresh temp archive is checked for exact names, duplicate or
 stale entries, regular-file portability, and content hashes before an atomic
-same-filesystem replacement. Ignored/untracked files, symlinks, special files,
-and content retained from an older ZIP are never distribution UI or runtime.
+same-filesystem replacement. `dist.complete` is not a mere presence flag: its
+bounded canonical schema binds the exact Git commit, current bytes of every
+indexed source file, and the exact generated service-worker/options hashes.
+The build compares indexed source before and after bundling, and packaging
+validates the marker both before and after hashing its inventory. Random lock
+owners, PIDs, version-directory names, and wall-clock timestamps remain private
+custody rather than archive input. Identical source builds are byte-identical;
+stale/legacy markers, ignored/untracked files, symlinks, special files, and
+content retained from an older ZIP are never distribution UI or runtime.
 
 ## Browser-test process custody
 The real-Chromium security suite runs only through its canonical lock-owning

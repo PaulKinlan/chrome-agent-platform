@@ -17,7 +17,7 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 
 ## Open
 
-11. **Extension name/distribution** — "Chrome Agent Platform" is a placeholder; the final public name and channel remain undecided. Archive freshness is no longer part of this decision: production ZIPs already use an exact tracked-plus-generated inventory and atomic fresh replacement.
+11. **Extension name/distribution** — "Chrome Agent Platform" is a placeholder; the final public name and channel remain undecided. Archive freshness and reproducibility are no longer part of this decision: production ZIPs use an exact tracked-plus-generated inventory, a deterministic commit/source/output-bound `dist.complete`, and atomic fresh replacement.
 12. **The model for the hub** — Gemini Nano is weak for tool-calling; which provider should be the recommended default for the best experience?
 13. **Owner-selected Wasm distribution policy** — may a Chrome Web Store build execute genuinely local owner-selected Wasm without violating remotely hosted code policy? Until written policy resolves this, Store mode is bundled-reviewed-executables only; owner-selected packages remain an unpacked/enterprise/developer lane.
 14. **Co-do licence/provenance reconciliation** — Co-do's root is Apache-2.0 while package and generated manifest metadata declare MIT. Which source/licence/SBOM/reproducibility authority must each candidate binary satisfy? No Co-do binary may be copied before this is resolved.

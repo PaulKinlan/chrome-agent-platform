@@ -10,6 +10,10 @@ import {
   packageExtensionArchive,
   verifyPackageArchive,
 } from "../scripts/package-archive.mjs";
+import {
+  validateDistCompleteMarker,
+  writeDistCompleteMarker,
+} from "../scripts/dist-complete.mjs";
 
 async function command(cwd, executable, args) {
   const output = await new Deno.Command(executable, {
@@ -100,8 +104,19 @@ async function fixture() {
     "extension/dist/options.bundle.js",
     "console.log('options-v1');\n",
   );
-  await write(root, "extension/dist/dist.complete", '{"fixture":1}\n');
+  await writeDistCompleteMarker({
+    root,
+    distRoot: `${root}/extension/dist`,
+  });
   return root;
+}
+
+async function refreshMarker(root) {
+  await Deno.remove(`${root}/extension/dist/dist.complete`).catch(() => {});
+  await writeDistCompleteMarker({
+    root,
+    distRoot: `${root}/extension/dist`,
+  });
 }
 
 async function zipEntries(archive) {
@@ -202,7 +217,7 @@ Deno.test("package archive replaces poison from exact tracked + generated invent
       "extension/dist/options.bundle.js",
       "console.log('options-v2-current');\n",
     );
-    await write(root, "extension/dist/dist.complete", '{"fixture":2}\n');
+    await refreshMarker(root);
 
     const second = await packageExtensionArchive({ root, archive });
     const secondNames = await zipEntries(archive);
@@ -254,6 +269,78 @@ Deno.test("package archive replaces poison from exact tracked + generated invent
     assertEquals(leftovers, [], "package staging/temp files leaked");
   } finally {
     await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("dist.complete rejects stale source/output plus owner and timestamp mutants", async () => {
+  const staleSource = await fixture();
+  try {
+    await write(
+      staleSource,
+      "extension/options/options.js",
+      "export const source = 2;\n",
+    );
+    await assertRejects(
+      () => collectPackageInventory({ root: staleSource }),
+      Error,
+      "marker indexed source authority is stale",
+    );
+  } finally {
+    await Deno.remove(staleSource, { recursive: true });
+  }
+
+  const staleOutput = await fixture();
+  try {
+    await write(
+      staleOutput,
+      "extension/dist/options.bundle.js",
+      "console.log('stale-after-marker');\n",
+    );
+    await assertRejects(
+      () => collectPackageInventory({ root: staleOutput }),
+      Error,
+      "marker output is stale: options.bundle.js",
+    );
+  } finally {
+    await Deno.remove(staleOutput, { recursive: true });
+  }
+
+  for (const field of ["owner", "builtAt", "timestamp"]) {
+    const root = await fixture();
+    try {
+      const markerPath = `${root}/extension/dist/dist.complete`;
+      const marker = JSON.parse(await Deno.readTextFile(markerPath));
+      marker[field] = field === "owner" ? "random-owner-token" : Date.now();
+      await Deno.writeTextFile(markerPath, `${JSON.stringify(marker)}\n`);
+      await assertRejects(
+        () =>
+          validateDistCompleteMarker({
+            root,
+            distRoot: `${root}/extension/dist`,
+          }),
+        Error,
+        "marker top-level schema is not exact",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+
+  const staleCommit = await fixture();
+  try {
+    await command(staleCommit, "git", [
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "next",
+    ]);
+    await assertRejects(
+      () => collectPackageInventory({ root: staleCommit }),
+      Error,
+      "marker commit is stale",
+    );
+  } finally {
+    await Deno.remove(staleCommit, { recursive: true });
   }
 });
 

@@ -29,6 +29,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { validateDistCompleteMarker } from "./dist-complete.mjs";
 
 const execFileAsync = promisify(execFile);
 const TRACKED_MODES = new Set(["100644", "100755"]);
@@ -203,6 +204,10 @@ export async function collectPackageInventory({ root }) {
   });
 
   const distRoot = await resolveDist(extDir);
+  // The marker is executable authority, not a presence bit: it must bind the
+  // current commit, indexed source bytes and both generated bundle hashes.
+  // Legacy owner/timestamp markers and stale copied markers fail closed.
+  const marker = await validateDistCompleteMarker({ root, distRoot });
   for (const generated of await walkRegularFiles(distRoot)) {
     const archivePath = `${GENERATED_DIST}/${generated.archivePath}`;
     entries.push({
@@ -220,8 +225,23 @@ export async function collectPackageInventory({ root }) {
     }
     byPath.set(entry.archivePath, entry);
   }
+  for (const output of marker.outputs) {
+    const entry = byPath.get(`${GENERATED_DIST}/${output.path}`);
+    if (!entry || entry.sha256 !== output.sha256) {
+      throw packageError(
+        `dist.complete output binding mismatch: ${output.path}`,
+      );
+    }
+  }
+  // Revalidate after inventory hashing. copyInventoryToStage subsequently
+  // compares every copied byte with this inventory, closing the remaining
+  // read/copy race without weakening fresh-archive atomicity.
+  await validateDistCompleteMarker({ root, distRoot });
+
   const manifestEntry = byPath.get("manifest.json");
-  if (!manifestEntry) throw packageError("required package file missing: manifest.json");
+  if (!manifestEntry) {
+    throw packageError("required package file missing: manifest.json");
+  }
   let manifest;
   try {
     manifest = JSON.parse(await readFile(manifestEntry.sourcePath, "utf8"));
@@ -233,7 +253,9 @@ export async function collectPackageInventory({ root }) {
     manifest?.manifest_version !== 3 || !archivePathSafe(serviceWorker) ||
     !serviceWorker.startsWith("dist/")
   ) {
-    throw packageError("manifest service-worker route is not a safe generated dist path");
+    throw packageError(
+      "manifest service-worker route is not a safe generated dist path",
+    );
   }
   for (
     const required of [

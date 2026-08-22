@@ -20,6 +20,11 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
+import {
+  computeIndexedSourceAuthority,
+  validateDistCompleteMarker,
+  writeDistCompleteMarker,
+} from "./scripts/dist-complete.mjs";
 
 const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
@@ -204,6 +209,11 @@ try {
       throw new Error("CAP_TEST_SEAM=1 is not allowed for the production build");
     }
 
+    // Bind the build to a stable indexed-source snapshot. The marker is
+    // recomputed after bundling and the build fails if source bytes changed
+    // while esbuild was running.
+    const sourceBefore = await computeIndexedSourceAuthority({ root: ROOT });
+
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
       logLevel: "silent", sourcemap: false, legalComments: "none",
@@ -258,8 +268,21 @@ try {
     }
 
     // The COMPLETE marker inside the staged tree: readers treat dist as valid
-    // only while dist/dist.complete exists.
-    await writeFile(path.join(STAGE, "dist.complete"), JSON.stringify({ builtAt: new Date().toISOString(), owner: OWNER.token }));
+    // only while dist/dist.complete exists. Lock owner, PID, wall-clock time,
+    // stage path and version ID are invocation custody and MUST NOT enter this
+    // production byte. The marker binds stable indexed source plus exact
+    // generated output bytes and is therefore reproducible and verifiable.
+    const sourceAfter = await computeIndexedSourceAuthority({ root: ROOT });
+    if (
+      sourceAfter.digest !== sourceBefore.digest ||
+      sourceAfter.files !== sourceBefore.files
+    ) {
+      throw new Error(
+        "indexed source changed during build — refusing to publish a mixed-generation dist",
+      );
+    }
+    await writeDistCompleteMarker({ root: ROOT, distRoot: STAGE });
+    await validateDistCompleteMarker({ root: ROOT, distRoot: STAGE });
 
     // ── THE PUBLISH (serialized by the lock) ────────────────────────────────
     // VERSIONED-DIR + ATOMIC POINTER: the real trees are dist-versions/<id>/;

@@ -5,16 +5,17 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 16:50 UTC. Reconciled against exact public
-> `origin/main@462d21d8da9bee640c2c12088dcafba6123e00fc` (`0.2.155`). Lazy,
-> package freshness, security-suite serialization and pure WASI Gate 1 are
-> `DONE`; the catalog remains `MERGED`; OPFS, bundled-package, public code-diff
-> and Chrome-capability records remain `IN_REVIEW` with Shipping `—`. This
-> branch adds only the read-only Tool Library panel-one `0.2.156` candidate;
-> no tool execution, package admission or provider authority is added.
-> Branch status counts: **13 OPEN · 12 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 37 DONE · 0 ABANDONED**. The 31 active entries and 37 archived terminal entries
-> below are the complete 68-entry state.
+> Snapshot: 2026-08-22 19:55 UTC. Reconciled against exact public
+> `origin/main@5e086c1fb0847ddccf1a16ba3129a4cf900eac8f` (`0.2.156`). Lazy,
+> security-suite serialization, pure WASI Gate 1 and the reviewed Tool Library
+> release remain exact; the catalog remains `MERGED`; OPFS, bundled-package,
+> public code-diff and Chrome-capability records remain `IN_REVIEW` with
+> Shipping `—`. This branch narrowly reopens package freshness to recompose the
+> reviewed deterministic commit/indexed-source/output marker as the `0.2.157`
+> candidate; no Tool product byte, execution, package admission, Store target,
+> provider or permission authority is added. Branch status counts: **13 OPEN ·
+> 13 IN_REVIEW · 2 MERGED · 4 BLOCKED · 36 DONE · 0 ABANDONED**. The 32 active
+> entries and 36 archived terminal entries below are the complete 68-entry state.
 
 ## Safety boundary
 
@@ -1377,26 +1378,27 @@ On resume after a coordinator or worker loss:
   - 2026-08-22 13:09 UTC — exact reviewed candidate `0e47a63591c9c798043cc196f6049c410d2cd597` became public `0.2.148`; its one authorized serialized real Chromium run and independent evidence review passed 7/7 with clean custody and cleanup, advancing the task to DONE.
 
 ## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
-- Feedback: 2026-08-22 — production packaging copied the entire local extension tree and updated an existing ZIP in place, allowing ignored/untracked artifacts and files removed since a prior package to survive into a release archive
-- Updated: 2026-08-22 12:38 UTC
-- Status: DONE
+- Feedback: 2026-08-22 — exact fresh packaging was public, but `dist.complete` still embedded a random build-owner token and wall-clock timestamp, so two builds from identical source produced different production ZIP bytes
+- Updated: 2026-08-22 19:55 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: package-archive implementer
-- Workspace: none
-- Branch: `main`
-- Base: `a8985af8af2af76d714cd0be29781c18c08d7a7f`
-- Candidate: `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
-- Shipping: `origin/main@1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
-- Acceptance: each package is assembled only from Git's exact tracked regular-file inventory under `extension/`, the current generated `dist` authority, and a byte-identical generated extension changelog; ignored/untracked files never enter; tracked/generated symlinks and special files, duplicate/nonportable paths, missing required dist files, stale changelog, unexpected ZIP entries and content-hash mismatches fail closed; ZIP output is written from a fresh exact staging tree to one unique nonexistent same-directory temp file, verified for exact inventory/no duplicates/no stale entries/current hashes/portable regular files, then atomically renamed over the final archive; failure preserves the old final and removes stage/temp residue
-- Review: independent archive-security/source-inventory/portability/atomicity review PASS on the exact candidate; review report SHA-256 `6bae139d36ff5c7da165460f643eb8fc5e0f9d8efb178a3a4c3bf8e47dae5f35`
-- Gates: exact candidate focused 3/3, executable mutation driver 3/3, canonical full unit 935/935, 102-file production build, exact 128-entry package/validate, gallery/changelog/order/diff/release/clean-tree PASS; two consecutive public-tip packages were byte-identical at SHA-256 `75619127f951465659d6f50975bbc07e965ef2d44534380eb7b43bade2c6f0af`; no Chrome was required for this packaging-only slice
-- Blockers: —
-- Next: —
-- Recover: `git show 1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624 -- scripts/package-extension.mjs scripts/package-archive.mjs tests/package-extension-freshness.test.ts tests/package-extension-freshness-driver.mjs TASKS.md`
+- Owner: deterministic build-marker recompose implementer
+- Workspace: active (local path private)
+- Branch: `fix/deterministic-marker-recompose-5e086c1`
+- Base: `5e086c1fb0847ddccf1a16ba3129a4cf900eac8f`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: each package retains the reviewed exact tracked-plus-generated regular-file inventory and atomic fresh replacement; `dist.complete` is bounded canonical JSON derived only from the exact Git commit, current bytes of every indexed source file, and the exact generated service-worker/options bytes; random lock owner, PID, staging/version paths, and wall-clock time remain private build custody; the build compares indexed source before and after bundling; packaging validates the marker before and after inventory hashing and its copy verification closes the remaining read/copy race; stale commit/source/output markers, legacy owner/time fields, malformed/special markers, and source changes during build fail closed; two consecutive builds and packages from identical source are byte-for-byte identical
+- Review: deterministic marker semantics at `3c96a9ff5f76633c177fcff4fbf7497f4c149790` independently PASSed review SHA-256 `b51b1d6eddae468ef868f98b2ffa141a5148032fee248a3c3461cbc2661517e8`; exact current-parent semantic recompose review pending
+- Gates: focused marker/bootstrap and package-freshness gates, canonical full no-Chrome suite, production build with zero Wasm, two same-source canonical markers and exact package/validate ZIPs, gallery/changelog/order/tracker/privacy/diff/release/clean gates required before review; no Chrome or security suite is authorized in this source lane
+- Blockers: independent exact-candidate review before publication
+- Next: complete no-Chrome gates, commit once as the hook-owned `0.2.157` release candidate, and stop for independent review
+- Recover: `git show <candidate> -- build.mjs scripts/dist-complete.mjs scripts/package-archive.mjs tests/build-bootstrap.test.ts tests/package-extension-freshness.test.ts tests/package-extension-freshness-driver.mjs README.md PLAN.md KNOWN-ISSUES.md docs/DESIGN.md docs/OPEN-QUESTIONS.md TASKS.md`
 - History:
   - 2026-08-22 11:10 UTC — replaced whole-tree/in-place ZIP packaging with an exact tracked-plus-generated inventory, fresh temp archive, extracted hash verification and atomic replacement; added poison/removal/current-dist/symlink/special/failure-cleanup regressions on exact public `a8985af`.
   - 2026-08-22 12:38 UTC — independent review PASSed; exact `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624` became public `0.2.147`, repeated real package/validate was byte-identical and free of the ignored stale bundle, and the task advanced to DONE.
+  - 2026-08-22 19:55 UTC — reopened narrowly on exact public Tool Library `0.2.156` to recompose the independently reviewed deterministic marker semantics while preserving lock custody, atomic publication, exact inventory and every Tool product byte; Store target binding remains a separate successor.
 
 Entries that reached `DONE` or `ABANDONED`, preserved with their complete field set and History.
 
