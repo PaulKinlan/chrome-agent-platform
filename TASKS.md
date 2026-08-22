@@ -5,9 +5,9 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 07:40 UTC. Reconciled against exact public
-> `origin/main@6480005001335fac885f6c7e261999424b0c9dac` (`0.2.137`).
-> Current status counts: **12 OPEN · 4 IN_REVIEW · 3 BLOCKED · 33 DONE ·
+> Snapshot: 2026-08-22 07:58 UTC. Reconciled against exact public
+> `origin/main@b71e7a58f506f06a6fdb8bfaae2e10253f5be2d9` (`0.2.138`).
+> Current status counts: **11 OPEN · 5 IN_REVIEW · 3 BLOCKED · 33 DONE ·
 > 0 ABANDONED**. The 19 active entries and 33 archived terminal entries below
 > are the complete 52-entry tracker state at this snapshot.
 
@@ -523,23 +523,24 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01] Remove superseded surfaces and the published mock site
 - Feedback: 2026-08-21 — independent architectural review found six stale design mocks duplicated into the published documentation site, a published front page titled "UI mocks", and two shipped surfaces that no longer carry a job
-- Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 07:58 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
-- Candidate: —
+- Owner: dead-surface cleanup implementer
+- Workspace: active (local path private)
+- Branch: `chore/remove-root-mocks-b71e7a5`
+- Base: `b71e7a58f506f06a6fdb8bfaae2e10253f5be2d9`
+- Candidate: this commit
 - Shipping: —
 - Acceptance: the `mock/` directory and its duplicated copies under `docs/` are removed; the published front page presents the component gallery and a real product screenshot rather than dead mocks, or is withdrawn; the Chrome Prompt API and demo-local providers are removed from the user-facing provider picker while remaining reachable for internal testing if still needed; the side panel's Page tab is either given a stated job or folded into the Agents view; every removal is checked for inbound references across code, docs, tests and the gallery sync before it lands
-- Review: independent review that no live surface, test, gallery entry or documentation link references a removed file
-- Gates: full unit suite, `scripts/chrome-journeys.ts`, `npm run check:gallery` and `npm run test:components` green after removal; a repository-wide grep for each removed path returning no hits; a loaded-MV3 screenshot of the provider picker without the internal entries
-- Blockers: removing providers from the picker must not remove a provider a user has already selected without a stated migration; the Page-tab decision is a product decision, not a cleanup
-- Next: produce the removal inventory with inbound-reference counts per item, then land the uncontroversial removals separately from the Page-tab decision
-- Recover: `git ls-files mock docs && git grep -n "prompt-api\|demo" -- extension/options extension/lib/provider.js`
+- Review: independent review pending on the exact owner-decision-free slice that deletes only the six closed, unreferenced root `mock/` files; published docs, providers, and the Page tab are unchanged
+- Gates: removed-path/external-reference and Markdown/docs-HTML link scans pass; full unit 876/876, build across 91 shipped JS, gallery/changelog/order, exact scope, and diff checks pass; browser-backed `npm run test:components` and the canonical loaded-MV3 Chrome suite follow independent review and are deliberately not run by the implementer under the no-Chrome instruction
+- Blockers: slice 1 needs independent review and the canonical Chrome gate; the public landing page/screenshot and `/model` namespace remain product decisions, while internal-provider state must remain migration-safe; the Page tab already has a tested current job and is not removed by this slice
+- Next: complete no-Chrome gates, commit the exact six-file deletion, obtain independent review, then run the canonical Chrome suite; scope the public-doc and provider residuals separately
+- Recover: `git show --stat chore/remove-root-mocks-b71e7a5 && git diff b71e7a5..chore/remove-root-mocks-b71e7a5 -- mock TASKS.md`
 - History:
+  - 2026-08-22 07:58 UTC — implemented owner-decision-free slice 1 on exact public `b71e7a5`: the standalone `mock/` subtree had no inbound repository references outside itself, so its six files were deleted without touching the published docs, provider authority, or side-panel Page job; status advanced to `IN_REVIEW` for independent review and the later canonical Chrome gate.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §4). The provider-picker removal restates a backlog item standing since 2026-08-17 and is folded here so it has acceptance criteria and a gate.
 

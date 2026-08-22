@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.139] — 2026-08-22
+- chore: remove unreferenced root mocks (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
+
 ## [0.2.138] — 2026-08-22
 - docs(tasks): finalize exact-tip tracker reconciliation (CAP-FB-20260821-TRACKER-GIT-RECONCILE-01)
 
