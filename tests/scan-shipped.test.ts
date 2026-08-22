@@ -296,3 +296,39 @@ Deno.test("scan: the minifier worker bundles are statically eval/Function/import
     assertEquals(v.length, 0, `${bundle} must contain no eval/Function/importScripts/Worker sink`);
   }
 });
+
+const JWT_CANONICAL_REL = "extension/lib/jwt-decode.js";
+
+async function jwtClientContents() {
+  return await Deno.readTextFile(new URL("../extension/lib/jwt-decode.js", import.meta.url));
+}
+
+Deno.test("scan: the jwt-decode canonical new Worker host is accepted at its exact location", async () => {
+  const source = await jwtClientContents();
+  const v = await scanShippedJs([JWT_CANONICAL_REL], { readText: async () => source });
+  assertEquals(v.length, 0, "the canonical jwt-decode host with the exact new Worker node stays clean");
+});
+
+Deno.test("scan: lookalike jwt-decode paths NEVER inherit the canonical exemption", async () => {
+  const source = await jwtClientContents();
+  const lookalikes = [
+    `/repo/${JWT_CANONICAL_REL}.evil`,
+    `/repo/${JWT_CANONICAL_REL}/..`,
+    `/repo/xx${JWT_CANONICAL_REL}`,
+    `/repo/extension/lib/not-jwt-decode.js`,
+    `/repo/extension/lib/jwt-decode.js\u0000x`,
+  ];
+  for (const file of lookalikes) {
+    const v = await scanShippedJs([file], { readText: async () => source });
+    assert(v.length >= 1, `jwt-decode host lookalike ${JSON.stringify(file)} must violate`);
+  }
+});
+
+Deno.test("scan: the jwt-decode worker is statically eval/Function/network-free (no dynamic exemption)", async () => {
+  const worker = await Deno.readTextFile(new URL("../extension/lib/jwt-decode-worker.js", import.meta.url));
+  const core = await Deno.readTextFile(new URL("../extension/lib/jwt-decode-core.js", import.meta.url));
+  for (const [name, source] of [["jwt-decode-worker.js", worker], ["jwt-decode-core.js", core]]) {
+    const v = await scanShippedJs([`extension/lib/${name}`], { readText: async () => source });
+    assertEquals(v.length, 0, `${name} must contain no eval/Function/importScripts/network/Worker sink`);
+  }
+});

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "title": "jwt_decode_bounded successful result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["header", "payload", "verified", "warnings"],
+  "properties": {
+    "header": { "type": "object", "description": "Redacted decoded JOSE header." },
+    "payload": { "type": "object", "description": "Redacted decoded claims object." },
+    "verified": { "const": false },
+    "warnings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": { "type": "string" },
+      "requiredFirstItem": "WARNING: JWT signature was not verified; header and payload claims are untrusted."
+    }
+  },
+  "maxSerializedUtf8BytesIncludingLf": 32768
+}

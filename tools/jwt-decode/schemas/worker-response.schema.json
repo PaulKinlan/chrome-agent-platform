@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "title": "jwt_decode_bounded Worker response",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "id", "ok", "result"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "id": { "type": "string" },
+        "ok": { "const": true },
+        "result": { "document": "decode-output.schema.json" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "id", "ok", "error"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "id": { "type": ["string", "null"] },
+        "ok": { "const": false },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exitCode", "code", "diagnostic"],
+          "properties": {
+            "exitCode": { "enum": [1, 2] },
+            "code": { "type": "string" },
+            "diagnostic": { "type": "string", "pattern": "^jwt: " }
+          }
+        }
+      }
+    }
+  ]
+}

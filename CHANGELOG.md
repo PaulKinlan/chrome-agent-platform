@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.168] — 2026-08-22
+- feat(jwt): add bounded browser-native JWT decode lane (verified:false, disabled, no provider)
+
 ## [0.2.167] — 2026-08-22
 - feat(wasm): bundle sqlite3-query-bounded as immutable package 26, disabled runtime-imports-unimplemented (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
 

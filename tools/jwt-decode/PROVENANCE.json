@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "candidate": "jwt_decode_bounded",
+  "implementationMethod": "fresh clean-room JavaScript implementation from the reviewed JWT v3 feasibility contract",
+  "contractInputsRead": [
+    "/tmp/cap-jwt-tool-feasibility-v3/REPORT.md",
+    "/tmp/cap-jwt-tool-feasibility-v3-review/REPORT.md",
+    "/tmp/cap-jwt-tool-feasibility-v2/REPORT.md",
+    "/tmp/cap-jwt-tool-feasibility-v2-review/REPORT.md",
+    "/tmp/cap-jwt-tool-feasibility/REPORT.md",
+    "/tmp/cap-jwt-tool-feasibility-review/REPORT.md"
+  ],
+  "excludedInputs": [
+    "CAP source and package state",
+    "Co-do source",
+    "prior JWT candidate source or binaries",
+    "third-party JWT libraries",
+    "verification keys or credentials",
+    "network resources"
+  ],
+  "assertions": {
+    "cleanRoom": true,
+    "pureJavaScript": true,
+    "dependencies": 0,
+    "networkUsed": false,
+    "chromeUsed": false,
+    "signatureVerificationImplemented": false,
+    "canonicalNameClaim": false,
+    "admitted": false,
+    "licenceStatus": "pending-owner-confirmation",
+    "proposedLicence": "MIT"
+  }
+}

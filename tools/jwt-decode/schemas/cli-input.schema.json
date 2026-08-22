@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "title": "jwt_decode_bounded CLI input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["token"],
+  "properties": {
+    "token": {
+      "type": "string",
+      "maxUtf8Bytes": 16384,
+      "description": "Exactly one compact JWT; supplied through stdin, never argv."
+    }
+  }
+}

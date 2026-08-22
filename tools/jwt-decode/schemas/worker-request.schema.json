@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "title": "jwt_decode_bounded Worker request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "method", "params"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+    "method": { "const": "jwt_decode_bounded" },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token"],
+      "properties": { "token": { "type": "string", "maxUtf8Bytes": 16384 } }
+    }
+  }
+}

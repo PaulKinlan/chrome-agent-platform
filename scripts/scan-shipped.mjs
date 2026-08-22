@@ -222,6 +222,12 @@ const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 const MINIFIER_WORKER_HOST_CANONICAL_PATH = "extension/lib/js-minifier-lifecycle.js";
 const MINIFIER_WORKER_HOST_CANONICAL_LOCATION = { line: 13, column: 13 };
 const MINIFIER_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
+// The bounded JWT-decode host constructs its fresh browser Worker directly
+// (`new Worker(workerUrl, { type: "module" })`). A SEPARATE canonical entry
+// bound to the exact line/column + the exact `new Worker(` shape.
+const JWT_WORKER_HOST_CANONICAL_PATH = "extension/lib/jwt-decode.js";
+const JWT_WORKER_HOST_CANONICAL_LOCATION = { line: 60, column: 19 };
+const JWT_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -424,6 +430,13 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(MINIFIER_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, JWT_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === JWT_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === JWT_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(JWT_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);
