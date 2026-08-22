@@ -1,0 +1,133 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.5",
+ "serialNumber": "urn:uuid:8f2c1d34-9a4b-4c3e-8f2a-1d36e0a2b1c4d5",
+ "version": 1,
+ "metadata": {
+  "component": {
+   "type": "application",
+   "bom-ref": "cap.bundled.sqlite3-query-bounded@1.0.0",
+   "name": "cap.bundled.sqlite3-query-bounded",
+   "version": "1.0.0",
+   "description": "Immutable bundled CAP package: SQLite 3.46.0 amalgamation (upstream Blessing) + CAP-authored wrapper/host (Apache-2.0). Disabled: runtime-imports-unimplemented.",
+   "licenses": [
+    {
+     "expression": "blessing AND Apache-2.0"
+    }
+   ],
+   "properties": [
+    {
+     "name": "cap:admitted",
+     "value": "false"
+    },
+    {
+     "name": "cap:canonicalNameClaim",
+     "value": "false"
+    },
+    {
+     "name": "cap:disabledReason",
+     "value": "runtime-imports-unimplemented"
+    },
+    {
+     "name": "cap:upstreamVersion",
+     "value": "3.46.0"
+    },
+    {
+     "name": "cap:sourceArchiveSha256",
+     "value": "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5"
+    }
+   ]
+  }
+ },
+ "components": [
+  {
+   "type": "library",
+   "bom-ref": "pkg:generic/sqlite@3.46.0",
+   "name": "SQLite amalgamation",
+   "version": "3.46.0",
+   "hashes": [
+    {
+     "alg": "SHA-256",
+     "content": "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5"
+    }
+   ],
+   "licenses": [
+    {
+     "license": {
+      "id": "blessing"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "cap:archive",
+     "value": "sources/archives/sqlite-amalgamation-3460000.zip"
+    },
+    {
+     "name": "cap:archiveBytes",
+     "value": "2763740"
+    },
+    {
+     "name": "cap:licenseFile",
+     "value": "licenses/LICENSE-BLESSING"
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "bom-ref": "sqlite3-query-bounded-authored-wrapper",
+   "name": "sqlite3_query_bounded wrapper and host boundary",
+   "version": "2-evaluation",
+   "licenses": [
+    {
+     "license": {
+      "id": "Apache-2.0"
+     }
+    }
+   ],
+   "properties": [
+    {
+     "name": "cap:wrapperSha256",
+     "value": "f855d99700ddd15c36f9d1fb72eea60c74a4254a0575aa6e81cde403ed435251"
+    },
+    {
+     "name": "cap:admitted",
+     "value": "false"
+    }
+   ]
+  },
+  {
+   "type": "file",
+   "bom-ref": "sqlite3-query-bounded.wasm",
+   "name": "sqlite3-query-bounded.wasm",
+   "version": "3.46.0",
+   "hashes": [
+    {
+     "alg": "SHA-256",
+     "content": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d"
+    }
+   ],
+   "properties": [
+    {
+     "name": "cap:bytes",
+     "value": "1125792"
+    },
+    {
+     "name": "cap:memoryInitialPages",
+     "value": "64"
+    },
+    {
+     "name": "cap:memoryMaxPages",
+     "value": "512"
+    }
+   ],
+   "licenses": [
+    {
+     "license": {
+      "id": "Apache-2.0"
+     }
+    }
+   ]
+  }
+ ]
+}

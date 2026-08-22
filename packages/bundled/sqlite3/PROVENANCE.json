@@ -1,0 +1,56 @@
+{
+ "schemaVersion": 1,
+ "package": "cap.bundled.sqlite3-query-bounded",
+ "upstream": {
+  "name": "SQLite",
+  "version": "3.46.0",
+  "archiveRel": "sources/archives/sqlite-amalgamation-3460000.zip",
+  "archiveSha256": "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5",
+  "license": "blessing"
+ },
+ "authored": {
+  "license": "Apache-2.0",
+  "files": {
+   "src/sqlite3_query_main.c": "f855d99700ddd15c36f9d1fb72eea60c74a4254a0575aa6e81cde403ed435251",
+   "host/quota-sink.mjs": "48b4cc3e7489df8af5ed0d5417c28edc8905a961ffaa39e90399a57ee32e6f82",
+   "host/run-query.mjs": "432f548ecd86f2add258e32f025faf27f10cbada68440c6dd3ecf8f0abe2194d",
+   "host/wasi-worker.mjs": "9f1ee85b4c7e483da2142b309840a96960c80e3ae91df02486e3b481476b288b"
+  }
+ },
+ "binary": {
+  "sha256": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d",
+  "bytes": 1125792,
+  "tier": "tiny",
+  "memoryPages": {
+   "initial": 64,
+   "max": 512
+  },
+  "importModule": "wasi_snapshot_preview1",
+  "importedFunctions": 24,
+  "capRuntimeGap": [
+   "fd_fdstat_set_flags",
+   "fd_filestat_set_size",
+   "fd_sync",
+   "path_create_directory",
+   "path_filestat_set_times",
+   "path_readlink",
+   "path_remove_directory",
+   "path_unlink_file",
+   "poll_oneoff"
+  ]
+ },
+ "buildReceipts": {
+  "byteIdentical": true,
+  "sqliteOmitAttachAbsent": true,
+  "sqliteOmitLoadExtension": true,
+  "toolchain": "wasi-sdk clang 18.1.2"
+ },
+ "licenseExpression": "blessing AND Apache-2.0",
+ "blessingNoticeSha256": "06545a6ec25fbbff6c62f205f94a35be49e38f33bea827a8cfb07d7b82e4b083",
+ "posture": {
+  "admitted": false,
+  "canonicalNameClaim": false,
+  "disabled": true,
+  "disabledReason": "runtime-imports-unimplemented"
+ }
+}

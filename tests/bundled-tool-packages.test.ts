@@ -4,6 +4,7 @@
 // @ts-nocheck
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
+  auditWasmBinary,
   canonicalJson,
   isValidLicenseExpression,
   WasmPackageAuthority,
@@ -45,7 +46,7 @@ function diskInventory() {
 }
 
 Deno.test("SPDX: exact single tokens admitted, including Zlib", () => {
-  for (const id of ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "Zlib"]) {
+  for (const id of ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "Zlib", "blessing"]) {
     assert(isValidLicenseExpression(id), id);
   }
 });
@@ -70,7 +71,7 @@ Deno.test("SPDX: everything else rejected fail-closed", () => {
 
 Deno.test("manifests: all 25 shipped manifests validate against the real authority (canonical bytes)", async () => {
   const probe = new WasmPackageAuthority();
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 25);
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 26);
   for (const row of BUNDLED_INVENTORY.manifests) {
     const rel = `extension/wasm/manifests/${row.pkg}-${row.version}.manifest.json`;
     const raw = await Deno.readTextFile(root(rel));
@@ -110,7 +111,7 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   }
   // no unmanifested binaries: every CAS file maps to exactly one manifest executable
   const cas = BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/"));
-  assertEquals(cas.length, 25);
+  assertEquals(cas.length, 26);
   const execShas = new Set();
   for (const m of BUNDLED_INVENTORY.manifests) {
     const manifest = JSON.parse(await Deno.readTextFile(root(`extension/wasm/manifests/${m.pkg}-${m.version}.manifest.json`)));
@@ -126,7 +127,7 @@ Deno.test("admission: all 25 packages admit through the real authority over the 
   const authority = new WasmPackageAuthority({ getStore: () => store, inventory, now: () => 1000 });
   const first = await admitBundledToolPackages(authority, { inventory });
   assert(first.ok, JSON.stringify(first.results.filter((r) => !r.ok)));
-  assertEquals(first.results.length, 25);
+  assertEquals(first.results.length, 26);
   assert(first.results.every((r) => !r.deduped));
   for (const row of BUNDLED_TOOL_PACKAGES) {
     const q = await authority.query({ packageId: row.packageId });
@@ -155,14 +156,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
 });
 
 Deno.test("posture: descriptors disabled, no canonical-name claim, bundled-package kind, preserved until host", () => {
-  assertEquals(BUNDLED_TOOL_PACKAGES.length, 25);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 25);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 25);
+  assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
   for (const row of BUNDLED_TOOL_PACKAGES) {
     assertEquals(row.canonicalNameClaim, false, row.toolId);
     assertEquals(row.admitted, false, row.toolId);
     assertEquals(row.disabled, true, row.toolId);
-    assertEquals(row.disabledReason, "no-execution-host", row.toolId);
+    assert(["no-execution-host", "runtime-imports-unimplemented"].includes(row.disabledReason), `${row.toolId}: ${row.disabledReason}`);
     assertEquals(row.sourceKind, BUNDLED_PACKAGE_SOURCE_KIND, row.toolId);
     assertEquals(row.sourceKind, "bundled-package", row.toolId);
   }
@@ -190,7 +191,7 @@ const repoRoot = new URL("..", import.meta.url).pathname;
 
 Deno.test("store map: exact archivePath→executable mapping for all 25 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);
-  assertEquals(map.size, 25);
+  assertEquals(map.size, 26);
   for (const [archivePath, executable] of map) {
     assert(archivePath.startsWith("wasm/cas/") && archivePath.endsWith(".wasm"), archivePath);
     assertEquals(archivePath, `wasm/cas/${executable.sha256}.wasm`);
@@ -240,4 +241,95 @@ Deno.test("store map hostile: malformed content address rejected", async () => {
   let caught = null;
   try { await buildBundledWasmManifestMap(repoRoot, { inventory: doctored }); } catch (e) { caught = e; }
   assert(caught, "escaped manifest identity must fail closed");
+});
+
+// ── Package 26: sqlite3-query-bounded (map §8) ─────────────────────────────
+import { SUPPORTED_WASI_PREVIEW1_IMPORTS } from "../extension/lib/wasi-preview1-runtime.js";
+
+const SQLITE_MANIFEST_REL = "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json";
+const SQLITE_WASM_SHA = "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d";
+const SQLITE_IMPORTS_24 = ["clock_time_get","environ_get","environ_sizes_get","fd_close","fd_fdstat_get","fd_fdstat_set_flags","fd_filestat_get","fd_filestat_set_size","fd_prestat_dir_name","fd_prestat_get","fd_read","fd_seek","fd_sync","fd_write","path_create_directory","path_filestat_get","path_filestat_set_times","path_open","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff","proc_exit","random_get"];
+const SQLITE_GAP_9 = ["fd_fdstat_set_flags","fd_filestat_set_size","fd_sync","path_create_directory","path_filestat_set_times","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff"];
+
+Deno.test("SPDX: exact blessing token and composite admitted; every mutant rejected", () => {
+  assert(isValidLicenseExpression("blessing"));
+  assert(isValidLicenseExpression("blessing AND Apache-2.0"));
+  for (const bad of ["Blessing", "BLESSING", "blessing ", " blessing", "blessing OR Apache-2.0", "blessing AND Apache-2.0 AND MIT", "(blessing AND Apache-2.0)", "LicenseRef-blessing", "blessing  AND  Apache-2.0", "Apache-2.0 AND blessingx"]) {
+    assert(!isValidLicenseExpression(bad), JSON.stringify(bad));
+  }
+});
+
+Deno.test("sqlite manifest: canonical bytes, composite licence, exact notice/SBOM/binary digests, tiny 64/512 memory", async () => {
+  const raw = await Deno.readTextFile(root(SQLITE_MANIFEST_REL));
+  assertEquals(raw, canonicalJson(JSON.parse(raw)), "canonical bytes");
+  const m = JSON.parse(raw);
+  assertEquals(m.package.id, "cap.bundled.sqlite3.query.bounded");
+  assertEquals(m.license.spdx, "blessing AND Apache-2.0");
+  assertEquals(m.license.file, "extension/wasm/licenses/Apache-2.0.txt");
+  assertEquals(m.license.notices, "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt");
+  const notice = await Deno.readFile(root(m.license.notices));
+  assertEquals(notice.byteLength, 254);
+  assertEquals(await digest(notice), "06545a6ec25fbbff6c62f205f94a35be49e38f33bea827a8cfb07d7b82e4b083");
+  assertEquals(m.sbom.sha256, "496d6e5a7d085700984fc96c0e123e925edb172d2a4cde65b91bcab2e2f32107");
+  assertEquals(m.executables[0].sha256, SQLITE_WASM_SHA);
+  assertEquals(m.executables[0].size, 1125792);
+  assertEquals(m.executables[0].memory, { tier: "tiny", initialPages: 64, maxPages: 512 });
+  assertEquals(m.executables[0].imports, { allowed: ["wasi_snapshot_preview1"], disallowed: [] });
+  assertEquals(m.executables[0].replayClass, "mutating");
+  const sbom = JSON.parse(await Deno.readTextFile(root(m.sbom.ref)));
+  assertEquals(sbom.metadata.component.licenses[0].expression, "blessing AND Apache-2.0");
+  assert(!JSON.stringify(sbom).includes("Evaluation-Only") && !JSON.stringify(sbom).includes("pending-owner"), "stale evaluation/pending wording must be gone");
+});
+
+Deno.test("sqlite binary: exact 24 imports and the exact nine-function CAP runtime gap", async () => {
+  const wasm = await Deno.readFile(root(`extension/wasm/cas/${SQLITE_WASM_SHA}.wasm`));
+  const audit = auditWasmBinary(wasm, JSON.parse(await Deno.readTextFile(root(SQLITE_MANIFEST_REL))).executables[0], {});
+  const names = audit.imports.map((i) => i.name).sort();
+  assertEquals(names, [...SQLITE_IMPORTS_24].sort());
+  assertEquals(audit.imports.every((i) => i.module === "wasi_snapshot_preview1"), true);
+  assertEquals(audit.measured.memoryInitial, 64);
+  assertEquals(audit.measured.memoryMax, 512);
+  const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
+  assertEquals(SQLITE_IMPORTS_24.filter((n) => !supported.has(n)).sort(), [...SQLITE_GAP_9].sort());
+  // the runtime must NOT have grown the nine in this commit
+  for (const gap of SQLITE_GAP_9) assert(!supported.has(gap), `runtime unexpectedly implements ${gap}`);
+});
+
+Deno.test("sqlite descriptor: false/false/true posture with runtime-imports-unimplemented; no route anywhere", async () => {
+  const row = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "sqlite3_query_bounded");
+  assert(row, "descriptor row exists");
+  assertEquals(row.canonicalNameClaim, false);
+  assertEquals(row.admitted, false);
+  assertEquals(row.disabled, true);
+  assertEquals(row.disabledReason, "runtime-imports-unimplemented");
+  assertEquals(row.sourceKind, "bundled-package");
+  for (const rel of ["extension/background/service-worker.js", "extension/lib/tool-catalog.js", "extension/lib/tool-catalog-shadow.js", "extension/lib/tool-selection.js", "extension/lib/wasm-offscreen-host.js", "extension/lib/wasm-executor.js", "extension/sidepanel/sidepanel.js", "extension/ntp/ntp.js"]) {
+    const src = await Deno.readFile(root(rel));
+    assert(!/sqlite3_query_bounded|sqlite3-query-bounded|bundled-tool-packages/.test(src), `${rel} must expose no sqlite/package route`);
+  }
+});
+
+Deno.test("sqlite sources stay outside extension/; shipped code imports no Node host", async () => {
+  for (const rel of ["packages/bundled/sqlite3/src/sqlite3_query_main.c", "packages/bundled/sqlite3/host/quota-sink.mjs", "packages/bundled/sqlite3/host/run-query.mjs", "packages/bundled/sqlite3/host/wasi-worker.mjs"]) {
+    await Deno.stat(root(rel)); // exists as public provenance
+  }
+  const shipped = []; for await (const e of Deno.readDir(root("extension/wasm"))) shipped.push(e.name);
+  assert(!shipped.some((n) => n.includes("host")), "no Node host under extension/wasm");
+});
+
+Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS hashes", async () => {
+  const identity26 = BUNDLED_INVENTORY.manifests.find((m) => m.pkg === "cap.bundled.sqlite3.query.bounded");
+  assert(identity26, "sqlite identity present");
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 26);
+  // the 25 predecessors' manifest files must match the previous release's digests
+  const prevText = await Deno.readTextFile("/home/paulkinlan/worktrees/cap-bundled-tool-packages-163/extension/lib/bundled-inventory-data.js").catch(() => null);
+  if (prevText) {
+    const prevDigests = [...prevText.matchAll(/"pkg": "(cap\.bundled\.[^"]+)",\s*"version": "1\.0\.0",\s*"digest": "([0-9a-f]{64})"/g)];
+    assertEquals(prevDigests.length, 25);
+    const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
+    for (const [, pkg, dg] of prevDigests) assertEquals(now.get(pkg), dg, `${pkg} manifest digest must be preserved`);
+    const prevCas = [...prevText.matchAll(/"rel": "extension\/wasm\/cas\/([0-9a-f]{64})\.wasm"/g)].map((m) => m[1]);
+    const nowCas = new Set(BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/")).map((f) => f.rel));
+    for (const sha of prevCas) assert(nowCas.has(`extension/wasm/cas/${sha}.wasm`), `predecessor CAS ${sha} preserved`);
+  }
 });

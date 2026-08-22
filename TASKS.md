@@ -2305,3 +2305,8 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - History:
   - Current-tip gate at `6480005`: Chrome 126/126 journey + 876/876 units + build PASS (canonical suite sufficient per the explicit lifecycle).
   - 2026-08-22 07:45 UTC — Git reconcile: merged at `6480005` (the hub-360 landing tip); the journey-suite green at that tip remains the browser gate.
+
+## CAP-FB-20260822-SQLITE3-ACCEPTANCE-04 — sqlite3-query-bounded immutable bundle (0.2.167)
+
+- Physically bundled as immutable package 26 (`cap.bundled.sqlite3.query.bounded`); inventory-admission tested; CAS `ba468c6e…`, licence `blessing AND Apache-2.0`.
+- Execution remains BLOCKED: 9 of 24 WASI imports unimplemented in the CAP runtime (`runtime-imports-unimplemented`); no route/grant/catalog entry; `admitted:false`, `canonicalNameClaim:false`.

@@ -41,6 +41,7 @@ const PATHS = {
   c2: join(EVIDENCE, "cap-fixed-tools-c2"),
   csvtool: join(EVIDENCE, "cap-csvtool-cleanroom"),
   d3: join(EVIDENCE, "cap-fixed-tools-d3"),
+  sqlite3: join(EVIDENCE, "cap-sqlite3-query-bounded-v2"),
   catalog: join(EVIDENCE, "cap-23-tool-catalog-metadata-v3", "inventory.json"),
 };
 for (const [k, p] of Object.entries(PATHS)) if (!existsSync(p)) throw new Error(`missing evidence path (${k}): ${p}`);
@@ -161,7 +162,10 @@ const LICENSE_WRITES = {
 // ── Manifests (authority-schema-exact; canonical bytes; re-validated) ───────
 const probe = new WasmPackageAuthority();
 const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
+// Per-package source anchors: the original 25 keep the bundle-landing anchor;
+// SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
+const SOURCE_SQLITE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "acf663a64aa741d8a914b2d0d4d63bca6e525cf5" };
 const RELEASE = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).version;
 
 const inventoryFiles = [];
@@ -181,12 +185,102 @@ function ship(rel, bytes) {
   inventoryFiles.push({ rel, sha256: sha256(bytes), size: bytes.byteLength });
 }
 
+// ── Package 26: sqlite3-query-bounded (SQLite 3.46.0 amalgamation + CAP-authored
+// wrapper/host). Exact upstream Blessing + Apache-2.0 authored provenance.
+// The binary imports 24 WASI functions; the CAP runtime implements 15 of them
+// (nine unimplemented) — the descriptor is disabled runtime-imports-unimplemented.
+// No scanner exemption, no route, no runtime change.
+const SQLITE_EVIDENCE = PATHS.sqlite3;
+const SQLITE_EXPECT = {
+  wasm: { sha256: "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d", bytes: 1125792 },
+  archive: { sha256: "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5", bytes: 2763740 },
+  blessing: { sha256: "06545a6ec25fbbff6c62f205f94a35be49e38f33bea827a8cfb07d7b82e4b083", bytes: 254 },
+  sources: {
+    "src/sqlite3_query_main.c": "f855d99700ddd15c36f9d1fb72eea60c74a4254a0575aa6e81cde403ed435251",
+    "host/quota-sink.mjs": "48b4cc3e7489df8af5ed0d5417c28edc8905a961ffaa39e90399a57ee32e6f82",
+    "host/run-query.mjs": "432f548ecd86f2add258e32f025faf27f10cbada68440c6dd3ecf8f0abe2194d",
+    "host/wasi-worker.mjs": "9f1ee85b4c7e483da2142b309840a96960c80e3ae91df02486e3b481476b288b",
+    "scripts/build-one.sh": "94e03f61169907757373ca22c6d4632256fb2dcc5ff1d8f43074e1364fbf0665",
+    "scripts/build-all.sh": "a7be3ad3af97f60444d741ce0d7696c8683e9471cd493db308d4f9d3f494371c",
+  },
+  sbomCorrected: "496d6e5a7d085700984fc96c0e123e925edb172d2a4cde65b91bcab2e2f32107",
+};
+{
+  const wasm = readFileSync(join(SQLITE_EVIDENCE, "dist/sqlite3-query-bounded.wasm"));
+  if (sha256(wasm) !== SQLITE_EXPECT.wasm.sha256 || wasm.byteLength !== SQLITE_EXPECT.wasm.bytes) throw new Error("sqlite wasm hash/size mismatch");
+  const archive = readFileSync(join(SQLITE_EVIDENCE, "sources/archives/sqlite-amalgamation-3460000.zip"));
+  if (sha256(archive) !== SQLITE_EXPECT.archive.sha256 || archive.byteLength !== SQLITE_EXPECT.archive.bytes) throw new Error("sqlite archive hash/size mismatch");
+  const blessing = readFileSync(join(SQLITE_EVIDENCE, "licenses/LICENSE-BLESSING"));
+  if (sha256(blessing) !== SQLITE_EXPECT.blessing.sha256 || blessing.byteLength !== SQLITE_EXPECT.blessing.bytes) throw new Error("sqlite blessing hash/size mismatch");
+  for (const [rel, expected] of Object.entries(SQLITE_EXPECT.sources)) {
+    if (sha256(readFileSync(join(SQLITE_EVIDENCE, rel))) !== expected) throw new Error(`sqlite source drifted: ${rel}`);
+  }
+  const receipt = JSON.parse(readFileSync(join(SQLITE_EVIDENCE, "receipts/build.json"), "utf8"));
+  if (receipt.byteIdentical !== true || receipt.buildA?.sha256 !== SQLITE_EXPECT.wasm.sha256 || receipt.buildB?.sha256 !== SQLITE_EXPECT.wasm.sha256 || receipt.sqliteOmitAttachAbsent !== true || receipt.sqliteOmitLoadExtension !== true) throw new Error("sqlite build receipt fails the reproducible/OMIT invariants");
+
+  // Corrected landing SBOM: upstream SQLite = blessing; CAP-authored wrapper +
+  // retained host = Apache-2.0; aggregate = "blessing AND Apache-2.0". The
+  // candidate's evaluation-only/pending-owner wording is REMOVED.
+  const candidateSbom = JSON.parse(readFileSync(join(SQLITE_EVIDENCE, "sbom/sqlite3-query-bounded.cdx.json"), "utf8"));
+  const correctedSbom = {
+    bomFormat: "CycloneDX", specVersion: "1.5", serialNumber: "urn:uuid:8f2c1d34-9a4b-4c3e-8f2a-1d36e0a2b1c4d5", version: 1,
+    metadata: {
+      component: { type: "application", "bom-ref": "cap.bundled.sqlite3-query-bounded@1.0.0", name: "cap.bundled.sqlite3-query-bounded", version: "1.0.0",
+        description: "Immutable bundled CAP package: SQLite 3.46.0 amalgamation (upstream Blessing) + CAP-authored wrapper/host (Apache-2.0). Disabled: runtime-imports-unimplemented.",
+        licenses: [{ expression: "blessing AND Apache-2.0" }],
+        properties: [
+          { name: "cap:admitted", value: "false" },
+          { name: "cap:canonicalNameClaim", value: "false" },
+          { name: "cap:disabledReason", value: "runtime-imports-unimplemented" },
+          { name: "cap:upstreamVersion", value: "3.46.0" },
+          { name: "cap:sourceArchiveSha256", value: SQLITE_EXPECT.archive.sha256 },
+        ] },
+    },
+    components: (candidateSbom.components ?? []).map((c) => {
+      if (c.name === "SQLite amalgamation") return { ...c, licenses: [{ license: { id: "blessing" } }] };
+      return { ...c, licenses: [{ license: { id: "Apache-2.0" } }] };
+    }),
+  };
+  const sbomBytes = enc.encode(JSON.stringify(correctedSbom, null, 1) + "\n");
+  if (SQLITE_EXPECT.sbomCorrected.startsWith("__")) {
+    console.log(`sqlite corrected SBOM sha256 (pin me): ${sha256(sbomBytes)}`);
+  } else if (sha256(sbomBytes) !== SQLITE_EXPECT.sbomCorrected) {
+    throw new Error("sqlite corrected SBOM drifted from the pinned landing form");
+  }
+  packages.push({
+    toolId: "sqlite3_query_bounded", lane: "sqlite3", bytes: wasm, row: null,
+    spdx: "blessing AND Apache-2.0",
+    licenseFile: "extension/wasm/licenses/Apache-2.0.txt",
+    notices: "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt",
+    sbom: { src: null, bytes: sbomBytes, rel: "extension/wasm/sbom/sqlite3-query-bounded.cdx.json", format: "cyclonedx-json@1.5" },
+    toolchain: "wasi-sdk clang 18.1.2", buildScriptLane: "sqlite3",
+    sourceAnchor: SOURCE_SQLITE,
+    displayName: "Bounded SQLite 3.46.0 query tool (upstream amalgamation)",
+    category: "data",
+    description: "SQLite 3.46.0 amalgamation query tool (upstream Blessing) with CAP-authored wrapper/host (Apache-2.0). ATTACH/DETACH/load_extension denied by runtime authorizer.",
+    caveats: [
+      "Memory tranche has no external persistence; may later be classified read-only for replay only after runtime wiring.",
+      "Workspace tranche is mutating and requires a sole bounded workspace preopen.",
+      "Package-level capability union is intentionally conservative.",
+      "No grants are issued and no route consumes this descriptor in this release.",
+    ],
+    replayClass: "mutating",
+    capabilities: ["compute", "data.read", "data.write", "file.read", "file.write"],
+    memoryOverride: { initialPages: 64, maxPages: 512 },
+    disabledReason: "runtime-imports-unimplemented",
+    metaStatus: "disabled-runtime-imports",
+    metaNote: "evidence digests in packages/bundled/sqlite3/PROVENANCE.json; owner decision CAP-DECISION-TEMPLATE-20260822-06 D4",
+  });
+  LICENSE_WRITES["extension/wasm/licenses/SQLite-Blessing-3.46.0.txt"] = blessing;
+}
+
+
 for (const [rel, bytes] of Object.entries(LICENSE_WRITES)) ship(rel, bytes);
 
 for (const pkg of packages) {
   const wasmSha = sha256(pkg.bytes);
   ship(`extension/wasm/cas/${wasmSha}.wasm`, pkg.bytes);
-  const sbomBytes = readFileSync(pkg.sbom.src);
+  const sbomBytes = pkg.sbom.bytes ?? readFileSync(pkg.sbom.src);
   ship(pkg.sbom.rel, sbomBytes);
 
   // Ground-truth the binary: audit the real bytes, then declare EXACTLY the
@@ -212,22 +306,24 @@ for (const pkg of packages) {
   if (!/^[\x20-\x7e]{1,256}$/.test(description)) throw new Error(`${pkg.toolId}: description not ASCII/bounded`);
   const manifest = {
     schemaVersion: 1,
-    package: { id: `cap.bundled.${pkg.toolId}`, version: "1.0.0", name: `cap_bundled_${pkg.toolId.replace(/-/g, "_")}`, type: "tool-bundle" },
+    // package.id derives from toolId with '-' → '.' (PACKAGE_ID_RE admits only
+    // [a-z0-9.-]); e.g. sqlite3-query-bounded → cap.bundled.sqlite3.query.bounded.
+    package: { id: `cap.bundled.${pkg.toolId.replace(/-/g, ".").replace(/_/g, ".")}`, version: "1.0.0", name: `cap_bundled_${pkg.toolId.replace(/-/g, "_")}`, type: "tool-bundle" },
     tools: [{ toolId: pkg.toolId, digest: wasmSha, capabilityDigest, replayClass: meta.replayClass, capabilities }],
     executables: [{ id: pkg.toolId, sha256: wasmSha, size: pkg.bytes.byteLength, imports: { allowed, disallowed: [] }, memory: { tier, initialPages, maxPages }, runtimeCompat: ["wasm32"], replayClass: meta.replayClass, capabilities, capabilityDigest }],
     signer: { lane: SIGNER.lane, keyId: SIGNER.keyId, alg: "none" },
-    source: SOURCE,
+    source: pkg.sourceAnchor ?? SOURCE,
     build: { toolchain: pkg.toolchain, profile: "release", reproducible: true, rebuildRef: `packages/bundled/${pkg.buildScriptLane}/build.sh` },
     sbom: { format: pkg.sbom.format, sha256: sha256(sbomBytes), ref: pkg.sbom.rel },
     license: { spdx: pkg.spdx, file: pkg.licenseFile, ...(pkg.notices ? { notices: pkg.notices } : {}) },
-    meta: { category: String(meta.category), channel: "bundled", description, label: pkg.toolId, status: "disabled-no-host", note: `evidence: /tmp cap-fixed-tools/${pkg.lane}; owner decision CAP-DECISION-TEMPLATE-20260822-06` },
+    meta: { category: String(meta.category), channel: "bundled", description, label: pkg.toolId, status: meta.metaStatus ?? "disabled-no-host", note: meta.metaNote ?? `evidence: /tmp cap-fixed-tools/${pkg.lane}; owner decision CAP-DECISION-TEMPLATE-20260822-06` },
   };
   const canonical = canonicalJson(manifest);
   const validated = probe.validateManifest(canonical);
   if (!validated.ok) throw new Error(`generated manifest failed validation for ${pkg.toolId}: ${validated.error} ${validated.path ?? ""} ${validated.detail ?? ""}`);
   // Re-audit with the FINAL declared values exactly as admission will.
   auditWasmBinary(pkg.bytes, manifest.executables[0], {});
-  const manifestRel = `extension/wasm/manifests/cap.bundled.${pkg.toolId}-1.0.0.manifest.json`;
+  const manifestRel = `extension/wasm/manifests/${manifest.package.id}-1.0.0.manifest.json`;
   ship(manifestRel, enc.encode(canonical));
   inventoryManifests.push({ pkg: manifest.package.id, version: "1.0.0", digest: validated.manifestDigest });
 
@@ -239,7 +335,7 @@ for (const pkg of packages) {
     licence: { spdx: pkg.spdx, file: pkg.licenseFile, notices: pkg.notices ?? null },
     binary: { sha256: wasmSha, bytes: pkg.bytes.byteLength, tier, initialPages, maxPages },
     manifestRef: manifestRel, sourceKind: "bundled-package",
-    canonicalNameClaim: false, admitted: false, disabled: true, disabledReason: "no-execution-host",
+    canonicalNameClaim: false, admitted: false, disabled: true, disabledReason: pkg.disabledReason ?? "no-execution-host",
   });
 }
 
@@ -283,6 +379,56 @@ writeFileSync(join(REPO, "packages/bundled/gzip/build.sh"), `#!/usr/bin/env bash
 # This script intentionally does NOT re-run the build: reproduction requires
 # the pinned source archive + overlay recorded in that receipt.
 echo "see receipts/gzip-build.json in the frozen evidence tree" >&2; exit 0
+`);
+mkdirSync(join(REPO, "packages/bundled/sqlite3/src"), { recursive: true });
+mkdirSync(join(REPO, "packages/bundled/sqlite3/host"), { recursive: true });
+writeFileSync(join(REPO, "packages/bundled/sqlite3/src/sqlite3_query_main.c"), readFileSync(join(SQLITE_EVIDENCE, "src/sqlite3_query_main.c")));
+for (const f of ["quota-sink.mjs", "run-query.mjs", "wasi-worker.mjs"]) {
+  writeFileSync(join(REPO, `packages/bundled/sqlite3/host/${f}`), readFileSync(join(SQLITE_EVIDENCE, `host/${f}`)));
+}
+writeFileSync(join(REPO, "packages/bundled/sqlite3/build.sh"), `#!/usr/bin/env bash
+# sqlite3-query-bounded — SQLite 3.46.0 amalgamation + CAP-authored wrapper.
+# Adapted from the pinned evidence build scripts (digests in PROVENANCE.json):
+# the absolute local compiler path is replaced by an explicit WASI_SDK_PATH
+# input; flags, archive digest, negative assertions, and two-build equality are
+# preserved. NEVER fetches the archive implicitly: fail clearly until the
+# hash-pinned archive is supplied at ./sources/archives/.
+set -euo pipefail
+SDK="\${WASI_SDK_PATH:?set WASI_SDK_PATH to a wasi-sdk 18.1.2 root}"
+ARCHIVE="sources/archives/sqlite-amalgamation-3460000.zip"
+[ -f "$ARCHIVE" ] || { echo "supply the pinned archive at $ARCHIVE (sha256 ${SQLITE_EXPECT.archive.sha256})" >&2; exit 1; }
+echo "$ARCHIVE" | sha256sum --check <(echo "${SQLITE_EXPECT.archive.sha256}  $ARCHIVE")
+# Negative assertions preserved: SQLITE_OMIT_ATTACH must be ABSENT;
+# SQLITE_OMIT_LOAD_EXTENSION=1 must clean-link. Exact flags: see the pinned
+# evidence scripts/build-one.sh (sha256 ${SQLITE_EXPECT.sources["scripts/build-one.sh"]}).
+# Two builds must be byte-identical:
+# sha256 ${SQLITE_EXPECT.wasm.sha256} (${SQLITE_EXPECT.wasm.bytes} bytes)
+echo "adapt with the pinned evidence script; do not improvise flags" >&2; exit 1
+`);
+writeFileSync(join(REPO, "packages/bundled/sqlite3/PROVENANCE.json"), JSON.stringify({
+  schemaVersion: 1,
+  package: "cap.bundled.sqlite3-query-bounded",
+  upstream: { name: "SQLite", version: "3.46.0", archiveRel: "sources/archives/sqlite-amalgamation-3460000.zip", archiveSha256: SQLITE_EXPECT.archive.sha256, license: "blessing" },
+  authored: { license: "Apache-2.0", files: {
+    "src/sqlite3_query_main.c": SQLITE_EXPECT.sources["src/sqlite3_query_main.c"],
+    "host/quota-sink.mjs": SQLITE_EXPECT.sources["host/quota-sink.mjs"],
+    "host/run-query.mjs": SQLITE_EXPECT.sources["host/run-query.mjs"],
+    "host/wasi-worker.mjs": SQLITE_EXPECT.sources["host/wasi-worker.mjs"] } },
+  binary: { sha256: SQLITE_EXPECT.wasm.sha256, bytes: SQLITE_EXPECT.wasm.bytes, tier: "tiny", memoryPages: { initial: 64, max: 512 }, importModule: "wasi_snapshot_preview1", importedFunctions: 24, capRuntimeGap: ["fd_fdstat_set_flags","fd_filestat_set_size","fd_sync","path_create_directory","path_filestat_set_times","path_readlink","path_remove_directory","path_unlink_file","poll_oneoff"] },
+  buildReceipts: { byteIdentical: true, sqliteOmitAttachAbsent: true, sqliteOmitLoadExtension: true, toolchain: "wasi-sdk clang 18.1.2" },
+  licenseExpression: "blessing AND Apache-2.0",
+  blessingNoticeSha256: SQLITE_EXPECT.blessing.sha256,
+  posture: { admitted: false, canonicalNameClaim: false, disabled: true, disabledReason: "runtime-imports-unimplemented" }
+}, null, 1) + "\n");
+writeFileSync(join(REPO, "packages/bundled/sqlite3/README.md"), `# sqlite3-query-bounded (bundled package 26, DISABLED)
+
+SQLite 3.46.0 amalgamation (upstream Blessing) + CAP-authored wrapper/host
+(Apache-2.0); licence expression "blessing AND Apache-2.0". Physically bundled
+and inventory-admissible; NOT executable in this release: the binary imports 24
+WASI functions, nine of which the CAP runtime does not yet implement (see
+PROVENANCE.json binary.capRuntimeGap). No route, grant, or catalog entry
+consumes this package. Node host sources under host/ are public Apache-2.0
+provenance only — they are not shipped runtime code.
 `);
 writeFileSync(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable, disabled-until-host)
 

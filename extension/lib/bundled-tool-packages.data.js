@@ -880,5 +880,46 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "admitted": false,
   "disabled": true,
   "disabledReason": "no-execution-host"
+ },
+ {
+  "packageId": "cap.bundled.sqlite3.query.bounded",
+  "version": "1.0.0",
+  "toolId": "sqlite3_query_bounded",
+  "lane": "sqlite3",
+  "displayName": "Bounded SQLite 3.46.0 query tool (upstream amalgamation)",
+  "category": "data",
+  "description": "SQLite 3.46.0 amalgamation query tool (upstream Blessing) with CAP-authored wrapper/host (Apache-2.0). ATTACH/DETACH/load_extension denied by runtime authorizer.",
+  "caveats": [
+   "Memory tranche has no external persistence; may later be classified read-only for replay only after runtime wiring.",
+   "Workspace tranche is mutating and requires a sole bounded workspace preopen.",
+   "Package-level capability union is intentionally conservative.",
+   "No grants are issued and no route consumes this descriptor in this release."
+  ],
+  "capabilities": [
+   "compute",
+   "data.read",
+   "data.write",
+   "file.read",
+   "file.write"
+  ],
+  "replayClass": "mutating",
+  "licence": {
+   "spdx": "blessing AND Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt"
+  },
+  "binary": {
+   "sha256": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d",
+   "bytes": 1125792,
+   "tier": "tiny",
+   "initialPages": 64,
+   "maxPages": 512
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": false,
+  "disabled": true,
+  "disabledReason": "runtime-imports-unimplemented"
  }
 ]);

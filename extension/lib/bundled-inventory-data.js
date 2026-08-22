@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.2.163",
+ "release": "0.2.167",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -77,6 +77,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.sort",
    "version": "1.0.0",
    "digest": "708604a612aeb6a3f372ae6193367c364ac982d3709239a36463668b8a30f607"
+  },
+  {
+   "pkg": "cap.bundled.sqlite3.query.bounded",
+   "version": "1.0.0",
+   "digest": "db04013952117ee270e3e60032ca64a0e4ad1551cc0ea23b46daac2281cc87a5"
   },
   {
    "pkg": "cap.bundled.stat",
@@ -231,6 +236,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 33269
   },
   {
+   "rel": "extension/wasm/cas/ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d.wasm",
+   "sha256": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d",
+   "size": 1125792
+  },
+  {
    "rel": "extension/wasm/cas/c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91.wasm",
    "sha256": "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91",
    "size": 186886
@@ -279,6 +289,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/licenses/MIT.txt",
    "sha256": "06ded467deff93623be6418da4777f2e6b7676335964dced6e38a4f0fffbbcd7",
    "size": 1088
+  },
+  {
+   "rel": "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt",
+   "sha256": "06545a6ec25fbbff6c62f205f94a35be49e38f33bea827a8cfb07d7b82e4b083",
+   "size": 254
   },
   {
    "rel": "extension/wasm/licenses/toml2json-NOTICES.txt",
@@ -361,6 +376,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1637
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
+   "sha256": "db04013952117ee270e3e60032ca64a0e4ad1551cc0ea23b46daac2281cc87a5",
+   "size": 2015
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.stat-1.0.0.manifest.json",
    "sha256": "1dc8bafbcae47e8847d6b6d8204df4fa866a484e89d815c92b47a0b72f2b3957",
    "size": 1639
@@ -439,6 +459,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/gzip.cdx.json",
    "sha256": "a7c5c1f8e73d7e798d3619a3b092a59eac0eaf029e9f0e6036d81ca547a0f3fe",
    "size": 7233
+  },
+  {
+   "rel": "extension/wasm/sbom/sqlite3-query-bounded.cdx.json",
+   "sha256": "496d6e5a7d085700984fc96c0e123e925edb172d2a4cde65b91bcab2e2f32107",
+   "size": 2782
   }
  ],
  "evidence": [],
