@@ -11,6 +11,7 @@ import {
   setProviderConfig,
 } from "../lib/provider.js";
 import { keyedProviderConfigured } from "../lib/first-run-onboarding.js";
+import { publicProviderChoices } from "../lib/provider-visibility.js";
 import {
   providerRunGate,
   recordProviderFailure,
@@ -2458,7 +2459,10 @@ const handlers = {
     };
   },
   async "provider.models"() {
-    return { choices: PROVIDER_CHOICES };
+    // User-facing /model completion gets only public providers. The complete
+    // PROVIDER_CHOICES authority remains intact for stored internal selections,
+    // provider.test, Prompt API helpers, and deterministic Demo runs.
+    return { choices: publicProviderChoices(PROVIDER_CHOICES) };
   },
 
   async "agent.run"(m) {

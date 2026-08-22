@@ -5,8 +5,8 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 08:30 UTC. Reconciled against exact public
-> `origin/main@7b254e43c38569667045363405b3243e9951f926` (`0.2.139`).
+> Snapshot: 2026-08-22 08:38 UTC. Reconciled against exact public
+> `origin/main@e27937205a48ad5abaa6841716dc9cca180d5aa8` (`0.2.140`).
 > Current status counts: **10 OPEN · 5 IN_REVIEW · 1 MERGED · 3 BLOCKED ·
 > 33 DONE · 0 ABANDONED**. The 19 active entries and 33 archived terminal entries below
 > are the complete 52-entry tracker state at this snapshot.
@@ -524,23 +524,24 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01] Remove superseded surfaces and the published mock site
 - Feedback: 2026-08-21 — independent architectural review found six stale design mocks duplicated into the published documentation site, a published front page titled "UI mocks", and two shipped surfaces that no longer carry a job
-- Updated: 2026-08-22 07:58 UTC
+- Updated: 2026-08-22 08:38 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P2
-- Owner: dead-surface cleanup implementer
+- Owner: dead-surface integration coordinator
 - Workspace: active (local path private)
-- Branch: `chore/remove-root-mocks-b71e7a5`
-- Base: `b71e7a58f506f06a6fdb8bfaae2e10253f5be2d9`
-- Candidate: this commit
-- Shipping: —
+- Branch: `integrate/provider-public-list-e279372`
+- Base: `e27937205a48ad5abaa6841716dc9cca180d5aa8`
+- Candidate: this integration commit
+- Shipping: root-mock slice `origin/main@7b254e43c38569667045363405b3243e9951f926`; provider-visibility slice `origin/main@this integration commit`
 - Acceptance: the `mock/` directory and its duplicated copies under `docs/` are removed; the published front page presents the component gallery and a real product screenshot rather than dead mocks, or is withdrawn; the Chrome Prompt API and demo-local providers are removed from the user-facing provider picker while remaining reachable for internal testing if still needed; the side panel's Page tab is either given a stated job or folded into the Agents view; every removal is checked for inbound references across code, docs, tests and the gallery sync before it lands
-- Review: independent review pending on the exact owner-decision-free slice that deletes only the six closed, unreferenced root `mock/` files; published docs, providers, and the Page tab are unchanged
-- Gates: removed-path/external-reference and Markdown/docs-HTML link scans pass; full unit 876/876, build across 91 shipped JS, gallery/changelog/order, exact scope, and diff checks pass; browser-backed `npm run test:components` and the canonical loaded-MV3 Chrome suite follow independent review and are deliberately not run by the implementer under the no-Chrome instruction
-- Blockers: slice 1 needs independent review and the canonical Chrome gate; the public landing page/screenshot and `/model` namespace remain product decisions, while internal-provider state must remain migration-safe; the Page tab already has a tested current job and is not removed by this slice
-- Next: complete no-Chrome gates, commit the exact six-file deletion, obtain independent review, then run the canonical Chrome suite; scope the public-doc and provider residuals separately
-- Recover: `git show --stat chore/remove-root-mocks-b71e7a5 && git diff b71e7a5..chore/remove-root-mocks-b71e7a5 -- mock TASKS.md`
+- Review: DeepSeek Pro PASSed root-mock slice `7b254e4` and provider public-list/no-migration source `64e8b80`; current-main integration review and browser evidence pending
+- Gates: root-mock source/link/build/unit/gallery gates plus exact loaded-MV3 126/126 passed before public `7b254e4`; provider source focused 79/79, full 884/884, security 108/108 and build passed; current-main integration reruns pending
+- Blockers: published docs root/screenshot remains an explicit product decision; `/model` namespace removal is separate; persisted internal providers must remain runnable/unmodified. The Page tab has a tested current job and is retained.
+- Next: independently review and browser-test the current-main provider composition, then obtain the published-root/screenshot decision; do not remove internal provider authority or the Page tab
+- Recover: `git show --stat origin/main && git grep -n "publicProviderChoices\|Internal testing provider active" -- extension tests`
 - History:
+  - 2026-08-22 08:38 UTC — recomposed independently PASSed provider public-list/no-migration behavior onto current public `e279372`: public surfaces exclude Demo/Prompt API while existing internal global/per-agent selections remain effective and render truthful inert replacement state without storage mutation.
   - 2026-08-22 07:58 UTC — implemented owner-decision-free slice 1 on exact public `b71e7a5`: the standalone `mock/` subtree had no inbound repository references outside itself, so its six files were deleted without touching the published docs, provider authority, or side-panel Page job; status advanced to `IN_REVIEW` for independent review and the later canonical Chrome gate.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §4). The provider-picker removal restates a backlog item standing since 2026-08-17 and is folded here so it has acceptance criteria and a gate.

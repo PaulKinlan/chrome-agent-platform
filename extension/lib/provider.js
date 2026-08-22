@@ -30,7 +30,9 @@ const DEFAULTS = {
   model: "",
 };
 
-/** The providers the options page may advertise — every one is real. */
+/** Complete runtime/test provider authority. User-facing lists derive a
+ * public-only view via provider-visibility.js; do not delete internal choices
+ * here or stored Demo/Prompt API selections would stop resolving. */
 export const PROVIDER_CHOICES = [
   { id: "demo", label: "Demo (no key — deterministic local)" },
   {

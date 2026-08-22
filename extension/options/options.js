@@ -15,6 +15,10 @@ import {
   localModelFeasibility,
   preflightLocalModel,
 } from "../lib/local-model-catalog.js";
+import {
+  providerSelectionPresentation,
+  renderInternalProviderStatus,
+} from "../lib/provider-visibility.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
 import {
   credentialNeedsDurableStorage,
@@ -285,6 +289,12 @@ async function renderProviders(restoreFocus = false) {
   // authority finding: with storage absent the page's session Map contradicts the
   // SW's).
   const cfg = await chrome.runtime.sendMessage({ type: "provider.get" });
+  // A stored internal provider remains runtime authority, but is not a public
+  // card. Explain that state without mutating, auto-selecting, or erasing it.
+  renderInternalProviderStatus(
+    $("#provider-selection-status"),
+    providerSelectionPresentation(cfg, PROVIDERS),
+  );
   const list = $("#provider-list");
   list.innerHTML = "";
   for (const p of PROVIDERS) {
@@ -647,7 +657,11 @@ async function renderAgents() {
  * fixed-endpoint providers; an explicit field for OpenAI-compatible, prefilled
  * from the global config when it matches). */
 function agentProviderRowHtml(a, cur, globalCfg) {
-  const provider = cur?.provider ?? "";
+  const selection = providerSelectionPresentation(cur, PROVIDERS);
+  // An internal legacy override remains stored/runnable. Keep the public select
+  // empty and its dependent controls inert until the owner chooses a listed
+  // replacement; rendering alone never rewrites the override.
+  const provider = selection.selectValue;
   const preset = PROVIDERS.find((p) => p.id === provider);
   const models = preset ? providerCatalogue(preset) : [];
   const needsBaseURL = provider === "openai-compatible";
@@ -656,17 +670,19 @@ function agentProviderRowHtml(a, cur, globalCfg) {
   const baseURLDefault = needsBaseURL
     ? (cur.baseURL ?? (globalCfg?.provider === "openai-compatible" ? globalCfg.baseURL : ""))
     : "";
-  const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.filter((p) => p.id !== "demo").map((p) => ({ id: p.id, name: p.name }))));
+  const providersAttr = escapeAttr(JSON.stringify(PROVIDERS.map((p) => ({ id: p.id, name: p.name }))));
+  const internalDisabled = selection.hiddenInternal ? "disabled" : "";
   return `
     <label class="field ag-name"><span class="field-label">Agent</span><span class="agent-provider-name" title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</span></label>
-    <provider-select class="ag-provider" providers="${providersAttr}" value="${escapeAttr(provider)}" label="Provider" placeholder="Use the global provider"></provider-select>
-    <model-picker class="ag-model" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(cur.model ?? "")}" label="Model id" placeholder="${models.length ? "Search or type a model id…" : "model id"}" ${provider ? "" : "disabled"}></model-picker>
+    <provider-select class="ag-provider" providers="${providersAttr}" value="${escapeAttr(provider)}" label="Provider" placeholder="${selection.hiddenInternal ? "Choose a listed provider" : "Use the global provider"}"></provider-select>
+    <model-picker class="ag-model" models="${escapeAttr(JSON.stringify(models))}" value="${escapeAttr(selection.hiddenInternal ? "" : (cur.model ?? ""))}" label="Model id" placeholder="${models.length ? "Search or type a model id…" : "model id"}" ${provider ? "" : "disabled"}></model-picker>
     <label class="field ag-base-url" ${needsBaseURL ? "" : "hidden"}><span class="field-label">Base URL</span><input class="agent-provider-base-url" type="text" placeholder="https://your-endpoint/v1" value="${escapeAttr(baseURLDefault)}"></label>
-    <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${cur.provider ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${cur.provider ? "A saved key is kept when this field is left blank" : "API key"}"></label>
+    <label class="field"><span class="field-label">API key (write-only)</span><input class="agent-provider-key" type="password" placeholder="${selection.hiddenInternal ? "Not used by the active internal provider" : cur.hasApiKey ? "(kept — blank keeps it)" : "…"}" autocomplete="off" title="${selection.hiddenInternal ? "Choose a listed provider before entering a key" : cur.hasApiKey ? "A saved key is kept when this field is left blank" : "API key"}" ${internalDisabled}></label>
+    <p class="hint agent-provider-internal-status" hidden></p>
     <storage-durability-warning id="${escapeAttr(`agent-storage-warning-${a.id}`)}" provider="${escapeAttr(a.name)}"></storage-durability-warning>
     <div class="ag-actions">
-      <button class="btn small set-agent-provider" type="button">Save</button>
-      ${cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
+      <button class="btn small set-agent-provider" type="button" ${internalDisabled}>Save</button>
+      ${!selection.hiddenInternal && cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
     </div>
   `;
 }
@@ -767,20 +783,32 @@ async function renderAgentProviders() {
     // The stored override is REDACTED (no key) — the provider + model are shown,
     // the key is entered (and only ever written, never read back).
     const cur = a.provider ?? {};
+    const storedSelection = providerSelectionPresentation(cur, PROVIDERS);
     row.innerHTML = agentProviderRowHtml(a, cur, globalCfg);
+    const internalStatus = row.querySelector(".agent-provider-internal-status");
+    renderInternalProviderStatus(internalStatus, storedSelection);
     const agentCredentialInput = row.querySelector(".agent-provider-key");
     const agentDurabilityWarning = row.querySelector("storage-durability-warning");
+    const setAgentProvider = row.querySelector(".set-agent-provider");
     wireCredentialDurability(agentCredentialInput, agentDurabilityWarning, {
       existing: cur.hasApiKey === true,
     });
 
     // Provider change → swap the model catalogue + base-URL field to the
     // selected provider (the row stays a labeled grid; only the dependent
-    // cells change).
+    // cells change). A hidden legacy override cannot be erased by pressing an
+    // otherwise-no-op Save: choose a public provider first.
     row.querySelector(".ag-provider")?.addEventListener("change", (e) => {
       const provider = e.detail?.value ?? e.target.value ?? "";
       const preset = PROVIDERS.find((p) => p.id === provider);
       const models = preset ? providerCatalogue(preset) : [];
+      const hiddenLegacyUnchanged = storedSelection.hiddenInternal && !provider;
+      renderInternalProviderStatus(
+        internalStatus,
+        hiddenLegacyUnchanged ? storedSelection : { hiddenInternal: false },
+      );
+      if (agentCredentialInput) agentCredentialInput.disabled = hiddenLegacyUnchanged;
+      if (setAgentProvider) setAgentProvider.disabled = hiddenLegacyUnchanged;
       const picker = row.querySelector(".ag-model");
       if (picker) {
         picker.models = models;
@@ -825,7 +853,7 @@ async function renderAgentProviders() {
         saveFlash(`Key not cleared: ${r.error ?? "unknown error"}`);
       }
     });
-    row.querySelector(".set-agent-provider").addEventListener("click", async (event) => {
+    setAgentProvider.addEventListener("click", async (event) => {
       const trigger = event.currentTarget;
       const provider = row.querySelector(".ag-provider")?.value ?? "";
       const model = row.querySelector(".ag-model")?.value?.trim() ?? "";

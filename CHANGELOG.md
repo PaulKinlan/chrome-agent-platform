@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.141] — 2026-08-22
+- fix(provider): hide internal providers without migrating stored selections (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
+
 ## [0.2.140] — 2026-08-22
 - feat(durable): publish replay-safety candidate for hands-on testing (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
 

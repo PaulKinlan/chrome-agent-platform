@@ -106,6 +106,7 @@ code {
   color: var(--muted);
   font-size: 12px;
 }
+#provider-selection-status { margin-block: var(--space-3, 12px) 0; }
 /* Providers */
 .provider-list {
   display: flex;
@@ -867,6 +868,7 @@ input:focus, select:focus, textarea:focus {
 }
 /* The Base URL cell spans full width when it wraps alone (openai-compatible). */
 .agent-provider-row .ag-base-url { grid-column: 1 / -1; }
+.agent-provider-internal-status { grid-column: 1 / -1; margin: 0; }
 .agent-provider-row .field { display: grid; gap: 4px; min-width: 0; }
 .agent-provider-row .field-label { font-size: var(--text-xs, 12px); color: var(--muted); }
 .agent-provider-row input.agent-provider-base-url,

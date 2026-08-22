@@ -651,7 +651,38 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   const allowedGet = await dispatch({ type: "provider.get" }, ownerSender);
   assert(allowedGet?.provider === "demo", "provider.get accepted via attested owner principal");
 
-  // 7. query/unknown-hash/foreign-document spoofs and missing attestations can NEVER pass (the fallback is gone):
+  // 7. provider.models is the REAL /model consumer route: it advertises only
+  // public choices while preserving stored global/per-agent internal authority.
+  const publicModels = await dispatch({ type: "provider.models" }, ownerSender);
+  assertEquals(
+    publicModels?.choices?.map((choice) => choice.id),
+    ["openai", "anthropic", "gemini", "deepseek", "openai-compatible", "ollama"],
+    "provider.models returns the exact public provider list",
+  );
+  assert(
+    !publicModels?.choices?.some((choice) => choice.id === "demo" || choice.id === "prompt-api"),
+    "provider.models leaked an internal provider",
+  );
+  const demoAfterModels = await dispatch({ type: "provider.get" }, ownerSender);
+  assertEquals(demoAfterModels?.provider, "demo", "reading the public list migrated the stored Demo selection");
+
+  const promptSet = await dispatch({ type: "provider.set", config: { provider: "prompt-api", baseURL: "", apiKey: "", model: "gemini-nano" } }, ownerSender);
+  assertEquals(promptSet?.provider, "prompt-api", "Prompt API remains accepted as internal authority");
+  await dispatch({ type: "provider.models" }, ownerSender);
+  const promptAfterModels = await dispatch({ type: "provider.get" }, ownerSender);
+  assertEquals(promptAfterModels?.provider, "prompt-api", "reading the public list migrated the stored Prompt API selection");
+
+  const legacyNamed = {
+    demoProbe: { id: "demoProbe", name: "Demo probe", provider: { provider: "demo", baseURL: "", model: "demo-local" } },
+    promptProbe: { id: "promptProbe", name: "Prompt probe", provider: { provider: "prompt-api", baseURL: "", model: "gemini-nano" } },
+  };
+  await dispatch({ type: "kv.set", values: { "cap:namedAgents": legacyNamed } }, ownerSender);
+  const namedBeforeModels = await dispatch({ type: "kv.get", keys: ["cap:namedAgents"] }, ownerSender);
+  await dispatch({ type: "provider.models" }, ownerSender);
+  const namedAfterModels = await dispatch({ type: "kv.get", keys: ["cap:namedAgents"] }, ownerSender);
+  assertEquals(namedAfterModels, namedBeforeModels, "reading the public list migrated a stored per-agent internal override");
+
+  // 8. query/unknown-hash/foreign-document spoofs and missing attestations can NEVER pass (the fallback is gone):
   for (const bad of [
     { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html?spoof=1", documentId: "d", documentLifecycle: "active" },
     { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html#x", documentId: "d", documentLifecycle: "active" },

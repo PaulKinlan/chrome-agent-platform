@@ -66,8 +66,7 @@
         <p
           class="muted">Choose the model the hub agent uses. Your API key is stored locally in <code>chrome.storage</code> — never in the bundle, logs, or receipts.</p>
         <div id="provider-list" class="provider-list"></div>
-        <div
-          class="hint">The on-device Prompt API (Gemini nano) needs no key and works offline. Demo mode runs a deterministic local model — useful for testing the loop without a provider.</div>
+        <p id="provider-selection-status" class="hint" role="status" aria-live="polite" aria-atomic="true" hidden></p>
       </section>
 
       <section id="local-models" class="panel">
