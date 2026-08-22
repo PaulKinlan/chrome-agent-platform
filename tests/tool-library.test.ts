@@ -25,9 +25,10 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut"]) {
+  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd"]) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
+  assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
   assertMatch(block, /_emit\("tool-preview-request"/, "the component emits exactly the preview-request event");
   assertMatch(block, /toolId, args, stdin, sourceEvent/, "the preview request carries the toolId");
   assertEquals((block.match(/<button/g) ?? []).length, 1, "exactly one button (the preview-run)");

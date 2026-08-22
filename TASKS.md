@@ -5,7 +5,7 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 23:05 UTC. Reconciled against exact public
+> Snapshot: 2026-08-22 23:20 UTC. Reconciled against exact public
 > `origin/main@9dd581a15fb86f9e6fa0b5ef98e57344ae300446` (`0.2.165`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary and the tool-platform foundation

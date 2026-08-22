@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.171] — 2026-08-22
+- feat(tools): A2 stream tranche — base64/md5sum/sha256sum/sha512sum/wc/xxd Settings previews (CAP-FB-20260822-TOOL-PREVIEW-EXEC-03)
+
 ## [0.2.170] — 2026-08-22
 - feat(tools): 5-tool Settings-only bundled preview tranche (csvtool, uuid, head, tail, cut) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-02)
 

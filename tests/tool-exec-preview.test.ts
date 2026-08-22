@@ -213,8 +213,10 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
-  // the allowlist is EXACTLY the 5 tools
-  assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(["csvtool", "cut", "head", "tail", "uuid"]));
+  // the allowlist is EXACTLY the 11 tools
+  assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
+    ["base64", "csvtool", "cut", "head", "md5sum", "sha256sum", "sha512sum", "tail", "uuid", "wc", "xxd"],
+  ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
     assert(typeof spec.casSha === "string" && /^[0-9a-f]{64}$/.test(spec.casSha), `${spec.toolId} casSha`);
@@ -384,16 +386,24 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 5-tool static allowlist is admitted as settings-preview (other 21 unchanged)", () => {
+Deno.test("preview: the EXACT 11-tool static allowlist is admitted as settings-preview (other 15 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
-  assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(["csvtool", "cut", "head", "tail", "uuid"]));
+  assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
+    ["base64", "csvtool", "cut", "head", "md5sum", "sha256sum", "sha512sum", "tail", "uuid", "wc", "xxd"],
+  ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 21, "the other 21 rows are unchanged");
+  assertEquals(notAdmitted.length, 15, "the other 15 rows are unchanged");
+  // per-tool caps: the digest tools carry the crypto set
+  assertEquals(JSON.stringify(previewSpecFor("md5sum").caps), JSON.stringify(["compute", "crypto"]));
+  assertEquals(JSON.stringify(previewSpecFor("sha256sum").caps), JSON.stringify(["compute", "crypto"]));
+  assertEquals(JSON.stringify(previewSpecFor("base64").caps), JSON.stringify(["compute", "text.transform"]));
+  assertEquals(JSON.stringify(previewSpecFor("wc").caps), JSON.stringify(["compute", "text.transform"]));
+  assertEquals(JSON.stringify(previewSpecFor("xxd").caps), JSON.stringify(["compute", "text.transform"]));
   // The preview limits are honest against the executor's JSON request budget.
   assert(PREVIEW_LIMITS.maxStdinBytes <= 4 * 1024, "stdin stays inside the 64 KiB executor request envelope");
   assert(PREVIEW_LIMITS.wallMs <= 30_000, "wall time stays inside the executor bound");

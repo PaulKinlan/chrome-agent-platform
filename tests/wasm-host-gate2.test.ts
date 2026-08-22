@@ -102,6 +102,49 @@ function makeRequest(overrides = {}) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// (B11) the 6-tool A2 stream tranche — EXACT example contracts through the
+// REAL worker (the coordinator's expected outputs are the authority)
+// ──────────────────────────────────────────────────────────────────────────
+const A2_CONTRACTS = {
+  base64: { stdin: "hello", args: [], expect: "aGVsbG8=\n" },
+  md5sum: { stdin: "hello", args: [], expect: "5d41402abc4b2a76b9719d911017c592\n" },
+  sha256sum: { stdin: "hello", args: [], expect: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\n" },
+  sha512sum: { stdin: "hello", args: [], expect: "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043\n" },
+  wc: { stdin: "one two\nthree\n", args: [], expect: "2 3 14\n" },
+  xxd: { stdin: "Hi", args: ["-p"], expect: "4869\n" },
+};
+
+Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT example outputs through the REAL worker", async () => {
+  const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  for (const [toolId, contract] of Object.entries(A2_CONTRACTS)) {
+    const spec = PREVIEW_SPECS[toolId];
+    assert(spec, `${toolId} is in the spec map`);
+    const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
+    const authority = { ...AUTHORITY };
+    // a generous output quota (the tool outputs 65+ char digests); stdin stays
+    // bounded by the preview limits.
+    const job = makeJob({
+      stdin: new Uint8Array(new TextEncoder().encode(contract.stdin)),
+      quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 1024, stderrBytes: 256, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
+    });
+    // the options host rehydrates the stdin to a genuine Uint8Array
+    const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+    const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+    const host = createOffscreenWasmHost({ executor, authority });
+    // argv0 = the toolId (the WASI command convention), then the user args
+    const res = await host.handleJob({
+      type: "wasm.job",
+      job: { ...rehydrated, args: [toolId, ...contract.args] },
+      wasmBytes: casBytes,
+    });
+    assertEquals(res.ok, true, `${toolId}: ${JSON.stringify(res)}`);
+    assertEquals(res.phase, "completed", toolId);
+    assertEquals(res.stdout, contract.expect, `${toolId} exact contract output`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // (B10) strict request-byte measurement (JSON inflation no longer governs)
 // ──────────────────────────────────────────────────────────────────────────
 import { measureRequestBytes } from "../extension/lib/wasm-executor.js";

@@ -6467,6 +6467,18 @@ class ToolLibrary extends Component {
         return 'Example: args "-n 2" + stdin "a\nb\nc" → "b\nc" (last two lines).';
       case "cut":
         return 'Example: args "-d , -f 2" + stdin "a,b,c" → "b" (the second field).';
+      case "base64":
+        return 'Example: (no args) + stdin "hello" → "aGVsbG8=\n".';
+      case "md5sum":
+        return 'LEGACY — NOT for security. Example: (no args) + stdin "hello" → "5d41402abc4b2a76b9719d911017c592\n".';
+      case "sha256sum":
+        return 'Example: (no args) + stdin "hello" → "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\n".';
+      case "sha512sum":
+        return 'Example: (no args) + stdin "hello" → "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043\n".';
+      case "wc":
+        return 'Example: (no args) + stdin "one two\nthree\n" → "2 3 14\n" (lines, words, bytes).';
+      case "xxd":
+        return 'Example: args "-p" + stdin "Hi" → "4869\n" (plain hex).';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6571,6 +6583,12 @@ class ToolLibrary extends Component {
             <option value="head">head — first lines of stdin</option>
             <option value="tail">tail — last lines of stdin</option>
             <option value="cut">cut — select fields from each line</option>
+            <option value="base64">base64 — RFC 4648 encode/decode stream</option>
+            <option value="md5sum">md5sum — MD5 digest (legacy, NOT security)</option>
+            <option value="sha256sum">sha256sum — SHA-256 digest</option>
+            <option value="sha512sum">sha512sum — SHA-512 digest</option>
+            <option value="wc">wc — line/word/byte counts</option>
+            <option value="xxd">xxd — hex dump (plain)</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
