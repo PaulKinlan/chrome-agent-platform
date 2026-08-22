@@ -70,6 +70,16 @@ function sameContext(a, b) {
     a.catalogGeneration === b.catalogGeneration;
 }
 
+function packageIdentity(descriptor) {
+  if (!descriptor || typeof descriptor !== "object") return "";
+  return [
+    descriptor.packageId,
+    descriptor.version,
+    descriptor.digest,
+    descriptor.capabilityDigest,
+  ].map((value) => safeFence(value)).join("\u0000");
+}
+
 export class ToolSelectionAuthority {
   #records = new Map();
   #clock;
@@ -177,6 +187,7 @@ export class ToolSelectionAuthority {
           selectionRef,
           stableId: descriptor.stableId,
           sourceGeneration: descriptor.sourceGeneration,
+          packageIdentity: packageIdentity(descriptor),
           context,
           issuedAt: now,
           expiresAt,
@@ -220,6 +231,7 @@ export class ToolSelectionAuthority {
     const descriptor = catalog.byStableId?.[record.stableId];
     if (
       !descriptor || descriptor.sourceGeneration !== record.sourceGeneration ||
+      packageIdentity(descriptor) !== record.packageIdentity ||
       descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
     ) {
       return Object.freeze({ ok: false, error: "selection-source-stale" });

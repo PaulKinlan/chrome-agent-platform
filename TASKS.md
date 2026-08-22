@@ -5,13 +5,14 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 12:38 UTC. Reconciled against exact public
-> `origin/main@1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624` (`0.2.147`). Package
-> archive freshness is public and verified, so it is `DONE`; this branch adds the
-> P0 security-suite serialization candidate without making a Chrome-run or shipping
-> claim for it. Branch status counts: **20 OPEN · 8 IN_REVIEW · 2 MERGED ·
-> 4 BLOCKED · 34 DONE · 0 ABANDONED**. The 34 active entries and 34 archived
-> terminal entries below are the complete 68-entry branch state at this snapshot.
+> Snapshot: 2026-08-22 13:09 UTC. Reconciled against exact public
+> `origin/main@0e47a63591c9c798043cc196f6049c410d2cd597` (`0.2.148`). Package
+> freshness and security-suite serialization are public, independently reviewed
+> and verified, so both are `DONE`; the catalog remains truthfully `MERGED` pending
+> its whole-product journey gate. This branch adds the shadow-only lazy-protocol
+> recompose without a shipping claim. Branch status counts: **19 OPEN ·
+> 8 IN_REVIEW · 2 MERGED · 4 BLOCKED · 35 DONE · 0 ABANDONED**. The 33 active
+> entries and 35 archived terminal entries below are the complete 68-entry state.
 
 ## Safety boundary
 
@@ -528,41 +529,53 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — hundreds of tools must be discovered lazily instead of
   eagerly appending every descriptor/schema to provider context
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 13:09 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: lazy-protocol recompose owner
+- Workspace: active (local path private)
+- Branch: `feat/lazy-tool-protocol-recompose-0e47a63`
+- Base: `0e47a63591c9c798043cc196f6049c410d2cd597`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: an always-small `search_tools`/`execute_tool` protocol uses
   current run-bound selection references; provider capture includes only bounded
   selected descriptors and no non-selected schema; execute re-resolves live
-  catalog/source/package/agent/origin/document/generation authority, validates
-  arguments and delegates to the unchanged source dispatcher; unavailable tools
-  get explanation but no executable reference; retrieval grants no permission or
-  install authority
-- Review: independent provider-boundary, prompt-injection, authority-confusion,
-  stale-reference, privacy, cancellation and replay review required
-- Gates: provider wire capture for selected versus non-selected descriptors;
-  stale/run/agent/origin/document/source/package generation matrix;
-  top-k/result/token budgets; unavailable/no-ref cases; service-worker restart;
-  exact loaded-MV3 proof that non-selected tools are absent and uncallable
-- Blockers: depends on accepted `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01` and
-  composes with, but does not duplicate,
-  `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`
-- Next: define the minimal provider protocol and capture oracle on top of the
-  reviewed lexical catalog; do not remove eager binding until nondisclosure and
-  execution parity pass
+  catalog/source/package/agent/origin/document/generation authority before
+  validation, before dispatch and after dispatch, validates getter-safe bounded
+  arguments and delegates only to the unchanged source closure; package identity
+  binds package ID, version, digest and capability digest; unavailable tools get
+  explanation but no executable reference; retrieval grants no permission or
+  install authority; this source slice remains shadow-only and cannot change eager
+  provider binding, execute, grant or install
+- Review: predecessor source semantics `ffdc2850bcf695608e5cecb29f8b46ee2d350bc6`
+  independently PASSed provider-boundary, authority-confusion, stale-reference,
+  privacy, cancellation, replay, bounds and dispatcher-parity review (report
+  SHA-256 `84ab4eddd10cde6fcf7fc86423420e13b979d8c7337f664c6648c8b697325cf0`);
+  exact current-main recompose review pending
+- Gates: reported pre-commit focused lazy/catalog/search/selection/route/provider
+  tests 75/75, canonical full no-Chrome unit suite 961/961 across 14 steps,
+  104-file production build and exact 130-entry package/validate PASS; gallery/
+  changelog/tracker/privacy/diff/release/clean-tree checks; later exact loaded-MV3
+  proof must show providers
+  and prompts unchanged, the two protocol tools absent and uncallable, selected-only
+  capture bounded, non-selected schemas absent, and lifecycle expiry/restart fail-closed
+- Blockers: provider cutover is explicitly excluded until exact loaded-MV3
+  nondisclosure/uncallability evidence and a separately reviewed successor;
+  this shadow-only candidate requires independent recompose review
+- Next: commit the exact one-release recompose, obtain independent review, then
+  return any browser-package preparation to the coordinator
 - Recover:
-  `git grep -n "tool-catalog.shadow\|search_tools\|execute_tool\|selectionRef" -- extension tests docs`
+  `git show feat/lazy-tool-protocol-recompose-0e47a63 -- extension/lib/lazy-tool-protocol.js extension/lib/lazy-tool-wire.js extension/lib/tool-catalog-shadow.js extension/lib/tool-catalog.js extension/lib/tool-selection.js tests/lazy-tool-protocol.test.ts tests/provider-gate.test.ts TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — split from the P0 program after research identified
     eager WebMCP/provider binding as a high-severity context and authority
     problem; no cutover is present in the catalog slice.
+  - 2026-08-22 13:09 UTC — source semantics at `ffdc2850bcf695608e5cecb29f8b46ee2d350bc6`
+    independently PASSed; recomposed only that source/test/documentation delta onto
+    exact public `0e47a63` while preserving the reviewed security-suite and package
+    freshness authorities; no Chrome, security-suite run, provider cutover or push.
 
 ## [CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01] Loaded-MV3 Wasm runtime and termination probe
 
@@ -990,28 +1003,6 @@ On resume after a coordinator or worker loss:
     Unicode, collision, bound, source-revocation, expiry and
     provider-nondisclosure tests as its first tranche.
 
-## [CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01] Serialize the real-Chromium security suite
-- Feedback: 2026-08-22 — source inspection confirmed `npm run test:security` launches real headless Chromium but does not self-acquire the canonical serialized Chrome lock
-- Updated: 2026-08-22 12:38 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P0
-- Owner: security-suite serialization implementer
-- Workspace: active (local path private)
-- Branch: `fix/security-suite-serialization-final-1fd65c6`
-- Base: `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
-- Candidate: this tracker commit
-- Shipping: —
-- Acceptance: direct runner execution refuses without the supervisor-issued nonce, live parent identity, exact inherited canonical flock fd and exact wrapper-owned profile; the shell acquires `/tmp/cap-serialized-chrome-acceptance.lock` before profile/evidence/server/browser side effects; production always uses the fixed runner and immutable 120-second timeout; only an explicit self-test token plus the exact repository fixture path and pinned SHA-256 may select a bounded fake runner; the supervisor creates durable bounded evidence and a fresh exact profile, launches one detached PID=PGID=SID group, enforces hard timeout and verified-group TERM then KILL, propagates runner exit/signal, detects exact observed descendants that escape the group, poisons on residue/unsafe cleanup, and removes only the exact current-UID-owned non-symlink profile through the shared live helper; the runner's seven security assertions remain unchanged
-- Review: prior semantic source established correct profile wiring and supervisor shape but was BLOCKed because source-string tests did not execute the failure paths; independent exact-candidate process-custody, lock-bypass, fixture-boundary, timeout, PID/PGID/SID, signal, symlink/ownership/prefix, residue/poison, cleanup, evidence and seven-assertion preservation review pending
-- Gates: executable no-Chrome tests drive the production helpers for direct/no-lock/stale-parent/stale-nonce/wrong-lock refusal, valid inherited-lock guard, fake-runner path/hash refusal, production runner/120-second immutability, PGID/SID mismatch, hard timeout, stubborn-group TERM→KILL/no-survivor, exit 37/signal propagation, real symlink/wrong-prefix cleanup refusal, injected wrong-owner refusal and escaped-survivor residue→POISON/nonzero with exact test cleanup; reported pre-commit focused 9/9, canonical full unit 944/944 across 14 steps, 102-file production build and exact 128-entry package/validate PASS; shell/Node/Deno, gallery/changelog/order/diff/release/clean-tree checks; no Chrome and no `npm run test:security` before independent review
-- Blockers: exact candidate independent review is required before one coordinator-authorized serialized Chrome run; historical unlocked security results remain noncanonical observations
-- Next: commit the single-release exact candidate, obtain independent review, then return execution authority to the coordinator
-- Recover: `git show fix/security-suite-serialization-final-1fd65c6 -- scripts/security-suite-supervisor.sh scripts/security-suite-supervisor.mjs scripts/security-suite-custody.mjs scripts/security-suite.ts tests/security-suite-custody.test.ts tests/fixtures/security-suite-fake-runner.mjs package.json TASKS.md`
-- History:
-  - 2026-08-22 10:00 UTC — opened after correcting the assumption that the security suite was no-Chrome. Historical unsynchronized invocations are noncanonical evidence, not product failures; their assertion results remain observations only.
-  - 2026-08-22 12:38 UTC — recomposed the reviewed source shape once from exact public `1fd65c6`: actual wrapper profile wiring plus shared live custody helpers and hash-pinned no-Chrome fixture mutants replace the predecessor's non-executable source-string assertions; no Chrome or security-suite run performed.
-
 ## [CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01] Local semantic search over the complete tool catalog
 
 - Feedback: 2026-08-20 — product-owner requested
@@ -1236,6 +1227,29 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Archive
+
+## [CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01] Serialize the real-Chromium security suite
+- Feedback: 2026-08-22 — source inspection confirmed `npm run test:security` launches real headless Chromium but does not self-acquire the canonical serialized Chrome lock
+- Updated: 2026-08-22 13:09 UTC
+- Status: DONE
+- Resume: —
+- Priority: P0
+- Owner: security-suite integration owner
+- Workspace: none
+- Branch: `main`
+- Base: `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624`
+- Candidate: `0e47a63591c9c798043cc196f6049c410d2cd597`
+- Shipping: `origin/main@0e47a63591c9c798043cc196f6049c410d2cd597`
+- Acceptance: direct runner execution refuses without the supervisor-issued nonce, live parent identity, exact inherited canonical flock fd and exact wrapper-owned profile; the shell acquires `/tmp/cap-serialized-chrome-acceptance.lock` before profile/evidence/server/browser side effects; production always uses the fixed runner and immutable 120-second timeout; only an explicit self-test token plus the exact repository fixture path and pinned SHA-256 may select a bounded fake runner; the supervisor creates durable bounded evidence and a fresh exact profile, launches one detached PID=PGID=SID group, enforces hard timeout and verified-group TERM then KILL, propagates runner exit/signal, detects exact observed descendants that escape the group, poisons on residue/unsafe cleanup, and removes only the exact current-UID-owned non-symlink profile through the shared live helper; the runner's seven security assertions remain unchanged
+- Review: independent exact-candidate process-custody/security review PASS (report SHA-256 `998409ec8cbfb787510a597e5e1b93342dcc8cafa24012a8feae29ba34a7bc78`); independent real-run evidence review PASS (report SHA-256 `99ac2743175f2db85f0d8b77dd2427a026ca59efa3f8e844522e967f736ed385`)
+- Gates: executable no-Chrome custody tests 9/9; canonical full unit 944/944 across 14 steps; 102-file production build and exact 128-entry package/validate PASS; one coordinator-authorized serialized real Chromium run passed 7/7 with PID=PGID=SID attested, exit 0, no timeout/survivor/residue, exact profile absent after cleanup, and canonical lock/poison clear
+- Blockers: —
+- Next: —
+- Recover: `git show 0e47a63591c9c798043cc196f6049c410d2cd597 -- scripts/security-suite-supervisor.sh scripts/security-suite-supervisor.mjs scripts/security-suite-custody.mjs scripts/security-suite.ts tests/security-suite-custody.test.ts tests/fixtures/security-suite-fake-runner.mjs package.json TASKS.md`
+- History:
+  - 2026-08-22 10:00 UTC — opened after correcting the assumption that the security suite was no-Chrome. Historical unsynchronized invocations are noncanonical evidence, not product failures; their assertion results remain observations only.
+  - 2026-08-22 12:38 UTC — recomposed the reviewed source shape once from exact public `1fd65c6`: actual wrapper profile wiring plus shared live custody helpers and hash-pinned no-Chrome fixture mutants replace the predecessor's non-executable source-string assertions; no Chrome or security-suite run performed in the implementation lane.
+  - 2026-08-22 13:09 UTC — exact reviewed candidate `0e47a63591c9c798043cc196f6049c410d2cd597` became public `0.2.148`; its one authorized serialized real Chromium run and independent evidence review passed 7/7 with clean custody and cleanup, advancing the task to DONE.
 
 ## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
 - Feedback: 2026-08-22 — production packaging copied the entire local extension tree and updated an existing ZIP in place, allowing ignored/untracked artifacts and files removed since a prior package to survive into a release archive

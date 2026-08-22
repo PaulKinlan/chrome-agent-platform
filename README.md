@@ -36,10 +36,13 @@ isolated OPFS memory, run history, skills, and avatar.
   (on a schedule/hook) in a sandboxed worker, without re-invoking the model.
 - **System hooks** — the full `chrome.*` `on*` event surface as candidate hooks, with
   an owner-only authoritative deny-list.
-- **Shadow tool catalog** — Settings-only metadata diagnostics derive bounded stable
-  descriptors from the real built-in, browser, management, and WebMCP sources, with
-  deterministic lexical search and expiring non-authorizing selection references.
-  This does not yet change provider binding or execute Wasm; see
+- **Shadow tool catalog + lazy capture** — Settings-only metadata diagnostics derive
+  bounded stable descriptors from the real built-in, browser, management, and WebMCP
+  sources, with deterministic lexical search and expiring non-authorizing references.
+  A review candidate captures a fixed two-tool lazy wire plus selected descriptors only
+  and repeatedly re-resolves live authority around existing dispatcher closures. It is
+  not provider-bound: eager tools remain unchanged and the capture cannot execute,
+  grant or install. See
   [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.

@@ -1,6 +1,6 @@
 # Open questions for Paul
 
-Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom. Security-suite serialization is implementation custody, not a product-policy question: the reviewed source and executable no-Chrome mutants must pass before the coordinator authorizes its single real-browser run.
+Resolved answers are recorded here (Paul confirmed each over the course of the build). Remaining open questions are at the bottom. Security-suite serialization is completed implementation custody, not a product-policy question. The shadow lazy-protocol recompose likewise makes no new product-policy choice: provider cutover stays excluded until its separate loaded-MV3 nondisclosure and uncallability gate.
 
 ## Resolved
 

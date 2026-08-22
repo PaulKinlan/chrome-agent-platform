@@ -616,6 +616,24 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   assertEquals(shadowOwner?.canExecute, false);
   assertEquals(shadowOwner?.canGrant, false);
   assert(Number(shadowOwner?.descriptorCount) > 0, "actual built-in adapters produced descriptors");
+  const lazyCapture = await dispatch({
+    type: "tool-catalog.shadow",
+    action: "capture",
+    query: "memory",
+    limit: 1,
+    runId: "capture-run-1",
+    agentId: "hub",
+    origin: "",
+    documentId: "doc-options-1",
+  }, ownerSender);
+  assertEquals(lazyCapture?.ok, true, "owner Settings can capture selected-only lazy metadata");
+  assertEquals(lazyCapture?.providerBound, false);
+  assertEquals(lazyCapture?.eagerBindingChanged, false);
+  assertEquals(lazyCapture?.canExecute, false);
+  assertEquals(lazyCapture?.canGrant, false);
+  assertEquals(lazyCapture?.protocolTools?.map((row) => row.name), ["search_tools", "execute_tool"]);
+  assertEquals(lazyCapture?.selectedDescriptors?.length, 1);
+  assertEquals(lazyCapture?.selectedDescriptors?.[0]?.authorizes, false);
   const seedRes = await dispatch({ type: "kv.set", values: {
     "cap:namedAgents": { probe: { name: MARKER_NAMED, provider: { provider: "deepseek", apiKey: "config-has-a-value" } } },
     "providerConfig": { provider: "deepseek", baseURL: "https://api.example", apiKey: "config-value", model: "m", note: MARKER_GLOBAL },

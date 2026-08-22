@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.149] — 2026-08-22
+- feat(tools): add shadow lazy protocol capture (CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01)
+
 ## [0.2.148] — 2026-08-22
 - fix(security): serialize the real Chromium suite (CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01)
 

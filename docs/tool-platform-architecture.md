@@ -1,6 +1,6 @@
 # Tool Platform Architecture
 
-Status: shadow catalog contract implemented; execution platform remains planned.
+Status: shadow catalog public; shadow-only lazy protocol candidate in review; provider cutover remains planned.
 
 ## Provenance and factual precedent
 
@@ -150,18 +150,51 @@ authorization. The future `execute_tool` protocol must re-resolve the descriptor
 and re-run the current source dispatcher's complete live authority checks before
 invocation.
 
+## Shadow-only lazy protocol successor
+
+`CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01` now has an owner-decision-free source
+candidate, but **no provider cutover**:
+
+- `lazy-tool-wire.js` defines the fixed, always-small `search_tools` and
+  `execute_tool` descriptors and is the only lazy module imported by the
+  service-worker shadow route; `lazy-tool-protocol.js` holds the separately
+  unreachable injectable execution core;
+- search uses the existing lexical index and `ToolSelectionAuthority`, so only
+  ready tools receive opaque references and every result remains explicitly
+  non-authorizing;
+- execute accepts only a reference and bounded accessor-safe arguments, then
+  rebuilds the live catalog and re-resolves run, agent, origin, document,
+  catalog, source, stable and package identity before validation, immediately
+  before dispatch, and after dispatch;
+- source adapters keep each current AI tool's own Zod validation and execute
+  closure. Browser permissions/grants/run fences, management routes, memory
+  generation guards and WebMCP enrollment/approval/replay checks therefore stay
+  in their existing authorities; the lazy core owns no alternate dispatcher;
+- absent replay metadata remains `unknown`; cancellation, expiry, restart,
+  source removal and post-dispatch revocation fail closed; bounded outputs are
+  structurally secret-redacted before crossing the lazy boundary;
+- the Settings-only shadow route may capture the fixed two-tool wire plus only
+  the selected descriptor summaries. It reports `providerBound:false`,
+  `eagerBindingChanged:false`, `canExecute:false` and `canGrant:false`.
+
+The reusable execution core is not reachable from a service-worker message
+route or provider. It exists so dispatcher parity and every fence can be
+independently reviewed before exposure. The existing eager tool map remains the
+production behavior.
+
 ## Provider nondisclosure and cutover boundary
 
-This slice does **not** add `search_tools` or `execute_tool` to the agent, alter
-protected prompts, or remove eager tool binding. Catalog contents are not
-appended to system prompts or model messages. The only new consumer is a
-Settings-only diagnostic route.
+Neither the public catalog nor the lazy successor adds the two protocol tools
+to an agent, alters protected prompts, or removes eager tool binding. Catalog
+contents are not appended to system prompts or model messages. The only runtime
+consumer remains the Settings-only diagnostic route, whose capture action is
+metadata-only and cannot invoke the execution core.
 
-The provider cutover is a separate task,
-`CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01`, dependent on this contract and the
-existing `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`. It must prove that
-non-selected descriptors and schemas are absent from provider capture and
-uncallable before eager binding is removed.
+Before provider exposure, exact loaded-MV3 capture must prove that non-selected
+descriptors and schemas are absent and uncallable, that selected dispatch is
+behaviorally identical across every existing source, and that expiry/restart/
+revocation/cancellation fences survive the real service-worker lifecycle. Eager
+binding is not removed by this candidate.
 
 ## Distribution lanes and Store policy
 
@@ -182,8 +215,9 @@ unresolved.
 
 ## Planned authority split
 
-1. **Lazy protocol:** bounded `search_tools` / `execute_tool`, provider cutover,
-   and live source reauthorization.
+1. **Lazy protocol:** shadow source/capture candidate implemented; provider
+   exposure/cutover and loaded-MV3 nondisclosure remain gated. Live source
+   reauthorization is implemented only in the injectable core.
 2. **MV3 runtime probe:** prove Wasm CSP, offscreen/nested Worker, OPFS,
    timeout/termination, import, and memory behavior in a loaded extension.
 3. **Package authority:** immutable manifest/module/capability identity,
@@ -226,7 +260,7 @@ maximum does not cap the whole Worker heap.
   execution, or OPFS job workspace;
 - no embeddings, SQLite, Vectorize, or storage-engine decision;
 - no permission additions or `chrome.permissions.request` calls;
-- no provider eager-binding cutover;
+- no provider binding or eager-binding cutover for the lazy protocol;
 - no reinterpretation of legacy `(origin, toolName)` approval as package
   authority;
 - no copying or executing Co-do binaries;

@@ -7,6 +7,7 @@
 import { buildToolCatalog } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
+import { buildLazyProviderCapture } from "./lazy-tool-wire.js";
 
 function ownData(value, key) {
   try {
@@ -87,6 +88,25 @@ export class ShadowToolCatalogController {
           ownData(context, "documentId"),
         catalogGeneration: catalog.generation,
       }, catalog);
+    }
+    if (action === "capture") {
+      const search = searchToolIndex(index, ownData(request, "query"), {
+        limit: ownData(request, "limit"),
+      });
+      const selected = this.#selections.issue(
+        search,
+        {
+          runId: ownData(request, "runId"),
+          agentId: ownData(request, "agentId"),
+          origin: ownData(request, "origin"),
+          documentId: ownData(request, "documentId") ??
+            ownData(context, "documentId"),
+          catalogGeneration: catalog.generation,
+        },
+        catalog,
+        { ttlMs: ownData(request, "ttlMs") },
+      );
+      return buildLazyProviderCapture(selected);
     }
     return Object.freeze({ ok: false, error: "unknown-shadow-action" });
   }

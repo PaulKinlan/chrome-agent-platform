@@ -150,7 +150,13 @@ function projectSchema(value, depth = 0, budget = { nodes: 0 }) {
   try {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     const out = {};
-    for (const key of Object.keys(descriptors).sort().slice(0, 64)) {
+    // Runtime parser caches are execution state, not schema identity. Zod 3
+    // populates `_cached` on first safeParse(); including it would change a
+    // descriptor/catalog generation merely because validation ran.
+    for (
+      const key of Object.keys(descriptors).filter((key) => key !== "_cached")
+        .sort().slice(0, 64)
+    ) {
       const descriptor = descriptors[key];
       if (!("value" in descriptor)) {
         out[key] = "[accessor]";
