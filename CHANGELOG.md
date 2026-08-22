@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.139] — 2026-08-22
+- fix(durable): critical review successor — atomic pre-tool authority, stable per-call key, bounded enum (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
+
 ## [0.2.138] — 2026-08-22
 - feat(durable): fail-closed per-tool replay safety + recovery gating (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
 

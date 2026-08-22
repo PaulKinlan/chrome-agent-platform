@@ -1334,38 +1334,38 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
-    const journalingProgress = (event) => {
+    const journalingProgress = async (event) => {
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
       if (type === "tool-call") {
-        let args;
-        try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
-        if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
-        // A per-call correlation id (FIFO per tool name within THIS run,
-        // RUN-INSTANCE scoped — a scheduled run reusing taskId/alarm.name must
-        // never regenerate colliding ids) lets a replay PAIR each tool-call
-        // with its result + render ONE terminal card.
-        const n = (callSeq.get(event.toolName) ?? 0) + 1;
-        callSeq.set(event.toolName, n);
-        const callId = `${taskId}:${runInstance}:${event.toolName ?? "tool"}:${n}`;
+        // ATOMIC PRE-TOOL RECORD: persist the call identity + the normalized
+        // safety + the stable per-tool-call index BEFORE any external effect
+        // runs. The progress callback AWAITS this; on failure the tool
+        // execution is REFUSED (a possibly-effectful tool never runs before
+        // its authority is durable). The returned per-call key is
+        // byte-identical across resume (the index lives in the durable
+        // record, never a fresh run-instance UUID).
+        let pre;
+        try {
+          pre = await durableRuns.preToolUse(executionId, {
+            toolName: event.toolName,
+            safety: replaySafetyForTool(event.toolName),
+          });
+        } catch (error) {
+          const refusal = new Error(`tool execution refused: pre-tool authority could not be persisted (${String(error?.message ?? error).slice(0, 120)})`);
+          refusal.durableRefusal = true;
+          throw refusal;
+        }
+        const callId = pre.callId;
         const cq = callQueue.get(event.toolName) ?? [];
         cq.push(callId); // the result side shifts the OLDEST pending id (FIFO)
         callQueue.set(event.toolName, cq);
+        let args = "";
+        try { args = event.toolArgs != null ? JSON.stringify(event.toolArgs) : ""; } catch { args = String(event.toolArgs ?? ""); }
+        if (args && args.length > 2000) args = args.slice(0, 2000) + "…";
         const log = { type: "tool-call", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", args };
         journalAppend(mem, log).catch(() => {});
         durableRuns.appendLog(executionId, log, `tool-call:${callId}`).catch(() => {});
-        // Record the tool's DECLARED replay safety (fail-closed): an unknown or
-        // mutating tool makes this run non-auto-resumable after an interruption
-        // (paused-side-effect-uncertain + owner Retry/Cancel). Read-only/
-        // idempotent progress keeps the run auto-resumable with the stable
-        // execution idempotency key.
-        // Best-effort: a recordToolSafety failure keeps the fail-closed
-        // default (mutating → no auto-resume), which is the SAFE direction.
-        durableRuns.recordToolSafety(executionId, replaySafetyForTool(event.toolName)).catch(() => {});
-        durableRuns.heartbeat(executionId, { progressed: true }).catch(() => {
-          heartbeatFailed = true;
-          try { orch?.abort?.(); } catch { /* already stopped */ }
-        });
       } else if (type === "tool-result") {
         let result;
         if (event.result == null) result = "";

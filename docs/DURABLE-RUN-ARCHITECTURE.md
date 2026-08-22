@@ -365,17 +365,27 @@ verdict is `PASS_FOR_INTEGRATION`, scoped to this exact Durable source and evide
 The interruption classifier is driven by the per-tool replay-safety declaration in
 `extension/lib/tool-replay-safety.js`, never by the progress count alone:
 
-- **read-only** tools (`memory_get`, `memory_grep`, `memory_list`) observe only —
-  safe to re-run automatically.
-- **idempotent** tools (`memory_set`, key-bound writes) may re-run with the stable
-  execution idempotency key.
-- **mutating / unknown / missing** tools fail closed: an interruption after such
-  progress pauses as `paused-side-effect-uncertain` and requires the owner's
-  explicit Retry or Cancel. The SW records the WORST progressed classification
-  (`durableRuns.recordToolSafety`) at every tool-call; the record defaults to
-  UNRECORDED (treated as mutating) until the first declaration lands.
+- **read-only** tools (the explicit browser/memory/registry read sets) observe
+  only — safe to re-run automatically.
+- **idempotent** tools (key-bound writes such as `memory_set`) may re-run with the
+  STABLE per-tool-call idempotency key (`executionId:toolName:index` — the index
+  lives in the durable record's per-tool counter, byte-identical across resume).
+- **mutating / unknown** tools fail closed: an interruption after such progress
+  pauses as `paused-side-effect-uncertain` and requires the owner's explicit
+  Retry or Cancel. The canonical enum is `{read-only, idempotent, mutating,
+  unknown}` with the unknown default for anything undeclared (page/WebMCP tools);
+  hostile inputs (a throwing String, a getter/Proxy, a non-enum value) normalize
+  to unknown and the worst-merge can never let an invalid value retain a
+  read-only/idempotent classification.
 
 There is NO claim of universal exactly-once external effects: read-only/idempotent
-work auto-resumes, and everything else stops for an owner decision. The durable
-run registry/journal authority, the task-scoping fences, the Gemini tool
-normalization, and the permission boundaries are unchanged.
+work auto-resumes, and everything else stops for an owner decision.
+
+The pre-tool authority is ATOMIC and fail-closed: before ANY tool executes, the
+`preToolUse` record (call identity + the normalized safety + the stable per-tool
+call index) is persisted in ONE locked write; the SW AWAITS it and REFUSES the
+tool execution if the persistence fails — a possibly-effectful tool never runs
+before its authority is durable, so the quota rollback never deletes a
+possibly-effectful execution. The durable run registry/journal authority, the
+task-scoping fences, the Gemini tool normalization, and the permission
+boundaries are unchanged.

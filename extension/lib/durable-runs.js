@@ -15,7 +15,7 @@ import {
   namedAgentMemory,
   siteMemory,
 } from "./memory.js";
-import { REPLAY_MUTATING, worstSafety } from "./tool-replay-safety.js";
+import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
 import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 
@@ -402,7 +402,8 @@ export function createDurableRunRegistry({
         startedAt: at,
         heartbeatAt: at,
         progressCount: 0,
-        toolSafety: null, // UNRECORDED until a tool's declared safety is recorded; the gate treats null as mutating (fail-closed)
+        toolSafety: null, // UNRECORDED until a tool's declared safety is recorded; the gate treats null as unknown/mutating (fail-closed)
+        toolCallCounts: null, // per-tool-name call index authority: { [toolName]: count } — the STABLE per-call idempotency index across resume
         policy: DURABLE_RUN_POLICY,
         retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
         resumeRequestRef,
@@ -554,6 +555,43 @@ export function createDurableRunRegistry({
    * auto-resume vs paused-side-effect-uncertain from the declaration, never
    * the progress count alone. Fail-closed: a missing/unknown/mutating tool
    * makes the run non-auto-resumable. */
+  /** ATOMIC pre-tool-use record: persist the call identity + the normalized
+   * safety + the stable per-tool call index BEFORE any external effect runs.
+   * The caller MUST await this and refuse tool execution if it throws — a
+   * possibly-effectful tool must never run before its authority is durable.
+   * Returns the STABLE per-tool-call key (executionId:toolName:index) that is
+   * byte-identical across resume (the index lives in THIS record, never a
+   * fresh run-instance UUID). */
+  async function preToolUse(executionId, { toolName, safety, args = null } = {}) {
+    return locked(async () => {
+      if (!active.has(executionId)) throw new Error("execution is not active in this boot");
+      const key = `${RUN_PREFIX}${executionId}`;
+      const current = await readRecord(executionId);
+      if (!current || current.bootId !== bootId || !["running", "settling"].includes(current.phase)) {
+        throw new Error("durable run ownership lost");
+      }
+      const counts = { ...(current.toolCallCounts ?? {}) };
+      let name;
+      try { name = String(toolName ?? "").slice(0, 128); } catch { name = ""; } // hostile names normalize to empty (unknown)
+      const index = (counts[name] ?? 0) + 1;
+      counts[name] = index;
+      const next = await writeRecord({
+        ...current,
+        heartbeatAt: now(),
+        progressCount: current.progressCount + 1,
+        toolSafety: current.toolSafety == null ? safety : worstSafety(current.toolSafety, safety),
+        toolCallCounts: counts,
+      }, current.revision);
+      if (!next) throw new Error("durable pre-tool CAS failed");
+      return {
+        ok: true,
+        callId: `${executionId}:${name}:${index}`,
+        callIndex: index,
+        key: perCallIdempotencyKey({ executionId, toolName: name, callIndex: index }),
+      };
+    });
+  }
+
   async function recordToolSafety(executionId, classification) {
     return locked(async () => {
       if (!active.has(executionId)) throw new Error("execution is not active in this boot");
@@ -1154,6 +1192,7 @@ export function createDurableRunRegistry({
     bootId,
     start,
     heartbeat,
+    preToolUse,
     recordToolSafety,
     rollbackUnprogressedQuota,
     settle,

@@ -1,4 +1,5 @@
 // @ts-nocheck — deterministic in-memory durable-store/failure harness.
+import { replaySafetyForTool, REPLAY_UNKNOWN } from "../extension/lib/tool-replay-safety.js";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 import {
   createDurableRunRegistry,
@@ -1025,7 +1026,6 @@ Deno.test("durable runs: an explicitly READ-ONLY progressed run pauses as recove
   await begin(first.registry);
   await first.registry.recordToolSafety(executionId, "read-only");
   await first.registry.heartbeat(executionId, { progressed: true });
-  const dbgRaw = await store.get(`run:${executionId}`); console.log("DBG toolSafety field:", dbgRaw.toolSafety); console.log("DBG keys:", JSON.stringify(Object.keys(dbgRaw)));
 
   const second = harness(store, { bootId: "boot-s" });
   const recovered = await second.registry.recover();
@@ -1073,4 +1073,74 @@ Deno.test("durable runs: an IDEMPOTENT progressed run auto-resumes (worst-merge 
   const recovered = await second.registry.recover();
   const paused = (await second.registry.list()).runs[0];
   assertEquals(paused.phase, "paused-side-effect-uncertain", "mutating progress always wins the recovery decision");
+});
+
+// CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01 (review successor): the
+// ATOMIC pre-tool authority — the call identity + the normalized safety are
+// persisted BEFORE any effect; the stable per-tool-call key is byte-identical
+// across resume; a possibly-effectful execution is never deleted by quota.
+Deno.test("durable runs: preToolUse persists the atomic call + safety and returns the STABLE per-call key across resume", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-p1" });
+  await begin(first.registry);
+  const pre = await first.registry.preToolUse(executionId, { toolName: "memory_set", safety: "idempotent" });
+  assertEquals(pre.ok, true);
+  assertEquals(pre.key, `${executionId}:memory_set:1`, "the stable key = executionId:toolName:index");
+  const raw = await store.get(`run:${executionId}`);
+  assertEquals(raw.toolSafety, "idempotent");
+  assertEquals(raw.progressCount, 1);
+  assertEquals(raw.toolCallCounts["memory_set"], 1);
+
+  // The RECORD carries the per-tool counter — the stable index authority that
+  // a resumed boot continues from (never a fresh run-instance UUID).
+  const rawAfter = await store.get(`run:${executionId}`);
+  assertEquals(rawAfter.toolCallCounts["memory_set"], 1);
+  // A real RESUME: the second boot recovers + re-activates the SAME execution,
+  // then the next pre-tool use continues the record's index.
+  const second = harness(store, { bootId: "boot-p2" });
+  await second.registry.recover();
+  const resumed = await second.registry.resumeAfterInterruption(executionId);
+  assertEquals(resumed.ok, true);
+  await second.registry.activateResume(executionId, resumed.token, resumed.resumeRequest.providerBinding);
+  const pre2 = await second.registry.preToolUse(executionId, { toolName: "memory_set", safety: "idempotent" });
+  assertEquals(pre2.key, `${executionId}:memory_set:2`, "the resumed call continues the STABLE index");
+});
+
+Deno.test("durable runs: a HOSTILE tool name normalizes to unknown and fails the safety merge closed", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-h1" });
+  await begin(first.registry);
+  await first.registry.preToolUse(executionId, { toolName: "read_page", safety: "read-only" });
+  const hostile = { toString() { throw new Error("hostile"); } };
+  // The CALLER computes the safety via the hostile-safe classifier (unknown for
+  // a hostile name) + the worst-merge must not retain the earlier read-only.
+  const hostileSafety = replaySafetyForTool(hostile);
+  assertEquals(hostileSafety, REPLAY_UNKNOWN);
+  const preH = await first.registry.preToolUse(executionId, { toolName: hostile, safety: hostileSafety });
+  assertEquals(preH.ok, true);
+  const raw = await store.get(`run:${executionId}`);
+  assertEquals(raw.toolSafety, "unknown", "a hostile name must NOT leave the run read-only");
+});
+
+Deno.test("durable runs: a pre-tool persistence failure REFUSES the execution (the run never mutates before its authority)", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-f1" });
+  await begin(first.registry);
+  // Make the next writeRecord fail (the record disappears).
+  // Simulate a lost authority: delete the record so the CAS/read fails.
+  store.values.delete(`run:${executionId}`);
+  let threw = "";
+  try { await first.registry.preToolUse(executionId, { toolName: "memory_set", safety: "idempotent" }); }
+  catch (error) { threw = String(error?.message ?? error); }
+  assert(threw.length > 0, "the pre-tool call must throw (refuse) when the authority cannot be persisted");
+});
+
+Deno.test("durable runs: quota rollback NEVER deletes a possibly-effectful execution (the pre-tool record preserved)", async () => {
+  const store = new FakeStore();
+  const first = harness(store, { bootId: "boot-q1" });
+  await begin(first.registry);
+  await first.registry.preToolUse(executionId, { toolName: "memory_set", safety: "idempotent" });
+  const result = await first.registry.rollbackUnprogressedQuota(executionId, quotaError());
+  assertEquals(result.preserved, true, "progressed authority is preserved");
+  assertEquals(await store.has(`run:${executionId}`), true, "the execution authority survives");
 });
