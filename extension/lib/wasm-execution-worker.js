@@ -67,7 +67,7 @@ export function validateJobEnvelope(raw) {
     throw failClosed("job-session");
   }
   if (!Array.isArray(raw.wasmBytes) || raw.wasmBytes.length < 8 ||
-      raw.wasmBytes.length > EXECUTOR_BOUNDS.maxRequestBytes) {
+      raw.wasmBytes.length > EXECUTOR_BOUNDS.maxWasmBytes) {
     throw failClosed("job-wasm");
   }
   if (!plainData(raw.job)) throw failClosed("job-inner");

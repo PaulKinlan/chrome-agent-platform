@@ -25,10 +25,14 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd"]) {
+  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json"]) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
   assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
+  // the preview section uses DURABLE truthful copy — it must never enumerate a
+  // stale hardcoded tool list (it would rot as the allowlist grows)
+  assertMatch(block, /The selector below lists the technically admitted Settings previews/, "durable selector copy");
+  assertNotMatch(block, /\(csvtool, uuid, head, tail, cut\)/, "no stale five-tool enumeration in the preview copy");
   assertMatch(block, /_emit\("tool-preview-request"/, "the component emits exactly the preview-request event");
   assertMatch(block, /toolId, args, stdin, sourceEvent/, "the preview request carries the toolId");
   assertEquals((block.match(/<button/g) ?? []).length, 1, "exactly one button (the preview-run)");

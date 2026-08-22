@@ -1,7 +1,7 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
-// (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01). The FIRST real bundled execution:
-// a single technically-admitted package (cap.bundled.csvtool) may be run ONLY
-// from the exact Settings options document by an EXPLICIT owner click.
+// (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
+// static allowlist of bundled packages (16 tools) may be run ONLY from the
+// exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:
 //   - NO package catalog/provider selection authority: the catalog summary stays
@@ -22,7 +22,10 @@
 import { createWasiJob } from "./wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
 
-const EXECUTOR_REQUEST_MAX_BYTES = EXECUTOR_BOUNDS.maxRequestBytes;
+// The wasm-bytes cap = the executor's maxWasmBytes (the tiny-tier max, 4 MiB —
+// the B2 tools are 164–325 KB); the METADATA/request JSON cap (maxRequestBytes
+// 64 KiB) is enforced separately and independently.
+const EXECUTOR_WASM_MAX_BYTES = EXECUTOR_BOUNDS.maxWasmBytes;
 import {
   WasmPackageAuthority,
   auditWasmBinary,
@@ -33,10 +36,10 @@ export const PREVIEW_LIMITS = Object.freeze({
   maxArgs: 4,
   maxArgBytes: 512,
   maxArgTotalBytes: 1024,
-  // The executor request envelope is JSON-bounded (EXECUTOR_BOUNDS.maxRequestBytes
-  // 64 KiB) and carries the wasm bytes as a JSON number array (~40 KB for the
-  // csvtool). The stdin therefore MUST stay small enough for the whole envelope
-  // to fit — 2 KiB is the honest bound for a settings preview sample.
+  // The wasm bytes transport at maxWasmBytes (4 MiB, the tiny-tier max) while
+  // the metadata/request JSON cap stays EXECUTOR_BOUNDS.maxRequestBytes 64 KiB;
+  // the stdin bound is sized for the metadata envelope (2 KiB honest for a
+  // settings preview sample).
   maxStdinBytes: 2 * 1024,
   // Bounded by the WASI host hard caps (MAX_STDOUT_BYTES 1 MiB, MAX_STDERR 256 KiB).
   maxStdoutBytes: 1024 * 1024,
@@ -112,10 +115,12 @@ function randomHex(bytes) {
 // typed arrays, so a Uint8Array never arrives as `instanceof Uint8Array` on the
 // receiving side. The SW sends an explicit Array.from(casBytes) array and the
 // options host STRICTLY validates + rehydrates it before the host contract
-// (which requires a genuine Uint8Array). Bound: 8 bytes .. maxRequestBytes.
+// (which requires a genuine Uint8Array). Bound: 8 bytes .. maxWasmBytes
+// (4 MiB — the B2 binaries exceed the old 64 KiB metadata cap and MUST
+// transport at the wasm cap; the metadata JSON cap stays 64 KiB separately).
 export function rehydratePreviewWasmBytes(value) {
   if (!Array.isArray(value) || value.length < 8 ||
-      value.length > EXECUTOR_REQUEST_MAX_BYTES) {
+      value.length > EXECUTOR_WASM_MAX_BYTES) {
     fail("preview_wasm_transport");
   }
   const out = new Uint8Array(value.length);

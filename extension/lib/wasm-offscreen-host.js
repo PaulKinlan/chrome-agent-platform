@@ -48,7 +48,7 @@ export function validateOffscreenRequest(raw) {
   }
   // Cap the wasm bytes BEFORE the copy (the JSON budget downstream cannot
   // prevent this allocation).
-  if (raw.wasmBytes.byteLength > EXECUTOR_BOUNDS.maxRequestBytes) {
+  if (raw.wasmBytes.byteLength > EXECUTOR_BOUNDS.maxWasmBytes) {
     throw failClosed("request-wasm-over-budget");
   }
   const job = createWasiJob(raw.job); // strict + bounded (the landed types)

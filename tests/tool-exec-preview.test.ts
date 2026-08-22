@@ -5,6 +5,8 @@
 // against the REAL shipped bundled csvtool bytes. No Chrome.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
+const EXECUTOR_BOUNDS_MAX_WASM = EXECUTOR_BOUNDS.maxWasmBytes;
 import {
   PREVIEW_LIMITS,
   PREVIEW_SPECS,
@@ -60,7 +62,8 @@ Deno.test("preview: the host lives ONLY in the options page — SW-only sender, 
   assert(options.includes('chrome.runtime.getURL("lib/wasm-execution-worker.js")'), "the fresh canonical worker URL");
   // 4. NO offscreen document, NTP or content-script fallback for the preview.
   assert(!offscreen.includes("wasm.preview"), "the offscreen document has no preview listener");
-  const routeStart = sw.indexOf('async "tool.preview.csvtool"');
+  const routeStart = sw.indexOf('async "tool.preview.run"');
+  assert(routeStart !== -1, "the tool.preview.run route must exist before its body is sliced");
   const routeEnd = sw.indexOf('async "agent.run"', routeStart);
   const routeBody = sw.slice(routeStart, routeEnd > routeStart ? routeEnd : routeStart + 4000);
   assert(!routeBody.includes("ensureOffscreen"), "the preview route never opens an offscreen document");
@@ -89,7 +92,7 @@ Deno.test("preview: the route fetches runtime-RELATIVE wasm paths (no extension/
   assert(!sw.includes('getURL("extension/wasm/'), "no extension/ prefix inside getURL");
 });
 
-Deno.test("preview: the wasm-bytes transport rehydrates a valid explicit array + rejects every hostile shape", async () => {
+Deno.test("preview: the wasm-bytes transport rehydrates valid explicit arrays (incl. a REAL >64 KiB B2 binary) + rejects every hostile shape", async () => {
   // The SW sends Array.from(casBytes) (runtime messaging JSON-serializes
   // typed arrays); the options host strictly validates + rehydrates.
   const cas = new Uint8Array(await Deno.readFile(
@@ -101,12 +104,23 @@ Deno.test("preview: the wasm-bytes transport rehydrates a valid explicit array +
   assertEquals(rehydrated[0], 0x00); assertEquals(rehydrated[1], 0x61); // wasm magic survives
   assertEquals(rehydrated[7], 0x00);
 
+  // A REAL B2 binary (> 64 KiB — the old metadata cap) MUST rehydrate: the
+  // wasm transport cap is maxWasmBytes (4 MiB), NOT maxRequestBytes.
+  const b2Spec = previewSpecFor("grep");
+  const b2Cas = new Uint8Array(await Deno.readFile(
+    new URL(`../extension/wasm/cas/${b2Spec.casSha}.wasm`, import.meta.url),
+  ));
+  assert(b2Cas.byteLength > 64 * 1024, `grep is ${b2Cas.byteLength} B (> 64 KiB)`);
+  const b2Rehydrated = rehydratePreviewWasmBytes(Array.from(b2Cas));
+  assertEquals(b2Rehydrated.byteLength, b2Cas.byteLength, "the B2 binary rehydrates at the 4 MiB wasm cap");
+  assertEquals(b2Rehydrated[0], 0x00); assertEquals(b2Rehydrated[1], 0x61);
+
   const rejections = {
     "not-an-array": { value: cas },
     "object": { value: { 0: 0, length: 8 } },
     "sparse": { value: Array.from({ length: 8 }) }, // holes → undefined
     "too-short": { value: Array.from(new Uint8Array(7)) },
-    "overbound": { value: Array.from(new Uint8Array(64 * 1024 + 1)) },
+    "overbound": { value: Array.from(new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes + 1)) },
     "fractional": { value: Array.from(cas.slice(0, 8)).map((b, i) => i === 3 ? 0.5 : b) },
     "negative": { value: Array.from(cas.slice(0, 8)).map((b, i) => i === 3 ? -1 : b) },
     "out-of-range": { value: Array.from(cas.slice(0, 8)).map((b, i) => i === 3 ? 256 : b) },
@@ -200,7 +214,7 @@ Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", (
 });
 
 Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exact)", () => {
-  for (const toolId of ["grep", "gzip", "evil", "csvtool.extra", "CsvTool", ""]) {
+  for (const toolId of ["diff", "gzip", "evil", "csvtool.extra", "CsvTool", ""]) {
     let threw = null;
     try { validatePreviewInput({ toolId, args: [], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assertEquals(threw, "preview_unknown_tool", `unknown tool ${JSON.stringify(toolId)} rejected`);
@@ -213,9 +227,9 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
-  // the allowlist is EXACTLY the 11 tools
+  // the allowlist is EXACTLY the 16 tools
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "head", "md5sum", "sha256sum", "sha512sum", "tail", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "grep", "head", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -386,10 +400,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 11-tool static allowlist is admitted as settings-preview (other 15 unchanged)", () => {
+Deno.test("preview: the EXACT 16-tool static allowlist is admitted as settings-preview (other 10 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "head", "md5sum", "sha256sum", "sha512sum", "tail", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "grep", "head", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -397,7 +411,9 @@ Deno.test("preview: the EXACT 11-tool static allowlist is admitted as settings-p
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 15, "the other 15 rows are unchanged");
+  assertEquals(notAdmitted.length, 10, "the other 10 rows are unchanged");
+  assertEquals(JSON.stringify(previewSpecFor("sort").caps), JSON.stringify(["compute", "text.transform"]));
+  assertEquals(JSON.stringify(previewSpecFor("toml2json").caps), JSON.stringify(["compute", "data.read", "data.write"]));
   // per-tool caps: the digest tools carry the crypto set
   assertEquals(JSON.stringify(previewSpecFor("md5sum").caps), JSON.stringify(["compute", "crypto"]));
   assertEquals(JSON.stringify(previewSpecFor("sha256sum").caps), JSON.stringify(["compute", "crypto"]));

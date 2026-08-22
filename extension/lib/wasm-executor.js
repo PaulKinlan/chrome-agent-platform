@@ -236,12 +236,10 @@ export class WasmExecutor {
     if (!plainData(request) || request.type !== TRANSPORT_MESSAGE_TYPES.JOB) {
       throw failClosed("request-shape");
     }
-    // Strict logical measurement: the wasm bytes count at their raw length
-    // (structured-clone transport — JSON inflation no longer governs) + the
-    // metadata JSON. The 64 KiB total is preserved.
-    if (measureRequestBytes(request) > EXECUTOR_BOUNDS.maxRequestBytes) {
-      throw failClosed("request-over-budget");
-    }
+    // Strict logical measurement: the wasm bytes are capped independently at
+    // maxWasmBytes (the tiny-tier max) while the metadata JSON keeps the
+    // 64 KiB cap — the measure throws request-wasm / request-over-budget.
+    measureRequestBytes(request);
 
     // 3. ONE fresh dedicated worker (the ONLY execution path).
     let worker = null;
@@ -360,11 +358,17 @@ function isDenseByteSequence(value) {
 export function measureRequestBytes(request) {
   if (!plainData(request)) throw failClosed("request-shape");
   const wasm = request.wasmBytes;
+  // The wasm bytes are capped independently at maxWasmBytes (the tiny-tier
+  // max — never an unbounded raise); the metadata JSON keeps the 64 KiB cap.
   if (!isDenseByteSequence(wasm) || wasm.length < 8 ||
-      wasm.length > EXECUTOR_BOUNDS.maxRequestBytes) {
+      wasm.length > EXECUTOR_BOUNDS.maxWasmBytes) {
     throw failClosed("request-wasm");
   }
   const meta = { ...request };
   delete meta.wasmBytes;
-  return wasm.length + utf8Bytes(JSON.stringify(meta));
+  const metadataBytes = utf8Bytes(JSON.stringify(meta));
+  if (metadataBytes > EXECUTOR_BOUNDS.maxRequestBytes) {
+    throw failClosed("request-over-budget");
+  }
+  return wasm.length + metadataBytes;
 }

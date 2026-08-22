@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.172] — 2026-08-22
+- feat(tools): B2 text tranche — sort/uniq/tr/grep/toml2json Settings previews + 4 MiB wasm cap (CAP-FB-20260822-TOOL-PREVIEW-EXEC-04)
+
 ## [0.2.171] — 2026-08-22
 - feat(tools): A2 stream tranche — base64/md5sum/sha256sum/sha512sum/wc/xxd Settings previews (CAP-FB-20260822-TOOL-PREVIEW-EXEC-03)
 

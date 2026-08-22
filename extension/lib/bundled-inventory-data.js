@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.2.171",
+ "release": "0.2.172",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -36,7 +36,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.grep",
    "version": "1.0.0",
-   "digest": "448e3514427bce73fcf427728d66b8b0dfb775fcc9b68053916b4a756a2c7a24"
+   "digest": "c87b282154ded271064afff328f5f436136fca5836fa9bc3476dbcfea06f3968"
   },
   {
    "pkg": "cap.bundled.gzip",
@@ -76,7 +76,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.sort",
    "version": "1.0.0",
-   "digest": "708604a612aeb6a3f372ae6193367c364ac982d3709239a36463668b8a30f607"
+   "digest": "a1704df13d51cfe666095faeefedd05d980bb81f68e87a1abd469baf31a2aba6"
   },
   {
    "pkg": "cap.bundled.sqlite3.query.bounded",
@@ -96,7 +96,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.toml2json",
    "version": "1.0.0",
-   "digest": "381a1695833d1a45f399c3d75d4d2f7cd991906f35f269ad31f8c4ae2a5dde8a"
+   "digest": "7da2af593fc3cd06203a407523faf0a7b530905f1bba659ba72140d9ef5ea4db"
   },
   {
    "pkg": "cap.bundled.touch",
@@ -106,7 +106,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.tr",
    "version": "1.0.0",
-   "digest": "e65433ae4b84617b4aa0ad7650e8d8ee76cd114276963a0eb11f39abe7756771"
+   "digest": "9e5134a0e09fb885890c2f4895ec845f4f8de76f7ab87899f34a623f7f9a4766"
   },
   {
    "pkg": "cap.bundled.tree",
@@ -121,7 +121,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.uniq",
    "version": "1.0.0",
-   "digest": "5cf5c7556c1055ec5f6b5f8823ae1c3234436d6a0fe69c595f6746b472ce98c1"
+   "digest": "9e22036c70c75c3e3f06a6f33f06692870a763ffabbe6b4db411768bc77ff0ab"
   },
   {
    "pkg": "cap.bundled.uuid",
@@ -332,8 +332,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.grep-1.0.0.manifest.json",
-   "sha256": "448e3514427bce73fcf427728d66b8b0dfb775fcc9b68053916b4a756a2c7a24",
-   "size": 1642
+   "sha256": "c87b282154ded271064afff328f5f436136fca5836fa9bc3476dbcfea06f3968",
+   "size": 1650
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.gzip-1.0.0.manifest.json",
@@ -372,8 +372,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sort-1.0.0.manifest.json",
-   "sha256": "708604a612aeb6a3f372ae6193367c364ac982d3709239a36463668b8a30f607",
-   "size": 1637
+   "sha256": "a1704df13d51cfe666095faeefedd05d980bb81f68e87a1abd469baf31a2aba6",
+   "size": 1645
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
@@ -392,8 +392,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.toml2json-1.0.0.manifest.json",
-   "sha256": "381a1695833d1a45f399c3d75d4d2f7cd991906f35f269ad31f8c4ae2a5dde8a",
-   "size": 1754
+   "sha256": "7da2af593fc3cd06203a407523faf0a7b530905f1bba659ba72140d9ef5ea4db",
+   "size": 1762
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.touch-1.0.0.manifest.json",
@@ -402,8 +402,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.tr-1.0.0.manifest.json",
-   "sha256": "e65433ae4b84617b4aa0ad7650e8d8ee76cd114276963a0eb11f39abe7756771",
-   "size": 1644
+   "sha256": "9e5134a0e09fb885890c2f4895ec845f4f8de76f7ab87899f34a623f7f9a4766",
+   "size": 1652
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.tree-1.0.0.manifest.json",
@@ -417,8 +417,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.uniq-1.0.0.manifest.json",
-   "sha256": "5cf5c7556c1055ec5f6b5f8823ae1c3234436d6a0fe69c595f6746b472ce98c1",
-   "size": 1630
+   "sha256": "9e22036c70c75c3e3f06a6f33f06692870a763ffabbe6b4db411768bc77ff0ab",
+   "size": 1638
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.uuid-1.0.0.manifest.json",

@@ -145,6 +145,58 @@ Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT 
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// (B12) the 5-tool B2 text tranche — EXACT example contracts through the REAL
+// worker (the coordinator's expected outputs are the authority)
+// ──────────────────────────────────────────────────────────────────────────
+const B2_CONTRACTS = {
+  sort: { stdin: "b\na\n", args: [], expect: "a\nb\n" },
+  uniq: { stdin: "a\na\nb\n", args: [], expect: "a\nb\n" },
+  tr: { stdin: "Hi\n", args: ["a-z", "A-Z"], expect: "HI\n" },
+  grep: { stdin: "foo\nbar\nfood\n", args: ["-n", "foo"], expect: "1:foo\n3:food\n" },
+  toml2json: { stdin: 'title = "x"\n[n]\na = 1\n', args: [], expect: '{"title":"x","n":{"a":1}}\n' },
+};
+
+Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT example outputs through the REAL worker", async () => {
+  const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  for (const [toolId, contract] of Object.entries(B2_CONTRACTS)) {
+    const spec = PREVIEW_SPECS[toolId];
+    assert(spec, `${toolId} is in the spec map`);
+    const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
+    assert(casBytes.byteLength > EXECUTOR_BOUNDS.maxRequestBytes, `${toolId} (${casBytes.byteLength} B) exceeds the old 64 KiB request cap — the 4 MiB wasm cap is what admits it`);
+    assert(casBytes.byteLength <= EXECUTOR_BOUNDS.maxWasmBytes, `${toolId} fits the 4 MiB wasm cap`);
+    const job = makeJob({
+      stdin: new Uint8Array(new TextEncoder().encode(contract.stdin)),
+      quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 1024, stderrBytes: 256, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
+    });
+    const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+    const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+    const host = createOffscreenWasmHost({ executor, authority: { ...AUTHORITY } });
+    const res = await host.handleJob({
+      type: "wasm.job",
+      job: { ...rehydrated, args: [toolId, ...contract.args] },
+      wasmBytes: casBytes,
+    });
+    assertEquals(res.ok, true, `${toolId}: ${JSON.stringify(res)}`);
+    assertEquals(res.stdout, contract.expect, `${toolId} exact contract output`);
+  }
+  // an INVALID grep regex `[` is a bounded proc-exit(2) with NO stale stdout
+  const grepSpec = PREVIEW_SPECS.grep;
+  const grepBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${grepSpec.casSha}.wasm`));
+  const executor2 = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+  const host2 = createOffscreenWasmHost({ executor: executor2, authority: { ...AUTHORITY } });
+  const badJob = makeJob({ stdin: new Uint8Array(new TextEncoder().encode("foo\nbar\n")) });
+  const badRes = await host2.handleJob({
+    type: "wasm.job",
+    job: { ...badJob, stdin: new Uint8Array(badJob.stdin), args: ["grep", "-n", "["] },
+    wasmBytes: grepBytes,
+  });
+  assertEquals(badRes.ok, false, "invalid regex fails");
+  assertEquals(badRes.errno, 2, "invalid regex → errno 2");
+  assertEquals(badRes.stdout, "", "no stale stdout on the bounded error");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // (B10) strict request-byte measurement (JSON inflation no longer governs)
 // ──────────────────────────────────────────────────────────────────────────
 import { measureRequestBytes } from "../extension/lib/wasm-executor.js";
@@ -174,12 +226,17 @@ Deno.test("request budget: a 32.7K wasm byte array + metadata PASSES (JSON infla
   assert(inflated > EXECUTOR_BOUNDS.maxRequestBytes, `old-style inflation ${inflated} exceeded the 64 KiB bound`);
 });
 
-Deno.test("request budget: a >64K LOGICAL envelope rejects (the 64 KiB total is preserved)", async () => {
-  const bytes = new Uint8Array(EXECUTOR_BOUNDS.maxRequestBytes - 512); // fits alone
-  const request = envelopeFor(bytes, { padding: "x".repeat(2048) });
-  const measured = measureRequestBytes(request);
-  assert(measured > EXECUTOR_BOUNDS.maxRequestBytes, `measured ${measured} exceeds the 64 KiB logical total`);
-  // and the executor run path surfaces request-over-budget
+Deno.test("request budget: METADATA over 64 KiB rejects (the metadata/request JSON cap is preserved) + the run path surfaces request-over-budget", async () => {
+  const bytes = new Uint8Array(4096);
+  // the metadata JSON alone exceeds the 64 KiB cap → the measure throws
+  let caught = null;
+  try { measureRequestBytes(envelopeFor(bytes, { padding: "x".repeat(EXECUTOR_BOUNDS.maxRequestBytes) })); } catch (e) { caught = e?.executorCode ?? null; }
+  assertEquals(caught, "request-over-budget", "metadata over the 64 KiB cap rejects");
+  // a 4 MiB wasm + small metadata MEASURES fine (the wasm cap is independent)
+  const big = new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes);
+  const measured = measureRequestBytes(envelopeFor(big));
+  assertEquals(measured, EXECUTOR_BOUNDS.maxWasmBytes + localUtf8Bytes(JSON.stringify({ type: TRANSPORT_MESSAGE_TYPES.JOB, sessionId: "session-1", job: makeJob() })));
+  // and the executor run path surfaces request-over-budget for big metadata
   const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
   const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
   const over = await host.handleJob(makeRequest({ wasmBytes: bytes })).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
@@ -203,17 +260,19 @@ Deno.test("request budget: sparse/fractional/out-of-range/short wasm sequences r
     try { measureRequestBytes(envelopeFor(wasm)); } catch (e) { caught = e?.executorCode ?? null; }
     assertEquals(caught, "request-wasm", `${label} rejects`);
   }
-  // a wasm array LARGER than maxRequestBytes rejects even though it is dense
+  // a wasm array LARGER than maxWasmBytes (the 4 MiB tiny-tier cap) rejects
+  // even though it is dense — the wasm cap is explicit, not unbounded
   let caught = null;
-  try { measureRequestBytes(envelopeFor(new Uint8Array(EXECUTOR_BOUNDS.maxRequestBytes + 1))); } catch (e) { caught = e?.executorCode ?? null; }
-  assertEquals(caught, "request-wasm", "over-max-length wasm rejects");
+  try { measureRequestBytes(envelopeFor(new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes + 1))); } catch (e) { caught = e?.executorCode ?? null; }
+  assertEquals(caught, "request-wasm", "over-max-wasm-length rejects");
 });
 
 Deno.test("request budget: HUGE metadata rejects (metadata JSON counts toward the 64 KiB)", () => {
   const bytes = new Uint8Array(4096);
   const request = envelopeFor(bytes, { bloat: "y".repeat(EXECUTOR_BOUNDS.maxRequestBytes) });
-  const measured = measureRequestBytes(request);
-  assert(measured > EXECUTOR_BOUNDS.maxRequestBytes, `huge metadata measures ${measured} > 64 KiB`);
+  let caught = null;
+  try { measureRequestBytes(request); } catch (e) { caught = e?.executorCode ?? null; }
+  assertEquals(caught, "request-over-budget", "huge metadata throws request-over-budget");
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -726,7 +785,7 @@ Deno.test("schemas: phase↔ok conflicts and hostile failure fields are rejected
 });
 
 Deno.test("schemas: the offscreen request caps wasmBytes BEFORE the copy", () => {
-  const oversized = makeRequest({ wasmBytes: new Uint8Array(EXECUTOR_BOUNDS.maxRequestBytes + 1) });
+  const oversized = makeRequest({ wasmBytes: new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes + 1) });
   let caught = null;
   try { validateOffscreenRequest(oversized); } catch (e) { caught = e; }
   assert(caught && caught.executorCode === "request-wasm-over-budget", String(caught?.executorCode));

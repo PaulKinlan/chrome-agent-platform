@@ -6382,10 +6382,11 @@ customElements.define("local-model-catalog", LocalModelCatalog);
  * <tool-library> — READ-ONLY owner diagnostics for the tool catalog contract
  * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice).
  *
- * HARD BOUNDARY: the ONLY action surface is the csvtool Settings preview Run
+ * HARD BOUNDARY: the ONLY action surface is the Settings preview Run
  * button (an EXPLICIT owner click that emits tool-preview-request; the options
- * surface wires the single tool.preview.csvtool route). No install/update/
- * revoke/grant/execute/verify/copy, no catalog/provider selection authority.
+ * surface wires the single tool.preview.run route over the static allowlist).
+ * No install/update/revoke/grant/execute/verify/copy, no catalog/provider
+ * selection authority.
  * It renders bounded metadata from the Settings-principal tool-catalog.shadow
  * diagnostics route only (summary in production; rows when a future reviewed
  * slice supplies bounded search results — the gallery exercises that path).
@@ -6479,6 +6480,16 @@ class ToolLibrary extends Component {
         return 'Example: (no args) + stdin "one two\nthree\n" → "2 3 14\n" (lines, words, bytes).';
       case "xxd":
         return 'Example: args "-p" + stdin "Hi" → "4869\n" (plain hex).';
+      case "sort":
+        return 'Example: (no args) + stdin "b\na\n" → "a\nb\n" (sorted lines).';
+      case "uniq":
+        return 'Example: (no args) + stdin "a\na\nb\n" → "a\nb\n" (adjacent duplicates removed).';
+      case "tr":
+        return 'Example: args "a-z" "A-Z" + stdin "Hi\n" → "HI\n" (translate).';
+      case "grep":
+        return 'Example: args "-n" "foo" + stdin "foo\nbar\nfood\n" → "1:foo\n3:food\n". Invalid regexes fail closed with no output.';
+      case "toml2json":
+        return 'Example: (no args) + stdin "title = \"x\"\n[n]\na = 1\n" → "{\"title\":\"x\",\"n\":{\"a\":1}}\n".';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6574,7 +6585,7 @@ class ToolLibrary extends Component {
       </div>
       <div class="preview" hidden>
         <h3>Bundled tool previews</h3>
-        <p class="meta">Technically admitted Settings previews (csvtool, uuid, head, tail, cut). Runs
+        <p class="meta">The selector below lists the technically admitted Settings previews. Runs
           ONLY on your explicit click; there is no catalog or provider selection authority.</p>
         <label class="preview-tool-label">Tool
           <select class="preview-tool" autocomplete="off">
@@ -6589,6 +6600,11 @@ class ToolLibrary extends Component {
             <option value="sha512sum">sha512sum — SHA-512 digest</option>
             <option value="wc">wc — line/word/byte counts</option>
             <option value="xxd">xxd — hex dump (plain)</option>
+            <option value="sort">sort — sort lines of stdin</option>
+            <option value="uniq">uniq — omit repeated lines</option>
+            <option value="tr">tr — translate characters</option>
+            <option value="grep">grep — search lines by pattern</option>
+            <option value="toml2json">toml2json — convert TOML to JSON</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
