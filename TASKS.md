@@ -5,20 +5,20 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 20:40 UTC. Reconciled against exact public
-> `origin/main@6662dfa2870ef1729b7e3ba68c3393d40f7db474` (`0.2.158`). Lazy,
+> Snapshot: 2026-08-22 21:15 UTC. Reconciled against exact public
+> `origin/main@9dd581a15fb86f9e6fa0b5ef98e57344ae300446` (`0.2.165`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
-> package bytes and the Store static boundary remain exact; the catalog
-> remains `MERGED`; OPFS, bundled-package, public code-diff, Chrome-capability
-> and the Gate-2 fresh-Worker host source candidate remain `IN_REVIEW` with
-> Shipping `—` (the Gate-2 executor/offscreen host is source-only and
-> unreachable — a separately reviewed successor owns the service-worker
-> route that would reach it). This branch recomposes the PASSed Gate-2
-> source host as the `0.2.159` candidate; no route, execution, package
-> admission, provider or permission authority is added.
-> Branch status counts: **13 OPEN · 14 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 36 DONE · 0 ABANDONED**. The 33 active entries and 36 archived terminal
-> entries below are the complete 69-entry state.
+> package bytes, the Store static boundary and the tool-platform foundation
+> (vendored sources/recipes/licenses + disabled descriptors) remain exact; the
+> catalog remains `MERGED`; OPFS, bundled-package, public code-diff,
+> Chrome-capability, the Gate-2 fresh-Worker host source candidate and the
+> bundled JS-minifier lane remain `IN_REVIEW` with Shipping `—`. This branch
+> recomposes the PASSed read-only tabular-diff artifact custody candidate as
+> the `0.2.166` step — an unreachable source library with no route, execution,
+> UI, OPFS mutation, apply or patched-CSV export.
+> Branch status counts: **14 OPEN · 14 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 36 DONE · 0 ABANDONED**. The 34 active entries and 36 archived terminal
+> entries below are the complete 70-entry state.
 
 ## Safety boundary
 
@@ -920,6 +920,53 @@ On resume after a coordinator or worker loss:
     `03dc099`; no workspace or execution route was added.
   - 2026-08-22 15:29 UTC — exact candidate `34ced55` became public `0.2.152`;
     lifecycle remains IN_REVIEW with Shipping `—` pending exact review.
+
+## [CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01] Read-only tabular-diff artifact custody
+
+- Feedback: 2026-08-22 — retain a complete bounded semantic table comparison
+  without giving descriptive rows code-patch or workspace-mutation authority
+- Updated: 2026-08-22 18:48 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: retained tabular-diff source owner
+- Workspace: active (local path private)
+- Branch: `feat/tabular-diff-artifacts-462d21d`
+- Base: `462d21d8da9bee640c2c12088dcafba6123e00fc`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: one import-free pure core fatally decodes and strictly validates
+  complete canonical `cap-tabular-diff-v1` bytes, duplicate/escaped-equivalent
+  keys, exact schema/row/cell/count/order semantics and semantic/options/source
+  receipts; operation identity binds bundled package/tool/executable/capability/
+  replay and full workspace/call/input fences; deterministic 180-KiB opaque byte
+  chunks retain at most one MiB through a separate manifest schema/media and only
+  injected keyed create/read authority; all chunks are immediately read back,
+  reassembled and revalidated before the manifest is written last; retries are
+  keyed and idempotent; capacity failure reports the missing aggregate
+  reservation/refcount/orphan-GC policy without deleting or evicting anything;
+  bounded summary/schema/row/cell previews are inert non-authoritative data;
+  apply/reject/undo/patched-CSV export refuse before input access
+- Review: integration design independently PASSed; exact source candidate review
+  pending
+- Gates: focused canonical K-BASE/O-BASE, Unicode/chunk/content boundaries through
+  exact one MiB, identity mutants, hostile proxies/accessors, manifest-last,
+  readback corruption/missing/reordered chunks, retry/interruption/capacity orphan
+  accounting, preview control/formula/scalar-safe truncation, no-truncation and
+  static no-route/no-OPFS/no-code-diff/no-mutation import graph; exact source
+  candidate passed focused 12/12, full no-Chrome 1041/1041 across 14 steps and
+  the 112-file production-JS build with zero bundled Wasm binaries
+- Blockers: existing asset API has no grouped capacity reservation, refcount or
+  orphan collector, so this adapter remains unreachable; any route/runtime/UI,
+  artifact access-control acceptance, grouped promotion/GC or table mutation is
+  a separately reviewed successor
+- Next: commit the narrow source candidate and obtain independent exact-diff
+  schema/identity/chunk/quota/no-authority review
+- Recover:
+  `git show feat/tabular-diff-artifacts-462d21d -- extension/lib/tabular-diff-artifacts-core.js extension/lib/tabular-diff-artifacts.js tests/tabular-diff-artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
+- History:
+  - 2026-08-22 18:48 UTC — implemented only the PASSed source design on exact
+    public `462d21d`; no route, Chrome run, execution, UI or mutation was added.
 
 ## [CAP-FB-20260822-CHROME-LAZY-TOOLS-01] Chrome API descriptors behind lazy discovery
 

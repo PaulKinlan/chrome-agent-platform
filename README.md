@@ -75,6 +75,13 @@ isolated OPFS memory, run history, skills, and avatar.
   artifact WAL creates, re-read and hash-verified; unified and side-by-side text views
   are non-authoritative and bounded. Apply/reject/undo synchronously refuse because no
   owner-approved workspace mutation route exists in this slice.
+- **Retained tabular-diff artifacts (source candidate)** — a separate strict
+  `cap-tabular-diff-v1` authority validates complete canonical descriptive JSON, binds
+  bundled producer/call/two-source identities, and plans fixed 180 KiB byte chunks up
+  to one MiB. The unreachable adapter uses only keyed artifact create/read, verifies
+  every chunk, writes a read-only manifest last, and exposes bounded inert data views.
+  Capacity errors disclose the lack of group reservation/orphan GC; nothing truncates,
+  evicts, applies, rejects, undoes, exports a patched CSV, or mutates a workspace.
   See [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.

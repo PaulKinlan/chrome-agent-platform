@@ -359,6 +359,41 @@ A separate reviewed slice must settle conditional workspace writes, owner UI,
 stale-base rechecks, recoverable multi-file semantics and its WAL before any of
 those actions can exist.
 
+## Source-only retained tabular-diff artifacts
+
+`CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01` is a distinct unreachable custody
+slice for complete descriptive table comparisons. It does not reinterpret rows
+as a code-change document:
+
+- the import-free core fatally decodes 1..1,048,576 UTF-8 bytes, rejects BOM,
+  lone surrogates, duplicate decoded JSON keys, noncanonical bytes, open schema,
+  hostile counts/order/locators/columns/cells and any incomplete or truncation
+  claim, then recomputes semantic, options, input and exact-content identities;
+- operation identity binds the bundled package/tool/version and all source,
+  manifest, inventory, executable, capability and replay digests; workspace,
+  execution, call, run, agent, origin and document fences; and exact ordered
+  left/right `inputs/` receipts including source generation;
+- the pure planner splits canonical bytes—not strings or rows—at fixed 180 KiB,
+  caps one MiB/eight chunks/nine assets, and materializes every digest-keyed
+  base64 envelope before write 1. A multibyte scalar may cross a chunk boundary
+  and is decoded only after exact reassembly;
+- the unreachable adapter has exactly `createAssetKeyed`/`getAsset` authority.
+  It writes chunks in index order with immediate readback, re-reads the complete
+  chunk set, then writes and verifies a canonical read-only retention manifest
+  last under the digest of its exact bytes. Reads revalidate manifest, chunks,
+  body and operation identity before returning data;
+- summary/schema/row/cell previews are non-authoritative, paginated plain data
+  bounded to 200 rows, 2,000 cells and 512 KiB. Display cells are neutralized,
+  scalar-safe truncated to 512 bytes and flag inert formula prefixes.
+
+The current artifact API has no atomic multi-key reservation, reference count or
+orphan collector. Capacity failure therefore refuses promotion and reports only
+verified digest-keyed chunk receipts plus the explicit no-automatic-delete
+policy; it never evicts owner artifacts or claims an atomic group. The adapter
+is not imported by a route. `applyTabularDiff`, `rejectTabularDiff`,
+`undoTabularDiff` and `exportPatchedCsv` synchronously throw
+`mutation_authority_required` before argument access.
+
 ## Source-only Chrome lazy capability metadata
 
 `CAP-FB-20260822-CHROME-LAZY-TOOLS-01` adds metadata—not Chrome authority:
