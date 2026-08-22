@@ -10,6 +10,7 @@ import {
   buildToolCatalog,
   canonicalToolDescriptor,
   TOOL_CATALOG_BOUNDS,
+  TOOL_SOURCE_KINDS,
 } from "../extension/lib/tool-catalog.js";
 import { browserToolset } from "../extension/lib/browser-tools.js";
 import {
@@ -270,4 +271,42 @@ Deno.test("tool catalog: real declared/inferred WebMCP descriptors stay unknown 
     assertEquals(entry.scope.documentId, "doc-7");
     assertEquals(entry.sourceGeneration, "enrollment:4:epoch:8:seq:2");
   }
+});
+
+Deno.test("tool catalog: bundled-package source kind is reserved and hard-rejected fail-closed", () => {
+  assert(TOOL_SOURCE_KINDS.includes("bundled-package"), "TOOL_SOURCE_KINDS must include bundled-package");
+
+  const packageInput = descriptor({
+    sourceKind: "bundled-package",
+    packageId: "cap.test-pkg",
+    toolId: "sha256",
+  });
+
+  let threw = false;
+  try {
+    canonicalToolDescriptor(packageInput);
+  } catch (err) {
+    threw = true;
+    assertEquals(err.code, "package-authority-unwired");
+  }
+  assert(threw, "canonicalToolDescriptor must reject bundled-package in precursor PR1");
+
+  const catalog = buildToolCatalog([packageInput]);
+  assertEquals(catalog.descriptors.length, 0);
+  assertEquals(catalog.diagnostics.rejected, 1);
+  assertEquals(catalog.diagnostics.errors["package-authority-unwired"], 1);
+});
+
+Deno.test("tool catalog: availability changes invalidate catalog generation", () => {
+  const readyTool = descriptor({ toolId: "a", name: "a", availability: "ready" });
+  const disabledTool = descriptor({ toolId: "a", name: "a", availability: "disabled" });
+
+  const catalogReady = buildToolCatalog([readyTool]);
+  const catalogDisabled = buildToolCatalog([disabledTool]);
+
+  assertNotEquals(
+    catalogReady.generation,
+    catalogDisabled.generation,
+    "catalog generation must change when availability changes",
+  );
 });

@@ -36,6 +36,7 @@ export const TOOL_SOURCE_KINDS = Object.freeze([
   "management",
   "webmcp-declared",
   "webmcp-inferred",
+  "bundled-package",
 ]);
 
 export const TOOL_AVAILABILITIES = Object.freeze([
@@ -254,6 +255,9 @@ export function canonicalToolDescriptor(input) {
   if (!TOOL_SOURCE_KINDS.includes(sourceKind)) {
     throw new ToolCatalogValidationError("source-kind");
   }
+  if (sourceKind === "bundled-package") {
+    throw new ToolCatalogValidationError("package-authority-unwired");
+  }
   const packageId = boundedIdentity(ownData(input, "packageId"), "package-id");
   const toolId = boundedIdentity(ownData(input, "toolId"), "tool-id");
   const version = boundedIdentity(ownData(input, "version"), "version");
@@ -464,6 +468,7 @@ export function buildToolCatalog(inputs) {
     descriptors.map((descriptor) => ({
       stableId: descriptor.stableId,
       sourceGeneration: descriptor.sourceGeneration,
+      availability: descriptor.availability,
     })),
   ));
   return Object.freeze({

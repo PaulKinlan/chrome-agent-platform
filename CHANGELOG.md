@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.162] — 2026-08-22
+- feat(catalog): reserve bundled-package source kind fail closed (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+
 ## [0.2.161] — 2026-08-22
 - fix(wasm): COI same-origin + COEP credentialless + wasm-unsafe-eval CSP; browser-follow HF preflight
 
