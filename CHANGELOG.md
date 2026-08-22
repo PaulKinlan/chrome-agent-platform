@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.169] — 2026-08-22
+- feat(tools): first Settings-only bundled execution — csvtool preview (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01)
+
 ## [0.2.168] — 2026-08-22
 - feat(jwt): add bounded browser-native JWT decode lane (verified:false, disabled, no provider)
 

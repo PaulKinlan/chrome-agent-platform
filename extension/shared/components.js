@@ -6382,8 +6382,10 @@ customElements.define("local-model-catalog", LocalModelCatalog);
  * <tool-library> — READ-ONLY owner diagnostics for the tool catalog contract
  * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice).
  *
- * HARD BOUNDARY: this component has NO events, NO buttons, and NO action
- * surface of any kind — no install/update/revoke/grant/execute/verify/copy.
+ * HARD BOUNDARY: the ONLY action surface is the csvtool Settings preview Run
+ * button (an EXPLICIT owner click that emits tool-preview-request; the options
+ * surface wires the single tool.preview.csvtool route). No install/update/
+ * revoke/grant/execute/verify/copy, no catalog/provider selection authority.
  * It renders bounded metadata from the Settings-principal tool-catalog.shadow
  * diagnostics route only (summary in production; rows when a future reviewed
  * slice supplies bounded search results — the gallery exercises that path).
@@ -6430,6 +6432,44 @@ class ToolLibrary extends Component {
     this._error = typeof value === "string" ? value.slice(0, 240) : "";
     if (this._rendered) this._render();
   }
+  set previewResult(value) {
+    // Bounded preview output: the SW already bounded the envelope; this setter
+    // only accepts the validated shape + caps the rendered text (defense in depth).
+    const out = this._root.querySelector(".preview-output");
+    if (!out) return;
+    this._previewResult = value && typeof value === "object" ? value : null;
+    if (value && typeof value === "object") {
+      out.classList.toggle("error", value.ok !== true);
+      const text = value.ok === true
+        ? String(value.stdout ?? "")
+        : String(value.error ?? "preview failed");
+      out.textContent = text.slice(0, 256 * 1024);
+    } else {
+      out.classList.remove("error");
+      out.textContent = "";
+    }
+  }
+  set previewBusy(value) {
+    this._previewBusy = value === true;
+    const button = this._root.querySelector(".preview-run");
+    const out = this._root.querySelector(".preview-output");
+    if (button) button.disabled = value === true;
+    if (out) out.textContent = value === true ? "Running…" : out.textContent;
+  }
+  _wire() {
+    // The ONLY interactive path: the explicit owner click that runs the
+    // csvtool Settings preview. No other control exists in this component.
+    this._root.querySelector(".preview-run")?.addEventListener("click", (sourceEvent) => {
+      if (this._previewBusy) return;
+      const argsInput = this._root.querySelector(".preview-args");
+      const stdinInput = this._root.querySelector(".preview-stdin");
+      const args = String(argsInput?.value ?? "").trim() === ""
+        ? []
+        : String(argsInput?.value ?? "").split(/\s+/);
+      const stdin = String(stdinInput?.value ?? "");
+      this._emit("tool-preview-request", { args, stdin, sourceEvent });
+    });
+  }
   _render() {
     // Mount ONCE: the live region must be a STABLE node so a polite
     // announcement fires exactly once per state transition. Re-renders update
@@ -6465,6 +6505,23 @@ class ToolLibrary extends Component {
         font-size:12px; color:var(--muted, #625d57); }
       .packages { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
       .packages h3 { margin:0 0 4px; font-size:15px; }
+      .preview { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
+      .preview h3 { margin:0 0 4px; font-size:15px; }
+      .preview label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
+      .preview input, .preview textarea { display:block; width:100%; box-sizing:border-box; margin-top:4px;
+        border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
+        font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
+      .preview textarea { resize:vertical; font-family:ui-monospace, monospace; }
+      .preview .preview-run { margin-top:10px; padding:6px 14px; border:1px solid var(--border, #ddd8d2);
+        border-radius:999px; background:var(--accent, #0b57d0); color:#fff; font:inherit; font-size:13px;
+        cursor:pointer; }
+      .preview .preview-run:focus-visible { outline:2px solid var(--accent, #0b57d0); outline-offset:2px; }
+      .preview .preview-run[disabled] { opacity:.55; cursor:default; }
+      .preview-output { min-block-size:2rem; max-block-size:240px; overflow:auto; margin:10px 0 0;
+        padding:8px 10px; border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
+        background:var(--bg, #f7f6f3); color:var(--text, #24211f); font:12px/1.45 ui-monospace, monospace;
+        white-space:pre-wrap; overflow-wrap:anywhere; }
+      .preview-output.error { color:var(--danger, #b3261e); }
       .status-line { min-block-size:1.25rem; margin:10px 0 0; font-size:13px; color:var(--muted, #625d57); }
       .status-line.error { color:var(--danger, #b3261e); }
       @media (max-width:560px) { .tool-head { grid-template-columns:1fr; } .groups .count { margin-inline-start:0; } }
@@ -6476,6 +6533,21 @@ class ToolLibrary extends Component {
         <h3>Bundled tool packages</h3>
         <p class="meta">No bundled Wasm packages are admitted in this build. If a future reviewed
           package host lands, admitted bundles and their pins will be listed here.</p>
+      </div>
+      <div class="preview" hidden>
+        <h3>csvtool — Settings preview</h3>
+        <p class="meta">Technically admitted (cap.bundled.csvtool, Apache-2.0). Runs ONLY on your
+          explicit click; there is no catalog or provider selection authority.</p>
+        <label class="preview-args-label">Arguments
+          <input class="preview-args" type="text" autocomplete="off"
+            placeholder="(none) — e.g. --strip" maxlength="128" />
+        </label>
+        <label class="preview-stdin-label">Stdin (bounded)
+          <textarea class="preview-stdin" rows="4" maxlength="2048"
+            placeholder="a,b&#10;1,2&#10;3,4"></textarea>
+        </label>
+        <button class="preview-run" type="button">Run preview</button>
+        <pre class="preview-output" aria-live="polite"></pre>
       </div>
       <p class="status-line" role="status" aria-live="polite" aria-atomic="true"></p>
     `);
@@ -6501,6 +6573,8 @@ class ToolLibrary extends Component {
 
     if (this._state === "loading" || this._state === "unavailable" || this._state === "error") return;
 
+    const preview = this._root.querySelector(".preview");
+    if (preview && s?.settingsPreviewCsvtool === true) preview.hidden = false;
     const s = this._summary;
     if (s) {
       const total = document.createElement("p");

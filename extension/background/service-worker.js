@@ -28,6 +28,18 @@ import {
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
+import {
+  PREVIEW_LIMITS,
+  PREVIEW_PACKAGE_ID,
+  PREVIEW_TOOL_ID,
+  boundPreviewResult,
+  buildPreviewAuthority,
+  buildPreviewJob,
+  PREVIEW_SETTINGS_ORIGIN,
+  revalidateCsvtoolExecution,
+  validatePreviewInput,
+} from "../lib/tool-exec-preview.js";
+import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -2357,6 +2369,112 @@ const handlers = mergeRouteMaps(
       };
     }
     return await shadowToolCatalog.inspect(m, context);
+  },
+  // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:
+  // a single technically-admitted package (cap.bundled.csvtool) runs ONLY
+  // from the exact Settings options document by an EXPLICIT owner click. No
+  // catalog/provider selection authority exists: the catalog summary stays
+  // metadata-only, there is no selection route and no capability grant — this
+  // route is the only executor path and it re-validates the immutable
+  // manifest/CAS/imports/memory/caps at EVERY execution.
+  async "tool.preview.csvtool"(m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `tool preview denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "tool preview is restricted to the Settings surface" };
+    }
+    // Defense in depth: the sender must be the EXACT options document of THIS
+    // runtime (the isExactOptionsSender machinery already bound principal
+    // owner-options; re-assert the exact document URL + no content-script/tab
+    // path).
+    const optionsUrl = chrome.runtime.getURL("options/options.html");
+    const senderUrl = context?.senderUrl ?? "";
+    const exactDoc = senderUrl === optionsUrl ||
+      (typeof senderUrl === "string" &&
+        senderUrl.startsWith(optionsUrl) &&
+        /^#[A-Za-z0-9-]+$/.test(senderUrl.slice(optionsUrl.length)));
+    if (
+      typeof context?.documentId !== "string" || !exactDoc ||
+      Boolean(context?.pageSender)
+    ) {
+      securityEvent("blocked-action", `tool preview sender rejected`);
+      return { ok: false, error: "tool preview sender is not the exact Settings document" };
+    }
+    // 1. The STRICT bounded request (args + stdin only; no fences/bytes).
+    let input;
+    try {
+      input = validatePreviewInput(m);
+    } catch (error) {
+      return { ok: false, error: `tool preview rejected: ${error?.code ?? error}` };
+    }
+    // 2. Immutable revalidation at execution: fetch the pinned bundled
+    //    manifest + CAS bytes and re-check digest/sha/size/imports/memory/caps
+    //    through the REAL package authority.
+    const manifestRel = "extension/wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json";
+    const casRel = "extension/wasm/cas/5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.wasm";
+    let manifestText;
+    let casBytes;
+    try {
+      const manifestRes = await fetch(chrome.runtime.getURL(manifestRel));
+      if (!manifestRes.ok) return { ok: false, error: "tool preview manifest unavailable" };
+      manifestText = await manifestRes.text();
+      const casRes = await fetch(chrome.runtime.getURL(casRel));
+      if (!casRes.ok) return { ok: false, error: "tool preview CAS unavailable" };
+      casBytes = new Uint8Array(await casRes.arrayBuffer());
+    } catch (error) {
+      return { ok: false, error: `tool preview asset fetch failed: ${error?.message ?? error}` };
+    }
+    let revalidated;
+    try {
+      revalidated = await revalidateCsvtoolExecution({
+        manifestText,
+        casBytes,
+        inventory: BUNDLED_INVENTORY,
+      });
+    } catch (error) {
+      securityEvent("blocked-action", `tool preview revalidation failed: ${error?.code ?? error}`);
+      return { ok: false, error: `tool preview revalidation failed: ${error?.code ?? error}` };
+    }
+    // 3. Host-bound fences (synthesized here — never request-borne) + the job.
+    let authority;
+    let job;
+    try {
+      authority = buildPreviewAuthority({ origin: PREVIEW_SETTINGS_ORIGIN });
+      job = buildPreviewJob({ input, authority });
+    } catch (error) {
+      return { ok: false, error: `tool preview job rejected: ${error?.code ?? error}` };
+    }
+    // 4. Run in the offscreen document (the only Worker-capable surface) via
+    //    the canonical Gate-2 fresh-Worker executor. Bounded wall time.
+    await ensureOffscreen().catch(() => {});
+    const envelope = await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(
+        () => finish({ ok: false, error: "tool preview timed out (SW)" }),
+        PREVIEW_LIMITS.wallMs + 5000,
+      );
+      chrome.runtime.sendMessage({
+        type: "wasm.preview",
+        authority,
+        job,
+        wasmBytes: casBytes,
+        wallMs: PREVIEW_LIMITS.wallMs,
+      }).then(
+        (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no offscreen response" }); },
+        (e) => { clearTimeout(timer); finish({ ok: false, error: `offscreen unavailable: ${e?.message ?? e}` }); },
+      );
+    });
+    if (envelope?.ok !== true) {
+      return { ok: false, error: String(envelope?.error ?? "tool preview failed") };
+    }
+    try {
+      return { ok: true, result: boundPreviewResult(envelope.result) };
+    } catch (error) {
+      return { ok: false, error: `tool preview result rejected: ${error?.code ?? error}` };
+    }
   },
   async "agent.run"(m) {
     // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust

@@ -155,31 +155,46 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors disabled, no canonical-name claim, bundled-package kind, preserved until host", () => {
+Deno.test("posture: descriptors disabled except the single csvtool settings-preview row", () => {
   assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
+  const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
+  assertEquals(previewRows.length, 1, "exactly ONE technically-admitted package");
+  assertEquals(previewRows[0].toolId, "csvtool", "the only admitted package is csvtool");
+  assertEquals(previewRows[0].settingsPreview, true);
+  assertEquals(previewRows[0].disabled, false);
+  assertEquals(previewRows[0].disabledReason, null);
   for (const row of BUNDLED_TOOL_PACKAGES) {
     assertEquals(row.canonicalNameClaim, false, row.toolId);
+    assertEquals(row.sourceKind, BUNDLED_PACKAGE_SOURCE_KIND, row.toolId);
+    assertEquals(row.sourceKind, "bundled-package", row.toolId);
+    if (row.toolId === "csvtool") continue;
     assertEquals(row.admitted, false, row.toolId);
     assertEquals(row.disabled, true, row.toolId);
     assert(["no-execution-host", "runtime-imports-unimplemented"].includes(row.disabledReason), `${row.toolId}: ${row.disabledReason}`);
-    assertEquals(row.sourceKind, BUNDLED_PACKAGE_SOURCE_KIND, row.toolId);
-    assertEquals(row.sourceKind, "bundled-package", row.toolId);
   }
   const listed = listBundledToolPackages();
   listed[0].description = "mutated";
   assert(BUNDLED_TOOL_PACKAGES[0].description !== "mutated", "enumeration must return copies");
 });
 
-Deno.test("posture: NO route — service worker and catalog never import the bundled modules", async () => {
+Deno.test("posture: the ONLY route is the csvtool Settings preview — no provider/selection authority", async () => {
   const sw = await Deno.readTextFile(root("extension/background/service-worker.js"));
-  for (const needle of ["bundled-tool-packages", "bundled-inventory", "admitBundledToolPackages", "cap.bundled."]) {
-    assert(!sw.includes(needle), `service-worker.js must not reference ${needle} until the execution host lands`);
-  }
-  for (const rel of ["extension/lib/tool-catalog.js", "extension/lib/tool-catalog-shadow.js"]) {
+  // The preview route legitimately consumes the immutable bundled inventory.
+  assert(sw.includes("tool.preview.csvtool"), "the csvtool Settings preview route exists");
+  assert(sw.includes("bundled-inventory-data"), "the preview route revalidates against the immutable inventory");
+  // But there is NO provider route / selection authority / grant path for the
+  // bundled packages — the catalog stays metadata-only. The ONLY `cap.bundled`
+  // references are the pinned csvtool preview constants inside the single route.
+  assert(!sw.includes("admitBundledToolPackages"), "service-worker.js must not reference the admission API");
+  // The ONLY `cap.bundled.` references are the two pinned csvtool constants
+  // (the route comment + the manifest rel) — exactly two, nowhere else.
+  assertEquals((sw.match(/cap\.bundled\./g) ?? []).length, 2, "exactly the two pinned csvtool references");
+  assert(sw.includes("tool.preview.csvtool"), "the single preview route key exists");
+  for (const rel of ["extension/lib/tool-catalog.js"]) {
     const src = await Deno.readTextFile(root(rel));
-    assert(!src.includes("bundled-tool-packages"), `${rel} must not consume bundled descriptors yet`);
+    assert(!src.includes("bundled-tool-packages"), `${rel} must not consume bundled descriptors`);
   }
 });
 
@@ -327,7 +342,13 @@ Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS ha
     const prevDigests = [...prevText.matchAll(/"pkg": "(cap\.bundled\.[^"]+)",\s*"version": "1\.0\.0",\s*"digest": "([0-9a-f]{64})"/g)];
     assertEquals(prevDigests.length, 25);
     const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
-    for (const [, pkg, dg] of prevDigests) assertEquals(now.get(pkg), dg, `${pkg} manifest digest must be preserved`);
+    for (const [, pkg, dg] of prevDigests) {
+      if (pkg === "cap.bundled.csvtool") {
+        assert(now.get(pkg) !== dg, "csvtool manifest digest intentionally changed (settings-preview meta status)");
+        continue;
+      }
+      assertEquals(now.get(pkg), dg, `${pkg} manifest digest must be preserved`);
+    }
     const prevCas = [...prevText.matchAll(/"rel": "extension\/wasm\/cas\/([0-9a-f]{64})\.wasm"/g)].map((m) => m[1]);
     const nowCas = new Set(BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/")).map((f) => f.rel));
     for (const sha of prevCas) assert(nowCas.has(`extension/wasm/cas/${sha}.wasm`), `predecessor CAS ${sha} preserved`);

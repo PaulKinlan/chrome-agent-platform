@@ -8,6 +8,7 @@ import { buildToolCatalog } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
 import { buildLazyProviderCapture } from "./lazy-tool-wire.js";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
 
 function ownData(value, key) {
   try {
@@ -59,6 +60,12 @@ export class ShadowToolCatalogController {
         selectionDiagnostics: this.#selections.diagnostics(),
         canExecute: false,
         canGrant: false,
+        // The ONLY technically-admitted bundled package exposes a Settings
+        // preview (metadata truth — NOT a selection or grant).
+        settingsPreviewCsvtool: BUNDLED_TOOL_PACKAGE_ROWS.some(
+          (row) => row?.toolId === "csvtool" &&
+            row?.settingsPreview === true && row?.admitted === true,
+        ),
       });
     }
     if (action === "search") {

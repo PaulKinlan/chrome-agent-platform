@@ -250,6 +250,47 @@ async function renderToolLibrary() {
       library.state = "error";
     }
   }
+
+  // The csvtool Settings preview: an EXPLICIT owner click on the component's
+  // Run button emits tool-preview-request; this surface sends the bounded
+  // request to the SW route (the only executor path) and renders the bounded
+  // result. No catalog/provider selection is involved.
+  library.addEventListener("tool-preview-request", async (event) => {
+    const detail = event?.detail ?? {};
+    const args = Array.isArray(detail.args)
+      ? detail.args.filter((a) => typeof a === "string").slice(0, 4)
+      : [];
+    const stdin = typeof detail.stdin === "string" ? detail.stdin : "";
+    if (typeof stdin !== "string" || new TextEncoder().encode(stdin).byteLength > 2048) {
+      library.previewResult = { ok: false, error: "stdin exceeds the 2 KiB preview bound" };
+      return;
+    }
+    library.previewBusy = true;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "tool.preview.csvtool",
+        args,
+        stdin,
+      });
+      if (!response || response.ok !== true) {
+        library.previewResult = {
+          ok: false,
+          error: String(response?.error ?? "preview declined"),
+        };
+      } else if (response.result) {
+        library.previewResult = response.result;
+      } else {
+        library.previewResult = { ok: false, error: "preview returned no result" };
+      }
+    } catch (error) {
+      library.previewResult = {
+        ok: false,
+        error: String(error?.message ?? error ?? "preview failed"),
+      };
+    } finally {
+      library.previewBusy = false;
+    }
+  });
 }
 
 async function renderLocalModels() {

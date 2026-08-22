@@ -19,21 +19,29 @@ async function componentSource() {
   return source.slice(start, end);
 }
 
-Deno.test("tool-library: registered component with zero events and zero controls", async () => {
+Deno.test("tool-library: registered component with exactly ONE explicit-owner-click control", async () => {
   const block = await componentSource();
-  assertNotMatch(block, /_emit\s*\(/, "the component emits no events");
-  assertNotMatch(block, /addEventListener/, "the component installs no listeners");
-  assertNotMatch(block, /<button|createElement\("button"/, "the component renders no buttons");
+  // The ONLY interactive path: the csvtool Settings preview Run button.
+  assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
+  assertMatch(block, /_emit\("tool-preview-request"/, "the component emits exactly the preview-request event");
+  assertMatch(block, /\.preview-run"\)\?\.addEventListener\("click"/, "the only listener is the Run button click");
+  assertEquals((block.match(/<button/g) ?? []).length, 1, "exactly one button (the preview-run)");
+  assertNotMatch(block, /createElement\("button"/, "no programmatic buttons");
   assertNotMatch(block, /\bfetch\s*\(|XMLHttpRequest|new WebSocket|sendMessage/, "the component performs no network/message calls itself");
   assertNotMatch(block, /chrome\.permissions/, "the component touches no permissions");
-  // No action verbs as affordances anywhere in the component's own markup/copy.
-  assertNotMatch(block, />(?:\s*)(Install|Update|Revoke|Grant|Execute|Run|Verify|Copy|Download|Remove|Enable|Disable)</, "no action controls in markup");
+  // No OTHER action verbs as affordances in the component's markup/copy (Run is
+  // the single permitted explicit-owner-click affordance).
+  const otherActions = block.match(/>\s*(?:Install|Update|Revoke|Grant|Execute|Verify|Copy|Download|Remove|Enable|Disable)\s*</g) ?? [];
+  assertEquals(otherActions.length, 0, "no other action controls in markup");
 });
 
 Deno.test("tool-library: truthful framing + no verification claim can exist", async () => {
   const block = await componentSource();
   assertMatch(block, /read-only diagnostic view/i, "the anti-overclaim framing line is present");
   assertMatch(block, /cannot run, install, grant, update, or remove/i, "the framing names the absent actions");
+  // The preview console itself re-states the bounded scope truthfully.
+  assertMatch(block, /Runs ONLY on your\s+explicit click/, "the preview console states the explicit-owner-click contract");
+  assertMatch(block, /no catalog or provider selection authority/, "no selection authority is claimed");
   // There is no signature-verification path in this build, so no USER-VISIBLE
   // copy may carry a verification claim. (The authority's field NAME
   // `trustedReplaySafety` is API vocabulary in code, not a rendered claim —
@@ -98,7 +106,9 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
   const fnStart = js.indexOf("async function renderToolLibrary");
   const fnEnd = js.indexOf("async function renderLocalModels");
   const fn = js.slice(fnStart, fnEnd);
-  assertNotMatch(fn, /addEventListener/, "the wiring installs no listeners");
+  // The ONLY listener in the Tool Library wiring: the preview-request handler.
+  assertMatch(fn, /tool-preview-request/, "the wiring handles the explicit preview click");
+  assertMatch(fn, /tool\.preview\.csvtool/, "the wiring calls ONLY the csvtool preview route");
   assertMatch(fn, /unavailable/, "older-worker unavailable state handled");
 });
 
