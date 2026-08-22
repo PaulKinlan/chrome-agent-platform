@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.165] — 2026-08-22
+- feat(wasm-tools): vendor retained tool sources, recipes, licenses, and disabled descriptors (CAP-FB-20260822-TOOL-PLATFORM-FOUNDATION-01)
+
 ## [0.2.164] — 2026-08-22
 - feat(js-minifier): add bounded bundled JS-minifier Worker lane (disabled, no provider)
 
