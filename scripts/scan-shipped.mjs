@@ -117,6 +117,60 @@ function foldString(node) {
   return null;
 }
 
+function isRemoteScriptUrl(value) {
+  return typeof value === "string" && /^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(value);
+}
+
+function memberPropertyName(node) {
+  if (!node || node.type !== "MemberExpression") return null;
+  if (!node.computed && node.property?.type === "Identifier") return node.property.name;
+  return node.computed ? foldString(node.property) : null;
+}
+
+const CODE_LOADING_SINKS = new Set([
+  "Worker",
+  "SharedWorker",
+  "importScripts",
+  "fetch",
+]);
+
+function directSinkName(node) {
+  if (node?.type === "Identifier" && CODE_LOADING_SINKS.has(node.name)) {
+    return node.name;
+  }
+  if (
+    node?.type === "MemberExpression" &&
+    node.object?.type === "Identifier" &&
+    ORACLE_GLOBALS.has(node.object.name)
+  ) {
+    const name = memberPropertyName(node);
+    return CODE_LOADING_SINKS.has(name) ? name : null;
+  }
+  return null;
+}
+
+function sinkName(node, aliases) {
+  const direct = directSinkName(node);
+  if (direct) return direct;
+  return node?.type === "Identifier" ? aliases.get(node.name) ?? null : null;
+}
+
+function isRemoteCodeUrl(value) {
+  return isRemoteScriptUrl(value) && /\.(?:m?js)(?:$|[?#])/iu.test(value);
+}
+
+function createsScriptElement(node) {
+  return node?.type === "CallExpression" &&
+    memberPropertyName(node.callee) === "createElement" &&
+    foldString(node.arguments?.[0])?.toLowerCase() === "script";
+}
+
+function scriptTarget(node, knownScripts) {
+  if (createsScriptElement(node)) return true;
+  return node?.type === "Identifier" &&
+    (knownScripts.has(node.name) || /script/iu.test(node.name));
+}
+
 /**
  * Scan the given shipped JS files. `generatedBundles` is the set of file paths
  * that are GENERATED dependency bundles (esbuild output inlining zod/vite); only
@@ -125,9 +179,21 @@ function foldString(node) {
  * importable from BOTH node and Deno without a node:fs type dependency).
  * Returns a list of human-readable violation strings (empty when clean).
  */
-export async function scanShippedJs(files, { generatedBundles = new Set(), readText } = {}) {
+export async function scanShippedJs(files, {
+  generatedBundles = new Set(),
+  allowedWorkerLiterals = new Set(),
+  allowedDynamicEvaluatorFiles = new Set(),
+  readText,
+} = {}) {
   if (typeof readText !== "function") {
     throw new Error("scanShippedJs requires an injected readText(file) function");
+  }
+  if (
+    !(generatedBundles instanceof Set) ||
+    !(allowedWorkerLiterals instanceof Set) ||
+    !(allowedDynamicEvaluatorFiles instanceof Set)
+  ) {
+    throw new Error("scanShippedJs policy sets must be Set instances");
   }
   const violations = [];
 
@@ -160,6 +226,38 @@ export async function scanShippedJs(files, { generatedBundles = new Set(), readT
       continue;
     }
 
+    const sinkAliases = new Map();
+    // Resolve direct/computed global sinks and simple alias chains. This is a
+    // bounded heuristic, not a substitute for CSP or exact package hashes.
+    walk(ast, (node) => {
+      if (
+        node.type === "VariableDeclarator" &&
+        node.id?.type === "Identifier"
+      ) {
+        const sink = sinkName(node.init, sinkAliases);
+        if (sink) sinkAliases.set(node.id.name, sink);
+      }
+      if (
+        node.type === "AssignmentExpression" &&
+        node.operator === "=" && node.left?.type === "Identifier"
+      ) {
+        const sink = sinkName(node.right, sinkAliases);
+        if (sink) sinkAliases.set(node.left.name, sink);
+      }
+    });
+
+    const scriptObjects = new Set();
+    walk(ast, (node) => {
+      if (
+        node.type === "VariableDeclarator" && node.id?.type === "Identifier" &&
+        createsScriptElement(node.init)
+      ) scriptObjects.add(node.id.name);
+      if (
+        node.type === "AssignmentExpression" && node.left?.type === "Identifier" &&
+        createsScriptElement(node.right)
+      ) scriptObjects.add(node.left.name);
+    });
+
     walk(ast, (node) => {
       // (a) exported __-prefixed test seams.
       if (node.type === "ExportNamedDeclaration") {
@@ -191,7 +289,77 @@ export async function scanShippedJs(files, { generatedBundles = new Set(), readT
           );
         }
       }
-      // (b) Dynamic Wasm construction/compilation and literal .wasm fetches
+      // (b) Remote script-loading URLs are forbidden for Store packages.
+      // AST checks are heuristic defense in depth; exact CSP and package SHA
+      // verification remain primary authority.
+      if (
+        (node.type === "ImportDeclaration" || node.type === "ExportNamedDeclaration" ||
+          node.type === "ExportAllDeclaration") &&
+        isRemoteScriptUrl(node.source?.value)
+      ) violations.push(`${file}: imports a remote script URL`);
+      if (
+        node.type === "ImportExpression" && isRemoteScriptUrl(foldString(node.source))
+      ) violations.push(`${file}: dynamically imports a remote script URL`);
+      if (
+        node.type === "CallExpression" &&
+        sinkName(node.callee, sinkAliases) === "importScripts"
+      ) {
+        for (const argument of node.arguments ?? []) {
+          const value = foldString(argument);
+          if (value === null || isRemoteScriptUrl(value)) {
+            violations.push(`${file}: importScripts requires package-local literal URLs`);
+            break;
+          }
+        }
+      }
+      if (
+        node.type === "AssignmentExpression" &&
+        memberPropertyName(node.left) === "src" &&
+        scriptTarget(node.left.object, scriptObjects) &&
+        isRemoteScriptUrl(foldString(node.right))
+      ) violations.push(`${file}: assigns a remote script URL`);
+      if (
+        node.type === "CallExpression" &&
+        memberPropertyName(node.callee) === "setAttribute" &&
+        scriptTarget(node.callee.object, scriptObjects) &&
+        foldString(node.arguments?.[0])?.toLowerCase() === "src" &&
+        isRemoteScriptUrl(foldString(node.arguments?.[1]))
+      ) violations.push(`${file}: assigns a remote script URL`);
+
+      // Worker construction is exact-literal and allowlist-only. Store mode in
+      // this slice supplies an empty allowlist, so an alternate Worker cannot
+      // become a hidden Wasm/package execution host.
+      if (node.type === "NewExpression") {
+        const workerSink = sinkName(node.callee, sinkAliases);
+        if (workerSink === "Worker" || workerSink === "SharedWorker") {
+          const value = foldString(node.arguments?.[0]);
+          if (value === null) {
+            violations.push(`${file}: ${workerSink} URL is not a literal`);
+          } else if (
+            isRemoteScriptUrl(value) || !allowedWorkerLiterals.has(value)
+          ) {
+            violations.push(
+              `${file}: ${workerSink} literal is not allowlisted: ${value}`,
+            );
+          }
+        }
+      }
+
+      // (c) Dynamic source evaluation is forbidden except for the exact
+      // manifest-sandbox evaluator path supplied by Store policy. Generated
+      // service-worker/options bundles never inherit this exemption.
+      if (
+        !allowedDynamicEvaluatorFiles.has(file) &&
+        ((node.type === "CallExpression" &&
+          node.callee?.type === "Identifier" && node.callee.name === "eval") ||
+          (node.type === "NewExpression" &&
+            node.callee?.type === "Identifier" &&
+            node.callee.name === "Function"))
+      ) {
+        violations.push(`${file}: dynamic source evaluator is forbidden`);
+      }
+
+      // (d) Dynamic Wasm construction/compilation and literal .wasm fetches
       // are forbidden in shipped source. The bundled authority is record-only;
       // a future host requires a separately reviewed static CAS route.
       if (
@@ -204,12 +372,18 @@ export async function scanShippedJs(files, { generatedBundles = new Set(), readT
       }
       if (
         node.type === "CallExpression" &&
-        node.callee?.type === "Identifier" && node.callee.name === "fetch" &&
-        typeof node.arguments?.[0]?.value === "string" && /\.wasm(?:$|[?#])/iu.test(node.arguments[0].value)
+        sinkName(node.callee, sinkAliases) === "fetch"
       ) {
-        violations.push(`${file}: fetches a .wasm resource (network Wasm is forbidden)`);
+        const value = foldString(node.arguments?.[0]);
+        if (typeof value === "string" && /\.wasm(?:$|[?#])/iu.test(value)) {
+          violations.push(
+            `${file}: fetches a .wasm resource (network Wasm is forbidden)`,
+          );
+        } else if (isRemoteCodeUrl(value)) {
+          violations.push(`${file}: fetches a remote JavaScript resource`);
+        }
       }
-      // (c) window/self/globalThis.__* oracle access (dot, bracket,
+      // (e) window/self/globalThis.__* oracle access (dot, bracket,
       //     template-literal, and statically foldable string concatenation).
       if (node.type === "MemberExpression") {
         const obj = node.object;

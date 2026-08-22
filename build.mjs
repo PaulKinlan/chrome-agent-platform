@@ -26,6 +26,21 @@ import {
   writeDistCompleteMarker,
 } from "./scripts/dist-complete.mjs";
 
+function parseBuildTarget(args) {
+  if (!Array.isArray(args) || args.length > 1) {
+    throw new Error("usage: node build.mjs [--target=store]");
+  }
+  if (args.length === 0 || args[0] === "--target=store") return "store";
+  if (args[0] === "--target=developer") {
+    throw new Error("target_developer_not_enabled");
+  }
+  if (args[0] === "--target=enterprise") {
+    throw new Error("target_enterprise_not_enabled");
+  }
+  throw new Error(`unsupported build target argument: ${args[0]}`);
+}
+
+const BUILD_TARGET = parseBuildTarget(process.argv.slice(2));
 const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
 const DIST = path.join(EXT_DIR, "dist");
@@ -71,6 +86,9 @@ const shippedJs = await walkJs("extension");
 // shipped source files.
 const violations = await scanShippedJs(shippedJs, {
   generatedBundles: new Set([path.join(ROOT, "extension", "dist", "background", "service-worker.js"), path.join(ROOT, "extension", "dist", "options.bundle.js")]),
+  allowedDynamicEvaluatorFiles: new Set([
+    "extension/sandbox/script-sandbox.js",
+  ]),
   readText: (f) => readFile(f, "utf8"),
 });
 if (violations.length > 0) {
@@ -281,8 +299,16 @@ try {
         "indexed source changed during build — refusing to publish a mixed-generation dist",
       );
     }
-    await writeDistCompleteMarker({ root: ROOT, distRoot: STAGE });
-    await validateDistCompleteMarker({ root: ROOT, distRoot: STAGE });
+    await writeDistCompleteMarker({
+      root: ROOT,
+      distRoot: STAGE,
+      target: BUILD_TARGET,
+    });
+    await validateDistCompleteMarker({
+      root: ROOT,
+      distRoot: STAGE,
+      expectedTarget: BUILD_TARGET,
+    });
 
     // ── THE PUBLISH (serialized by the lock) ────────────────────────────────
     // VERSIONED-DIR + ATOMIC POINTER: the real trees are dist-versions/<id>/;

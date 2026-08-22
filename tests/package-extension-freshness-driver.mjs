@@ -14,6 +14,10 @@ import {
   validateDistCompleteMarker,
   writeDistCompleteMarker,
 } from "../scripts/dist-complete.mjs";
+import {
+  assertStoreTargetBoundary,
+  STORE_EXTENSION_CSP,
+} from "../scripts/store-target-policy.mjs";
 
 async function command(cwd, executable, args) {
   const output = await new Deno.Command(executable, {
@@ -61,6 +65,7 @@ async function fixture() {
       manifest_version: 3,
       version: "1.0.0",
       background: { service_worker: "dist/background/service-worker.js" },
+      content_security_policy: { extension_pages: STORE_EXTENSION_CSP },
     }),
   );
   await write(
@@ -107,6 +112,7 @@ async function fixture() {
   await writeDistCompleteMarker({
     root,
     distRoot: `${root}/extension/dist`,
+    target: "store",
   });
   return root;
 }
@@ -116,6 +122,7 @@ async function refreshMarker(root) {
   await writeDistCompleteMarker({
     root,
     distRoot: `${root}/extension/dist`,
+    target: "store",
   });
 }
 
@@ -317,6 +324,7 @@ Deno.test("dist.complete rejects stale source/output plus owner and timestamp mu
           validateDistCompleteMarker({
             root,
             distRoot: `${root}/extension/dist`,
+            expectedTarget: "store",
           }),
         Error,
         "marker top-level schema is not exact",
@@ -341,6 +349,98 @@ Deno.test("dist.complete rejects stale source/output plus owner and timestamp mu
     );
   } finally {
     await Deno.remove(staleCommit, { recursive: true });
+  }
+});
+
+Deno.test("dist.complete v2 migration rejects legacy, missing, noncanonical and mismatched targets", async () => {
+  const root = await fixture();
+  try {
+    const markerPath = `${root}/extension/dist/dist.complete`;
+    const original = JSON.parse(await Deno.readTextFile(markerPath));
+
+    const legacy = {
+      schema: "cap-dist-complete-v1",
+      commit: original.commit,
+      source: original.source,
+      outputs: original.outputs,
+    };
+    await Deno.writeTextFile(markerPath, `${JSON.stringify(legacy)}\n`);
+    await assertRejects(
+      () => validateDistCompleteMarker({
+        root,
+        distRoot: `${root}/extension/dist`,
+        expectedTarget: "store",
+      }),
+      Error,
+      "legacy schema cap-dist-complete-v1 is rejected; run node build.mjs --target=store",
+    );
+
+    await Deno.writeTextFile(
+      markerPath,
+      `${JSON.stringify({ ...original, target: undefined })}\n`,
+    );
+    await assertRejects(
+      () => validateDistCompleteMarker({
+        root,
+        distRoot: `${root}/extension/dist`,
+        expectedTarget: "store",
+      }),
+      Error,
+      "marker top-level schema is not exact",
+    );
+
+    await Deno.writeTextFile(markerPath, `${JSON.stringify(original, null, 2)}\n`);
+    await assertRejects(
+      () => validateDistCompleteMarker({
+        root,
+        distRoot: `${root}/extension/dist`,
+        expectedTarget: "store",
+      }),
+      Error,
+      "marker JSON is not canonical",
+    );
+
+    original.target = "developer";
+    await Deno.writeTextFile(markerPath, `${JSON.stringify(original)}\n`);
+    await assertRejects(
+      () => validateDistCompleteMarker({
+        root,
+        distRoot: `${root}/extension/dist`,
+        expectedTarget: "store",
+      }),
+      Error,
+      "build target mismatch: expected store, got developer",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("Store scanner, not marker declaration, rejects misdeclared forbidden bytes", async () => {
+  const root = await fixture();
+  try {
+    await write(
+      root,
+      "extension/dist/options.bundle.js",
+      'import "https://evil.example/developer-route.js";\n',
+    );
+    await refreshMarker(root);
+    const inventory = await collectPackageInventory({
+      root,
+      expectedTarget: "store",
+    });
+    await validateDistCompleteMarker({
+      root,
+      distRoot: `${root}/extension/dist`,
+      expectedTarget: "store",
+    });
+    await assertRejects(
+      () => assertStoreTargetBoundary({ target: "store", inventory }),
+      Error,
+      "static boundary violations",
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
   }
 });
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.158] — 2026-08-22
+- feat(store): bind Store target and enforce static package boundary (CAP-FB-20260822-OWNER-WASM-INSTALL-01)
+
 ## [0.2.157] — 2026-08-22
 - fix(build): recompose deterministic archives after Tool Library (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01, CAP-FB-20260822-TOOL-LIBRARY-UI-01)
 

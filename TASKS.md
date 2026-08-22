@@ -5,17 +5,17 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 19:55 UTC. Reconciled against exact public
-> `origin/main@5e086c1fb0847ddccf1a16ba3129a4cf900eac8f` (`0.2.156`). Lazy,
-> security-suite serialization, pure WASI Gate 1 and the reviewed Tool Library
-> release remain exact; the catalog remains `MERGED`; OPFS, bundled-package,
-> public code-diff and Chrome-capability records remain `IN_REVIEW` with
-> Shipping `—`. This branch narrowly reopens package freshness to recompose the
-> reviewed deterministic commit/indexed-source/output marker as the `0.2.157`
-> candidate; no Tool product byte, execution, package admission, Store target,
-> provider or permission authority is added. Branch status counts: **13 OPEN ·
-> 13 IN_REVIEW · 2 MERGED · 4 BLOCKED · 36 DONE · 0 ABANDONED**. The 32 active
-> entries and 36 archived terminal entries below are the complete 68-entry state.
+> Snapshot: 2026-08-22 20:12 UTC. Reconciled against exact public
+> `origin/main@093757fea4bee236f6b9038789ad4a67bd1f3b7a` (`0.2.157`). Lazy,
+> security-suite serialization, pure WASI Gate 1, Tool Library and deterministic
+> package bytes remain exact; the catalog remains `MERGED`; OPFS, bundled-
+> package, public code-diff and Chrome-capability records remain `IN_REVIEW`
+> with Shipping `—`. This branch adds the credential-free Store static boundary
+> and marker-v2 target mismatch gate as the `0.2.158` candidate; no Tool product
+> byte, owner-package admission, Wasm execution, provider or permission authority
+> is added. Branch status counts: **13 OPEN · 13 IN_REVIEW · 2 MERGED · 4 BLOCKED
+> · 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived terminal
+> entries below are the complete 68-entry state.
 
 ## Safety boundary
 
@@ -996,15 +996,15 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-22 — the long-term platform should let owners install
   reviewed local packages without making installation model-callable or silently
   broadening authority
-- Updated: 2026-08-22 09:30 UTC
+- Updated: 2026-08-22 20:12 UTC
 - Status: BLOCKED
 - Resume: OPEN
 - Priority: P0
 - Owner: distribution-policy owner
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Workspace: active (local path private)
+- Branch: `feat/store-boundary-recompose-093757f`
+- Base: `093757fea4bee236f6b9038789ad4a67bd1f3b7a`
+- Candidate: this tracker commit
 - Shipping: —
 - Acceptance: an explicit owner-selected file enters staged validation,
   provenance/signature/licence/SBOM and capability/version diff review, then
@@ -1013,11 +1013,13 @@ On resume after a coordinator or worker loss:
   change; model/page cannot install, update, trust a signer or grant capability
 - Review: independent Store/RHC legal-policy, supply-chain, owner-gesture,
   package transaction, grant, accessibility and loaded-MV3 review required
-- Gates: owner cancel/deny,
+- Gates: credential-free Store precursor requires marker-v2 exact target,
+  legacy/cross-target refusal, exact CSP, tracked/generated scanner, empty Worker
+  allowlist, zero unmanifested Wasm and exact archive parity; owner cancel/deny,
   malformed/archive-bomb/substitution/signature/revocation/update, grant
   invalidation, concurrent install, crash recovery, offline restart, no
-  network/provider credentials, static RHC scan and distribution-specific
-  packaging
+  network/provider credentials, written RHC decision and owner-package-specific
+  packaging remain separate
 - Blockers: Chrome Web Store execution of owner-uploaded/downloaded Wasm
   requires written policy clearance; until then this is limited to a separately
   packaged unpacked/enterprise/developer lane and Store mode remains
@@ -1030,6 +1032,9 @@ On resume after a coordinator or worker loss:
   - 2026-08-22 09:30 UTC — intentionally BLOCKED at the distribution boundary;
     digests, signatures and an owner click are not treated as automatic
     Store-policy clearance.
+  - 2026-08-22 20:12 UTC — added only the credential-free Store package/static
+    precursor over exact public `0.2.157`: target intent and scanner evidence do
+    not clear written-policy, owner gesture, signer, install or execution gates.
 
 ## [CAP-FB-20260822-SPREADSHEET-TOOLKIT-01] Bounded spreadsheet and table workflow toolkit
 
@@ -1379,17 +1384,17 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
 - Feedback: 2026-08-22 — exact fresh packaging was public, but `dist.complete` still embedded a random build-owner token and wall-clock timestamp, so two builds from identical source produced different production ZIP bytes
-- Updated: 2026-08-22 19:55 UTC
+- Updated: 2026-08-22 20:12 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: deterministic build-marker recompose implementer
+- Owner: Store package-boundary recompose implementer
 - Workspace: active (local path private)
-- Branch: `fix/deterministic-marker-recompose-5e086c1`
-- Base: `5e086c1fb0847ddccf1a16ba3129a4cf900eac8f`
+- Branch: `feat/store-boundary-recompose-093757f`
+- Base: `093757fea4bee236f6b9038789ad4a67bd1f3b7a`
 - Candidate: this tracker commit
 - Shipping: —
-- Acceptance: each package retains the reviewed exact tracked-plus-generated regular-file inventory and atomic fresh replacement; `dist.complete` is bounded canonical JSON derived only from the exact Git commit, current bytes of every indexed source file, and the exact generated service-worker/options bytes; random lock owner, PID, staging/version paths, and wall-clock time remain private build custody; the build compares indexed source before and after bundling; packaging validates the marker before and after inventory hashing and its copy verification closes the remaining read/copy race; stale commit/source/output markers, legacy owner/time fields, malformed/special markers, and source changes during build fail closed; two consecutive builds and packages from identical source are byte-for-byte identical
+- Acceptance: each package retains the reviewed exact tracked-plus-generated regular-file inventory and atomic fresh replacement; `dist.complete` v2 is bounded canonical JSON derived only from the exact Git commit, current bytes of every indexed source file, exact generated service-worker/options bytes and target intent; random lock owner, PID, staging/version paths and wall-clock time remain private; source is fenced before/after bundling; packaging validates the marker before/after inventory hashing and copy verification closes the read/copy race; v1, cross-target, stale commit/source/output, owner/time, malformed/special and source-change mutants fail closed; Store classification independently scans actual package bytes; two same-source builds/packages remain byte-identical
 - Review: deterministic marker semantics at `3c96a9ff5f76633c177fcff4fbf7497f4c149790` independently PASSed review SHA-256 `b51b1d6eddae468ef868f98b2ffa141a5148032fee248a3c3461cbc2661517e8`; exact current-parent semantic recompose review pending
 - Gates: focused marker/bootstrap and package-freshness gates, canonical full no-Chrome suite, production build with zero Wasm, two same-source canonical markers and exact package/validate ZIPs, gallery/changelog/order/tracker/privacy/diff/release/clean gates required before review; no Chrome or security suite is authorized in this source lane
 - Blockers: independent exact-candidate review before publication
@@ -1399,6 +1404,9 @@ On resume after a coordinator or worker loss:
   - 2026-08-22 11:10 UTC — replaced whole-tree/in-place ZIP packaging with an exact tracked-plus-generated inventory, fresh temp archive, extracted hash verification and atomic replacement; added poison/removal/current-dist/symlink/special/failure-cleanup regressions on exact public `a8985af`.
   - 2026-08-22 12:38 UTC — independent review PASSed; exact `1fd65c696cbfcbe0aed135e0ba8c743b8c0ca624` became public `0.2.147`, repeated real package/validate was byte-identical and free of the ignored stale bundle, and the task advanced to DONE.
   - 2026-08-22 19:55 UTC — reopened narrowly on exact public Tool Library `0.2.156` to recompose the independently reviewed deterministic marker semantics while preserving lock custody, atomic publication, exact inventory and every Tool product byte; Store target binding remains a separate successor.
+  - 2026-08-22 20:12 UTC — exact marker successor `093757f` became public
+    `0.2.157`; the Store recompose evolves only the marker target/schema and
+    package classification boundary while preserving deterministic/atomic custody.
 
 Entries that reached `DONE` or `ABANDONED`, preserved with their complete field set and History.
 

@@ -10,7 +10,13 @@ import { execFileSync } from "node:child_process";
 import { lstat, readFile, readlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export const DIST_COMPLETE_SCHEMA = "cap-dist-complete-v1";
+export const DIST_COMPLETE_SCHEMA = "cap-dist-complete-v2";
+export const LEGACY_DIST_COMPLETE_SCHEMA = "cap-dist-complete-v1";
+export const DIST_COMPLETE_TARGETS = Object.freeze([
+  "store",
+  "developer",
+  "enterprise",
+]);
 export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "background/service-worker.js",
   "options.bundle.js",
@@ -175,13 +181,22 @@ async function outputAuthority(distRoot) {
   return Object.freeze(outputs);
 }
 
-export async function createDistCompleteMarker({ root, distRoot }) {
+function validTarget(value) {
+  return DIST_COMPLETE_TARGETS.includes(value);
+}
+
+export async function createDistCompleteMarker({ root, distRoot, target }) {
+  if (!validTarget(target)) throw markerError("marker target is invalid");
   const source = await computeIndexedSourceAuthority({ root });
+  // The key order is part of the canonical v2 byte contract. `target` is an
+  // intent/mismatch declaration, not independent proof of output content; the
+  // Store scanner must still inspect the actual package bytes.
   const marker = {
-    schema: DIST_COMPLETE_SCHEMA,
     commit: gitCommit(root),
-    source: { digest: source.digest, files: source.files },
     outputs: await outputAuthority(distRoot),
+    schema: DIST_COMPLETE_SCHEMA,
+    source: { digest: source.digest, files: source.files },
+    target,
   };
   return Object.freeze({
     ...marker,
@@ -189,8 +204,8 @@ export async function createDistCompleteMarker({ root, distRoot }) {
   });
 }
 
-export async function writeDistCompleteMarker({ root, distRoot }) {
-  const marker = await createDistCompleteMarker({ root, distRoot });
+export async function writeDistCompleteMarker({ root, distRoot, target }) {
+  const marker = await createDistCompleteMarker({ root, distRoot, target });
   await writeFile(path.join(distRoot, "dist.complete"), canonicalJson(marker), {
     flag: "wx",
     mode: 0o644,
@@ -198,7 +213,11 @@ export async function writeDistCompleteMarker({ root, distRoot }) {
   return marker;
 }
 
-export async function validateDistCompleteMarker({ root, distRoot }) {
+export async function validateDistCompleteMarker({
+  root,
+  distRoot,
+  expectedTarget,
+}) {
   const markerPath = path.join(distRoot, "dist.complete");
   const info = await lstat(markerPath).catch(() => null);
   if (!info?.isFile() || info.isSymbolicLink()) {
@@ -214,13 +233,31 @@ export async function validateDistCompleteMarker({ root, distRoot }) {
   } catch {
     throw markerError("marker is not valid JSON");
   }
-  if (!exactObject(marker, ["commit", "outputs", "schema", "source"])) {
+  if (marker?.schema === LEGACY_DIST_COMPLETE_SCHEMA) {
+    throw markerError(
+      "legacy schema cap-dist-complete-v1 is rejected; run node build.mjs --target=store",
+    );
+  }
+  if (
+    !exactObject(marker, ["commit", "outputs", "schema", "source", "target"])
+  ) {
     throw markerError("marker top-level schema is not exact");
   }
   if (
     marker.schema !== DIST_COMPLETE_SCHEMA || !COMMIT_RE.test(marker.commit)
   ) {
     throw markerError("marker identity is invalid");
+  }
+  if (!validTarget(marker.target)) {
+    throw markerError("marker target is invalid");
+  }
+  if (!validTarget(expectedTarget)) {
+    throw markerError("expected build target is invalid");
+  }
+  if (marker.target !== expectedTarget) {
+    throw markerError(
+      `build target mismatch: expected ${expectedTarget}, got ${marker.target}`,
+    );
   }
   if (
     !exactObject(marker.source, ["digest", "files"]) ||
@@ -264,11 +301,12 @@ export async function validateDistCompleteMarker({ root, distRoot }) {
     ) throw markerError(`marker output is stale: ${outputs[index].path}`);
   }
   return Object.freeze({
-    schema: marker.schema,
     commit: marker.commit,
-    source: Object.freeze({ ...marker.source }),
     outputs: Object.freeze(
       marker.outputs.map((row) => Object.freeze({ ...row })),
     ),
+    schema: marker.schema,
+    source: Object.freeze({ ...marker.source }),
+    target: marker.target,
   });
 }

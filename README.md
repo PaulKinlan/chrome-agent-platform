@@ -103,7 +103,8 @@ npm test               # unit tests
 npm run test:chrome    # the CDP journeys (drives the real extension)
 npm run test:components  # the component gallery smoke
 npm run test:security  # the sandbox-boundary security suite
-npm run package        # fresh exact-inventory production ZIP
+npm run package        # fresh exact-inventory Store production ZIP
+npm run package:store  # same exact Store boundary (explicit alias)
 ```
 
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked**
@@ -113,12 +114,26 @@ Production packaging never copies the local `extension/` tree wholesale. It
 combines Git-tracked regular files with the current generated `dist` and the
 byte-identical generated changelog, rejects symlinks/special files, verifies a
 fresh ZIP's exact names and hashes, then atomically replaces the final archive.
-`dist.complete` is canonical JSON bound to the Git commit, current indexed source
-bytes, and exact generated bundle hashes; lock owners, PIDs, stage paths and
-wall-clock timestamps remain build custody and never enter package bytes. The
-package step revalidates that marker around inventory hashing. Identical source
-builds therefore produce byte-identical markers and ZIPs, while ignored local
-bundles, stale markers, and files removed since an older ZIP cannot survive.
+`dist.complete` v2 is canonical JSON bound to the Git commit, current indexed
+source bytes, exact generated bundle hashes, and the declared `store` target;
+lock owners, PIDs, stage paths and wall-clock timestamps remain build custody
+and never enter package bytes. The target is an intent/mismatch gate, not proof
+of content. The package step revalidates the marker around inventory hashing,
+then independently scans the actual tracked and generated package bytes.
+Identical source builds therefore produce byte-identical markers and ZIPs,
+while ignored local bundles, stale/legacy/cross-target markers, and files removed
+since an older ZIP cannot survive.
+
+Store packaging uses the same inventory, content hashes, ZIP construction, and
+atomic replacement without transforming bytes. The explicit `--target=store`
+boundary additionally requires the exact MV3 extension CSP, the bundled-reviewed-
+only lane, zero unmanifested Wasm, no alternate Worker literal, and no statically
+visible remote script/code-loading URL. Computed and simple aliased Worker,
+SharedWorker, importScripts, and remote JavaScript fetch sinks are rejected. The
+manifest sandbox evaluator alone has an exact-path exemption; generated service-
+worker/options bundles do not. These scans are bounded heuristic defense in depth;
+exact CSP, package hashes, marker bindings, and archive verification remain
+mandatory. Static PASS is not Chrome Web Store policy approval.
 
 ## Architecture
 

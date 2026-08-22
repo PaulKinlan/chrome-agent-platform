@@ -160,7 +160,10 @@ async function resolveDist(extDir) {
   return resolved;
 }
 
-export async function collectPackageInventory({ root }) {
+export async function collectPackageInventory({
+  root,
+  expectedTarget = "store",
+}) {
   root = path.resolve(root);
   const extDir = path.join(root, "extension");
   const extInfo = await lstat(extDir).catch(() => null);
@@ -207,7 +210,11 @@ export async function collectPackageInventory({ root }) {
   // The marker is executable authority, not a presence bit: it must bind the
   // current commit, indexed source bytes and both generated bundle hashes.
   // Legacy owner/timestamp markers and stale copied markers fail closed.
-  const marker = await validateDistCompleteMarker({ root, distRoot });
+  const marker = await validateDistCompleteMarker({
+    root,
+    distRoot,
+    expectedTarget,
+  });
   for (const generated of await walkRegularFiles(distRoot)) {
     const archivePath = `${GENERATED_DIST}/${generated.archivePath}`;
     entries.push({
@@ -236,7 +243,7 @@ export async function collectPackageInventory({ root }) {
   // Revalidate after inventory hashing. copyInventoryToStage subsequently
   // compares every copied byte with this inventory, closing the remaining
   // read/copy race without weakening fresh-archive atomicity.
-  await validateDistCompleteMarker({ root, distRoot });
+  await validateDistCompleteMarker({ root, distRoot, expectedTarget });
 
   const manifestEntry = byPath.get("manifest.json");
   if (!manifestEntry) {
@@ -425,7 +432,7 @@ async function commitEpoch(root) {
 }
 
 export async function packageExtensionArchive(
-  { root, archive, zipCommand = "zip" },
+  { root, archive, zipCommand = "zip", expectedTarget = "store" },
 ) {
   root = path.resolve(root);
   archive = path.resolve(archive);
@@ -440,7 +447,7 @@ export async function packageExtensionArchive(
     throw packageError("existing final archive is special or a symlink");
   }
 
-  const inventory = await collectPackageInventory({ root });
+  const inventory = await collectPackageInventory({ root, expectedTarget });
   const stage = await mkdtemp(path.join(outputDir, ".cap-package-stage-"));
   const tempArchive = path.join(
     outputDir,

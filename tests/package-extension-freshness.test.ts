@@ -29,7 +29,7 @@ Deno.test("package archive freshness, exact inventory, and portability regressio
     const stdout = new TextDecoder().decode(output.stdout);
     const stderr = new TextDecoder().decode(output.stderr);
     assertEquals(output.code, 0, `${stdout}\n${stderr}`);
-    assertStringIncludes(stdout, "4 passed");
+    assertStringIncludes(stdout, "6 passed");
     assertStringIncludes(stdout, "0 failed");
   } finally {
     clearTimeout(timer);

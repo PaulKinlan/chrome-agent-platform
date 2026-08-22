@@ -88,9 +88,20 @@ Deno.test("two production builds produce byte-identical markers and ZIP archives
       path.join(DIST, "dist.complete"),
       "utf8",
     );
+    const firstMarkerValue = JSON.parse(firstMarker);
+    assertEquals(firstMarkerValue.schema, "cap-dist-complete-v2");
+    assertEquals(firstMarkerValue.target, "store");
+    assertEquals(Object.keys(firstMarkerValue), [
+      "commit",
+      "outputs",
+      "schema",
+      "source",
+      "target",
+    ]);
     const first = await packageExtensionArchive({
       root: ROOT,
       archive: path.join(output, "first.zip"),
+      expectedTarget: "store",
     });
 
     build();
@@ -101,6 +112,7 @@ Deno.test("two production builds produce byte-identical markers and ZIP archives
     const second = await packageExtensionArchive({
       root: ROOT,
       archive: path.join(output, "second.zip"),
+      expectedTarget: "store",
     });
 
     assertEquals(secondMarker, firstMarker, "dist.complete bytes drifted");
