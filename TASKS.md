@@ -5,17 +5,20 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 20:12 UTC. Reconciled against exact public
-> `origin/main@093757fea4bee236f6b9038789ad4a67bd1f3b7a` (`0.2.157`). Lazy,
-> security-suite serialization, pure WASI Gate 1, Tool Library and deterministic
-> package bytes remain exact; the catalog remains `MERGED`; OPFS, bundled-
-> package, public code-diff and Chrome-capability records remain `IN_REVIEW`
-> with Shipping `—`. This branch adds the credential-free Store static boundary
-> and marker-v2 target mismatch gate as the `0.2.158` candidate; no Tool product
-> byte, owner-package admission, Wasm execution, provider or permission authority
-> is added. Branch status counts: **13 OPEN · 13 IN_REVIEW · 2 MERGED · 4 BLOCKED
-> · 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived terminal
-> entries below are the complete 68-entry state.
+> Snapshot: 2026-08-22 20:30 UTC. Reconciled against exact public
+> `origin/main@6662dfa2870ef1729b7e3ba68c3393d40f7db474` (`0.2.158`). Lazy,
+> security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
+> package bytes and the Store static boundary remain exact; the catalog
+> remains `MERGED`; OPFS, bundled-package, public code-diff, Chrome-capability
+> and the Gate-2 fresh-Worker host source candidate remain `IN_REVIEW` with
+> Shipping `—` (the Gate-2 executor/offscreen host is source-only and
+> unreachable — a separately reviewed successor owns the service-worker
+> route that would reach it). This branch recomposes the PASSed Gate-2
+> source host as the `0.2.159` candidate; no route, execution, package
+> admission, provider or permission authority is added.
+> Branch status counts: **13 OPEN · 14 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 36 DONE · 0 ABANDONED**. The 33 active entries and 36 archived terminal
+> entries below are the complete 69-entry state.
 
 ## Safety boundary
 
@@ -713,6 +716,36 @@ On resume after a coordinator or worker loss:
     but remains IN_REVIEW with Shipping `—` pending exact-candidate review.
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
+## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
+
+- Feedback: 2026-08-22 — the reviewed package host needs hard termination,
+  byte-bounded sync workspaces, an audit-before-instantiate scan and a bounded
+  result envelope before any route can reach it
+- Updated: 2026-08-22 20:30 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: recomposed source candidate on this branch
+- Workspace: active (local path private)
+- Branch: `recompose/gate2-6662dfa`
+- Base: `6662dfa2870ef1729b7e3ba68c3393d40f7db474`
+- Candidate: this commit (`086ee3d` PASSed source, renumbered `0.2.159`)
+- Shipping: —
+- Acceptance: the recomposed source tree preserves the PASSed Gate-2 facts —
+  synchronous per-job workspace, audit-before-instantiate, the exact 15-key
+  result envelope with bounded stdout/stderr content, one finish() for
+  timeout/abort, scanner-owned execution-host exemption (fixed canonical path
+  + exact call shape) and the scanner-owned worker-host exemption (the one
+  non-literal fresh-Worker construction); executor/offscreen host remain
+  UNREACHABLE source-only until a separately reviewed route successor lands
+- Gates: final independent review PASS on `086ee3d` (26/26 focused, full
+  1056/1056, build rc 0); recomposed gates re-run on this commit
+- Recover: `git show 086ee3d -- extension/lib/wasm-execution-worker.js
+  extension/lib/wasm-executor.js extension/lib/wasm-executor-bounds.js
+  extension/lib/wasm-offscreen-host.js extension/lib/wasm-sync-workspace.js
+  tests/wasm-fixture-builder.mjs tests/wasm-host-gate2.test.ts
+  scripts/scan-shipped.mjs build.mjs`
+
 
 - Feedback: 2026-08-22 — reviewed packages require a least-privilege host with
   hard termination, quotas and Durable replay integration

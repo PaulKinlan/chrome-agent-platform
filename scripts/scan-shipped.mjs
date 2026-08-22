@@ -179,10 +179,48 @@ function scriptTarget(node, knownScripts) {
  * importable from BOTH node and Deno without a node:fs type dependency).
  * Returns a list of human-readable violation strings (empty when clean).
  */
+// THE EXECUTION-HOST exemption — a FIXED canonical constant owned by the
+// scanner (NOT caller-supplied): the exact source-only, unreachable worker
+// that compiles a bounded wasm job inside a fresh dedicated Worker (Gate 2 of
+// CAP-FB-20260822-WASM-EXECUTION-HOST-01). It is not route/provider-bound and
+// nothing imports it in production; a separately reviewed successor owns the
+// service-worker route that would reach it. The exemption is NOT a generic
+// bypass: it applies to this ONE canonical path AND only to the EXACT allowed
+// call shape below (a bounded count of `WebAssembly.instantiate(` calls whose
+// FIRST argument is the identifier `wasmBytes` and whose SECOND argument is
+// the member `runtime.imports`). The check covers DIRECT `WebAssembly.*`
+// calls and constructors ONLY; ALIAS-based forms (e.g. `const inst =
+// WebAssembly.instantiate` used later) are a DOCUMENTED RESIDUAL/HEURISTIC —
+// they are outside this predicate and are not claimed as detected. Any other
+// file with ANY direct dynamic WebAssembly call/constructor — and any deviating
+// call shape in the canonical file — is a violation.
+const EXECUTION_HOST_CANONICAL_PATH = "extension/lib/wasm-execution-worker.js";
+const EXECUTION_HOST_CANONICAL_LOCATION = { line: 201, column: 25 };
+const EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
+// The EXACT allowed arguments of the single canonical call: the first argument
+// is the identifier `wasmBytes`, the second is the member `runtime.imports`.
+const EXECUTION_HOST_ALLOWED_ARG0 = "wasmBytes";
+const EXECUTION_HOST_ALLOWED_ARG1_OBJECT = "runtime";
+const EXECUTION_HOST_ALLOWED_ARG1_PROP = "imports";
+
+// THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
+// scanner (NOT caller-supplied): the exact source-only, unreachable executor
+// (Gate 2 of CAP-FB-20260822-WASM-EXECUTION-HOST-01) constructs its fresh
+// dedicated Worker from a runtime-resolved URL. This is the ONLY non-literal
+// Worker construction in shipped source; everything else must be an
+// allowlisted literal. The exemption applies to exactly this ONE node (file +
+// exact line/column) and a bounded count of 1; any other Worker/SharedWorker
+// node — literal or not — in any file stays flagged.
+const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
+const WORKER_HOST_CANONICAL_LOCATION = { line: 200, column: 9 };
+const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+
 export async function scanShippedJs(files, {
   generatedBundles = new Set(),
   allowedWorkerLiterals = new Set(),
   allowedDynamicEvaluatorFiles = new Set(),
+  readText,
+} = {}) {
   readText,
 } = {}) {
   if (typeof readText !== "function") {
@@ -218,6 +256,7 @@ export async function scanShippedJs(files, {
         ecmaVersion: "latest",
         sourceType: "module",
         allowHashBang: true,
+        locations: true, // the execution-host exact-location pin needs node.loc
       });
     } catch (err) {
       violations.push(
@@ -333,10 +372,17 @@ export async function scanShippedJs(files, {
         const workerSink = sinkName(node.callee, sinkAliases);
         if (workerSink === "Worker" || workerSink === "SharedWorker") {
           const value = foldString(node.arguments?.[0]);
-          if (value === null) {
+          const isCanonicalWorkerHost = file === WORKER_HOST_CANONICAL_PATH &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(WORKER_HOST_ALLOWED_RE) ?? []).length === 1;
+          if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);
           } else if (
-            isRemoteScriptUrl(value) || !allowedWorkerLiterals.has(value)
+            value !== null &&
+            (isRemoteScriptUrl(value) || !allowedWorkerLiterals.has(value))
           ) {
             violations.push(
               `${file}: ${workerSink} literal is not allowlisted: ${value}`,
@@ -363,12 +409,41 @@ export async function scanShippedJs(files, {
       // are forbidden in shipped source. The bundled authority is record-only;
       // a future host requires a separately reviewed static CAS route.
       if (
-        node.type === "CallExpression" &&
-        node.callee?.type === "MemberExpression" &&
-        node.callee.object?.type === "Identifier" &&
-        node.callee.object.name === "WebAssembly"
+        (node.type === "CallExpression" &&
+          node.callee?.type === "MemberExpression" &&
+          node.callee.object?.type === "Identifier" &&
+          node.callee.object.name === "WebAssembly") ||
+        // ALSO reject constructor APIs: new WebAssembly.Module(...) etc.
+        (node.type === "NewExpression" &&
+          node.callee?.type === "MemberExpression" &&
+          node.callee.object?.type === "Identifier" &&
+          node.callee.object.name === "WebAssembly")
       ) {
-        violations.push(`${file}: calls dynamic WebAssembly API (execution host is absent)`);
+        const isCanonicalHost = file === EXECUTION_HOST_CANONICAL_PATH;
+        const isCall = node.type === "CallExpression";
+        const memberName = node.callee?.property?.type === "Identifier"
+          ? node.callee.property.name
+          : null;
+        const arg0 = node.arguments?.[0] ?? null;
+        const arg0Ok = isCall && arg0?.type === "Identifier" &&
+          arg0.name === EXECUTION_HOST_ALLOWED_ARG0;
+        const arg1 = node.arguments?.[1] ?? null;
+        const arg1Ok = isCall && arg1?.type === "MemberExpression" &&
+          arg1.object?.type === "Identifier" &&
+          arg1.object.name === EXECUTION_HOST_ALLOWED_ARG1_OBJECT &&
+          arg1.property?.type === "Identifier" &&
+          arg1.property.name === EXECUTION_HOST_ALLOWED_ARG1_PROP;
+        const argCount = isCall ? (node.arguments?.length ?? 0) : 0;
+        const sameLocation = node.loc?.start?.line ===
+            EXECUTION_HOST_CANONICAL_LOCATION.line &&
+          node.loc?.start?.column === EXECUTION_HOST_CANONICAL_LOCATION.column;
+        const count = (text.match(EXECUTION_HOST_ALLOWED_CALL_RE) ?? []).length;
+        const allowed =
+          isCanonicalHost && isCall && memberName === "instantiate" &&
+          argCount === 2 && arg0Ok && arg1Ok && sameLocation && count === 1;
+        if (!allowed) {
+          violations.push(`${file}: calls dynamic WebAssembly API (execution host is absent or the allowed call shape deviates)`);
+        }
       }
       if (
         node.type === "CallExpression" &&

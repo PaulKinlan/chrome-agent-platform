@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.159] — 2026-08-22
+- feat(wasm): source-only offscreen fresh-Worker host foundation (CAP-FB-20260822-WASM-EXECUTION-HOST-01, Gate 2)
+
 ## [0.2.158] — 2026-08-22
 - feat(store): bind Store target and enforce static package boundary (CAP-FB-20260822-OWNER-WASM-INSTALL-01)
 

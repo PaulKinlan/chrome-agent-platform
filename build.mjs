@@ -86,6 +86,8 @@ const shippedJs = await walkJs("extension");
 // shipped source files.
 const violations = await scanShippedJs(shippedJs, {
   generatedBundles: new Set([path.join(ROOT, "extension", "dist", "background", "service-worker.js"), path.join(ROOT, "extension", "dist", "options.bundle.js")]),
+  // NOTE: the execution-host exemption is NOT caller-supplied — the scanner
+  // owns the fixed canonical path + the exact allowed call shape.
   allowedDynamicEvaluatorFiles: new Set([
     "extension/sandbox/script-sandbox.js",
   ]),
