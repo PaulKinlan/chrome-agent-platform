@@ -1,0 +1,391 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:6a7cc723-4ee3-4a70-b090-3908d31eb2a2",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2@0.1.0",
+      "name": "cap-fixed-tools-a2",
+      "version": "0.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "generate-sbom.mjs",
+          "version": "1"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-base64@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "base64",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8a834cd33c5ab8ac9e84e3427ab0c826c38ff4ee879bbc0955fdb930ec9d9b59"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "33507"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-md5sum@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "md5sum",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "195026a42b8ec87cde58f91b151d7cb657b41c0f4a725c0dde7b16825faa8a01"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "32962"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-sha256sum@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "sha256sum",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b8d396f708ac70bf19dd94255119b13ab53450c7c5f4edff9646b9fa8e6f9335"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "33269"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-sha512sum@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "sha512sum",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4235e8273af38787b39997d0aaae5a9c56b8a4101ea9c887c1477f73595dfcb1"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "33637"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-xxd@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "xxd",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "24793c383472ffcbf477488b293830fdc22bf368fd36df1cc0631c8e288b5705"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "34894"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-uuid@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "uuid",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1bf758e866b5b2a6af74ece480f061ac45e5455cd6ac7bbdada2fb17acf4e250"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "28476"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-wc@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "wc",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "08a0cac5cf4d872b0727fa52dcc4fca2c05ab225056486b55454f041baf497ca"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "32960"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-head@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "head",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "daa8ef830215b5e710dd529a4ed5d8c81591bdf92401241a94242b0b79857585"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "32116"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-tail@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "tail",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9ce43db995cc580551a3a061127ca0756043d2f55e2c925efbb43106c8438761"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "32309"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/cap-fixed-tools-a2-cut@0.1.0",
+      "group": "cap-fixed-tools-a2",
+      "name": "cut",
+      "version": "0.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e2d4687d1b04f3fdc009a089f68b3c1afc1ca19cb614dd7b32f43b9b4f0446d2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:target",
+          "value": "wasm32-wasi"
+        },
+        {
+          "name": "cap:size",
+          "value": "32733"
+        },
+        {
+          "name": "cap:canonicalNameClaim",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "pkg:generic/wasi-sdk-clang@18.1.2-wasi-sdk",
+      "name": "wasi-sdk-clang",
+      "version": "18.1.2-wasi-sdk",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/WebAssembly/wasi-sdk"
+        }
+      ]
+    }
+  ]
+}

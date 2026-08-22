@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.163] — 2026-08-22
+- feat(wasm): ship immutable bundled tool packages, disabled until the execution host (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+
 ## [0.2.162] — 2026-08-22
 - feat(catalog): reserve bundled-package source kind fail closed (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
 

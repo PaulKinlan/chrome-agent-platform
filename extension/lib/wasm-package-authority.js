@@ -46,7 +46,18 @@ const BUNDLED_ALLOWED_IMPORT_MODULE_SET = new Set(BUNDLED_ALLOWED_IMPORT_MODULES
 const PATH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u;
 const REPLAY = new Set(["read-only", "idempotent", "mutating", "unknown"]);
 const PACKAGE_TYPES = new Set(["tool-bundle", "runtime", "library", "model-support"]);
-const SPDX_IDS = new Set(["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0"]);
+const SPDX_IDS = new Set(["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "Zlib"]);
+// Licence field: either one exact SPDX token from SPDX_IDS, or one exact
+// two-operand composite "<id> AND <id>" where BOTH operands are SPDX_IDS
+// tokens (e.g. "MIT AND Apache-2.0", "Zlib AND Apache-2.0"). Nothing else:
+// no OR, no WITH, no parentheses, no LicenseRef, no three-operand chains,
+// no irregular whitespace.
+export function isValidLicenseExpression(value) {
+  if (typeof value !== "string") return false;
+  if (SPDX_IDS.has(value)) return true;
+  const parts = value.split(" AND ");
+  return parts.length === 2 && SPDX_IDS.has(parts[0]) && SPDX_IDS.has(parts[1]);
+}
 const CAPABILITY_ALLOWLIST = new Set([
   "artifact.create", "compute", "crypto", "data.read", "data.write",
   "file.read", "file.write", "text.transform",
@@ -313,7 +324,7 @@ function validateManifestObject(manifest) {
   assertRelativePath(manifest.sbom.ref, "$.sbom.ref");
 
   exactKeys(manifest.license, ["spdx", "file"], ["notices"], "$.license");
-  if (!SPDX_IDS.has(manifest.license.spdx)) fail("license_invalid", "$.license.spdx");
+  if (!isValidLicenseExpression(manifest.license.spdx)) fail("license_invalid", "$.license.spdx");
   assertRelativePath(manifest.license.file, "$.license.file");
   if (manifest.license.notices != null) assertRelativePath(manifest.license.notices, "$.license.notices");
 

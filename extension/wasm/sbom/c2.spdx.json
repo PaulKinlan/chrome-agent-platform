@@ -1,0 +1,272 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "cap-fixed-tools-c2",
+  "documentNamespace": "https://example.invalid/spdx/cap-fixed-tools-c2/c149a61938bae19b",
+  "creationInfo": {
+    "created": "2026-08-22T15:52:28.790Z",
+    "creators": [
+      "Tool: cap-fixed-tools-c2/scripts/make-sbom.mjs"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-CapFixedFs",
+      "name": "cap-fixed-filesystem-tools",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": true,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Cmark",
+      "name": "cmark",
+      "versionInfo": "0.31.1",
+      "downloadLocation": "https://github.com/commonmark/cmark/archive/refs/tags/0.31.1.tar.gz",
+      "filesAnalyzed": true,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "Copyright (c) 2014, John MacFarlane",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "3da93db5469c30588cfeb283d9d62edfc6ded9eb0edc10a4f5bbfb7d722ea802"
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "SPDXID": "SPDXRef-File-sources-file",
+      "fileName": "sources/file/main.c",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "87b18b085e32469aa22a370cd2c22b3645869e37d35b4d9f3d09c0c15f50b492"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binaries-file",
+      "fileName": "binaries/file.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "f71cf3bb6ac0eb3157f2e225a5b3a51914c82cb4198bcee81327871f44b30be2"
+        }
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-sources-du",
+      "fileName": "sources/du/main.c",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "bcf241f820e9e58da439526bb5209ac7cf7d97b2deb0ba77cd9e7ecbca24c252"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binaries-du",
+      "fileName": "binaries/du.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d"
+        }
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-sources-stat",
+      "fileName": "sources/stat/main.c",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "62f1a3ac59671fa02a650ae0014eea81014fd4efbe5faa63130e4e5e8b040d21"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binaries-stat",
+      "fileName": "binaries/stat.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f"
+        }
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-sources-tree",
+      "fileName": "sources/tree/main.c",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "07badc7790d079a8a9e8977a3b595b086e35d9c542564c1cd9312430ce4ab990"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binaries-tree",
+      "fileName": "binaries/tree.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb"
+        }
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-sources-touch",
+      "fileName": "sources/touch/main.c",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "e7c54e8786a417e5e662916f82f0def5481d49a2676c4f58a7c90f4b15fe5ba4"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binaries-touch",
+      "fileName": "binaries/touch.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "9c9cae983c3db00bdead5e7cf00bdb345d298dda194bd683915b4e7d083346ac"
+        }
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-sources-truncate",
+      "fileName": "sources/truncate/main.c",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "2d8345a77641d65240e5e86928d5f3f0d6b7bbdba7f5218cd9855327486c2f74"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binaries-truncate",
+      "fileName": "binaries/truncate.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad"
+        }
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-File-binary-markdown",
+      "fileName": "binaries/markdown.wasm",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91"
+        }
+      ],
+      "licenseConcluded": "BSD-2-Clause",
+      "copyrightText": "Copyright (c) 2014, John MacFarlane"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-sources-file"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binaries-file"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-sources-du"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binaries-du"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-sources-stat"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binaries-stat"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-sources-tree"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binaries-tree"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-sources-touch"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binaries-touch"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-sources-truncate"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CapFixedFs",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binaries-truncate"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Cmark",
+      "relationshipType": "GENERATES",
+      "relatedSpdxElement": "SPDXRef-File-binary-markdown"
+    }
+  ]
+}

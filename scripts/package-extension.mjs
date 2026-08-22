@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import {
   collectPackageInventory,
+  buildBundledWasmManifestMap,
   packageExtensionArchive,
   verifyPackageArchive,
 } from "./package-archive.mjs";
@@ -51,7 +52,13 @@ async function inventoryForTarget() {
     expectedTarget: target,
   });
   if (target === STORE_TARGET) {
-    await assertStoreTargetBoundary({ target, inventory });
+    // Exact archivePath→executable authority from the bundled inventory —
+    // without it every shipped CAS binary is correctly refused as
+    // unmanifested. Covers the packaging precheck AND the validate-only path
+    // (both go through inventoryForTarget); the postcheck re-verifies the
+    // archive against this same boundary-checked inventory.
+    const bundledWasmManifestByArchivePath = await buildBundledWasmManifestMap(ROOT);
+    await assertStoreTargetBoundary({ target, inventory, bundledWasmManifestByArchivePath });
   }
   return inventory;
 }

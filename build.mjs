@@ -101,14 +101,25 @@ if (violations.length > 0) {
 }
 console.log(`build assertion: no test controls/oracles in ${shippedJs.length} shipped JS files (AST export + oracle walk)`);
 
-// Bundled-lane Wasm is inventory-only in this slice. There are intentionally no
-// binaries today; if one appears without an exact manifest mapping the build
-// fails closed before packaging. A future release-inventory step supplies the
-// mapping only after separate review.
+// Bundled-lane Wasm ships inventory-only: every content-addressed binary
+// under extension/wasm/cas/ is mapped to its exact manifest executable via
+// the generated bundled inventory (extension/lib/bundled-inventory-data.js).
+// A binary with no exact manifest mapping still fails the build closed.
 const shippedWasm = await walkWasm("extension");
+const { BUNDLED_INVENTORY } = await import("./extension/lib/bundled-inventory-data.js");
+const manifestByFile = new Map();
+for (const identity of BUNDLED_INVENTORY.manifests) {
+  const manifestRel = `extension/wasm/manifests/${identity.pkg}-${identity.version}.manifest.json`;
+  const manifest = JSON.parse(await readFile(join(ROOT, manifestRel), "utf8"));
+  for (const executable of manifest.executables ?? []) {
+    const casRel = `extension/wasm/cas/${executable.sha256}.wasm`;
+    if (manifestByFile.has(casRel)) throw new Error(`bundled-Wasm manifest collision: ${casRel}`);
+    manifestByFile.set(casRel, executable);
+  }
+}
 const wasmViolations = await scanBundledWasmFiles(shippedWasm, {
   readBytes: (file) => readFile(file),
-  manifestByFile: new Map(),
+  manifestByFile,
 });
 if (wasmViolations.length > 0) {
   throw new Error(`bundled-Wasm scan failed (${wasmViolations.length} violation(s)):\n${wasmViolations.map((value) => `  - ${value}`).join("\n")}`);

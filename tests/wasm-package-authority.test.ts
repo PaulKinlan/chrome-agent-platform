@@ -543,7 +543,21 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
     }
   };
   await walk(new URL("../extension", import.meta.url).pathname);
-  assertEquals(wasmFiles, [], "this authority slice ships zero Wasm binaries");
+  // Since 0.2.157 the bundled lane PHYSICALLY SHIPS the 25 reviewed binaries
+  // (inventory-only; still no route/execution). The successor invariant: the
+  // shipped set is EXACTLY the inventory's declared CAS set — no more, no
+  // less — and every byte hashes to its pinned content address.
+  const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
+  const declaredCas = BUNDLED_INVENTORY.files
+    .filter((row) => row.rel.startsWith("extension/wasm/cas/"))
+    .map((row) => new URL(`../${row.rel}`, import.meta.url).pathname)
+    .sort();
+  assertEquals([...wasmFiles].sort(), declaredCas, "shipped Wasm must be exactly the inventory CAS set");
+  for (const row of BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/"))) {
+    const bytes = await Deno.readFile(new URL(`../${row.rel}`, import.meta.url));
+    assertEquals(bytes.byteLength, row.size, row.rel);
+    assertEquals(hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))), row.sha256, row.rel);
+  }
   const memory = await Deno.readTextFile(new URL("../extension/lib/memory.js", import.meta.url));
   for (const key of ["wasmPkg", "wasmPkgRepair", "__wasmTx"]) assert(memory.includes(key), `reserved key absent: ${key}`);
   const dynamic = await scanShippedJs(["dynamic.js"], { readText: async () => "export const x=WebAssembly.compile(new Uint8Array());" });
