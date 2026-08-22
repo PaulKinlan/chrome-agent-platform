@@ -5,15 +5,15 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 14:36 UTC. Reconciled against exact public
-> `origin/main@9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc` (`0.2.150`). Lazy,
+> Snapshot: 2026-08-22 15:00 UTC. Reconciled against exact public
+> `origin/main@03dc09910a11afd4c1611a985411c6d97139bfb7` (`0.2.151`). Lazy,
 > package freshness and security-suite serialization remain `DONE`; the catalog
-> remains `MERGED`, and the public OPFS wrapper intentionally remains `IN_REVIEW`
-> with no Shipping claim. This branch adds the source-only bundled Wasm package
-> authority without a binary, shipping or execution claim. Branch status counts:
-> **17 OPEN · 9 IN_REVIEW · 2 MERGED · 4 BLOCKED · 36 DONE · 0 ABANDONED**.
-> The 32 active entries and 36 archived terminal entries below are the complete
-> 68-entry state.
+> remains `MERGED`; OPFS and bundled-package records intentionally remain
+> `IN_REVIEW` with Shipping `—`. This branch adds only the unreachable retained
+> code-diff first slice; apply/reject/undo and every workspace mutation remain
+> unavailable. Branch status counts: **16 OPEN · 10 IN_REVIEW · 2 MERGED ·
+> 4 BLOCKED · 36 DONE · 0 ABANDONED**. The 32 active entries and 36 archived
+> terminal entries below are the complete 68-entry state.
 
 ## Safety boundary
 
@@ -586,15 +586,15 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-22 — executable packages need artifact-grade identity,
   provenance and crash recovery rather than a name-keyed archive/storage model
-- Updated: 2026-08-22 14:36 UTC
+- Updated: 2026-08-22 15:00 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: bundled-package authority owner
-- Workspace: active (local path private)
-- Branch: `feat/wasm-package-authority-9c03e4f`
+- Owner: bundled-package review owner
+- Workspace: none
+- Branch: `main`
 - Base: `9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc`
-- Candidate: this tracker commit
+- Candidate: `03dc09910a11afd4c1611a985411c6d97139bfb7`
 - Shipping: —
 - Acceptance: one unreachable library accepts only bounded canonical raw
   manifests after duplicate-key detection before materialization; unknown fields
@@ -629,16 +629,18 @@ On resume after a coordinator or worker loss:
   and Store/RHC policy; large tier requires loaded-MV3 release evidence; execution
   remains blocked on the MV3 runtime probe and a separately reviewed host; exact
   source candidate requires independent review
-- Next: commit one `0.2.151` source-only release, obtain independent supply-chain/
-  scanner/WAL review, and leave all binary/runtime/install work to successors
+- Next: obtain independent exact-candidate supply-chain/scanner/WAL review and
+  leave all binary/runtime/install work to successors
 - Recover:
-  `git show feat/wasm-package-authority-9c03e4f -- extension/lib/wasm-package-authority.js extension/lib/memory.js scripts/scan-shipped.mjs build.mjs tests/wasm-package-authority.test.ts tests/memory.test.ts docs/tool-platform-architecture.md TASKS.md`
+  `git show 03dc09910a11afd4c1611a985411c6d97139bfb7 -- extension/lib/wasm-package-authority.js extension/lib/memory.js scripts/scan-shipped.mjs build.mjs tests/wasm-package-authority.test.ts tests/memory.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
   - 2026-08-22 09:30 UTC — opened with separate Store-bundled and owner-selected
     distribution lanes; owner packages remain policy-blocked.
   - 2026-08-22 14:36 UTC — implemented only the reviewed bundled-record authority
     on exact public `9c03e4f`; no binary, owner lane, route, runtime or execution
     surface was added.
+  - 2026-08-22 15:00 UTC — exact candidate `03dc099` became public `0.2.151`;
+    lifecycle remains IN_REVIEW with Shipping `—` pending exact-candidate review.
 
 ## [CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01] Isolated per-job OPFS tool workspaces
 
@@ -774,35 +776,63 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-22 — tool-produced code changes need owner-visible
   base/result identity and reversible application rather than direct workspace
   mutation
-- Updated: 2026-08-22 09:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 15:00 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `30afd5acc85597a3c23c6addbbb76e191c6435c8`
-- Candidate: —
+- Owner: retained code-diff first-slice owner
+- Workspace: active (local path private)
+- Branch: `feat/code-diff-artifacts-03dc099`
+- Base: `03dc09910a11afd4c1611a985411c6d97139bfb7`
+- Candidate: this tracker commit
 - Shipping: —
-- Acceptance: tool outputs become retained patch artifacts with source
-  tool/package/digests, input/base/result digests and bounded syntax-safe
-  unified/side-by-side views; owner apply/reject/undo is explicit, base mismatch
-  fails closed and all workspace mutation uses transaction/recovery authority
-- Review: independent artifact transaction, path, diff correctness,
-  XSS/rendering, owner-authority, accessibility and recovery review required
-- Gates: add/update/delete/rename/binary/large/Unicode patches; stale base and
-  concurrent edit; apply crash points; reject mutates nothing; undo and restart;
-  safe rendering; narrow/theme/RTL screenshots and raw accessibility tree
-- Blockers: depends on OPFS workspaces, artifact transaction authority and a
-  reviewed execution output contract
-- Next: specify patch artifact schema and base/result CAS before building any
-  code-writing Wasm tool
+- Acceptance: one unreachable library getter-safely snapshots strict canonical
+  add/update/delete/rename/binary documents; user paths accept valid UTF-8 and
+  per-segment NFC while rejecting lone surrogates, NUL, C0/C1/bidi controls,
+  backslashes, absolute/drive/UNC/empty/dot/dotdot/percent traversal, NFC and
+  conservative casefold collisions, >255-byte segments, >1024-byte paths and
+  >256 paths; `displayPaths` is exact and reversible; identity binds producer
+  source/package/executable/capability/replay, workspace/execution/call/run/
+  agent/origin/document, inputs, exact sorted base/result sets, canonical
+  change digest and media; retention preflights all hashes/sizes/UTF-8, one
+  180-KiB blob, 64 blobs and 4-MiB total raw CAS before writes, then retains
+  each unique digest and the patch only through `createAssetKeyed`, re-reads and
+  hash-verifies them, and retries through stable artifact-WAL keys; bounded
+  unified/side-by-side row-split views re-hash source bytes, neutralize controls,
+  truncate long lines, refuse total overflow and render binary metadata only;
+  views are non-authoritative; apply/reject/undo synchronously throw
+  `mutation_authority_required` before input access and no route/store/OPFS/
+  provider/WebAssembly/mutation authority exists
+- Review: v2 design SHA-256
+  `78be17675b667aeaa33f58ca1b43fda660685a53242758bd890d6f172ec90945`
+  independently PASSed review SHA-256
+  `a7d6ac7e5aabf6d4febf38560f48efa5603da8268979b4dae3ff83cd2cacf9cc`;
+  exact implementation artifact/path/CAS/view/no-route review pending
+- Gates: reported focused hostile authority 15/15; canonical full no-Chrome
+  1001/1001 across 14 steps; 107-file production build with zero Wasm binaries;
+  exact 133-entry package/validate; gallery/changelog/tracker/privacy/diff/
+  release/clean gates; identity-field changes; getter/proxy inputs;
+  UTF-8/NFC/traversal/collision/
+  display/bounds; every operation shape and substitution; CAS missing/extra/
+  digest/size/encoding/blob/count/total preflight with zero writes; digest-keyed
+  dedup, readback corruption, interrupted artifact-WAL retry; unified/side views,
+  huge lines/line totals/control neutralization/binary metadata; synchronous
+  unavailable stubs and no-route/no-direct-mutation static scan
+- Blockers: exact source candidate requires independent review; apply/reject/
+  undo depend on a separately reviewed conditional OPFS mutation authority,
+  genuine owner UI/approval route, stale-base checks and crash-recoverable
+  multi-file WAL; accessibility/theme/narrow/RTL evidence belongs to that future
+  rendered owner-review lane, not this source-only slice
+- Next: commit one `0.2.152` source-only release, obtain independent artifact/
+  path/CAS/view review, and leave every mutation to a separate successor
 - Recover:
-  `git grep -n "CODE-DIFF-ARTIFACTS\|baseDigest\|resultDigest\|patch" -- TASKS.md docs extension tests`
+  `git show feat/code-diff-artifacts-03dc099 -- extension/lib/code-diff-artifacts.js tests/code-diff-artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
-  - 2026-08-22 09:30 UTC — split from the P0 program; Co-do's line-LCS diff is
-    precedent only and does not provide CAP transaction or owner-review
-    authority.
+  - 2026-08-22 09:30 UTC — split from the P0 program; a line-LCS precedent alone
+    does not provide CAP transaction or owner-review authority.
+  - 2026-08-22 15:00 UTC — implemented only reviewed v2 schema/identity/views/
+    retention plus fail-closed unavailable mutation stubs on exact public
+    `03dc099`; no workspace or execution route was added.
 
 ## [CAP-FB-20260822-CHROME-LAZY-TOOLS-01] Chrome API descriptors behind lazy discovery
 

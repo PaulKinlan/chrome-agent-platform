@@ -267,6 +267,43 @@ OPFS, artifact or executable path. The build scans any newly appearing `.wasm`
 and fails it as unmanifested; because this slice has no binary, the measured
 fixture audit exists in tests only.
 
+## Source-only retained code-diff artifacts
+
+`CAP-FB-20260822-CODE-DIFF-ARTIFACTS-01` adds an unreachable first slice for
+retaining tool-produced changes without granting workspace mutation:
+
+- a getter/proxy-safe snapshot rejects accessors and exotic/cyclic input before
+  validation. Strict change documents cover add, update, delete, rename and
+  binary replacement with exact allowed fields, SHA-256, sizes, media and
+  encodings;
+- owner paths accept valid Unicode/UTF-8 but reject lone surrogates, NUL,
+  C0/C1/bidi controls, backslashes, absolute/drive/UNC/empty/dot/dotdot and
+  percent traversal. Per-segment NFC is canonical; NFC and conservative
+  Unicode-casefold collisions reject the whole document. Segment/path/path-set
+  budgets are 255/1024 bytes and 256 paths, with an exact reversible
+  `displayPaths` map when original spelling is retained;
+- one SHA-256 identity binds producer source/package/executable/capability/replay
+  identity, workspace/execution/call/run/agent/origin/document fences, inputs,
+  exact sorted base/result sets, the canonical change document and fixed media;
+- `retainPatch` preflights every byte, digest, declared size, UTF-8 claim,
+  per-blob limit, 64-blob limit and 4 MiB total raw-CAS limit before writing.
+  Each unique blob is base64-enveloped under a digest-bound
+  `createAssetKeyed` key, then re-read and hash-verified. The patch is written
+  last under its identity key. A write interruption is delegated to the
+  existing artifact WAL and a retry uses the same keys; no unkeyed create or
+  artifact-index/store handle exists here;
+- unified and side-by-side row-split views re-hash supplied authoritative bytes,
+  neutralize controls, truncate overlong lines, refuse total line/byte overflow,
+  and show binary metadata only. They are plain-data, explicitly
+  non-authoritative previews, not stored diffs or an LCS correctness claim.
+
+`applyPending`, `rejectPending` and `undoApplied` synchronously throw
+`mutation_authority_required` before inspecting caller input. There is no owner
+approval, route, OPFS primitive, provider, WebAssembly or mutation dependency.
+A separate reviewed slice must settle conditional workspace writes, owner UI,
+stale-base rechecks, recoverable multi-file semantics and its WAL before any of
+those actions can exist.
+
 ## Distribution lanes and Store policy
 
 Two lanes remain explicitly separate:
@@ -302,8 +339,9 @@ unresolved.
    main-thread fallback; durable job records; replay integration.
 6. **Built-ins:** provenance-clean bundled tranche, starting with operating
    essentials.
-7. **Code-diff artifacts:** base/output digests and owner-visible
-   apply/reject/undo through artifact authority.
+7. **Code-diff artifacts:** source candidate retains strict base/result CAS and
+   derives bounded non-authoritative views; owner-visible apply/reject/undo and
+   every workspace mutation remain a separate unavailable successor.
 8. **Chrome lazy tools:** same discovery protocol without weakening optional
    permissions, grants, run fences, or route dispatch.
 9. **Tool Library UI:** reusable components for provenance, versions,

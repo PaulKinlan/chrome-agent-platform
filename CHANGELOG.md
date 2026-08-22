@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.152] — 2026-08-22
+- feat(artifacts): retain bounded code diffs (CAP-FB-20260822-CODE-DIFF-ARTIFACTS-01)
+
 ## [0.2.151] — 2026-08-22
 - feat(wasm): add bundled package authority (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
 

@@ -54,6 +54,12 @@ isolated OPFS memory, run history, skills, and avatar.
   and an exact-token package registry WAL record bundled metadata only. This release
   contains zero Wasm binaries and no install, owner, provider, Worker, network,
   permission, OPFS, or execution route; signer metadata is recorded but not verified.
+- **Retained code-diff artifacts (source candidate)** — strict Unicode owner paths and
+  add/update/delete/rename/binary documents bind producer, run, inputs, base and result
+  digests. Bounded base/result bytes are preflighted, retained through digest-keyed
+  artifact WAL creates, re-read and hash-verified; unified and side-by-side text views
+  are non-authoritative and bounded. Apply/reject/undo synchronously refuse because no
+  owner-approved workspace mutation route exists in this slice.
   See [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.
