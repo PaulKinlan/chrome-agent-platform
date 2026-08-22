@@ -207,9 +207,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.uuid-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.wc",
@@ -277,9 +278,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.head-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.tail",
@@ -312,9 +314,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.tail-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.cut",
@@ -347,9 +350,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.cut-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.sort",

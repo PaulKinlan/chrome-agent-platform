@@ -38,7 +38,7 @@ const BASELINE_ROUTES = [
   "invalidate-agent",
   "agent.orchestrator",
   "tool-catalog.shadow",
-  "tool.preview.csvtool",
+  "tool.preview.run",
   "agent.run",
   "agent.list",
   "thread.list",

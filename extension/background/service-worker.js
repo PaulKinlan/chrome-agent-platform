@@ -30,14 +30,13 @@ import { describeError, formatError, errorDetail } from "../lib/error-report.js"
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
   PREVIEW_LIMITS,
-  PREVIEW_PACKAGE_ID,
-  PREVIEW_TOOL_ID,
+  PREVIEW_SETTINGS_ORIGIN,
   boundPreviewResult,
   buildPreviewAuthority,
   buildPreviewJob,
   extractPreviewInput,
-  PREVIEW_SETTINGS_ORIGIN,
-  revalidateCsvtoolExecution,
+  previewSpecFor,
+  revalidatePreviewExecution,
   validatePreviewInput,
 } from "../lib/tool-exec-preview.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
@@ -2372,13 +2371,15 @@ const handlers = mergeRouteMaps(
     return await shadowToolCatalog.inspect(m, context);
   },
   // CAP-FB-20260822-TOOL-PREVIEW-EXEC-01 — the FIRST real bundled execution:
-  // a single technically-admitted package (cap.bundled.csvtool) runs ONLY
-  // from the exact Settings options document by an EXPLICIT owner click. No
-  // catalog/provider selection authority exists: the catalog summary stays
-  // metadata-only, there is no selection route and no capability grant — this
-  // route is the only executor path and it re-validates the immutable
-  // manifest/CAS/imports/memory/caps at EVERY execution.
-  async "tool.preview.csvtool"(m, context) {
+  // a static allowlist (csvtool, uuid, head, tail, cut) runs ONLY
+  // from the exact Settings options document by an EXPLICIT owner click. The
+  // toolId resolves through the immutable spec map (packageId, manifest rel,
+  // CAS SHA/size, caps) — never request-borne bytes/caps. No catalog/provider
+  // selection authority exists: the catalog summary stays metadata-only, there
+  // is no selection route and no capability grant — this route is the only
+  // executor path and it re-validates the immutable manifest/CAS/imports/
+  // memory/caps at EVERY execution.
+  async "tool.preview.run"(m, context) {
     if (context?.principal !== "owner-options") {
       securityEvent(
         "blocked-action",
@@ -2410,11 +2411,14 @@ const handlers = mergeRouteMaps(
     } catch (error) {
       return { ok: false, error: `tool preview rejected: ${error?.code ?? error}` };
     }
-    // 2. Immutable revalidation at execution: fetch the pinned bundled
-    //    manifest + CAS bytes and re-check digest/sha/size/imports/memory/caps
-    //    through the REAL package authority.
-    const manifestRel = "wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json";
-    const casRel = "wasm/cas/5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.wasm";
+    // 2. Immutable revalidation at execution: resolve the toolId through the
+    //    trusted spec map, fetch the pinned bundled manifest + CAS bytes and
+    //    re-check digest/sha/size/imports/memory/caps through the REAL package
+    //    authority. The spec's rels are the ONLY paths ever fetched.
+    const spec = previewSpecFor(input.toolId);
+    if (!spec) return { ok: false, error: "tool preview unknown tool" };
+    const manifestRel = spec.manifestRel;
+    const casRel = spec.casRel;
     let manifestText;
     let casBytes;
     try {
@@ -2429,7 +2433,8 @@ const handlers = mergeRouteMaps(
     }
     let revalidated;
     try {
-      revalidated = await revalidateCsvtoolExecution({
+      revalidated = await revalidatePreviewExecution({
+        toolId: input.toolId,
         manifestText,
         casBytes,
         inventory: BUNDLED_INVENTORY,

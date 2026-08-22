@@ -102,6 +102,78 @@ function makeRequest(overrides = {}) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// (B10) strict request-byte measurement (JSON inflation no longer governs)
+// ──────────────────────────────────────────────────────────────────────────
+import { measureRequestBytes } from "../extension/lib/wasm-executor.js";
+
+const localUtf8Bytes = (value) => new TextEncoder().encode(value).byteLength;
+
+function envelopeFor(wasmBytes, extraMeta = {}) {
+  return {
+    type: TRANSPORT_MESSAGE_TYPES.JOB,
+    sessionId: "session-1",
+    job: makeJob(),
+    wasmBytes,
+    ...extraMeta,
+  };
+}
+
+Deno.test("request budget: a 32.7K wasm byte array + metadata PASSES (JSON inflation no longer governs)", () => {
+  const bytes = new Uint8Array(32768); // the uuid/head/tail/cut size class
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7) & 0xff;
+  const request = envelopeFor(bytes);
+  const measured = measureRequestBytes(request);
+  assert(measured < EXECUTOR_BOUNDS.maxRequestBytes, `measured ${measured} < 64 KiB`);
+  assertEquals(measured, bytes.length + localUtf8Bytes(JSON.stringify({ type: request.type, sessionId: request.sessionId, job: request.job })), "raw length + metadata JSON");
+  // the OLD JSON.stringify of the full envelope would exceed the bound —
+  // proving the inflation no longer governs.
+  const inflated = localUtf8Bytes(JSON.stringify(request));
+  assert(inflated > EXECUTOR_BOUNDS.maxRequestBytes, `old-style inflation ${inflated} exceeded the 64 KiB bound`);
+});
+
+Deno.test("request budget: a >64K LOGICAL envelope rejects (the 64 KiB total is preserved)", async () => {
+  const bytes = new Uint8Array(EXECUTOR_BOUNDS.maxRequestBytes - 512); // fits alone
+  const request = envelopeFor(bytes, { padding: "x".repeat(2048) });
+  const measured = measureRequestBytes(request);
+  assert(measured > EXECUTOR_BOUNDS.maxRequestBytes, `measured ${measured} exceeds the 64 KiB logical total`);
+  // and the executor run path surfaces request-over-budget
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
+  const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
+  const over = await host.handleJob(makeRequest({ wasmBytes: bytes })).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  assert(!over.ok, JSON.stringify(over));
+});
+
+Deno.test("request budget: sparse/fractional/out-of-range/short wasm sequences reject (strict dense check)", () => {
+  const ok = new Uint8Array(16);
+  assertEquals(measureRequestBytes(envelopeFor(ok)), ok.length + localUtf8Bytes(JSON.stringify({ type: TRANSPORT_MESSAGE_TYPES.JOB, sessionId: "session-1", job: makeJob() })));
+  const cases = {
+    "plain-object": { 0: 1, length: 8 },
+    "sparse-array": Array.from({ length: 16 }), // holes → not dense
+    "fractional": [1, 2.5, 3, 4, 5, 6, 7, 8],
+    "negative": [1, -1, 3, 4, 5, 6, 7, 8],
+    "out-of-range": [1, 256, 3, 4, 5, 6, 7, 8],
+    "string-byte": [1, "2", 3, 4, 5, 6, 7, 8],
+    "too-short": [1, 2, 3],
+  };
+  for (const [label, wasm] of Object.entries(cases)) {
+    let caught = null;
+    try { measureRequestBytes(envelopeFor(wasm)); } catch (e) { caught = e?.executorCode ?? null; }
+    assertEquals(caught, "request-wasm", `${label} rejects`);
+  }
+  // a wasm array LARGER than maxRequestBytes rejects even though it is dense
+  let caught = null;
+  try { measureRequestBytes(envelopeFor(new Uint8Array(EXECUTOR_BOUNDS.maxRequestBytes + 1))); } catch (e) { caught = e?.executorCode ?? null; }
+  assertEquals(caught, "request-wasm", "over-max-length wasm rejects");
+});
+
+Deno.test("request budget: HUGE metadata rejects (metadata JSON counts toward the 64 KiB)", () => {
+  const bytes = new Uint8Array(4096);
+  const request = envelopeFor(bytes, { bloat: "y".repeat(EXECUTOR_BOUNDS.maxRequestBytes) });
+  const measured = measureRequestBytes(request);
+  assert(measured > EXECUTOR_BOUNDS.maxRequestBytes, `huge metadata measures ${measured} > 64 KiB`);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // (B9) WASI fd_read STDIN short-read semantics (oversized advertised iovecs)
 // ──────────────────────────────────────────────────────────────────────────
 function directRuntime(jobOverrides = {}, memoryBytes = 256 * 1024) {

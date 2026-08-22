@@ -60,11 +60,13 @@ export class ShadowToolCatalogController {
         selectionDiagnostics: this.#selections.diagnostics(),
         canExecute: false,
         canGrant: false,
-        // The ONLY technically-admitted bundled package exposes a Settings
-        // preview (metadata truth — NOT a selection or grant).
-        settingsPreviewCsvtool: BUNDLED_TOOL_PACKAGE_ROWS.some(
-          (row) => row?.toolId === "csvtool" &&
-            row?.settingsPreview === true && row?.admitted === true,
+        // The technically-admitted bundled packages expose Settings previews
+        // (metadata truth — NOT a selection or grant).
+        settingsPreviewTools: Object.freeze(
+          BUNDLED_TOOL_PACKAGE_ROWS
+            .filter((row) => row?.settingsPreview === true && row?.admitted === true)
+            .map((row) => row.toolId)
+            .sort(),
         ),
       });
     }

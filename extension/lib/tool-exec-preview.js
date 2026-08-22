@@ -45,8 +45,39 @@ export const PREVIEW_LIMITS = Object.freeze({
   maxOutputTextBytes: 256 * 1024,
 });
 
-export const PREVIEW_PACKAGE_ID = "cap.bundled.csvtool";
-export const PREVIEW_TOOL_ID = "csvtool";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
+
+// The immutable trusted spec map for the Settings-only preview allowlist. It is
+// DERIVED at module load from the generated immutable descriptor rows (only the
+// `settingsPreview:true` rows) — the toolId is the ONLY request-borne input and
+// it resolves HERE (packageId, manifest rel, CAS SHA/size, caps, argv0). The
+// request never carries bytes, digests or capabilities; every run re-validates
+// the manifest + CAS through the REAL package authority.
+export const PREVIEW_SPECS = Object.freeze(
+  Object.fromEntries(
+    BUNDLED_TOOL_PACKAGE_ROWS
+      .filter((row) => row?.settingsPreview === true && row?.admitted === true)
+      .map((row) => [
+        row.toolId,
+        Object.freeze({
+          packageId: row.packageId,
+          toolId: row.toolId,
+          manifestRel: row.manifestRef.startsWith("extension/")
+            ? row.manifestRef.slice("extension/".length)
+            : row.manifestRef,
+          casRel: `wasm/cas/${row.binary?.sha256}.wasm`,
+          casSha: row.binary?.sha256,
+          size: row.binary?.bytes,
+          caps: Object.freeze([...(row.capabilities ?? [])].sort()),
+          argv0: row.toolId,
+        }),
+      ]),
+  ),
+);
+export const PREVIEW_TOOL_IDS = Object.freeze(Object.keys(PREVIEW_SPECS).sort());
+export function previewSpecFor(toolId) {
+  return PREVIEW_SPECS[toolId] ?? null;
+}
 // The reserved https origin representing the exact Settings surface in the WASI
 // job context (boundedOrigin accepts http(s) only — chrome-extension:// cannot
 // be a WASI job origin). Never routable, never a web origin.
@@ -125,18 +156,22 @@ export function rehydratePreviewStdin(value) {
  * The global dispatch is deliberately NOT modified. */
 export function extractPreviewInput(message) {
   if (!plainData(message)) return message; // let the validator reject the shape
-  return { args: message.args, stdin: message.stdin };
+  return { toolId: message.toolId, args: message.args, stdin: message.stdin };
 }
 
-/** The STRICT exact-key bounded preview request: ONLY `args` + `stdin`.
- * Nothing else may reach the executor (no fences, no package bytes, no
- * capability claims — the SW supplies those). */
+/** The STRICT exact-key bounded preview request: ONLY `toolId` + `args` +
+ * `stdin`. Nothing else may reach the executor (no fences, no package bytes,
+ * no capability claims — the SW supplies those). The toolId MUST resolve in
+ * the immutable spec map; unknown tools fail closed. */
 export function validatePreviewInput(raw) {
   if (!plainData(raw)) fail("preview_request_shape");
   if (
     JSON.stringify(Object.keys(raw).sort()) !==
-    JSON.stringify(["args", "stdin"].sort())
+    JSON.stringify(["args", "stdin", "toolId"].sort())
   ) fail("preview_request_shape");
+  if (typeof raw.toolId !== "string" || !previewSpecFor(raw.toolId)) {
+    fail("preview_unknown_tool");
+  }
   if (!Array.isArray(raw.args) || raw.args.length > PREVIEW_LIMITS.maxArgs) {
     fail("preview_args");
   }
@@ -152,7 +187,13 @@ export function validatePreviewInput(raw) {
   if (typeof raw.stdin !== "string") fail("preview_stdin");
   const stdinBytes = utf8Bytes(raw.stdin);
   if (stdinBytes > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin");
-  return Object.freeze({ args: Object.freeze(args), stdin: raw.stdin });
+  // The validated toolId MUST survive (the SW resolves the spec from it — a
+  // dropped toolId would make every allowlisted tool appear unknown).
+  return Object.freeze({
+    toolId: raw.toolId,
+    args: Object.freeze(args),
+    stdin: raw.stdin,
+  });
 }
 
 /** Build the host-bound authority fence record for a settings preview run.
@@ -185,10 +226,12 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     fail("preview_authority");
   }
   const stdinBytes = encoder.encode(input.stdin);
-  // argv0 = the program name: the WASI `_start` command convention REQUIRES
-  // argv[0] (the csvtool exits with code 2 when it is absent). The Settings
-  // UI stays command-only — the program name is prepended here, never typed.
-  const args = [PREVIEW_TOOL_ID, ...input.args];
+  // argv0 = the EXACT requested toolId (the WASI `_start` command convention
+  // requires argv[0]). It is resolved from the validated input — never typed
+  // by the UI and never request-borne beyond the allowlisted toolId.
+  const spec = previewSpecFor(input.toolId);
+  if (!spec) fail("preview_unknown_tool");
+  const args = [spec.argv0, ...input.args];
   const job = createWasiJob({
     tier: "tiny",
     context: {
@@ -215,31 +258,36 @@ export function buildPreviewJob({ input, authority, quota = null }) {
 
 /** The immutable execution-time revalidation. Every check uses the REAL
  * authority + the immutable bundled manifest + the pinned CAS bytes. */
-export async function revalidateCsvtoolExecution({
+export async function revalidatePreviewExecution({
+  toolId,
   manifestText,
   casBytes,
   inventory = null,
   limits = WASM_PACKAGE_LIMITS,
   now = null,
 }) {
-  if (typeof manifestText !== "string" || !(casBytes instanceof Uint8Array)) {
+  if (typeof toolId !== "string" || typeof manifestText !== "string" ||
+      !(casBytes instanceof Uint8Array)) {
     fail("preview_revalidate_input");
   }
+  const spec = previewSpecFor(toolId);
+  if (!spec) fail("preview_unknown_tool");
   const authority = new WasmPackageAuthority({ now: now ?? (() => Date.now()) });
   const validated = authority.validateManifest(manifestText);
   if (!validated?.ok) fail("preview_manifest_invalid", validated?.error ?? "");
   const manifest = validated.manifest;
 
-  // The package identity must be the pinned preview package.
+  // The package identity must be the SPEC's pinned package — a substituted
+  // manifest (or a toolId→package swap) fails closed.
   if (
-    manifest?.package?.id !== PREVIEW_PACKAGE_ID ||
+    manifest?.package?.id !== spec.packageId ||
     manifest?.package?.type !== "tool-bundle"
   ) fail("preview_package_identity");
 
   // The manifest digest must equal the IMMUTABLE inventory row (when supplied).
   if (inventory && Array.isArray(inventory.manifests)) {
     const row = inventory.manifests.find(
-      (candidate) => candidate?.pkg === PREVIEW_PACKAGE_ID,
+      (candidate) => candidate?.pkg === spec.packageId,
     );
     if (!row || typeof row.digest !== "string" || !HEX64_RE.test(row.digest)) {
       fail("preview_inventory_row");
@@ -249,17 +297,24 @@ export async function revalidateCsvtoolExecution({
     }
   }
 
-  // The executables must contain exactly the csvtool executable + no others.
+  // The executables must contain exactly the spec's tool + no others.
   const executables = Array.isArray(manifest?.executables)
     ? manifest.executables
     : [];
   if (executables.length !== 1) fail("preview_executable_count");
   const executable = executables[0];
   if (
-    !executable || executable?.id !== PREVIEW_TOOL_ID ||
+    !executable || executable?.id !== spec.toolId ||
     typeof executable?.sha256 !== "string" || !HEX64_RE.test(executable.sha256) ||
     !Number.isSafeInteger(executable?.size) || executable.size < 0
   ) fail("preview_executable");
+
+  // The manifest executable's SHA/size must equal the SPEC's pinned values
+  // (the immutable descriptor row) — a spec substitution fails closed.
+  if (
+    executable.sha256 !== spec.casSha ||
+    executable.size !== spec.size
+  ) fail("preview_spec_mismatch");
 
   // CAS bytes MUST re-match the manifest executable (sha256 + size) —
   // a substituted/truncated/grown binary fails closed.
@@ -272,13 +327,13 @@ export async function revalidateCsvtoolExecution({
   // auditWasmBinary re-checks imports/memory/tier against the manifest.
   auditWasmBinary(casBytes, executable, { limits });
 
-  // Capabilities must match the executable's declared set exactly.
+  // Capabilities must match the SPEC's declared set exactly (per-tool).
   const caps = Array.isArray(executable?.capabilities)
     ? executable.capabilities
     : [];
   if (
     JSON.stringify([...caps].sort()) !==
-    JSON.stringify(["compute", "text.transform"].sort())
+    JSON.stringify(spec.caps)
   ) fail("preview_capabilities");
 
   return Object.freeze({

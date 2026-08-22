@@ -19,12 +19,17 @@ async function componentSource() {
   return source.slice(start, end);
 }
 
-Deno.test("tool-library: registered component with exactly ONE explicit-owner-click control", async () => {
+Deno.test("tool-library: registered component with the tool selector + ONE explicit-owner-click control", async () => {
   const block = await componentSource();
-  // The ONLY interactive path: the csvtool Settings preview Run button.
+  // The ONLY interactive paths: the tool selector (help refresh) + the Run
+  // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
+  assertMatch(block, /class="preview-tool"/, "the tool selector exists");
+  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut"]) {
+    assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
+  }
   assertMatch(block, /_emit\("tool-preview-request"/, "the component emits exactly the preview-request event");
-  assertMatch(block, /\.preview-run"\)\?\.addEventListener\("click"/, "the only listener is the Run button click");
+  assertMatch(block, /toolId, args, stdin, sourceEvent/, "the preview request carries the toolId");
   assertEquals((block.match(/<button/g) ?? []).length, 1, "exactly one button (the preview-run)");
   assertNotMatch(block, /createElement\("button"/, "no programmatic buttons");
   assertNotMatch(block, /\bfetch\s*\(|XMLHttpRequest|new WebSocket|sendMessage/, "the component performs no network/message calls itself");
@@ -40,7 +45,7 @@ Deno.test("tool-library: truthful framing + no verification claim can exist", as
   assertMatch(block, /read-only diagnostic view/i, "the anti-overclaim framing line is present");
   assertMatch(block, /cannot run, install, grant, update, or remove/i, "the framing names the absent actions");
   // The preview console itself re-states the bounded scope truthfully.
-  assertMatch(block, /Runs ONLY on your\s+explicit click/, "the preview console states the explicit-owner-click contract");
+  assertMatch(block, /Runs\s+ONLY on your\s+explicit click/, "the preview console states the explicit-owner-click contract");
   assertMatch(block, /no catalog or provider selection authority/, "no selection authority is claimed");
   // There is no signature-verification path in this build, so no USER-VISIBLE
   // copy may carry a verification claim. (The authority's field NAME
@@ -108,7 +113,7 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
   const fn = js.slice(fnStart, fnEnd);
   // The ONLY listener in the Tool Library wiring: the preview-request handler.
   assertMatch(fn, /tool-preview-request/, "the wiring handles the explicit preview click");
-  assertMatch(fn, /tool\.preview\.csvtool/, "the wiring calls ONLY the csvtool preview route");
+  assertMatch(fn, /tool\.preview\.run/, "the wiring calls ONLY the csvtool preview route");
   assertMatch(fn, /unavailable/, "older-worker unavailable state handled");
 });
 
@@ -135,7 +140,7 @@ Deno.test("tool-library: the component registers with the design system", async 
 // (a Temporal-Dead-Zone ReferenceError). This test INVOKES the real _render
 // with a stub shadow DOM — not just a string scan.
 
-Deno.test("tool-library: _render with settingsPreviewCsvtool:true reveals the preview without throwing (TDZ regression)", async () => {
+Deno.test("tool-library: _render with settingsPreviewTools revealing csvtool does not throw (TDZ regression)", async () => {
   class El {
     constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.className = ""; this.hidden = false; this.attrs = {}; this.classes = new Set(); }
     setAttribute(k, v) { this.attrs[k] = v; }
@@ -196,16 +201,16 @@ Deno.test("tool-library: _render with settingsPreviewCsvtool:true reveals the pr
   // render without throwing and MUST reveal the preview panel.
   let threw = null;
   try {
-    library.summary = { settingsPreviewCsvtool: true, descriptorCount: 25, bySource: {}, catalogDiagnostics: {}, selectionDiagnostics: {} };
+    library.summary = { settingsPreviewTools: ["csvtool", "cut", "head", "tail", "uuid"], descriptorCount: 25, bySource: {}, catalogDiagnostics: {}, selectionDiagnostics: {} };
     library.state = "ready";
   } catch (error) {
     threw = error;
   }
   assertEquals(threw, null, `render must not throw (TDZ regression): ${threw?.message ?? threw}`);
-  assertEquals(previewEl.hidden, false, "the preview panel must be revealed when settingsPreviewCsvtool is true");
+  assertEquals(previewEl.hidden, false, "the preview panel must be revealed when csvtool is in settingsPreviewTools");
 
-  // The negative path: without the flag the panel stays hidden.
+  // The negative path: without the list the panel stays hidden.
   previewEl.hidden = true;
   library.summary = { descriptorCount: 25, bySource: {}, catalogDiagnostics: {}, selectionDiagnostics: {} };
-  assertEquals(previewEl.hidden, true, "the preview panel stays hidden without the flag");
+  assertEquals(previewEl.hidden, true, "the preview panel stays hidden without the list");
 });

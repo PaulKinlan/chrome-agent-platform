@@ -236,8 +236,10 @@ export class WasmExecutor {
     if (!plainData(request) || request.type !== TRANSPORT_MESSAGE_TYPES.JOB) {
       throw failClosed("request-shape");
     }
-    const requestJson = JSON.stringify(request);
-    if (utf8Bytes(requestJson) > EXECUTOR_BOUNDS.maxRequestBytes) {
+    // Strict logical measurement: the wasm bytes count at their raw length
+    // (structured-clone transport — JSON inflation no longer governs) + the
+    // metadata JSON. The 64 KiB total is preserved.
+    if (measureRequestBytes(request) > EXECUTOR_BOUNDS.maxRequestBytes) {
       throw failClosed("request-over-budget");
     }
 
@@ -334,4 +336,35 @@ export class WasmExecutor {
       throw error;
     }
   }
+}
+
+// ── Strict request-byte measurement (CAP-FB-20260822-TOOL-PREVIEW-EXEC-02) ──
+// The JSON-stringify budget inflated a wasm byte ARRAY (~4 chars/byte), so
+// 28–33 KiB binaries tripped request-over-budget even though the logical
+// envelope was far below 64 KiB. The real transport is structured clone
+// (one byte per element), so the bound is measured as `wasmBytes.length` +
+// the metadata JSON (wasmBytes excluded). The 64 KiB total is PRESERVED.
+function isDenseByteSequence(value) {
+  if (value instanceof Uint8Array) return true;
+  if (!Array.isArray(value)) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (!(index in value)) return false; // a hole is not dense
+    const byte = value[index];
+    if (typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 255) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function measureRequestBytes(request) {
+  if (!plainData(request)) throw failClosed("request-shape");
+  const wasm = request.wasmBytes;
+  if (!isDenseByteSequence(wasm) || wasm.length < 8 ||
+      wasm.length > EXECUTOR_BOUNDS.maxRequestBytes) {
+    throw failClosed("request-wasm");
+  }
+  const meta = { ...request };
+  delete meta.wasmBytes;
+  return wasm.length + utf8Bytes(JSON.stringify(meta));
 }

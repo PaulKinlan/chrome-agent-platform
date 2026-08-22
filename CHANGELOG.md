@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.170] — 2026-08-22
+- feat(tools): 5-tool Settings-only bundled preview tranche (csvtool, uuid, head, tail, cut) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-02)
+
 ## [0.2.169] — 2026-08-22
 - feat(tools): first Settings-only bundled execution — csvtool preview (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01)
 

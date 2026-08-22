@@ -6456,18 +6456,40 @@ class ToolLibrary extends Component {
     if (button) button.disabled = value === true;
     if (out) out.textContent = value === true ? "Running…" : out.textContent;
   }
+  // Per-tool example/help copy (static, bounded — the tool selector shows it).
+  _previewHelp(toolId) {
+    switch (toolId) {
+      case "uuid":
+        return 'Example: args "-n 2" + empty stdin → two RFC 4122 v4 UUIDs (one per line).';
+      case "head":
+        return 'Example: args "-n 2" + stdin "a\nb\nc" → "a\nb" (first two lines).';
+      case "tail":
+        return 'Example: args "-n 2" + stdin "a\nb\nc" → "b\nc" (last two lines).';
+      case "cut":
+        return 'Example: args "-d , -f 2" + stdin "a,b,c" → "b" (the second field).';
+      default:
+        return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
+    }
+  }
   _wire() {
-    // The ONLY interactive path: the explicit owner click that runs the
-    // csvtool Settings preview. No other control exists in this component.
+    // The ONLY interactive paths: the explicit owner click that runs the
+    // selected tool's Settings preview + the tool selector (help refresh).
+    // No other control exists in this component.
     this._root.querySelector(".preview-run")?.addEventListener("click", (sourceEvent) => {
       if (this._previewBusy) return;
+      const toolSelect = this._root.querySelector(".preview-tool");
       const argsInput = this._root.querySelector(".preview-args");
       const stdinInput = this._root.querySelector(".preview-stdin");
+      const toolId = String(toolSelect?.value ?? "csvtool");
       const args = String(argsInput?.value ?? "").trim() === ""
         ? []
         : String(argsInput?.value ?? "").split(/\s+/);
       const stdin = String(stdinInput?.value ?? "");
-      this._emit("tool-preview-request", { args, stdin, sourceEvent });
+      this._emit("tool-preview-request", { toolId, args, stdin, sourceEvent });
+    });
+    this._root.querySelector(".preview-tool")?.addEventListener("change", (event) => {
+      const help = this._root.querySelector(".preview-help");
+      if (help) help.textContent = this._previewHelp(String(event?.target?.value ?? "csvtool"));
     });
   }
   _render() {
@@ -6508,6 +6530,10 @@ class ToolLibrary extends Component {
       .preview { margin-top:20px; border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:16px; }
       .preview h3 { margin:0 0 4px; font-size:15px; }
       .preview label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
+      .preview select { display:block; width:100%; box-sizing:border-box; margin-top:4px;
+        border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
+        font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
+      .preview-help { margin:8px 0 0; font-size:12px; color:var(--muted, #625d57); }
       .preview input, .preview textarea { display:block; width:100%; box-sizing:border-box; margin-top:4px;
         border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
@@ -6535,12 +6561,22 @@ class ToolLibrary extends Component {
           package host lands, admitted bundles and their pins will be listed here.</p>
       </div>
       <div class="preview" hidden>
-        <h3>csvtool — Settings preview</h3>
-        <p class="meta">Technically admitted (cap.bundled.csvtool, Apache-2.0). Runs ONLY on your
-          explicit click; there is no catalog or provider selection authority.</p>
+        <h3>Bundled tool previews</h3>
+        <p class="meta">Technically admitted Settings previews (csvtool, uuid, head, tail, cut). Runs
+          ONLY on your explicit click; there is no catalog or provider selection authority.</p>
+        <label class="preview-tool-label">Tool
+          <select class="preview-tool" autocomplete="off">
+            <option value="csvtool">csvtool — RFC 4180 CSV stream filter</option>
+            <option value="uuid">uuid — RFC 4122 v4 generator (CSPRNG)</option>
+            <option value="head">head — first lines of stdin</option>
+            <option value="tail">tail — last lines of stdin</option>
+            <option value="cut">cut — select fields from each line</option>
+          </select>
+        </label>
+        <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
         <label class="preview-args-label">Arguments
           <input class="preview-args" type="text" autocomplete="off"
-            placeholder="(none) — e.g. --strip" maxlength="128" />
+            placeholder="(none) — e.g. -n 2" maxlength="128" />
         </label>
         <label class="preview-stdin-label">Stdin (bounded)
           <textarea class="preview-stdin" rows="4" maxlength="2048"
@@ -6575,7 +6611,10 @@ class ToolLibrary extends Component {
 
     const s = this._summary;
     const preview = this._root.querySelector(".preview");
-    if (preview && s?.settingsPreviewCsvtool === true) preview.hidden = false;
+    if (
+      preview && Array.isArray(s?.settingsPreviewTools) &&
+      s.settingsPreviewTools.includes("csvtool")
+    ) preview.hidden = false;
     if (s) {
       const total = document.createElement("p");
       total.className = "meta";

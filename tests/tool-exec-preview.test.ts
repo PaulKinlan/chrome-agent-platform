@@ -7,15 +7,16 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   PREVIEW_LIMITS,
-  PREVIEW_PACKAGE_ID,
-  PREVIEW_TOOL_ID,
+  PREVIEW_SPECS,
+  PREVIEW_TOOL_IDS,
   boundPreviewResult,
   buildPreviewAuthority,
   buildPreviewJob,
   extractPreviewInput,
+  previewSpecFor,
   rehydratePreviewStdin,
   rehydratePreviewWasmBytes,
-  revalidateCsvtoolExecution,
+  revalidatePreviewExecution,
   validatePreviewInput,
 } from "../extension/lib/tool-exec-preview.js";
 import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
@@ -76,10 +77,15 @@ Deno.test("preview: the route fetches runtime-RELATIVE wasm paths (no extension/
   const sw = await Deno.readTextFile(
     new URL("../extension/background/service-worker.js", import.meta.url),
   );
-  assert(sw.includes('const manifestRel = "wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json"'), "the manifest rel is runtime-relative");
-  assert(sw.includes('const casRel = "wasm/cas/5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.wasm"'), "the CAS rel is runtime-relative");
-  assert(sw.includes("chrome.runtime.getURL(manifestRel)") && sw.includes("chrome.runtime.getURL(casRel)"), "the route fetches via getURL with the rel vars");
-  assert(!sw.includes('const manifestRel = "extension/wasm/') && !sw.includes('const casRel = "extension/wasm/'), "no extension/ prefix in the runtime fetch paths");
+  assert(sw.includes("const manifestRel = spec.manifestRel"), "the manifest rel is the SPEC's runtime-relative path");
+  assert(sw.includes("const casRel = spec.casRel"), "the CAS rel is the SPEC's runtime-relative path");
+  assert(sw.includes("chrome.runtime.getURL(manifestRel)") && sw.includes("chrome.runtime.getURL(casRel)"), "the route fetches via getURL with the spec rels");
+  // every spec rel is wasm-relative (no extension/ prefix) + points at the pinned CAS
+  for (const spec of Object.values(PREVIEW_SPECS)) {
+    assert(!spec.manifestRel.startsWith("extension/"), `${spec.toolId} manifestRel is runtime-relative`);
+    assert(spec.manifestRel.startsWith("wasm/manifests/"), `${spec.toolId} manifestRel prefix`);
+    assertEquals(spec.casRel, `wasm/cas/${spec.casSha}.wasm`, `${spec.toolId} CAS rel`);
+  }
   assert(!sw.includes('getURL("extension/wasm/'), "no extension/ prefix inside getURL");
 });
 
@@ -144,19 +150,21 @@ Deno.test("preview: route-shaped messages strip ONLY type — extra keys never f
   // The runtime route receives the dispatch body WITH `type` (dispatchRoute
   // passes the message body through; the global dispatcher is NOT modified).
   const standard = {
-    type: "tool.preview.csvtool",
+    type: "tool.preview.run",
+    toolId: "csvtool",
     args: ["--strip"],
     stdin: "a,b\n1,2",
   };
   const extracted = extractPreviewInput(standard);
-  assertEquals(JSON.stringify(Object.keys(extracted).sort()), JSON.stringify(["args", "stdin"]), "only args+stdin are extracted");
+  assertEquals(JSON.stringify(Object.keys(extracted).sort()), JSON.stringify(["args", "stdin", "toolId"]), "only toolId+args+stdin are extracted");
   // The strict validator ACCEPTS the extracted standard message (no
   // preview_request_shape from the stray `type` key).
   assertEquals(validatePreviewInput(extracted).args, ["--strip"]);
   // A hostile message with extra keys: the extraction drops them BEFORE the
   // validator — `evil` can never flow to the validator/executor.
   const hostile = {
-    type: "tool.preview.csvtool",
+    type: "tool.preview.run",
+    toolId: "head",
     args: [],
     stdin: "",
     evil: 1,
@@ -165,7 +173,7 @@ Deno.test("preview: route-shaped messages strip ONLY type — extra keys never f
     wasmBytes: new Uint8Array(4),
   };
   const hostileExtracted = extractPreviewInput(hostile);
-  assertEquals(JSON.stringify(Object.keys(hostileExtracted).sort()), JSON.stringify(["args", "stdin"]), "extra keys are stripped locally");
+  assertEquals(JSON.stringify(Object.keys(hostileExtracted).sort()), JSON.stringify(["args", "stdin", "toolId"]), "extra keys are stripped locally");
   assertEquals(validatePreviewInput(hostileExtracted).stdin, "");
   // Non-object input still fails closed (the extraction passes it through).
   let threw = null;
@@ -173,20 +181,45 @@ Deno.test("preview: route-shaped messages strip ONLY type — extra keys never f
   assertEquals(threw, "preview_request_shape", "non-object input fails closed");
 });
 
-Deno.test("preview: strict exact-key bounded request (args + stdin only)", () => {
-  assertEquals(validatePreviewInput({ args: ["--strip"], stdin: "a,b\n1,2" }).args, ["--strip"]);
-  assertEquals(validatePreviewInput({ args: [], stdin: "" }).stdin, "");
+Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", () => {
+  assertEquals(validatePreviewInput({ toolId: "csvtool", args: ["--strip"], stdin: "a,b\n1,2" }).args, ["--strip"]);
+  assertEquals(validatePreviewInput({ toolId: "uuid", args: [], stdin: "" }).stdin, "");
+  assertEquals(validatePreviewInput({ toolId: "cut", args: ["-d", ",", "-f", "2"], stdin: "a,b" }).args.length, 4);
   for (const bad of [
-    null, "x", { args: [] }, { stdin: "" }, { args: [], stdin: "", extra: 1 },
-    { args: ["x".repeat(PREVIEW_LIMITS.maxArgBytes + 1)], stdin: "" },
-    { args: Array.from({ length: PREVIEW_LIMITS.maxArgs + 1 }, () => "a"), stdin: "" },
-    { args: ["a\u0000b"], stdin: "" },
-    { args: [], stdin: "x".repeat(PREVIEW_LIMITS.maxStdinBytes + 1) },
-    { args: ["a".repeat(600), "b".repeat(600)], stdin: "" }, // total arg bytes
+    null, "x", { args: [] }, { stdin: "" }, { toolId: "csvtool", args: [], stdin: "", extra: 1 },
+    { toolId: "csvtool", args: ["x".repeat(PREVIEW_LIMITS.maxArgBytes + 1)], stdin: "" },
+    { toolId: "csvtool", args: Array.from({ length: PREVIEW_LIMITS.maxArgs + 1 }, () => "a"), stdin: "" },
+    { toolId: "csvtool", args: ["a\u0000b"], stdin: "" },
+    { toolId: "csvtool", args: [], stdin: "x".repeat(PREVIEW_LIMITS.maxStdinBytes + 1) },
+    { toolId: "csvtool", args: ["a".repeat(600), "b".repeat(600)], stdin: "" }, // total arg bytes
   ]) {
     let threw = null;
     try { validatePreviewInput(bad); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assert(threw !== null, `expected rejection for ${JSON.stringify(bad)}`);
+  }
+});
+
+Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exact)", () => {
+  for (const toolId of ["grep", "gzip", "evil", "csvtool.extra", "CsvTool", ""]) {
+    let threw = null;
+    try { validatePreviewInput({ toolId, args: [], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+    assertEquals(threw, "preview_unknown_tool", `unknown tool ${JSON.stringify(toolId)} rejected`);
+  }
+  // every allowlisted tool SURVIVES validation with its exact toolId intact
+  // (the SW resolves the spec from the validated toolId — a dropped toolId
+  // would make every tool unknown).
+  for (const toolId of PREVIEW_TOOL_IDS) {
+    const validated = validatePreviewInput({ toolId, args: ["-n", "2"], stdin: "a\nb" });
+    assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
+    assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
+  }
+  // the allowlist is EXACTLY the 5 tools
+  assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(["csvtool", "cut", "head", "tail", "uuid"]));
+  for (const spec of Object.values(PREVIEW_SPECS)) {
+    assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
+    assert(typeof spec.casSha === "string" && /^[0-9a-f]{64}$/.test(spec.casSha), `${spec.toolId} casSha`);
+    assert(Number.isSafeInteger(spec.size) && spec.size > 0, `${spec.toolId} size`);
+    assertEquals(spec.argv0, spec.toolId, "argv0 == the exact toolId");
   }
 });
 
@@ -205,24 +238,29 @@ Deno.test("preview: authority fences are synthesized + exact-key", () => {
 
 Deno.test("preview: the bounded job binds the authority fences", () => {
   const authority = buildPreviewAuthority({ origin: "https://settings.cap" });
-  const job = buildPreviewJob({ input: { args: [], stdin: "a,b\n1,2" }, authority });
+  const job = buildPreviewJob({ input: { toolId: "csvtool", args: [], stdin: "a,b\n1,2" }, authority });
   assertEquals(job.context.executionId, authority.executionId);
   assertEquals(job.context.callId, authority.callId);
   assertEquals(job.context.origin, authority.origin);
   assertEquals(job.tier, "tiny");
-  // argv0 = the program name (the WASI _start command convention requires
-  // argv[0]; the Settings UI stays command-only).
+  // argv0 = the EXACT requested toolId (the WASI _start command convention
+  // requires argv[0]; the Settings UI stays command-only).
   assertEquals(job.args[0], "csvtool", "argv0 is the program name");
   assertEquals(job.args.length, 1, "no user args → exactly argv0");
-  const withArgs = buildPreviewJob({ input: { args: ["--strip", "-k"], stdin: "" }, authority });
+  const withArgs = buildPreviewJob({ input: { toolId: "csvtool", args: ["--strip", "-k"], stdin: "" }, authority });
   assertEquals(withArgs.args[0], "csvtool", "argv0 is the program name");
   assertEquals(JSON.stringify(withArgs.args.slice(1)), JSON.stringify(["--strip", "-k"]), "user args follow argv0 exactly");
+  const uuidJob = buildPreviewJob({ input: { toolId: "uuid", args: ["-n", "2"], stdin: "" }, authority });
+  assertEquals(uuidJob.args[0], "uuid", "argv0 == the requested toolId");
+  assertEquals(JSON.stringify(uuidJob.args.slice(1)), JSON.stringify(["-n", "2"]));
+  const headJob = buildPreviewJob({ input: { toolId: "head", args: ["-n", "2"], stdin: "" }, authority });
+  assertEquals(headJob.args[0], "head", "argv0 == the requested toolId");
   assertEquals([...job.stdin].length, "a,b\n1,2".length);
   // quota is bounded by the preview limits
   assertEquals(job.quota.stdinBytes, PREVIEW_LIMITS.maxStdinBytes);
   // argv0 + the user args stay inside the WASI arg bounds (64 args / 4096 bytes)
   const wide = buildPreviewJob({
-    input: { args: Array.from({ length: PREVIEW_LIMITS.maxArgs }, () => "x"), stdin: "" },
+    input: { toolId: "csvtool", args: Array.from({ length: PREVIEW_LIMITS.maxArgs }, () => "x"), stdin: "" },
     authority,
   });
   assertEquals(wide.args.length, PREVIEW_LIMITS.maxArgs + 1, "max user args + argv0");
@@ -231,42 +269,51 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   let threw = null;
   try {
     buildPreviewJob({
-      input: { args: [], stdin: "" },
+      input: { toolId: "csvtool", args: [], stdin: "" },
       authority: { ...authority, evil: 1 },
     });
   } catch (e) { threw = (e as { code?: string }).code ?? null; }
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped csvtool bytes", async () => {
-  const { manifestText, casBytes } = await realCsvtoolAssets();
-  const revalidated = await revalidateCsvtoolExecution({
-    manifestText,
-    casBytes,
-    inventory: BUNDLED_INVENTORY,
-  });
-  assertEquals(revalidated.ok, true);
-  assertEquals(revalidated.casSha256, "5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81");
-  assertEquals(revalidated.casSize, 10581);
-  assertEquals(revalidated.executable.id, PREVIEW_TOOL_ID);
-  assertEquals(revalidated.memory.tier, "tiny");
-  assertEquals(revalidated.capabilities.join(","), "compute,text.transform");
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 5 allowlisted tools", async () => {
+  for (const toolId of PREVIEW_TOOL_IDS) {
+    const spec = previewSpecFor(toolId);
+    const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
+    const casBytes = new Uint8Array(await Deno.readFile(root(`extension/wasm/cas/${spec.casSha}.wasm`)));
+    const revalidated = await revalidatePreviewExecution({
+      toolId,
+      manifestText,
+      casBytes,
+      inventory: BUNDLED_INVENTORY,
+    });
+    assertEquals(revalidated.ok, true, toolId);
+    assertEquals(revalidated.casSha256, spec.casSha, toolId);
+    assertEquals(revalidated.casSize, spec.size, toolId);
+    assertEquals(revalidated.executable.id, toolId, toolId);
+    assertEquals(revalidated.memory.tier, "tiny", toolId);
+    assertEquals(JSON.stringify(revalidated.capabilities), JSON.stringify(spec.caps), toolId);
+  }
+  // per-tool caps honored: uuid is the crypto set, the others text.transform
+  assertEquals(JSON.stringify(previewSpecFor("uuid").caps), JSON.stringify(["compute", "crypto"]));
+  assertEquals(JSON.stringify(previewSpecFor("head").caps), JSON.stringify(["compute", "text.transform"]));
 });
 
-Deno.test("preview: revalidation fails closed on every mutant (sha/size/imports/memory/caps/inventory)", async () => {
+Deno.test("preview: revalidation fails closed on every mutant (sha/size/imports/memory/caps/inventory/spec)", async () => {
   const { manifestText, casBytes } = await realCsvtoolAssets();
   // 1. CAS sha mismatch (one byte flipped)
   const flipped = new Uint8Array(casBytes);
   flipped[20] ^= 0x01;
   let threw = null;
   try {
-    await revalidateCsvtoolExecution({ manifestText, casBytes: flipped, inventory: BUNDLED_INVENTORY });
+    await revalidatePreviewExecution({ toolId: "csvtool", manifestText, casBytes: flipped, inventory: BUNDLED_INVENTORY });
   } catch (e) { threw = (e as { code?: string }).code ?? null; }
   assertEquals(threw, "preview_cas_sha", "flipped CAS bytes fail closed");
   // 2. CAS size mismatch
   threw = null;
   try {
-    await revalidateCsvtoolExecution({
+    await revalidatePreviewExecution({
+      toolId: "csvtool",
       manifestText,
       casBytes: new Uint8Array(casBytes.slice(0, casBytes.byteLength - 1)),
       inventory: BUNDLED_INVENTORY,
@@ -280,7 +327,7 @@ Deno.test("preview: revalidation fails closed on every mutant (sha/size/imports/
   );
   threw = null;
   try {
-    await revalidateCsvtoolExecution({ manifestText: driftedManifest, casBytes, inventory: BUNDLED_INVENTORY });
+    await revalidatePreviewExecution({ toolId: "csvtool", manifestText: driftedManifest, casBytes, inventory: BUNDLED_INVENTORY });
   } catch (e) { threw = (e as { code?: string }).code ?? null; }
   assert(["preview_manifest_drift", "preview_manifest_invalid"].includes(threw), `drift fails closed: ${threw}`);
   // 4. An executable-capability mutant (adds a capability)
@@ -290,19 +337,36 @@ Deno.test("preview: revalidation fails closed on every mutant (sha/size/imports/
   );
   threw = null;
   try {
-    await revalidateCsvtoolExecution({ manifestText: capsMutant, casBytes, inventory: null });
+    await revalidatePreviewExecution({ toolId: "csvtool", manifestText: capsMutant, casBytes, inventory: null });
   } catch (e) { threw = (e as { code?: string }).code ?? null; }
   assert(
     ["preview_capabilities", "preview_manifest_invalid"].includes(threw ?? ""),
     `capability mutant fails closed: ${threw}`,
   );
   // 5. A non-preview package identity
-  const wrongPkg = manifestText.replace(PREVIEW_PACKAGE_ID, "cap.bundled.evil");
+  const wrongPkg = manifestText.replace("cap.bundled.csvtool", "cap.bundled.evil");
   threw = null;
   try {
-    await revalidateCsvtoolExecution({ manifestText: wrongPkg, casBytes, inventory: null });
+    await revalidatePreviewExecution({ toolId: "csvtool", manifestText: wrongPkg, casBytes, inventory: null });
   } catch (e) { threw = (e as { code?: string }).code ?? null; }
   assertEquals(threw, "preview_package_identity", "wrong package identity fails closed");
+  // 6. SPEC SUBSTITUTION: the csvtool toolId fed the uuid manifest/CAS bytes
+  //    must fail closed (package identity + spec mismatch), and vice versa.
+  const uuidSpec = previewSpecFor("uuid");
+  const uuidManifest = await Deno.readTextFile(root(`extension/wasm/manifests/${uuidSpec.packageId}-1.0.0.manifest.json`));
+  const uuidCas = new Uint8Array(await Deno.readFile(root(`extension/wasm/cas/${uuidSpec.casSha}.wasm`)));
+  threw = null;
+  try {
+    await revalidatePreviewExecution({ toolId: "csvtool", manifestText: uuidManifest, casBytes: uuidCas, inventory: BUNDLED_INVENTORY });
+  } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assert(["preview_package_identity", "preview_spec_mismatch"].includes(threw ?? ""), `csvtool←uuid substitution fails closed: ${threw}`);
+  // a manifest whose executable SHA was swapped for another tool's → spec mismatch
+  const swapped = uuidManifest.replace(uuidSpec.casSha, previewSpecFor("head").casSha);
+  threw = null;
+  try {
+    await revalidatePreviewExecution({ toolId: "uuid", manifestText: swapped, casBytes: uuidCas, inventory: null });
+  } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assert(["preview_spec_mismatch", "preview_manifest_invalid"].includes(threw ?? ""), `spec substitution fails closed: ${threw}`);
 });
 
 Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () => {
@@ -320,12 +384,16 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the csvtool descriptor is the ONLY admitted settings-preview row", () => {
+Deno.test("preview: the EXACT 5-tool static allowlist is admitted as settings-preview (other 21 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
-  assertEquals(admitted.length, 1);
-  assertEquals(admitted[0].toolId, "csvtool");
-  assertEquals(admitted[0].settingsPreview, true);
-  assertEquals(admitted[0].disabled, false);
+  assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(["csvtool", "cut", "head", "tail", "uuid"]));
+  for (const row of admitted) {
+    assertEquals(row.settingsPreview, true, row.toolId);
+    assertEquals(row.disabled, false, row.toolId);
+    assertEquals(row.disabledReason, null, row.toolId);
+  }
+  const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
+  assertEquals(notAdmitted.length, 21, "the other 21 rows are unchanged");
   // The preview limits are honest against the executor's JSON request budget.
   assert(PREVIEW_LIMITS.maxStdinBytes <= 4 * 1024, "stdin stays inside the 64 KiB executor request envelope");
   assert(PREVIEW_LIMITS.wallMs <= 30_000, "wall time stays inside the executor bound");

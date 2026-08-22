@@ -307,6 +307,7 @@ async function renderToolLibrary() {
   // result. No catalog/provider selection is involved.
   library.addEventListener("tool-preview-request", async (event) => {
     const detail = event?.detail ?? {};
+    const toolId = typeof detail.toolId === "string" ? detail.toolId : "";
     const args = Array.isArray(detail.args)
       ? detail.args.filter((a) => typeof a === "string").slice(0, 4)
       : [];
@@ -318,7 +319,8 @@ async function renderToolLibrary() {
     library.previewBusy = true;
     try {
       const response = await chrome.runtime.sendMessage({
-        type: "tool.preview.csvtool",
+        type: "tool.preview.run",
+        toolId,
         args,
         stdin,
       });
