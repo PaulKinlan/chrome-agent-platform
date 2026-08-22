@@ -4,7 +4,7 @@
 // a generated dependency bundle).
 
 // @ts-nocheck — the injected readText shim + acorn types are intentionally dynamic.
-import { assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 import { scanShippedJs } from "../scripts/scan-shipped.mjs";
 
 async function withTemp(name, code) {
@@ -178,4 +178,78 @@ Deno.test("scan: a clean file has zero violations", async () => {
     `export const ok = 1; export function fine() { return 2; }`,
   );
   assertEquals(v2.length, 0);
+});
+
+// ── canonical exemption path matcher (CAP-FB-20260822-WASM-EXECUTION-HOST-01) ──
+// The Store pipeline passes ABSOLUTE source paths, so the scanner-owned
+// canonical exemptions must bind to the exact normalized repo tail — accepting
+// the absolute form and rejecting lookalikes/suffix tricks.
+
+const EXECUTION_CANONICAL_REL = "extension/lib/wasm-execution-worker.js";
+const WORKER_CANONICAL_REL = "extension/lib/wasm-executor.js";
+
+async function realCanonicalContents() {
+  const workerJs = await Deno.readTextFile(
+    new URL("../extension/lib/wasm-execution-worker.js", import.meta.url),
+  );
+  const executorJs = await Deno.readTextFile(
+    new URL("../extension/lib/wasm-executor.js", import.meta.url),
+  );
+  return { workerJs, executorJs };
+}
+
+Deno.test("scan: BOTH canonical exemptions accept the ABSOLUTE repo-tail path (Store pipeline shape)", async () => {
+  const { workerJs, executorJs } = await realCanonicalContents();
+  const absWorker = `/some/repo/root/${EXECUTION_CANONICAL_REL}`;
+  const absExecutor = `/some/repo/root/${WORKER_CANONICAL_REL}`;
+  const vWorker = await scanShippedJs([absWorker], {
+    readText: async () => workerJs,
+  });
+  assertEquals(vWorker.length, 0, "absolute canonical worker path with the exact Wasm shape is clean");
+  const vExecutor = await scanShippedJs([absExecutor], {
+    readText: async () => executorJs,
+  });
+  assertEquals(vExecutor.length, 0, "absolute canonical executor path with the exact worker node is clean");
+});
+
+Deno.test("scan: BOTH canonical exemptions accept the RELATIVE form (regression)", async () => {
+  const { workerJs, executorJs } = await realCanonicalContents();
+  const vWorker = await scanShippedJs([EXECUTION_CANONICAL_REL], {
+    readText: async () => workerJs,
+  });
+  assertEquals(vWorker.length, 0, "relative canonical worker path stays clean");
+  const vExecutor = await scanShippedJs([WORKER_CANONICAL_REL], {
+    readText: async () => executorJs,
+  });
+  assertEquals(vExecutor.length, 0, "relative canonical executor path stays clean");
+});
+
+Deno.test("scan: lookalike/suffix paths NEVER inherit the canonical exemptions", async () => {
+  const { workerJs, executorJs } = await realCanonicalContents();
+  // Execution-host lookalikes: same exact bytes, hostile path shapes.
+  const workerLookalikes = [
+    `/repo/${EXECUTION_CANONICAL_REL}.evil`,
+    `/repo/${EXECUTION_CANONICAL_REL}.bak`,
+    `/repo/xx${EXECUTION_CANONICAL_REL}`, // prefix segment trick
+    `/repo/not-extension/lib/wasm-execution-worker.js`,
+    `/repo/extension/lib/other-wasm-execution-worker.js`, // different filename
+    `/repo/extension/lib/wasm-execution-worker.js\u0000x`, // NUL injection
+  ];
+  for (const file of workerLookalikes) {
+    const v = await scanShippedJs([file], { readText: async () => workerJs });
+    assert(v.length >= 1, `execution-host lookalike ${JSON.stringify(file)} must violate`);
+  }
+  // Worker-host lookalikes: same exact bytes (the canonical executor file),
+  // hostile path shapes — the one non-literal `new Worker` must be flagged.
+  const workerHostLookalikes = [
+    `/repo/${WORKER_CANONICAL_REL}.evil`,
+    `/repo/${WORKER_CANONICAL_REL}/..`, // resolves away from the canonical file
+    `/repo/xx${WORKER_CANONICAL_REL}`,
+    `/repo/extension/lib/not-wasm-executor.js`,
+    `/repo/extension/lib/wasm-executor.js\u0000x`,
+  ];
+  for (const file of workerHostLookalikes) {
+    const v = await scanShippedJs([file], { readText: async () => executorJs });
+    assert(v.length >= 1, `worker-host lookalike ${JSON.stringify(file)} must violate`);
+  }
 });

@@ -5,7 +5,7 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 20:30 UTC. Reconciled against exact public
+> Snapshot: 2026-08-22 20:40 UTC. Reconciled against exact public
 > `origin/main@6662dfa2870ef1729b7e3ba68c3393d40f7db474` (`0.2.158`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes and the Store static boundary remain exact; the catalog
@@ -740,6 +740,16 @@ On resume after a coordinator or worker loss:
   UNREACHABLE source-only until a separately reviewed route successor lands
 - Gates: final independent review PASS on `086ee3d` (26/26 focused, full
   1056/1056, build rc 0); recomposed gates re-run on this commit
+
+- History:
+  - 2026-08-22 20:40 UTC — Store package scan after the recomposed push passed
+    ABSOLUTE source paths to the scanner; the canonical exemptions compared only
+    relative paths and flagged the execution-host Wasm + worker-host Worker
+    constructions. Fixed with a scanner-owned canonical path matcher
+    (`isCanonicalScannedPath`) that accepts the exact normalized repo tail
+    (relative or absolute) and rejects lookalikes/suffix tricks; added
+    absolute-positive + lookalike-negative tests for BOTH exemptions. Store
+    package build/package/validate pass on `0.2.160`.
 - Recover: `git show 086ee3d -- extension/lib/wasm-execution-worker.js
   extension/lib/wasm-executor.js extension/lib/wasm-executor-bounds.js
   extension/lib/wasm-offscreen-host.js extension/lib/wasm-sync-workspace.js

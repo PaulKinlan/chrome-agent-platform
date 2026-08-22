@@ -215,6 +215,38 @@ const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
 const WORKER_HOST_CANONICAL_LOCATION = { line: 200, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 
+// Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
+// normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
+// source paths (`path.join(root, entry.name)`), so a bare relative equality
+// never matches there. This matcher accepts the exact normalized repo-tail —
+// the relative form OR any path whose lexically normalized form ends in exactly
+// that tail — and REJECTS lookalikes and suffix tricks: the tail must be the
+// exact final segments (no `.evil`/`.bak` suffix, no `xxextension/…` prefix
+// segment, no different filename, no NUL/control-character injection). The
+// normalization is purely LEXICAL (collapse separators/`.` and resolve `..`
+// without touching the filesystem), so `..` games that resolve to the canonical
+// file still match, while anything that resolves away does not.
+function isCanonicalScannedPath(file, canonicalRelative) {
+  if (typeof file !== "string" || !file || typeof canonicalRelative !== "string") {
+    return false;
+  }
+  // Control characters: refuse before any comparison (NUL/separator tricks).
+  if (/[\u0000-\u001f\u007f]/u.test(file)) return false;
+  const segments = file.replace(/\\/gu, "/").split("/");
+  const out = [];
+  for (const segment of segments) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (out.length) out.pop();
+      continue;
+    }
+    out.push(segment);
+  }
+  const normalized = out.join("/");
+  if (normalized === canonicalRelative) return true;
+  return normalized.endsWith("/" + canonicalRelative);
+}
+
 export async function scanShippedJs(files, {
   generatedBundles = new Set(),
   allowedWorkerLiterals = new Set(),
@@ -370,7 +402,7 @@ export async function scanShippedJs(files, {
         const workerSink = sinkName(node.callee, sinkAliases);
         if (workerSink === "Worker" || workerSink === "SharedWorker") {
           const value = foldString(node.arguments?.[0]);
-          const isCanonicalWorkerHost = file === WORKER_HOST_CANONICAL_PATH &&
+          const isCanonicalWorkerHost = isCanonicalScannedPath(file, WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "Worker" &&
             node.loc?.start?.line === WORKER_HOST_CANONICAL_LOCATION.line &&
             node.loc?.start?.column === WORKER_HOST_CANONICAL_LOCATION.column &&
@@ -417,7 +449,7 @@ export async function scanShippedJs(files, {
           node.callee.object?.type === "Identifier" &&
           node.callee.object.name === "WebAssembly")
       ) {
-        const isCanonicalHost = file === EXECUTION_HOST_CANONICAL_PATH;
+        const isCanonicalHost = isCanonicalScannedPath(file, EXECUTION_HOST_CANONICAL_PATH);
         const isCall = node.type === "CallExpression";
         const memberName = node.callee?.property?.type === "Identifier"
           ? node.callee.property.name
