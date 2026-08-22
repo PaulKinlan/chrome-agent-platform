@@ -221,8 +221,6 @@ export async function scanShippedJs(files, {
   allowedDynamicEvaluatorFiles = new Set(),
   readText,
 } = {}) {
-  readText,
-} = {}) {
   if (typeof readText !== "function") {
     throw new Error("scanShippedJs requires an injected readText(file) function");
   }
