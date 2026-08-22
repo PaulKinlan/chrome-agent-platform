@@ -10,7 +10,7 @@ import { scanBundledWasmFiles, scanShippedJs } from "./scan-shipped.mjs";
 
 export const STORE_TARGET = "store";
 export const STORE_EXTENSION_CSP =
-  "script-src 'self'; object-src 'self'; frame-src 'self' about: blob: data:";
+  "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:";
 export const STORE_WASM_LANE = "bundled-reviewed-only";
 export const STORE_ALLOWED_WORKER_LITERALS = Object.freeze([]);
 

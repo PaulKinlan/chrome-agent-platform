@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.161] — 2026-08-22
+- fix(wasm): COI same-origin + COEP credentialless + wasm-unsafe-eval CSP; browser-follow HF preflight
+
 ## [0.2.160] — 2026-08-22
 - fix(wasm): scanner canonical exemptions bind to the exact normalized repo tail
   (Store absolute source paths) (CAP-FB-20260822-WASM-EXECUTION-HOST-01)

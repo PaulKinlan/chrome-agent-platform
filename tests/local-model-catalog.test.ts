@@ -3,7 +3,6 @@ import {
   isPublisherSourceUrl,
   LOCAL_MODEL_CATALOG,
   localModelFeasibility,
-  MAX_REDIRECT_HOPS,
   PREFLIGHT_RANGE,
   preflightLocalModel,
   probePublisherFile,
@@ -52,14 +51,6 @@ const EXPECTED = [
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
-}
-
-function redirectResponse(location, overrides = {}) {
-  return {
-    status: 302,
-    headers: new Headers({ location }),
-    ...overrides,
-  };
 }
 
 function rangeResponse(file, overrides = {}) {
@@ -148,8 +139,8 @@ Deno.test("publisher probe sends a bounded one-byte Range request without creden
   );
   assert(request.init.credentials === "omit", "credentials were not omitted");
   assert(
-    request.init.redirect === "manual",
-    "redirect mode must be manual (follow would chase an unbounded hostile chain)",
+    request.init.redirect === "follow",
+    "redirect mode must be follow (the browser chases the publisher → CDN hops natively; the final response.url is validated)",
   );
   assert(
     request.init.cache === "no-store",
@@ -161,49 +152,39 @@ Deno.test("publisher probe sends a bounded one-byte Range request without creden
   );
 });
 
-Deno.test("publisher probe follows redirects MANUALLY: intermediate hostile hop fails closed", async () => {
+Deno.test("publisher probe validates the FINAL response.url against the delivery allowlist", async () => {
   const file = LOCAL_MODEL_CATALOG[0].files[0];
-  // Hop 1 resolves to a hostile third-party host — must fail BEFORE any fetch
-  // of that host (the Location is validated, never followed).
+  // The browser follows the redirect; the FINAL url is a hostile host.
   const hostile = await probePublisherFile(file, {
-    fetchImpl: async (url, init) => {
-      if (url === file.url) return redirectResponse("https://evil.example/file.gguf");
-      throw new Error("hostile hop was followed");
-    },
+    fetchImpl: async () => rangeResponse(file, { url: "https://evil.example/file.gguf" }),
   });
-  assert(!hostile.ok && hostile.error.includes("allowlist"), `hostile hop passed: ${hostile.error}`);
+  assert(!hostile.ok && hostile.error.includes("allowlist"), `hostile final url passed: ${hostile.error}`);
   // A wrong scheme on a trusted-looking host is refused.
   const scheme = await probePublisherFile(file, {
-    fetchImpl: async (url) => {
-      if (url === file.url) return redirectResponse("http://cdn.hf.co/file.gguf");
-      throw new Error("http hop was followed");
-    },
+    fetchImpl: async () => rangeResponse(file, { url: "http://cdn.hf.co/file.gguf" }),
   });
-  assert(!scheme.ok && scheme.error.includes("https"), `http hop passed: ${scheme.error}`);
+  assert(!scheme.ok && scheme.error.includes("allowlist"), `http final url passed: ${scheme.error}`);
 });
 
-Deno.test("publisher probe enforces the strict redirect ceiling", async () => {
+Deno.test("publisher probe fails closed on an opaque (status 0 / empty url) cross-origin response", async () => {
   const file = LOCAL_MODEL_CATALOG[0].files[0];
-  let hopsSeen = 0;
+  // A cross-origin redirect without the CDN's CORP/CORS grant surfaces as an
+  // OPAQUE response: status 0 and an empty url. The final-url validation
+  // rejects it before any status/header/body trust.
   const result = await probePublisherFile(file, {
-    fetchImpl: async (url) => {
-      hopsSeen += 1;
-      // Always a fresh valid allowlisted hop target, but beyond the ceiling.
-      return redirectResponse("https://cdn.hf.co/hop-" + hopsSeen + "/file.gguf");
-    },
+    fetchImpl: async () => rangeResponse(file, { status: 0, url: "" }),
   });
-  assert(!result.ok && result.error.includes("ceiling"), `ceiling not enforced: ${result.error}`);
-  assert(hopsSeen === MAX_REDIRECT_HOPS + 1, `hops ${hopsSeen} != ${MAX_REDIRECT_HOPS + 1}`);
+  assert(!result.ok && result.error.includes("allowlist"), `opaque response passed: ${result.error}`);
 });
 
-Deno.test("publisher probe honors ONE absolute deadline across hops (no clock reset)", async () => {
+Deno.test("publisher probe honors ONE absolute deadline (no clock reset)", async () => {
   const file = LOCAL_MODEL_CATALOG[0].files[0];
   const started = Date.now();
   const result = await probePublisherFile(file, {
     timeoutMs: 120,
     fetchImpl: async (_url, init) => {
-      // The hop never completes: only the shared AbortController's deadline
-      // can terminate it — and a later hop must NOT reset that deadline.
+      // The fetch never completes: only the shared AbortController's deadline
+      // can terminate it — the browser-follow redirects cannot reset the clock.
       return new Promise((_resolve, reject) => {
         init.signal?.addEventListener("abort", () =>
           reject(new Error(String(init.signal?.reason ?? "aborted"))),
@@ -216,23 +197,20 @@ Deno.test("publisher probe honors ONE absolute deadline across hops (no clock re
   assert(elapsed >= 100 && elapsed < 2000, `deadline not absolute: ${elapsed}ms`);
 });
 
-Deno.test("publisher probe accepts a bounded hop chain with the pinned 206 + Content-Range", async () => {
+Deno.test("publisher probe reports the browser's truthful redirect fields", async () => {
   const file = LOCAL_MODEL_CATALOG[0].files[0];
-  const chain = [
-    (url) => url === file.url ? redirectResponse("https://cdn-lfs-us-1.hf.co/repos/a/1") : null,
-    (url) => url === "https://cdn-lfs-us-1.hf.co/repos/a/1" ? redirectResponse("https://cdn.hf.co/repos/b/2") : null,
-  ];
   const result = await probePublisherFile(file, {
-    fetchImpl: async (url) => {
-      for (const step of chain) {
-        const hop = step(url);
-        if (hop) return hop;
-      }
-      return rangeResponse(file);
-    },
+    fetchImpl: async () => rangeResponse(file, {
+      redirected: true,
+      url: "https://cdn.hf.co/repos/b/2",
+    }),
   });
-  assert(result.ok, `hop chain failed: ${result.error}`);
-  assert(result.hops === 2 && result.redirected === true && result.finalUrl === "https://cdn.hf.co/repos/b/2", `hops=${result.hops} final=${result.finalUrl}`);
+  assert(result.ok, `probe failed: ${result.error}`);
+  assert(
+    result.redirected === true && result.finalUrl === "https://cdn.hf.co/repos/b/2",
+    `redirected=${result.redirected} final=${result.finalUrl}`,
+  );
+  assert(!("hops" in result), "the manual-hop field must not survive the browser-follow schema");
 });
 
 Deno.test("publisher probe fails closed on status, Content-Range, Content-Length and body mismatches", async () => {

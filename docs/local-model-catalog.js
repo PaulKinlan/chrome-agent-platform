@@ -5,11 +5,10 @@ const PUBLISHER_HOST = "huggingface.co";
 const DELIVERY_HOST_SUFFIXES = [".huggingface.co", ".hf.co"];
 export const PREFLIGHT_RANGE = "bytes=0-0";
 export const DEFAULT_PREFLIGHT_TIMEOUT_MS = 10_000;
-// Strict product-owned redirect ceiling: the publisher resolver (huggingface.co)
-// redirects to its delivery CDN; the probe follows redirects MANUALLY, one hop
-// at a time, and fails closed past this ceiling. Never `redirect: "follow"` —
-// follow mode would silently chase an unbounded hostile chain.
-export const MAX_REDIRECT_HOPS = 3;
+// The probe uses the browser's native redirect handling (`redirect: "follow"`)
+// and validates the FINAL response.url against the trusted delivery allowlist
+// BEFORE trusting any status/header/body. No manual hop chain is re-implemented
+// (a manual chain would need to re-derive the browser's redirect policy).
 
 function publisherFile(repo, revision, name, bytes, sha256, role) {
   return Object.freeze({
@@ -157,67 +156,42 @@ export async function probePublisherFile(file, {
     timeoutMs,
   );
   try {
-    let currentUrl = file.url;
-    let hops = 0;
-    for (;;) {
-      const response = await fetchImpl(currentUrl, {
-        method: "GET",
-        headers: { Range: PREFLIGHT_RANGE },
-        credentials: "omit",
-        redirect: "manual",
-        cache: "no-store",
-        referrerPolicy: "no-referrer",
-        signal: controller.signal,
-      });
-      if (response.status >= 300 && response.status < 400) {
-        // A redirect hop: resolve the Location EXACTLY against the current URL
-        // and assert https + the publisher delivery allowlist at EVERY hop,
-        // under the strict product-owned ceiling. An intermediate hostile hop
-        // (wrong scheme or host) fails closed here — never followed.
-        hops += 1;
-        if (hops > MAX_REDIRECT_HOPS) {
-          throw new Error(`Redirect ceiling exceeded (${MAX_REDIRECT_HOPS} hops).`);
-        }
-        const location = response.headers.get("location");
-        if (!location) {
-          throw new Error("Redirect hop carried no Location header.");
-        }
-        let next;
-        try {
-          next = new URL(location, currentUrl);
-        } catch {
-          throw new Error("Redirect Location did not resolve to an absolute URL.");
-        }
-        if (next.protocol !== "https:") {
-          throw new Error("Redirect hop left the https scheme.");
-        }
-        if (!isTrustedDeliveryUrl(next.href)) {
-          throw new Error("Redirect hop left the publisher delivery allowlist.");
-        }
-        currentUrl = next.href;
-        continue;
-      }
-      // The terminal response: 206 + the pinned Content-Range + one byte.
-      if (response.status !== 206) {
-        throw new Error(`Expected HTTP 206; received ${response.status}.`);
-      }
-      const contentRange = response.headers.get("content-range");
-      if (parseContentRange(contentRange) !== file.bytes) {
-        throw new Error("Content-Range did not match the pinned byte size.");
-      }
-      if (response.headers.get("content-length") !== "1") {
-        throw new Error("Range response Content-Length was not one byte.");
-      }
-      await readOneByte(response);
-      return {
-        ok: true,
-        redirected: hops > 0,
-        hops,
-        finalUrl: currentUrl,
-        status: 206,
-        contentRange,
-      };
+    // `redirect: "follow"` lets the BROWSER chase the publisher → delivery-CDN
+    // redirects natively. We then validate the FINAL response.url is https and
+    // on the trusted delivery allowlist BEFORE accepting the 206/content-range/
+    // content-length/one-byte evidence. `credentials: "omit"` never exposes
+    // ambient auth; a cross-origin hop without the CDN's CORP/CORS grant
+    // surfaces as an opaque (status 0 / empty url) response and fails closed here.
+    const response = await fetchImpl(file.url, {
+      method: "GET",
+      headers: { Range: PREFLIGHT_RANGE },
+      credentials: "omit",
+      redirect: "follow",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    if (!isTrustedDeliveryUrl(response.url)) {
+      throw new Error("Final response URL left the publisher delivery allowlist.");
     }
+    if (response.status !== 206) {
+      throw new Error(`Expected HTTP 206; received ${response.status}.`);
+    }
+    const contentRange = response.headers.get("content-range");
+    if (parseContentRange(contentRange) !== file.bytes) {
+      throw new Error("Content-Range did not match the pinned byte size.");
+    }
+    if (response.headers.get("content-length") !== "1") {
+      throw new Error("Range response Content-Length was not one byte.");
+    }
+    await readOneByte(response);
+    return {
+      ok: true,
+      redirected: response.redirected === true,
+      finalUrl: response.url,
+      status: 206,
+      contentRange,
+    };
   } catch (error) {
     return { ok: false, error: String(error?.message ?? error) };
   } finally {
