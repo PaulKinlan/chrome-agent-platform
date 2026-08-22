@@ -1,16 +1,35 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Chrome Agent Platform — UI mocks</title>
-<style>body{font:16px/1.6 system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;background:#f7f6f3;color:#1d1b18}a{color:#0e6e63}</style></head><body>
-<h1>Chrome Agent Platform — UI mocks</h1>
-<p>Renderable mock pages for the agent-platform extension design. The real extension is in
-<code>extension/</code> (load unpacked).</p>
-<p><strong><a href="review-2026-08-21.html">Independent architectural review — 21 Aug 2026</a></strong>
-— the verified baseline, the delivery diagnosis, the reproduced defects, and the ordered
-work queue. The markdown source is <code>REVIEW-2026-08-21.md</code> in the repository.</p>
-<ul>
-<li><a href="components.html">Component gallery</a> — every UI element as a testable Web Component</li>
-<li><a href="ntp-hub.html">NTP agent hub</a></li>
-<li><a href="chat.html">Chat surface</a></li>
-<li><a href="directory.html">Agent directory</a></li>
-<li><a href="memory.html">Memory explorer</a></li>
-</ul>
-</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chrome Agent Platform — documentation</title>
+  <!-- CSP-safe, no-script redirect (the WCAG H76 pattern): a static meta
+       refresh to the component gallery with a visible fallback link. -->
+  <meta http-equiv="refresh" content="0; url=components.html">
+  <style>
+    body { font: 16px/1.6 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #f7f6f3; color: #1d1b18; }
+    a { color: #0e6e63; }
+    .withdrawn { border: 1px solid #ddd8d2; border-radius: 12px; padding: 1rem 1.25rem; background: #fff; }
+  </style>
+</head>
+<body>
+  <h1>Chrome Agent Platform — documentation</h1>
+  <p class="withdrawn" role="status">
+    The static design mocks are withdrawn: they duplicated the real extension, which is
+    the source of truth. The living surfaces are the
+    <a href="components.html">component gallery</a> (every UI element as a testable Web
+    Component) and the product documentation below. No screenshot claim is made here —
+    the extension is verified in a real browser, not a static mock.
+  </p>
+  <p>If you are not redirected automatically, open the
+    <a href="components.html">component gallery</a> directly.</p>
+  <ul>
+    <li><a href="components.html">Component gallery</a> — every UI element as a testable Web Component</li>
+    <li><a href="review-2026-08-21.html">Independent architectural review — 21 Aug 2026</a></li>
+    <li><a href="CONSTITUTION.md">The constitution</a> (the non-negotiable constraints)</li>
+    <li><a href="DESIGN.md">Design system</a></li>
+    <li><a href="DURABLE-RUN-ARCHITECTURE.md">Durable run architecture</a></li>
+  </ul>
+</body>
+</html>

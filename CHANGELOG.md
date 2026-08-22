@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.145] — 2026-08-22
+- chore(docs): withdraw the duplicated published mocks + the gallery redirect root, recomposed onto 30afd5a (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
+
 ## [0.2.144] — 2026-08-22
 - refactor(sw): extract guarded provider KV and lease routes (CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01)
 
