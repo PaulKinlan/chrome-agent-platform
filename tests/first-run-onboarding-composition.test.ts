@@ -76,17 +76,19 @@ Deno.test("first-run fragment navigation retains Settings route and explicit foc
 });
 
 Deno.test("first-run composition redacts setup state and only prefills the real composer", async () => {
-  const [worker, ntp] = await Promise.all([
+  const [worker, providerRoutes, ntp] = await Promise.all([
     text("../extension/background/service-worker.js"),
+    text("../extension/background/routes/provider.js").catch(() => ""),
     text("../extension/ntp/ntp.js"),
   ]);
-  const summaryStart = worker.indexOf('async "provider.summary"()');
-  const summaryEnd = worker.indexOf(
+  const providerSrc = providerRoutes || worker;
+  const summaryStart = providerSrc.indexOf('async "provider.summary"()');
+  const summaryEnd = providerSrc.indexOf(
     'async "provider.permission-summary"()',
     summaryStart,
   );
   assert(summaryStart >= 0 && summaryEnd > summaryStart);
-  const summaryRoute = worker.slice(summaryStart, summaryEnd);
+  const summaryRoute = providerSrc.slice(summaryStart, summaryEnd);
   assert(summaryRoute.includes("configured: keyedProviderConfigured(cfg)"));
   assert(!/return\s*\{[^}]*apiKey/s.test(summaryRoute));
   assert(!/return\s*\{[^}]*model/s.test(summaryRoute));

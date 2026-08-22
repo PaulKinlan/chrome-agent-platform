@@ -5,9 +5,9 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-22 08:38 UTC. Reconciled against exact public
-> `origin/main@e27937205a48ad5abaa6841716dc9cca180d5aa8` (`0.2.140`).
-> Current status counts: **10 OPEN · 5 IN_REVIEW · 1 MERGED · 3 BLOCKED ·
+> Snapshot: 2026-08-22 09:00 UTC. Reconciled against exact public
+> `origin/main@5e05fa95f05e3b38715cbe22335209d7874d5503` (`0.2.143`).
+> Current status counts: **9 OPEN · 7 IN_REVIEW · 1 MERGED · 2 BLOCKED ·
 > 33 DONE · 0 ABANDONED**. The 19 active entries and 33 archived terminal entries below
 > are the complete 52-entry tracker state at this snapshot.
 
@@ -529,17 +529,17 @@ On resume after a coordinator or worker loss:
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P2
-- Owner: dead-surface integration coordinator
+- Owner: docs withdrawal integrator
 - Workspace: active (local path private)
-- Branch: `integrate/provider-public-list-e279372`
+- Branch: `chore/docs-mock-withdrawal-e279372`
 - Base: `e27937205a48ad5abaa6841716dc9cca180d5aa8`
-- Candidate: this integration commit
-- Shipping: root-mock slice `origin/main@7b254e43c38569667045363405b3243e9951f926`; provider-visibility slice `origin/main@this integration commit`
+- Candidate: `7b1aa265cf2323e1cf32c36fd8916f08f82df971`
+- Shipping: root-mock slice `origin/main@7b254e43c38569667045363405b3243e9951f926`; provider-visibility slice `origin/main@d50ea21eb3ade27e45e921044c581d382b19fb72`
 - Acceptance: the `mock/` directory and its duplicated copies under `docs/` are removed; the published front page presents the component gallery and a real product screenshot rather than dead mocks, or is withdrawn; the Chrome Prompt API and demo-local providers are removed from the user-facing provider picker while remaining reachable for internal testing if still needed; the side panel's Page tab is either given a stated job or folded into the Agents view; every removal is checked for inbound references across code, docs, tests and the gallery sync before it lands
-- Review: DeepSeek Pro PASSed root-mock slice `7b254e4` and provider public-list/no-migration source `64e8b80`; current-main integration review and browser evidence pending
-- Gates: root-mock source/link/build/unit/gallery gates plus exact loaded-MV3 126/126 passed before public `7b254e4`; provider source focused 79/79, full 884/884, security 108/108 and build passed; current-main integration reruns pending
-- Blockers: published docs root/screenshot remains an explicit product decision; `/model` namespace removal is separate; persisted internal providers must remain runnable/unmodified. The Page tab has a tested current job and is retained.
-- Next: independently review and browser-test the current-main provider composition, then obtain the published-root/screenshot decision; do not remove internal provider authority or the Page tab
+- Review: DeepSeek Pro PASSed root-mock `7b254e4`, provider source `64e8b80`, exact current-main provider integration `d50ea21`, and docs-withdrawal source `7b1aa26`
+- Gates: root-mock and provider slices are public after full source gates and canonical loaded-MV3 126/126; provider targeted raw-CDP 10/10 proves public lists plus retained internal Demo/no migration; docs source focused 3/3, full 891/891, build/gallery/link/accessibility gates passed
+- Blockers: only the independently PASSed docs withdrawal remains to recompose onto current main. Internal provider authority and the tested Page tab are intentionally retained.
+- Next: land the docs withdrawal current-main recomposition after its exact delta review; then archive this task as DONE
 - Recover: `git show --stat origin/main && git grep -n "publicProviderChoices\|Internal testing provider active" -- extension tests`
 - History:
   - 2026-08-22 08:38 UTC — recomposed independently PASSed provider public-list/no-migration behavior onto current public `e279372`: public surfaces exclude Demo/Prompt API while existing internal global/per-agent selections remain effective and render truthful inert replacement state without storage mutation.
@@ -549,23 +549,24 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01] Split the service-worker route surface
 - Feedback: 2026-08-21 — independent architectural review found 127 message routes in a single 4,799-line flat handler object, identifying it as a structural cause of cross-lane merge conflict and the serialized integration queue
-- Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
+- Updated: 2026-08-22 09:00 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `cdc1a657e3907e018ba8fb33de066aec95bd9596`
-- Candidate: —
+- Owner: route integration coordinator
+- Workspace: active (local path private)
+- Branch: `integrate/sw-routes-d50ea21`
+- Base: `5e05fa95f05e3b38715cbe22335209d7874d5503`
+- Candidate: this integration commit
 - Shipping: —
 - Acceptance: routes are grouped into modules by subsystem behind a thin dispatcher; the sender-authorization decision, the page-route allowlist and the error-shaping path remain single authorities and are not duplicated per module; the external message contract is byte-identical — every route name, request shape and response shape unchanged; the bundle contains no new `eval`/`new Function`; no behavior change is bundled with the move
-- Review: independent security review specifically confirming the page-route allowlist and sender authorization cannot be bypassed through any new module boundary
-- Gates: full unit suite and `scripts/chrome-journeys.ts` green; `npm run test:security`; a diff-derived list proving the set of route names before and after is identical; bundle size and service-worker registration time compared before and after
-- Blockers: must not start until `CAP-FB-20260821-STALE-BRANCH-TRIAGE-01` completes — a wide mechanical move performed while 46 branches are outstanding would invalidate all of them
-- Next: after the branch triage, produce the route-to-module map and confirm the authorization seams before moving any code
-- Recover: `git grep -c '^  \(async \)\?"' -- extension/background/service-worker.js`
+- Review: DeepSeek Pro PASSed source `5b57c10`; GPT source/no-loss review PASSed route/security behavior in predecessor integration `bd06e1b` but BLOCKed its premature tracker state; exact corrected one-commit successor re-review pending
+- Gates: source/no-loss review verified 119 inline +14 extracted =133 route parity, collision-failing frozen maps, real extracted-handler tests, full 908/908, security 7/7 and build; canonical loaded-MV3 126/126 passed on the same route bytes; corrected successor reruns/review pending
+- Blockers: corrected tracker/release successor must pass exact re-review before push; stale branch cleanup is complete non-destructively and hygiene tooling/type gate are public through `5e05fa9`
+- Next: re-review exact corrected one-commit successor, rerun exact-release security/build and canonical Chrome if product bytes differ, then remotely attest the landing
+- Recover: `git show origin/main -- extension/background/routes extension/background/service-worker.js tests/sw-route-modularization.test.ts`
 - History:
+  - 2026-08-22 09:00 UTC — recomposed independently PASSed provider/KV/permission-lease extraction onto current public `5e05fa9`; preserved Durable authority and moved `provider.models` to the extracted module using `publicProviderChoices`, while the full provider catalog remains internal runtime authority. The first integration commit was not pushed because review caught premature MERGED/shipping claims and stale status counts; this one-commit successor corrects only that tracker truth.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D7). Explicitly sequenced after the branch triage to avoid invalidating outstanding work.
 

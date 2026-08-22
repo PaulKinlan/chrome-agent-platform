@@ -6,12 +6,8 @@ import {
   getModel,
   getModelForAgent,
   getProviderConfig,
-  PROVIDER_CHOICES,
   resolveModelFromConfig,
-  setProviderConfig,
 } from "../lib/provider.js";
-import { keyedProviderConfigured } from "../lib/first-run-onboarding.js";
-import { publicProviderChoices } from "../lib/provider-visibility.js";
 import {
   providerRunGate,
   recordProviderFailure,
@@ -23,8 +19,13 @@ import {
   providerOriginPattern,
 } from "../lib/provider-gate.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
-import { testProvider } from "../lib/provider-test.js";
-import { acquireLease, settleLease, leaseState } from "../lib/perm-lease.js";
+import {
+  createProviderRoutes,
+  kvRoutes,
+  mergeRouteMaps,
+  permLeaseRoutes,
+  requireSettingsSender,
+} from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
@@ -2015,29 +2016,10 @@ function dispatchRoute(type, body, context) {
 // gated permission request; this boundary means no OTHER extension surface
 // (a conversation page, a compromised renderer surface) can drive them.
 
-function requireSettingsSender(context) {
-  // (review a258f814 HIGH) ATTESTED-PRINCIPAL ONLY: the dispatcher computed
-  // principal="owner-options" from the browser-attested sender (exact id +
-  // URL + documentId + active lifecycle) via isExactOptionsSender. The
-  // raw-sender fallback is REMOVED — query/hash spoofs, missing IDs, or
-  // inactive documents can never reach a credential route. Direct
-  // (non-dispatch) invocation is refused by design; tests drive the real
-  // dispatcher.
-  if (context?.principal === "owner-options") return;
-  throw new Error("provider credential routes are restricted to the Settings surface");
-}
+const providerRoutes = createProviderRoutes({ invalidateAgent });
 
-// SECRET-BEARING NAMESPACES (the sol review's HIGH-1). Raw credentials live
-// under these KV keys (per-agent provider overrides carry provider.apiKey;
-// the global providerConfig carries the key). The GENERIC kv.get route must
-// NEVER return them raw — the dedicated resolution paths (getNamedAgentProvider
-// / provider.get in Settings) are the ONLY authorities that read a key back,
-// and they are internal to the SW. Generic reads of these namespaces get a
-// deep redactSecrets() pass; this also covers management tools that callRoute
-// kv.get.
-const SECRET_KV_KEYS = new Set(["cap:namedAgents", "providerConfig"]);
-
-const handlers = {
+const handlers = mergeRouteMaps(
+  {
   // The controlled cross-origin fetch for the script-host (and any extension
   // page): the service worker performs the fetch with the extension's host
   // permission (which bypasses CORS), so a page/script fetch never hits the
@@ -2228,214 +2210,11 @@ const handlers = {
     }
     return res;
   },
-  // Shared key-value access, EXTENSION-ONLY. Page surfaces route their key-value
-  // reads/writes through these routes so the service worker is the SINGLE
-  // authority for shared state (provider, theme, browser-control grant, multi-
-  // agent). When storage is absent, the SW's session Map is the one shared store
-  // — pages must never call kv* directly in their own realm (the round-15
-  // split-authority finding: Settings said granted while the worker said no).
-  async "kv.get"(m) {
-    // ONE composed secret-safe read path (static-review finding 1): the
-    // attestation key is denied outright on explicit reads and stripped from
-    // read-alls; EVERY secret-bearing namespace (the per-agent provider
-    // overrides + the global provider config) is deep-redacted recursively —
-    // both BEFORE the single reachable return. No unreachable dead code.
-    const keys = m?.keys;
-    const list = keys == null ? null : Array.isArray(keys) ? keys : [keys];
-    if (list && list.includes(ATTESTATION_KEY_STORE)) {
-      return {
-        ok: false,
-        error: `${ATTESTATION_KEY_STORE} is key material managed by the prompt.* routes — never exposed by a generic read`,
-      };
-    }
-    const SECRET_KV_KEYS = new Set(["cap:namedAgents", "providerConfig"]);
-    const raw = list == null ? await kvGet(null) : await kvGet(list);
-    delete raw[ATTESTATION_KEY_STORE];
-    for (const k of Object.keys(raw)) {
-      if (SECRET_KV_KEYS.has(k)) raw[k] = redactSecrets(raw[k]);
-    }
-    return raw;
   },
-  async "kv.set"(m, context) {
-    if (!m?.values || typeof m.values !== "object") {
-      return { ok: false, error: "kv.set needs a values object" }
-    }
-    // Key-specific storage authority: the prompt-override store (its
-    // quarantine + the attestation key) is owned by the prompt.* routes — a
-    // generic kv.set must never mutate it outside the overrides mutex, the
-    // strict schema, and the CAS guard (the review's bypass finding).
-    const owned = Object.keys(m.values).filter((k) => PROMPT_OWNED_KEYS.includes(k));
-    if (owned.length) {
-      return {
-        ok: false,
-        error: `${owned.join(", ")} is managed by the prompt.* routes — direct kv writes are refused`,
-      };
-    }
-    // SECRET-BEARING NAMESPACES (review a258f814 HIGH): providerConfig and the
-    // named-agent registry are credential-bearing and lifecycle-controlled.
-    // Generic kv writes must NEVER mutate them outside the Settings surface —
-    // providerConfig goes through provider.set (key-preserving, invalidateAgent)
-    // and the registry through the named-agent routes (revision-fenced). Without
-    // this, any extension principal (NTP, a compromised surface) bypasses owner
-    // authorization by writing the store directly.
-    const SECRET_CONTROLLED = ["providerConfig", "cap:namedAgents"];
-    const secretKeys = Object.keys(m.values).filter((k) => SECRET_CONTROLLED.includes(k));
-    if (secretKeys.length && context?.principal !== "owner-options") {
-      securityEvent("blocked-action", `kv.set denied for secret-controlled keys (${secretKeys.join(", ")}) from principal ${context?.principal ?? "unknown"}`);
-      return {
-        ok: false,
-        error: `${secretKeys.join(", ")} are secret-controlled stores — mutation requires the Settings surface (provider.set / named-agent routes)`,
-      };
-    }
-    try {
-      const mode = await kvSet(m.values);
-      return { ok: true, mode };
-    } catch (e) {
-      return { ok: false, error: String(e?.message ?? e) };
-    }
-  },
-  async "kv.remove"(m, context) {
-    if (m?.keys == null) return { ok: false, error: "kv.remove needs keys" };
-    const list = Array.isArray(m.keys) ? m.keys : [m.keys];
-    const owned = list.filter((k) => PROMPT_OWNED_KEYS.includes(k));
-    if (owned.length) {
-      return {
-        ok: false,
-        error: `${owned.join(", ")} is managed by the prompt.* routes — direct kv removes are refused`,
-      };
-    }
-    // SECRET-BEARING NAMESPACES (review a258f814 HIGH): removing providerConfig
-    // from a non-Settings principal would bypass provider.clear-key (the only
-    // sanctioned key-removal path); removing the registry bypasses the fenced
-    // delete lifecycle.
-    const SECRET_CONTROLLED = ["providerConfig", "cap:namedAgents"];
-    const secretKeys = list.filter((k) => SECRET_CONTROLLED.includes(k));
-    if (secretKeys.length && context?.principal !== "owner-options") {
-      securityEvent("blocked-action", `kv.remove denied for secret-controlled keys (${secretKeys.join(", ")}) from principal ${context?.principal ?? "unknown"}`);
-      return {
-        ok: false,
-        error: `${secretKeys.join(", ")} are secret-controlled stores — removal requires the Settings surface (provider.clear-key / named-agent routes)`,
-      };
-    }
-    await kvRemove(list);
-    return { ok: true };
-  },
-  // ── the permission-request LEASE registry (the final review's HIGH): the SW
-  // is the single coordination authority ACROSS ALL PAGES. Pages acquire a
-  // lease before prompting (chrome.permissions.request must run in the page's
-  // own gesture), settle it with the outcome (late settles accepted for the
-  // matching generation), and every surface can observe the settle broadcast.
-  async "perm-lease.acquire"({ pattern }) {
-    return await acquireLease(String(pattern ?? ""));
-  },
-  async "perm-lease.settle"({ pattern, generation, token, granted, error }) {
-    // The UNGUESSABLE OWNER TOKEN is threaded through (the acceptance review's
-    // CRITICAL: dropping it here made every real settlement fail the
-    // token-owner check — unit tests bypassed the route and hid it).
-    const r = settleLease(String(pattern ?? ""), { generation, token, granted, error });
-    if (r.broadcast) {
-      // Deliver the late-settle to every extension page (the consumers in
-      // options.js + conversation.js reconcile their UI from this message).
-      chrome.runtime.sendMessage(r.broadcast).catch(() => {});
-    }
-    return r;
-  },
-  async "perm-lease.state"({ pattern }) {
-    return await leaseState(String(pattern ?? ""));
-  },
-  async "provider.get"(_m, context) {
-    requireSettingsSender(context);
-    // REDACTED (the final review's HIGH): the raw apiKey NEVER crosses into a
-    // page — not even Settings. The response carries hasApiKey so the UI can
-    // show "key set — leave blank to keep" and offer Clear key, and the rest
-    // of the config (provider/baseURL/model) which are not credentials. The
-    // key itself is SW-ONLY: preservation happens inside provider.set, the
-    // connection test runs inside provider.test, and model resolution reads
-    // the stored config directly.
-    const cfg = await getProviderConfig();
-    return { ...cfg, apiKey: "", hasApiKey: Boolean(cfg.apiKey) };
-  },
-  async "provider.summary"() {
-    // A REDACTED summary for non-Settings surfaces (which provider is active,
-    // the baseURL needed for the host-permission pattern, and a boolean setup
-    // state). Neither the raw key nor the model crosses into a non-Settings DOM.
-    const cfg = await getProviderConfig();
-    return {
-      provider: cfg.provider,
-      baseURL: cfg.baseURL ?? "",
-      configured: keyedProviderConfigured(cfg),
-    };
-  },
-  async "provider.permission-summary"() {
-    // Permission preflight must not pull the provider key/model/base URL into a
-    // non-settings DOM. Return only the normalized origin match needed by the
-    // owner surface; malformed network endpoints fail closed as unavailable.
-    const cfg = await getProviderConfig();
-    return {
-      provider: String(cfg.provider ?? "").slice(0, 80),
-      local: isLocalProvider(cfg),
-      origin: providerOriginPattern(cfg),
-    };
-  },
-  async "provider.status"() {
-    // Whether the active provider can RUN right now — the hub shows a warning
-    // BEFORE a task when the provider is unreachable / misconfigured, so the
-    // user isn't surprised by a failure after running. Redacted: only the id,
-    // a boolean, and a human reason (never the key / base URL / model).
-    const cfg = await getProviderConfig();
-    const gate = await providerRunGate(cfg);
-    return {
-      provider: cfg.provider ?? "",
-      ok: gate.ok,
-      reason: gate.ok ? "" : gate.reason,
-    };
-  },
-  async "provider.set"(m, sender) {
-    requireSettingsSender(sender);
-    // SW-SIDE KEY PRESERVATION (the final review's HIGH): when apiKey is
-    // ABSENT (undefined — e.g. the Settings key field left blank on the SAME
-    // provider), the stored key is preserved INSIDE the SW; an explicit ""
-    // from the dedicated clear-key route is the only removal path. The route
-    // returns the REDACTED config — the raw key never crosses back out.
-    const cfg = m?.config ?? {};
-    // Blank/absent key on the SAME provider → preserve (the final review's
-    // HIGH: an explicit "" must NOT erase — provider.clear-key, restricted to
-    // the Settings surface, is the ONLY removal path).
-    if (cfg.apiKey === undefined || cfg.apiKey === "") {
-      const cur = await getProviderConfig();
-      cfg.apiKey = cur.provider === cfg.provider && cur.apiKey ? cur.apiKey : "";
-    }
-    const next = await setProviderConfig(cfg);
-    // The running agent must switch immediately — invalidate the cached model + orchestrator.
-    invalidateAgent();
-    return { ...next, apiKey: "", hasApiKey: Boolean(next.apiKey) };
-  },
-  async "provider.clear-key"(_m, sender) {
-    requireSettingsSender(sender);
-    // The OWNER-GESTURE explicit clear (the Settings "Clear key" button). The
-    // ONLY path that removes a stored key; returns the redacted config.
-    const cur = await getProviderConfig();
-    const next = await setProviderConfig({ ...cur, apiKey: "" });
-    invalidateAgent();
-    return { ok: true, config: { ...next, apiKey: "", hasApiKey: false } };
-  },
-  async "provider.test"(m, sender) {
-    requireSettingsSender(sender);
-    // The connection test runs INSIDE the SW so the stored key is merged here
-    // — the page passes only the entered fields (an entered key wins; blank
-    // means "use the stored one", which the page never sees). The page has
-    // already performed the host-permission request on its user gesture.
-    const cur = await getProviderConfig();
-    const fields = {
-      baseURL: String(m?.baseURL ?? cur.baseURL ?? ""),
-      apiKey: String(m?.apiKey ?? "") || (cur.provider === (m?.provider ?? cur.provider) ? (cur.apiKey ?? "") : ""),
-      model: String(m?.model ?? cur.model ?? ""),
-    };
-    const preset = PROVIDER_CHOICES.find((p) => p.id === (m?.provider ?? cur.provider)) ??
-      { id: m?.provider ?? cur.provider, name: m?.provider ?? cur.provider, baseURL: fields.baseURL, needsKey: true };
-    const res = await testProvider(preset, fields);
-    return { ...res, error: res?.error ? safeProviderError(res.error, fields.apiKey ? [fields.apiKey] : []) : res?.error };
-  },
+  kvRoutes,
+  permLeaseRoutes,
+  providerRoutes,
+  {
   async "invalidate-agent"() {
     // The options page calls this after toggling agent mode (multi-agent) so the
     // running orchestrator is rebuilt with the new setting.
@@ -2458,13 +2237,6 @@ const handlers = {
       generation,
     };
   },
-  async "provider.models"() {
-    // User-facing /model completion gets only public providers. The complete
-    // PROVIDER_CHOICES authority remains intact for stored internal selections,
-    // provider.test, Prompt API helpers, and deterministic Demo runs.
-    return { choices: publicProviderChoices(PROVIDER_CHOICES) };
-  },
-
   async "agent.run"(m) {
     // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust
     // a client-claimed size), enforce per-item AND aggregate limits + a count cap,
@@ -4786,7 +4558,8 @@ const handlers = {
   async "security.clear"() {
     return securityClear();
   },
-};
+  },
+);
 
 async function resumeInterruptedRuns() {
   await durableRecoveryReady;

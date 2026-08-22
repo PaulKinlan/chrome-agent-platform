@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.144] — 2026-08-22
+- refactor(sw): extract guarded provider KV and lease routes (CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01)
+
 ## [0.2.143] — 2026-08-22
 - test(worktree-hygiene): restore canonical TypeScript gate (CAP-FB-20260821-WORKTREE-HYGIENE-01)
 
