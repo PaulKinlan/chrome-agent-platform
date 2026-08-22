@@ -118,3 +118,63 @@ export function buildWasiFdRoundTripWasm() {
     ...section(11, dataPayload),
   ]);
 }
+
+/** A minimal WASI fixture with a configurable entry export for the canonical
+ * worker's export-selection contract:
+ *  - exportName "run"   → a plain function export (function-export tool shape)
+ *  - exportName "_start" → the WASI command/main convention (csvtool shape)
+ *  - exportName null    → NO entry export (neither → export-missing)
+ *  - callsProcExit      → the body calls proc_exit(code) after writing "hi"
+ *    to stdout (fd_write(1, iovec@0x20, 1, nwritten@0x30)); with
+ *    callsProcExit=false the body just writes + returns.
+ *  - importProcExit     → include the proc_exit import (required when calling).
+ */
+export function buildWasiEntryExportWasm({ exportName, callsProcExit = false, exitCode = 0, importProcExit = callsProcExit }) {
+  const tWrite = [0x60, 4, 0x7f, 0x7f, 0x7f, 0x7f, 1, 0x7f];
+  const tExit = [0x60, 1, 0x7f, 0];
+  const typePayload = importProcExit ? [3, ...tWrite, ...tExit, 0x60, 0x00, 0x00] : [2, ...tWrite, 0x60, 0x00, 0x00];
+  const imp = (m, n, ti) => [...nameBytes(m), ...nameBytes(n), 0x00, ti];
+  const importPayload = [importProcExit ? 2 : 1,
+    ...imp("wasi_snapshot_preview1", "fd_write", 0),
+    ...(importProcExit ? [...imp("wasi_snapshot_preview1", "proc_exit", 1)] : []),
+  ];
+  // function type indices: 0 = fd_write, 1 = proc_exit, last = the empty main
+  const mainTypeIndex = importProcExit ? 0x02 : 0x01;
+  const funcPayload = [1, mainTypeIndex];
+  const memoryPayload = [1, 0x01, 0x01, 0x01];
+
+  const DATA = [...new TextEncoder().encode("hi")];
+  const dataPayload = [
+    2,
+    0x00, 0x41, ...u32leb(0x10), 0x0b, ...u32leb(DATA.length), ...DATA,
+    0x00, 0x41, ...u32leb(0x20), 0x0b, ...u32leb(8), 0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+  ];
+
+  const mainFuncIndex = importProcExit ? 0x02 : 0x01;
+  const exportPayload = [
+    exportName ? 2 : 1,
+    ...(exportName ? [...nameBytes(exportName), 0x00, mainFuncIndex] : []),
+    ...nameBytes("memory"), 0x02, 0x00,
+  ];
+
+  // fd_write(1, iovs@0x20, 1, nwritten@0x30); drop; [i32.const code; call proc_exit]; end
+  const body = [
+    0x41, 0x01, 0x41, 0x20, 0x41, 0x01, 0x41, 0x30,
+    0x10, 0x00, 0x1a,
+    ...(callsProcExit
+      ? [0x41, ...u32leb(exitCode), 0x10, 0x01, 0x0b]
+      : [0x0b]),
+  ];
+  const codePayload = [1, ...u32leb(1 + body.length), 0x00, ...body];
+
+  return new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ...section(1, typePayload),
+    ...section(2, importPayload),
+    ...section(3, funcPayload),
+    ...section(5, memoryPayload),
+    ...section(7, exportPayload),
+    ...section(10, codePayload),
+    ...section(11, dataPayload),
+  ]);
+}

@@ -35,6 +35,7 @@ import {
   boundPreviewResult,
   buildPreviewAuthority,
   buildPreviewJob,
+  extractPreviewInput,
   PREVIEW_SETTINGS_ORIGIN,
   revalidateCsvtoolExecution,
   validatePreviewInput,
@@ -2405,15 +2406,15 @@ const handlers = mergeRouteMaps(
     // 1. The STRICT bounded request (args + stdin only; no fences/bytes).
     let input;
     try {
-      input = validatePreviewInput(m);
+      input = validatePreviewInput(extractPreviewInput(m));
     } catch (error) {
       return { ok: false, error: `tool preview rejected: ${error?.code ?? error}` };
     }
     // 2. Immutable revalidation at execution: fetch the pinned bundled
     //    manifest + CAS bytes and re-check digest/sha/size/imports/memory/caps
     //    through the REAL package authority.
-    const manifestRel = "extension/wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json";
-    const casRel = "extension/wasm/cas/5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.wasm";
+    const manifestRel = "wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json";
+    const casRel = "wasm/cas/5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.wasm";
     let manifestText;
     let casBytes;
     try {
@@ -2446,9 +2447,9 @@ const handlers = mergeRouteMaps(
     } catch (error) {
       return { ok: false, error: `tool preview job rejected: ${error?.code ?? error}` };
     }
-    // 4. Run in the offscreen document (the only Worker-capable surface) via
-    //    the canonical Gate-2 fresh-Worker executor. Bounded wall time.
-    await ensureOffscreen().catch(() => {});
+    // 4. Run in the OPTIONS document (the Settings-only Gate-2 host — the
+    //    options page is Worker-capable + COI; no offscreen permission is
+    //    requested, no NTP/content/offscreen fallback). Bounded wall time.
     const envelope = await new Promise((resolve) => {
       let settled = false;
       const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -2457,10 +2458,13 @@ const handlers = mergeRouteMaps(
         PREVIEW_LIMITS.wallMs + 5000,
       );
       chrome.runtime.sendMessage({
-        type: "wasm.preview",
+        type: "wasm.preview.options",
         authority,
         job,
-        wasmBytes: casBytes,
+        // Explicit transport: runtime messaging JSON-serializes typed arrays,
+        // so the bytes travel as an explicit byte array + are strictly
+        // revalidated + rehydrated on the options host side.
+        wasmBytes: Array.from(casBytes),
         wallMs: PREVIEW_LIMITS.wallMs,
       }).then(
         (res) => { clearTimeout(timer); finish(res ?? { ok: false, error: "no offscreen response" }); },

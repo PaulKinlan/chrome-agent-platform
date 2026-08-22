@@ -129,3 +129,83 @@ Deno.test("tool-library: the component registers with the design system", async 
   const source = await text("../extension/shared/components.js");
   assertMatch(source, /customElements\.define\("tool-library", ToolLibrary\)/, "registered");
 });
+
+// ── TDZ regression (browser gate): render with settingsPreviewCsvtool:true ──
+// The preview reveal must not touch `s` before `const s = this._summary`
+// (a Temporal-Dead-Zone ReferenceError). This test INVOKES the real _render
+// with a stub shadow DOM — not just a string scan.
+
+Deno.test("tool-library: _render with settingsPreviewCsvtool:true reveals the preview without throwing (TDZ regression)", async () => {
+  class El {
+    constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.className = ""; this.hidden = false; this.attrs = {}; this.classes = new Set(); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] ?? null; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = [...nodes]; }
+    get classList() { return { toggle: (_c, _v) => {}, add: (_c) => {}, remove: (_c) => {} }; }
+  }
+  const registry = new Map();
+  const previewEl = new El("div");
+  const statusEl = new El("p");
+  const catalogEl = new El("div");
+  const bySelector = new Map([
+    [".status-line", statusEl],
+    [".catalog", catalogEl],
+    [".preview", previewEl],
+  ]);
+  const shadow = {
+    _html: "",
+    set innerHTML(v) { this._html = v; },
+    get innerHTML() { return this._html; },
+    querySelector(sel) { return bySelector.get(sel) ?? null; },
+    querySelectorAll() { return []; },
+  };
+  globalThis.HTMLElement = class {
+    attachShadow() { return shadow; }
+    addEventListener() {}
+    dispatchEvent() { return true; }
+    getAttribute() { return null; }
+    hasAttribute() { return false; }
+  };
+  globalThis.customElements = {
+    define(name, cls) { registry.set(name, cls); },
+    get(name) { return registry.get(name); },
+  };
+  globalThis.window = globalThis;
+  globalThis.CustomEvent = class { constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; } };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.document = {
+    createElement: (tag) => new El(tag),
+    querySelector: () => null,
+    head: { appendChild() {} },
+    getElementById: () => null,
+  };
+
+  const mod = await import("../extension/shared/components.js?tdz-regression");
+  const ToolLibraryClass = mod.ToolLibrary ?? registry.get("tool-library");
+  assert(ToolLibraryClass, "ToolLibrary class exported/registered");
+  const library = Object.create(ToolLibraryClass.prototype);
+  library._root = shadow;
+  library._rendered = false;
+  library._state = "ready";
+  library._announcedState = "";
+  library._error = "";
+  library._results = null;
+  library._summary = null;
+  // The TDZ path: setting the summary with settingsPreviewCsvtool:true MUST
+  // render without throwing and MUST reveal the preview panel.
+  let threw = null;
+  try {
+    library.summary = { settingsPreviewCsvtool: true, descriptorCount: 25, bySource: {}, catalogDiagnostics: {}, selectionDiagnostics: {} };
+    library.state = "ready";
+  } catch (error) {
+    threw = error;
+  }
+  assertEquals(threw, null, `render must not throw (TDZ regression): ${threw?.message ?? threw}`);
+  assertEquals(previewEl.hidden, false, "the preview panel must be revealed when settingsPreviewCsvtool is true");
+
+  // The negative path: without the flag the panel stays hidden.
+  previewEl.hidden = true;
+  library.summary = { descriptorCount: 25, bySource: {}, catalogDiagnostics: {}, selectionDiagnostics: {} };
+  assertEquals(previewEl.hidden, true, "the preview panel stays hidden without the flag");
+});

@@ -20,6 +20,7 @@ import {
   createWasiPreview1Runtime,
   revalidateAuditedMemory,
 } from "./wasi-preview1-runtime.js";
+import { WasiProcExit } from "./wasm-host-types.js";
 import { auditWasmBinary, WASM_PACKAGE_LIMITS } from "./wasm-package-authority.js";
 import { createSyncWorkspace } from "./wasm-sync-workspace.js";
 import { TRANSPORT_MESSAGE_TYPES } from "./wasm-executor.js";
@@ -201,13 +202,38 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
     const module = await WebAssembly.instantiate(wasmBytes, runtime.imports);
     const instance = module.instance;
     result = instance;
-    const exportName = "run";
-    const fn = instance.exports[exportName];
-    if (typeof fn !== "function") {
+    // Entry-export selection (canonical, NOT preview-specific): prefer the
+    // function-export `run`; fall back to the WASI command/main convention
+    // `_start` (e.g. the csvtool). Neither export → export-missing.
+    const fn = typeof instance.exports.run === "function"
+      ? instance.exports.run
+      : typeof instance.exports._start === "function"
+        ? instance.exports._start
+        : null;
+    if (!fn) {
       throw failClosed("export-missing");
     }
-    fn();
-    const snapshot = runtime.snapshot();
+    let snapshot;
+    try {
+      fn();
+      snapshot = runtime.snapshot();
+    } catch (error) {
+      if (error instanceof WasiProcExit && error.code === 0) {
+        // `_start` success: proc_exit(0) IS the normal WASI command
+        // completion — snapshot the output so bounded stdout/stderr content
+        // is preserved (never dropped).
+        snapshot = runtime.snapshot();
+      } else if (error instanceof WasiProcExit) {
+        // Nonzero: the CURRENT failure schema — ok:false phase proc-exit with
+        // errno = the exit code; bounded, no stale stdout under this schema.
+        const exit = new Error(`WASI proc_exit(${error.code})`);
+        exit.executorCode = "proc-exit";
+        exit.errno = error.code;
+        throw exit;
+      } else {
+        throw error;
+      }
+    }
     respond(Object.freeze({
       type: TRANSPORT_MESSAGE_TYPES.RESULT,
       sessionId,
@@ -230,7 +256,10 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
     let phase;
     if (code.startsWith("audit:")) {
       phase = auditPhaseForCode(code.slice("audit:".length));
-    } else if (error instanceof Error && String(error.message).includes("proc_exit")) {
+    } else if (
+      String(error?.executorCode ?? "") === "proc-exit" ||
+      (error instanceof Error && String(error.message).includes("proc_exit"))
+    ) {
       phase = "proc-exit";
     } else if (String(error?.executorCode ?? "") === "export-missing") {
       phase = "runtime-error";

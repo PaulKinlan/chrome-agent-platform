@@ -6573,9 +6573,9 @@ class ToolLibrary extends Component {
 
     if (this._state === "loading" || this._state === "unavailable" || this._state === "error") return;
 
+    const s = this._summary;
     const preview = this._root.querySelector(".preview");
     if (preview && s?.settingsPreviewCsvtool === true) preview.hidden = false;
-    const s = this._summary;
     if (s) {
       const total = document.createElement("p");
       total.className = "meta";

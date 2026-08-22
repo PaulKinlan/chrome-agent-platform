@@ -20,6 +20,9 @@
 //     reviewed offscreen document.
 
 import { createWasiJob } from "./wasm-host-types.js";
+import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
+
+const EXECUTOR_REQUEST_MAX_BYTES = EXECUTOR_BOUNDS.maxRequestBytes;
 import {
   WasmPackageAuthority,
   auditWasmBinary,
@@ -72,6 +75,57 @@ function randomHex(bytes) {
   const out = new Uint8Array(bytes);
   crypto.getRandomValues(out);
   return [...out].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The explicit wasm-bytes transport: Chrome runtime messaging JSON-serializes
+// typed arrays, so a Uint8Array never arrives as `instanceof Uint8Array` on the
+// receiving side. The SW sends an explicit Array.from(casBytes) array and the
+// options host STRICTLY validates + rehydrates it before the host contract
+// (which requires a genuine Uint8Array). Bound: 8 bytes .. maxRequestBytes.
+export function rehydratePreviewWasmBytes(value) {
+  if (!Array.isArray(value) || value.length < 8 ||
+      value.length > EXECUTOR_REQUEST_MAX_BYTES) {
+    fail("preview_wasm_transport");
+  }
+  const out = new Uint8Array(value.length);
+  for (let index = 0; index < value.length; index++) {
+    const byte = value[index];
+    if (typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 255) {
+      fail("preview_wasm_transport");
+    }
+    out[index] = byte;
+  }
+  return out;
+}
+
+// The stdin transport rehydration: createWasiJob on the SW side emits the
+// stdin as a FROZEN PLAIN byte array, which the generic offscreen-host contract
+// (createWasiJob) rejects (it requires a genuine Uint8Array). The options host
+// STRICTLY validates + rehydrates a dense byte array (0..maxStdinBytes, every
+// element an integer 0..255, no holes) and clones the job before handleJob.
+export function rehydratePreviewStdin(value) {
+  if (!Array.isArray(value)) fail("preview_stdin_transport");
+  if (value.length > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin_transport");
+  const out = new Uint8Array(value.length);
+  for (let index = 0; index < value.length; index++) {
+    const byte = value[index];
+    if (typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 255) {
+      fail("preview_stdin_transport");
+    }
+    out[index] = byte;
+  }
+  return out;
+}
+
+/** The route's LOCAL extraction from the runtime message. The global
+ * dispatcher passes the message body (which carries `type`) straight to the
+ * handler, so the strict validator would reject it; this extracts ONLY
+ * `args` + `stdin` so the standard `{type,args,stdin}` message works and ANY
+ * extra key (hostile or accidental) can never reach the validator/executor.
+ * The global dispatch is deliberately NOT modified. */
+export function extractPreviewInput(message) {
+  if (!plainData(message)) return message; // let the validator reject the shape
+  return { args: message.args, stdin: message.stdin };
 }
 
 /** The STRICT exact-key bounded preview request: ONLY `args` + `stdin`.
@@ -131,6 +185,10 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     fail("preview_authority");
   }
   const stdinBytes = encoder.encode(input.stdin);
+  // argv0 = the program name: the WASI `_start` command convention REQUIRES
+  // argv[0] (the csvtool exits with code 2 when it is absent). The Settings
+  // UI stays command-only — the program name is prepended here, never typed.
+  const args = [PREVIEW_TOOL_ID, ...input.args];
   const job = createWasiJob({
     tier: "tiny",
     context: {
@@ -139,7 +197,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
       origin: authority.origin,
       workspaceRoot: `tool-jobs/${authority.executionId}/${authority.callId}/`,
     },
-    args: input.args,
+    args,
     stdin: stdinBytes,
     quota: quota ?? {
       hostCalls: 50_000,

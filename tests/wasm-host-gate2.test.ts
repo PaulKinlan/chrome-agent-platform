@@ -20,7 +20,7 @@ import {
 } from "../extension/lib/wasm-executor.js";
 import { createOffscreenWasmHost, validateOffscreenRequest } from "../extension/lib/wasm-offscreen-host.js";
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
-import { buildWasiFdRoundTripWasm } from "./wasm-fixture-builder.mjs";
+import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm } from "./wasm-fixture-builder.mjs";
 import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtime.js";
 import { WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS } from "../extension/lib/wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
@@ -100,6 +100,81 @@ function makeRequest(overrides = {}) {
     ...overrides,
   };
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// (B9) WASI fd_read STDIN short-read semantics (oversized advertised iovecs)
+// ──────────────────────────────────────────────────────────────────────────
+function directRuntime(jobOverrides = {}, memoryBytes = 256 * 1024) {
+  const ws = createSyncWorkspace({ root: "tool-jobs/exec-1/call-1/" });
+  const mem = new Uint8Array(memoryBytes);
+  const memory = {
+    size: () => mem.byteLength,
+    read: (p, l) => mem.slice(p, p + l),
+    write: (p, b) => { mem.set(b, p); },
+  };
+  const job = makeJob(jobOverrides);
+  const runtime = createWasiPreview1Runtime({ job, memory, workspace: ws });
+  return { wasi: runtime.imports.wasi_snapshot_preview1, mem, job, ws };
+}
+
+Deno.test("WASI fd_read STDIN: an OVERSIZED advertised iovec short-reads the real stdin to SUCCESS+EOF (no E2BIG, no large allocation)", () => {
+  // The advertised buffer (8388609 B) must FIT the memory so the pointer
+  // validation passes and the total-length exemption is what's under test.
+  const { wasi, mem } = directRuntime(
+    { stdin: new Uint8Array(new TextEncoder().encode("hi")) },
+    9 * 1024 * 1024,
+  );
+  // iovec at 4000 = { buf: 5000, len: 8388609 (MAX_INPUT+1) } — the csvtool
+  // advertises a huge read buffer while the actual stdin is 2 bytes.
+  mem.set([0x88, 0x13, 0x00, 0x00], 4000);      // buf ptr 5000
+  mem.set([0x01, 0x80, 0x80, 0x00], 4004);      // len 8388609 (0x800001)
+  const v = new DataView(mem.buffer);
+  const errno = wasi.fd_read(0, 4000, 1, 4100);
+  assertEquals(errno, WASI_ERRNO.SUCCESS, `oversized advertised stdin iovec short-reads, not E2BIG: ${errno}`);
+  assertEquals(v.getUint32(4100, true), 2, "nread = the real stdin bytes");
+  assertEquals(new TextDecoder().decode(mem.slice(5000, 5002)), "hi", "the real stdin bytes are copied");
+  // EOF: the second read sees no remaining bytes → nread 0 (SUCCESS + EOF).
+  const errno2 = wasi.fd_read(0, 4000, 1, 4104);
+  assertEquals(errno2, WASI_ERRNO.SUCCESS);
+  assertEquals(v.getUint32(4104, true), 0, "EOF short-read");
+});
+
+Deno.test("WASI fd_read STDIN: OOB/overlap iovecs still reject EINVAL (table/pointer/overlap checks unchanged)", () => {
+  const { wasi, mem } = directRuntime({ stdin: new Uint8Array([1, 2, 3]) }, 1024 * 1024);
+  // iovec buffer overlapping the iovec TABLE → EINVAL.
+  mem.set([0x84, 0x0f, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00], 4000); // buf 3972, len 4 → 3972..3976? NO — buf 4004, len 4
+  mem.set([0xa4, 0x0f, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00], 4000); // buf 4004, len 8 → overlaps the table 4000..4008
+  assertEquals(wasi.fd_read(0, 4000, 1, 4100), WASI_ERRNO.EINVAL, "table-overlapping buffer rejects");
+  // two iovecs whose buffers overlap each other → EINVAL.
+  mem.set([0x20, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00], 4000); // buf 0x20 len 0x10
+  mem.set([0x28, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00], 4008); // buf 0x28 len 0x10 (overlaps row 0)
+  assertEquals(wasi.fd_read(0, 4000, 2, 4100), WASI_ERRNO.EINVAL, "mutually-overlapping buffers reject");
+  // the iovec buffer overlapping the nread result → EINVAL.
+  mem.set([0x00, 0x10, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00], 4000); // buf 4096, len 8 → 4096..4104 overlaps nread@4100
+  assertEquals(wasi.fd_read(0, 4000, 1, 4100), WASI_ERRNO.EINVAL, "result-overlapping buffer rejects");
+});
+
+Deno.test("WASI fd_read FILE + fd_write: advertised totals > MAX_IO_BYTES_PER_CALL still E2BIG (cap preserved)", () => {
+  // A 2 MiB memory so a 1 MiB+1 advertised total passes the pointer check
+  // and the MAX_IO_BYTES_PER_CALL cap is what's exercised.
+  const { wasi, mem, ws } = directRuntime({}, 2 * 1024 * 1024);
+  // open a real file + write a payload.
+  const putPath = (ptr, text) => { const b = new TextEncoder().encode(text); mem.set(b, ptr); return b.length; };
+  const v = new DataView(mem.buffer);
+  const pathLen = putPath(1000, "scratch/f.bin");
+  const rights = WASI_RIGHTS.FD_WRITE | WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_SEEK | WASI_RIGHTS.FD_TELL | WASI_RIGHTS.FD_FILESTAT_GET;
+  const openErrno = wasi.path_open(3, 0, 1000, pathLen, WASI_OFLAGS.CREAT, rights, 0n, 0, 2000);
+  assertEquals(openErrno, WASI_ERRNO.SUCCESS);
+  const fd = v.getUint32(2000, true);
+  // fd_write with an advertised total > 1 MiB (1048577, fits the memory) →
+  // E2BIG (unchanged — the write path never gets the stdin exemption).
+  mem.set([0x70, 0x17, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00], 4000); // buf 6000, len 1048577 (> MAX_IO_BYTES_PER_CALL)
+  assertEquals(wasi.fd_write(fd, 4000, 1, 4100), WASI_ERRNO.E2BIG, "write overbound stays E2BIG");
+  // FILE read with an advertised total > 1 MiB → E2BIG (the stdin exemption is
+  // NOT extended to files).
+  const readFd = v.getUint32(2000, true);
+  assertEquals(wasi.fd_read(readFd, 4000, 1, 4100), WASI_ERRNO.E2BIG, "file read overbound stays E2BIG");
+});
 
 // ──────────────────────────────────────────────────────────────────────────
 // 1. (B1) REAL synchronous stat/open/read/write/close round trips
@@ -210,6 +285,43 @@ Deno.test("audit: a valid bounded module completes (phase completed) through the
 // ──────────────────────────────────────────────────────────────────────────
 // 3. (B3) strict EXACT-key UTF-8-byte-bounded schemas
 // ──────────────────────────────────────────────────────────────────────────
+Deno.test("worker export selection: the function-export `run` entry is compatible (stdout preserved)", async () => {
+  const res = await runRealWorker(buildWasiEntryExportWasm({ exportName: "run" }));
+  assertEquals(res.ok, true, JSON.stringify(res));
+  assertEquals(res.phase, "completed", JSON.stringify(res));
+  assertEquals(res.stdout, "hi", "the run entry writes to stdout");
+});
+
+Deno.test("worker export selection: the WASI command `_start` entry runs normally (stdout preserved)", async () => {
+  const res = await runRealWorker(buildWasiEntryExportWasm({ exportName: "_start" }));
+  assertEquals(res.ok, true, JSON.stringify(res));
+  assertEquals(res.phase, "completed", JSON.stringify(res));
+  assertEquals(res.stdout, "hi", "the _start entry writes to stdout");
+});
+
+Deno.test("worker export selection: `_start` with proc_exit(0) is a SUCCESS with output preserved", async () => {
+  const res = await runRealWorker(buildWasiEntryExportWasm({ exportName: "_start", callsProcExit: true, exitCode: 0 }));
+  assertEquals(res.ok, true, JSON.stringify(res));
+  assertEquals(res.phase, "completed", JSON.stringify(res));
+  assertEquals(res.errno, null, JSON.stringify(res));
+  assertEquals(res.stdout, "hi", "proc_exit(0) output is snapshotted, never dropped");
+});
+
+Deno.test("worker export selection: `_start` with proc_exit(2) FAILS with errno 2 (phase proc-exit, bounded, no stale stdout)", async () => {
+  const res = await runRealWorker(buildWasiEntryExportWasm({ exportName: "_start", callsProcExit: true, exitCode: 2 }));
+  assertEquals(res.ok, false, JSON.stringify(res));
+  assertEquals(res.phase, "proc-exit", JSON.stringify(res));
+  assertEquals(res.errno, 2, JSON.stringify(res));
+  assertEquals(res.stdout, "", "the failure schema keeps no stale stdout");
+});
+
+Deno.test("worker export selection: NEITHER run nor _start rejects with export-missing", async () => {
+  const res = await runRealWorker(buildWasiEntryExportWasm({ exportName: null }));
+  assertEquals(res.ok, false, JSON.stringify(res));
+  assert(res.phase === "runtime-error" || res.phase === "proc-exit", res.phase);
+  assert(String(res.error).includes("export-missing"), `error names the missing export: ${res.error}`);
+});
+
 Deno.test("schemas: EXACT keys — extra keys are rejected everywhere", () => {
   for (const bad of [
     { ...makeRequest(), call: {} },                       // extra key

@@ -451,7 +451,7 @@ export function createWasiPreview1Runtime({
     if ((record.rights & right) !== right) fault(WASI_ERRNO.ENOTCAPABLE);
   }
 
-  function parseIovecs(iovsPointer, iovsLength, resultPointer) {
+  function parseIovecs(iovsPointer, iovsLength, resultPointer, { allowOversize = false } = {}) {
     const count = asU32(iovsLength);
     if (count > WASI_HOST_HARD_LIMITS.MAX_IOVECS) fault(WASI_ERRNO.E2BIG);
     const tableBytes = count * 8;
@@ -483,10 +483,17 @@ export function createWasiPreview1Runtime({
         }
       }
       total += data.len;
-      if (
-        !Number.isSafeInteger(total) ||
-        total > WASI_HOST_HARD_LIMITS.MAX_IO_BYTES_PER_CALL
-      ) fault(WASI_ERRNO.E2BIG);
+      if (!Number.isSafeInteger(total)) fault(WASI_ERRNO.E2BIG);
+      // The MAX_IO_BYTES_PER_CALL cap is preserved for FILE reads and ALL
+      // writes. For STDIN reads an advertised iovec length is NOT a promise to
+      // consume that many bytes — a tool may advertise a large buffer while
+      // the actual job stdin is tiny (short-read on EOF). The table/pointer/
+      // overlap checks above still reject OOB/overlap; the copy below is
+      // bounded by the REAL remaining stdin bytes (already ≤ the validated
+      // stdin quota), so no large allocation ever happens.
+      if (!allowOversize && total > WASI_HOST_HARD_LIMITS.MAX_IO_BYTES_PER_CALL) {
+        fault(WASI_ERRNO.E2BIG);
+      }
       rows.push(data);
     }
     return rows;
@@ -784,14 +791,22 @@ export function createWasiPreview1Runtime({
         fault(WASI_ERRNO.EBADF);
       }
       requireRight(record, WASI_RIGHTS.FD_READ);
-      const rows = parseIovecs(iovsPtr, iovsLength, nreadPtr);
+      const rows = parseIovecs(iovsPtr, iovsLength, nreadPtr, {
+        allowOversize: record.kind === FD_KIND.STDIN,
+      });
       let total = 0;
       for (const row of rows) {
         if (row.len === 0) continue;
         let bytes;
         if (record.kind === FD_KIND.STDIN) {
+          // Short-read on EOF: copy at most the REAL remaining stdin bytes
+          // (≤ the already-validated stdin quota) — never the advertised
+          // length, so an oversized advertised buffer cannot allocate.
+          const remaining = job.stdin.length - state.stdinOffset;
+          if (remaining <= 0) break;
+          const take = Math.min(row.len, remaining);
           bytes = new Uint8Array(
-            job.stdin.slice(state.stdinOffset, state.stdinOffset + row.len),
+            job.stdin.slice(state.stdinOffset, state.stdinOffset + take),
           );
         } else {
           const remaining = job.quota.fileBytes - state.fileBytes;
