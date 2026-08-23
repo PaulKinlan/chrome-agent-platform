@@ -1,6 +1,9 @@
 # Changelog
 
 ## [0.2.203] — 2026-08-23
+- feat(discovery): add list_tools enumeration capability and truthful bundled Wasm tool discovery — bounded result (50/category, 256B desc, ≤32KiB, truncated flag), protected policy + agent.js aligned, count-neutral Tool Library template (CAP-FB-20260823-AGENT-WASM-DISCOVERY-01)
+
+## [0.2.203] — 2026-08-23
 - feat(nav): adopt Navigation API with history fallback for Settings and back button routing (CAP-FB-20260823-NAVIGATION-BACK-01)
 
 ## [0.2.202] — 2026-08-23

@@ -402,6 +402,88 @@ export class LazyToolProtocol {
     );
   }
 
+  async list(request = {}, context = {}) {
+    const signal = ownData(context, "signal");
+    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+    let snapshot;
+    try {
+      snapshot = await liveSnapshot(this.#readSources);
+    } catch {
+      return fixedError("lazy-source-unavailable");
+    }
+    if (isAborted(signal)) return fixedError("lazy-run-aborted");
+
+    const descriptors = snapshot.catalog.descriptors || [];
+    const filterSource = typeof request?.source === "string" ? request.source.trim().toLowerCase() : null;
+
+    const bySource = {
+      builtin: [],
+      browser: [],
+      management: [],
+      "bundled-wasm": [],
+      webmcp: [],
+    };
+
+    const maxPerCategory = 50;
+    const maxDescBytes = 256;
+    const MAX_RESULT_BYTES = 32 * 1024;
+    let currentEstimatedBytes = 256; // envelope baseline
+    let truncated = false;
+
+    for (const desc of descriptors) {
+      const srcKind = desc.sourceKind;
+      let group = "builtin";
+      if (srcKind === "chrome-api") group = "browser";
+      else if (srcKind === "management") group = "management";
+      else if (srcKind === "bundled-package") group = "bundled-wasm";
+      else if (srcKind.startsWith("webmcp")) group = "webmcp";
+
+      if (filterSource && filterSource !== group && filterSource !== srcKind) {
+        continue;
+      }
+
+      if (bySource[group].length >= maxPerCategory) {
+        truncated = true;
+        continue;
+      }
+
+      const itemDesc = truncateUtf8(String(desc.description ?? ""), maxDescBytes);
+      const entry = {
+        name: String(desc.name ?? ""),
+        description: itemDesc,
+        capabilities: Array.isArray(desc.capabilities) ? desc.capabilities.slice(0, 8) : [],
+        availability: desc.availability ?? "ready",
+        sourceKind: desc.sourceKind ?? "extension-builtin",
+      };
+
+      const entryBytes = utf8ByteLength(JSON.stringify(entry));
+      if (currentEstimatedBytes + entryBytes > MAX_RESULT_BYTES) {
+        truncated = true;
+        break;
+      }
+
+      currentEstimatedBytes += entryBytes;
+      bySource[group].push(entry);
+    }
+
+    const counts = {
+      total: descriptors.length,
+      builtin: bySource.builtin.length,
+      browser: bySource.browser.length,
+      management: bySource.management.length,
+      bundledWasm: bySource["bundled-wasm"].length,
+      webmcp: bySource.webmcp.length,
+    };
+
+    return Object.freeze({
+      ok: true,
+      counts,
+      truncated,
+      tools: bySource,
+      summary: `Total tools: ${descriptors.length} (builtin: ${counts.builtin}, browser: ${counts.browser}, management: ${counts.management}, bundled-wasm: ${counts.bundledWasm}, webmcp: ${counts.webmcp}). Use search_tools to get an executable selectionRef for a tool.`,
+    });
+  }
+
   async execute(request = {}, context = {}) {
     const signal = ownData(context, "signal");
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
@@ -685,8 +767,20 @@ export function createLazyProviderToolset({
           : fixedError("lazy-run-context-unavailable");
       },
     }),
-    execute_tool: tool({
+    list_tools: tool({
       description: LAZY_PROTOCOL_TOOL_WIRE[1].description,
+      inputSchema: z.object({
+        source: z.string().optional(),
+      }).strict(),
+      execute: async (request) => {
+        const context = await readContext();
+        return context
+          ? await protocol.list(request, context)
+          : fixedError("lazy-run-context-unavailable");
+      },
+    }),
+    execute_tool: tool({
+      description: LAZY_PROTOCOL_TOOL_WIRE[2].description,
       inputSchema: z.object({
         selectionRef: z.string().regex(/^sel_[a-f0-9]{36}$/u),
         arguments: z.record(z.unknown()),

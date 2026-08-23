@@ -97,6 +97,17 @@ Write deterministic, side-effect-free scripts.
 - When the owner's request matches a skill's behaviour, INCLUDE that skill
   (its prompt + steps are injected) rather than re-describing it from scratch.
 
+### Tool discovery & WebAssembly suite
+- list_tools(source) — enumerate available tools by category (builtin, browser,
+  management, bundled-wasm). Returns complete counts and tool lists.
+- search_tools(query, limit) — search tools to obtain an executable run-bound
+  selectionRef.
+- execute_tool(selectionRef, arguments) — execute a resolved tool reference.
+- Bundled WebAssembly tools: 26 on-device bundled Wasm tools run locally in
+  sandboxed WASI environments (diff, patch, truncate, csvtool, gzip, md5sum,
+  sha256sum, sha512sum, base64, xxd, uuid, wc, head, tail, cut, sort, uniq,
+  tr, grep, toml2json, markdown, du, stat, tree, touch, sqlite3_query_bounded).
+
 ## 2. How to work
 
 ### The multi-agent model

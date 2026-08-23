@@ -611,6 +611,7 @@ Deno.test("lazy provider capture: only two fixed protocol tools and selected sch
   assertEquals(capture.protocolTools, LAZY_PROTOCOL_TOOL_WIRE);
   assertEquals(capture.protocolTools.map((row: { name: string }) => row.name), [
     "search_tools",
+    "list_tools",
     "execute_tool",
   ]);
   assertEquals(capture.selectedDescriptors.length, 1);
@@ -638,7 +639,7 @@ Deno.test("lazy protocol: production provider cutover binds only the fixed pair 
   );
   assertStringIncludes(agent, "createLazyProviderToolset");
   assertStringIncludes(agent, "const allTools = lazy.tools");
-  assertStringIncludes(policy, "first call search_tools with a narrow query");
+  assertStringIncludes(policy, "first call search_tools (or list_tools)");
   assertStringIncludes(policy, "then call execute_tool with the exact selectionRef");
   assertStringIncludes(worker, "readMasterLazySources");
   assertStringIncludes(worker, "readSiteLazySources");

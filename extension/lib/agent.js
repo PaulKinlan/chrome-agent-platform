@@ -540,7 +540,7 @@ export function createAgent({
       });
     },
   });
-  // The provider receives exactly the two fixed lazy protocol tools. Every
+  // The provider receives the fixed lazy protocol tools. Every
   // source closure above stays private until a fresh search result is resolved
   // and execute_tool revalidates it; empty/ambiguous search never falls back to
   // eager exposure.

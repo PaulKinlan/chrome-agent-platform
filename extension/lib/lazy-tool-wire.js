@@ -38,6 +38,21 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
     }),
   }),
   Object.freeze({
+    name: "list_tools",
+    description:
+      "Enumerate available tools grouped by source category (builtin, browser, management, bundled-wasm). Returns tool inventories and counts.",
+    inputSchema: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      properties: Object.freeze({
+        source: Object.freeze({
+          type: "string",
+          description: "Optional category filter: 'builtin' | 'browser' | 'management' | 'bundled-wasm' | 'webmcp'",
+        }),
+      }),
+    }),
+  }),
+  Object.freeze({
     name: "execute_tool",
     description:
       "Resolve one run-bound tool reference and invoke its existing authorized dispatcher.",

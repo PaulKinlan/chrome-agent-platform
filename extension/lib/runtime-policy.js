@@ -24,7 +24,7 @@
 // instruction; the id is stable (tests + docs reference ids).
 
 export const LAZY_TOOL_FLOW_RULE =
-  "For every tool action, first call search_tools with a narrow query, inspect only its bounded results, then call execute_tool with the exact selectionRef returned for that same run. Never invent, alter, cache, or reuse a selectionRef; narrow the query when results are ambiguous. Search is discovery only and never grants a permission, capability, enrollment, package admission, or owner approval.";
+  "For every tool action, first call search_tools (or list_tools) with a narrow query, inspect only its bounded results, then call execute_tool with the exact selectionRef returned for that same run. Never invent, alter, cache, or reuse a selectionRef; narrow the query when results are ambiguous. Search is discovery only and never grants a permission, capability, enrollment, package admission, or owner approval.";
 
 export const RUNTIME_POLICY = [
   {

@@ -50,7 +50,7 @@ function records(count: number, suffix = "a") {
   });
 }
 
-Deno.test("lazy provider cutover: 20/100/1000 catalogs expose exactly two fixed tools and constant schema bytes", async () => {
+Deno.test("lazy provider cutover: 20/100/1000 catalogs expose exactly three fixed tools and constant schema bytes", async () => {
   const wireBytes = new TextEncoder().encode(JSON.stringify(LAZY_PROTOCOL_TOOL_WIRE)).byteLength;
   const measurements = [];
   for (const count of [20, 100, 1000]) {
@@ -60,8 +60,8 @@ Deno.test("lazy provider cutover: 20/100/1000 catalogs expose exactly two fixed 
       contextReader: context,
       selectionAuthority: new ToolSelectionAuthority({ newRef: refs() }),
     });
-    assertEquals(Object.keys(bound.tools), ["search_tools", "execute_tool"]);
-    assertEquals(bound.diagnostics().exposedToolCount, 2);
+    assertEquals(Object.keys(bound.tools), ["search_tools", "list_tools", "execute_tool"]);
+    assertEquals(bound.diagnostics().exposedToolCount, 3);
     const bytes = new TextEncoder().encode(JSON.stringify(LAZY_PROTOCOL_TOOL_WIRE)).byteLength;
     assertEquals(bytes, wireBytes);
     const eagerBytes = new TextEncoder().encode(JSON.stringify(source.map((r) => r.descriptorInput))).byteLength;
@@ -106,7 +106,7 @@ Deno.test("lazy provider cutover: actual AI-SDK provider options stay fixed and 
     };
   });
   for (const capture of projected) {
-    assertEquals(capture.names, ["search_tools", "execute_tool"]);
+    assertEquals(capture.names, ["search_tools", "list_tools", "execute_tool"]);
     assert(!/tool_(?:19|99|999)|marker-(?:20|100|1000)/u.test(capture.wire));
   }
   assertEquals(new Set(projected.map((entry) => entry.bytes)).size, 1);

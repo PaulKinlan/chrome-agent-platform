@@ -6844,8 +6844,7 @@ class ToolLibrary extends Component {
       <div class="catalog"></div>
       <div class="packages">
         <h3>Bundled tool packages</h3>
-        <p class="meta">No bundled Wasm packages are admitted in this build. If a future reviewed
-          package host lands, admitted bundles and their pins will be listed here.</p>
+        <p class="meta">Admitted bundled WebAssembly tool packages will be listed here when loaded.</p>
       </div>
       <div class="preview" hidden>
         <h3>Bundled tool previews</h3>
@@ -6942,6 +6941,14 @@ class ToolLibrary extends Component {
         ? ` · catalog generation ${s.catalogGeneration.slice(0, 12)}` : "";
       total.textContent = `${s.descriptorCount ?? 0} tools visible to diagnostics${gen}`;
       host.append(total);
+
+      const packagesMeta = this._root.querySelector(".packages .meta");
+      const bundledCount = s.bySource?.["bundled-package"] ?? 0;
+      if (packagesMeta) {
+        packagesMeta.textContent = bundledCount > 0
+          ? `${bundledCount} immutable bundled WebAssembly tool packages are admitted in this build.`
+          : "No bundled Wasm packages are admitted in this build. If a future reviewed package host lands, admitted bundles and their pins will be listed here.";
+      }
 
       const groups = document.createElement("section");
       groups.className = "groups";
