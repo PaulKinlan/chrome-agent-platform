@@ -202,14 +202,14 @@ On resume after a coordinator or worker loss:
   is Settings-owner-click preview only. A task's agent therefore cannot
   actually run them yet
 - Updated: 2026-08-23 23:30 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `8bb5d40`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@befdacdb4742eafdda06908477810c382f9af5c8` (0.2.206)
 - Acceptance: a run-bound, per-call-revalidated provider dispatch closure for
   admitted bundled WASM tools — execute_tool(selectionRef, args) runs the tool
   in a fresh dedicated Worker from the immutable CAS package bytes, over a
@@ -225,7 +225,7 @@ On resume after a coordinator or worker loss:
   bytes or capabilities from the request
 - Blockers: composes with the lazy protocol, the scratch/workspace model, and
   the immutable package authority
-- Next: land after re-review of the hardened candidate
+- Next: —
 - Owner policy (2026-08-23, explicit): bundled tools are APPROVED to run in
   tasks because they are installed (admitted) in the build — admission is the
   grant. Gate = admitted-in-live-catalog + valid owner run; per-call
