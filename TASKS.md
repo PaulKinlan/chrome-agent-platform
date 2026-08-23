@@ -1513,7 +1513,7 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01] Downloadable in-extension local model management
 - Feedback: 2026-08-19 — product-owner voice feedback requested on-demand local models inside the extension; the transcript's apparent “Gemma 4” wording is uncertain and is not a model claim, while Gemma and Qwen are the requested model families
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: implementation lane (assigned 2026-08-23)
@@ -1521,7 +1521,7 @@ On resume after a coordinator or worker loss:
 - Branch: `docs/local-model-management-current-main`
 - Base: `669016edc75531f014a1e8406d4d39192b26750c`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@4136ea1535b923c3b8f7face3e45c84b03c2cc0a` (0.2.208, download/install/remove surface; inference engine lane separate)
 - Acceptance: Settings lets the owner explicitly discover, download on demand, select, update, and delete browser-local models without Ollama; model entries expose safe provenance, version, size, integrity and licence information before download; large downloads have truthful progress plus cancel, resumable recovery, integrity verification, and version-aware update behavior; quota, storage usage, deletion, device capability, WebGPU and Wasm compatibility are visible before destructive or expensive actions; a verified download supports inference with network disabled; no network access, model discovery, model download, selection change, update, or deletion occurs silently; every quota, compatibility, integrity, interruption, offline, and inference failure has a clear bounded recovery path
 - Review: independently accepted TASKS-only source capture `676bfa0674d1525362b3496e81e3047dcefb6727`; exact current-main replay review pending, then independent runtime, supply-chain, licence, privacy, storage, performance, accessibility, and exact loaded-MV3 browser review
 - Gates: document an evidence-based comparison of ONNX Runtime Web versus Transformers.js and justify any other browser-native runtime before adoption; use bounded small model/manifest/corruption/interruption fixtures in CI; drive the real loaded MV3 Settings UI through explicit discovery, download, progress, cancel/resume, integrity, select, offline inference, update, storage accounting, and deletion journeys with network assertions and before/after evidence; CI fixtures do not substitute for a real compatible model artifact and offline inference acceptance
