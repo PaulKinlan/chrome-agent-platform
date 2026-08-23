@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.2.187] — 2026-08-23
+- feat(notifications): route notification clicks to task view and bounded agent actions (CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01)
 - chore(tasks): capture nine owner-reported bugs (first-run assets, configure deeplink, example agent, browser-control consent, side-panel background agents, icon-on-create, HTML iframe size, generate_ui render) and escalate local-model management to P0 in-flight
 
 ## [0.2.186] — 2026-08-23

@@ -15,10 +15,13 @@ import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
 import { ATTESTATION_KEY_STORE } from "../extension/lib/system-prompts.js";
 import { kvSet } from "../extension/lib/kv.js";
 
-// Canonical baseline route list (134 exact routes: 133 preserved + shadow diagnostics)
+// Canonical baseline route list (138 exact routes: 135 preserved + 3 notification-click routes)
 const BASELINE_ROUTES = [
   "cap:fetch",
   "capabilities.status",
+  "notifications.list",
+  "notification.get",
+  "notification.dismiss",
   "alarms.permission-granted",
   "capability.revoke",
   "kv.get",

@@ -9,6 +9,13 @@ import {
   resolveModelFromConfig,
 } from "../lib/provider.js";
 import {
+  NotificationRegistry,
+  handleNotificationClick,
+  handleNotificationClosed,
+  NOTIFICATION_STATES,
+  NOTIFICATION_ACTION_TYPES,
+} from "../lib/notification-action-routing.js";
+import {
   providerRunGate,
   recordProviderFailure,
   recordProviderSuccess,
@@ -200,6 +207,8 @@ import {
   executableManagementToolRecords,
   executableWebMcpToolRecords,
 } from "../lib/lazy-tool-protocol.js";
+
+const notificationRegistry = new NotificationRegistry();
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -1868,7 +1877,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         })();
         if (canNotify && chrome.notifications?.create) {
           try {
-            await chrome.notifications.create(`cap:${taskId}`, {
+            const notifId = `cap:task:${taskId}`;
+            await notificationRegistry.registerNotification({
+              notificationId: notifId,
+              taskId,
+              executionId,
+              threadId: taskId,
+              title: "Scheduled task complete",
+              message: String(result ?? "").slice(0, 160),
+              action: { type: "default" },
+            });
+            await chrome.notifications.create(notifId, {
               type: "basic",
               iconUrl: chrome.runtime.getURL("icons/icon128.png"),
               title: "Scheduled task complete",
@@ -2432,6 +2451,33 @@ const handlers = mergeRouteMaps(
     // tabs, scripting, notifications, sidePanel). The Settings panel renders
     // enable buttons from this; the Chrome suite asserts the empty base list.
     return await capabilityStatus();
+  },
+  async "notifications.list"(m, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    const list = await notificationRegistry.listNotifications({
+      state: m?.state,
+      agentId: m?.agentId,
+      taskId: m?.taskId,
+      executionId: m?.executionId,
+      limit: m?.limit ?? 50,
+    });
+    return { ok: true, notifications: list };
+  },
+  async "notification.get"(m, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    const record = await notificationRegistry.getNotification(m?.id);
+    return { ok: Boolean(record), notification: record };
+  },
+  async "notification.dismiss"(m, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    const record = await notificationRegistry.updateState(m?.id, "dismissed");
+    return { ok: Boolean(record), notification: record };
   },
   async "alarms.permission-granted"(_message, context) {
     // Settings owns chrome.permissions.request on its genuine click. The worker
@@ -3935,6 +3981,14 @@ const handlers = mergeRouteMaps(
     const snapshot = await durableRuns.list();
     const run = snapshot.runs.find((row) => row.executionId === executionId);
     if (!run) return { ok: false, error: "run_not_found", executionId };
+    // N-2 defense-in-depth (CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01): when
+    // the caller carries an expected agent identity (the notification-click
+    // path binds it from the SW-authored registry record), the run being
+    // resumed MUST be that exact agent — cross-agent execution aliasing fails
+    // closed. Callers that pass no expectation are unconstrained.
+    if (m?.expectedAgentId != null && run.agentId !== m.expectedAgentId) {
+      return { ok: false, error: "agent_mismatch", executionId };
+    }
     if (["cancelled", "cancel-requested"].includes(run.phase)) {
       return { ok: false, cancelled: true, error: "cancelled_requires_new_run", executionId };
     }
@@ -5431,6 +5485,25 @@ function wireHookListeners() {
   bind("runtime", "onSuspend", "runtime.onSuspend", () => ({}));
 }
 wireHookListeners();
+
+// Notification Click & Closed routing (CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01)
+chrome.notifications?.onClicked?.addListener((notificationId) => {
+  handleNotificationClick(notificationId, {
+    registry: notificationRegistry,
+    resumeAgentExecution: async ({ executionId, agentId, prompt }) => {
+      if (handlers["run.resume"]) {
+        return await handlers["run.resume"]({ executionId, expectedAgentId: agentId }, { principal: "extension" });
+      }
+      return { ok: false, error: "resume_handler_missing" };
+    },
+  }).catch((e) => console.warn("notification click routing failed", e?.message ?? e));
+});
+
+chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
+  handleNotificationClosed(notificationId, byUser, {
+    registry: notificationRegistry,
+  }).catch((e) => console.warn("notification close tracking failed", e?.message ?? e));
+});
 
 // Capture errors + rejections into the diagnostics ring buffer so the
 // <error-console> + <security-shield> can surface them (the transparency
