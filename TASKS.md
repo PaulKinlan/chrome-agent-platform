@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **27 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 54 nonterminal and 40 terminal status entries
-> below are the complete 94-entry state.
+> Branch status counts: **29 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 56 nonterminal and 40 terminal status entries
+> below are the complete 96-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,70 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
+
+- Feedback: 2026-08-23 — product owner requested common Unix and system tools
+  as additional WASM admissions: awk, sed, jq, date as the common set;
+  pandoc, tesseract, qpdf, pup, qsv, mlr, zq, htmlq, numbat, fend, xan,
+  lychee, bttf, tokei as the complex set
+- Updated: 2026-08-23 22:05 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `0fae090`
+- Candidate: —
+- Shipping: —
+- Acceptance: each candidate gets the full admission pipeline — provenance
+  and licence audit first (GPL-family tools need explicit policy disposition
+  before any build), deterministic retained-build preflight under the safe
+  build environment, import/memory census against the supported set, bounded
+  immutable spec contract, and separate reviewed admission; jq is the
+  frontrunner (selection already PASSed as jq_filter_bounded); no candidate
+  ships without the five never-fabricate inputs
+- Review: pending licence triage, then per-candidate independent reviews
+- Gates: licence allowlist disposition per tool; build feasibility per tool;
+  import/memory bounds per tool; serial admission ordering
+- Blockers: licence triage must precede any GPL-family build work
+- Next: run the licence/feasibility triage across all eighteen candidates
+- Recover: `git grep -n "EXTENDED-TOOL-FAMILIES" -- TASKS.md`
+- History:
+  - 2026-08-23 22:05 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-PYODIDE-PYTHON-01] Python in the browser via Pyodide
+
+- Feedback: 2026-08-23 — product owner wants to run Python in the browser,
+  possibly via Pyodide
+- Updated: 2026-08-23 22:05 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `0fae090`
+- Candidate: —
+- Shipping: —
+- Acceptance: a feasibility decision with evidence — Pyodide (or alternative)
+  core size and memory footprint measured against the extension's budget,
+  CSP/wasm interaction verified in loaded MV3, licence disposition (Pyodide
+  MPL-2.0 + CPython PSF), OPFS persistence model for the runtime and
+  packages, sandboxing boundary versus the existing fresh-Worker host, and a
+  minimum viable slice definition if feasible
+- Review: pending independent architecture/licence/security review of the
+  feasibility report
+- Gates: measured size/memory; licence allowlist disposition; CSP probe;
+  OPFS model; isolation boundary analysis
+- Blockers: —
+- Next: feasibility research report
+- Recover: `git grep -n "PYODIDE" -- TASKS.md`
+- History:
+  - 2026-08-23 22:05 UTC — captured from direct product-owner feedback.
+
+
 
 ## [CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01] Bundled tool descriptions must be agent-useful, not internal jargon
 
