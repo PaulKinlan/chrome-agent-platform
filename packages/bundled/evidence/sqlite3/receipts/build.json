@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "buildA": {"sha256": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d", "bytes": 1125792},
+  "buildB": {"sha256": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d", "bytes": 1125792},
+  "byteIdentical": true,
+  "sqliteOmitAttachAbsent": true,
+  "sqliteOmitLoadExtension": true,
+  "warningsAsErrors": true
+}

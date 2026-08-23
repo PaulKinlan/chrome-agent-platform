@@ -2,7 +2,7 @@
 // build-bundled-tool-packages.mjs — regenerate the shipped immutable bundled
 // tool packages from the frozen, independently reviewed evidence trees.
 //
-// Reads (paths via --evidence-root, default /tmp):
+// Reads (paths via --evidence-root, default packages/bundled/evidence):
 //   <root>/cap-fixed-tools-a2/            (10 MIT stdin tools)
 //   <root>/cap-fixed-tools-b2/            (6 Apache-2.0 + toml2json MIT AND Apache-2.0)
 //   <root>/cap-fixed-tools-c2/            (markdown BSD-2-Clause + 5 Apache-2.0 preopen tools)
@@ -31,8 +31,11 @@ import { canonicalJson, WasmPackageAuthority, auditWasmBinary, WASM_PACKAGE_LIMI
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
+// Evidence lives IN THE REPO at packages/bundled/evidence/<lane>/ (durable
+// migration, owner directive: never depend on paths outside the source tree).
+// --evidence-root remains for provenance hosts re-running against original trees.
 const evidenceIdx = args.indexOf("--evidence-root");
-const EVIDENCE = evidenceIdx >= 0 ? args[evidenceIdx + 1] : "/tmp";
+const EVIDENCE = evidenceIdx >= 0 ? args[evidenceIdx + 1] : join(REPO, "packages/bundled/evidence");
 // --verify: generate everything IN MEMORY and fail closed on ANY drift versus
 // the committed tree. The default build path (build.mjs) runs this so
 // `npm run build` truthfully bundles the exact generated tools and hand edits
@@ -50,13 +53,13 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const enc = new TextEncoder();
 
 const PATHS = {
-  a2: join(EVIDENCE, "cap-fixed-tools-a2"),
-  b2: join(EVIDENCE, "cap-fixed-tools-b2"),
-  c2: join(EVIDENCE, "cap-fixed-tools-c2"),
-  csvtool: join(EVIDENCE, "cap-csvtool-cleanroom"),
-  d3: join(EVIDENCE, "cap-fixed-tools-d3"),
-  sqlite3: join(EVIDENCE, "cap-sqlite3-query-bounded-v2"),
-  catalog: join(EVIDENCE, "cap-23-tool-catalog-metadata-v3", "inventory.json"),
+  a2: join(EVIDENCE, "a2"),
+  b2: join(EVIDENCE, "b2"),
+  c2: join(EVIDENCE, "c2"),
+  csvtool: join(EVIDENCE, "csvtool"),
+  d3: join(EVIDENCE, "d3"),
+  sqlite3: join(EVIDENCE, "sqlite3"),
+  catalog: join(EVIDENCE, "catalog", "inventory.json"),
 };
 const missingEvidence = Object.entries(PATHS).filter(([, p]) => !existsSync(p));
 if (missingEvidence.length > 0) {
@@ -244,7 +247,7 @@ const SQLITE_EXPECT = {
     "host/quota-sink.mjs": "48b4cc3e7489df8af5ed0d5417c28edc8905a961ffaa39e90399a57ee32e6f82",
     "host/run-query.mjs": "432f548ecd86f2add258e32f025faf27f10cbada68440c6dd3ecf8f0abe2194d",
     "host/wasi-worker.mjs": "9f1ee85b4c7e483da2142b309840a96960c80e3ae91df02486e3b481476b288b",
-    "scripts/build-one.sh": "94e03f61169907757373ca22c6d4632256fb2dcc5ff1d8f43074e1364fbf0665",
+    "scripts/build-one.sh": "dbee22cd00d904f6c7706027e3728c22e7e1535571fda1d45c223b6db275d3da",  // re-pinned after owner-directed host-path scrub (no other byte changed),
     "scripts/build-all.sh": "a7be3ad3af97f60444d741ce0d7696c8683e9471cd493db308d4f9d3f494371c",
   },
   sbomCorrected: "496d6e5a7d085700984fc96c0e123e925edb172d2a4cde65b91bcab2e2f32107",
@@ -360,7 +363,7 @@ for (const pkg of packages) {
     build: { toolchain: pkg.toolchain, profile: "release", reproducible: true, rebuildRef: `packages/bundled/${pkg.buildScriptLane}/build.sh` },
     sbom: { format: pkg.sbom.format, sha256: sha256(sbomBytes), ref: pkg.sbom.rel },
     license: { spdx: pkg.spdx, file: pkg.licenseFile, ...(pkg.notices ? { notices: pkg.notices } : {}) },
-    meta: { category: String(meta.category), channel: "bundled", description, label: pkg.toolId, status: meta.metaStatus ?? (SETTINGS_PREVIEW_LANES.has(pkg.toolId) ? "settings-preview-enabled" : "disabled-no-host"), note: meta.metaNote ?? `evidence: /tmp cap-fixed-tools/${pkg.lane}; owner decision CAP-DECISION-TEMPLATE-20260822-06` },
+    meta: { category: String(meta.category), channel: "bundled", description, label: pkg.toolId, status: meta.metaStatus ?? (SETTINGS_PREVIEW_LANES.has(pkg.toolId) ? "settings-preview-enabled" : "disabled-no-host"), note: meta.metaNote ?? `evidence: packages/bundled/evidence/${pkg.lane}; owner decision CAP-DECISION-TEMPLATE-20260822-06` },
   };
   const canonical = canonicalJson(manifest);
   const validated = probe.validateManifest(canonical);
@@ -454,7 +457,8 @@ for (const [lane, src] of Object.entries(scriptSources)) {
 if (!VERIFY) mkdirSync(join(REPO, "packages/bundled/csvtool"), { recursive: true });
 emit(join(REPO, "packages/bundled/csvtool/build.sh"), `#!/usr/bin/env bash
 # Reconstructed from the EXACT command recorded in the clean-room evidence
-# (/tmp/cap-csvtool-cleanroom/REPORT.md line 24; toolchain clang/LLD 22.1.8,
+# (packages/bundled/evidence/csvtool, REPORT.md line 24 in the original
+# provenance tree; toolchain clang/LLD 22.1.8,
 # SOURCE_DATE_EPOCH=0 via scripts/safe-build-env.sh). Two builds must be
 # byte-identical: sha256 5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81.
 set -euo pipefail
@@ -466,8 +470,8 @@ if (!VERIFY) mkdirSync(join(REPO, "packages/bundled/gzip"), { recursive: true })
 emit(join(REPO, "packages/bundled/gzip/build.sh"), `#!/usr/bin/env bash
 # gzip (zlib 1.3.1 Z_SOLO minigzip + CAP-authored freestanding runtime).
 # The exact units/flags/two-build evidence is the retained receipt
-# receipts/gzip-build.json inside the frozen evidence tree
-# (/tmp/cap-fixed-tools-d3/, inventory sha256 7ddeea056eec79eaa0c496522297d9f381293532816f2085611c027584482af9);
+# receipts/gzip-build.json inside the pinned evidence tree
+# (packages/bundled/evidence/d3, inventory sha256 7ddeea056eec79eaa0c496522297d9f381293532816f2085611c027584482af9);
 # toolchain clang 22.1.8 / wasm-ld 22.1.8, target wasm32-unknown-unknown,
 # SOURCE_DATE_EPOCH=1716422400. Both trusted builds were byte-identical:
 # sha256 d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc (56,938 B).
@@ -532,9 +536,8 @@ provenance only — they are not shipped runtime code.
 emit(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 23-tool Settings-preview tranche)
 
 26 single-tool Wasm packages generated by \`scripts/build-bundled-tool-packages.mjs\`
-from the frozen, independently reviewed evidence trees under \`/tmp/cap-fixed-tools-*\`,
-\`/tmp/cap-csvtool-cleanroom/\`, and \`/tmp/cap-23-tool-catalog-metadata-v3/\`
-(inventory sha256 ${catalogSha}).
+from the pinned, independently reviewed evidence trees committed under
+\`packages/bundled/evidence/\` (catalog inventory sha256 ${catalogSha}).
 
 - Binaries ship content-addressed in \`extension/wasm/cas/<sha256>.wasm\`.
 - Manifests are authority-schema-exact canonical JSON in \`extension/wasm/manifests/\`.
@@ -587,6 +590,9 @@ if (VERIFY) {
   };
   for (const rootRel of ["extension/wasm", "packages/bundled"]) {
     for (const rel of walk(rootRel)) {
+      // packages/bundled/evidence/** is generator INPUT (the pinned evidence
+      // trees), not generated output — exclude it from the ungenerated sweep.
+      if (rel.startsWith("packages/bundled/evidence/")) continue;
       if (!emitted.has(rel)) drift.push(`ungenerated file present: ${rel}`);
     }
   }

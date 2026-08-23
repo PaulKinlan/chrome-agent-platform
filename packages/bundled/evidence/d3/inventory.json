@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 2,
+  "lane": "D3-successor",
+  "disposition": "ONE_EXPERIMENTAL_RAW_CANDIDATE_READY_FOR_REVIEW",
+  "admitted": false,
+  "admissionRequested": false,
+  "admissionPerformed": false,
+  "wrapperGate": {"status": "PASS", "tests": 19, "passed": 19, "receipt": "receipts/safe-build-env-gate.json", "receiptSha256": "00301cc2af098839cdf4d249d3443193479af68c22a8d936edf36a4faa41bf28"},
+  "retainedBinaries": [
+    {"candidate": "gzip-zlib-minigzip-stdio", "file": "dist/gzip-zlib-minigzip-stdio.wasm", "sha256": "d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc", "bytes": 56938, "admitted": false}
+  ],
+  "retainedBuildLogs": [],
+  "sanitizedReceipts": [
+    {"file": "receipts/gzip-build.json", "sha256": "e7bf3b6cb218ee43026b8b37b25fbd6bff4b2a90fffef407509f63e2d3d22812"},
+    {"file": "receipts/gzip-cap-raw-scan.json", "sha256": "041319847848ab2e290b90d61eb95270188672030f771531d60cf0140c1f0a90"},
+    {"file": "receipts/gzip-node-acceptance.json", "sha256": "8f7184b2a9dead77b2eda81b50fedbe4beb675ff9563c55bbe589e1a5de6ad83"},
+    {"file": "receipts/gzip-stdout-quota-sink.json", "sha256": "a35712b02ba80d1c0450a5c701150339b2692e5ae35dba01b0c183263fbb9610"},
+    {"file": "receipts/gzip-sbom.json", "sha256": "29f8bd6a3262d32d8881055b7367d9260836310f8adc54228c397f1c3b209dd0"},
+    {"file": "receipts/gzip-source-overlay.json", "sha256": "1fe48e0219eae074e7ee46a240c72a2070039db8ed1d09b460b17380c4084ce9"},
+    {"file": "receipts/safe-build-env-gate.json", "sha256": "00301cc2af098839cdf4d249d3443193479af68c22a8d936edf36a4faa41bf28"}
+  ],
+  "tools": [
+    {
+      "requestedName": "gzip",
+      "candidateName": "gzip-zlib-minigzip-stdio",
+      "status": "READY_FOR_REVIEW",
+      "reviewState": "READY_FOR_INDEPENDENT_REVIEW",
+      "admitted": false,
+      "experimental": true,
+      "canonicalFullGzipClaim": false,
+      "contract": "Upstream zlib 1.3.1 Z_SOLO test/minigzip.c RFC1952 compressor/decompressor over stdin/stdout only. Supports -c, -d, -f, -h, -r, and -1 through -9. Rejects file operands, recursion, and unknown options.",
+      "upstream": "https://github.com/madler/zlib",
+      "version": "1.3.1",
+      "commit": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf",
+      "sourceArchive": "sources/archives/zlib-51b7f2ab.tar.gz",
+      "sourceSha256": "d9e270d46252734aa49770fbc544125391617956266f220bd63216c834f3a522",
+      "license": "Zlib plus LicenseRef-CAP-D3-Evaluation-Only for authored runtime, patches, Node quota sink, worker boundary, and acceptance fixtures",
+      "binary": "dist/gzip-zlib-minigzip-stdio.wasm",
+      "binarySha256": "d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc",
+      "binaryBytes": 56938,
+      "memory": {"tier": "tiny", "initialPages": 32, "maxPages": 256, "maxBytes": 16777216},
+      "imports": ["wasi_snapshot_preview1"],
+      "toolchain": "installed clang 22.1.8 and wasm-ld 22.1.8; exact executable hashes in SBOM/build receipt",
+      "reproducible": true,
+      "sbom": {"file": "sbom/gzip-zlib-minigzip-stdio.cdx.json", "format": "CycloneDX 1.5 JSON", "sha256": "a7c5c1f8e73d7e798d3619a3b092a59eac0eaf029e9f0e6036d81ca547a0f3fe"},
+      "hostBoundary": {
+        "stdoutCapBytes": 1048576,
+        "sink": "dedicated pre-write Node WASI fd_write interceptor",
+        "zeroOvershoot": true,
+        "sinkTests": {"passed": 18, "total": 18},
+        "hostileE2eTests": {"passed": 14, "total": 14},
+        "workerFinalReceipt": ["type", "status", "stdoutBytes", "quotaLatched", "hostIoErrorCode", "sinkClosed", "closeErrorCode"],
+        "outputContract": "in-memory Buffer is authoritative; outputPath is always null after verified stage cleanup"
+      },
+      "admissionStatus": "BLOCKED",
+      "admissionBlockers": [
+        "Independent implementation code/security/licence review has not occurred; only the v7 sink design has an independent PASS.",
+        "CAP manifest SPDX allowlist does not admit Zlib.",
+        "Authored freestanding runtime, patches, Node quota sink, worker boundary, and acceptance fixtures carry an evaluation-only LicenseRef with no distribution grant.",
+        "This is not the original pinned WASI SDK 18.1.2 full planned recipe and must not be represented as that output."
+      ],
+      "originalPinnedRecipe": {"status": "BLOCKED", "reason": "Pinned WASI SDK 18.1.2 was not present in the allowed local source/toolchain set."}
+    },
+    {
+      "requestedName": "fzf",
+      "candidateName": "fzf-filter",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "v0.65.2", "commit": "416aff86e9d550d0a34af9d3cc12dfede25354c3", "sha256": "05c242945135575242bdf3dc93b2924540b7d2266f3b33169e6468b8df3d2c0d", "license": "MIT"},
+      "blockers": ["Pinned Go 1.23.0 toolchain/offline dependency closure was unavailable.", "No audited mandatory-memory-maximum post-linker was available.", "No bounded wrapper was built or tested."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "shfmt",
+      "candidateName": "shfmt",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "v3.12.0", "commit": "8202166b7d1e3473a7c65eeac53ddbdb55d5b808", "sha256": "d258a65d99ac3aa5aa592052dbc7ad0fb25e9727a5769415da5067b2e120e888", "license": "BSD-3-Clause"},
+      "blockers": ["Pinned Go 1.23.0 toolchain/offline dependency closure was unavailable.", "No audited mandatory-memory-maximum post-linker was available."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "minify",
+      "candidateName": "minify-tdewolff",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "v2.24.2", "commit": "8985643f3b18ee597507a18c495017c63514b2bf", "sha256": "c87abdfb25801164b9c126129de30ac9e70bf125faa6a926a4140850e35aff63", "license": "MIT"},
+      "blockers": ["Pinned Go 1.24.1 toolchain/offline dependency closure was unavailable.", "No reviewed bounded WASI wrapper or mandatory-memory-maximum post-linker was available.", "Generic minify alias identity remains a catalog decision."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "sqlite3",
+      "candidateName": "sqlite3-query",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "3.46.0", "sourceId": "2024-05-23 13:25:27 96c92aba00c8375bc32fafcdf12429c58bd8aabfcadab6683e35bbb9cdebf19e", "sha256": "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5", "license": "Public-Domain"},
+      "blockers": ["No approved local WASI SDK/toolchain for the pinned bounded recipe.", "Bounded query wrapper and hostile SQL corpus were not implemented.", "CAP licence schema has no acceptable Public-Domain/LicenseRef value."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "terser",
+      "candidateName": "terser",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "5.44.0", "commit": "a19ee63c1d545dccaf2b1f2f1c02ea9823a82d5d", "sha256": "86b954e059e70d536a7918fdf7f2f74292e81e03f30a9ab4bd281484e7c9edfc", "license": "BSD-2-Clause"},
+      "blockers": ["Canonical implementation is JavaScript.", "No pinned reviewed embedded-JS runtime satisfies the standalone bounded-WASI contract."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "csso",
+      "candidateName": "csso",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "5.0.5", "commit": "1ebc6709119284e3e1cd6d0b8d6c94074bb40921", "sha256": "f7605918aff2de20dd00b741edbc888f0f8ec0f79c060745c987a1ef50e54fd8", "license": "MIT"},
+      "blockers": ["Canonical implementation is JavaScript.", "No pinned reviewed embedded-JS runtime satisfies the standalone bounded-WASI contract."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "html-minifier",
+      "candidateName": "html-minifier-terser",
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "7.2.0", "commit": "e2bc1937d17807310cc8f674a9a22b4cb96cd657", "sha256": "eb47bb99cc849885fc0d2da65e86bab238c6536af1017bf8c6c51cc3a41fad03", "license": "MIT"},
+      "blockers": ["Canonical implementation is JavaScript and includes Terser.", "No pinned reviewed embedded-JS runtime satisfies the standalone bounded-WASI contract."],
+      "binary": null,
+      "sbom": null
+    },
+    {
+      "requestedName": "ffmpeg",
+      "candidateName": null,
+      "status": "BLOCKED",
+      "admitted": false,
+      "source": {"version": "n7.1.1", "commit": "db69d06eeeab4f46da15030a80d539efb4503ca8", "sha256": "173ba614d8636491106cba08d79db469b5dee4b479388bc4fbcead8ca1fb79b1", "license": "LGPL-2.1-or-later when configured without GPL/nonfree components"},
+      "blockers": ["Pinned complete Emscripten binary dependency closure was unavailable.", "Standalone-WASI imports, size, memory, and CLI compatibility remain unproven.", "No substitute implementation is acceptable."],
+      "binary": null,
+      "sbom": null
+    }
+  ]
+}

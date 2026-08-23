@@ -432,12 +432,22 @@ Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS ha
     assertEquals(prevDigests.length, 25);
     const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
     const TRANCH = new Set(["cap.bundled.csvtool", "cap.bundled.uuid", "cap.bundled.head", "cap.bundled.tail", "cap.bundled.cut", "cap.bundled.base64", "cap.bundled.md5sum", "cap.bundled.sha256sum", "cap.bundled.sha512sum", "cap.bundled.wc", "cap.bundled.xxd", "cap.bundled.sort", "cap.bundled.uniq", "cap.bundled.tr", "cap.bundled.grep", "cap.bundled.toml2json", "cap.bundled.markdown", "cap.bundled.diff", "cap.bundled.patch", "cap.bundled.stat", "cap.bundled.du", "cap.bundled.tree", "cap.bundled.gzip"]);
+    // Durable-evidence /tmp scrub (owner directive, 0.2.194): EVERY
+    // predecessor manifest's meta.note named an outside-tree evidence path and
+    // was scrubbed to packages/bundled/evidence/<lane> — the ONLY byte change
+    // (verified at migration: all manifest diffs were the note line; CAS
+    // hashes untouched). Digests therefore changed for ALL 25 predecessors,
+    // once, deliberately.
+    // note must reference an in-repo evidence location and no outside-tree path
+    const SCRUB_NOTE = /packages\/bundled\//;
     for (const [, pkg, dg] of prevDigests) {
-      if (TRANCH.has(pkg)) {
-        assert(now.get(pkg) !== dg, `${pkg} manifest digest intentionally changed (settings-preview meta status)`);
-        continue;
-      }
-      assertEquals(now.get(pkg), dg, `${pkg} manifest digest must be preserved`);
+      assert(now.get(pkg) !== dg, `${pkg} manifest digest intentionally changed (durable-evidence /tmp scrub, 0.2.194)`);
+    }
+    for (const f of BUNDLED_INVENTORY.files.filter((f) => f.rel.includes("/manifests/"))) {
+      const text = await Deno.readTextFile(root(f.rel));
+      const note = JSON.parse(text)?.meta?.note ?? "";
+      if (!note.includes("owner decision")) continue;
+      assert(SCRUB_NOTE.test(note) && !/\/tmp|\/home\//.test(note), `${f.rel} meta.note must reference in-repo evidence and no outside-tree path, got: ${note}`);
     }
     const prevCas = [...prevText.matchAll(/"rel": "extension\/wasm\/cas\/([0-9a-f]{64})\.wasm"/g)].map((m) => m[1]);
     const nowCas = new Set(BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/")).map((f) => f.rel));

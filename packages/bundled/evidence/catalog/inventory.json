@@ -1,0 +1,808 @@
+{
+  "schemaVersion": 3,
+  "generatedAt": "2026-08-22T17:46:27.525Z",
+  "targetCommit": "462d21d8da9bee640c2c12088dcafba6123e00fc",
+  "status": "DRAFT_METADATA_SPECIFICATION",
+  "totalCandidates": 23,
+  "catalogIntersectionAudit": {
+    "groundTruthDescriptorsCount": 44,
+    "uniqueCanonicalNamesCount": 43,
+    "collisionsDetected": 0,
+    "intersectionWith23Candidates": []
+  },
+  "governance": {
+    "licenceStatus": "pending-owner-confirmation",
+    "admitted": false,
+    "canonicalNameClaim": false,
+    "licenceDeclarationSummary": "Source inventories declare MIT, Apache-2.0, BSD-2-Clause, or the exact composite expression shown; licence/provenance posture remains pending owner confirmation and no candidate is admitted.",
+    "sourceKindIntegrationNote": "At 462d21d, TOOL_SOURCE_KINDS has no package sourceKind; this draft represents proposed future package-catalog inputs only."
+  },
+  "tools": [
+    {
+      "toolId": "base64",
+      "lane": "A2",
+      "displayName": "Bounded RFC 4648 base64 encoding and decoding stream filter",
+      "category": "data",
+      "aliases": [],
+      "description": "Bounded RFC 4648 base64 encoding and decoding stream filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Stdin-only stream filter; supports encode and decode. Invalid padding or characters rejected fail-closed with exit code 1."
+      ],
+      "binary": {
+        "path": "binaries/base64.wasm",
+        "bytes": 33507,
+        "sha256": "8a834cd33c5ab8ac9e84e3427ab0c826c38ff4ee879bbc0955fdb930ec9d9b59",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "md5sum",
+      "lane": "A2",
+      "displayName": "Bounded MD5 legacy digest filter (not for security/signatures)",
+      "category": "crypto",
+      "aliases": [],
+      "description": "Bounded MD5 legacy digest filter (not for security/signatures)",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity."
+      ],
+      "binary": {
+        "path": "binaries/md5sum.wasm",
+        "bytes": 32962,
+        "sha256": "195026a42b8ec87cde58f91b151d7cb657b41c0f4a725c0dde7b16825faa8a01",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "crypto"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "sha256sum",
+      "lane": "A2",
+      "displayName": "Bounded FIPS 180-4 SHA-256 cryptographic digest filter",
+      "category": "crypto",
+      "aliases": [],
+      "description": "Bounded FIPS 180-4 SHA-256 cryptographic digest filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin; implementation/provenance still pending owner admission."
+      ],
+      "binary": {
+        "path": "binaries/sha256sum.wasm",
+        "bytes": 33269,
+        "sha256": "b8d396f708ac70bf19dd94255119b13ab53450c7c5f4edff9646b9fa8e6f9335",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "crypto"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "sha512sum",
+      "lane": "A2",
+      "displayName": "Bounded FIPS 180-4 SHA-512 cryptographic digest filter",
+      "category": "crypto",
+      "aliases": [],
+      "description": "Bounded FIPS 180-4 SHA-512 cryptographic digest filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin; implementation/provenance still pending owner admission."
+      ],
+      "binary": {
+        "path": "binaries/sha512sum.wasm",
+        "bytes": 33637,
+        "sha256": "4235e8273af38787b39997d0aaae5a9c56b8a4101ea9c887c1477f73595dfcb1",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "crypto"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "xxd",
+      "lane": "A2",
+      "displayName": "Bounded hex dump and binary reconstruction filter",
+      "category": "data",
+      "aliases": [],
+      "description": "Bounded hex dump and binary reconstruction filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin."
+      ],
+      "binary": {
+        "path": "binaries/xxd.wasm",
+        "bytes": 34894,
+        "sha256": "24793c383472ffcbf477488b293830fdc22bf368fd36df1cc0631c8e288b5705",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "uuid",
+      "lane": "A2",
+      "displayName": "WASI-CSPRNG RFC 4122 UUID v4 generator",
+      "category": "crypto",
+      "aliases": [],
+      "description": "WASI-CSPRNG RFC 4122 UUID v4 generator",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID)."
+      ],
+      "binary": {
+        "path": "binaries/uuid.wasm",
+        "bytes": 28476,
+        "sha256": "1bf758e866b5b2a6af74ece480f061ac45e5455cd6ac7bbdada2fb17acf4e250",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "crypto"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "wc",
+      "lane": "A2",
+      "displayName": "Bounded POSIX-style stdin line, word, and byte count filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded POSIX-style stdin line, word, and byte count filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Counts lines, whitespace-delimited words, and bytes. Input bounded by the exact 8 MiB stdin ceiling."
+      ],
+      "binary": {
+        "path": "binaries/wc.wasm",
+        "bytes": 32960,
+        "sha256": "08a0cac5cf4d872b0727fa52dcc4fca2c05ab225056486b55454f041baf497ca",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "head",
+      "lane": "A2",
+      "displayName": "Bounded stdin line-prefix filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded stdin line-prefix filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling."
+      ],
+      "binary": {
+        "path": "binaries/head.wasm",
+        "bytes": 32116,
+        "sha256": "daa8ef830215b5e710dd529a4ed5d8c81591bdf92401241a94242b0b79857585",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "tail",
+      "lane": "A2",
+      "displayName": "Bounded stdin line-suffix filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded stdin line-suffix filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling."
+      ],
+      "binary": {
+        "path": "binaries/tail.wasm",
+        "bytes": 32309,
+        "sha256": "9ce43db995cc580551a3a061127ca0756043d2f55e2c925efbb43106c8438761",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "cut",
+      "lane": "A2",
+      "displayName": "Bounded single-field delimiter column extraction filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded single-field delimiter column extraction filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands."
+      ],
+      "binary": {
+        "path": "binaries/cut.wasm",
+        "bytes": 32733,
+        "sha256": "e2d4687d1b04f3fdc009a089f68b3c1afc1ca19cb614dd7b32f43b9b4f0446d2",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "sort",
+      "lane": "B2",
+      "displayName": "Bounded stdin line sort in the C byte locale",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded stdin line sort in the C byte locale",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Stdin-only line sort in the C byte locale. Options: -n (numeric, no exponent notation), -r (reverse), -u (unique). File operands rejected."
+      ],
+      "binary": {
+        "path": "binaries/sort.wasm",
+        "bytes": 174496,
+        "sha256": "9b3e8fd857cafb99d975254c542a0571e05249fd8cf1f49f4310918b821fa1b4",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "uniq",
+      "lane": "B2",
+      "displayName": "Bounded adjacent full-line run filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded adjacent full-line run filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Filters adjacent duplicate lines without field/character skipping. Options: -c (count), -d (repeated only), -u (unique only). Stdin-only."
+      ],
+      "binary": {
+        "path": "binaries/uniq.wasm",
+        "bytes": 164080,
+        "sha256": "80a4c45e0df58f78cfe8f0079260f57ddd2eb0ca36fe987785d265a828f56205",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "tr",
+      "lane": "B2",
+      "displayName": "Bounded streaming byte-locale translate/delete/squeeze filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded streaming byte-locale translate/delete/squeeze filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Translates, deletes (-d), or squeezes (-s) characters in byte locale with complement and POSIX character classes. Unsupported equivalence classes and repeat expressions rejected."
+      ],
+      "binary": {
+        "path": "binaries/tr.wasm",
+        "bytes": 170919,
+        "sha256": "3604f52153226edfaeabbadfb8a157a1340c90fa8270016a3aa4e10a6bdb69de",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "grep",
+      "lane": "B2",
+      "displayName": "Bounded POSIX BRE/ERE stdin line selection filter",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded POSIX BRE/ERE stdin line selection filter",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Stdin text selection filter. Options: -i, -v, -n, -c, -F, -E. NUL input and file operands are rejected."
+      ],
+      "binary": {
+        "path": "binaries/grep.wasm",
+        "bytes": 325572,
+        "sha256": "0f049d7a43c39af2f035d805b0b92b80cdb1dc2525b4973cfd6f2d13ad043038",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "diff",
+      "lane": "B2",
+      "displayName": "Bounded LCS-based unified diff over two literal text arguments",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded LCS-based unified diff over two literal text arguments",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error)."
+      ],
+      "binary": {
+        "path": "binaries/diff.wasm",
+        "bytes": 149489,
+        "sha256": "47d674035f83bf0de7b4a2ae5ee7d5e6bbe505713974ec6e5c83b2c379307c6f",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "patch",
+      "lane": "B2",
+      "displayName": "Bounded exact unified-diff application over literal text arguments",
+      "category": "text",
+      "aliases": [],
+      "description": "Bounded exact unified-diff application over literal text arguments",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation."
+      ],
+      "binary": {
+        "path": "binaries/patch.wasm",
+        "bytes": 150630,
+        "sha256": "a7838fc92dc1a63e57a257da1b89b721bbd5eb1c0cddac220d59c1bee63ee9b2",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "toml2json",
+      "lane": "B2",
+      "displayName": "Bounded TOML to JSON direct converter (pinned tomlc99)",
+      "category": "data",
+      "aliases": [],
+      "description": "Bounded TOML to JSON direct converter (pinned tomlc99)",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0."
+      ],
+      "binary": {
+        "path": "binaries/toml2json.wasm",
+        "bytes": 241413,
+        "sha256": "6119489ddf0cb9648a4ac87b943108f850be3e3b637cea6c478bf7ec1bf6432a",
+        "memoryInitialPages": 3,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "data.read",
+        "data.write"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "none",
+      "licence": {
+        "spdx": "MIT AND Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "markdown",
+      "lane": "C2",
+      "displayName": "Bounded CommonMark HTML renderer based on pinned cmark 0.31.1",
+      "category": "data",
+      "aliases": [],
+      "description": "Bounded CommonMark HTML renderer based on pinned cmark 0.31.1",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection. If narrowed to stdin-only in product integration, that contract requires an explicit adapter check. Requires future reviewed execution adapter to map only exact per-job CAP OPFS authority to WASI /job; not currently executable/admitted."
+      ],
+      "binary": {
+        "path": "binaries/markdown.wasm",
+        "bytes": 186886,
+        "sha256": "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "text.transform",
+        "file.read"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "future workspace-read adapter",
+      "licence": {
+        "spdx": "BSD-2-Clause",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "du",
+      "lane": "C2",
+      "displayName": "Bounded directory and file usage counter for OPFS job workspaces",
+      "category": "file",
+      "aliases": [],
+      "description": "Bounded directory and file usage counter for OPFS job workspaces",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Reports apparent bytes rounded to 1 KiB (or human units), not physical blocks. Bounded to depth 64, 100,000 entries; symlink directories are not followed. Requires future reviewed execution adapter to enforce bounded path classes and reject symlink following; not currently executable/admitted."
+      ],
+      "binary": {
+        "path": "binaries/du.wasm",
+        "bytes": 36905,
+        "sha256": "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "file.read"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "future workspace-read adapter",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "stat",
+      "lane": "C2",
+      "displayName": "Bounded file metadata inspector for OPFS job workspaces",
+      "category": "file",
+      "aliases": [],
+      "description": "Bounded file metadata inspector for OPFS job workspaces",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Reports stable path, type, size, and mtime fields; POSIX permission bits are omitted. Explicitly not GNU formatting/options. Requires future reviewed execution adapter to enforce path classes; not currently executable/admitted."
+      ],
+      "binary": {
+        "path": "binaries/stat.wasm",
+        "bytes": 30190,
+        "sha256": "cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "file.read"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "future workspace-read adapter",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "tree",
+      "lane": "C2",
+      "displayName": "Bounded deterministic directory tree visualizer for OPFS job workspaces",
+      "category": "file",
+      "aliases": [],
+      "description": "Bounded deterministic directory tree visualizer for OPFS job workspaces",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed. Requires future reviewed execution adapter; not currently executable/admitted."
+      ],
+      "binary": {
+        "path": "binaries/tree.wasm",
+        "bytes": 39108,
+        "sha256": "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "file.read"
+      ],
+      "replayClass": "read-only",
+      "filesystemRequirement": "future workspace-read adapter",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "touch",
+      "lane": "C2",
+      "displayName": "Bounded file creator and timestamp mutator for OPFS job workspaces",
+      "category": "file",
+      "aliases": [],
+      "description": "Bounded file creator and timestamp mutator for OPFS job workspaces",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed. Requires future reviewed execution adapter to restrict writes to approved mutable path classes (scratch/output, never immutable inputs), and enforce symlink, cross-job, and over-quota rejection fail closed. Not currently executable/admitted."
+      ],
+      "binary": {
+        "path": "binaries/touch.wasm",
+        "bytes": 38030,
+        "sha256": "9c9cae983c3db00bdead5e7cf00bdb345d298dda194bd683915b4e7d083346ac",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "file.read",
+        "file.write"
+      ],
+      "replayClass": "mutating",
+      "filesystemRequirement": "future bounded workspace read/write adapter",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    },
+    {
+      "toolId": "truncate",
+      "lane": "C2",
+      "displayName": "Bounded file length truncator and expander for OPFS job workspaces",
+      "category": "file",
+      "aliases": [],
+      "description": "Bounded file length truncator and expander for OPFS job workspaces",
+      "canonicalNameClaim": false,
+      "caveats": [
+        "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed. Requires future reviewed execution adapter to restrict writes to mutable path classes and enforce traversal and quota fail-closed rules. Not currently executable/admitted."
+      ],
+      "binary": {
+        "path": "binaries/truncate.wasm",
+        "bytes": 36095,
+        "sha256": "ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad",
+        "memoryInitialPages": 2,
+        "memoryMaxPages": 512,
+        "tier": "tiny",
+        "imports": [
+          "wasi_snapshot_preview1"
+        ]
+      },
+      "capabilities": [
+        "compute",
+        "file.read",
+        "file.write"
+      ],
+      "replayClass": "mutating",
+      "filesystemRequirement": "future bounded workspace read/write adapter",
+      "licence": {
+        "spdx": "Apache-2.0",
+        "status": "pending-owner-confirmation"
+      },
+      "admitted": false
+    }
+  ]
+}

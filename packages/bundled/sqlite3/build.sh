@@ -12,7 +12,7 @@ ARCHIVE="sources/archives/sqlite-amalgamation-3460000.zip"
 echo "$ARCHIVE" | sha256sum --check <(echo "712a7d09d2a22652fb06a49af516e051979a3984adb067da86760e60ed51a7f5  $ARCHIVE")
 # Negative assertions preserved: SQLITE_OMIT_ATTACH must be ABSENT;
 # SQLITE_OMIT_LOAD_EXTENSION=1 must clean-link. Exact flags: see the pinned
-# evidence scripts/build-one.sh (sha256 94e03f61169907757373ca22c6d4632256fb2dcc5ff1d8f43074e1364fbf0665).
+# evidence scripts/build-one.sh (sha256 dbee22cd00d904f6c7706027e3728c22e7e1535571fda1d45c223b6db275d3da).
 # Two builds must be byte-identical:
 # sha256 ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d (1125792 bytes)
 echo "adapt with the pinned evidence script; do not improvise flags" >&2; exit 1

@@ -1,0 +1,380 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-08-22T15:58:23.132Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "wasi-sdk clang",
+          "version": "18.1.2",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "64280d1cf3e55fe73bffe55deed0e61936c84a1b538a5435e50ad8e028eb2e3b"
+            }
+          ]
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "name": "cap-fixed-tools-b2",
+      "version": "0.1.0"
+    }
+  },
+  "components": [
+    {
+      "type": "application",
+      "name": "sort",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:sort@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9b3e8fd857cafb99d975254c542a0571e05249fd8cf1f49f4310918b821fa1b4"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "uniq",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:uniq@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "80a4c45e0df58f78cfe8f0079260f57ddd2eb0ca36fe987785d265a828f56205"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "tr",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:tr@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3604f52153226edfaeabbadfb8a157a1340c90fa8270016a3aa4e10a6bdb69de"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "grep",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:grep@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0f049d7a43c39af2f035d805b0b92b80cdb1dc2525b4973cfd6f2d13ad043038"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "diff",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:diff@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "47d674035f83bf0de7b4a2ae5ee7d5e6bbe505713974ec6e5c83b2c379307c6f"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "patch",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:patch@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a7838fc92dc1a63e57a257da1b89b721bbd5eb1c0cddac220d59c1bee63ee9b2"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "toml2json",
+      "version": "0.1.0-b2",
+      "scope": "required",
+      "bom_ref": "candidate:toml2json@0.1.0-b2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6119489ddf0cb9648a4ac87b943108f850be3e3b637cea6c478bf7ec1bf6432a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT AND Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BUILT_TESTED_CANDIDATE"
+        },
+        {
+          "name": "cap:memoryMaxPages",
+          "value": "512"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tomlc99",
+      "version": "29076dfd095bbbbd50a3c1b2760d29f4b83e74ac",
+      "scope": "required",
+      "bom_ref": "pkg:github/cktan/tomlc99@29076dfd095bbbbd50a3c1b2760d29f4b83e74ac",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fdd1bf848bd81f3e98dd98dd4381a626a4a6255537ac8571be0f0a7e34a4becf"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/cktan/tomlc99/commit/29076dfd095bbbbd50a3c1b2760d29f4b83e74ac"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "GNU sed",
+      "version": "4.9",
+      "scope": "excluded",
+      "bom_ref": "blocked:sed",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BLOCKED"
+        },
+        {
+          "name": "cap:dependency",
+          "value": "A reviewed wasm32-wasi port/build of GNU sed 4.9 and its gnulib regex/locale/file-I/O assumptions; no such port or configure recipe is present in this lane."
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "GNU awk",
+      "version": "5.3.2",
+      "scope": "excluded",
+      "bom_ref": "blocked:awk",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f8c3486509de705192138b00ef2c00bbbdd0e84c30d5c07d23fc73a9dc4cc9cc"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL-3.0-or-later"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://ftp.gnu.org/gnu/gawk/gawk-5.3.2.tar.xz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BLOCKED"
+        },
+        {
+          "name": "cap:dependency",
+          "value": "A reviewed wasm32-wasi port/build of gawk 5.3.2 including its runtime, locale and extension-loading feature decisions; the WASI SDK cannot directly configure this upstream package as-is."
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "ocaml-csv csvtool",
+      "version": "2.4",
+      "scope": "excluded",
+      "bom_ref": "blocked:csvtool",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9a86a281d6077fed8a047dfd76d11acbe519f4b313f15b10727bddc546e14426"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "LGPL-2.1-only WITH OCaml-LGPL-linking-exception"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://api.github.com/repos/Chris00/ocaml-csv/tarball/2.4"
+        }
+      ],
+      "properties": [
+        {
+          "name": "cap:status",
+          "value": "BLOCKED"
+        },
+        {
+          "name": "cap:dependency",
+          "value": "A wasm32-wasi-capable OCaml compiler/runtime plus dune/opam build of csvtool 2.4; ocamlc, dune, and a WASI OCaml runtime are absent on this host."
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "candidate:toml2json@0.1.0-b2",
+      "dependsOn": [
+        "pkg:github/cktan/tomlc99@29076dfd095bbbbd50a3c1b2760d29f4b83e74ac"
+      ]
+    }
+  ]
+}

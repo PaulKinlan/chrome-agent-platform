@@ -1,0 +1,51 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:5c8210c9-3d39-4893-b961-943093ccad31",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "clang",
+          "version": "22.1.8"
+        },
+        {
+          "type": "application",
+          "name": "LLD",
+          "version": "22.1.8"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "csvtool-cleanroom-candidate@1.0.0",
+      "name": "csvtool-cleanroom-candidate",
+      "version": "1.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "properties": [
+        {
+          "name": "licenceStatus",
+          "value": "pending-owner-confirmation"
+        },
+        {
+          "name": "admitted",
+          "value": "false"
+        }
+      ]
+    }
+  },
+  "components": []
+}
