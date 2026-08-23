@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **18 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 45 nonterminal and 40 terminal status entries
-> below are the complete 85-entry state.
+> Branch status counts: **26 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 53 nonterminal and 40 terminal status entries
+> below are the complete 93-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,244 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-FIRST-RUN-DUPLICATE-TEST-ASSET-01] First run creates many test assets instead of one
+
+- Feedback: 2026-08-23 — product owner: the first-run experience creates a
+  test asset, but creates MANY instead of one — either a logic error, or the
+  file that was opened is not found again to be edited/updated
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: first run creates exactly one test asset; subsequent steps find
+  and update that same asset (idempotent keyed lookup); interrupted/repeated
+  first runs never duplicate it; the asset remains discoverable and editable
+  afterwards
+- Review: pending independent onboarding, idempotence, storage and loaded-MV3
+  review
+- Gates: fresh-profile first run count = 1; repeat/refresh runs still 1;
+  edit-after-create finds the same key; storage before/after evidence
+- Blockers: —
+- Next: reproduce on a fresh profile and trace the create-vs-find lookup
+- Recover: `git grep -n "test asset\|first-run\|onboarding" -- extension`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-BACKGROUND-CONFIGURE-DEEPLINK-01] Configure for background agents must open and scroll to Settings section
+
+- Feedback: 2026-08-23 — product owner: clicking Configure for background
+  agents opens Settings but does not navigate or scroll to the Background
+  agents section
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: Configure opens the options page AND focuses/scrolls the
+  Background agents section (deep-link hash registered in the exact Settings
+  sender authority); works from every surface that shows the control;
+  keyboard reachable
+- Review: pending independent navigation, sender-authority, accessibility and
+  loaded-MV3 review
+- Gates: deep-link hash allowlist; scroll/focus evidence; stale-hash fail
+  closed; AX focus order
+- Blockers: —
+- Next: audit the Configure call sites and the registered Settings hashes
+- Recover: `git grep -n "configure\|background agents\|options.html#" -- extension`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-FIRST-RUN-EXAMPLE-AGENT-01] First run should create a compelling example agent
+
+- Feedback: 2026-08-23 — product owner: first run should also create an
+  agent as one of the tasks; something compelling — e.g. a weekly review of
+  the owner's browsing and actions in the browser, or alternatives such as a
+  "grill me" agent that learns about the owner's tasks, or a critique agent
+  the owner can send tasks or pages to review
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: onboarding offers one or more genuinely useful example agents
+  with truthful capability descriptions; creating one is a single explicit
+  owner action; schedule/permissions are least-privilege and owner-visible;
+  decline mutates nothing; the example works end-to-end once created
+- Review: pending product decision among the proposed options, then
+  independent privacy, scheduling, permissions and loaded-MV3 review
+- Gates: option comparison record; created-agent end-to-end journey;
+  permission surface; decline path; schedule truth
+- Blockers: owner decision on which example agent(s) to offer
+- Next: write the option comparison (weekly browsing review vs grill-me vs
+  critique agent) with privacy implications for the owner decision
+- Recover: `git grep -n "onboarding\|namedAgents" -- extension`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-FIRST-RUN-BROWSER-CONTROL-CONSENT-01] First run must ask whether the tool may control the browser
+
+- Feedback: 2026-08-23 — product owner: first run needs to ask the user
+  whether they want the tool to control the browser — it is most of the
+  point and the power of the tool
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: onboarding presents a truthful, explicit browser-control opt-in
+  explaining what control means (tabs, navigation, page interaction) and
+  what stays unavailable without it; grant flows through a genuine permission
+  gesture; decline keeps the product usable with reduced capability and no
+  silent retry; the choice is revisitable from Settings
+- Review: pending independent permission-model, truth, accessibility and
+  loaded-MV3 review
+- Gates: opt-in/opt-out journeys; genuine gesture; reduced-capability state;
+  Settings revisit; no broad grant beyond consent
+- Blockers: must compose with `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`
+- Next: design the consent step within the onboarding flow under the settled
+  permission policy
+- Recover: `git grep -n "onboarding\|permissions.request" -- extension`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-SIDEPANEL-BACKGROUND-AGENTS-01] Background agents must be visible in the side-panel agent list
+
+- Feedback: 2026-08-23 — product owner: background agents need to be visible
+  in the side-panel agent list, or at least made clearly discoverable
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: background/scheduled agents appear in the side-panel agent list
+  with a clear background indicator and truthful status; selecting one opens
+  its view; the list never misrepresents foreground vs background identity
+- Review: pending independent identity, status-truth, accessibility and
+  loaded-MV3 review
+- Gates: list composition with background agents included; status truth;
+  selection journey; AX labels
+- Blockers: —
+- Next: audit the side-panel agent list source and registry composition
+- Recover: `git grep -n "agent-list\|sidepanel" -- extension`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-AGENT-ICON-ON-CREATE-01] Generate the agent icon at creation, not on click
+
+- Feedback: 2026-08-23 — product owner: when an agent is created, its icon
+  should be generated immediately, not lazily on click
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: agent creation produces the icon as part of the creation
+  transaction (or bounded immediate follow-up) so every surface shows the
+  final icon without a click-triggered generation; failure falls back to a
+  deterministic placeholder, never a broken image
+- Review: pending independent storage, failure-fallback and loaded-MV3 review
+- Gates: create-then-list shows icon; generation failure placeholder;
+  no click dependency; storage bound
+- Blockers: —
+- Next: locate the lazy icon generation call site and move it into creation
+- Recover: `git grep -n "icon" -- extension/lib extension/shared`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01] HTML artifact viewer iframe and dialog are too small
+
+- Feedback: 2026-08-23 — product owner: the artifact view for HTML renders
+  the iframe far too small; it should be at least the container size, the
+  click-to-open dialog must be large enough to display it, and content-fit
+  sizing should be explored later
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: the HTML artifact dialog is large enough to display the content
+  comfortably; the iframe fills at least its container; sandboxed rendering
+  and the double-boundary isolation are unchanged; narrow/RTL/theme correct
+- Review: pending independent sandbox-isolation, accessibility and
+  loaded-MV3 review
+- Gates: dialog/iframe size evidence at multiple viewports; sandbox attrs
+  unchanged; content-fit follow-up recorded
+- Blockers: —
+- Next: measure the current dialog/iframe constraints and set container-fill
+  sizing
+- Recover: `git grep -n "iframe\|artifact" -- extension/shared extension/ntp`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+## [CAP-FB-20260823-GENERATE-UI-RENDER-01] generate_ui output must render as UI, not raw JSON
+
+- Feedback: 2026-08-23 — product owner: the generate_ui tool generates HTML
+  in the tasks view but it appears inside the JSON object; the actual UI
+  should render inside the double iframe boundary
+- Updated: 2026-08-23 20:35 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: —
+- Shipping: —
+- Acceptance: generate_ui tool results in the tasks view render the produced
+  HTML inside the existing sandboxed double-iframe boundary (inert, no script
+  escape, no parent access) instead of displaying raw JSON; the raw payload
+  remains available via an explicit disclosure; sizing follows the HTML
+  artifact viewer fix
+- Review: pending independent sandbox-isolation, CSP, accessibility and
+  loaded-MV3 review
+- Gates: rendered output inside sandbox; raw JSON behind explicit disclosure;
+  hostile HTML fixtures inert; console/network clean
+- Blockers: composes with `CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01`
+- Next: identify where generate_ui results are projected in the tasks view
+  and route the HTML through the sandboxed viewer
+- Recover: `git grep -n "generate_ui" -- extension`
+- History:
+  - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+
+
 
 ## [CAP-FB-20260823-AGENT-RUN-VISIBILITY-01] Agent-view run log visibility in the chat interface
 
@@ -573,9 +811,9 @@ On resume after a coordinator or worker loss:
 - Updated: 2026-08-22 07:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P1
-- Owner: unassigned
-- Workspace: none
+- Priority: P0
+- Owner: implementation lane (assigned 2026-08-23)
+- Workspace: active (local path private)
 - Branch: `docs/local-model-management-current-main`
 - Base: `669016edc75531f014a1e8406d4d39192b26750c`
 - Candidate: —
@@ -591,6 +829,13 @@ On resume after a coordinator or worker loss:
   - Git reconcile at 2026-08-22 07:30 UTC: the Gemma 4 catalog/preflight SLICE landed on origin/main; the full download/install/inference acceptance is NOT met — the task stays OPEN.
   - 2026-08-19 21:08 UTC — captured the local-model request as research-first OPEN work; no Ollama dependency, model identity, size, quantization, licence, runtime, or storage backend is inferred or approved from the uncertain voice transcription.
   - 2026-08-20 03:25 UTC — replayed the independently accepted public-safe task capture onto exact current public main; the extension-managed download goal remains OPEN, with no runtime, model identity or size, quantization, source or licence, update/version, storage/ownership/quota/eviction/atomicity/recovery, integrity, or supply-chain/security choice approved.
+  - 2026-08-23 20:35 UTC — OWNER ESCALATION: product owner demanded the
+    Gemma and other model download/install path be implemented immediately;
+    priority raised P1 → P0 and an implementation lane assigned. Runtime
+    inference, full OPFS installation, model removal and eviction move from
+    deferred to in-flight, still under the settled policy (publisher-source
+    downloads only, user-controlled removal, no silent network/model
+    actions).
 
 ## [CAP-FB-20260822-WASM-TOOL-PLATFORM-01] Co-do-style browser-native tool operating platform
 

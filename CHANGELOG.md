@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.187] — 2026-08-23
+- chore(tasks): capture nine owner-reported bugs (first-run assets, configure deeplink, example agent, browser-control consent, side-panel background agents, icon-on-create, HTML iframe size, generate_ui render) and escalate local-model management to P0 in-flight
+
 ## [0.2.186] — 2026-08-23
 - chore(tasks): sweep 12 IN_REVIEW entries to MERGED with ancestry/byte-containment proof; retain 2 truthful residuals
 
