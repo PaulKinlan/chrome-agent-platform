@@ -120,6 +120,7 @@ import {
   createNamedAgent,
   deleteNamedAgent,
   generateAgentAvatar,
+  generateAvatarForCreatedAgent,
   getNamedAgent,
   getNamedAgentProvider,
   grepAgentMemory,
@@ -3044,8 +3045,31 @@ const handlers = mergeRouteMaps(
         },
       },
     );
-    if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
-    broadcastRegistryChanged();
+    if (r?.ok !== false) {
+      broadcastProgress({ type: "named-agent-changed" });
+      broadcastRegistryChanged();
+      // CAP-FB-20260823-AGENT-ICON-ON-CREATE-01: the icon is generated as part
+      // of creation — a bounded immediate follow-up that never blocks the
+      // create response. Best-effort: no key / generation failure / a
+      // concurrent owner edit all leave the deterministic initial-avatar
+      // placeholder (never a broken image, never a clobbered choice).
+      if (r?.agent && !r.agent.avatar) {
+        void generateAvatarForCreatedAgent({
+          agent: r.agent,
+          getAgent: getNamedAgent,
+          updateAgent: (id, patch) => updateNamedAgent(id, patch),
+          readGeminiKey: async () => {
+            const cfg = await getProviderConfig("gemini");
+            return typeof cfg?.apiKey === "string" ? cfg.apiKey : "";
+          },
+        }).then((res) => {
+          if (res?.attached) {
+            broadcastProgress({ type: "named-agent-changed" });
+            broadcastRegistryChanged();
+          }
+        }).catch(() => { /* the placeholder remains */ });
+      }
+    }
     return r;
   },
   async "named-agent.update"({ id, name, role, avatar, skills, coreAssets }, context) {

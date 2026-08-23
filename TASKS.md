@@ -847,14 +847,14 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-23 — product owner: when an agent is created, its icon
   should be generated immediately, not lazily on click
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
 - Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
-- Candidate: —
+- Workspace: `/home/paulkinlan/worktrees/cap-agent-icon-1dfcb86`
+- Branch: detached
+- Base: `1dfcb865a064ded345ab661dbb26dff31db0dca9`
+- Candidate: GLM implementation (bounded creation-time avatar follow-up)
 - Shipping: —
 - Acceptance: agent creation produces the icon as part of the creation
   transaction (or bounded immediate follow-up) so every surface shows the
@@ -868,6 +868,23 @@ On resume after a coordinator or worker loss:
 - Recover: `git grep -n "icon" -- extension/lib extension/shared`
 - History:
   - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+  - 2026-08-23 21:20 UTC — diagnosis: the ONLY generator was the edit-dialog
+    "Regenerate avatar" button (named-agent.avatar returns a preview; the icon
+    persisted only when the owner clicked). Fix: `generateAvatarForCreatedAgent`
+    (lib/named-agents.js, dependency-injected + time-bounded 20s) runs as a
+    bounded immediate follow-up inside the SW `named-agent.create` handler —
+    never blocking the create response, only when the created agent has no
+    avatar, persisting ONLY if the stored agent still has none (a concurrent
+    owner edit always wins). No key / generation failure / timeout / agent
+    gone → avatar stays null and every render surface keeps the deterministic
+    initialAvatar placeholder (data:image/svg+xml — never a broken image,
+    existing onerror fallback unchanged). Storage bounded: the existing
+    128px-JPEG downscale. Covers BOTH creation paths (UI dialog + the model's
+    named_agent.create management tool — same route). Gates:
+    agent-icon-on-create (new, 6) + named-agents + named-agents-provider +
+    agent-registry + named-agent-provider-route + sw-route-modularization +
+    owner-approval-security + dialog-confirm-modernization + tools-management —
+    107/107.
 
 ## [CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01] HTML artifact viewer iframe and dialog are too small
 

@@ -459,5 +459,58 @@ async function downscaleAvatar(dataURL, size = 128) {
   }
 }
 
+/** Creation-time avatar follow-up (CAP-FB-20260823-AGENT-ICON-ON-CREATE-01):
+ * the agent's icon is generated as part of creation — a bounded, best-effort
+ * immediate follow-up that never blocks the create response. Dependency-
+ * injected for testability; persists ONLY when the stored agent still has no
+ * avatar (an owner's concurrent edit always wins), so it can never clobber a
+ * human choice. Any failure leaves avatar null — every render surface falls
+ * back to the deterministic initialAvatar placeholder, never a broken image.
+ * Storage stays bounded: generateAgentAvatar downscales to a 128px JPEG. */
+export const AGENT_AVATAR_FOLLOWUP_TIMEOUT_MS = 20_000;
+
+export async function generateAvatarForCreatedAgent({
+  agent,
+  getAgent,
+  updateAgent,
+  readGeminiKey,
+  generate = generateAgentAvatar,
+  timeoutMs = AGENT_AVATAR_FOLLOWUP_TIMEOUT_MS,
+}) {
+  if (!agent || typeof agent.id !== "string" || !agent.id) {
+    return { attached: false, reason: "no-agent" };
+  }
+  if (agent.avatar) return { attached: false, reason: "has-avatar" };
+  let key = "";
+  try { key = await readGeminiKey(); } catch { return { attached: false, reason: "key-unavailable" }; }
+  if (!key) return { attached: false, reason: "no-key" };
+  let avatar = null;
+  try {
+    avatar = await avatarWithTimeout(
+      generate({ name: agent.name, role: agent.role, apiKey: key }),
+      timeoutMs,
+    );
+  } catch {
+    return { attached: false, reason: "generation-failed" };
+  }
+  if (!avatar) return { attached: false, reason: "generation-returned-null" };
+  let current = null;
+  try { current = await getAgent(agent.id); } catch { return { attached: false, reason: "read-failed" }; }
+  if (!current) return { attached: false, reason: "agent-gone" };
+  if (current.avatar) return { attached: false, reason: "avatar-set-concurrently" };
+  try { await updateAgent(agent.id, { avatar }); } catch { return { attached: false, reason: "update-failed" }; }
+  return { attached: true };
+}
+
+function avatarWithTimeout(promise, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("avatar generation timed out")), timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 /** A deterministic fallback avatar (an SVG data URL with the agent's initial). */
 export { initialAvatar } from "./avatar.js";

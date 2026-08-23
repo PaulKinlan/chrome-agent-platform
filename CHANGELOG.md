@@ -17,6 +17,8 @@
 
 ## [0.2.193] — 2026-08-23
 - fix(build): bundled-tool generator verify degrades HONESTLY on fresh checkouts — missing /tmp evidence trees now produce a clear WARNING + pass instead of failing `npm run build` (portability regression from 0.2.191); regeneration still hard-fails without evidence; full verify unchanged where the frozen trees exist (CAP-FB-20260822-BUILTIN-WASM-TOOLS-01)
+## [0.2.193] — 2026-08-23
+- fix(agents): generate the agent icon at creation, not on click (CAP-FB-20260823-AGENT-ICON-ON-CREATE-01)
 
 ## [0.2.192] — 2026-08-23
 - feat(ui): replace window.confirm with native promise dialogs (CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01)
