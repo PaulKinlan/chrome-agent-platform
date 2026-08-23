@@ -78,11 +78,17 @@ function syncConversationRunControls() {
 }
 
 // The agent view's LIVE run transcript (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01):
-// subscribe to the agent's most-recent run's progress so the chat surface shows
-// the tool calls/results/errors/status in near-real time, composing with the
-// retained history (renderAgentHistory) rather than duplicating it. The
-// subscription is bound to the current surface (agent + kind) and is torn down
-// when the surface changes or the run settles.
+// The open surface's LIVE run transcript — agent surfaces AND task (thread)
+// surfaces alike (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01 introduced it for
+// agents; CAP-FB-20260823-DURABLE-TASK-RESTORE-01 extends the SAME wiring to
+// tasks, whose open path never attached it): subscribe to the current
+// surface's most-recent run's progress so the view shows the tool
+// calls/results/errors/status in near-real time, composing with the retained
+// history (renderAgentHistory / renderThreadProjection) rather than
+// duplicating it. The subscription is bound to the current surface
+// (threadId when a task is open, else agent + kind) and is torn down when
+// the surface changes or the run settles. Returns the resolved run (or null)
+// so open paths can truthfully set the status banner.
 let runTranscriptUnsub = null;
 let runTranscriptExecutionId = null;
 
@@ -94,19 +100,21 @@ function stopRunTranscript() {
   runTranscriptExecutionId = null;
 }
 
-function projectAgentRunTranscript() {
+function projectSurfaceRunTranscript() {
   const run = latestRunForSurface(latestDurableRuns, {
+    threadId: currentAgentId === null ? currentThreadId : null,
     agentId: currentAgentId,
     agentKind: currentAgentKind,
   });
   const nextId = run?.executionId ?? null;
-  if (nextId === runTranscriptExecutionId) return; // already subscribed to THIS run
+  if (nextId === runTranscriptExecutionId) return run; // already subscribed to THIS run
   stopRunTranscript(); // teardown FIRST — it nulls the guard; assign AFTER so the guard actually holds
   runTranscriptExecutionId = nextId;
-  if (!nextId || !threadConversation) return;
+  if (!nextId || !threadConversation) return run;
   runTranscriptUnsub = renderRunTranscript(threadConversation, nextId, {
     onStatus: (s) => renderRunStatus(s),
   });
+  return run;
 }
 
 if (durableRunRegistry) {
@@ -114,10 +122,10 @@ if (durableRunRegistry) {
   subscribeRunRegistry(({ runs }) => {
     latestDurableRuns = Array.isArray(runs) ? runs : [];
     syncConversationRunControls();
-    // A run that starts or settles while an agent surface is open re-projects
-    // the transcript (guarded by the execution-id change, so heartbeats don't
-    // churn the subscription).
-    projectAgentRunTranscript();
+    // A run that starts or settles while a run surface (agent OR task) is
+    // open re-projects the transcript (guarded by the execution-id change, so
+    // heartbeats don't churn the subscription).
+    projectSurfaceRunTranscript();
   });
   durableRunRegistry.addEventListener("run-cancel", async (event) => {
     const result = await cancelDurableRun(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
@@ -1023,8 +1031,18 @@ async function openThread(id) {
   if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
   const thread = res.ok ? res.thread : null;
   renderThreadProjection(thread, owner);
+  // Restore the run view for a task that was executing (or terminally settled)
+  // while the owner was away (CAP-FB-20260823-DURABLE-TASK-RESTORE-01):
+  // re-attach the live projection for THIS thread's latest run. The thread
+  // projection above replays the persisted journal, so the surface composes
+  // retained history + live continuation without duplicating or losing either;
+  // a run that starts/settles while the view is open re-projects via the run
+  // registry subscription below.
+  const restoredRun = projectSurfaceRunTranscript();
   showThreadView();
-  renderRunStatus({ state: "idle" });
+  const live = restoredRun != null
+    && actionableRunsForSurface(latestDurableRuns, { threadId: id }).length > 0;
+  renderRunStatus(live ? { state: "running", activity: "run in progress" } : { state: "idle" });
   renderTasks(id);
 }
 
@@ -1053,7 +1071,7 @@ async function openBackgroundAgentChat(id, name) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
   renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
-  projectAgentRunTranscript();
+  projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
 }
@@ -1107,7 +1125,7 @@ async function openAgentSurface({ kind, id, name }) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
   renderAgentHistory(threadConversation, entries);
-  projectAgentRunTranscript();
+  projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
 }

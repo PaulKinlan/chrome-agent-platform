@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.204] — 2026-08-23
+- fix(tasks): restore the live task view on leave-and-return — openThread attaches the run transcript projection (surface scope threadId), banner set from run actionability, exactly-once journal replay, registry re-projection covers SW-restart lag (CAP-FB-20260823-DURABLE-TASK-RESTORE-01)
+
 ## [0.2.203] — 2026-08-23
 - feat(discovery): add list_tools enumeration capability and truthful bundled Wasm tool discovery — bounded result (50/category, 256B desc, ≤32KiB, truncated flag), protected policy + agent.js aligned, count-neutral Tool Library template (CAP-FB-20260823-AGENT-WASM-DISCOVERY-01)
 
