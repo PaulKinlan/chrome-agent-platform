@@ -5,18 +5,18 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 00:02 UTC. Reconciled against exact public
-> `origin/main@e793e9a081cf00ac73119c44f227554fbb9e42a2` (`0.2.172`). Lazy,
+> Snapshot: 2026-08-23 00:22 UTC. Reconciled against exact public
+> `origin/main@8cf4c1d90750ca85245422fb8b954ab7c87e9e75` (`0.2.173`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary, the tool-platform foundation and
-> the Settings preview tranches (5 → 16 tools) remain exact; the catalog
-> remains `MERGED`. This branch adds the runtime-only least-authority
-> `fd_fdstat_set_flags` import (linkage-only; the markdown binary links; the
-> SQLite gap shrinks 9→8; no change semantics, no rights grants) as the
-> `0.2.173` step — no package admission, no UI/allowlist change.
-> Branch status counts: **13 OPEN · 14 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 37 DONE · 0 ABANDONED**. The 33 active entries and 37 archived terminal
-> entries below are the complete 70-entry state.
+> the Settings preview tranches (5 → 17 tools) remain exact; the catalog
+> remains `MERGED`. This branch adds the markdown Settings preview (Release B)
+> as the `0.2.174` step — the 17th admitted tool; the runtime's
+> `fd_fdstat_set_flags` linkage-only import landed as public `0.2.173`
+> (SQLite gap 9→8); no provider/page/OPFS authority.
+> Branch status counts: **14 OPEN · 15 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 37 DONE · 0 ABANDONED**. The 35 active entries and 37 archived terminal
+> entries below are the complete 72-entry state.
 
 ## Safety boundary
 
@@ -715,21 +715,42 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
+
+## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-05] markdown Settings preview (Release B)
+
+- Feedback: 2026-08-22 — the markdown binary links after the Release A import;
+  admit the cmark safe-HTML preview (17th tool)
+- Updated: 2026-08-23 00:05 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: admission tranche on this branch
+- Workspace: active (local path private)
+- Branch: `feat/markdown-preview-8cf4c1d`
+- Base: `8cf4c1d90750ca85245422fb8b954ab7c87e9e75`
+- Candidate: `c04f346…` → this amended commit (0.2.174; the generator
+  truthfulness + TASKS reconciliation amendment)
+- Shipping: —
+- Acceptance: exactly 17 enabled / 9 disabled; the exact safe-HTML contracts
+  through the real Worker (# Hi → <h1>Hi</h1>\n; raw <script> omitted; javascript:
+  href scrubbed; --unsafe → proc-exit 2 no stale; file operand denied); the
+  markdown CAS (186,886 B) transports at the 4 MiB wasm cap
+- Gates: full 1168/1168, build rc 0, Store package/validate OK
 ## [CAP-FB-20260822-WASI-FDSTAT-FLAGS-01] Least-authority fd_fdstat_set_flags (linkage-only, Release A)
 
 - Feedback: 2026-08-22 — the markdown binary imports fd_fdstat_set_flags, absent
   from the runtime; the containment audit blocked its admission until a
   least-authority implementation existed
-- Updated: 2026-08-23 00:02 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 00:16 UTC
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: runtime slice on this branch
 - Workspace: active (local path private)
 - Branch: `feat/wasi-fdstat-set-flags-e793e9a`
 - Base: `e793e9a081cf00ac73119c44f227554fbb9e42a2`
-- Candidate: `5eb7171…` (amended; 0.2.173)
-- Shipping: —
+- Candidate: `8cf4c1d90750ca85245422fb8b954ab7c87e9e75`
+- Shipping: `origin/main@8cf4c1d90750ca85245422fb8b954ab7c87e9e75` (public 0.2.173)
 - Acceptance: SUPPORTED imports 18→19 (fd_fdstat_set_flags); the method order
   fdFor (EBADF) → u16/known-mask (EINVAL) → right (ENOTCAPABLE — never granted)
   → known change (ENOTSUP) → exact no-change (SUCCESS) via the pure
@@ -743,7 +764,9 @@ On resume after a coordinator or worker loss:
   - 2026-08-22 23:44 UTC — Release A implemented + committed 5eb7171.
   - 2026-08-23 00:02 UTC — GPT review REVISE (F1 SQLite provenance 9→8 +
     linkage-only-unauthorized wording; F2 pure behavioral planner KAT +
-    counters on the markdown run test) — amended.
+    counters on the markdown run test) — amended to 8cf4c1d.
+  - 2026-08-23 00:19 UTC — pushed as public `origin/main@8cf4c1d…`
+    (`0.2.173`).
 
 
 - Feedback: 2026-08-22 — the reviewed package host needs hard termination,
@@ -808,8 +831,10 @@ On resume after a coordinator or worker loss:
   partial IO, cancellation and host/stdin/stdout/stderr/path/dynamic-FD/file-byte/
   file-size quotas; normalized UTF-8 relative paths reject traversal and symlink
   following; `inputs/` is read-only, `scratch/` read-write and `output/` write-
-  only; the exact nine-function import union measured across 37 non-Emscripten
-  rebuilds is recorded and foreign module/kind/function imports fail explicitly;
+  only; the exact nine-function import UNION measured across 37 non-Emscripten
+  rebuilds is recorded (runtime import SUPPORT is a separate axis: fd_fdstat_set_flags
+  is now supported, shrinking the runtime gap to eight) and foreign module/kind/
+  function imports fail explicitly;
   shared package tiny/default scanner readback is revalidated and large remains
   blocked; no service-worker/offscreen/Worker/route/OPFS construction/network/
   provider/package-byte load/WebAssembly compile-or-instantiate/execution exists
@@ -2337,4 +2362,4 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 ## CAP-FB-20260822-SQLITE3-ACCEPTANCE-04 — sqlite3-query-bounded immutable bundle (0.2.167)
 
 - Physically bundled as immutable package 26 (`cap.bundled.sqlite3.query.bounded`); inventory-admission tested; CAS `ba468c6e…`, licence `blessing AND Apache-2.0`.
-- Execution remains BLOCKED: 9 of 24 WASI imports unimplemented in the CAP runtime (`runtime-imports-unimplemented`); no route/grant/catalog entry; `admitted:false`, `canonicalNameClaim:false`.
+- Execution remains BLOCKED: 8 of 24 WASI imports unimplemented in the CAP runtime (`runtime-imports-unimplemented`); no route/grant/catalog entry; `admitted:false`, `canonicalNameClaim:false`.

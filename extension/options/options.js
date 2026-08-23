@@ -301,7 +301,7 @@ async function renderToolLibrary() {
     return true; // async response
   });
 
-  // The csvtool Settings preview: an EXPLICIT owner click on the component's
+  // The Settings preview: an EXPLICIT owner click on the component's
   // Run button emits tool-preview-request; this surface sends the bounded
   // request to the SW route (the only executor path) and renders the bounded
   // result. No catalog/provider selection is involved.

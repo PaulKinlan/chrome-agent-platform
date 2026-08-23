@@ -6490,6 +6490,8 @@ class ToolLibrary extends Component {
         return 'Example: args "-n" "foo" + stdin "foo\nbar\nfood\n" → "1:foo\n3:food\n". Invalid regexes fail closed with no output.';
       case "toml2json":
         return 'Example: (no args) + stdin "title = \"x\"\n[n]\na = 1\n" → "{\"title\":\"x\",\"n\":{\"a\":1}}\n".';
+      case "markdown":
+        return 'Example: (no args) + stdin "# Hi" → "<h1>Hi</h1>\n" (safe HTML — raw HTML and javascript: URLs omitted; --unsafe is disabled).';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6605,6 +6607,7 @@ class ToolLibrary extends Component {
             <option value="tr">tr — translate characters</option>
             <option value="grep">grep — search lines by pattern</option>
             <option value="toml2json">toml2json — convert TOML to JSON</option>
+            <option value="markdown">markdown — CommonMark to safe HTML (cmark 0.31.1)</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>

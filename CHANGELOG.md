@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.174] — 2026-08-22
+- feat(tools): markdown Settings preview (cmark 0.31.1 safe HTML; Release B) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-05)
+
 ## [0.2.173] — 2026-08-22
 - fix(wasm): least-authority fd_fdstat_set_flags import (linkage-only; markdown links; no change semantics) (CAP-FB-20260822-WASI-FDSTAT-FLAGS-01)
 

@@ -145,6 +145,41 @@ Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT 
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// (B14) markdown Settings preview — EXACT safe-HTML contracts (Release B)
+// ──────────────────────────────────────────────────────────────────────────
+const MARKDOWN_SHA = "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91";
+
+async function runMarkdown(args, stdin) {
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${MARKDOWN_SHA}.wasm`));
+  const job = makeJob({ stdin: new Uint8Array(new TextEncoder().encode(stdin)) });
+  const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+  const host = createOffscreenWasmHost({ executor, authority: { ...AUTHORITY } });
+  return await host.handleJob({ type: "wasm.job", job: { ...rehydrated, args: ["markdown", ...args] }, wasmBytes });
+}
+
+Deno.test("markdown Release B: EXACT safe-HTML contracts through the real Worker", async () => {
+  const heading = await runMarkdown([], "# Hi");
+  assertEquals(heading.ok, true, JSON.stringify(heading));
+  assertEquals(heading.stdout, "<h1>Hi</h1>\n", "exact heading HTML");
+  const raw = await runMarkdown([], "<script>alert(1)</script>");
+  assertEquals(raw.ok, true, JSON.stringify(raw));
+  assertEquals(raw.stdout, "<!-- raw HTML omitted -->\n", "raw HTML omitted (CMARK_OPT_SAFE)");
+  const js = await runMarkdown([], "[x](javascript:alert(1))");
+  assertEquals(js.ok, true, JSON.stringify(js));
+  assertEquals(js.stdout, "<p><a href=\"\">x</a></p>\n", "javascript: URL scrubbed to an empty href");
+  const unsafe = await runMarkdown(["--unsafe"], "# Hi");
+  assertEquals(unsafe.ok, false, "the --unsafe flag fails closed");
+  assertEquals(unsafe.errno, 2, "--unsafe → bounded proc-exit(2)");
+  assertEquals(unsafe.stdout, "", "no stale stdout on the denial");
+  const fileOp = await runMarkdown(["missing.md"], "# Hi");
+  assertEquals(fileOp.ok, false, "a file operand is denied (empty workspace)");
+  assertEquals(fileOp.errno, 1, "file operand → bounded exit 1");
+  assertEquals(fileOp.stdout, "", "no stale stdout");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // (B13) fd_fdstat_set_flags — least-authority runtime support (Release A)
 // ──────────────────────────────────────────────────────────────────────────
 function directRuntimeFlags(overrides = {}) {
@@ -226,11 +261,12 @@ Deno.test("fd_fdstat_set_flags: the DISABLED markdown binary now RUNS through th
   const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const repoRoot = new URL("..", import.meta.url).pathname;
-  // markdown is NOT admitted (the 0.2.173 Release A is runtime-only)
+  // markdown IS admitted now (Release B) — this test's RUN assertion remains
+  // the import-linkage proof
   const row = BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === "markdown");
-  assertEquals(row.admitted, false, "markdown stays disabled (Release A is runtime-only)");
+  assertEquals(row.admitted, true, "markdown is admitted in Release B");
   const spec = PREVIEW_SPECS.markdown;
-  assert(!spec, "markdown is not in the preview allowlist yet");
+  assert(spec && spec.casSha === "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91", "markdown is in the preview allowlist with the pinned CAS");
   const sha = "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91";
   const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${sha}.wasm`));
   // the audit now accepts the full 12-import set (fd_fdstat_set_flags included) and

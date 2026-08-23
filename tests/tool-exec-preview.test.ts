@@ -115,6 +115,16 @@ Deno.test("preview: the wasm-bytes transport rehydrates valid explicit arrays (i
   assertEquals(b2Rehydrated.byteLength, b2Cas.byteLength, "the B2 binary rehydrates at the 4 MiB wasm cap");
   assertEquals(b2Rehydrated[0], 0x00); assertEquals(b2Rehydrated[1], 0x61);
 
+  // The markdown CAS (186,886 B — > 64 KiB) also transports at the 4 MiB cap.
+  const mdSpec = previewSpecFor("markdown");
+  const mdCas = new Uint8Array(await Deno.readFile(
+    new URL(`../extension/wasm/cas/${mdSpec.casSha}.wasm`, import.meta.url),
+  ));
+  assert(mdCas.byteLength > 64 * 1024, `markdown is ${mdCas.byteLength} B (> 64 KiB)`);
+  const mdRehydrated = rehydratePreviewWasmBytes(Array.from(mdCas));
+  assertEquals(mdRehydrated.byteLength, mdCas.byteLength, "the markdown binary rehydrates at the 4 MiB wasm cap");
+  assertEquals(mdRehydrated[0], 0x00); assertEquals(mdRehydrated[1], 0x61);
+
   const rejections = {
     "not-an-array": { value: cas },
     "object": { value: { 0: 0, length: 8 } },
@@ -227,9 +237,9 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
-  // the allowlist is EXACTLY the 16 tools
+  // the allowlist is EXACTLY the 17 tools
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "grep", "head", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "grep", "head", "markdown", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -292,7 +302,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 5 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 17 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -400,10 +410,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 16-tool static allowlist is admitted as settings-preview (other 10 unchanged)", () => {
+Deno.test("preview: the EXACT 17-tool static allowlist is admitted as settings-preview (other 9 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "grep", "head", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "grep", "head", "markdown", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -411,7 +421,7 @@ Deno.test("preview: the EXACT 16-tool static allowlist is admitted as settings-p
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 10, "the other 10 rows are unchanged");
+  assertEquals(notAdmitted.length, 9, "the other 9 rows are unchanged");
   assertEquals(JSON.stringify(previewSpecFor("sort").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("toml2json").caps), JSON.stringify(["compute", "data.read", "data.write"]));
   // per-tool caps: the digest tools carry the crypto set

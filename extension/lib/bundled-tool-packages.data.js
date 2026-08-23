@@ -10,7 +10,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "Bounded RFC 4648 base64 encoding and decoding stream filter",
   "caveats": [
-   "Stdin-only stream filter; supports encode and decode. Invalid padding or characters rejected fail-closed with exit code 1."
+   "Stdin-only stream filter; supports encode and decode. Invalid padding or characters rejected fail-closed with exit code 1.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -46,7 +47,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "crypto",
   "description": "Bounded MD5 legacy digest filter (not for security/signatures)",
   "caveats": [
-   "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity."
+   "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -82,7 +84,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "crypto",
   "description": "Bounded FIPS 180-4 SHA-256 cryptographic digest filter",
   "caveats": [
-   "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin; implementation/provenance still pending owner admission."
+   "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -118,7 +121,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "crypto",
   "description": "Bounded FIPS 180-4 SHA-512 cryptographic digest filter",
   "caveats": [
-   "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin; implementation/provenance still pending owner admission."
+   "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -154,7 +158,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "Bounded hex dump and binary reconstruction filter",
   "caveats": [
-   "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin."
+   "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -190,7 +195,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "crypto",
   "description": "WASI-CSPRNG RFC 4122 UUID v4 generator",
   "caveats": [
-   "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID)."
+   "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID).",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -226,7 +232,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded POSIX-style stdin line, word, and byte count filter",
   "caveats": [
-   "Counts lines, whitespace-delimited words, and bytes. Input bounded by the exact 8 MiB stdin ceiling."
+   "Counts lines, whitespace-delimited words, and bytes. Input bounded by the exact 8 MiB stdin ceiling.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -262,7 +269,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded stdin line-prefix filter",
   "caveats": [
-   "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling."
+   "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -298,7 +306,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded stdin line-suffix filter",
   "caveats": [
-   "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling."
+   "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -334,7 +343,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded single-field delimiter column extraction filter",
   "caveats": [
-   "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands."
+   "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -370,7 +380,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded stdin line sort in the C byte locale",
   "caveats": [
-   "Stdin-only line sort in the C byte locale. Options: -n (numeric, no exponent notation), -r (reverse), -u (unique). File operands rejected."
+   "Stdin-only line sort in the C byte locale. Options: -n (numeric, no exponent notation), -r (reverse), -u (unique). File operands rejected.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -406,7 +417,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded adjacent full-line run filter",
   "caveats": [
-   "Filters adjacent duplicate lines without field/character skipping. Options: -c (count), -d (repeated only), -u (unique only). Stdin-only."
+   "Filters adjacent duplicate lines without field/character skipping. Options: -c (count), -d (repeated only), -u (unique only). Stdin-only.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -442,7 +454,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded streaming byte-locale translate/delete/squeeze filter",
   "caveats": [
-   "Translates, deletes (-d), or squeezes (-s) characters in byte locale with complement and POSIX character classes. Unsupported equivalence classes and repeat expressions rejected."
+   "Translates, deletes (-d), or squeezes (-s) characters in byte locale with complement and POSIX character classes. Unsupported equivalence classes and repeat expressions rejected.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -478,7 +491,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded POSIX BRE/ERE stdin line selection filter",
   "caveats": [
-   "Stdin text selection filter. Options: -i, -v, -n, -c, -F, -E. NUL input and file operands are rejected."
+   "Stdin text selection filter. Options: -i, -v, -n, -c, -F, -E. NUL input and file operands are rejected.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -584,7 +598,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "Bounded TOML to JSON direct converter (pinned tomlc99)",
   "caveats": [
-   "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0."
+   "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -621,7 +636,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "Bounded CommonMark HTML renderer based on pinned cmark 0.31.1",
   "caveats": [
-   "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection. If narrowed to stdin-only in product integration, that contract requires an explicit adapter check. Requires future reviewed execution adapter to map only exact per-job CAP OPFS authority to WASI /job; not currently executable/admitted."
+   "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority.",
+   "file.read remains declared in the manifest; the route projects NO files into the fresh empty per-job workspace, so a file operand cannot read owner data and fails closed (path normalization prevents escape/cross-job)."
   ],
   "capabilities": [
    "compute",
@@ -644,9 +661,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.markdown-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.du",
@@ -834,7 +852,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Clean-room bounded RFC 4180 CSV stream filter (stdin/stdout only); CAP-authored, Apache-2.0.",
   "caveats": [
-   "Stdin/stdout only; no file operands."
+   "Stdin/stdout only; no file operands.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",

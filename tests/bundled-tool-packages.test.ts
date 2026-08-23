@@ -155,14 +155,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admitted EXACTLY for the 16-tool settings-preview allowlist", () => {
+Deno.test("posture: descriptors admitted EXACTLY for the 17-tool settings-preview allowlist", () => {
   assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(previewRows.map((r) => r.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "grep", "head", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
-  ), "exactly the 16-tool allowlist");
+    ["base64", "csvtool", "cut", "grep", "head", "markdown", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+  ), "exactly the 17-tool allowlist");
   for (const row of previewRows) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
@@ -180,6 +180,38 @@ Deno.test("posture: descriptors admitted EXACTLY for the 16-tool settings-previe
   const listed = listBundledToolPackages();
   listed[0].description = "mutated";
   assert(BUNDLED_TOOL_PACKAGES[0].description !== "mutated", "enumeration must return copies");
+  // ALL 17 admitted rows: the file.read sentence appears IFF the caps include
+  // file.read; the generic Settings-only sentence appears in every one; and no
+  // admitted row carries pre-admission stale wording.
+  for (const row of previewRows) {
+    const caveats = (row.caveats ?? []).join(" ");
+    const hasFileReadCaps = (row.capabilities ?? []).includes("file.read");
+    assertEquals(caveats.includes("projects NO files into the fresh empty per-job workspace"), hasFileReadCaps, `${row.toolId}: file.read caveat iff file.read caps`);
+    assert(caveats.includes("Settings-only bounded stdin preview"), `${row.toolId}: generic Settings-only caveat present`);
+    assert(!/pending owner admission|not currently executable|future reviewed execution adapter|not admitted/i.test(caveats), `${row.toolId}: no stale pre-admission wording`);
+  }
+  // per-tool TRUE caveats are preserved (not overwritten by the generic one)
+  const md5 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "md5sum");
+  assert((md5.caveats ?? []).join(" ").includes("never signatures, content trust, or collision-resistant integrity"), "md5 legacy caveat preserved");
+  const uuid = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "uuid");
+  assert((uuid.caveats ?? []).join(" ").includes("output is intentionally nondeterministic"), "uuid nondeterminism caveat preserved");
+  const b64 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "base64");
+  assert((b64.caveats ?? []).join(" ").includes("Invalid padding or characters rejected fail-closed"), "base64 padding caveat preserved");
+  const sha256 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "sha256sum");
+  assert((sha256.caveats ?? []).join(" ").includes("FIPS 180-4 SHA-256"), "sha256 FIPS caveat preserved");
+  // the ADMITTED markdown row's caveat is TRUTHFUL (no pre-admission wording)
+  const markdownRow = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "markdown");
+  assert(markdownRow, "markdown row present");
+  assertEquals(markdownRow.admitted, true, "markdown admitted");
+  const caveat = (markdownRow.caveats ?? []).join(" ");
+  assert(caveat.includes("Settings-only bounded stdin preview"), "the generated caveat names the stdin preview");
+  assert(caveat.includes("projects NO files into the fresh empty per-job workspace"), "the route projects no files into the fresh empty workspace");
+  assert(caveat.includes("cannot read owner data and fails closed"), "a file operand cannot read owner data");
+  assert(caveat.includes("path normalization prevents escape/cross-job"), "path normalization prevents escape/cross-job");
+  assert(!/deny any (valid )?file operand|not currently executable|future reviewed execution adapter|not admitted/i.test(caveat), "no pre-admission/deny-all false wording in the admitted caveat");
+  // the TRUE per-tool predecessor caveat is PRESERVED byte-wise in the admitted row
+  assert(caveat.includes("Based on pinned cmark 0.31.1 (BSD-2-Clause)"), "the cmark predecessor caveat is preserved");
+  assert(caveat.includes("Raw HTML and dangerous javascript: URLs are omitted/disabled"), "the cmark XSS caveat is preserved");
 });
 
 Deno.test("posture: the ONLY route is tool.preview.run — no provider/selection authority", async () => {
@@ -342,7 +374,7 @@ Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS ha
     const prevDigests = [...prevText.matchAll(/"pkg": "(cap\.bundled\.[^"]+)",\s*"version": "1\.0\.0",\s*"digest": "([0-9a-f]{64})"/g)];
     assertEquals(prevDigests.length, 25);
     const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
-    const TRANCH = new Set(["cap.bundled.csvtool", "cap.bundled.uuid", "cap.bundled.head", "cap.bundled.tail", "cap.bundled.cut", "cap.bundled.base64", "cap.bundled.md5sum", "cap.bundled.sha256sum", "cap.bundled.sha512sum", "cap.bundled.wc", "cap.bundled.xxd", "cap.bundled.sort", "cap.bundled.uniq", "cap.bundled.tr", "cap.bundled.grep", "cap.bundled.toml2json"]);
+    const TRANCH = new Set(["cap.bundled.csvtool", "cap.bundled.uuid", "cap.bundled.head", "cap.bundled.tail", "cap.bundled.cut", "cap.bundled.base64", "cap.bundled.md5sum", "cap.bundled.sha256sum", "cap.bundled.sha512sum", "cap.bundled.wc", "cap.bundled.xxd", "cap.bundled.sort", "cap.bundled.uniq", "cap.bundled.tr", "cap.bundled.grep", "cap.bundled.toml2json", "cap.bundled.markdown"]);
     for (const [, pkg, dg] of prevDigests) {
       if (TRANCH.has(pkg)) {
         assert(now.get(pkg) !== dg, `${pkg} manifest digest intentionally changed (settings-preview meta status)`);
