@@ -260,12 +260,15 @@ Deno.test("stat Release E: the workspace-seed schema fails closed on every hosti
     ["array-extra-key", { files: [{ path: "inputs/a", bytes: Object.assign([1], { extra: 2 }) }] }],
     ["array-symbol-key", { files: [{ path: "inputs/a", bytes: Object.assign([1], { [Symbol("x")]: 2 }) }] }],
     ["dup-path", { files: [{ path: "inputs/a", bytes: [1] }, { path: "inputs/a", bytes: [2] }] }],
+    ["file-prefix-ambiguity", { files: [{ path: "inputs/a", bytes: [1] }, { path: "inputs/a/b", bytes: [2] }] }],
     ["leading-slash", { files: [{ path: "/inputs/a", bytes: [1] }] }],
     ["backslash", { files: [{ path: "inputs\\a", bytes: [1] }] }],
     ["inputs-alone", { files: [{ path: "inputs", bytes: [1] }] }],
     ["dot-segment", { files: [{ path: "inputs/./a", bytes: [1] }] }],
     ["dotdot", { files: [{ path: "inputs/../a", bytes: [1] }] }],
     ["nul-path", { files: [{ path: "inputs/a\u0000b", bytes: [1] }] }],
+    ["control-path", { files: [{ path: "inputs/a\u0001b", bytes: [1] }] }],
+    ["del-path", { files: [{ path: "inputs/a\u007fb", bytes: [1] }] }],
   ];
   for (const [label, seed] of recordCases) assertSeedFailure(label, seed);
   // EMPTY bytes are ACCEPTED (≤32 KiB includes 0) + a NESTED valid path is accepted
@@ -310,6 +313,139 @@ Deno.test("stat Release E: seeded workspace bytes are cloned per job and mutatio
   assertEquals([...bHandle.read(0, 2)], [7], "another job has independent bytes");
   aHandle.write(0, new Uint8Array([9]));
   assertEquals([...bHandle.read(0, 2)], [7], "mutating one in-memory job cannot mutate another job");
+});
+
+Deno.test("fd_readdir D-minus: the production workspace seeds root and nested implicit directories deterministically", () => {
+  const workspace = createSyncWorkspace({
+    root: "tool-jobs/dirs/c/",
+    seed: {
+      files: [
+        { path: "inputs/z.txt", bytes: [1] },
+        { path: "inputs/sub/deep.txt", bytes: [2] },
+        { path: "inputs/a.txt", bytes: [3] },
+      ],
+    },
+  });
+  assertEquals(workspace.stat("."), { type: "directory", size: 0, mtime: 0 });
+  assertEquals(workspace.stat("inputs"), { type: "directory", size: 0, mtime: 0 });
+  assertEquals(workspace.stat("inputs/sub"), { type: "directory", size: 0, mtime: 0 });
+  assertEquals(workspace.readdir("."), [{ name: "inputs", type: "directory" }]);
+  assertEquals(workspace.readdir("inputs"), [
+    { name: "a.txt", type: "file" },
+    { name: "sub", type: "directory" },
+    { name: "z.txt", type: "file" },
+  ]);
+  assertEquals(workspace.readdir("inputs/sub"), [{ name: "deep.txt", type: "file" }]);
+  let code = null;
+  try {
+    workspace.readdir("inputs/a.txt");
+  } catch (error) {
+    code = error?.code ?? null;
+  }
+  assertEquals(code, "ENOENT", "a file can never be enumerated as a directory");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Runtime-only fd_readdir D-minus — retained du/tree linkage, NO admission
+// ──────────────────────────────────────────────────────────────────────────
+const DU_SHA = "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d";
+const TREE_SHA = "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb";
+
+async function runDirectoryTool(toolId, sha, args, workspaceSeed, acceptedExitCodes = [0]) {
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${sha}.wasm`));
+  const job = makeJob({
+    args: [toolId, ...args],
+    workspaceSeed,
+    acceptedExitCodes,
+    stdin: new Uint8Array(0),
+    quota: {
+      ...WASI_HOST_DEFAULT_QUOTA,
+      hostCalls: 10_000,
+      pathCalls: 1_000,
+      stdinBytes: 64,
+      stdoutBytes: 4096,
+      stderrBytes: 4096,
+      fileBytes: 4096,
+      fileSize: 4096,
+      dynamicFds: 32,
+    },
+  });
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+  const host = createOffscreenWasmHost({ executor, authority: { ...AUTHORITY } });
+  return await host.handleJob({ type: "wasm.job", job, wasmBytes });
+}
+
+Deno.test("fd_readdir D-minus: exact 12-import du/tree binaries run in fresh Workers while remaining unadmitted", async () => {
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const exactImports = [
+    "args_get",
+    "args_sizes_get",
+    "fd_close",
+    "fd_fdstat_get",
+    "fd_prestat_dir_name",
+    "fd_prestat_get",
+    "fd_readdir",
+    "fd_seek",
+    "fd_write",
+    "path_filestat_get",
+    "path_open",
+    "proc_exit",
+  ];
+  for (const [toolId, sha] of [["du", DU_SHA], ["tree", TREE_SHA]]) {
+    const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
+    assertEquals(row?.binary?.sha256, sha, `${toolId}: exact retained CAS`);
+    assertEquals(row?.admitted, false, `${toolId}: runtime-linked only`);
+    assertEquals(row?.disabled, true, `${toolId}: no Settings preview admission`);
+    const bytes = await Deno.readFile(new URL(`../extension/wasm/cas/${sha}.wasm`, import.meta.url));
+    const imports = WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((row) => row.name).sort();
+    assertEquals(imports, exactImports, `${toolId}: frozen 12-import census`);
+  }
+
+  const seed = { files: [{ path: "inputs/f.bin", bytes: [104, 105] }] };
+  const duSeeded = await runDirectoryTool("du", DU_SHA, ["/job"], seed);
+  assertEquals(duSeeded.ok, true, JSON.stringify(duSeeded));
+  assertEquals(duSeeded.stdout, "1\t/job/inputs\n1\t/job\n");
+  assertEquals(duSeeded.stderr, "");
+  assertEquals(duSeeded.counters, {
+    hostCalls: 23,
+    pathCalls: 9,
+    fileBytes: 0,
+    stdinBytesRead: 0,
+    stdoutBytes: 21,
+    stderrBytes: 0,
+    openDynamicFds: 0,
+  });
+  const duEmpty = await runDirectoryTool("du", DU_SHA, ["/job"], { files: [] });
+  assertEquals(duEmpty.ok, true, JSON.stringify(duEmpty));
+  assertEquals(duEmpty.stdout, "0\t/job\n");
+  assertEquals(duEmpty.stderr, "");
+  assertEquals(duEmpty.counters?.openDynamicFds, 0);
+
+  const treeSeeded = await runDirectoryTool("tree", TREE_SHA, ["/job"], seed);
+  assertEquals(treeSeeded.ok, true, JSON.stringify(treeSeeded));
+  assertEquals(treeSeeded.stdout, "/job\n└── inputs/\n    └── f.bin\n\n1 directories, 1 files\n");
+  assertEquals(treeSeeded.stderr, "");
+  assertEquals(treeSeeded.counters, {
+    hostCalls: 26,
+    pathCalls: 9,
+    fileBytes: 0,
+    stdinBytesRead: 0,
+    stdoutBytes: 67,
+    stderrBytes: 0,
+    openDynamicFds: 0,
+  });
+  const treeEmpty = await runDirectoryTool("tree", TREE_SHA, ["/job"], { files: [] });
+  assertEquals(treeEmpty.ok, true, JSON.stringify(treeEmpty));
+  assertEquals(treeEmpty.stdout, "/job\n\n0 directories, 0 files\n");
+  assertEquals(treeEmpty.stderr, "");
+  assertEquals(treeEmpty.counters?.openDynamicFds, 0);
+
+  const treeFile = await runDirectoryTool("tree", TREE_SHA, ["/job/inputs/f.bin"], seed, [0, 1]);
+  assertEquals(treeFile.ok, true, JSON.stringify(treeFile));
+  assertEquals(treeFile.stdout, "", "accepted diagnostic exit has no stale stdout");
+  assertEquals(treeFile.stderr, "tree: /job/inputs/f.bin: not a directory\n");
+  assertEquals(treeFile.counters?.openDynamicFds, 0);
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -416,12 +552,16 @@ async function runActualStatAgainstCapture(guestPath) {
     root: job.context.workspaceRoot,
     stat(path) {
       seenPaths.push(path);
+      if (path === ".") return { type: "directory", size: 0, mtime: 0 };
       if (path !== "inputs/f.bin") {
         const error = new Error("ENOENT");
         error.code = "ENOENT";
         throw error;
       }
       return { type: "file", size: 2, mtime: 0 };
+    },
+    readdir() {
+      throw new Error("stat must not enumerate a directory");
     },
     open() {
       throw new Error("stat must not open a file");
@@ -476,9 +616,16 @@ Deno.test("/job preopen: actual retained stat libc maps /job/inputs/f.bin to exa
   assertEquals(result.stderr, "");
 });
 
+Deno.test("/job preopen: actual retained stat can observe only bounded root metadata", async () => {
+  const result = await runActualStatAgainstCapture("/job");
+  assertEquals(result.exitCode, 0, JSON.stringify(result));
+  assertEquals(result.seenPaths, ["."], "exact /job reaches only the bounded workspace root");
+  assertEquals(result.stdout, "path=/job\ntype=directory\nsize=0\nmtime=0.000000000\n");
+  assertEquals(result.stderr, "");
+});
+
 Deno.test("/job preopen: actual stat refuses non-mount and traversal argv before the workspace adapter", async () => {
   for (const guestPath of [
-    "/job",
     "/jobx/inputs/f.bin",
     "/other/inputs/f.bin",
     "inputs/f.bin",
@@ -542,7 +689,7 @@ Deno.test("fd_fdstat_set_flags: import linkage — the wasi table exposes it + t
   assert(m, "supported import set found");
   const names = [...m[1].matchAll(/"([a-z_0-9]+)"/g)].map((x) => x[1]);
   assertEquals(names.includes("fd_fdstat_set_flags"), true, "supported set includes fd_fdstat_set_flags");
-  assertEquals(names.length, 19, "supported set is 18 → 19 (exactly one added)");
+  assertEquals(names.length, 20, "fd_readdir is the exact twentieth supported import");
 });
 
 Deno.test("fd_fdstat_set_flags: error ORDER — unknown fd EBADF first; invalid bits EINVAL on a valid no-right fd; known change ENOTCAPABLE on a current fd", () => {

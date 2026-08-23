@@ -17,6 +17,8 @@ export const SYNC_WORKSPACE_BOUNDS = Object.freeze({
   maxSegmentBytes: 255,
   maxFileBytes: 10 * 1024 * 1024,
   maxOpenHandles: 64,
+  maxDirEntries: 4096,
+  maxDirNameBytes: 255,
 });
 
 function failClosed(code) {
@@ -35,9 +37,13 @@ function boundedPath(path) {
     throw failClosed("ENAMETOOLONG");
   }
   for (const part of path.split("/")) {
+    const segmentBytes = new TextEncoder().encode(part);
     if (!part || part === "." || part === ".." ||
-        new TextEncoder().encode(part).byteLength > SYNC_WORKSPACE_BOUNDS.maxSegmentBytes) {
+        segmentBytes.byteLength > SYNC_WORKSPACE_BOUNDS.maxSegmentBytes) {
       throw failClosed("EPERM");
+    }
+    for (const byte of segmentBytes) {
+      if (byte < 0x20 || byte === 0x7f) throw failClosed("EINVAL");
     }
   }
   return path;
@@ -134,6 +140,12 @@ export function validateWorkspaceSeed(seed) {
       if (total > WORKSPACE_SEED_LIMITS.maxTotalBytes) seedFail();
       files.push(Object.freeze({ path, bytes: Object.freeze(dense) }));
     }
+    // A seeded file may never also name an implicit directory. This keeps the
+    // file-vs-directory decision unambiguous before the workspace is created.
+    for (const path of seen) {
+      const prefix = `${path}/`;
+      if ([...seen].some((candidate) => candidate.startsWith(prefix))) seedFail();
+    }
     return Object.freeze({ files: Object.freeze(files) });
   } catch {
     seedFail();
@@ -154,14 +166,54 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
   let nextHandleId = 1;
 
   const stat = (path) => {
-    const p = boundedPath(path);
-    const entry = files.get(p);
-    if (!entry) {
-      const e = new Error("ENOENT");
-      e.code = "ENOENT";
-      throw e;
+    const p = path === "." ? "." : boundedPath(path);
+    const entry = p === "." ? null : files.get(p);
+    const prefix = p === "." ? "" : `${p}/`;
+    const isDirectory = p === "." || [...files.keys()].some((key) => key.startsWith(prefix));
+    // Defense in depth: validateWorkspaceSeed forbids this for trusted seeds,
+    // but the mutable in-memory adapter still fails closed if a later file
+    // write ever creates an exact-file/implicit-directory collision.
+    if (entry && isDirectory) throw failClosed("ENOTDIR");
+    if (entry) return { type: "file", size: entry.bytes.byteLength, mtime: entry.mtime };
+    if (isDirectory) return { type: "directory", size: 0, mtime: 0 };
+    const error = new Error("ENOENT");
+    error.code = "ENOENT";
+    throw error;
+  };
+
+  const readdir = (path) => {
+    const p = path === "." ? "." : boundedPath(path);
+    const prefix = p === "." ? "" : `${p}/`;
+    if (p !== "." && ![...files.keys()].some((key) => key.startsWith(prefix))) {
+      throw failClosed("ENOENT");
     }
-    return { type: "file", size: entry.bytes.byteLength, mtime: entry.mtime };
+    const children = new Map();
+    for (const key of files.keys()) {
+      if (prefix && !key.startsWith(prefix)) continue;
+      const relative = prefix ? key.slice(prefix.length) : key;
+      if (!relative) continue;
+      const slash = relative.indexOf("/");
+      const name = slash < 0 ? relative : relative.slice(0, slash);
+      const type = slash < 0 ? "file" : "directory";
+      const bytes = new TextEncoder().encode(name);
+      if (!name || name === "." || name === ".." || name.includes("/") ||
+          name.includes("\0") || bytes.byteLength > SYNC_WORKSPACE_BOUNDS.maxDirNameBytes) {
+        throw failClosed("EIO");
+      }
+      const prior = children.get(name);
+      if (prior && prior !== type) throw failClosed("EIO");
+      children.set(name, type);
+      if (children.size > SYNC_WORKSPACE_BOUNDS.maxDirEntries) throw failClosed("EIO");
+    }
+    const rows = [...children].map(([name, type]) => ({ name, type, bytes: new TextEncoder().encode(name) }));
+    rows.sort((a, b) => {
+      const length = Math.min(a.bytes.length, b.bytes.length);
+      for (let index = 0; index < length; index++) {
+        if (a.bytes[index] !== b.bytes[index]) return a.bytes[index] - b.bytes[index];
+      }
+      return a.bytes.length - b.bytes.length;
+    });
+    return Object.freeze(rows.map(({ name, type }) => Object.freeze({ name, type })));
   };
 
   const open = (path, options = {}) => {
@@ -244,6 +296,7 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
   return Object.freeze({
     root,
     stat,
+    readdir,
     open,
     // introspection for the no-Chrome tests (never an execution authority)
     _inspect: () => Object.freeze({

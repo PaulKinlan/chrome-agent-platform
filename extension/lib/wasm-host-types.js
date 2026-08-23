@@ -121,6 +121,7 @@ export const FD_KIND = Object.freeze({
   STDERR: "stderr",
   PREOPEN: "preopen",
   FILE: "file",
+  DIR: "dir",
 });
 
 export const PATH_CLASS_RIGHTS = Object.freeze({
@@ -307,6 +308,7 @@ export function createFdRecord(value) {
     "offset",
     "path",
     "rights",
+    "rightsInheriting",
   ];
   const input = ownRecord(value, required, "fd_shape");
   if (
@@ -318,7 +320,9 @@ export function createFdRecord(value) {
   }
   if (
     typeof input.rights !== "bigint" || input.rights < 0n ||
-    input.rights > 0xffff_ffff_ffff_ffffn
+    input.rights > 0xffff_ffff_ffff_ffffn ||
+    typeof input.rightsInheriting !== "bigint" || input.rightsInheriting < 0n ||
+    input.rightsInheriting > 0xffff_ffff_ffff_ffffn
   ) fail("fd_rights");
   if (
     typeof input.offset !== "bigint" || input.offset < 0n ||

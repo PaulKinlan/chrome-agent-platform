@@ -11,9 +11,11 @@ import {
   PATH_CLASS_RIGHTS,
   WASI_CLOCK,
   WASI_ERRNO,
+  WASI_FDFLAGS,
   WASI_FILETYPE,
   WASI_HOST_DEFAULT_QUOTA,
   WASI_HOST_HARD_LIMITS,
+  WASI_LOOKUPFLAGS,
   WASI_OFLAGS,
   WASI_RIGHTS,
   WASI_WHENCE,
@@ -21,11 +23,13 @@ import {
 } from "../extension/lib/wasm-host-types.js";
 import {
   createWasiPreview1Runtime,
+  planFdReaddir,
   REBUILT_TOOL_COUNT,
   REBUILT_WASI_IMPORTS,
   revalidateAuditedMemory,
   SUPPORTED_WASI_PREVIEW1_IMPORTS,
   validateWasiImportSet,
+  WASI_LIBC_OPENDIR_PROFILE,
 } from "../extension/lib/wasi-preview1-runtime.js";
 
 const enc = new TextEncoder();
@@ -82,8 +86,27 @@ class MemoryWorkspace {
   }
   stat(path) {
     const row = this.files.get(path);
-    if (!row) throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    return { type: row.type, size: row.bytes.byteLength };
+    const prefix = path === "." ? "" : `${path}/`;
+    const directory = path === "." || [...this.files.keys()].some((key) => key.startsWith(prefix));
+    if (row && directory) throw Object.assign(new Error("ambiguous"), { code: "ENOTDIR" });
+    if (row) return { type: row.type, size: row.bytes.byteLength };
+    if (directory) return { type: "directory", size: 0 };
+    throw Object.assign(new Error("missing"), { code: "ENOENT" });
+  }
+  readdir(path) {
+    const prefix = path === "." ? "" : `${path}/`;
+    if (path !== "." && ![...this.files.keys()].some((key) => key.startsWith(prefix))) {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+    const names = new Map();
+    for (const key of this.files.keys()) {
+      if (prefix && !key.startsWith(prefix)) continue;
+      const relative = prefix ? key.slice(prefix.length) : key;
+      const slash = relative.indexOf("/");
+      const name = slash < 0 ? relative : relative.slice(0, slash);
+      names.set(name, slash < 0 ? "file" : "directory");
+    }
+    return [...names].map(([name, type]) => ({ name, type }));
   }
   open(path, options) {
     let row = this.files.get(path);
@@ -206,6 +229,50 @@ function openPath(
   return { errno, fd: h.memory.u32(openedPtr) };
 }
 
+function openDir(h, path, overrides = {}) {
+  const pathPtr = overrides.pathPtr ?? 2000;
+  const openedPtr = overrides.openedPtr ?? 3000;
+  const length = putPath(h.memory, pathPtr, path);
+  const profile = {
+    dirflags: WASI_LIBC_OPENDIR_PROFILE.dirflags,
+    oflags: WASI_LIBC_OPENDIR_PROFILE.oflags,
+    rightsBase: WASI_LIBC_OPENDIR_PROFILE.requestedBase,
+    rightsInheriting: WASI_LIBC_OPENDIR_PROFILE.requestedInheriting,
+    fdflags: WASI_LIBC_OPENDIR_PROFILE.fdflags,
+    preopenFd: 4,
+    ...overrides,
+  };
+  const errno = h.wasi.path_open(
+    profile.preopenFd,
+    profile.dirflags,
+    pathPtr,
+    length,
+    profile.oflags,
+    profile.rightsBase,
+    profile.rightsInheriting,
+    profile.fdflags,
+    openedPtr,
+  );
+  return { errno, fd: h.memory.u32(openedPtr) };
+}
+
+function decodeDirents(bytes) {
+  const rows = [];
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset);
+    const nameLength = view.getUint32(16, true);
+    rows.push({
+      next: view.getBigUint64(0, true),
+      ino: view.getBigUint64(8, true),
+      type: view.getUint32(20, true),
+      name: dec.decode(bytes.slice(offset + 24, offset + 24 + nameLength)),
+    });
+    offset += 24 + nameLength;
+  }
+  return rows;
+}
+
 Deno.test("WASI host types: constants, job/context/quota and FD records are strict and frozen", () => {
   for (
     const value of [
@@ -227,6 +294,7 @@ Deno.test("WASI host types: constants, job/context/quota and FD records are stri
     filetype: WASI_FILETYPE.CHARACTER_DEVICE,
     flags: 0,
     rights: WASI_RIGHTS.FD_READ,
+    rightsInheriting: 0n,
     offset: 0n,
     path: "",
     handle: null,
@@ -484,7 +552,8 @@ Deno.test("WASI preopen/fd stat KAT: fd3 dot + fd4 /job aliases have identical b
   assertEquals(h.memory.bytes[200], WASI_FILETYPE.CHARACTER_DEVICE);
   const rootRights = WASI_RIGHTS.PATH_OPEN |
     WASI_RIGHTS.PATH_CREATE_FILE |
-    WASI_RIGHTS.PATH_FILESTAT_GET;
+    WASI_RIGHTS.PATH_FILESTAT_GET |
+    WASI_RIGHTS.FD_READDIR;
   const inheritedRights = PATH_CLASS_RIGHTS.inputs.rights |
     PATH_CLASS_RIGHTS.scratch.rights |
     PATH_CLASS_RIGHTS.output.rights;
@@ -556,6 +625,9 @@ Deno.test("WASI path normalization/stat: relative classes work; traversal, NUL, 
   const hostile = harness({
     workspace: {
       open() {
+        throw hostileError;
+      },
+      readdir() {
         throw hostileError;
       },
       stat() {
@@ -648,7 +720,7 @@ Deno.test("WASI path_open rights: inputs read-only, scratch rw, output write-onl
       0,
       3050,
     ),
-    WASI_ERRNO.ENOTSUP,
+    WASI_ERRNO.ENOTCAPABLE,
   );
   assertEquals(
     h.wasi.path_open(
@@ -930,6 +1002,262 @@ Deno.test("WASI quotas/cancellation: every call is fenced; host/path/file/FD quo
     size.wasi.fd_seek(output.fd, 3n, WASI_WHENCE.SET, 300),
     WASI_ERRNO.EFBIG,
   );
+});
+
+Deno.test("fd_readdir planner: byte sort, exact dirents, cookies, full-entry buffers and hostile bounds", () => {
+  const entries = [
+    { name: "z", type: "file" },
+    { name: "a", type: "directory" },
+  ];
+  const full = planFdReaddir(entries, 0n, 50);
+  assertEquals(full.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(full.bufused, 50);
+  assertEquals(decodeDirents(full.packed), [
+    { next: 1n, ino: 0n, type: WASI_FILETYPE.DIRECTORY, name: "a" },
+    { next: 2n, ino: 0n, type: WASI_FILETYPE.REGULAR_FILE, name: "z" },
+  ]);
+  assertEquals(planFdReaddir(entries, 0n, 0).bufused, 0);
+  assertEquals(planFdReaddir(entries, 0n, 24).bufused, 0, "a name is never truncated");
+  assertEquals(
+    decodeDirents(planFdReaddir(entries, 0n, 25).packed).map((row) => row.name),
+    ["a"],
+  );
+  assertEquals(
+    decodeDirents(planFdReaddir(entries, 1n, 25).packed).map((row) => row.name),
+    ["z"],
+  );
+  assertEquals(planFdReaddir(entries, 2n, 50).bufused, 0, "cookie == count is EOF");
+  assertEquals(planFdReaddir(entries, 99n, 50).errno, WASI_ERRNO.SUCCESS);
+  assertEquals(planFdReaddir(entries, 99n, 50).bufused, 0, "cookie > count is EOF");
+  assertEquals(planFdReaddir([], 0n, 0).bufused, 0);
+  const maxName = planFdReaddir([{ name: "x".repeat(255), type: "file" }], 0n, 279);
+  assertEquals(maxName.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(maxName.bufused, 279);
+  for (const hostile of [
+    [{ name: "x".repeat(256), type: "file" }],
+    [{ name: "..", type: "file" }],
+    [{ name: ".", type: "directory" }],
+    [{ name: "a/b", type: "file" }],
+    [{ name: "a\0b", type: "file" }],
+    [{ name: "a", type: "symlink" }],
+    [{ name: "a", type: "file", extra: true }],
+    Array.from({ length: 4097 }, (_, i) => ({ name: `x${i}`, type: "file" })),
+  ]) {
+    assertEquals(planFdReaddir(hostile, 0n, 1000).errno, WASI_ERRNO.EIO);
+  }
+  for (const [cookie, bufLen] of [[-1n, 50], [0n, -1], [0n, 0x1_0000_0000]]) {
+    assertEquals(planFdReaddir(entries, cookie, bufLen).errno, WASI_ERRNO.EINVAL);
+  }
+  assertEquals([...planFdReaddir(entries, 0n, 50).packed], [...full.packed], "deterministic bytes");
+  assert(Object.isFrozen(full), "the planner result is immutable");
+});
+
+Deno.test("D-minus: exact libc tuple grants only readdir + child-stat authority and reports it honestly", () => {
+  assertEquals(WASI_LIBC_OPENDIR_PROFILE, {
+    dirflags: WASI_LOOKUPFLAGS.SYMLINK_FOLLOW,
+    oflags: WASI_OFLAGS.DIRECTORY,
+    requestedBase: 0x200026n,
+    requestedInheriting: 0x600066n,
+    fdflags: WASI_FDFLAGS.NONBLOCK,
+    granted: 0x244026n,
+  });
+  const h = harness();
+  h.workspace.files.set("inputs/nested/deep.txt", { type: "file", bytes: enc.encode("deep") });
+  const root = openDir(h, ".", { preopenFd: 4 });
+  assertEquals(root, { errno: WASI_ERRNO.SUCCESS, fd: 5 });
+  assertEquals(h.wasi.fd_fdstat_get(root.fd, 100), WASI_ERRNO.SUCCESS);
+  const view = new DataView(h.memory.bytes.buffer);
+  assertEquals(view.getUint8(100), WASI_FILETYPE.DIRECTORY);
+  assertEquals(view.getUint16(102, true), WASI_FDFLAGS.NONBLOCK);
+  assertEquals(view.getBigUint64(108, true), 0x244026n);
+  assertEquals(view.getBigUint64(116, true), 0x244026n);
+  const forbidden = WASI_RIGHTS.PATH_OPEN | WASI_RIGHTS.FD_WRITE |
+    WASI_RIGHTS.FD_FILESTAT_SET_SIZE | WASI_RIGHTS.PATH_FILESTAT_SET_SIZE |
+    WASI_RIGHTS.FD_FDSTAT_SET_FLAGS | WASI_RIGHTS.PATH_CREATE_FILE |
+    WASI_RIGHTS.PATH_CREATE_DIRECTORY;
+  assertEquals(view.getBigUint64(108, true) & forbidden, 0n);
+  assertEquals(view.getBigUint64(116, true) & forbidden, 0n);
+  assertEquals(h.wasi.fd_fdstat_set_flags(root.fd, WASI_FDFLAGS.NONBLOCK), WASI_ERRNO.ENOTCAPABLE);
+
+  assertEquals(h.wasi.fd_readdir(root.fd, 400, 1000, 0n, 300), WASI_ERRNO.SUCCESS);
+  assertEquals(
+    decodeDirents(h.memory.bytes.slice(400, 400 + h.memory.u32(300))).map((row) => [row.name, row.type]),
+    [
+      ["inputs", WASI_FILETYPE.DIRECTORY],
+      ["output", WASI_FILETYPE.DIRECTORY],
+      ["scratch", WASI_FILETYPE.DIRECTORY],
+    ],
+  );
+
+  const childNameLength = putPath(h.memory, 2000, "inputs");
+  assertEquals(h.wasi.path_filestat_get(root.fd, 0, 2000, childNameLength, 200), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[216], WASI_FILETYPE.DIRECTORY);
+  const child = openDir(h, "inputs", { preopenFd: 4, openedPtr: 3010 });
+  assertEquals(child.errno, WASI_ERRNO.SUCCESS, "child opens return to preopen fd4");
+  assertEquals(h.wasi.fd_readdir(child.fd, 1400, 1000, 0n, 1300), WASI_ERRNO.SUCCESS);
+  assertEquals(
+    decodeDirents(h.memory.bytes.slice(1400, 1400 + h.memory.u32(1300))).map((row) => [row.name, row.type]),
+    [
+      ["in.txt", WASI_FILETYPE.REGULAR_FILE],
+      ["nested", WASI_FILETYPE.DIRECTORY],
+    ],
+  );
+  const fileLength = putPath(h.memory, 2100, "in.txt");
+  assertEquals(h.wasi.path_filestat_get(child.fd, 0, 2100, fileLength, 300), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[316], WASI_FILETYPE.REGULAR_FILE);
+  const nestedLength = putPath(h.memory, 2200, "nested");
+  assertEquals(h.wasi.path_filestat_get(child.fd, 0, 2200, nestedLength, 400), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[416], WASI_FILETYPE.DIRECTORY);
+  const nested = openDir(h, "inputs/nested", { preopenFd: 4, openedPtr: 3020 });
+  assertEquals(nested.errno, WASI_ERRNO.SUCCESS, "nested child also opens from preopen fd4");
+  assertEquals(h.wasi.fd_readdir(nested.fd, 1800, 100, 0n, 1700), WASI_ERRNO.SUCCESS);
+  assertEquals(decodeDirents(h.memory.bytes.slice(1800, 1800 + h.memory.u32(1700))).map((row) => row.name), ["deep.txt"]);
+
+  const dotLength = putPath(h.memory, 2000, ".");
+  assertEquals(h.wasi.path_filestat_get(child.fd, 0, 2000, dotLength, 500), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[516], WASI_FILETYPE.DIRECTORY);
+  assertEquals(openDir(h, ".", { preopenFd: child.fd, openedPtr: 3030 }).errno, WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_read(child.fd, 0, 0, 0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_write(child.fd, 0, 0, 0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_seek(child.fd, 0n, WASI_WHENCE.SET, 0), WASI_ERRNO.ESPIPE);
+  assertEquals(h.wasi.fd_tell(child.fd, 0), WASI_ERRNO.ESPIPE);
+
+  assertEquals(h.wasi.fd_close(nested.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(child.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(child.fd), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_close(root.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.runtime.snapshot().counters.openDynamicFds, 0);
+});
+
+Deno.test("D-minus: exact tuple mutant lattice, fd-kind matrix, alias parity and rights-first memory order", () => {
+  const mutations = [
+    { dirflags: 0 },
+    { dirflags: 2 },
+    { oflags: WASI_OFLAGS.DIRECTORY | WASI_OFLAGS.CREAT },
+    { oflags: WASI_OFLAGS.DIRECTORY | WASI_OFLAGS.EXCL },
+    { oflags: WASI_OFLAGS.DIRECTORY | WASI_OFLAGS.TRUNC },
+    { rightsBase: WASI_LIBC_OPENDIR_PROFILE.requestedBase - WASI_RIGHTS.FD_READ },
+    { rightsBase: WASI_LIBC_OPENDIR_PROFILE.requestedBase | WASI_RIGHTS.FD_READDIR },
+    { rightsBase: WASI_LIBC_OPENDIR_PROFILE.requestedBase | WASI_RIGHTS.FD_WRITE },
+    { rightsInheriting: WASI_LIBC_OPENDIR_PROFILE.requestedInheriting - WASI_RIGHTS.FD_WRITE },
+    { rightsInheriting: WASI_LIBC_OPENDIR_PROFILE.requestedInheriting | WASI_RIGHTS.FD_READDIR },
+    { fdflags: 0 },
+    { fdflags: WASI_FDFLAGS.NONBLOCK | WASI_FDFLAGS.APPEND },
+  ];
+  for (const [index, mutation] of mutations.entries()) {
+    assertEquals(openDir(harness(), ".", mutation).errno, WASI_ERRNO.ENOTCAPABLE, `tuple mutation ${index}`);
+  }
+  assertEquals(openDir(harness(), ".", { oflags: 0 }).errno, WASI_ERRNO.ENOTSUP, "without DIRECTORY the unchanged file branch rejects dirflags");
+  assertEquals(openDir(harness(), ".", { oflags: 0x10 }).errno, WASI_ERRNO.EINVAL, "unknown oflags are rejected first");
+
+  const h = harness();
+  const dir = openDir(h, "inputs", { preopenFd: 4 });
+  assertEquals(dir.errno, WASI_ERRNO.SUCCESS);
+  const readRights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_SEEK |
+    WASI_RIGHTS.FD_TELL | WASI_RIGHTS.FD_FILESTAT_GET;
+  const fileFd = openPath(h, "inputs/in.txt", readRights, { preopenFd: 4, openedPtr: 3040 }).fd;
+
+  assertEquals(h.wasi.fd_filestat_get(dir.fd, 100), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[116], WASI_FILETYPE.DIRECTORY);
+  assertEquals(h.wasi.fd_readdir(dir.fd, 400, 100, 0n, 300), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_readdir(fileFd, 0xfffffff0, 32, 0n, 0xfffffff0), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.wasi.fd_readdir(0, 0xfffffff0, 32, 0n, 0xfffffff0), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.wasi.fd_readdir(999, 0xfffffff0, 32, 0n, 0xfffffff0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_readdir(3, 0xfffffff0, 32, 0n, 0xfffffff0), WASI_ERRNO.EFAULT);
+  assertEquals(h.wasi.fd_readdir(3, 400, 20, 0n, 410), WASI_ERRNO.EINVAL);
+  assertEquals(h.wasi.fd_prestat_get(dir.fd, 100), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_prestat_dir_name(dir.fd, 100, 1), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_fdstat_set_flags(dir.fd, WASI_FDFLAGS.NONBLOCK), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.wasi.fd_read(dir.fd, 0, 0, 0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_write(dir.fd, 0, 0, 0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.fd_seek(dir.fd, 0n, WASI_WHENCE.SET, 0), WASI_ERRNO.ESPIPE);
+  assertEquals(h.wasi.fd_tell(dir.fd, 0), WASI_ERRNO.ESPIPE);
+
+  const exactLength = putPath(h.memory, 2000, ".");
+  assertEquals(
+    h.wasi.path_open(
+      dir.fd,
+      WASI_LIBC_OPENDIR_PROFILE.dirflags,
+      2000,
+      exactLength,
+      WASI_LIBC_OPENDIR_PROFILE.oflags,
+      WASI_LIBC_OPENDIR_PROFILE.requestedBase,
+      WASI_LIBC_OPENDIR_PROFILE.requestedInheriting,
+      WASI_LIBC_OPENDIR_PROFILE.fdflags,
+      3050,
+    ),
+    WASI_ERRNO.EBADF,
+    "DIR-base path_open is permanently forbidden even for the exact tuple",
+  );
+  assertEquals(openDir(h, ".", { preopenFd: dir.fd, dirflags: 0, openedPtr: 3060 }).errno, WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.path_filestat_get(fileFd, 0, 2000, exactLength, 500), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.path_filestat_get(2, 0, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.path_filestat_get(999, 1, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EBADF);
+  assertEquals(h.wasi.path_filestat_get(dir.fd, 1, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.ENOTSUP);
+  assertEquals(h.wasi.path_filestat_get(dir.fd, 0, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EFAULT);
+
+  assertEquals(h.wasi.fd_readdir(3, 800, 100, 0n, 700), WASI_ERRNO.SUCCESS);
+  const a = h.memory.bytes.slice(800, 800 + h.memory.u32(700));
+  assertEquals(h.wasi.fd_readdir(4, 1200, 100, 0n, 1100), WASI_ERRNO.SUCCESS);
+  const b = h.memory.bytes.slice(1200, 1200 + h.memory.u32(1100));
+  assertEquals([...a], [...b], "fd3 and fd4 enumerate identical root bytes");
+  assertEquals(h.wasi.fd_readdir(4, 1600, 100, 3n, 1500), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u32(1500), 0, "cookie == count is EOF");
+  assertEquals(h.wasi.fd_readdir(4, 1600, 100, 999n, 1500), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u32(1500), 0, "cookie > count is EOF");
+  assertEquals(h.wasi.fd_readdir(4, 1600, 0, 0n, 1500), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u32(1500), 0, "zero buffer is valid");
+
+  assertEquals(h.wasi.fd_close(fileFd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(dir.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.runtime.snapshot().counters.openDynamicFds, 0);
+});
+
+Deno.test("D-minus: DIR-base path_filestat_get joins only inside the immutable bound subtree", () => {
+  const h = harness();
+  h.workspace.files.set("inputs/sub/deep.txt", { type: "file", bytes: enc.encode("x") });
+  const dir = openDir(h, "inputs", { preopenFd: 4 });
+  assertEquals(dir.errno, WASI_ERRNO.SUCCESS);
+  let pointer = 2000;
+  const stat = (bytes, flags = 0, statPtr = 100) => {
+    const input = typeof bytes === "string" ? enc.encode(bytes) : bytes;
+    h.memory.put(pointer, input);
+    const errno = h.wasi.path_filestat_get(dir.fd, flags, pointer, input.byteLength, statPtr);
+    pointer += input.byteLength + 8;
+    return errno;
+  };
+  assertEquals(stat("."), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[116], WASI_FILETYPE.DIRECTORY);
+  assertEquals(stat("in.txt", 0, 200), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[216], WASI_FILETYPE.REGULAR_FILE);
+  assertEquals(stat("sub", 0, 300), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[316], WASI_FILETYPE.DIRECTORY);
+  assertEquals(stat("sub/deep.txt", 0, 400), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[416], WASI_FILETYPE.REGULAR_FILE);
+  assertEquals(stat("missing"), WASI_ERRNO.ENOENT);
+  assertEquals(stat("output/existing.txt"), WASI_ERRNO.ENOENT, "a different class name is still joined below inputs");
+
+  const hostiles = [
+    ["", WASI_ERRNO.ENAMETOOLONG],
+    ["../escape", WASI_ERRNO.EPERM],
+    ["/inputs", WASI_ERRNO.EPERM],
+    ["sub/../escape", WASI_ERRNO.EPERM],
+    ["sub/./x", WASI_ERRNO.EPERM],
+    ["sub//x", WASI_ERRNO.EPERM],
+    ["sub/", WASI_ERRNO.EPERM],
+    ["sub\\x", WASI_ERRNO.EPERM],
+    ["sub/\0x", WASI_ERRNO.EPERM],
+    ["sub/\u0001x", WASI_ERRNO.EINVAL],
+    ["sub/\u007fx", WASI_ERRNO.EINVAL],
+    ["x".repeat(256), WASI_ERRNO.ENAMETOOLONG],
+  ];
+  for (const [path, errno] of hostiles) assertEquals(stat(path), errno, JSON.stringify(path));
+  assertEquals(stat(new Uint8Array([0xff])), WASI_ERRNO.EINVAL, "invalid UTF-8 fails closed");
+  const valid = enc.encode("in.txt");
+  h.memory.put(5000, valid);
+  assertEquals(h.wasi.path_filestat_get(dir.fd, 0, 5000, valid.byteLength, 0xfffffff0), WASI_ERRNO.EFAULT);
+  assertEquals(h.wasi.fd_close(dir.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.runtime.snapshot().counters.openDynamicFds, 0);
 });
 
 Deno.test("WASI source boundary: only two new pure modules exist and no product route/execution primitive reaches them", async () => {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.178] — 2026-08-23
+- feat(wasi): add least-authority runtime-only fd_readdir with subtree-bound directory descriptors; du/tree remain disabled (CAP-FB-20260823-WASI-FD-READDIR-01)
+
 ## [0.2.177] — 2026-08-23
 - feat(tools): admit bounded stat Settings preview over an immutable per-job `/job/inputs/f.bin` seed (CAP-FB-20260823-TOOL-PREVIEW-STAT-01)
 

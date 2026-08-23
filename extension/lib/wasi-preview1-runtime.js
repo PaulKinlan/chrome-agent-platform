@@ -49,6 +49,7 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "fd_prestat_dir_name",
   "fd_prestat_get",
   "fd_read",
+  "fd_readdir",
   "fd_seek",
   "fd_tell",
   "fd_write",
@@ -264,7 +265,7 @@ function validateWorkspace(workspace) {
   if (!workspace || typeof workspace !== "object") {
     throw new TypeError("workspace_adapter");
   }
-  for (const method of ["open", "stat"]) {
+  for (const method of ["open", "readdir", "stat"]) {
     if (typeof workspace[method] !== "function") {
       throw new TypeError("workspace_adapter");
     }
@@ -298,6 +299,87 @@ export function planFdstatSetFlags(currentFlags, rights, requested) {
   return WASI_ERRNO.SUCCESS;
 }
 
+export const WASI_READDIR_LIMITS = Object.freeze({
+  maxEntries: 4096,
+  maxNameBytes: 255,
+  direntBytes: 24,
+});
+
+// Exact retained wasi-libc opendir compatibility profile. Any tuple drift is a
+// design stop, never a reason to widen this allowlist. The libc under-requests
+// the two read-only rights its directory stream actually uses: enumerate and
+// stat children. The host adds exactly those bits; requested inheriting
+// WRITE/SET_SIZE bits are stripped forever and DIR-base path_open is forbidden.
+export const WASI_LIBC_OPENDIR_PROFILE = Object.freeze({
+  dirflags: WASI_LOOKUPFLAGS.SYMLINK_FOLLOW,
+  oflags: WASI_OFLAGS.DIRECTORY,
+  requestedBase: 0x200026n,
+  requestedInheriting: 0x600066n,
+  fdflags: WASI_FDFLAGS.NONBLOCK,
+  granted: 0x244026n,
+});
+
+function compareBytes(a, b) {
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index++) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return a.length - b.length;
+}
+
+// Pure deterministic WASI dirent planner. It owns no descriptor, workspace, or
+// memory authority; the syscall validates those boundaries before copying the
+// returned bytes into guest memory.
+export function planFdReaddir(entries, cookie, bufLen) {
+  try {
+    if (!Array.isArray(entries) || entries.length > WASI_READDIR_LIMITS.maxEntries) {
+      return Object.freeze({ errno: WASI_ERRNO.EIO, bufused: 0, packed: new Uint8Array(0) });
+    }
+    if (typeof cookie !== "bigint" || cookie < 0n || cookie > U64_MAX ||
+        !Number.isSafeInteger(bufLen) || bufLen < 0 || bufLen > 0xffff_ffff) {
+      return Object.freeze({ errno: WASI_ERRNO.EINVAL, bufused: 0, packed: new Uint8Array(0) });
+    }
+    const rows = entries.map((entry) => {
+      const row = dataSnapshot(entry, ["name", "type"], "readdir_entry");
+      if (typeof row.name !== "string" || !new Set(["file", "directory"]).has(row.type) ||
+          !row.name || row.name === "." || row.name === ".." ||
+          row.name.includes("/") || row.name.includes("\0")) throw new TypeError("readdir_entry");
+      const bytes = encoder.encode(row.name);
+      if (bytes.byteLength > WASI_READDIR_LIMITS.maxNameBytes) throw new TypeError("readdir_entry");
+      return { type: row.type, bytes };
+    });
+    rows.sort((a, b) => compareBytes(a.bytes, b.bytes));
+    if (cookie >= BigInt(rows.length)) {
+      return Object.freeze({ errno: WASI_ERRNO.SUCCESS, bufused: 0, packed: new Uint8Array(0) });
+    }
+    const chunks = [];
+    let used = 0;
+    for (let index = Number(cookie); index < rows.length; index++) {
+      const row = rows[index];
+      const length = WASI_READDIR_LIMITS.direntBytes + row.bytes.byteLength;
+      if (length > bufLen - used) break;
+      const chunk = new Uint8Array(length);
+      const view = new DataView(chunk.buffer);
+      view.setBigUint64(0, BigInt(index + 1), true);
+      view.setBigUint64(8, 0n, true);
+      view.setUint32(16, row.bytes.byteLength, true);
+      view.setUint32(20, row.type === "directory" ? WASI_FILETYPE.DIRECTORY : WASI_FILETYPE.REGULAR_FILE, true);
+      chunk.set(row.bytes, WASI_READDIR_LIMITS.direntBytes);
+      chunks.push(chunk);
+      used += length;
+    }
+    const packed = new Uint8Array(used);
+    let cursor = 0;
+    for (const chunk of chunks) {
+      packed.set(chunk, cursor);
+      cursor += chunk.byteLength;
+    }
+    return Object.freeze({ errno: WASI_ERRNO.SUCCESS, bufused: used, packed });
+  } catch {
+    return Object.freeze({ errno: WASI_ERRNO.EIO, bufused: 0, packed: new Uint8Array(0) });
+  }
+}
+
 export function createWasiPreview1Runtime({
   job: rawJob,
   memory: rawMemory,
@@ -328,7 +410,7 @@ export function createWasiPreview1Runtime({
   const fds = new Map();
   const freeFds = [];
   const rootRights = WASI_RIGHTS.PATH_OPEN | WASI_RIGHTS.PATH_CREATE_FILE |
-    WASI_RIGHTS.PATH_FILESTAT_GET;
+    WASI_RIGHTS.PATH_FILESTAT_GET | WASI_RIGHTS.FD_READDIR;
   const inheritedRights = PATH_CLASS_RIGHTS.inputs.rights |
     PATH_CLASS_RIGHTS.scratch.rights | PATH_CLASS_RIGHTS.output.rights;
 
@@ -341,6 +423,7 @@ export function createWasiPreview1Runtime({
     filetype: WASI_FILETYPE.CHARACTER_DEVICE,
     flags: 0,
     rights: WASI_RIGHTS.FD_READ,
+    rightsInheriting: 0n,
     offset: 0n,
     path: "",
     handle: null,
@@ -351,6 +434,7 @@ export function createWasiPreview1Runtime({
     filetype: WASI_FILETYPE.CHARACTER_DEVICE,
     flags: 0,
     rights: WASI_RIGHTS.FD_WRITE,
+    rightsInheriting: 0n,
     offset: 0n,
     path: "",
     handle: null,
@@ -361,6 +445,7 @@ export function createWasiPreview1Runtime({
     filetype: WASI_FILETYPE.CHARACTER_DEVICE,
     flags: 0,
     rights: WASI_RIGHTS.FD_WRITE,
+    rightsInheriting: 0n,
     offset: 0n,
     path: "",
     handle: null,
@@ -372,6 +457,7 @@ export function createWasiPreview1Runtime({
       filetype: WASI_FILETYPE.DIRECTORY,
       flags: 0,
       rights: rootRights,
+      rightsInheriting: inheritedRights,
       offset: 0n,
       path: PREOPEN_NAMES[fd],
       handle: null,
@@ -526,8 +612,10 @@ export function createWasiPreview1Runtime({
   function statHandle(record) {
     if (record.kind !== FD_KIND.FILE) {
       return {
-        type: record.kind === FD_KIND.PREOPEN ? "directory" : "character",
-        size: record.kind === FD_KIND.STDIN ? job.stdin.length : record.offset,
+        type: new Set([FD_KIND.PREOPEN, FD_KIND.DIR]).has(record.kind)
+          ? "directory"
+          : "character",
+        size: record.kind === FD_KIND.STDIN ? job.stdin.length : Number(record.offset),
       };
     }
     return validateStat(syncResult(record.handle.stat()));
@@ -554,11 +642,7 @@ export function createWasiPreview1Runtime({
     view.setUint8(0, record.filetype);
     view.setUint16(2, record.flags, true);
     view.setBigUint64(8, record.rights, true);
-    view.setBigUint64(
-      16,
-      record.kind === FD_KIND.PREOPEN ? inheritedRights : 0n,
-      true,
-    );
+    view.setBigUint64(16, record.rightsInheriting, true);
     writeBytes(pointer, bytes);
   }
 
@@ -607,6 +691,74 @@ export function createWasiPreview1Runtime({
       root: parts[0],
       policy: PATH_CLASS_RIGHTS[parts[0]],
     });
+  }
+
+  function validateDirText(text, { allowRoot, requireClass }) {
+    if (allowRoot && text === ".") return Object.freeze({ path: ".", root: "." });
+    if (text.includes("\0") || text.includes("\\") || text.startsWith("/") || text.endsWith("/")) {
+      fault(WASI_ERRNO.EPERM);
+    }
+    const parts = text.split("/");
+    if (requireClass && !Object.hasOwn(PATH_CLASS_RIGHTS, parts[0])) {
+      fault(WASI_ERRNO.EPERM);
+    }
+    for (const part of parts) {
+      const encoded = encoder.encode(part);
+      if (!part || part === "." || part === "..") fault(WASI_ERRNO.EPERM);
+      if (encoded.byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_SEGMENT_BYTES) {
+        fault(WASI_ERRNO.ENAMETOOLONG);
+      }
+      for (const byte of encoded) {
+        if (byte < 0x20 || byte === 0x7f) fault(WASI_ERRNO.EINVAL);
+      }
+    }
+    return Object.freeze({ path: text, root: parts[0] });
+  }
+
+  function readDirText(pointer, length) {
+    const bytes = readBytes(pointer, length);
+    if (bytes.byteLength === 0 || bytes.byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_BYTES) {
+      fault(WASI_ERRNO.ENAMETOOLONG);
+    }
+    try {
+      return decoder.decode(bytes);
+    } catch {
+      fault(WASI_ERRNO.EINVAL);
+    }
+  }
+
+  // Directory-only grammar: the exact preopen root token `.` plus class roots
+  // and bounded descendants. The file decoder above stays byte-identical.
+  function decodeDirPath(pointer, length) {
+    return validateDirText(readDirText(pointer, length), {
+      allowRoot: true,
+      requireClass: true,
+    });
+  }
+
+  // Resolve a directory-relative libc path against the immutable subtree bound
+  // into a DIR descriptor. Traversal cannot be expressed by the grammar; the
+  // containment check remains as a defense against later decoder changes.
+  function resolveDirBasePath(record, pointer, length) {
+    if (record.kind === FD_KIND.PREOPEN) return decodeDirPath(pointer, length);
+    const relative = validateDirText(readDirText(pointer, length), {
+      allowRoot: true,
+      requireClass: false,
+    }).path;
+    const base = record.path;
+    const joined = relative === "."
+      ? base
+      : base === "."
+      ? relative
+      : `${base}/${relative}`;
+    const resolved = validateDirText(joined, {
+      allowRoot: true,
+      requireClass: true,
+    });
+    if (base !== "." && resolved.path !== base && !resolved.path.startsWith(`${base}/`)) {
+      fault(WASI_ERRNO.EPERM);
+    }
+    return resolved;
   }
 
   function allocateFd() {
@@ -721,7 +873,7 @@ export function createWasiPreview1Runtime({
 
     fd_filestat_get: (fdValue, statPtr) => {
       const record = fdFor(fdValue);
-      if (record.kind === FD_KIND.FILE) {
+      if (new Set([FD_KIND.FILE, FD_KIND.DIR]).has(record.kind)) {
         requireRight(record, WASI_RIGHTS.FD_FILESTAT_GET);
       }
       span(statPtr, 64);
@@ -729,14 +881,42 @@ export function createWasiPreview1Runtime({
       return WASI_ERRNO.SUCCESS;
     },
 
+    fd_readdir: (fdValue, bufValue, bufLenValue, cookieValue, bufusedPtrValue) => {
+      const record = fdFor(fdValue); // EBADF wins
+      const buf = asU32(bufValue);
+      const bufLen = asU32(bufLenValue);
+      const cookie = asU64(cookieValue);
+      // Security binding: rights + kind precede every guest-memory span.
+      requireRight(record, WASI_RIGHTS.FD_READDIR);
+      if (!new Set([FD_KIND.PREOPEN, FD_KIND.DIR]).has(record.kind)) {
+        fault(WASI_ERRNO.ENOTDIR);
+      }
+      const bufused = span(bufusedPtrValue, 4);
+      const output = span(buf, bufLen);
+      if (rangesOverlap(output.ptr, output.len, bufused.ptr, bufused.len)) {
+        fault(WASI_ERRNO.EINVAL);
+      }
+      const entries = syncResult(workspace.readdir(
+        record.kind === FD_KIND.PREOPEN ? "." : record.path,
+      ));
+      const plan = planFdReaddir(entries, cookie, bufLen);
+      if (plan.errno !== WASI_ERRNO.SUCCESS) return plan.errno;
+      writeBytes(output.ptr, plan.packed);
+      writeU32(bufused.ptr, plan.bufused);
+      return WASI_ERRNO.SUCCESS;
+    },
+
     path_filestat_get: (fdValue, flagsValue, pathPtr, pathLength, statPtr) => {
-      const preopen = fdFor(fdValue);
-      if (preopen.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
+      const base = fdFor(fdValue);
+      if (!new Set([FD_KIND.PREOPEN, FD_KIND.DIR]).has(base.kind)) {
+        fault(WASI_ERRNO.EBADF);
+      }
+      requireRight(base, WASI_RIGHTS.PATH_FILESTAT_GET);
       const flags = asU32(flagsValue);
       if (flags !== 0 || (flags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)) {
         fault(WASI_ERRNO.ENOTSUP);
       }
-      const resolved = decodePath(pathPtr, pathLength);
+      const resolved = resolveDirBasePath(base, pathPtr, pathLength);
       span(statPtr, 64);
       const stat = validateStat(syncResult(workspace.stat(resolved.path)));
       writeFilestat(statPtr, stat);
@@ -759,16 +939,56 @@ export function createWasiPreview1Runtime({
       const dirflags = asU32(dirflagsValue);
       const oflags = asU32(oflagsValue);
       const fdflags = asU32(fdflagsValue);
-      if (dirflags !== 0 || (dirflags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)) {
-        fault(WASI_ERRNO.ENOTSUP);
-      }
       if (
         oflags &
         ~(WASI_OFLAGS.CREAT | WASI_OFLAGS.DIRECTORY | WASI_OFLAGS.EXCL |
           WASI_OFLAGS.TRUNC)
       ) fault(WASI_ERRNO.EINVAL);
+      if (oflags & WASI_OFLAGS.DIRECTORY) {
+        const rightsBase = asU64(rightsBaseValue);
+        const rightsInheriting = asU64(rightsInheritingValue);
+        // Exact retained wasi-libc opendir tuple; no field is widened. The
+        // requested inheriting write/resize bits are stripped, while the two
+        // missing read-only traversal bits are added and reported truthfully.
+        if (
+          dirflags !== WASI_LIBC_OPENDIR_PROFILE.dirflags ||
+          oflags !== WASI_LIBC_OPENDIR_PROFILE.oflags ||
+          rightsBase !== WASI_LIBC_OPENDIR_PROFILE.requestedBase ||
+          rightsInheriting !== WASI_LIBC_OPENDIR_PROFILE.requestedInheriting ||
+          fdflags !== WASI_LIBC_OPENDIR_PROFILE.fdflags
+        ) fault(WASI_ERRNO.ENOTCAPABLE);
+        const resolvedDir = decodeDirPath(pathPtr, pathLength);
+        const stat = validateStat(syncResult(workspace.stat(resolvedDir.path)));
+        if (stat.type !== "directory") fault(WASI_ERRNO.ENOTDIR);
+        span(openedFdPtr, 4);
+        const fd = allocateFd();
+        putFd({
+          fd,
+          kind: FD_KIND.DIR,
+          filetype: WASI_FILETYPE.DIRECTORY,
+          flags: WASI_LIBC_OPENDIR_PROFILE.fdflags,
+          rights: WASI_LIBC_OPENDIR_PROFILE.granted,
+          rightsInheriting: WASI_LIBC_OPENDIR_PROFILE.granted,
+          offset: 0n,
+          path: resolvedDir.path,
+          handle: null,
+        });
+        try {
+          writeU32(openedFdPtr, fd);
+        } catch (error) {
+          fds.delete(fd);
+          freeFds.push(fd);
+          freeFds.sort((a, b) => a - b);
+          throw error;
+        }
+        return WASI_ERRNO.SUCCESS;
+      }
+
+      // Existing FILE-open branch below stays byte-for-byte equivalent.
+      if (dirflags !== 0 || (dirflags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)) {
+        fault(WASI_ERRNO.ENOTSUP);
+      }
       if (fdflags & ~(WASI_FDFLAGS.APPEND)) fault(WASI_ERRNO.ENOTSUP);
-      if (oflags & WASI_OFLAGS.DIRECTORY) fault(WASI_ERRNO.ENOTSUP);
       if ((oflags & WASI_OFLAGS.EXCL) && !(oflags & WASI_OFLAGS.CREAT)) {
         fault(WASI_ERRNO.EINVAL);
       }
@@ -819,6 +1039,7 @@ export function createWasiPreview1Runtime({
           filetype: WASI_FILETYPE.REGULAR_FILE,
           flags: fdflags,
           rights: rightsBase,
+          rightsInheriting: 0n,
           offset,
           path: resolved.path,
           handle,
@@ -991,8 +1212,10 @@ export function createWasiPreview1Runtime({
       const fd = asU32(fdValue);
       if (fd <= 2) return WASI_ERRNO.SUCCESS;
       const record = fdFor(fd);
-      if (record.kind !== FD_KIND.FILE) fault(WASI_ERRNO.EBADF);
-      syncResult(record.handle.close());
+      if (!new Set([FD_KIND.FILE, FD_KIND.DIR]).has(record.kind)) {
+        fault(WASI_ERRNO.EBADF);
+      }
+      if (record.kind === FD_KIND.FILE) syncResult(record.handle.close());
       fds.delete(fd);
       freeFds.push(fd);
       freeFds.sort((a, b) => a - b);
@@ -1034,7 +1257,8 @@ export function createWasiPreview1Runtime({
 
   const wasi = {};
   for (const name of SUPPORTED_WASI_PREVIEW1_IMPORTS) {
-    const pathCall = name === "path_open" || name === "path_filestat_get";
+    const pathCall = name === "path_open" || name === "path_filestat_get" ||
+      name === "fd_readdir";
     wasi[name] = syscall(implementation[name], { path: pathCall });
   }
   wasi.proc_exit = (codeValue) => {

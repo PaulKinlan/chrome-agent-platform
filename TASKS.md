@@ -5,19 +5,18 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 02:55 UTC. Reconciled against exact public
-> `origin/main@2d00f2a9f5124e2b493a674991ae97b6597f67e9` (`0.2.176`). Lazy,
+> Snapshot: 2026-08-23 03:24 UTC. Reconciled against exact public
+> `origin/main@fab59e6d9fbef8b40d59e4f8f7851abb0f751822` (`0.2.177`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary, the tool-platform foundation and
-> the Settings preview tranches (5 → 19 tools) remain exact; the catalog
-> remains `MERGED`. The fd 3 `.` + same-workspace fd 4 `/job` runtime alias is
-> DONE/shipping on public main. This `0.2.177` stat Release E candidate adds
-> only the trusted immutable per-job `inputs/f.bin` seed and admits stat as the
-> twentieth Settings preview (20/6 posture), with no route, permission,
-> provider, page, OPFS, persistence or mutation authority.
-> Branch status counts: **14 OPEN · 15 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 35 nonterminal and 40 terminal status entries
-> below are the complete 75-entry state.
+> the 20-tool Settings preview posture remain exact; the catalog remains
+> `MERGED`. This `0.2.178` runtime-only candidate adds bounded `fd_readdir` and
+> least-authority read-only directory descriptors for retained du/tree linkage;
+> du/tree remain disabled and unadmitted, so posture stays exactly 20/6 with no
+> route, permission, provider, page, OPFS, persistence or mutation authority.
+> Branch status counts: **14 OPEN · 16 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 36 nonterminal and 40 terminal status entries
+> below are the complete 76-entry state.
 
 ## Safety boundary
 
@@ -747,6 +746,28 @@ On resume after a coordinator or worker loss:
   Store package/validate OK (224 entries); held-lock loaded-MV3 36/36 PASS
 - Review: independent source/package and loaded-MV3 evidence reviews PASS
 - Next: —
+
+## [CAP-FB-20260823-WASI-FD-READDIR-01] Least-authority fd_readdir runtime foundation (Release 0.2.178)
+
+- Feedback: 2026-08-23 — retained du/tree need bounded recursive enumeration of the immutable per-job workspace without package admission or new product authority
+- Updated: 2026-08-23 03:24 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: runtime implementation worker
+- Workspace: active (local path private)
+- Branch: `feat/fd-readdir-fab59e6`
+- Base: public `fab59e6d9fbef8b40d59e4f8f7851abb0f751822` (0.2.177)
+- Candidate: this commit (0.2.178)
+- Shipping: —
+- Acceptance: `fd_readdir` is the exact twentieth supported WASI import; fd3/fd4 enumerate the same seeded root; implicit directories and distinct dynamic DIR descriptors are bounded, path-bound, quota-counted and close-once. Only the exact retained libc directory tuple is accepted from preopens. DIR base/inheriting rights report exactly `0x244026`, store NONBLOCK, deny set-flags, writes/resizes and DIR-base path_open, and allow only rights-gated subtree-contained path_filestat_get. Retained du/tree exact seeded and empty outputs execute through fresh Workers while both descriptors remain disabled/unadmitted; Settings posture remains exactly 20/6.
+- Review: two independent reviewers approved the D-minus design; independent final implementation/package review required
+- Gates: focused runtime/real-Worker/posture 99/99; full serial no-Chrome 1183/1183 across 14 steps; generator regeneration idempotent with canonical inventory SHA; Store build seam scan clean; final-object Store package validation pending
+- Blockers: —
+- Next: complete serial gates, commit the clean candidate, package against that exact object, then obtain independent review
+- Recover: `git show --stat --oneline feat/fd-readdir-fab59e6 && git diff fab59e6..feat/fd-readdir-fab59e6`
+- History:
+  - 2026-08-23 03:24 UTC — recovered the preserved five-file partial prototype, corrected candidate-D surplus PATH_OPEN authority to the approved D-minus `0x244026`, and completed the runtime/test/release candidate without admitting du/tree or changing product routes.
 
 ## [CAP-FB-20260823-TOOL-PREVIEW-STAT-01] Bounded stat Settings preview (Release E)
 
