@@ -600,7 +600,7 @@ On resume after a coordinator or worker loss:
 - Branch: `integrate/durable-final`
 - Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
 - Candidate: this tracker commit
-- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0` (panel-1); `origin/main@7a997cf5aed08cc980aede72189e309a745b667d` (details slice 0.2.190)
 - Acceptance: authoritative list-read failure preserves prior rows; successful owner-fenced replacement alone acknowledges invalidation; each event-driven read has at most one 400ms MV3-startup retry; terminal reload retains exactly one native Tasks row and visible retained logs
 - Review: exact source `dd41258f` independently PASSed; exact 7/7 loaded-extension evidence independently PASSed for integration; current-main integration review pending
 - Gates: source 14/14 focused, 692/692 full unit, 31/31 no-Chrome security/source, build/78-file scan; accepted screenshot sequence `01-task-start.png` through `07-reload-persistence.png`; integration gates recorded on the integration commit
@@ -1842,6 +1842,11 @@ On resume after a coordinator or worker loss:
     summary/no-package surface. Harness preparation caught and fixed duplicate
     section/component ids and a remounted live region; no package rows, actions,
     grant/install/run route or provider authority exists. Browser matrix pending.
+  - 2026-08-23 21:52 UTC — the native <details> category slice landed as 0.2.190
+    (7a997cf): per-category expandable groups with bounded per-tool names,
+    versions and descriptions, plus the shadow-catalog bundled projection
+    product fix; browser gate PASS after one harness pin correction; 1242/1242
+    full suite; GLM review PASS f032d883.
   - 2026-08-22 19:02 UTC — the first loaded-MV3 run was a harness FAIL with
     the product result indeterminate because failure capture did not bind the
     destination document. Subsequent source review found the new deep-link hash
