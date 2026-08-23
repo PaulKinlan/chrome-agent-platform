@@ -5,18 +5,16 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 12:45 UTC. Reconciled against exact public
-> `origin/main@54e3240e7df1e6c83fdd3ff9684917b6e3bfe215` (`0.2.179`). The
-> 21-enabled/5-disabled Settings posture, all bundled Wasm/CAS bytes, pure WASI
-> host, Store boundary, and owner-only package authority remain exact. This
-> separate `0.2.180` candidate cuts every run type over from eager dynamic
-> provider maps to the fixed bounded `search_tools`/`execute_tool` pair with
-> live run/source/permission/grant/document/replay revalidation and protected
-> non-authorizing discovery guidance. Fresh loaded-MV3 acceptance is still
-> required and Chrome is explicitly outside this candidate-finisher run.
-> Branch status counts: **14 OPEN · 18 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 38 nonterminal and 40 terminal status entries
-> below are the complete 78-entry state.
+> Snapshot: 2026-08-23 20:00 UTC. Reconciled against exact public
+> `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0` (`0.2.183`). The
+> 23-enabled/3-disabled Settings posture, all bundled Wasm/CAS bytes, pure WASI
+> host, Store boundary, lossless result envelope, lazy provider cutover, and
+> owner-only package authority remain exact. All seven tool-platform and provider
+> releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
+> scratch foundation (0.2.184) is in its final security gate.
+> Branch status counts: **18 OPEN · 14 IN_REVIEW · 9 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 45 nonterminal and 40 terminal status entries
+> below are the complete 85-entry state.
 
 ## Safety boundary
 
@@ -155,6 +153,155 @@ On resume after a coordinator or worker loss:
 
 ## Active
 
+## [CAP-FB-20260823-AGENT-RUN-VISIBILITY-01] Agent-view run log visibility in the chat interface
+
+- Feedback: 2026-08-23 — product owner: when an agent is running, the chat
+  interface shows nothing, so the owner cannot see or review what happened;
+  agent runs should expose their full logs like a Task does (in agent view)
+- Updated: 2026-08-23 20:05 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
+- Candidate: —
+- Shipping: —
+- Acceptance: while an agent runs, the agent view renders a chat-like
+  transcript of the run (owner-visible messages, tool calls, tool results,
+  errors and status transitions) in near-real time; after completion or
+  interruption the same transcript remains reviewable for the retained run
+  window; visibility survives navigation and reload for durable runs; the
+  transcript is bounded and redacts credentials/keys; no owner-visible claim
+  may exceed the retained evidence
+- Review: pending independent UX, truth/retention, privacy/redaction,
+  accessibility, durable-run composition and loaded-MV3 review
+- Gates: running-agent live transcript; completed/failed/interrupted review;
+  navigation and reload retention; bounded scrollback; redaction fixtures;
+  keyboard/screen-reader/narrow/RTL/theme checks; composition with durable
+  background runs and the terminal projection surface
+- Blockers: must compose with durable background runs, the terminal result
+  projection and the run-status lifecycle rather than duplicate them
+- Next: inventory which run log streams currently exist and where they are
+  retained, then design the agent-view transcript projection
+- Recover: `git grep -n "AGENT-RUN-VISIBILITY\|durable-runs\|terminal-thread-projection" -- TASKS.md extension`
+- History:
+  - 2026-08-23 20:05 UTC — captured from direct product-owner feedback as P0
+    owner-visibility work; no implementation approach selected yet.
+
+## [CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01] Artifact deletion should not require a hidden permission
+
+- Feedback: 2026-08-23 — product owner: deleting an artifact while viewing
+  artifacts in the UI demands a permission, which it should not; worse, there
+  is no way to know a permission is required because it is hidden in Settings
+  and never re-surfaced after granting
+- Updated: 2026-08-23 20:08 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
+- Candidate: —
+- Shipping: —
+- Acceptance: deleting an artifact from the artifact view succeeds as a direct
+  owner action without any permission grant; if any capability genuinely
+  requires a grant, the need is surfaced at the moment of the action as a
+  native `<dialog>` modal explaining exactly what and why, and the same
+  pattern applies everywhere a permission may be needed; Settings permission
+  rows state which actions they gate; granting once never leaves a silently
+  required but invisible dependency
+- Review: pending independent permission-model, owner-authority, UX truth,
+  accessibility, and loaded-MV3 review
+- Gates: delete-from-view journey with and without any related grant; modal
+  contents/name the capability and the action; deny/cancel mutate nothing;
+  Settings row traceability; AX/keyboard/narrow/RTL/theme checks
+- Blockers: must compose with `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`
+  (owner-only prompts and paused-run resume) and the artifact transaction
+  authority; must not widen any host/site access grant
+- Next: audit every artifact-delete path for permission dependencies and map
+  which are real capability gates versus accidental orchestration artifacts
+- Recover: `git grep -n "artifact.delete\|deleteArtifact\|permissions.request" -- extension`
+- History:
+  - 2026-08-23 20:08 UTC — captured from direct product-owner feedback as P0.
+
+## [CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01] Replace all window.confirm with native dialog modals
+
+- Feedback: 2026-08-23 — product owner: per modern web guidance, every
+  `window.confirm` usage should become a native `<dialog>` modal popup
+- Updated: 2026-08-23 20:08 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
+- Candidate: —
+- Shipping: —
+- Acceptance: an exhaustive inventory of blocking prompt/confirm usage is
+  replaced by native `<dialog>` elements with focus trapping, Escape/cancel
+  semantics, promise-based results, and theme/RTL/narrow correctness; no
+  blocking synchronous dialogs remain; destructive confirmations name the
+  exact object being acted on
+- Review: pending independent UX, accessibility, focus-management and
+  loaded-MV3 review
+- Gates: full inventory before/after; dialog AX labels and focus order;
+  cancel/deny mutate nothing; keyboard-only flows; narrow/RTL/theme
+  screenshots
+- Blockers: —
+- Next: inventory every window.confirm/window.prompt/alert call site in
+  extension pages and side panel
+- Recover: `git grep -n "window.confirm\|window.prompt\|window.alert" -- extension`
+- History:
+  - 2026-08-23 20:08 UTC — captured from direct product-owner feedback with
+    the explicit instruction to follow modern web guidance.
+
+## [CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01] Chrome notification clicks must route to the agent task view or a defined action
+
+- Feedback: 2026-08-23 — product owner: when an agent sends a Chrome
+  notification, clicking it does nothing; it should at least return the owner
+  to the agent's task view / run log, or the agent should be able to define
+  code to run on click (possibly as part of its continued agent loop)
+- Updated: 2026-08-23 20:09 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
+- Candidate: —
+- Shipping: —
+- Acceptance: every agent-created Chrome notification has a click behavior;
+  the default opens/focuses the extension to the exact agent task view and
+  retained run log for that execution; when no explicit click target is
+  clear, the click resumes the agent's continued loop and the agent works out
+  the next action itself (bounded by its existing run/origin/agent fences and
+  policy); an agent may also supply an explicit bounded, policy-checked click
+  action; no click path may broaden permissions, run unbounded code, or
+  navigate outside the extension without owner consent; dismissed
+  notifications remain discoverable in the task view
+- Review: pending independent notification-permission, run-scope authority,
+  replay-safety, accessibility and loaded-MV3 review
+- Gates: click routes to the exact task view/log for queued, running,
+  completed, failed and interrupted runs; agent-defined action matrix within
+  fence; deny/stale-execution clicks fail closed; notification dedupe and
+  service-worker restart survival; AX labels and keyboard paths
+- Blockers: composes with durable background runs, the agent-view run log
+  surface (`CAP-FB-20260823-AGENT-RUN-VISIBILITY-01`) and run-scope controls
+- Next: inventory the current chrome.notifications call sites and click
+  handlers, then define the default routing plus the bounded agent-action
+  contract
+- Recover: `git grep -n "chrome.notifications\|onClicked" -- extension`
+- History:
+  - 2026-08-23 20:10 UTC — owner refinement: when the click action is not
+    clear, the agent loop itself should work out the next action (click
+    resumes the continued loop rather than failing inert).
+  - 2026-08-23 20:09 UTC — captured from direct product-owner feedback.
+
 ## [CAP-FB-20260821-DURABLE-SIDEBAR-LIVE-01] Live durable task in the Tasks sidebar
 - Feedback: 2026-08-21 — owner Tasks rows must remain native, live, unique, and recover after navigation and hard reload
 - Updated: 2026-08-22 07:30 UTC
@@ -178,6 +325,7 @@ On resume after a coordinator or worker loss:
   - 2026-08-21 11:45 UTC — source recovery added fail-safe reads, success-only invalidation acknowledgement, one bounded startup retry, and stale-result fencing.
   - 2026-08-21 12:40 UTC — exact 7/7 loaded-extension evidence passed and was independently accepted for integration at `dd41258f` / tree `80ca97f0`; no whole-product acceptance was inferred.
   - 2026-08-21 13:55 UTC — replayed the accepted Durable source as one integration candidate on exact public main `7f1f7ae`; integration review remains pending.
+  - 2026-08-23 20:00 UTC — verified candidate dd41258f is NOT an ancestor of origin/main; durable semantics are on main via the 0.2.137 lineage; residual = reconcile integration delta or abandon.
 
 ## [CAP-FB-20260821-DURABLE-TERMINAL-PROJECTION-01] Reconcile terminal result into an already-open owner thread
 - Feedback: 2026-08-21 — a terminal durable result must replace the authoritative open-thread projection without duplicates
@@ -202,6 +350,7 @@ On resume after a coordinator or worker loss:
   - 2026-08-21 11:12 UTC — implemented targeted event-driven terminal projection reconciliation with authoritative replacement and surface fencing.
   - 2026-08-21 12:40 UTC — exact 7/7 loaded-extension evidence independently accepted this behavior for integration.
   - 2026-08-21 13:55 UTC — included unchanged accepted runtime/test blobs in the current-main integration candidate.
+  - 2026-08-23 20:00 UTC — verified candidate dd41258f is NOT an ancestor of origin/main; durable semantics are on main via the 0.2.137 lineage; residual = reconcile integration delta or abandon.
 
 ## [CAP-FB-20260821-DURABLE-QUOTA-EXACT-01] Exact native-quota compensation
 - Feedback: 2026-08-21 — preserve durable registry and journal state exactly when an admitted zero-progress run meets native storage quota
@@ -225,6 +374,7 @@ On resume after a coordinator or worker loss:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `IN_REVIEW` mapped to `IN_REVIEW` (unchanged semantics).
   - 2026-08-21 04:20 UTC — exact source implementation entered review after focused compensation coverage passed.
   - 2026-08-21 13:55 UTC — accepted source included byte-identically in the current-main integration candidate; no whole-product acceptance claimed.
+  - 2026-08-23 20:00 UTC — verified candidate dd41258f is NOT an ancestor of origin/main; durable semantics are on main via the 0.2.137 lineage; residual = reconcile integration delta or abandon.
 
 ## [CAP-FB-20260818-WIDER-REVIEW-01] Wider-goal review remediation umbrella
 - Feedback: 2026-08-18 — recovered independent review found omitted security, concurrency, bounds, and accessibility work
@@ -751,8 +901,8 @@ On resume after a coordinator or worker loss:
 
 - Feedback: 2026-08-23 — after FND-1, admit only retained gzip through the
   explicit-owner-click Settings preview using lossless base64 in both directions
-- Updated: 2026-08-23 14:15 UTC
-- Status: OPEN
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: gzip admission worker
@@ -760,7 +910,7 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/gzip-admission-13936ec`
 - Base: speculative FND-1 candidate `13936ecfdf3f8ff9b1b97da7db2d5f2099bd537a` (0.2.182)
 - Candidate: this commit (0.2.183)
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0` (0.2.183)
 - Acceptance: exactly 23 enabled / 3 disabled; gzip alone is appended after tree.
   Its deeply frozen spec accepts exact argv `[]`/`["-d"]`, uses base64 stdout,
   bounds text input to 2,048 UTF-8 bytes, canonical-base64 input to 2,048
@@ -781,14 +931,16 @@ On resume after a coordinator or worker loss:
 - Review: independent source/package review required; Chrome and security suite
   intentionally not run in this source lane
 - Blockers: speculative until FND-1 candidate lands
-- Next: review this exact successor; loaded-MV3 gzip journeys remain residual
+- Next: advance to DONE only after the journey suite is green at that tip
+- History:
+  - 2026-08-23 20:00 UTC — merged onto public main at aca0759e6a8ebfe82c9dba0650566eeeb15334d0 (0.2.183); status advanced to MERGED.
 
 ## [CAP-FB-20260823-LOSSLESS-ENVELOPE-01] Lossless Worker result envelope (Release 0.2.182)
 
 - Feedback: 2026-08-23 — land only the generic FND-1 lossless stdout envelope;
   gzip and every new authority remain deferred
-- Updated: 2026-08-23 13:55 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: lossless-envelope worker
@@ -796,7 +948,7 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/lossless-envelope-b054037`
 - Base: public `b054037a3c8ea387a5fd2d85551e1a5919cab9fe` (0.2.181)
 - Candidate: this commit (0.2.182)
-- Shipping: —
+- Shipping: `origin/main@13936ecfdf3f8ff9b1b97da7db2d5f2099bd537a` (0.2.182)
 - Acceptance: trusted immutable `stdoutEncoding` is required at every job layer.
   The exact 16-key result union preserves UTF-8 text or complete canonical base64,
   caps raw stdout at 65,536 bytes and base64 at 87,384 characters, and discards
@@ -811,7 +963,9 @@ On resume after a coordinator or worker loss:
 - Review: independent source/package review required; Chrome and security suite
   intentionally not run in this foundation lane
 - Blockers: —
-- Next: review this single candidate; gzip admission remains a separate release
+- Next: advance to DONE only after the journey suite is green at that tip
+- History:
+  - 2026-08-23 20:00 UTC — merged onto public main at 13936ecfdf3f8ff9b1b97da7db2d5f2099bd537a (0.2.182); status advanced to MERGED.
 
 ## [CAP-FB-20260823-TOOL-PREVIEW-TREE-01] Bounded tree Settings preview (Release 0.2.181)
 
@@ -819,8 +973,8 @@ On resume after a coordinator or worker loss:
   admit only the retained tree binary through the existing owner-only Settings
   preview without adding package, provider, page, OPFS, permission, route, or
   mutation authority
-- Updated: 2026-08-23 13:15 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: tree admission worker
@@ -828,7 +982,7 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/tree-admission-349d762`
 - Base: public `349d762475538cfce4e4bf201395ba4e47a6475b` (0.2.180)
 - Candidate: this commit (0.2.181)
-- Shipping: —
+- Shipping: `origin/main@b054037a3c8ea387a5fd2d85551e1a5919cab9fe` (0.2.181)
 - Acceptance: exactly 22 enabled / 4 disabled. tree alone is appended after du
   in the Settings selector and immutable preview allowlist. Its retained CAS is
   `65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb`
@@ -850,16 +1004,18 @@ On resume after a coordinator or worker loss:
 - Review: independent source/package review required; Chrome intentionally not run
   in this source/package lane
 - Blockers: —
-- Next: commit one clean candidate, build/package that exact object, then obtain
+- Next: advance to DONE only after the journey suite is green at that tip
   independent review
+- History:
+  - 2026-08-23 20:00 UTC — merged onto public main at b054037a3c8ea387a5fd2d85551e1a5919cab9fe (0.2.181); status advanced to MERGED.
 
 ## [CAP-FB-20260823-TOOL-PREVIEW-DU-01] Bounded du Settings preview (Release 0.2.179)
 
 - Feedback: 2026-08-23 — after the bounded `fd_readdir` runtime foundation
   landed, admit retained du alone through the existing owner-only Settings
   preview; tree remains separately gated
-- Updated: 2026-08-23 10:26 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: du admission worker
@@ -867,7 +1023,7 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/du-admission-0354422`
 - Base: public `0354422b331315d2651474ce4ba11930fc272875` (0.2.178)
 - Candidate: this commit (0.2.179)
-- Shipping: —
+- Shipping: `origin/main@54e3240e7df1e6c83fdd3ff9684917b6e3bfe215` (0.2.179)
 - Acceptance: exactly 21 enabled / 5 disabled. du alone is appended to the
   immutable Settings-preview allowlist with exact accepted exits `[0]`, the
   deeply frozen `inputs/f.bin=[104,105]` per-job seed and immutable safe
@@ -884,13 +1040,15 @@ On resume after a coordinator or worker loss:
   portable, with no stale/duplicate/symlink content
 - Review: independent source/package review required
 - Blockers: —
-- Next: obtain independent review
+- Next: advance to DONE only after the journey suite is green at that tip
+- History:
+  - 2026-08-23 20:00 UTC — merged onto public main at 54e3240e7df1e6c83fdd3ff9684917b6e3bfe215 (0.2.179); status advanced to MERGED.
 
 ## [CAP-FB-20260823-WASI-FD-READDIR-01] Least-authority fd_readdir runtime foundation (Release 0.2.178)
 
 - Feedback: 2026-08-23 — retained du/tree need bounded recursive enumeration of the immutable per-job workspace without package admission or new product authority
-- Updated: 2026-08-23 03:24 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: runtime implementation worker
@@ -898,22 +1056,23 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/fd-readdir-fab59e6`
 - Base: public `fab59e6d9fbef8b40d59e4f8f7851abb0f751822` (0.2.177)
 - Candidate: this commit (0.2.178)
-- Shipping: —
+- Shipping: `origin/main@0354422b331315d2651474ce4ba11930fc272875` (0.2.178)
 - Acceptance: `fd_readdir` is the exact twentieth supported WASI import; fd3/fd4 enumerate the same seeded root; implicit directories and distinct dynamic DIR descriptors are bounded, path-bound, quota-counted and close-once. Only the exact retained libc directory tuple is accepted from preopens. DIR base/inheriting rights report exactly `0x244026`, store NONBLOCK, deny set-flags, writes/resizes and DIR-base path_open, and allow only rights-gated subtree-contained path_filestat_get. Retained du/tree exact seeded and empty outputs execute through fresh Workers while both descriptors remain disabled/unadmitted; Settings posture remains exactly 20/6.
 - Review: two independent reviewers approved the D-minus design; independent final implementation/package review required
 - Gates: focused runtime/real-Worker/posture 99/99; full serial no-Chrome 1183/1183 across 14 steps; generator regeneration idempotent with canonical inventory SHA; Store build seam scan clean; final-object Store package validation pending
 - Blockers: —
-- Next: complete serial gates, commit the clean candidate, package against that exact object, then obtain independent review
+- Next: advance to DONE only after the journey suite is green at that tip
 - Recover: `git show --stat --oneline feat/fd-readdir-fab59e6 && git diff fab59e6..feat/fd-readdir-fab59e6`
 - History:
   - 2026-08-23 03:24 UTC — recovered the preserved five-file partial prototype, corrected candidate-D surplus PATH_OPEN authority to the approved D-minus `0x244026`, and completed the runtime/test/release candidate without admitting du/tree or changing product routes.
+  - 2026-08-23 20:00 UTC — merged onto public main at 0354422b331315d2651474ce4ba11930fc272875 (0.2.178); status advanced to MERGED.
 
 ## [CAP-FB-20260823-TOOL-PREVIEW-STAT-01] Bounded stat Settings preview (Release E)
 
 - Feedback: 2026-08-23 — after the `/job` alias foundation landed, admit the
   retained C2 stat binary over a narrowly trusted immutable per-job file seed
-- Updated: 2026-08-23 02:55 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: stat admission worker
@@ -921,7 +1080,7 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/stat-preview-9e13cfb`
 - Base: public `2d00f2a9f5124e2b493a674991ae97b6597f67e9` (0.2.176)
 - Candidate: this commit (0.2.177)
-- Shipping: —
+- Shipping: `origin/main@fab59e6d9fbef8b40d59e4f8f7851abb0f751822` (0.2.177)
 - Acceptance: exact 20 enabled / 6 disabled; immutable exact-key JSON-safe
   `workspaceSeed:{files:[{path,bytes}]}` authority with at most 8 inputs-only
   files, 32 KiB/file and 256 KiB total; plain dense byte arrays, normalized
@@ -937,7 +1096,9 @@ On resume after a coordinator or worker loss:
   final commit identity
 - Review: independent source/package review pending; browser gate belongs to
   the coordinator after the clean candidate commit
-- Next: commit clean, rebuild/package against the exact object, then review
+- Next: advance to DONE only after the journey suite is green at that tip
+- History:
+  - 2026-08-23 20:00 UTC — merged onto public main at fab59e6d9fbef8b40d59e4f8f7851abb0f751822 (0.2.177); status advanced to MERGED.
 
 ## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-06] diff/patch Settings previews (Release C)
 
@@ -1717,8 +1878,8 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01] Cut live providers over to bounded lazy dispatch
 - Feedback: 2026-08-23 — provider context must remain constant as the callable catalog scales, without weakening live source, run, permission, grant, enrollment, document, package, or replay authority
-- Updated: 2026-08-23 12:45 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 20:00 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: implementation finisher
@@ -1726,16 +1887,18 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/lazy-provider-cutover-0354422`
 - Base: `54e3240e7df1e6c83fdd3ff9684917b6e3bfe215`
 - Candidate: this tracker commit
-- Shipping: —
+- Shipping: `origin/main@349d762475538cfce4e4bf201395ba4e47a6475b` (0.2.180)
 - Acceptance: the actual AI-SDK provider map contains exactly fixed `search_tools` and `execute_tool` definitions at catalog sizes 20/100/1000; search returns bounded deterministic in-scope metadata and single-use run-bound non-authorizing references; execute accepts only a returned reference and revalidates immutable source/closure/package/capability identity plus live run/task/agent/origin/document/generation, permission, grant, revocation, expiry and replay authority before validation, before dispatch and after dispatch; bundled rows remain catalog-only; protected post-owner guidance covers every run surface
 - Review: independent candidate review required; prior K3 takeover diagnosis verified the partial direction and identified the corrected direct-agent origin fallback plus bounded test migration, but is not final release review
 - Gates: focused catalog/search/selection/protocol/cutover/system-prompt/abort/e2e 120/120 and final cutover/protocol/abort/e2e/shadow 53/53; changed-source type checks pass; exact candidate full serial no-Chrome 1195/1195 across 14 steps; two exact-candidate Store builds are byte-identical (132 shipped JS scan clean, 26 Wasm manifest/raw scan); two fresh Store packages are byte-identical at 224 entries; provider wire 646 bytes and actual AI-SDK definitions 812 bytes at each of 20/100/1000 rows; fresh CAS import census has 21 admitted with missing=[]; tree remains disabled; SQLite remains disabled with its exact eight-import gap; 26 CAS files have zero byte delta from the public parent
 - Blockers: Chrome is prohibited in this finisher run, so canonical loaded-MV3 behavior/denial/revoke/race evidence remains a required next gate; independent final candidate review is pending; no push authorized
-- Next: obtain independent diff/evidence review, then run the serialized loaded-MV3 browser gate without changing this candidate
+- Next: advance to DONE only after the journey suite is green at that tip
 - Recover: `git show <candidate> -- extension/background/service-worker.js extension/lib/agent.js extension/lib/lazy-tool-protocol.js extension/lib/models/demo-model.js extension/lib/runtime-policy.js extension/lib/tool-catalog.js extension/lib/tool-search.js extension/lib/tool-selection.js tests/lazy-provider-cutover.test.ts tests/agent-abort.test.ts`
 - History:
   - 2026-08-23 12:45 UTC — preserved the frozen old-base partial diff, recomposed it without conflict onto exact public 0.2.179, corrected direct-agent origin scope, migrated fixed-boundary abort/demo assertions, added atomic single-use replay claims and hostile lifecycle/provider-context coverage, and entered IN_REVIEW truthfully with browser acceptance still open.
   - 2026-08-23 13:20 UTC — exact no-Chrome release gates completed: 1195/1195 full tests, deterministic Store build/package, 224-entry package, constant provider bytes, zero CAS delta, fresh 21-tool missing=[] census, tree disabled and exact SQLite eight-import gap; independent review and browser acceptance remain open.
+
+  - 2026-08-23 20:00 UTC — merged onto public main at 349d762475538cfce4e4bf201395ba4e47a6475b (0.2.180); status advanced to MERGED.
 
 ---
 
