@@ -150,6 +150,7 @@ function rawJob(
     stdin,
     tier,
     acceptedExitCodes: [0],
+    workspaceSeed: { files: [] },
   };
 }
 

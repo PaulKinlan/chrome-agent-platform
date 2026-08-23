@@ -1,11 +1,9 @@
-// lib/wasm-offscreen-host.js — the offscreen-side host contract (Gate 2,
-// corrected successor). SOURCE ONLY AND UNREACHABLE.
+// lib/wasm-offscreen-host.js — the isolated execution-host contract used by
+// the bounded Settings preview.
 //
-// No route, no provider/tool-catalog binding, no package/binary admission, no
-// Settings control, no OPFS/artifact authority mutation, no Chrome. The real
-// service-worker route + the real OPFS/sync workspace adapter are reviewed
-// successors. The offscreen document that would host this code is not
-// registered anywhere in Gate 2.
+// It has no provider/tool-catalog selection binding and no OPFS/artifact
+// mutation authority. The owner-only Settings route supplies already pinned
+// package bytes; each call is fenced and executed in a fresh Worker.
 //
 // The workspace is supplied by the WORKER side (a per-job synchronous model,
 // wasm-sync-workspace.js) — the LANDED WASI adapters are synchronous, so no
@@ -90,6 +88,7 @@ export function createOffscreenWasmHost({ executor, authority }) {
               quota: job.quota,
               tier: job.tier,
               acceptedExitCodes: job.acceptedExitCodes,
+              workspaceSeed: job.workspaceSeed,
             },
             wasmBytes: Array.from(wasmBytes),
           }),

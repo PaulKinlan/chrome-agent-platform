@@ -6496,6 +6496,8 @@ class ToolLibrary extends Component {
         return 'Two documents (≤1 KiB each): Document A "a\nb\n" + Document B "a\nc\n" → the unified hunk (exit 1 is a normal result).';
       case "patch":
         return 'Two documents (≤1 KiB each): Document A the original + Document B a unified diff → the patched text (exact-position only).';
+      case "stat":
+        return 'Example: args "/job/inputs/f.bin" → "path=/job/inputs/f.bin\\ntype=regular file\\nsize=2\\nmtime=0.000000000\\n" (read-only immutable job seed).';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6658,6 +6660,7 @@ class ToolLibrary extends Component {
             <option value="markdown">markdown — CommonMark to safe HTML (cmark 0.31.1)</option>
             <option value="diff">diff — unified diff over two documents</option>
             <option value="patch">patch — apply a unified diff</option>
+            <option value="stat">stat — inspect immutable job-file metadata</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>

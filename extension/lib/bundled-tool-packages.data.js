@@ -714,7 +714,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "file",
   "description": "Bounded file metadata inspector for OPFS job workspaces",
   "caveats": [
-   "Reports stable path, type, size, and mtime fields; POSIX permission bits are omitted. Explicitly not GNU formatting/options. Requires future reviewed execution adapter to enforce path classes; not currently executable/admitted."
+   "Reports stable path, type, size, and mtime fields; POSIX permission bits are omitted. Explicitly not GNU formatting/options",
+   "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed (explicit owner click); no provider, page or OPFS authority.",
+   "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
   "capabilities": [
    "compute",
@@ -736,9 +738,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.stat-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.tree",

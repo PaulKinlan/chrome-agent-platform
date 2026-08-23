@@ -82,6 +82,7 @@ function makeJob(overrides = {}) {
     stdin: new Uint8Array(0),
     quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 64, stderrBytes: 64, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
     acceptedExitCodes: [0],
+    workspaceSeed: { files: [] },
     ...overrides,
   };
 }
@@ -146,6 +147,142 @@ Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT 
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// (B16) stat Settings preview — workspace-seed + exact workspace-read output
+// ──────────────────────────────────────────────────────────────────────────
+const STAT_SHA = "cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f";
+
+async function runStat(args, seed) {
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${STAT_SHA}.wasm`));
+  const job = makeJob({
+    stdin: new Uint8Array(0), workspaceSeed: seed,
+    quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 10_000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 1024, stderrBytes: 1024, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
+  });
+  const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+  const host = createOffscreenWasmHost({ executor, authority: { ...AUTHORITY } });
+  return await host.handleJob({ type: "wasm.job", job: { ...rehydrated, args: ["stat", ...args] }, wasmBytes });
+}
+
+const STAT_SEED = { files: [{ path: "inputs/f.bin", bytes: [104, 105] }] };
+
+Deno.test("stat Release E: the EXACT workspace-read output through the real Worker (seed inputs/f.bin)", async () => {
+  const res = await runStat(["/job/inputs/f.bin"], STAT_SEED);
+  assertEquals(res.ok, true, JSON.stringify(res));
+  assertEquals(res.stdout, "path=/job/inputs/f.bin\ntype=regular file\nsize=2\nmtime=0.000000000\n", "the EXACT stat output (regular file — the C2 kind() string)");
+  // mtime zero is the runtime's hardcoded writeFilestat zero (the host exposes
+  // no wall-clock identity), not a stored seed mtime.
+  // a MISSING path → exit 1 + no stale
+  const missing = await runStat(["/job/inputs/missing.bin"], STAT_SEED);
+  assertEquals(missing.ok, false, "missing path fails");
+  assertEquals(missing.errno, 1, "missing → exit 1");
+  assertEquals(missing.stdout, "", "no stale stdout");
+  // TRAVERSAL / non-job path → the retained C2 refusal (exit 1, no stale)
+  const traversal = await runStat(["../escape"], STAT_SEED);
+  assertEquals(traversal.ok, false, "traversal refused");
+  assertEquals(traversal.errno, 1, "traversal → exit 1");
+  assertEquals(traversal.stdout, "", "no stale");
+  const nonJob = await runStat(["/etc/passwd"], STAT_SEED);
+  assertEquals(nonJob.ok, false, "non-/job path refused");
+  assertEquals(nonJob.errno, 1, "non-job → exit 1");
+  assertEquals(nonJob.stdout, "", "non-job produces no stale output");
+});
+
+Deno.test("stat Release E: the workspace-seed schema fails closed on every hostile shape + accepts empty/nested files", async () => {
+  const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
+  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["stat"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, acceptedExitCodes: [0], workspaceSeed: { files: [] } };
+  // the outer shape is EXACT {files:[...]} — extra/missing/renamed outer keys fail
+  const outerCases = [
+    ["outer-extra", { files: [], extra: 1 }],
+    ["outer-missing", {}],
+    ["outer-array", []],
+    ["outer-null", null],
+    ["outer-undefined", undefined],
+    ["outer-files-string", { files: "x" }],
+    ["outer-symbol", Object.assign({ files: [] }, { [Symbol("x")]: 1 })],
+  ];
+  for (const [label, seed] of outerCases) {
+    let threw = null;
+    try { createWasiJob({ ...base, workspaceSeed: seed }); } catch (e) { threw = String(e?.message ?? ""); }
+    assertEquals(threw, "job-seed", `${label} fails closed`);
+  }
+  // record/byte shapes: sparse/float/out-of-range/prototype/dup/mutation
+  const recordCases = [
+    ["record-extra", { files: [{ path: "inputs/a", bytes: [1], extra: 1 }] }],
+    ["record-missing", { files: [{ path: "inputs/a" }] }],
+    ["sparse-bytes", { files: [{ path: "inputs/a", bytes: [1, , 3] }] }],
+    ["float-byte", { files: [{ path: "inputs/a", bytes: [1.5] }] }],
+    ["out-of-range-byte", { files: [{ path: "inputs/a", bytes: [256] }] }],
+    ["negative-byte", { files: [{ path: "inputs/a", bytes: [-1] }] }],
+    ["string-byte", { files: [{ path: "inputs/a", bytes: ["1"] }] }],
+    ["array-extra-key", { files: [{ path: "inputs/a", bytes: Object.assign([1], { extra: 2 }) }] }],
+    ["array-symbol-key", { files: [{ path: "inputs/a", bytes: Object.assign([1], { [Symbol("x")]: 2 }) }] }],
+    ["dup-path", { files: [{ path: "inputs/a", bytes: [1] }, { path: "inputs/a", bytes: [2] }] }],
+    ["leading-slash", { files: [{ path: "/inputs/a", bytes: [1] }] }],
+    ["backslash", { files: [{ path: "inputs\\a", bytes: [1] }] }],
+    ["inputs-alone", { files: [{ path: "inputs", bytes: [1] }] }],
+    ["dot-segment", { files: [{ path: "inputs/./a", bytes: [1] }] }],
+    ["dotdot", { files: [{ path: "inputs/../a", bytes: [1] }] }],
+    ["nul-path", { files: [{ path: "inputs/a\u0000b", bytes: [1] }] }],
+  ];
+  for (const [label, seed] of recordCases) {
+    let threw = null;
+    try { createWasiJob({ ...base, workspaceSeed: seed }); } catch (e) { threw = String(e?.message ?? ""); }
+    assertEquals(threw, "job-seed", `${label} fails closed`);
+  }
+  // a proto-tainted record fails (prototype check)
+  const proto = { files: [] };
+  const evil = Object.create(null);
+  evil.path = "inputs/a"; evil.bytes = [1];
+  proto.files = [evil];
+  let threw = null;
+  try { createWasiJob({ ...base, workspaceSeed: proto }); } catch (e) { threw = String(e?.message ?? ""); }
+  assertEquals(threw, "job-seed", "proto-tainted record fails closed");
+  // EMPTY bytes are ACCEPTED (≤32 KiB includes 0) + a NESTED valid path is accepted
+  const empty = createWasiJob({ ...base, workspaceSeed: { files: [{ path: "inputs/empty.bin", bytes: [] }] } });
+  assertEquals(empty.workspaceSeed.files[0].bytes.length, 0, "zero-byte seeded file accepted");
+  const nested = createWasiJob({ ...base, workspaceSeed: { files: [{ path: "inputs/sub/dir/f.bin", bytes: [1, 2, 3] }] } });
+  assertEquals(nested.workspaceSeed.files[0].path, "inputs/sub/dir/f.bin", "nested path accepted");
+  assert(Object.isFrozen(nested.workspaceSeed) && Object.isFrozen(nested.workspaceSeed.files) &&
+    Object.isFrozen(nested.workspaceSeed.files[0]) && Object.isFrozen(nested.workspaceSeed.files[0].bytes),
+  "the canonical outer/files/record/bytes graph is deeply frozen");
+  // a long UTF-8 segment / path (> the shared bounds) fails
+  let threw2 = null;
+  try { createWasiJob({ ...base, workspaceSeed: { files: [{ path: "inputs/" + "x".repeat(300), bytes: [1] }] } }); } catch (e) { threw2 = String(e?.message ?? ""); }
+  assertEquals(threw2, "job-seed", "a long UTF-8 segment fails closed (boundedPath ceiling)");
+
+  // The owner request cannot forge trusted seed authority: workspaceSeed is
+  // not in the exact Settings input schema. The Worker separately validates
+  // it before compile (source-order pinned without importing the Worker realm).
+  const { validatePreviewInput } = await import("../extension/lib/tool-exec-preview.js");
+  let requestCode = null;
+  try {
+    validatePreviewInput({ toolId: "stat", args: ["/job/inputs/f.bin"], stdin: "", workspaceSeed: { files: [] } });
+  } catch (error) {
+    requestCode = error?.code ?? null;
+  }
+  assertEquals(requestCode, "preview_request_shape", "request-borne seed forgery is exact-shape rejected");
+  const workerSource = await Deno.readTextFile(new URL("../extension/lib/wasm-execution-worker.js", import.meta.url));
+  const seedValidationAt = workerSource.indexOf("validateWorkspaceSeed(raw.job.workspaceSeed)");
+  const compileAt = workerSource.indexOf("auditWasmBinary(wasmBytes");
+  assert(seedValidationAt > 0 && compileAt > seedValidationAt, "Worker seed validation is explicit and precedes compile/audit");
+});
+
+Deno.test("stat Release E: seeded workspace bytes are cloned per job and mutation-isolated", () => {
+  const sourceBytes = [104, 105];
+  const seed = { files: [{ path: "inputs/f.bin", bytes: sourceBytes }] };
+  const a = createSyncWorkspace({ root: "tool-jobs/a/c/", seed });
+  sourceBytes[0] = 0;
+  const aHandle = a.open("inputs/f.bin", { read: true });
+  assertEquals([...aHandle.read(0, 2)], [104, 105], "workspace cloned the seed before caller mutation");
+  const b = createSyncWorkspace({ root: "tool-jobs/b/c/", seed: { files: [{ path: "inputs/f.bin", bytes: [7] }] } });
+  const bHandle = b.open("inputs/f.bin", { read: true });
+  assertEquals([...bHandle.read(0, 2)], [7], "another job has independent bytes");
+  aHandle.write(0, new Uint8Array([9]));
+  assertEquals([...bHandle.read(0, 2)], [7], "mutating one in-memory job cannot mutate another job");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // (B15) diff/patch Settings preview — accepted-exit + two-document contracts
 // ──────────────────────────────────────────────────────────────────────────
 const DIFF_SHA = "47d674035f83bf0de7b4a2ae5ee7d5e6bbe505713974ec6e5c83b2c379307c6f";
@@ -194,7 +331,7 @@ Deno.test("diff/patch Release C: EXACT outputs + accepted-exit + exit2/no-stale 
 
 Deno.test("diff/patch Release C: schema/forgery/bounds mutants fail closed", async () => {
   const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
-  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["diff", "a", "b"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 } };
+  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["diff", "a", "b"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, workspaceSeed: [] };
   const hostile = [
     ["missing-0", { ...base, acceptedExitCodes: [1] }],
     ["unsorted", { ...base, acceptedExitCodes: [1, 0] }],
@@ -217,16 +354,16 @@ Deno.test("diff/patch Release C: schema/forgery/bounds mutants fail closed", asy
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Runtime-only `/job` preopen correction — actual retained C2 stat/libc path
-// resolution. stat stays disabled: this proves mount mapping only, with an
-// injected read-only adapter and NO seed schema or package admission.
+// Landed `/job` preopen correction — actual retained C2 stat/libc path
+// resolution. Release E admits stat with a trusted per-job seed; this retained
+// capture independently pins libc's mount mapping through an injected read-only adapter.
 // ──────────────────────────────────────────────────────────────────────────
 async function runActualStatAgainstCapture(guestPath) {
   const repoRoot = new URL("..", import.meta.url).pathname;
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === "stat");
   assert(row, "the retained stat package row exists");
-  assertEquals(row.admitted, false, "stat remains disabled in the runtime-only slice");
+  assertEquals(row.admitted, true, "stat is admitted only after the /job runtime foundation");
   const wasmBytes = new Uint8Array(
     await Deno.readFile(`${repoRoot}extension/wasm/cas/${row.binary.sha256}.wasm`),
   );

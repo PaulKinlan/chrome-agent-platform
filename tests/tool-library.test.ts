@@ -25,10 +25,12 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch"]) {
+  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat"]) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
   assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
+  assertMatch(block, /args "\/job\/inputs\/f\.bin"/, "stat help gives the exact immutable-seed guest path");
+  assertNotMatch(block, /type="file"|showOpenFilePicker|upload/i, "stat adds no picker/upload authority");
   // the two-document mode hides BOTH the normal Arguments and Stdin controls
   assertMatch(block, /const argsLabel = this\._root\.querySelector\("\.preview-args-label"\)/, "the args label is queried for the toggle");
   assertMatch(block, /if \(argsLabel\) argsLabel\.hidden = twoDocMode/, "the args control hides in two-document mode");

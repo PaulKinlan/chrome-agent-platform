@@ -237,9 +237,9 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
-  // the allowlist is EXACTLY the 17 tools
+  // the allowlist is EXACTLY the 20 tools
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -336,7 +336,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 19 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 20 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -444,10 +444,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 19-tool static allowlist is admitted as settings-preview (other 7 unchanged)", () => {
+Deno.test("preview: the EXACT 20-tool static allowlist is admitted as settings-preview (other 6 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -455,7 +455,15 @@ Deno.test("preview: the EXACT 19-tool static allowlist is admitted as settings-p
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 7, "the other 7 rows are unchanged");
+  assertEquals(notAdmitted.length, 6, "the other 6 rows are unchanged");
+  const statSpec = previewSpecFor("stat");
+  assertEquals(JSON.stringify(statSpec.workspaceSeed), JSON.stringify({ files: [{ path: "inputs/f.bin", bytes: [104, 105] }] }));
+  assert(Object.isFrozen(statSpec.workspaceSeed) && Object.isFrozen(statSpec.workspaceSeed.files) &&
+    Object.isFrozen(statSpec.workspaceSeed.files[0]) && Object.isFrozen(statSpec.workspaceSeed.files[0].bytes),
+  "stat trusted seed is deeply frozen");
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "stat")) {
+    assertEquals(JSON.stringify(previewSpecFor(toolId).workspaceSeed), JSON.stringify({ files: [] }), `${toolId}: empty immutable seed`);
+  }
   assertEquals(JSON.stringify(previewSpecFor("sort").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("toml2json").caps), JSON.stringify(["compute", "data.read", "data.write"]));
   // per-tool caps: the digest tools carry the crypto set

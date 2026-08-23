@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.177] — 2026-08-23
+- feat(tools): admit bounded stat Settings preview over an immutable per-job `/job/inputs/f.bin` seed (CAP-FB-20260823-TOOL-PREVIEW-STAT-01)
+
 ## [0.2.176] — 2026-08-23
 - fix(wasi): add bounded /job preopen alias (CAP-FB-20260823-WASI-JOB-PREOPEN-01)
 

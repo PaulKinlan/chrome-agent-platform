@@ -5,20 +5,19 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 01:20 UTC. Reconciled against exact public
-> `origin/main@9e13cfbcbe5978a42c4d40e3a3ac360f2392fa8a` (`0.2.175`). Lazy,
+> Snapshot: 2026-08-23 02:55 UTC. Reconciled against exact public
+> `origin/main@2d00f2a9f5124e2b493a674991ae97b6597f67e9` (`0.2.176`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary, the tool-platform foundation and
 > the Settings preview tranches (5 → 19 tools) remain exact; the catalog
-> remains `MERGED`. This branch is the runtime-only `0.2.176` step: fd 3 keeps
-> its exact `.` preopen identity and a new fd 4 `/job` alias binds the SAME
-> per-job workspace with identical descriptor kind and rights, matching the
-> retained bounded filesystem tools without changing relative-path semantics.
-> stat remains disabled/unadmitted (19/7 posture); no seed, import, route,
-> permission, provider, page, OPFS or mutation authority is added.
+> remains `MERGED`. The fd 3 `.` + same-workspace fd 4 `/job` runtime alias is
+> DONE/shipping on public main. This `0.2.177` stat Release E candidate adds
+> only the trusted immutable per-job `inputs/f.bin` seed and admits stat as the
+> twentieth Settings preview (20/6 posture), with no route, permission,
+> provider, page, OPFS, persistence or mutation authority.
 > Branch status counts: **14 OPEN · 15 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 39 DONE · 0 ABANDONED**. The 35 nonterminal and 39 terminal status entries
-> below are the complete 74-entry state.
+> 40 DONE · 0 ABANDONED**. The 35 nonterminal and 40 terminal status entries
+> below are the complete 75-entry state.
 
 ## Safety boundary
 
@@ -724,16 +723,16 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-23 — the retained bounded filesystem binaries require the
   conventional absolute guest mount `/job`; fd 3's former guest name `.` made
   libc pass `job/inputs/...` instead of the class-relative `inputs/...` path
-- Updated: 2026-08-23 01:20 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 02:45 UTC
+- Status: DONE
 - Resume: —
 - Priority: P0
-- Owner: runtime foundation on this branch
+- Owner: landed on public main
 - Workspace: active (local path private)
 - Branch: `fix/job-preopen-9e13cfb`
 - Base: public `9e13cfbcbe5978a42c4d40e3a3ac360f2392fa8a` (0.2.175)
-- Candidate: this commit (0.2.176)
-- Shipping: —
+- Candidate: `2d00f2a9f5124e2b493a674991ae97b6597f67e9` (0.2.176)
+- Shipping: `origin/main@2d00f2a9f5124e2b493a674991ae97b6597f67e9` (public 0.2.176)
 - Acceptance: fd 3 remains the exact `.` PREOPEN/DIRECTORY fallback; fd 4 is
   an exact `/job` alias with the same kind/flags/base rights/inherited rights
   and SAME per-job workspace. fd 5 is the preopen-scan EBADF boundary; dynamic
@@ -744,11 +743,41 @@ On resume after a coordinator or worker loss:
   `/job`, `/jobx/...`, a relative path and traversal are refused before the
   adapter. stat remains disabled and no seed schema, package admission, import,
   route or permission is added.
-- Gates: focused 66/66; full 1172/1172 (14 steps); build rc 0 (seam scan
-  clean); Store package/validate OK (224 entries)
-- Review: pending independent source/package review
-- Next: after this runtime-only slice lands, rebase the separately preserved
-  bounded workspace-seed/stat admission candidate and review it independently
+- Gates: focused 102/102; full 1173/1173; build rc 0 (seam scan clean);
+  Store package/validate OK (224 entries); held-lock loaded-MV3 36/36 PASS
+- Review: independent source/package and loaded-MV3 evidence reviews PASS
+- Next: —
+
+## [CAP-FB-20260823-TOOL-PREVIEW-STAT-01] Bounded stat Settings preview (Release E)
+
+- Feedback: 2026-08-23 — after the `/job` alias foundation landed, admit the
+  retained C2 stat binary over a narrowly trusted immutable per-job file seed
+- Updated: 2026-08-23 02:55 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: stat admission worker
+- Workspace: active (local path private)
+- Branch: `feat/stat-preview-9e13cfb`
+- Base: public `2d00f2a9f5124e2b493a674991ae97b6597f67e9` (0.2.176)
+- Candidate: this commit (0.2.177)
+- Shipping: —
+- Acceptance: exact 20 enabled / 6 disabled; immutable exact-key JSON-safe
+  `workspaceSeed:{files:[{path,bytes}]}` authority with at most 8 inputs-only
+  files, 32 KiB/file and 256 KiB total; plain dense byte arrays, normalized
+  bounded unique paths, deep-frozen canonical specs and per-job Uint8Array
+  clones. stat alone seeds `inputs/f.bin` with `[104,105]`; every predecessor
+  gets an empty frozen seed. The real Worker runs argv `/job/inputs/f.bin` and
+  emits the exact four-line regular-file result with runtime-zero mtime;
+  missing/non-mount/traversal cases fail with no stale output. Inputs remain
+  read-only; no request-borne seed, OPFS, persistence, route, permission,
+  provider, page or mutation authority is added.
+- Gates: focused 113/113; full 1176/1176 (14 steps); generator regeneration
+  idempotent; build rc 0 (seam scan clean); Store package/validate pending the
+  final commit identity
+- Review: independent source/package review pending; browser gate belongs to
+  the coordinator after the clean candidate commit
+- Next: commit clean, rebuild/package against the exact object, then review
 
 ## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-06] diff/patch Settings previews (Release C)
 

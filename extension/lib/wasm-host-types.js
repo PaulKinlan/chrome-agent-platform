@@ -1,10 +1,11 @@
-// lib/wasm-host-types.js — pure, bounded types for the unreachable WASI host.
+// lib/wasm-host-types.js — pure, bounded types for the Settings-preview WASI host.
 //
-// SOURCE AUTHORITY ONLY. This module defines data contracts and constants. It
-// does not create a Worker, OPFS handle, route, provider, network request,
+// This module defines data contracts and constants. It does not create a
+// Worker, OPFS handle, route, provider, network request,
 // WebAssembly instance, or executable package path.
 
 import { WASM_PACKAGE_LIMITS } from "./wasm-package-authority.js";
+import { validateWorkspaceSeed } from "./wasm-sync-workspace.js";
 
 export const WASI_ERRNO = Object.freeze({
   SUCCESS: 0,
@@ -146,7 +147,7 @@ export const PATH_CLASS_RIGHTS = Object.freeze({
 });
 
 const encoder = new TextEncoder();
-const JOB_KEYS = Object.freeze(["acceptedExitCodes", "args", "context", "quota", "stdin", "tier"]);
+const JOB_KEYS = Object.freeze(["acceptedExitCodes", "args", "context", "quota", "stdin", "tier", "workspaceSeed"]);
 const CONTEXT_KEYS = Object.freeze([
   "callId",
   "executionId",
@@ -284,12 +285,14 @@ export function createWasiJob(value) {
     acceptedExitCodes.some((code) => !Number.isInteger(code) || code < 0 || code > 255) ||
     JSON.stringify(acceptedExitCodes) !== JSON.stringify([...new Set(acceptedExitCodes)].sort((a, b) => a - b))
   ) fail("job-accepted-exits");
+  const workspaceSeed = validateWorkspaceSeed(input.workspaceSeed);
   return Object.freeze({
     context: createWasiContext(input.context),
     args: Object.freeze(args),
     stdin: Object.freeze([...input.stdin]),
     quota,
     acceptedExitCodes: Object.freeze(acceptedExitCodes),
+    workspaceSeed, // already deep-frozen by the validator
     tier: input.tier,
   });
 }

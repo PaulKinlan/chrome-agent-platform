@@ -1,5 +1,5 @@
 // lib/wasm-sync-workspace.js — the per-job SYNCHRONOUS workspace model (Gate 2
-// corrected). SOURCE ONLY AND UNREACHABLE.
+// corrected). Used only inside each fresh Settings-preview Worker.
 //
 // The LANDED WASI runtime's adapters are SYNCHRONOUS: the runtime turns any
 // Promise-returning adapter operation into EIO (wasi-preview1-runtime.js
@@ -46,11 +46,104 @@ function boundedPath(path) {
 /** A per-job synchronous workspace: a Map-backed store keyed by the relative
  * path under the job's workspaceRoot. Every handle is a synchronous object;
  * open/stat/read/write/close never return a Promise. */
-export function createSyncWorkspace({ root, now = () => 0 } = {}) {
+export const WORKSPACE_SEED_LIMITS = Object.freeze({
+  maxFiles: 8,
+  maxFileBytes: 32 * 1024,
+  maxTotalBytes: 256 * 1024,
+});
+
+// The stable seed failure: BOTH the message AND the .code are "job-seed" so
+// every layer (createWasiJob, the worker envelope, the SW) sees the code.
+function seedFail() {
+  const error = new TypeError("job-seed");
+  error.code = "job-seed";
+  throw error;
+}
+
+const EMPTY_WORKSPACE_SEED = Object.freeze({ files: Object.freeze([]) });
+
+function hasExactOwnKeys(value, expected) {
+  try {
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string") || keys.length !== expected.length) return false;
+    const sortedExpected = [...expected].sort();
+    return [...keys].sort().every((key, index) => key === sortedExpected[index]);
+  } catch {
+    return false;
+  }
+}
+
+// Validate a trusted workspace seed. The schema is EXACTLY
+// `workspaceSeed: { files: [{ path, bytes }] }`:
+// the outer object carries ONLY the `files` key; each file is an EXACT-key
+// {path, bytes} record; paths are unique relative `inputs/<file>` (at least one
+// segment past `inputs`, nested freely within the SYNC_WORKSPACE_BOUNDS
+// path/segment ceilings — the shared boundedPath machinery is reused); bytes
+// are dense plain arrays of integers 0..255 (zero bytes allowed). EVERY schema
+// failure carries the stable `job-seed` code. Returns a deep-frozen canonical
+// form: the outer object + files + records + dense byte arrays all frozen.
+export function validateWorkspaceSeed(seed) {
+  if (typeof seed !== "object" || seed === null || Array.isArray(seed) ||
+      Object.getPrototypeOf(seed) !== Object.prototype ||
+      !hasExactOwnKeys(seed, ["files"])) seedFail();
+  if (!Array.isArray(seed.files) || seed.files.length > WORKSPACE_SEED_LIMITS.maxFiles) {
+    seedFail();
+  }
+  const seen = new Set();
+  let total = 0;
+  const files = [];
+  for (const file of seed.files) {
+    if (!file || typeof file !== "object" || Array.isArray(file) ||
+        Object.getPrototypeOf(file) !== Object.prototype ||
+        !hasExactOwnKeys(file, ["path", "bytes"])) seedFail();
+    const path = file.path;
+    if (typeof path !== "string" || path.includes("\0") ||
+        path.startsWith("/") || path.includes("\\")) seedFail();
+    let segments;
+    try {
+      // the shared boundedPath enforces the UTF-8 path + segment byte ceilings
+      // and rejects empty/`.`/`..` segments; then require `inputs/<file>`.
+      boundedPath(path);
+      segments = path.split("/");
+      if (segments[0] !== "inputs" || segments.length < 2) seedFail();
+    } catch (error) {
+      seedFail();
+    }
+    if (seen.has(path)) seedFail();
+    seen.add(path);
+    const bytes = file.bytes;
+    if (!Array.isArray(bytes) || Object.getPrototypeOf(bytes) !== Array.prototype ||
+        bytes.length > WORKSPACE_SEED_LIMITS.maxFileBytes ||
+        !hasExactOwnKeys(bytes, [
+          ...Array.from({ length: bytes.length }, (_, index) => String(index)),
+          "length",
+        ])) {
+      seedFail();
+    }
+    const dense = [];
+    for (let index = 0; index < bytes.length; index++) {
+      if (!(index in bytes)) seedFail(); // a hole is not dense
+      const byte = bytes[index];
+      if (!Number.isInteger(byte) || byte < 0 || byte > 255) seedFail();
+      dense.push(byte);
+    }
+    total += dense.length;
+    if (total > WORKSPACE_SEED_LIMITS.maxTotalBytes) seedFail();
+    files.push(Object.freeze({ path, bytes: Object.freeze(dense) }));
+  }
+  return Object.freeze({ files: Object.freeze(files) });
+}
+
+export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPACE_SEED } = {}) {
   if (typeof root !== "string" || root.length === 0) {
     throw new TypeError("sync_workspace_root");
   }
+  const validated = validateWorkspaceSeed(seed);
   const files = new Map(); // path -> { bytes: Uint8Array, mtime }
+  for (const file of validated.files) {
+    // clone to a genuine Uint8Array ONLY inside the per-job workspace
+    files.set(file.path, { path: file.path, bytes: new Uint8Array(file.bytes), mtime: 0 });
+  }
   const handles = new Map(); // handleId -> { path, handle }
   let nextHandleId = 1;
 

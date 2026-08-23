@@ -22,7 +22,7 @@ import {
 } from "./wasi-preview1-runtime.js";
 import { WasiProcExit } from "./wasm-host-types.js";
 import { auditWasmBinary, WASM_PACKAGE_LIMITS } from "./wasm-package-authority.js";
-import { createSyncWorkspace } from "./wasm-sync-workspace.js";
+import { createSyncWorkspace, validateWorkspaceSeed } from "./wasm-sync-workspace.js";
 import { TRANSPORT_MESSAGE_TYPES } from "./wasm-executor.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
 
@@ -47,7 +47,7 @@ const workerInstanceId = (globalThis.crypto?.randomUUID
   : `worker_${Math.random().toString(36).slice(2)}_${Date.now()}`);
 
 const JOB_ENVELOPE_KEYS = Object.freeze(["type", "sessionId", "job", "wasmBytes"]);
-const JOB_INNER_KEYS = Object.freeze(["acceptedExitCodes", "context", "args", "stdin", "quota", "tier"]);
+const JOB_INNER_KEYS = Object.freeze(["acceptedExitCodes", "context", "args", "stdin", "quota", "tier", "workspaceSeed"]);
 const CONTEXT_KEYS = Object.freeze(["executionId", "callId", "origin", "workspaceRoot"]);
 
 function exactKeys(value, keys, code) {
@@ -79,6 +79,15 @@ export function validateJobEnvelope(raw) {
     aec.some((code) => !Number.isInteger(code) || code < 0 || code > 255) ||
     JSON.stringify(aec) !== JSON.stringify([...new Set(aec)].sort((x, y) => x - y))
   ) throw failClosed("job-accepted-exits");
+  // the trusted workspace seed is validated EXPLICITLY here — the exact outer
+  // {files:[{path,bytes}]} schema + the dense bytes — BEFORE any workspace or
+  // compile; every failure carries the stable job-seed code.
+  try {
+    validateWorkspaceSeed(raw.job.workspaceSeed);
+  } catch (error) {
+    if (String(error?.message ?? "") === "job-seed") throw failClosed("job-seed");
+    throw failClosed("job-seed", String(error?.message ?? error));
+  }
   if (!plainData(raw.job.context)) throw failClosed("job-context");
   exactKeys(raw.job.context, CONTEXT_KEYS, "job-context");
   if (!Array.isArray(raw.job.args)) throw failClosed("job-args");
@@ -165,7 +174,7 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
     }
 
     // 2. The PER-JOB SYNCHRONOUS workspace bound to the job's workspaceRoot.
-    const workspace = createSyncWorkspace({ root: job?.context?.workspaceRoot });
+    const workspace = createSyncWorkspace({ root: job?.context?.workspaceRoot, seed: job?.workspaceSeed });
 
     // 3. The LANDED WASI runtime with the instance-memory adapter + the sync
     //    workspace (no Promises — the runtime syncResult-rejects them).
@@ -177,6 +186,7 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
         stdin: new Uint8Array(job.stdin ?? []),
         quota: job.quota,
         acceptedExitCodes: job.acceptedExitCodes,
+        workspaceSeed: job.workspaceSeed,
       },
       memory: {
         // Wasm memory is reached through instance.EXPORTS.memory (the export),
