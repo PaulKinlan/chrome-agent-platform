@@ -379,8 +379,11 @@ On resume after a coordinator or worker loss:
     (silent broad host access, declarativeNetRequest, webNavigation, history,
     proxy/vpn, downloads.open, model-chosen navigate URLs,
     notification-onclick-to-model-URL, contentSettings/cookies,
-    enterprise.management.install). Implementation starts after owner-visible
-    queue clears.
+    enterprise.management.install). TRANCHE 1 DELIVERED (K3, 797f101, in
+    review): 8 tools — windows list/create/focus/close/move, action
+    set/get state, commands list — zero new manifest permissions, grant-lock
+    origin re-reads (smuggle-class defense), owner-scoped action state,
+    registry parity 46 tools, 1309/1309 suite.
   - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
     revives the early "go through all Chrome extension APIs and create tools"
     request.
