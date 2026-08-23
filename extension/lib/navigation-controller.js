@@ -207,3 +207,33 @@ export function parseNtpHash(hash) {
 
   return { route: "hub" };
 }
+
+/** A self-initiated same-document pushState/replaceState must NOT re-dispatch
+ * the route (the open* call already rendered the view) — only traversals and
+ * reloads drive the dispatcher. Pure; the NTP's navigate listener + tests use
+ * it. */
+export function shouldDispatchForNavigationType(type) {
+  return type !== "push" && type !== "replace";
+}
+
+/** Resolve the EXACT entry title/name from the history state (the single
+ * source of truth) for a parsed route — never a degraded hardcoded fallback
+ * when the entry carried a real title/name. Pure; the NTP dispatcher + tests
+ * use it. */
+export function resolveEntryMeta(parsed, state = null) {
+  const s = (state && typeof state === "object") ? state : null;
+  if (!parsed || typeof parsed !== "object") return { title: null, name: null };
+  if (parsed.route === "view") {
+    return {
+      title: (s && typeof s.title === "string" && s.title) ? s.title : "View",
+      name: null,
+    };
+  }
+  if (parsed.route === "agent") {
+    return {
+      title: null,
+      name: (s && typeof s.name === "string" && s.name) ? s.name : null,
+    };
+  }
+  return { title: null, name: null };
+}

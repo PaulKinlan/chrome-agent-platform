@@ -39,7 +39,7 @@ import {
   VIEW_ROUTE,
 } from "./view-transition.js";
 import { applySidebarNubPolicy } from "./view-policy.js";
-import { parseNtpHash } from "../lib/navigation-controller.js";
+import { parseNtpHash, resolveEntryMeta, shouldDispatchForNavigationType } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
@@ -1059,7 +1059,7 @@ async function openBackgroundAgentChat(id, name) {
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=background:${encodeURIComponent(id)}`;
     if (location.hash !== hash) {
-      window.history.pushState({ route: "agent", kind: "background", id }, "", hash);
+      window.history.pushState({ route: "agent", kind: "background", id, name }, "", hash);
     }
   }
   renderRunStatus({ state: "idle" });
@@ -1113,7 +1113,7 @@ async function openAgentSurface({ kind, id, name }) {
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
     if (location.hash !== hash) {
-      window.history.pushState({ route: "agent", kind, id }, "", hash);
+      window.history.pushState({ route: "agent", kind, id, name }, "", hash);
     }
   }
   renderRunStatus({ state: "idle" });
@@ -1987,6 +1987,12 @@ async function applyCurrentHashRoute(isTraverse = false) {
   isApplyingHashRoute = true;
   try {
     const parsed = parseNtpHash(location.hash);
+    // history.state is the SINGLE source of truth for the exact title/name of
+    // the entry being restored — a traverse must not re-derive a degraded
+    // hardcoded "View".
+    const state = (typeof history !== "undefined" && history.state && typeof history.state === "object")
+      ? history.state : null;
+    const meta = resolveEntryMeta(parsed, state);
     if (parsed.route === "hub") {
       if (!viewOverlay?.hidden) {
         closeView({ fromNavigation: true });
@@ -2003,17 +2009,22 @@ async function applyCurrentHashRoute(isTraverse = false) {
       if (!viewOverlay?.hidden) hideViewInner();
       if (parsed.kind === "background") {
         if (currentAgentId !== parsed.id || currentAgentKind !== "background" || threadView?.hidden) {
-          await openBackgroundAgentChat(parsed.id, null, { pushHistory: false });
+          await openBackgroundAgentChat(parsed.id, meta.name ?? null, { pushHistory: false });
         }
       } else {
         if (currentAgentId !== parsed.id || currentAgentKind !== parsed.kind || threadView?.hidden) {
-          await openAgentSurface({ kind: parsed.kind, id: parsed.id }, { pushHistory: false });
+          await openAgentSurface({ kind: parsed.kind, id: parsed.id, name: meta.name ?? null }, { pushHistory: false });
         }
       }
     } else if (parsed.route === "view") {
       const expectedSrc = chrome.runtime?.getURL ? chrome.runtime.getURL(parsed.path) : parsed.path;
+      const title = meta.title ?? "View";
       if (viewOverlay?.hidden || viewFrame.src !== expectedSrc) {
-        openView(parsed.path, "View", null, { pushHistory: false });
+        openView(parsed.path, title, null, { pushHistory: false });
+      } else if (viewTitle && meta.title && meta.title !== "View") {
+        // Already open with the correct src — restore the stored title (a
+        // traverse to the SAME view must not blank or rename it).
+        viewTitle.textContent = meta.title;
       }
     }
   } finally {
@@ -2027,9 +2038,22 @@ if (typeof window !== "undefined") {
     window.navigation.addEventListener("navigate", (event) => {
       const destUrl = event.destination?.url ? new URL(event.destination.url) : null;
       if (event.canIntercept && destUrl && destUrl.pathname === location.pathname) {
+        const type = event.navigationType;
+        if (!shouldDispatchForNavigationType(type)) {
+          // A self-initiated pushState/replaceState already rendered the view
+          // (openView/openThread/openAgentSurface set the DOM BEFORE pushing) —
+          // do NOT re-dispatch, or the re-entrancy re-opens with a hardcoded
+          // "View" title and loses the real one.
+          return;
+        }
         event.intercept({
           async handler() {
-            await applyCurrentHashRoute(event.navigationType === "traverse");
+            await applyCurrentHashRoute(type === "traverse");
+            // Settle the intercepted traversal: commit the URL, then restore
+            // the browser's native scroll + focus contract.
+            try { event.commit(); } catch { /* some traversals commit implicitly */ }
+            try { event.scroll(); } catch { /* not every navigation exposes scroll */ }
+            try { event.focusReset(); } catch { /* not every navigation exposes focusReset */ }
           },
         });
       }

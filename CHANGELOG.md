@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.207] — 2026-08-23
+- fix(navigation): history stack as single source of truth — back AND forward restore exact view/title/name, in-app back parity with browser back, unknown routes fail closed to hub, transitions settle scroll/focus; owner repros 1–3 pinned as named KATs (CAP-FB-20260823-NAVIGATION-STATE-02)
+
 ## [0.2.206] — 2026-08-23
 - feat(wasm): wire model-invoked task execution dispatch closures for admitted bundled tools — owner policy: admission is the grant; run-bound revalidation per call, dedicated offscreen host, typed failure envelopes, disabled tools fail closed (CAP-FB-20260823-WASM-TASK-EXECUTION-01)
 
