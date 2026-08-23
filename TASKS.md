@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **43 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 70 nonterminal and 40 terminal status entries
-> below are the complete 110-entry state.
+> Branch status counts: **44 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 71 nonterminal and 40 terminal status entries
+> below are the complete 111-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,46 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-NAVIGATION-STATE-02] Navigation state machine still broken: forward dead, in-app back produces blank "view" state
+
+- Feedback: 2026-08-23 — product owner (after 0.2.202): better than before but
+  still broken. Click a task → back works; click Settings → back works; but
+  FORWARD doesn't work after going back. In-app back button (not Chrome's)
+  from Assets lands on a blank screen titled "view"; state gets confused —
+  click Skills → skills list, in-app back shows the weird "view", pressing
+  back does nothing, pressing again goes blank. Owner directive: deeper
+  analysis of how the Navigation API integration and state management
+  actually work; do NOT use Gemini for this fix (two mistakes already)
+- Updated: 2026-08-23 23:40 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: Pro (assigned)
+- Workspace: none
+- Branch: none
+- Base: `a063324`
+- Candidate: —
+- Shipping: —
+- Acceptance: the browser history stack is the single source of truth for
+  view state — back AND forward restore the exact prior view for every view
+  class (hub, task, settings sections, assets, skills, agents) across
+  arbitrary sequences; the in-app back button has exact parity with the
+  browser back button; no reachable blank/orphan "view" state; every
+  view-switch pushes exactly one entry and every entry maps to a renderable
+  view; reload boots into the route
+- Review: pending independent state-machine/navigation review (non-Gemini
+  implementer per owner directive)
+- Gates: full transition matrix KATs (task/settings/assets/skills/hub ×
+  back/forward/reload), the owner's exact repro sequences, no blank states,
+  listener-count discipline
+- Blockers: supersedes the 0.2.202 approach where it fails; keep what works
+- Next: deep root-cause analysis of the history/state interaction, then fix
+- Recover: `git grep -n "navigationController\|applyCurrentHashRoute\|history.back" -- extension/ntp extension/options`
+- History:
+  - 2026-08-23 23:40 UTC — captured from product-owner voice feedback on
+    0.2.202.
+
+
 
 ## [CAP-FB-20260823-WASM-TASK-EXECUTION-01] Execute bundled WASM tools from a task (provider dispatch closure)
 
