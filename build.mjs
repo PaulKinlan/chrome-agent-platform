@@ -18,6 +18,7 @@ import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, ut
 import path, { join, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
 import {
@@ -28,7 +29,7 @@ import {
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
-    throw new Error("usage: node build.mjs [--target=store]");
+    throw new Error("usage: node build.mjs [--target=store] [--regen-tools]");
   }
   if (args.length === 0 || args[0] === "--target=store") return "store";
   if (args[0] === "--target=developer") {
@@ -40,7 +41,11 @@ function parseBuildTarget(args) {
   throw new Error(`unsupported build target argument: ${args[0]}`);
 }
 
-const BUILD_TARGET = parseBuildTarget(process.argv.slice(2));
+// --regen-tools is the EXPLICIT opt-in to fully regenerate the bundled Wasm
+// tool packages; the default build only VERIFIES them (see below).
+const RAW_ARGS = process.argv.slice(2);
+const REGEN_TOOLS = RAW_ARGS.includes("--regen-tools");
+const BUILD_TARGET = parseBuildTarget(RAW_ARGS.filter((a) => a !== "--regen-tools"));
 const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
 const DIST = path.join(EXT_DIR, "dist");
@@ -51,6 +56,16 @@ const COMPLETE_MARKER = path.join(DIST, "dist.complete");
 if (process.platform === "win32") {
   throw new Error("atomic directory publish is not supported on Windows in this build — publish from WSL/Linux/CI");
 }
+
+// Bundled-tool truthfulness gate: the shipped Wasm tool packages are GENERATED
+// artifacts. The default build runs the generator in --verify mode and FAILS
+// CLOSED on any drift (hand edit, stale bytes, ungenerated file), so
+// `npm run build` truthfully bundles the exact pinned tools. Full regeneration
+// never happens implicitly — only via the explicit --regen-tools flag.
+execFileSync(process.execPath, [
+  path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
+  ...(REGEN_TOOLS ? [] : ["--verify"]),
+], { cwd: ROOT, stdio: "inherit" });
 
 // SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
 // shipped extension. RECURSIVELY discover every shipped .js under extension/,

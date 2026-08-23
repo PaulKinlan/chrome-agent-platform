@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.191] — 2026-08-23
+- feat(build): verify-only bundled tool generation in the default build path (CAP-FB-20260823-BUILD-TOOL-BUNDLING-01)
+
 ## [0.2.189] — 2026-08-23
 - chore(tasks): capture owner request for agent-useful bundled tool descriptions (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01)
 
