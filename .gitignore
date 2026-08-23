@@ -4,6 +4,7 @@ node_modules/
 extension/dist
 extension/**/*.bundle.js
 dist/
+!packages/bundled/evidence/**/dist/
 extension/CHANGELOG.md
 node_modules
 
