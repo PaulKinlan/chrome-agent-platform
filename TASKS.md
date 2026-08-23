@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **41 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 68 nonterminal and 40 terminal status entries
-> below are the complete 108-entry state.
+> Branch status counts: **42 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 69 nonterminal and 40 terminal status entries
+> below are the complete 109-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,46 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-PERSISTENT-FS-ACCESS-01] Persistent local filesystem access via directory/file handles (Co-do-style)
+
+- Feedback: 2026-08-23 — product owner: like the Co-do project, the platform
+  should access not just OPFS but real directory/file handles — persist the
+  directory handle so the agent has ongoing (user-granted) access to monitor,
+  read, and edit files on the user's system; maybe via an "add directory /
+  add file" affordance in a task; plus hooks for watching filesystem changes
+  and reacting to them. Owner wants a plan first, then implementation
+- Updated: 2026-08-23 23:10 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `63d177d`
+- Candidate: —
+- Shipping: —
+- Acceptance: Phase 1 (plan): a design covering the File System Access API
+  surface (showDirectoryPicker/getFileHandle), handle persistence across
+  sessions (structured-clone handles to IndexedDB), permission re-request
+  semantics (query/requestPermission on resume), the owner-grant UX
+  ("add directory"/"add file" affordance scoped to a task or agent), the
+  boundary vs OPFS workspaces and artifact transactions, a watcher strategy
+  (platform truth: no native recursive FS watch — design polling/manifest
+  diffing hooks honestly), and security limits (no silent broad access,
+  per-directory grants, revocable). Phase 2: implementation in tranches per
+  the approved plan
+- Review: pending independent permissions/persistence/security review of the
+  plan before any implementation
+- Gates: plan covers persistence + re-permission + revocation + watcher truth
+  + grant scoping; implementation gated on plan approval
+- Blockers: design-first; composes with OPFS workspaces, permission
+  remediation, and artifact transactions
+- Next: write the design/plan (prior art: Co-do's handle persistence)
+- Recover: `git grep -n "showDirectoryPicker\|FileSystemDirectoryHandle" -- extension`
+- History:
+  - 2026-08-23 23:10 UTC — captured from product-owner voice feedback.
+
+
 
 ## [CAP-FB-20260823-AGENT-WASM-DISCOVERY-01] Agent claims "no native WASM tools" despite 26 running; add list_tools; clarify "bundled packages"
 
