@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.211] — 2026-08-24
+- feat(workspace): transactional scratch directory primitives (S2) — explicit empty-directory representation, create/remove with full collision lattice (EEXIST/ENOENT/ENAMETOOLONG/ENOSPC/ENOTEMPTY/EPERM), root protection, stat/readdir union, S1 transaction reentry rule (CAP-FB-20260823-S2-DIRS-01)
+
 ## [0.2.210] — 2026-08-24
 - feat(tools): Unix-name-first tool naming and agent-useful descriptions — displayName === tool name for all 26, descriptions lead with the tool name (concise, jargon-free, ≤256B), Settings preview selector labels aligned, live search vocabulary verified (CAP-FB-20260823-TOOL-NAMING-01)
 

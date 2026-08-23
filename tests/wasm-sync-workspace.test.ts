@@ -540,3 +540,111 @@ Deno.test("S1 validator: exactDenseByteArray is a SINGLE indexed walk — one fr
   expectSeedFail({ files: [{ path: "scratch/g.bin", bytes: [1], [Symbol("x")]: 2 }] }, "bytes symbol key");
   expectSeedFail({ files: [{ path: "scratch/s.bin", get bytes() { return [1]; } }] }, "bytes getter");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// S2 transactional scratch directories: explicit dir representation + the
+// createDirectory/removeDirectory primitives + the collision lattice.
+// ──────────────────────────────────────────────────────────────────────────
+import { SCRATCH_DIR_LIMITS } from "../extension/lib/wasm-sync-workspace.js";
+
+Deno.test("S2 dirs: createDirectory makes an explicit empty dir (stat + readdir union + rollback)", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/s2/c/" });
+  const tx = ws.createDirectory("scratch/lock.d");
+  assertEquals(ws.stat("scratch/lock.d"), { type: "directory", size: 0, mtime: 0 }, "the explicit dir is a directory");
+  assertEquals(ws.readdir("scratch"), [{ name: "lock.d", type: "directory" }], "the dir appears in the parent's readdir");
+  assertEquals(ws.readdir("scratch/lock.d"), [], "the explicit dir is EMPTY (the lock-dir case)");
+  assertEquals(tx.commit(), true);
+  assertEquals(ws._inspect().directories, ["scratch/lock.d"]);
+  // rollback removes it
+  const tx2 = ws.createDirectory("scratch/other.d");
+  assertEquals(tx2.rollback(), true);
+  assertEquals(ws._inspect().directories, ["scratch/lock.d"], "the rollback removed the provisional dir");
+});
+
+Deno.test("S2 dirs: createDirectory collision lattice (existing file/dir/implicit/parent-missing/root/inputs/output/depth/cap)", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/s2/c/", seed: { files: [row("scratch/f.bin", [1]), row("scratch/implicit/child.bin", [2])] } });
+  const expectErr = (p, code) => {
+    let c = null;
+    try { ws.createDirectory(p); } catch (e) { c = e?.code ?? e?.message; }
+    assertEquals(c, code, `${p} -> ${code}`);
+  };
+  expectErr("scratch/f.bin", "EEXIST");                       // an exact FILE
+  expectErr("scratch/implicit", "EEXIST");                    // an implicit dir (a child file exists)
+  expectErr("scratch/inputs/x", "ENOENT");                    // parent-missing (scratch/inputs is not a dir)
+  expectErr("inputs/x", "EPERM");                             // wrong class
+  expectErr("output/x", "EPERM");
+  expectErr("scratch", "EPERM");                              // the class root
+  expectErr("scratch/a/b/c", "ENOENT");                       // nested parent missing
+  // a deep path over the depth cap
+  const deep = "scratch/" + Array.from({ length: SCRATCH_DIR_LIMITS.maxDirDepth + 2 }, (_, i) => `d${i}`).join("/");
+  expectErr(deep, "ENAMETOOLONG");
+  // a valid nested dir with a created parent
+  const tx = ws.createDirectory("scratch/ok.d");
+  tx.commit();
+  const nested = ws.createDirectory("scratch/ok.d/inner");
+  nested.commit();
+  assertEquals(ws.stat("scratch/ok.d/inner").type, "directory");
+  // duplicate create -> EEXIST
+  let c = null;
+  try { ws.createDirectory("scratch/ok.d"); } catch (e) { c = e?.code ?? e?.message; }
+  assertEquals(c, "EEXIST");
+});
+
+Deno.test("S2 dirs: the maxDirs cap (63->64 OK, 64->65 ENOSPC)", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/s2/c/" });
+  for (let i = 0; i < SCRATCH_DIR_LIMITS.maxDirs; i++) {
+    const tx = ws.createDirectory(`scratch/d${i}`);
+    tx.commit();
+  }
+  assertEquals(ws._inspect().directories.length, SCRATCH_DIR_LIMITS.maxDirs);
+  let c = null;
+  try { ws.createDirectory("scratch/overflow"); } catch (e) { c = e?.code ?? e?.message; }
+  assertEquals(c, "ENOSPC", "the 65th explicit dir fails ENOSPC");
+});
+
+Deno.test("S2 dirs: removeDirectory is empty-only + never removes the root/implicit/non-explicit", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/s2/c/", seed: { files: [row("scratch/implicit/child.bin", [1])] } });
+  const mk = (p) => { const t = ws.createDirectory(p); t.commit(); };
+  mk("scratch/empty.d");
+  mk("scratch/full.d");
+  // fill the full.d with a file
+  const h = ws.open("scratch/full.d/x.bin", { create: true, write: true });
+  h.close();
+  const expectErr = (p, code) => {
+    let c = null;
+    try { ws.removeDirectory(p); } catch (e) { c = e?.code ?? e?.message; }
+    assertEquals(c, code, `${p} -> ${code}`);
+  };
+  expectErr("scratch", "EPERM");          // the root is never removable
+  expectErr("scratch/implicit", "ENOTDIR"); // not an explicit dir
+  expectErr("scratch/full.d", "ENOTEMPTY"); // has a file beneath
+  expectErr("scratch/missing.d", "ENOTDIR"); // not an explicit dir
+  expectErr("inputs/x", "EPERM");
+  // a valid empty remove + the rollback
+  const tx = ws.removeDirectory("scratch/empty.d");
+  assertEquals(ws._inspect().directories.includes("scratch/empty.d"), false, "the empty dir is removed");
+  assertEquals(tx.rollback(), true);
+  assertEquals(ws._inspect().directories.includes("scratch/empty.d"), true, "the rollback restores it");
+  // an explicit subdir makes a parent non-empty
+  mk("scratch/outer.d");
+  mk("scratch/outer.d/inner.d");
+  expectErr("scratch/outer.d", "ENOTEMPTY");
+  const innerTx = ws.removeDirectory("scratch/outer.d/inner.d");
+  innerTx.commit();
+  const outerTx = ws.removeDirectory("scratch/outer.d");
+  outerTx.commit();
+  assertEquals(ws._inspect().directories.includes("scratch/outer.d"), false);
+});
+
+Deno.test("S2 dirs: the S1 reentry rule covers the dir primitives (EINVAL during a provisional FILE transaction)", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/s2/c/" });
+  const fileTx = ws.createScratchFile("scratch/w.bin");
+  let c = null;
+  try { ws.createDirectory("scratch/d"); } catch (e) { c = e?.code ?? e?.message; }
+  assertEquals(c, "EINVAL", "createDirectory rejects during a provisional file tx");
+  c = null;
+  try { ws.removeDirectory("scratch/d"); } catch (e) { c = e?.code ?? e?.message; }
+  assertEquals(c, "EINVAL", "removeDirectory rejects during a provisional file tx");
+  assertEquals(ws._inspect().directories.length, 0, "no dir was created");
+  fileTx.rollback();
+});

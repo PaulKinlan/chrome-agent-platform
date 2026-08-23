@@ -46,6 +46,15 @@ export const WORKSPACE_SEED_LIMITS = Object.freeze({
   scratch: SCRATCH_FILE_LIMITS,
 });
 
+// Explicit scratch-directory caps (the S2 transactional directory slice). The
+// maxDirs bound matches the handle cap; maxDirDepth bounds the nesting. These
+// bound the explicit directories set ONLY — the implicit-prefix directories
+// remain governed by the file grammar.
+export const SCRATCH_DIR_LIMITS = Object.freeze({
+  maxDirs: 64,
+  maxDirDepth: 32,
+});
+
 function failClosed(code) {
   const error = new Error(`sync-workspace: ${code}`);
   error.code = code;
@@ -246,6 +255,10 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     throw new TypeError("sync_workspace_root");
   }
   const validated = validateWorkspaceSeed(seed);
+  // Explicit empty scratch directories (the S2 slice): a Set of exact paths,
+  // additive to the implicit-prefix inference — a lock dir can exist with zero
+  // files beneath it. Per-job, never shared, never persisted.
+  const directories = new Set(); // exactPath
   const files = new Map(); // path -> { path, className, bytes: Uint8Array, mtime }
   for (const file of validated.files) {
     // clone to a genuine Uint8Array ONLY inside the per-job workspace; the
@@ -317,7 +330,9 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     const p = path === "." ? "." : boundedPath(path);
     const entry = p === "." ? null : files.get(p);
     const prefix = p === "." ? "" : `${p}/`;
-    const isDirectory = p === "." || [...files.keys()].some((key) => key.startsWith(prefix));
+    const isDirectory = p === "." || directories.has(p) ||
+      [...directories].some((dir) => dir.startsWith(prefix)) ||
+      [...files.keys()].some((key) => key.startsWith(prefix));
     // Defense in depth: validateWorkspaceSeed forbids this for trusted seeds,
     // but the mutable in-memory adapter still fails closed if a later file
     // write ever creates an exact-file/implicit-directory collision.
@@ -332,10 +347,29 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
   const readdir = (path) => {
     const p = path === "." ? "." : boundedPath(path);
     const prefix = p === "." ? "" : `${p}/`;
-    if (p !== "." && ![...files.keys()].some((key) => key.startsWith(prefix))) {
+    if (p !== "." && !directories.has(p) &&
+        ![...directories].some((dir) => dir.startsWith(prefix)) &&
+        ![...files.keys()].some((key) => key.startsWith(prefix))) {
       throw failClosed("ENOENT");
     }
     const children = new Map();
+    // explicit empty directories under this path contribute their children
+    for (const dir of directories) {
+      if (prefix && !dir.startsWith(prefix)) continue;
+      const relative = prefix ? dir.slice(prefix.length) : dir;
+      if (!relative) continue;
+      const slash = relative.indexOf("/");
+      const name = slash < 0 ? relative : relative.slice(0, slash);
+      const bytes = new TextEncoder().encode(name);
+      if (!name || name === "." || name === ".." || name.includes("/") ||
+          name.includes("\0") || bytes.byteLength > SYNC_WORKSPACE_BOUNDS.maxDirNameBytes) {
+        throw failClosed("EIO");
+      }
+      const prior = children.get(name);
+      if (prior && prior !== "directory") throw failClosed("EIO");
+      children.set(name, "directory");
+      if (children.size > SYNC_WORKSPACE_BOUNDS.maxDirEntries) throw failClosed("EIO");
+    }
     for (const key of files.keys()) {
       if (prefix && !key.startsWith(prefix)) continue;
       const relative = prefix ? key.slice(prefix.length) : key;
@@ -561,6 +595,59 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     }
   };
 
+  // The parent-exists check: the parent of a scratch path must be an existing
+  // directory (explicit, implicit-prefix, or the scratch root).
+  const directoryExists = (path) => {
+    if (path === "scratch") return true; // the class root always exists
+    if (directories.has(path)) return true;
+    const prefix = `${path}/`;
+    return [...files.keys()].some((key) => key.startsWith(prefix));
+  };
+
+  // Transactional synchronous scratch-directory create. prepare validates (no
+  // mutation), commit is the atomic Set add, rollback is the inverse Set delete
+  // (used by the later path_create_directory syscall wrapper for caller-failure
+  // atomicity). Rejects during a provisional FILE transaction (the S1 reentry).
+  const createDirectory = (path) => {
+    if (activeTransaction !== null) throw failClosed("EINVAL");
+    const p = boundedPath(path);
+    const segments = p.split("/");
+    if (segments[0] !== "scratch" || segments.length < 2) throw failClosed("EPERM");
+    if (segments.length - 1 > SCRATCH_DIR_LIMITS.maxDirDepth) throw failClosed("ENAMETOOLONG");
+    const parent = segments.slice(0, -1).join("/");
+    if (!directoryExists(parent)) throw failClosed("ENOENT");
+    if (directories.has(p)) throw failClosed("EEXIST");
+    if (files.has(p)) throw failClosed("EEXIST");
+    const prefix = `${p}/`;
+    if ([...files.keys()].some((key) => key.startsWith(prefix))) throw failClosed("EEXIST");
+    if (directories.size >= SCRATCH_DIR_LIMITS.maxDirs) throw failClosed("ENOSPC");
+    directories.add(p);
+    return Object.freeze({
+      path: p,
+      commit: () => true,
+      rollback: () => { directories.delete(p); return true; },
+    });
+  };
+
+  // Transactional synchronous scratch-directory remove. empty-only: no files
+  // under the path AND no explicit subdirs. The root/scratch is never removable.
+  const removeDirectory = (path) => {
+    if (activeTransaction !== null) throw failClosed("EINVAL");
+    const p = boundedPath(path);
+    const segments = p.split("/");
+    if (segments[0] !== "scratch" || segments.length < 2) throw failClosed("EPERM");
+    if (!directories.has(p)) throw failClosed("ENOTDIR");
+    const prefix = `${p}/`;
+    if ([...files.keys()].some((key) => key.startsWith(prefix))) throw failClosed("ENOTEMPTY");
+    if ([...directories].some((dir) => dir.startsWith(prefix))) throw failClosed("ENOTEMPTY");
+    directories.delete(p);
+    return Object.freeze({
+      path: p,
+      commit: () => true,
+      rollback: () => { directories.add(p); return true; },
+    });
+  };
+
   const open = (path, options = {}) => {
     // The one-provisional reentry rule covers open() too: while a transaction
     // is provisional, any state-touching allocation must fail EINVAL so a
@@ -629,12 +716,15 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     readdir,
     open,
     createScratchFile,
+    createDirectory,
+    removeDirectory,
     // introspection for the no-Chrome tests (never an execution authority)
     // Test-safe canonical introspection (copy-only, frozen; never an execution
     // authority): the canonical bytes/mtimes/handles/allocator snapshot so the
     // tests can prove byte/mtime/allocator identity after every failure.
     _inspect: () => Object.freeze({
       files: Object.freeze([...files.keys()].sort()),
+      directories: Object.freeze([...directories].sort()),
       entries: Object.freeze([...files.entries()].map(([path, entry]) => Object.freeze({
         path,
         className: entry.className,
