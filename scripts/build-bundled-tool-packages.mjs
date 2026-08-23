@@ -38,6 +38,8 @@ const EVIDENCE = evidenceIdx >= 0 ? args[evidenceIdx + 1] : "/tmp";
 // `npm run build` truthfully bundles the exact generated tools and hand edits
 // cannot slip through. Full regeneration is the explicit --regen-tools build
 // flag (plain invocation of this script). Verify mode writes/deletes NOTHING.
+// On a host WITHOUT the frozen evidence trees, verify degrades to an honest
+// WARNING + pass (fresh-checkout portability); regeneration still hard-fails.
 const VERIFY = args.includes("--verify");
 const emitted = new Map(); // verify mode only: repo-relative path -> bytes
 function emit(abs, bytes) {
@@ -56,7 +58,24 @@ const PATHS = {
   sqlite3: join(EVIDENCE, "cap-sqlite3-query-bounded-v2"),
   catalog: join(EVIDENCE, "cap-23-tool-catalog-metadata-v3", "inventory.json"),
 };
-for (const [k, p] of Object.entries(PATHS)) if (!existsSync(p)) throw new Error(`missing evidence path (${k}): ${p}`);
+const missingEvidence = Object.entries(PATHS).filter(([, p]) => !existsSync(p));
+if (missingEvidence.length > 0) {
+  if (!VERIFY) {
+    // Full regeneration must never run from nothing.
+    throw new Error(`missing evidence path (${missingEvidence[0][0]}): ${missingEvidence[0][1]} — regeneration requires the frozen evidence trees (pass --evidence-root <dir>)`);
+  }
+  // Degraded verify on a fresh checkout: the frozen evidence trees live on the
+  // provenance host, not in the repo. The committed generated outputs remain
+  // authoritative (build.mjs still enforces the shipped-Wasm manifest/bounded
+  // scan), but regeneration-drift verification is IMPOSSIBLE without the raw
+  // trees — say so honestly instead of failing an innocent checkout.
+  console.warn(
+    `WARNING: bundled-tool verify DEGRADED — evidence trees absent (${missingEvidence.map(([k]) => k).join(", ")}); ` +
+    `skipping regeneration-drift verification. Committed generated outputs are trusted as pinned ` +
+    `(build.mjs shipped-Wasm manifest checks still apply). Provide --evidence-root <dir> for full verification.`
+  );
+  process.exit(0);
+}
 
 const CATALOG = JSON.parse(readFileSync(PATHS.catalog, "utf8"));
 // The catalog sha is computed ONCE from the actual pinned evidence file and is
