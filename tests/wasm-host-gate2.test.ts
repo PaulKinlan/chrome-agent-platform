@@ -21,7 +21,7 @@ import {
 import { createOffscreenWasmHost, validateOffscreenRequest } from "../extension/lib/wasm-offscreen-host.js";
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm } from "./wasm-fixture-builder.mjs";
-import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtime.js";
+import { createWasiPreview1Runtime, SUPPORTED_WASI_PREVIEW1_IMPORTS } from "../extension/lib/wasi-preview1-runtime.js";
 import { WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS, WasiProcExit } from "../extension/lib/wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
 
@@ -346,7 +346,7 @@ Deno.test("fd_readdir D-minus: the production workspace seeds root and nested im
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Runtime-only fd_readdir D-minus — retained du/tree linkage, NO admission
+// Runtime-only fd_readdir foundation — du admission, tree remains disabled
 // ──────────────────────────────────────────────────────────────────────────
 const DU_SHA = "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d";
 const TREE_SHA = "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb";
@@ -376,7 +376,7 @@ async function runDirectoryTool(toolId, sha, args, workspaceSeed, acceptedExitCo
   return await host.handleJob({ type: "wasm.job", job, wasmBytes });
 }
 
-Deno.test("fd_readdir D-minus: exact 12-import du/tree binaries run in fresh Workers while remaining unadmitted", async () => {
+Deno.test("du admission: exact 12-import retained du/tree binaries, du exact real-Worker traces, tree remains unadmitted", async () => {
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const exactImports = [
     "args_get",
@@ -395,11 +395,15 @@ Deno.test("fd_readdir D-minus: exact 12-import du/tree binaries run in fresh Wor
   for (const [toolId, sha] of [["du", DU_SHA], ["tree", TREE_SHA]]) {
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
     assertEquals(row?.binary?.sha256, sha, `${toolId}: exact retained CAS`);
-    assertEquals(row?.admitted, false, `${toolId}: runtime-linked only`);
-    assertEquals(row?.disabled, true, `${toolId}: no Settings preview admission`);
+    assertEquals(row?.admitted, toolId === "du", `${toolId}: admission posture`);
+    assertEquals(row?.disabled, toolId !== "du", `${toolId}: disabled posture`);
+    if (toolId === "tree") {
+      assertEquals(row?.disabledReason, "runtime-linked-awaiting-admission", "tree remains a separately gated admission");
+    }
     const bytes = await Deno.readFile(new URL(`../extension/wasm/cas/${sha}.wasm`, import.meta.url));
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((row) => row.name).sort();
     assertEquals(imports, exactImports, `${toolId}: frozen 12-import census`);
+    assertEquals(imports.filter((name) => !SUPPORTED_WASI_PREVIEW1_IMPORTS.includes(name)), [], `${toolId}: missing imports=[]`);
   }
 
   const seed = { files: [{ path: "inputs/f.bin", bytes: [104, 105] }] };
@@ -421,6 +425,25 @@ Deno.test("fd_readdir D-minus: exact 12-import du/tree binaries run in fresh Wor
   assertEquals(duEmpty.stdout, "0\t/job\n");
   assertEquals(duEmpty.stderr, "");
   assertEquals(duEmpty.counters?.openDynamicFds, 0);
+
+  // Hostile/nonexistent operands fail with no stale output or counters. Each
+  // call uses a new WasmExecutor/Worker, pinning fresh-Worker isolation.
+  for (const operand of ["/job/../escape", "/job/missing", "/jobx", "../job"]) {
+    const denied = await runDirectoryTool("du", DU_SHA, [operand], seed);
+    assertEquals(denied.ok, false, `${operand}: denied`);
+    assertEquals(denied.phase, "proc-exit", `${operand}: bounded process failure`);
+    assertEquals(denied.errno, 1, `${operand}: exact retained exit`);
+    assertEquals(denied.stdout, "", `${operand}: no stale stdout`);
+    assertEquals(denied.stderr, "", `${operand}: no stale stderr`);
+    assertEquals(denied.counters, null, `${operand}: failed snapshots are not promoted`);
+  }
+  // A fresh seeded Worker after the empty + hostile runs proves no workspace
+  // state or failed output leaked across jobs.
+  const duFresh = await runDirectoryTool("du", DU_SHA, ["/job"], seed);
+  assertEquals(duFresh.ok, true, JSON.stringify(duFresh));
+  assertEquals(duFresh.stdout, "1\t/job/inputs\n1\t/job\n");
+  assertEquals(duFresh.stderr, "");
+  assertEquals(duFresh.counters, duSeeded.counters, "fresh Worker repeats exact counters without workspace leakage");
 
   const treeSeeded = await runDirectoryTool("tree", TREE_SHA, ["/job"], seed);
   assertEquals(treeSeeded.ok, true, JSON.stringify(treeSeeded));

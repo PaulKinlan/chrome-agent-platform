@@ -155,14 +155,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admitted EXACTLY for the 20-tool settings-preview allowlist", () => {
+Deno.test("posture: descriptors admitted EXACTLY for the 21-tool settings-preview allowlist", () => {
   assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(previewRows.map((r) => r.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
-  ), "exactly the 20-tool allowlist");
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+  ), "exactly the 21-tool allowlist");
   for (const row of previewRows) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
@@ -175,26 +175,36 @@ Deno.test("posture: descriptors admitted EXACTLY for the 20-tool settings-previe
     if (previewRows.includes(row)) continue;
     assertEquals(row.admitted, false, row.toolId);
     assertEquals(row.disabled, true, row.toolId);
-    assert(["no-execution-host", "runtime-imports-unimplemented"].includes(row.disabledReason), `${row.toolId}: ${row.disabledReason}`);
+    assert(["no-execution-host", "runtime-linked-awaiting-admission", "runtime-imports-unimplemented"].includes(row.disabledReason), `${row.toolId}: ${row.disabledReason}`);
   }
   const listed = listBundledToolPackages();
   listed[0].description = "mutated";
   assert(BUNDLED_TOOL_PACKAGES[0].description !== "mutated", "enumeration must return copies");
-  // ALL 20 admitted rows retain truthful per-tool caveats. Markdown alone has
-  // an empty workspace; stat alone has the immutable inputs/f.bin seed.
+  // ALL 21 admitted rows retain truthful per-tool caveats. Markdown has an
+  // empty workspace; stat and du have the immutable inputs/f.bin seed.
   for (const row of previewRows) {
     const caveats = (row.caveats ?? []).join(" ");
     if (row.toolId === "markdown") {
       assert(caveats.includes("projects NO files into the fresh empty per-job workspace"), "markdown empty-workspace caveat");
-    } else if (row.toolId === "stat") {
-      assert(caveats.includes("immutable per-job inputs/f.bin seed"), "stat seed confinement caveat");
-      assert(caveats.includes("no provider, page or OPFS authority"), "stat no-authority caveat");
+    } else if (row.toolId === "stat" || row.toolId === "du") {
+      assert(caveats.includes("immutable per-job inputs/f.bin seed"), `${row.toolId} seed confinement caveat`);
+      assert(caveats.includes("no provider, page or OPFS authority"), `${row.toolId} no-authority caveat`);
+      if (row.toolId === "du") {
+        assert(caveats.includes("using /job by default"), "du safe default caveat");
+        assert(caveats.includes("bounded recursive enumeration"), "du recursive read confinement caveat");
+      }
     } else {
       assert(!caveats.includes("projects NO files into the fresh empty per-job workspace"), `${row.toolId}: no file caveat without file.read`);
       assert(caveats.includes("Settings-only bounded stdin preview"), `${row.toolId}: generic Settings-only caveat present`);
     }
     assert(!/pending owner admission|not currently executable|future reviewed execution adapter|not admitted/i.test(caveats), `${row.toolId}: no stale pre-admission wording`);
   }
+  const tree = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "tree");
+  assertEquals(tree.admitted, false, "tree remains unadmitted");
+  assertEquals(tree.disabledReason, "runtime-linked-awaiting-admission");
+  assert((tree.caveats ?? []).join(" ").includes("runtime-linked through the bounded read-only directory host"), "tree runtime linkage caveat");
+  assert((tree.caveats ?? []).join(" ").includes("awaits separate Settings preview admission"), "tree admission remains pending");
+  assert(!(tree.caveats ?? []).join(" ").includes("future reviewed execution adapter"), "tree does not claim a missing host");
   // per-tool TRUE caveats are preserved (not overwritten by the generic one)
   const md5 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "md5sum");
   assert((md5.caveats ?? []).join(" ").includes("never signatures, content trust, or collision-resistant integrity"), "md5 legacy caveat preserved");
@@ -396,7 +406,7 @@ Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS ha
     const prevDigests = [...prevText.matchAll(/"pkg": "(cap\.bundled\.[^"]+)",\s*"version": "1\.0\.0",\s*"digest": "([0-9a-f]{64})"/g)];
     assertEquals(prevDigests.length, 25);
     const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
-    const TRANCH = new Set(["cap.bundled.csvtool", "cap.bundled.uuid", "cap.bundled.head", "cap.bundled.tail", "cap.bundled.cut", "cap.bundled.base64", "cap.bundled.md5sum", "cap.bundled.sha256sum", "cap.bundled.sha512sum", "cap.bundled.wc", "cap.bundled.xxd", "cap.bundled.sort", "cap.bundled.uniq", "cap.bundled.tr", "cap.bundled.grep", "cap.bundled.toml2json", "cap.bundled.markdown", "cap.bundled.diff", "cap.bundled.patch", "cap.bundled.stat"]);
+    const TRANCH = new Set(["cap.bundled.csvtool", "cap.bundled.uuid", "cap.bundled.head", "cap.bundled.tail", "cap.bundled.cut", "cap.bundled.base64", "cap.bundled.md5sum", "cap.bundled.sha256sum", "cap.bundled.sha512sum", "cap.bundled.wc", "cap.bundled.xxd", "cap.bundled.sort", "cap.bundled.uniq", "cap.bundled.tr", "cap.bundled.grep", "cap.bundled.toml2json", "cap.bundled.markdown", "cap.bundled.diff", "cap.bundled.patch", "cap.bundled.stat", "cap.bundled.du"]);
     for (const [, pkg, dg] of prevDigests) {
       if (TRANCH.has(pkg)) {
         assert(now.get(pkg) !== dg, `${pkg} manifest digest intentionally changed (settings-preview meta status)`);

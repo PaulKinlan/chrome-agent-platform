@@ -25,12 +25,17 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  for (const toolId of ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat"]) {
+  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du"];
+  for (const toolId of selectorOrder) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
+  const actualSelectorOrder = [...block.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
+  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and du is appended after all 20 predecessors");
   assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
   assertMatch(block, /args "\/job\/inputs\/f\.bin"/, "stat help gives the exact immutable-seed guest path");
-  assertNotMatch(block, /type="file"|showOpenFilePicker|upload/i, "stat adds no picker/upload authority");
+  assertMatch(block, /leave args empty for the immutable "\/job" default/, "du help names its safe immutable default");
+  assertMatch(block, /read-only deterministic inputs\/f\.bin seed/, "du help names its bounded deterministic seed");
+  assertNotMatch(block, /type="file"|showOpenFilePicker|upload/i, "du/stat add no picker/upload authority");
   // the two-document mode hides BOTH the normal Arguments and Stdin controls
   assertMatch(block, /const argsLabel = this\._root\.querySelector\("\.preview-args-label"\)/, "the args label is queried for the toggle");
   assertMatch(block, /if \(argsLabel\) argsLabel\.hidden = twoDocMode/, "the args control hides in two-document mode");

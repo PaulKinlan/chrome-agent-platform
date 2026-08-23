@@ -1,6 +1,6 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
 // (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
-// static allowlist of bundled packages (20 tools) may be run ONLY from the
+// static allowlist of bundled packages (21 tools) may be run ONLY from the
 // exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:
@@ -85,12 +85,19 @@ export const PREVIEW_SPECS = Object.freeze(
           // accepts only exit 0. NEVER request-borne — the SW copies this into
           // the trusted job envelope.
           acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
-          // The immutable workspace seed (only stat seeds files; all others empty).
+          // The immutable workspace seed (stat + du receive the same minimum
+          // deterministic input; every predecessor other than stat stays empty).
           // The spec holds FROZEN DENSE PLAIN byte arrays — never a mutable
           // Uint8Array — so the spec object itself is deep-immutable.
-          workspaceSeed: row.toolId === "stat"
+          workspaceSeed: row.toolId === "stat" || row.toolId === "du"
             ? Object.freeze({ files: Object.freeze([Object.freeze({ path: "inputs/f.bin", bytes: Object.freeze([104, 105]) })]) })
             : Object.freeze({ files: Object.freeze([]) }),
+          // du alone has an immutable safe default operand. It is applied only
+          // when the owner leaves generic Arguments empty and is never carried
+          // by the request as package/capability/seed/exit authority.
+          ...(row.toolId === "du"
+            ? { defaultArgs: Object.freeze(["/job"]) }
+            : {}),
           argBounds: row.toolId === "diff" || row.toolId === "patch"
             ? TWO_DOCUMENT_BOUNDS
             : SINGLE_DOCUMENT_BOUNDS,
@@ -265,7 +272,10 @@ export function buildPreviewJob({ input, authority, quota = null }) {
   // by the UI and never request-borne beyond the allowlisted toolId.
   const spec = previewSpecFor(input.toolId);
   if (!spec) fail("preview_unknown_tool");
-  const args = [spec.argv0, ...input.args];
+  const effectiveArgs = input.args.length === 0 && spec.defaultArgs
+    ? spec.defaultArgs
+    : input.args;
+  const args = [spec.argv0, ...effectiveArgs];
   const job = createWasiJob({
     tier: "tiny",
     context: {

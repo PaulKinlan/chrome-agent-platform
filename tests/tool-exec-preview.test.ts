@@ -211,6 +211,13 @@ Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", (
   assertEquals(validatePreviewInput({ toolId: "cut", args: ["-d", ",", "-f", "2"], stdin: "a,b" }).args.length, 4);
   for (const bad of [
     null, "x", { args: [] }, { stdin: "" }, { toolId: "csvtool", args: [], stdin: "", extra: 1 },
+    // du's seed/default/accepted-exit/package/capability authority is immutable
+    // spec data; no request can forge or replace any of it.
+    { toolId: "du", args: [], stdin: "", workspaceSeed: { files: [] } },
+    { toolId: "du", args: [], stdin: "", acceptedExitCodes: [0, 1] },
+    { toolId: "du", args: [], stdin: "", defaultArgs: ["/jobx"] },
+    { toolId: "du", args: [], stdin: "", packageId: "cap.bundled.tree" },
+    { toolId: "du", args: [], stdin: "", capabilities: ["file.write"] },
     { toolId: "csvtool", args: ["x".repeat(PREVIEW_LIMITS.maxArgBytes + 1)], stdin: "" },
     { toolId: "csvtool", args: Array.from({ length: PREVIEW_LIMITS.maxArgs + 1 }, () => "a"), stdin: "" },
     { toolId: "csvtool", args: ["a\u0000b"], stdin: "" },
@@ -237,9 +244,9 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
-  // the allowlist is EXACTLY the 20 tools
+  // the allowlist is EXACTLY the 21 tools (du is the sole appended tranche)
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -281,6 +288,11 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assertEquals(JSON.stringify(uuidJob.args.slice(1)), JSON.stringify(["-n", "2"]));
   const headJob = buildPreviewJob({ input: { toolId: "head", args: ["-n", "2"], stdin: "" }, authority });
   assertEquals(headJob.args[0], "head", "argv0 == the requested toolId");
+  const duDefaultJob = buildPreviewJob({ input: { toolId: "du", args: [], stdin: "" }, authority });
+  assertEquals(JSON.stringify(duDefaultJob.args), JSON.stringify(["du", "/job"]), "du empty args resolve to the immutable /job default");
+  assertEquals(JSON.stringify(duDefaultJob.acceptedExitCodes), JSON.stringify([0]), "du accepts exactly exit 0");
+  const duExplicitJob = buildPreviewJob({ input: { toolId: "du", args: ["/job/inputs"], stdin: "" }, authority });
+  assertEquals(JSON.stringify(duExplicitJob.args), JSON.stringify(["du", "/job/inputs"]), "a bounded explicit du operand replaces only its default");
   assertEquals([...job.stdin].length, "a,b\n1,2".length);
   // quota is bounded by the preview limits
   assertEquals(job.quota.stdinBytes, PREVIEW_LIMITS.maxStdinBytes);
@@ -336,7 +348,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 20 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 21 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -444,10 +456,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 20-tool static allowlist is admitted as settings-preview (other 6 unchanged)", () => {
+Deno.test("preview: the EXACT 21-tool static allowlist is admitted as settings-preview (other 5 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -455,15 +467,26 @@ Deno.test("preview: the EXACT 20-tool static allowlist is admitted as settings-p
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 6, "the other 6 rows are unchanged");
-  const statSpec = previewSpecFor("stat");
-  assertEquals(JSON.stringify(statSpec.workspaceSeed), JSON.stringify({ files: [{ path: "inputs/f.bin", bytes: [104, 105] }] }));
-  assert(Object.isFrozen(statSpec.workspaceSeed) && Object.isFrozen(statSpec.workspaceSeed.files) &&
-    Object.isFrozen(statSpec.workspaceSeed.files[0]) && Object.isFrozen(statSpec.workspaceSeed.files[0].bytes),
-  "stat trusted seed is deeply frozen");
-  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "stat")) {
-    assertEquals(JSON.stringify(previewSpecFor(toolId).workspaceSeed), JSON.stringify({ files: [] }), `${toolId}: empty immutable seed`);
+  assertEquals(notAdmitted.length, 5, "the other 5 rows remain disabled");
+  for (const toolId of ["stat", "du"]) {
+    const spec = previewSpecFor(toolId);
+    assertEquals(JSON.stringify(spec.workspaceSeed), JSON.stringify({ files: [{ path: "inputs/f.bin", bytes: [104, 105] }] }));
+    assert(Object.isFrozen(spec.workspaceSeed) && Object.isFrozen(spec.workspaceSeed.files) &&
+      Object.isFrozen(spec.workspaceSeed.files[0]) && Object.isFrozen(spec.workspaceSeed.files[0].bytes),
+    `${toolId} trusted seed is deeply frozen`);
   }
+  assertEquals(JSON.stringify(previewSpecFor("du").defaultArgs), JSON.stringify(["/job"]), "du safe default is immutable-spec-controlled");
+  assert(Object.isFrozen(previewSpecFor("du").defaultArgs), "du default args are frozen");
+  assertEquals(JSON.stringify(previewSpecFor("du").acceptedExitCodes), JSON.stringify([0]), "du accepted exits are exactly [0]");
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "stat" && id !== "du")) {
+    assertEquals(JSON.stringify(previewSpecFor(toolId).workspaceSeed), JSON.stringify({ files: [] }), `${toolId}: empty immutable seed`);
+    assertEquals("defaultArgs" in previewSpecFor(toolId), false, `${toolId}: predecessor receives no new default-arg behavior`);
+  }
+  const tree = BUNDLED_TOOL_PACKAGE_ROWS.find((row) => row.toolId === "tree");
+  assertEquals(tree.admitted, false, "tree remains unadmitted");
+  assertEquals(tree.disabledReason, "runtime-linked-awaiting-admission", "tree truthfully reports runtime linkage without admission");
+  assert((tree.caveats ?? []).join(" ").includes("runtime-linked") && (tree.caveats ?? []).join(" ").includes("awaits separate Settings preview admission"), "tree caveat is truthful");
+  assert(!(tree.caveats ?? []).join(" ").includes("future reviewed execution adapter"), "tree no longer claims its execution host is missing");
   assertEquals(JSON.stringify(previewSpecFor("sort").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("toml2json").caps), JSON.stringify(["compute", "data.read", "data.write"]));
   // per-tool caps: the digest tools carry the crypto set

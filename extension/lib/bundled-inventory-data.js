@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.2.178",
+ "release": "0.2.179",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -31,7 +31,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.du",
    "version": "1.0.0",
-   "digest": "091bfd9b802e931b783b18028072795191ab15b06d69cfdaf39d45735f00bcc2"
+   "digest": "1df6dce75a6a81deb5beb4412c91a8fcfea351c498c8f4213b7a7738905bec1a"
   },
   {
    "pkg": "cap.bundled.grep",
@@ -327,8 +327,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.du-1.0.0.manifest.json",
-   "sha256": "091bfd9b802e931b783b18028072795191ab15b06d69cfdaf39d45735f00bcc2",
-   "size": 1638
+   "sha256": "1df6dce75a6a81deb5beb4412c91a8fcfea351c498c8f4213b7a7738905bec1a",
+   "size": 1646
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.grep-1.0.0.manifest.json",

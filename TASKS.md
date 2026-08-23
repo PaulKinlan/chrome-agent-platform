@@ -5,18 +5,19 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 03:24 UTC. Reconciled against exact public
-> `origin/main@fab59e6d9fbef8b40d59e4f8f7851abb0f751822` (`0.2.177`). Lazy,
+> Snapshot: 2026-08-23 10:26 UTC. Reconciled against exact public
+> `origin/main@0354422b331315d2651474ce4ba11930fc272875` (`0.2.178`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary, the tool-platform foundation and
 > the 20-tool Settings preview posture remain exact; the catalog remains
-> `MERGED`. This `0.2.178` runtime-only candidate adds bounded `fd_readdir` and
-> least-authority read-only directory descriptors for retained du/tree linkage;
-> du/tree remain disabled and unadmitted, so posture stays exactly 20/6 with no
-> route, permission, provider, page, OPFS, persistence or mutation authority.
-> Branch status counts: **14 OPEN · 16 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 36 nonterminal and 40 terminal status entries
-> below are the complete 76-entry state.
+> `MERGED`. This separate `0.2.179` candidate admits only retained `du` through
+> the existing owner-click Settings preview with the immutable minimum seed and
+> `/job` default; tree and the other four packages remain disabled, so posture
+> is exactly 21/5 with no new route, permission, provider, page, OPFS,
+> persistence or mutation authority.
+> Branch status counts: **14 OPEN · 17 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 37 nonterminal and 40 terminal status entries
+> below are the complete 77-entry state.
 
 ## Safety boundary
 
@@ -746,6 +747,39 @@ On resume after a coordinator or worker loss:
   Store package/validate OK (224 entries); held-lock loaded-MV3 36/36 PASS
 - Review: independent source/package and loaded-MV3 evidence reviews PASS
 - Next: —
+
+## [CAP-FB-20260823-TOOL-PREVIEW-DU-01] Bounded du Settings preview (Release 0.2.179)
+
+- Feedback: 2026-08-23 — after the bounded `fd_readdir` runtime foundation
+  landed, admit retained du alone through the existing owner-only Settings
+  preview; tree remains separately gated
+- Updated: 2026-08-23 10:26 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: du admission worker
+- Workspace: active (local path private)
+- Branch: `feat/du-admission-0354422`
+- Base: public `0354422b331315d2651474ce4ba11930fc272875` (0.2.178)
+- Candidate: this commit (0.2.179)
+- Shipping: —
+- Acceptance: exactly 21 enabled / 5 disabled. du alone is appended to the
+  immutable Settings-preview allowlist with exact accepted exits `[0]`, the
+  deeply frozen `inputs/f.bin=[104,105]` per-job seed and immutable safe
+  `/job` default; requests cannot carry seed/package/capability/exit/default
+  authority. The exact retained 12-import binary emits
+  `1\t/job/inputs\n1\t/job\n` at 23 host / 9 path calls and zero open dynamic
+  FDs through a fresh Worker. Empty workspaces remain `0\t/job\n`; traversal,
+  mount-prefix and nonexistent operands fail without stale output. tree stays
+  disabled with truthful runtime-linked-awaiting-admission metadata. No runtime,
+  route, permission, provider, OPFS, persistence or mutation authority changes.
+- Gates: focused 100/100; full serial no-Chrome 1183/1183 across 14 steps;
+  generator twice idempotent with canonical inventory SHA; build + shipped scan
+  clean; fresh final-object Store package validates 224 exact entries,
+  portable, with no stale/duplicate/symlink content
+- Review: independent source/package review required
+- Blockers: —
+- Next: obtain independent review
 
 ## [CAP-FB-20260823-WASI-FD-READDIR-01] Least-authority fd_readdir runtime foundation (Release 0.2.178)
 
