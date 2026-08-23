@@ -583,7 +583,7 @@ On resume after a coordinator or worker loss:
 - Branch: detached
 - Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
 - Candidate: GLM implementation (owner-direct `asset.delete` + native dialog + gates rows)
-- Shipping: —
+- Shipping: `origin/main@ab02213ffad0692fe484abd18eff266946440cad` (0.2.194)
 - Acceptance: deleting an artifact from the artifact view succeeds as a direct
   owner action without any permission grant; if any capability genuinely
   requires a grant, the need is surfaced at the moment of the action as a
