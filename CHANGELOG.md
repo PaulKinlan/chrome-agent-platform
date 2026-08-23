@@ -10,6 +10,11 @@
 - feat(notifications): route notification clicks to task view and bounded agent actions (CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01)
 - chore(tasks): capture nine owner-reported bugs (first-run assets, configure deeplink, example agent, browser-control consent, side-panel background agents, icon-on-create, HTML iframe size, generate_ui render) and escalate local-model management to P0 in-flight
 
+## [0.2.190] — 2026-08-23
+- feat(ui): Settings tool-library native details groups + bounded per-tool summary (CAP-FB-20260823-TOOL-LIBRARY-DETAILS-01)
+- fix(ui): shadow catalog projects the bundled tools so the Settings details list names all 26 bundled packages
+- note: 0.2.186, 0.2.187, 0.2.188 and 0.2.189 were inadvertently consumed by tracker chore hook bumps with no release content; this release continues the details slice from 0.2.185.
+
 ## [0.2.186] — 2026-08-23
 - chore(tasks): sweep 12 IN_REVIEW entries to MERGED with ancestry/byte-containment proof; retain 2 truthful residuals
 

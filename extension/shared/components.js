@@ -6400,6 +6400,7 @@ const TOOL_LIBRARY_SOURCE_LABELS = Object.freeze({
   "management": "Management",
   "webmcp-declared": "Site tools (declared)",
   "webmcp-inferred": "Site tools (inferred)",
+  "bundled-package": "Bundled packages",
 });
 const TOOL_LIBRARY_AVAILABILITY = Object.freeze({
   ready: "Ready",
@@ -6614,11 +6615,25 @@ class ToolLibrary extends Component {
       :host { display:block; color:var(--text, #24211f); }
       .framing { margin:0 0 12px; padding:10px 12px; border-radius:var(--radius-md,10px);
         background:var(--bg, #f7f6f3); color:var(--muted, #625d57); font-size:13px; }
-      .groups { margin:0 0 16px; padding:0; list-style:none; display:grid; gap:6px; }
-      .groups li { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline;
-        padding:9px 12px; border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md,10px);
-        font-size:13px; min-inline-size:0; }
+      .groups { margin:0 0 16px; padding:0; display:grid; gap:6px; }
+      .groups details { border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md,10px);
+        background:var(--panel, #fff); }
+      .groups summary { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; cursor:pointer;
+        padding:9px 12px; font-size:13px; min-inline-size:0; list-style-position:outside; }
+      .groups summary::-webkit-details-marker { display:inline-block; }
+      .groups summary:focus-visible { outline:2px solid var(--accent, #0b57d0); outline-offset:2px; }
       .groups .count { margin-inline-start:auto; font-variant-numeric:tabular-nums; font-weight:700; }
+      .groups .source-tools { margin:0; padding:0 12px 10px; list-style:none; display:grid; gap:8px; }
+      .source-tool { min-inline-size:0; }
+      .source-tool + .source-tool { border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:8px; }
+      .source-tool-head { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; align-items:start; }
+      .source-tool-head strong { font-size:13px; overflow-wrap:anywhere; min-inline-size:0; }
+      .source-tool-head .avail { font-size:11px; padding:1px 8px; border:1px solid var(--border, #ddd8d2);
+        border-radius:999px; color:var(--muted, #625d57); white-space:nowrap; }
+      .source-tool-head .avail.unavailable { border-color:var(--warning, #9a6b00); color:var(--warning, #9a6b00); }
+      .source-tool-desc { margin:4px 0 0; font-size:12px; color:var(--muted, #625d57);
+        overflow-wrap:anywhere; min-inline-size:0; }
+      @media (max-width:560px) { .source-tool-head { grid-template-columns:1fr; } }
       .rows { margin:12px 0 0; padding:0; list-style:none; display:grid; gap:10px; }
       .tool { border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:12px; min-inline-size:0; }
       .tool:first-child { border-block-start:0; padding-block-start:0; }
@@ -6779,20 +6794,53 @@ class ToolLibrary extends Component {
       total.textContent = `${s.descriptorCount ?? 0} tools visible to diagnostics${gen}`;
       host.append(total);
 
-      const groups = document.createElement("ul");
+      const groups = document.createElement("section");
       groups.className = "groups";
-      groups.setAttribute("role", "list");
       groups.setAttribute("aria-label", "Tools by source");
+      const rowsBySource = s.toolsBySource ?? {};
       for (const [kind, label] of Object.entries(TOOL_LIBRARY_SOURCE_LABELS)) {
         const count = s.bySource?.[kind] ?? 0;
-        const li = document.createElement("li");
+        const details = document.createElement("details");
+        details.className = "source-group";
+        details.setAttribute("data-source", kind);
+        const summaryEl = document.createElement("summary");
         const name = document.createElement("span");
         name.textContent = label;
         const n = document.createElement("span");
         n.className = "count";
         n.textContent = String(count);
-        li.append(name, n);
-        groups.append(li);
+        summaryEl.append(name, n);
+        details.append(summaryEl);
+        // ONE bounded per-tool summary list per category (name, source label,
+        // version/availability, one-line description). Read-only — no action,
+        // grant or verify surface is ever rendered here.
+        const rows = Array.isArray(rowsBySource[kind]) ? rowsBySource[kind].slice(0, 64) : [];
+        if (rows.length) {
+          const list = document.createElement("ul");
+          list.className = "source-tools";
+          list.setAttribute("role", "list");
+          for (const row of rows) {
+            const li = document.createElement("li");
+            li.className = "source-tool";
+            const head = document.createElement("div");
+            head.className = "source-tool-head";
+            const title = document.createElement("strong");
+            title.textContent = String(row.name ?? row.toolId ?? "");
+            const avail = document.createElement("span");
+            avail.className = `avail${row.available === true ? "" : " unavailable"}`;
+            avail.textContent = typeof row.version === "string" && row.version
+              ? `v${row.version}`
+              : (row.available === true ? "available" : "unavailable");
+            head.append(title, avail);
+            const desc = document.createElement("p");
+            desc.className = "source-tool-desc";
+            desc.textContent = String(row.description ?? "");
+            li.append(head, desc);
+            list.append(li);
+          }
+          details.append(list);
+        }
+        groups.append(details);
       }
       host.append(groups);
 

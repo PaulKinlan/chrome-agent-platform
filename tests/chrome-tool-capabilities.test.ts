@@ -243,3 +243,110 @@ Deno.test("shadow metadata wiring contains no permission request, grant, runtime
   assert(!worker.includes("search_tools"));
   assert(!worker.includes("execute_tool"));
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tool-library <details> slice: the shadow summary's bounded per-tool list
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("shadow summary: toolsBySource is a bounded read-only per-tool list (name/source label/version-availability/description; no secrets or authority)", async () => {
+  const { adaptBundledTools, adaptBuiltinTools } = await import("../extension/lib/tool-catalog.js");
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const inputs = [
+    ...adaptBuiltinTools({ "memory.read": { kind: "builtin", source: "extension", version: "1", name: "memory.read", description: "Read the hub memory" } }, { version: "0.2.185" }),
+    ...adaptBundledTools([
+      { toolId: "csvtool", packageId: "cap.bundled.csvtool", version: "1.0.0", description: "Bounded RFC 4180 CSV stream filter", displayName: "csvtool", admitted: true, settingsPreview: true },
+      { toolId: "touch", packageId: "cap.bundled.touch", version: "1.0.0", description: "touch candidate", displayName: "touch", admitted: false, settingsPreview: false },
+    ]),
+  ];
+  const controller = new ShadowToolCatalogController({
+    readInputs: () => inputs,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const summary = await controller.inspect({ action: "summary" });
+  assertEquals(summary.ok, true);
+  assertEquals(summary.canExecute, false, "no execution authority");
+  assertEquals(summary.canGrant, false, "no grant authority");
+  assert(summary.toolsBySource, "the summary carries the bounded per-tool list");
+  // the bundled rows are enriched (displayName/description/version) + the
+  // availability reflects the admitted preview posture.
+  const bundled = summary.toolsBySource["bundled-package"] ?? [];
+  assert(bundled.length >= 2, "the bundled rows appear");
+  const csv = bundled.find((row) => row.toolId === "csvtool");
+  assert(csv, "csvtool row present");
+  assertEquals(csv.name, BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === "csvtool")?.displayName ?? "csvtool", "the real displayName is carried");
+  assertEquals(csv.sourceLabel, "Bundled packages");
+  assertEquals(csv.version, BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === "csvtool")?.version ?? "1.0.0");
+  assertEquals(csv.available, true, "the admitted preview tool is available");
+  assert(csv.description.length > 0, "the one-line description is present");
+  const touch = bundled.find((row) => row.toolId === "touch");
+  assertEquals(touch.available, false, "the disabled candidate is unavailable");
+  // every row is bounded + has only the summary fields (no secrets/history/
+  // digests/capabilities/grant surface)
+  for (const rows of Object.values(summary.toolsBySource)) {
+    assert(rows.length <= 64, "bounded rows per source");
+    for (const row of rows) {
+      for (const key of Object.keys(row)) {
+        assert(["toolId", "name", "sourceLabel", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
+      }
+      assertEquals(typeof row.name, "string");
+      assertEquals(typeof row.description, "string");
+      assert(row.description.length <= 240, "bounded description");
+    }
+  }
+  // the per-source label is carried on every row (the bundled label verified
+  // above); the row set is exactly the catalog's sources.
+  assertEquals(Object.keys(summary.toolsBySource).sort(), Object.keys(summary.bySource).sort(), "one row set per bySource category");
+});
+
+Deno.test("shadow summary: an empty catalog yields an empty toolsBySource (empty state, no throw)", async () => {
+  const controller = new ShadowToolCatalogController({
+    readInputs: () => [],
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const summary = await controller.inspect({ action: "summary" });
+  assertEquals(summary.ok, true);
+  assertEquals(summary.descriptorCount, 0);
+  assertEquals(Object.keys(summary.toolsBySource).length, 0);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Details-slice product fix: the production shadow catalog projects the
+// bundled tools, so the Settings <details> bundled category lists all 26.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (26 rows in toolsBySource[bundled-package])", async () => {
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const { adaptBundledTools } = await import("../extension/lib/tool-catalog.js");
+  const inputs = adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS, {
+    version: "0.2.187",
+    sourceGeneration: "bundled-inventory:test",
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+  });
+  const controller = new ShadowToolCatalogController({
+    readInputs: () => inputs,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  });
+  const summary = await controller.inspect({ action: "summary" });
+  const bundled = summary.toolsBySource["bundled-package"] ?? [];
+  assertEquals(bundled.length, 26, "all 26 bundled rows are listed");
+  assertEquals(summary.bySource["bundled-package"], 26, "the bySource count matches");
+  // every row carries the summary-only fields + the admitted-preview availability
+  const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((r) => r.admitted === true && r.settingsPreview === true).length;
+  assertEquals(bundled.filter((r) => r.available === true).length, admitted, "the available count equals the admitted previews");
+  for (const row of bundled) {
+    assertEquals(typeof row.name, "string");
+    assertEquals(typeof row.sourceLabel, "string");
+    assertEquals(row.sourceLabel, "Bundled packages");
+    assert(["string", "object"].includes(typeof row.version) ? typeof row.version === "string" || row.version === null : true);
+    assertEquals(typeof row.description, "string");
+    assert(row.description.length <= 240);
+  }
+});
+
+Deno.test("details slice: the production readShadowCatalogInputs projects the bundled tools (source assertion)", async () => {
+  const worker = await Deno.readTextFile("extension/background/service-worker.js");
+  const block = worker.slice(
+    worker.indexOf("async function readShadowCatalogInputs"),
+    worker.indexOf("async function readShadowCatalogInputs") + 2500,
+  );
+  assert(block.includes("adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS"), "the production shadow inputs include the bundled projection");
+  assert(block.includes("bundled-inventory:${BUNDLED_INVENTORY.release}"), "the bundled source generation is bound to the inventory release");
+});

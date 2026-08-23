@@ -10,6 +10,26 @@ import { ToolSelectionAuthority } from "./tool-selection.js";
 import { buildLazyProviderCapture } from "./lazy-tool-wire.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
 
+// Bounded read-only per-tool summary limits (the tool-library `<details>`
+// slice). Metadata only — never execution/grant/verify authority.
+const TOOL_LIBRARY_SUMMARY_LIMITS = Object.freeze({
+  maxRowsPerSource: 64,
+  maxNameBytes: 192,
+  maxDescriptionBytes: 240,
+});
+
+// The canonical source labels (the UI's TOOL_LIBRARY_SOURCE_LABELS mirror —
+// carried by the route so the component renders the label without a second
+// source of truth).
+const TOOL_LIBRARY_SOURCE_LABELS = Object.freeze({
+  "extension-builtin": "Built-in",
+  "chrome-api": "Browser",
+  "management": "Management",
+  "webmcp-declared": "Site tools (declared)",
+  "webmcp-inferred": "Site tools (inferred)",
+  "bundled-package": "Bundled packages",
+});
+
 function ownData(value, key) {
   try {
     if (!value || typeof value !== "object") return undefined;
@@ -55,9 +75,32 @@ export class ShadowToolCatalogController {
       : "summary";
     if (action === "summary") {
       const bySource = {};
+      const toolsBySource = {};
+      const bundledById = new Map(
+        BUNDLED_TOOL_PACKAGE_ROWS.map((row) => [row.toolId, row]),
+      );
       for (const descriptor of catalog.descriptors) {
         bySource[descriptor.sourceKind] =
           (bySource[descriptor.sourceKind] ?? 0) + 1;
+        // ONE bounded read-only per-tool summary row per source: name, source
+        // label, version or availability, one-line description. Never secrets,
+        // query history, digests, capabilities or any grant/verify surface.
+        const rows = (toolsBySource[descriptor.sourceKind] ??= []);
+        if (rows.length >= TOOL_LIBRARY_SUMMARY_LIMITS.maxRowsPerSource) continue;
+        const bundled = bundledById.get(descriptor.toolId);
+        const previewAdmitted = bundled?.admitted === true &&
+          bundled?.settingsPreview === true;
+        rows.push(Object.freeze({
+          toolId: descriptor.toolId,
+          name: String(bundled?.displayName ?? descriptor.name ?? descriptor.toolId)
+            .slice(0, TOOL_LIBRARY_SUMMARY_LIMITS.maxNameBytes),
+          sourceLabel: TOOL_LIBRARY_SOURCE_LABELS[descriptor.sourceKind] ??
+            descriptor.sourceKind,
+          version: bundled?.version ?? null,
+          available: previewAdmitted || descriptor.availability === "ready",
+          description: String(bundled?.description ?? descriptor.description ?? "")
+            .slice(0, TOOL_LIBRARY_SUMMARY_LIMITS.maxDescriptionBytes),
+        }));
       }
       return Object.freeze({
         ok: true,
@@ -76,6 +119,16 @@ export class ShadowToolCatalogController {
             .filter((row) => row?.settingsPreview === true && row?.admitted === true)
             .map((row) => row.toolId)
             .sort(),
+        ),
+        // Bounded per-tool summary by source (name/source label/version or
+        // availability/one-line description) for the Settings `<details>` UI.
+        toolsBySource: Object.freeze(
+          Object.fromEntries(
+            Object.entries(toolsBySource).map(([kind, rows]) => [
+              kind,
+              Object.freeze(rows),
+            ]),
+          ),
         ),
       });
     }

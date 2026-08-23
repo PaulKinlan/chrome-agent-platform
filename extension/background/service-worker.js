@@ -191,6 +191,7 @@ import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 import {
   adaptBrowserTools,
+  adaptBundledTools,
   adaptBuiltinTools,
   adaptManagementTools,
   adaptWebMcpTools,
@@ -2099,6 +2100,15 @@ async function readShadowCatalogInputs() {
         managementTools,
         "management",
       ),
+    }),
+    // Bundled rows are shadow-catalog entries too: the Settings `<details>`
+    // slice lists them per source with their name/version/availability/
+    // description. They remain disabled-for-dispatch (the only executor is the
+    // owner-click Settings preview route).
+    ...adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS, {
+      version,
+      sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
+      scope: hubScope,
     }),
   ];
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};

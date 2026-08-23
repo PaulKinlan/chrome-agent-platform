@@ -353,3 +353,138 @@ Deno.test("tool-library: gzip tool/mode handlers update controls and restore gen
   assertEquals(stdinLabelText.textContent, "Stdin (bounded)");
   assertEquals(stdin.placeholder, "a,b\n1,2\n3,4");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tool-library <details> slice: the native details groups + the bounded rows
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("tool-library: each source category renders as a native <details> with the count on the <summary> and bounded tool rows (no action surfaces)", async () => {
+  class El {
+    constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.className = ""; this.hidden = false; this.attrs = {}; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] ?? null; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = [...nodes]; }
+    get classList() { return { toggle: () => {}, add: () => {}, remove: () => {} }; }
+  }
+  const registry = new Map();
+  const catalogEl = new El("div");
+  const bySelector = new Map([[".catalog", catalogEl], [".status-line", new El("p")], [".preview", new El("div")]]);
+  const shadow = { _html: "", set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; }, querySelector: (s) => bySelector.get(s) ?? null, querySelectorAll: () => [] };
+  globalThis.HTMLElement = class { attachShadow() { return shadow; } addEventListener() {} dispatchEvent() { return true; } getAttribute() { return null; } hasAttribute() { return false; } };
+  globalThis.customElements = { define(n, c) { registry.set(n, c); }, get(n) { return registry.get(n); } };
+  globalThis.window = globalThis;
+  globalThis.CustomEvent = class { constructor(t, i = {}) { this.type = t; this.detail = i.detail ?? {}; } };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.document = { createElement: (t) => new El(t), querySelector: () => null, head: { appendChild() {} }, getElementById: () => null };
+
+  const mod = await import("../extension/shared/components.js?details-slice");
+  const ToolLibraryClass = mod.ToolLibrary ?? registry.get("tool-library");
+  const library = Object.create(ToolLibraryClass.prototype);
+  library._root = shadow;
+  library._rendered = true;
+  library._state = "ready";
+  library._announcedState = "";
+  library._error = "";
+  library._results = null;
+  library._summary = null;
+  library.summary = {
+    descriptorCount: 3,
+    bySource: { "bundled-package": 2, "extension-builtin": 1 },
+    catalogDiagnostics: {},
+    selectionDiagnostics: {},
+    settingsPreviewTools: ["csvtool", "gzip"],
+    toolsBySource: {
+      "bundled-package": [
+        { toolId: "csvtool", name: "csvtool", sourceLabel: "Bundled packages", version: "1.0.0", available: true, description: "RFC 4180 CSV stream filter" },
+        { toolId: "touch", name: "touch", sourceLabel: "Bundled packages", version: "1.0.0", available: false, description: "touch candidate" },
+      ],
+      "extension-builtin": [
+        { toolId: "memory.read", name: "memory.read", sourceLabel: "Built-in", version: null, available: true, description: "Read the hub memory" },
+      ],
+    },
+  };
+  library.state = "ready";
+
+  // each category is a native <details> with the count on the <summary>
+  const allDetails = [];
+  const walkDetails = (node) => {
+    if (node.tag === "details") allDetails.push(node);
+    for (const child of node.children ?? []) walkDetails(child);
+  };
+  walkDetails(catalogEl);
+  const details = allDetails.filter((d) => d.className === "source-group");
+  assertEquals(details.length, 6, "one native <details> per category (incl. the zero-count sources)");
+  const bundled = details.find((d) => d.attrs["data-source"] === "bundled-package");
+  assert(bundled, "the bundled-package category exists");
+  const bundledSummary = bundled.children.find((c) => c.tag === "summary");
+  assert(bundledSummary, "the category has a <summary>");
+  const summaryText = bundledSummary.children.map((c) => c.textContent).join(" ");
+  assert(summaryText.includes("Bundled packages"), "the summary keeps the label");
+  assert(summaryText.includes("2"), "the summary keeps the count");
+  // the expanded body lists the tool rows with the descriptions
+  const toolList = bundled.children.find((c) => c.tag === "ul");
+  assert(toolList, "the expanded body is a list");
+  assertEquals(toolList.children.length, 2, "the bounded tool rows are listed");
+  const first = toolList.children[0];
+  const firstHead = first.children.find((c) => c.className === "source-tool-head");
+  const firstDesc = first.children.find((c) => c.className === "source-tool-desc");
+  assert(firstHead && firstDesc, "each row has the head + the description");
+  const headText = firstHead.children.map((c) => c.textContent).join(" ");
+  assert(headText.includes("csvtool") && headText.includes("v1.0.0"), "the row shows the name + the version");
+  assertEquals(firstDesc.textContent, "RFC 4180 CSV stream filter", "the row shows the one-line description");
+  const touchHead = toolList.children[1].children.find((c) => c.className === "source-tool-head");
+  assert(touchHead.children.some((c) => c.className.includes("unavailable")), "the unavailable row is marked");
+  // NO action surface: the details bodies contain no buttons/links/inputs
+  const walk = (node, out = []) => {
+    if (["button", "a", "input", "select", "textarea"].includes(node.tag)) out.push(node.tag);
+    for (const child of node.children ?? []) walk(child, out);
+    return out;
+  };
+  assertEquals(walk(catalogEl), [], "the <details> slice renders no action surface — the Run preview button is the ONLY action");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// N-2: a legacy/corrupt shadow summary shape renders safely (empty groups)
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("tool-library: a legacy or corrupt shadow summary (missing/typed-wrong perSource arrays) renders empty safely without throwing", async () => {
+  class El {
+    constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.className = ""; this.hidden = false; this.attrs = {}; }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] ?? null; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = [...nodes]; }
+    get classList() { return { toggle: () => {}, add: () => {}, remove: () => {} }; }
+  }
+  const registry = new Map();
+  const catalogEl = new El("div");
+  const bySelector = new Map([[".catalog", catalogEl], [".status-line", new El("p")], [".preview", new El("div")]]);
+  const shadow = { _html: "", set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; }, querySelector: (s) => bySelector.get(s) ?? null, querySelectorAll: () => [] };
+  globalThis.HTMLElement = class { attachShadow() { return shadow; } addEventListener() {} dispatchEvent() { return true; } getAttribute() { return null; } hasAttribute() { return false; } };
+  globalThis.customElements = { define(n, c) { registry.set(n, c); }, get(n) { return registry.get(n); } };
+  globalThis.window = globalThis;
+  globalThis.CustomEvent = class { constructor(t, i = {}) { this.type = t; this.detail = i.detail ?? {}; } };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.document = { createElement: (t) => new El(t), querySelector: () => null, head: { appendChild() {} }, getElementById: () => null };
+
+  const mod = await import("../extension/shared/components.js?n2-corrupt-summary");
+  const ToolLibraryClass = mod.ToolLibrary ?? registry.get("tool-library");
+  for (const [label, summary] of [
+    ["no toolsBySource", { descriptorCount: 3, bySource: { "bundled-package": 2 }, catalogDiagnostics: {}, selectionDiagnostics: {}, settingsPreviewTools: ["csvtool"] }],
+    ["toolsBySource wrong type", { descriptorCount: 3, bySource: { "bundled-package": 2 }, catalogDiagnostics: {}, selectionDiagnostics: {}, settingsPreviewTools: ["csvtool"], toolsBySource: "corrupt" }],
+    ["bySource wrong type", { descriptorCount: 3, bySource: "corrupt", catalogDiagnostics: {}, selectionDiagnostics: {}, settingsPreviewTools: ["csvtool"], toolsBySource: {} }],
+    ["rows not an array", { descriptorCount: 3, bySource: { "bundled-package": 2 }, catalogDiagnostics: {}, selectionDiagnostics: {}, settingsPreviewTools: ["csvtool"], toolsBySource: { "bundled-package": "corrupt" } }],
+    ["null summary", null],
+  ]) {
+    const library = Object.create(ToolLibraryClass.prototype);
+    library._root = shadow;
+    library._rendered = true;
+    library._state = "ready";
+    library._announcedState = "";
+    library._error = "";
+    library._results = null;
+    library._summary = null;
+    let threw = null;
+    try { library.summary = summary; library.state = "ready"; } catch (error) { threw = error; }
+    assertEquals(threw, null, `${label}: the corrupt summary renders without throwing`);
+  }
+});
