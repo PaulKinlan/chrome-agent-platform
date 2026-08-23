@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **30 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 57 nonterminal and 40 terminal status entries
-> below are the complete 97-entry state.
+> Branch status counts: **31 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 58 nonterminal and 40 terminal status entries
+> below are the complete 98-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,47 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-TOOL-NAMING-01] Bundled tool names must lead with the Unix tool name
+
+- Feedback: 2026-08-23 — product owner: the bundled Wasm tool names are
+  "terribly done" — "Bounded ..." makes no sense to anyone; the names are
+  verbose and obtuse; include the actual Unix tool name in both the name and
+  the description so they are understandable by people AND by agents
+- Updated: 2026-08-23 22:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `e1139dc`
+- Candidate: —
+- Shipping: —
+- Acceptance: every bundled tool's displayName and description LEAD with the
+  actual Unix tool name (e.g. "truncate", "gzip", "md5sum", "toml2json")
+  followed by a tight plain-language function; names are concise, not verbose
+  or obtuse; understandable by a human reading the Tool Library and by an
+  agent selecting via search; canonicalNameClaim stays false everywhere (we
+  name the tool for discoverability without claiming it is the canonical
+  build); the displayName change keeps the search alias source-derived and
+  does not weaken any execution authority; descriptions stay within the
+  schema byte bound and jargon-free
+- Review: pending independent naming-truth, search-relevance, schema-bounds,
+  and loaded-MV3 review
+- Gates: every displayName starts with the Unix tool name; byte-bound and
+  jargon KATs; canonicalNameClaim-false preserved across all 26; search still
+  resolves owner-style queries; Tool Library renders the new names
+- Blockers: must compose with the in-flight descriptions/search work without
+  regressing the source-derived alias contract
+- Next: rewrite displayName + description to lead with the Unix tool name,
+  concise
+- Recover: `git grep -n "displayName\|Bounded" -- extension/lib/bundled-tool-packages.data.js scripts/build-bundled-tool-packages.mjs`
+- History:
+  - 2026-08-23 22:40 UTC — captured from direct product-owner feedback
+    ("Bounded makes no sense to anyone", "terribly verbose and obtuse").
+
+
 
 ## [CAP-FB-20260823-NAVIGATION-BACK-01] Back button breaks Settings navigation — adopt the Navigation API
 
