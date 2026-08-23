@@ -48,6 +48,37 @@ export async function requestStorageFromOwnerClick({
   }
 }
 
+/**
+ * Request optional browser control (tabs/activeTab) directly from a genuine owner click.
+ * Uses the narrowest practical scope under the settled policy (no blanket <all_urls>).
+ */
+export async function requestBrowserControlFromOwnerClick({
+  event,
+  userActivation,
+  permissionsApi,
+} = {}) {
+  if (!isGenuineOwnerClick(event, userActivation)) {
+    return { granted: false, requested: false, reason: "owner-click-required" };
+  }
+  if (typeof permissionsApi?.request !== "function") {
+    return {
+      granted: false,
+      requested: false,
+      reason: "permissions-api-unavailable",
+    };
+  }
+  try {
+    const granted = await permissionsApi.request({ permissions: ["tabs"] });
+    return {
+      granted: granted === true,
+      requested: true,
+      reason: granted === true ? "granted" : "denied",
+    };
+  } catch {
+    return { granted: false, requested: true, reason: "request-failed" };
+  }
+}
+
 export function keyedProviderConfigured(config) {
   const provider = String(config?.provider ?? "");
   if (
@@ -77,6 +108,8 @@ export function firstRunGuideState({
   providerConfig = null,
   assets = [],
   dismissed = false,
+  browserControlGranted = false,
+  browserControlChoice = "unselected",
 } = {}) {
   const hasArtifact = Array.isArray(assets) && assets.length > 0;
   const providerReady = providerReadyForFirstTask(providerConfig);
@@ -86,23 +119,33 @@ export function firstRunGuideState({
     hasArtifact,
     show: dismissed !== true && !hasArtifact,
     canSeedTask: storageGranted === true && providerReady,
+    browserControlGranted: browserControlGranted === true,
+    browserControlChoice: ["granted", "declined", "unselected"].includes(browserControlChoice)
+      ? browserControlChoice
+      : (browserControlGranted ? "granted" : "unselected"),
   };
 }
 
 /** Load the first-run state without making zero-permission boot fragile. */
 export async function loadFirstRunGuideState({
   containsStorage,
+  containsBrowserControl,
   readProvider,
   listArtifacts,
+  readBrowserChoice,
   dismissed = false,
 } = {}) {
-  const [storageGranted, providerConfig, assets] = await Promise.all([
+  const [storageGranted, browserControlGranted, providerConfig, assets, browserChoice] = await Promise.all([
     Promise.resolve().then(() => containsStorage?.()).catch(() => false),
+    Promise.resolve().then(() => containsBrowserControl?.()).catch(() => false),
     Promise.resolve().then(() => readProvider?.()).catch(() => null),
     Promise.resolve().then(() => listArtifacts?.()).catch(() => []),
+    Promise.resolve().then(() => readBrowserChoice?.()).catch(() => "unselected"),
   ]);
   return firstRunGuideState({
     storageGranted: storageGranted === true,
+    browserControlGranted: browserControlGranted === true,
+    browserControlChoice: browserChoice || (browserControlGranted ? "granted" : "unselected"),
     providerConfig,
     assets: Array.isArray(assets) ? assets : [],
     dismissed,

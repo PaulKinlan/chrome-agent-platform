@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.197] — 2026-08-23
+- feat(onboarding): first-run browser-control consent — explicit owner opt-in to tab inspection/navigation control with truthful scope copy, graceful decline into reduced capability, and Settings revisit (CAP-FB-20260823-FIRST-RUN-BROWSER-CONTROL-CONSENT-01)
+
 ## [0.2.196] — 2026-08-23
 - fix(navigation): route background agent Configure to options #background-agents deep-link with scroll and focus (CAP-FB-20260823-BACKGROUND-CONFIGURE-DEEPLINK-01)
 

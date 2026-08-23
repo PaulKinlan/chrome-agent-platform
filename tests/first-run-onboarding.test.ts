@@ -6,6 +6,7 @@ import {
   keyedProviderConfigured,
   loadFirstRunGuideState,
   requestStorageFromOwnerClick,
+  requestBrowserControlFromOwnerClick,
 } from "../extension/lib/first-run-onboarding.js";
 import { freshKv } from "./test-hooks.js";
 
@@ -79,6 +80,8 @@ Deno.test("first run: zero-permission boot remains clean when every authority is
     hasArtifact: false,
     show: true,
     canSeedTask: false,
+    browserControlGranted: false,
+    browserControlChoice: "unselected",
   });
 });
 
@@ -262,4 +265,103 @@ Deno.test("first run: options blocks session-only credentials before provider.se
   );
   assertEquals(manifest.permissions, []);
   assert(manifest.optional_permissions.includes("storage"));
+});
+
+Deno.test("first run: browser control request requires a genuine active owner click", async () => {
+  const calls = [];
+  const permissionsApi = {
+    request: (value) => {
+      calls.push(value);
+      return Promise.resolve(true);
+    },
+  };
+  assertEquals(
+    (await requestBrowserControlFromOwnerClick({
+      event: { isTrusted: false },
+      userActivation: { isActive: true },
+      permissionsApi,
+    })).reason,
+    "owner-click-required",
+  );
+  assertEquals(
+    (await requestBrowserControlFromOwnerClick({
+      event: { isTrusted: true },
+      userActivation: { isActive: false },
+      permissionsApi,
+    })).reason,
+    "owner-click-required",
+  );
+  assertEquals(
+    (await requestBrowserControlFromOwnerClick({
+      event: { isTrusted: true },
+      userActivation: { isActive: true },
+      permissionsApi,
+    })).granted,
+    true,
+  );
+  assertEquals(calls, [{ permissions: ["tabs"] }]);
+});
+
+Deno.test("first run: browser control consent state reflects granted, declined, and unselected states", () => {
+  const unselected = firstRunGuideState({
+    storageGranted: true,
+    providerConfig: { provider: "openai", configured: true },
+    browserControlGranted: false,
+    browserControlChoice: "unselected",
+  });
+  assertEquals(unselected.browserControlGranted, false);
+  assertEquals(unselected.browserControlChoice, "unselected");
+  assertEquals(unselected.canSeedTask, true); // product remains usable
+
+  const granted = firstRunGuideState({
+    storageGranted: true,
+    providerConfig: { provider: "openai", configured: true },
+    browserControlGranted: true,
+    browserControlChoice: "granted",
+  });
+  assertEquals(granted.browserControlGranted, true);
+  assertEquals(granted.browserControlChoice, "granted");
+
+  const declined = firstRunGuideState({
+    storageGranted: true,
+    providerConfig: { provider: "openai", configured: true },
+    browserControlGranted: false,
+    browserControlChoice: "declined",
+  });
+  assertEquals(declined.browserControlGranted, false);
+  assertEquals(declined.browserControlChoice, "declined");
+  assertEquals(declined.canSeedTask, true); // product remains fully usable in reduced capability mode
+});
+
+Deno.test("first run: component template contains truthful browser control consent copy and Settings revisit link", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../extension/shared/components.js", import.meta.url),
+  );
+  const ntpSource = await Deno.readTextFile(
+    new URL("../extension/ntp/ntp.js", import.meta.url),
+  );
+  assert(
+    source.includes("Browser control (optional)"),
+    "guide must label browser control as optional",
+  );
+  assert(
+    source.includes("You can change this choice any time in Settings → Browser control."),
+    "guide must state that choice is revisitable in Settings",
+  );
+  assert(
+    source.includes("inspect tab URLs and titles (reading page content requires separate per-origin site enrollment)"),
+    "guide must truthfully explain what browser control means and that page content needs site enrollment",
+  );
+  assert(
+    source.includes("grant-browser"),
+    "guide must provide grant button",
+  );
+  assert(
+    source.includes("decline-browser"),
+    "guide must provide decline button",
+  );
+  assert(
+    ntpSource.includes("requestBrowserControlFromOwnerClick"),
+    "ntp.js must wire the tested requestBrowserControlFromOwnerClick gesture helper",
+  );
 });

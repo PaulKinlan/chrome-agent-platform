@@ -31,6 +31,7 @@ import { createViewFocusController } from "../lib/view-focus.js";
 import {
   FIRST_RUN_TASK_PROMPT,
   loadFirstRunGuideState,
+  requestBrowserControlFromOwnerClick,
 } from "../lib/first-run-onboarding.js";
 import {
   createViewTransitionRunner,
@@ -170,16 +171,30 @@ function shortOrigin(o) {
 const firstRunGuide = document.getElementById("first-run-guide");
 let returningFromFirstRunSettings = false;
 const FIRST_RUN_DISMISSED_KEY = "cap:first-run-guide-dismissed";
+const FIRST_RUN_BROWSER_CHOICE_KEY = "cap:first-run-browser-choice";
 
 function firstRunDismissed() {
   try { return localStorage.getItem(FIRST_RUN_DISMISSED_KEY) === "1"; }
   catch { return false; }
 }
 
+function firstRunBrowserChoice() {
+  try { return sessionStorage.getItem(FIRST_RUN_BROWSER_CHOICE_KEY) || localStorage.getItem(FIRST_RUN_BROWSER_CHOICE_KEY) || "unselected"; }
+  catch { return "unselected"; }
+}
+
+function setFirstRunBrowserChoice(choice) {
+  try {
+    sessionStorage.setItem(FIRST_RUN_BROWSER_CHOICE_KEY, choice);
+    localStorage.setItem(FIRST_RUN_BROWSER_CHOICE_KEY, choice);
+  } catch {}
+}
+
 async function renderFirstRunGuide() {
   if (!firstRunGuide) return;
   const state = await loadFirstRunGuideState({
     containsStorage: () => chrome.permissions?.contains?.({ permissions: ["storage"] }) ?? false,
+    containsBrowserControl: () => chrome.permissions?.contains?.({ permissions: ["tabs"] }) ?? false,
     readProvider: async () => {
       const [summary, status] = await Promise.all([
         send("provider.summary"),
@@ -194,11 +209,14 @@ async function renderFirstRunGuide() {
       const result = await send("asset.list", { origin: "master" });
       return Array.isArray(result?.assets) ? result.assets : [];
     },
+    readBrowserChoice: () => firstRunBrowserChoice(),
     dismissed: firstRunDismissed(),
   });
   firstRunGuide.hidden = !state.show;
   firstRunGuide.toggleAttribute("storage-ready", state.storageGranted);
   firstRunGuide.toggleAttribute("provider-ready", state.providerReady);
+  firstRunGuide.toggleAttribute("browser-ready", state.browserControlGranted);
+  firstRunGuide.setAttribute("browser-choice", state.browserControlChoice);
 }
 
 firstRunGuide?.addEventListener("open-settings", (event) => {
@@ -214,6 +232,30 @@ firstRunGuide?.addEventListener("dismiss-guide", () => {
   try { localStorage.setItem(FIRST_RUN_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }
   firstRunGuide.hidden = true;
   composer.focus();
+});
+firstRunGuide?.addEventListener("request-browser-control", async (event) => {
+  const sourceEvent = event.detail?.sourceEvent;
+  try {
+    const outcome = await requestBrowserControlFromOwnerClick({
+      event: sourceEvent,
+      userActivation: navigator.userActivation,
+      permissionsApi: chrome.permissions,
+    });
+    if (outcome.granted) {
+      setFirstRunBrowserChoice("granted");
+      await send("browser-control.set", { granted: true }).catch(() => {});
+    } else {
+      setFirstRunBrowserChoice("declined");
+    }
+  } catch {
+    setFirstRunBrowserChoice("declined");
+  }
+  await renderFirstRunGuide();
+});
+firstRunGuide?.addEventListener("decline-browser-control", async () => {
+  setFirstRunBrowserChoice("declined");
+  await send("browser-control.set", { granted: false }).catch(() => {});
+  await renderFirstRunGuide();
 });
 
 function prefersReducedMotion() {

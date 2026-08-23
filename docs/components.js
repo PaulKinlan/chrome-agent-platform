@@ -701,14 +701,16 @@ class StorageDurabilityWarning extends Component {
 }
 customElements.define("storage-durability-warning", StorageDurabilityWarning);
 
-/* <first-run-guide storage-ready provider-ready>
+/* <first-run-guide storage-ready provider-ready browser-ready browser-choice>
  * A compact, optional path to first value. It never runs a task or asks for a
  * permission: owner actions are emitted for the NTP/options surfaces to wire. */
 class FirstRunGuide extends Component {
-  static get observedAttributes() { return ["storage-ready", "provider-ready"]; }
+  static get observedAttributes() { return ["storage-ready", "provider-ready", "browser-ready", "browser-choice"]; }
   _render() {
     const storageReady = this.hasAttribute("storage-ready");
     const providerReady = this.hasAttribute("provider-ready");
+    const browserReady = this.hasAttribute("browser-ready");
+    const browserChoice = this.getAttribute("browser-choice") || (browserReady ? "granted" : "unselected");
     const canSeed = storageReady && providerReady;
     const check = `<span class="check" aria-hidden="true">${ICONS.check}</span>`;
     mountTemplate(this, `
@@ -732,6 +734,14 @@ class FirstRunGuide extends Component {
       .step strong, .step span { display:block; }
       .step strong { font-size:13px; margin-bottom:2px; }
       .step span { color:var(--muted,#635e56); font-size:12px; line-height:1.4; }
+      .consent-card { margin-top:16px; padding:12px 14px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-sm,8px); background:var(--bg,#f7f6f3); }
+      .consent-card strong { display:block; font-size:13px; margin-bottom:4px; }
+      .consent-card p { margin:0 0 10px; font-size:12px; color:var(--muted,#635e56); line-height:1.45; }
+      .consent-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+      .consent-status { font-size:12px; font-weight:600; }
+      .consent-status.granted { color:var(--accent,#0e6e63); }
+      .consent-status.declined { color:var(--muted,#635e56); }
       .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
       button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 12px;
         border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
@@ -748,12 +758,22 @@ class FirstRunGuide extends Component {
     `, `<section class="guide" aria-labelledby="first-run-title">
       <button class="dismiss" type="button" aria-label="Dismiss first-run setup">${ICONS.close}</button>
       <h2 id="first-run-title">Set up your first task</h2>
-      <p class="intro">Connect one provider, keep its key across restarts, then ask the agent to create a visible artifact.</p>
+      <p class="intro">Connect one provider, keep its key across restarts, choose browser control, then create a visible artifact.</p>
       <ol>
         <li class="${providerReady ? "ready" : ""}"><span class="marker">${providerReady ? check : ""}</span><div class="step"><strong>Choose a provider</strong><span>${providerReady ? "Provider and key are ready." : "Pick a model service and enter its key."}</span></div></li>
         <li class="${storageReady ? "ready" : ""}"><span class="marker">${storageReady ? check : ""}</span><div class="step"><strong>Keep the key</strong><span>${storageReady ? "Storage is enabled." : "Enable optional storage from the key warning."}</span></div></li>
         <li><span class="marker"></span><div class="step"><strong>Create an artifact</strong><span>Use the starter task, review it, then choose Run task.</span></div></li>
       </ol>
+      <div class="consent-card" aria-label="Browser control consent">
+        <strong>Browser control (optional)</strong>
+        <p>Allow the agent to open, navigate, and close tabs, and inspect tab URLs and titles (reading page content requires separate per-origin site enrollment). Without it, tab navigation actions stay unavailable, but local models, Wasm tools, and artifacts remain fully usable. You can change this choice any time in Settings → Browser control.</p>
+        ${browserReady
+          ? `<span class="consent-status granted">${check} Browser control is enabled.</span>`
+          : browserChoice === "declined"
+          ? `<div class="consent-actions"><span class="consent-status declined">Reduced-capability mode (local tools only).</span><button class="primary grant-browser" type="button">Enable browser control</button></div>`
+          : `<div class="consent-actions"><button class="primary grant-browser" type="button">Allow browser control</button><button class="decline-browser" type="button">Continue without browser control</button></div>`
+        }
+      </div>
       <div class="actions">
         <button class="open-settings" type="button">${providerReady && storageReady ? "Review provider settings" : "Open provider settings"}</button>
         <button class="primary seed-task" type="button"${canSeed ? "" : " disabled"}>Use starter task</button>
@@ -769,6 +789,10 @@ class FirstRunGuide extends Component {
     });
     this._root.querySelector(".dismiss")?.addEventListener("click", (sourceEvent) =>
       this._emit("dismiss-guide", { sourceEvent }));
+    this._root.querySelector(".grant-browser")?.addEventListener("click", (sourceEvent) =>
+      this._emit("request-browser-control", { sourceEvent }));
+    this._root.querySelector(".decline-browser")?.addEventListener("click", (sourceEvent) =>
+      this._emit("decline-browser-control", { sourceEvent }));
   }
   focusNextAction() {
     const seed = this._root.querySelector(".seed-task:not(:disabled)");
