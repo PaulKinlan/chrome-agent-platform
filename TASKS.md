@@ -2022,6 +2022,12 @@ On resume after a coordinator or worker loss:
 - Recover:
   `git grep -n "BUILTIN-WASM-TOOLS\|gzip\|SBOM\|Tranche A" -- TASKS.md docs extension tests`
 - History:
+  - 2026-08-23 23:15 UTC — durable evidence migration LANDED (0.2.198, tip
+    4bd429b): in-repo evidence tree is the sole generator root — full verify
+    works on any fresh checkout with zero /tmp dependency; total scrub of
+    /tmp and absolute build-host paths from all shipped bytes (owner
+    directive); repair commits restored the gitignored d3/sqlite3 dist
+    binaries and the dist marker.
   - 2026-08-23 22:00 UTC — build integrity landed as 0.2.191 (45ca99f):
     `npm run build` runs the package generator in verify mode by default
     (fail-closed zero-drift over all 80 generated outputs) with full
