@@ -209,6 +209,59 @@ async function hasTabsPermission() {
   }
 }
 
+/** Window-level mutation under the SAME grant discipline as close_tab
+ * (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): the window's tab origins
+ * are re-read INSIDE the grant lock (a navigation/move since any earlier read
+ * must not smuggle an unauthorized origin past the check); the grant must
+ * cover EVERY tab origin (a window mutation is every tab's mutation); a
+ * window with no tabs is an origin-less scope requiring a GLOBAL grant.
+ * Durable ownership is asserted adjacent to the mutation and re-checked after
+ * the await (an abort mid-mutation never reports a committed effect). */
+async function mutateWindowWithGrant(windowId, verb, mutate) {
+  if (!(await hasTabsPermission())) {
+    return {
+      error:
+        "tabs permission not granted — enable Browser control in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    const win = await chrome.windows.get(windowId, { populate: true }).catch(() => null);
+    if (!win) return { error: "no such window" };
+    const origins = [...new Set(
+      (Array.isArray(win.tabs) ? win.tabs : [])
+        .map((t) => {
+          try {
+            return t?.url ? canonicalOrigin(t.url) : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter((o) => typeof o === "string"),
+    )];
+    const covered = origins.length === 0
+      ? await isBrowserControlGranted(undefined)
+      : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
+    if (!covered) {
+      return {
+        error:
+          "browser control not granted for every tab origin in this window — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — window not ${verb}` };
+    }
+    const result = await mutate();
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — window ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
 /** Whether the OPTIONAL `sidePanel` permission is currently granted. */
 async function hasSidePanelPermission() {
   try {
@@ -950,6 +1003,188 @@ export function browserToolset(readOnly = false) {
         return { ok: true, name, when };
       },
     }),
+    // ── Tranche-1 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+    // windows (query/create/manage), chrome.action state, commands list. NO new
+    // manifest permission: windows/action/commands need none. Window MUTATIONS
+    // go through the SAME scoped/expiring browser-control grant as their tabs
+    // siblings (create_window with a url is open_tab-equivalent; focus/close/
+    // move re-read the window's tab origins INSIDE the grant lock and require
+    // the grant to cover EVERY one — a window mutation is every tab's mutation).
+    list_windows: tool({
+      description:
+        "List the browser windows (id, focused, type, state, bounds). No tab contents or URLs are returned.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const wins = await chrome.windows.getAll({});
+        return {
+          windows: wins.slice(0, 64).map((w) => ({
+            id: w.id,
+            focused: w.focused === true,
+            type: typeof w.type === "string" ? w.type : "normal",
+            state: typeof w.state === "string" ? w.state : "normal",
+            left: w.left ?? null,
+            top: w.top ?? null,
+            width: w.width ?? null,
+            height: w.height ?? null,
+          })),
+        };
+      },
+    }),
+    create_window: tool({
+      description:
+        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s).",
+      inputSchema: z.object({
+        url: z.string().url().max(2048).optional(),
+        focused: z.boolean().optional(),
+        left: z.number().int().min(0).max(100000).optional(),
+        top: z.number().int().min(0).max(100000).optional(),
+        width: z.number().int().min(100).max(10000).optional(),
+        height: z.number().int().min(100).max(10000).optional(),
+      }),
+      execute: async ({ url, focused, left, top, width, height }) => {
+        if (!(await hasTabsPermission())) {
+          return {
+            error:
+              "tabs permission not granted — enable Browser control in Settings",
+          };
+        }
+        let destOrigin;
+        if (url !== undefined) {
+          try {
+            destOrigin = canonicalOrigin(url);
+          } catch {
+            return { error: "invalid url" };
+          }
+        }
+        return await withGrantLock(async () => {
+          // No URL ⇒ the window opens Chrome's NTP — an origin-less mutation
+          // scope that ONLY a global grant authorizes (undefined origin).
+          if (!(await isBrowserControlGranted(destOrigin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — window not opened" };
+          }
+          const create = { url, focused, left, top, width, height };
+          for (const k of Object.keys(create)) if (create[k] === undefined) delete create[k];
+          const win = await chrome.windows.create(create);
+          // Re-check the fence AFTER the await; compensate by closing the
+          // just-opened window (mirrors open_tab's round-18/19 discipline).
+          try {
+            await assertRunOwned();
+          } catch {
+            try {
+              await chrome.windows.remove(win.id);
+            } catch { /* best-effort compensation */ }
+            return { error: "run aborted — window opened then closed" };
+          }
+          return { ok: true, windowId: win.id, url: url ?? null };
+        });
+      },
+    }),
+    focus_window: tool({
+      description:
+        "Bring a window to the front by id. Requires browser-control permission (scoped + expiring) covering every tab origin in the window.",
+      inputSchema: z.object({ windowId: z.number().int() }),
+      execute: async ({ windowId }) =>
+        await mutateWindowWithGrant(windowId, "focused", async () => {
+          await chrome.windows.update(windowId, { focused: true });
+          return { ok: true, windowId, focused: true };
+        }),
+    }),
+    close_window: tool({
+      description:
+        "Close a window by id (closing every tab in it). Requires browser-control permission (scoped + expiring) covering every tab origin in the window.",
+      inputSchema: z.object({ windowId: z.number().int() }),
+      execute: async ({ windowId }) =>
+        await mutateWindowWithGrant(windowId, "closed", async () => {
+          await chrome.windows.remove(windowId);
+          return { ok: true, windowId, closed: true };
+        }),
+    }),
+    move_window: tool({
+      description:
+        "Move/resize a window or set its state (normal/minimized/maximized/fullscreen) by id. Requires browser-control permission (scoped + expiring) covering every tab origin in the window.",
+      inputSchema: z.object({
+        windowId: z.number().int(),
+        left: z.number().int().min(-100000).max(100000).optional(),
+        top: z.number().int().min(-100000).max(100000).optional(),
+        width: z.number().int().min(100).max(10000).optional(),
+        height: z.number().int().min(100).max(10000).optional(),
+        state: z.enum(["normal", "minimized", "maximized", "fullscreen"]).optional(),
+      }),
+      execute: async ({ windowId, left, top, width, height, state }) =>
+        await mutateWindowWithGrant(windowId, "moved", async () => {
+          const update = { left, top, width, height, state };
+          for (const k of Object.keys(update)) if (update[k] === undefined) delete update[k];
+          if (Object.keys(update).length === 0) return { error: "nothing to move — pass left/top/width/height or state" };
+          await chrome.windows.update(windowId, update);
+          return { ok: true, windowId, ...update };
+        }),
+    }),
+    set_action_state: tool({
+      description:
+        "Set this extension's own toolbar action state (badge text/colour, hover title, icon). Owner-scoped surface; no browser-control grant needed.",
+      inputSchema: z.object({
+        badgeText: z.string().max(8).optional(),
+        badgeColor: z.string().regex(/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/u).optional(),
+        title: z.string().max(128).optional(),
+        iconPath: z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_/.-]{0,62}\.png$/u).refine((p) => !p.includes("..") && !p.startsWith("/"), "extension-relative icon path only").optional(),
+      }).refine((v) => Object.values(v).some((x) => x !== undefined), "at least one action field is required"),
+      execute: async ({ badgeText, badgeColor, title, iconPath }) => {
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — action not changed" };
+        }
+        const applied = [];
+        try {
+          if (badgeText !== undefined) { await chrome.action.setBadgeText({ text: badgeText }); applied.push("badgeText"); }
+          if (badgeColor !== undefined) { await chrome.action.setBadgeBackgroundColor({ color: badgeColor }); applied.push("badgeColor"); }
+          if (title !== undefined) { await chrome.action.setTitle({ title }); applied.push("title"); }
+          if (iconPath !== undefined) { await chrome.action.setIcon({ path: iconPath }); applied.push("iconPath"); }
+        } catch (e) {
+          return { error: `action update failed: ${e?.message ?? e}`, applied };
+        }
+        return { ok: true, applied };
+      },
+    }),
+    get_action_state: tool({
+      description:
+        "Read this extension's own toolbar action state (badge text/colour, hover title).",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const [badgeText, title, bg] = await Promise.all([
+          chrome.action.getBadgeText({}),
+          chrome.action.getTitle({}),
+          chrome.action.getBadgeBackgroundColor({}),
+        ]);
+        const color = Array.isArray(bg) && bg.length >= 3
+          ? `#${bg.slice(0, 4).map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`
+          : null;
+        return { badgeText: String(badgeText ?? ""), title: String(title ?? ""), badgeColor: color };
+      },
+    }),
+    list_commands: tool({
+      description:
+        "List the extension's declared keyboard commands (name, shortcut, description). Read-only.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const commands = await chrome.commands.getAll();
+        return {
+          commands: (Array.isArray(commands) ? commands : []).slice(0, 32).map((c) => ({
+            name: String(c?.name ?? "").slice(0, 128),
+            shortcut: String(c?.shortcut ?? "").slice(0, 64),
+            description: String(c?.description ?? "").slice(0, 256),
+          })),
+        };
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -961,6 +1196,9 @@ export function browserToolset(readOnly = false) {
       capture_screenshot: all.capture_screenshot,
       list_tabs: all.list_tabs,
       recent_browser_events: all.recent_browser_events,
+      list_windows: all.list_windows,
+      get_action_state: all.get_action_state,
+      list_commands: all.list_commands,
     };
   }
   return all;

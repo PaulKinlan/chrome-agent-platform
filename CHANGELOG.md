@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.205] — 2026-08-23
+- feat(tools): Chrome API coverage tranche 1 — windows list/create/focus/close/move, action set/get state, commands list; zero new manifest permissions, grant-lock origin re-reads, owner-scoped action state, registry parity 46 tools (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01)
+
 ## [0.2.204] — 2026-08-23
 - fix(tasks): restore the live task view on leave-and-return — openThread attaches the run transcript projection (surface scope threadId), banner set from run actionability, exactly-once journal replay, registry re-projection covers SW-restart lag (CAP-FB-20260823-DURABLE-TASK-RESTORE-01)
 

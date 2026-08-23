@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 9,
+  browserTools: 17,
   managementTools: 29,
-  totalTools: 38,
+  totalTools: 46,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -25,6 +25,14 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "close_tab",
   "recent_browser_events",
   "schedule_task",
+  "list_windows",
+  "create_window",
+  "focus_window",
+  "close_window",
+  "move_window",
+  "set_action_state",
+  "get_action_state",
+  "list_commands",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -114,6 +122,19 @@ const rows = [
   record("close_tab", "chrome-api", ["chrome.tabs.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
   record("recent_browser_events", "chrome-api", ["chrome.events.recent.read"], [], "none", "read-only", false, "read", "browser.events"),
   record("schedule_task", "chrome-api", ["chrome.alarms.schedule", "chrome.scripts.schedule"], ["alarms"], "none", "mutating", false, "mutating", "browser.scheduler"),
+
+  // Tranche-1 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // windows + action + commands. No NEW manifest permission anywhere in this
+  // tranche; window mutations ride the SAME product browser-control grant as
+  // their tabs siblings (the grant is not a manifest permission).
+  record("list_windows", "chrome-api", ["chrome.windows.list"], [], "none", "read-only", false, "read", "browser.windows"),
+  record("create_window", "chrome-api", ["chrome.windows.create.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.windows"),
+  record("focus_window", "chrome-api", ["chrome.windows.focus.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.windows"),
+  record("close_window", "chrome-api", ["chrome.windows.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.windows"),
+  record("move_window", "chrome-api", ["chrome.windows.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.windows"),
+  record("set_action_state", "chrome-api", ["chrome.action.set"], [], "none", "mutating", false, "mutating", "browser.action"),
+  record("get_action_state", "chrome-api", ["chrome.action.get"], [], "none", "read-only", false, "read", "browser.action"),
+  record("list_commands", "chrome-api", ["chrome.commands.list"], [], "none", "read-only", false, "read", "browser.commands"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),
