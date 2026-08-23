@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
@@ -38,7 +38,7 @@ import {
   VIEW_ROUTE,
 } from "./view-transition.js";
 import { applySidebarNubPolicy } from "./view-policy.js";
-import { actionableRunsForSurface } from "../lib/run-scope.js";
+import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -75,11 +75,47 @@ function syncConversationRunControls() {
   durableRunRegistry.hidden = runs.length === 0;
 }
 
+// The agent view's LIVE run transcript (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01):
+// subscribe to the agent's most-recent run's progress so the chat surface shows
+// the tool calls/results/errors/status in near-real time, composing with the
+// retained history (renderAgentHistory) rather than duplicating it. The
+// subscription is bound to the current surface (agent + kind) and is torn down
+// when the surface changes or the run settles.
+let runTranscriptUnsub = null;
+let runTranscriptExecutionId = null;
+
+function stopRunTranscript() {
+  if (runTranscriptUnsub) {
+    try { runTranscriptUnsub(); } catch { /* unsubscribe must never throw */ }
+    runTranscriptUnsub = null;
+  }
+  runTranscriptExecutionId = null;
+}
+
+function projectAgentRunTranscript() {
+  const run = latestRunForSurface(latestDurableRuns, {
+    agentId: currentAgentId,
+    agentKind: currentAgentKind,
+  });
+  const nextId = run?.executionId ?? null;
+  if (nextId === runTranscriptExecutionId) return; // already subscribed to THIS run
+  stopRunTranscript(); // teardown FIRST — it nulls the guard; assign AFTER so the guard actually holds
+  runTranscriptExecutionId = nextId;
+  if (!nextId || !threadConversation) return;
+  runTranscriptUnsub = renderRunTranscript(threadConversation, nextId, {
+    onStatus: (s) => renderRunStatus(s),
+  });
+}
+
 if (durableRunRegistry) {
   durableRunRegistry.hidden = true;
   subscribeRunRegistry(({ runs }) => {
     latestDurableRuns = Array.isArray(runs) ? runs : [];
     syncConversationRunControls();
+    // A run that starts or settles while an agent surface is open re-projects
+    // the transcript (guarded by the execution-id change, so heartbeats don't
+    // churn the subscription).
+    projectAgentRunTranscript();
   });
   durableRunRegistry.addEventListener("run-cancel", async (event) => {
     const result = await cancelDurableRun(event.detail.executionId).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
@@ -778,6 +814,7 @@ function hideThreadViewInner() {
   currentAgentKind = null;
   syncComposerScope();
   syncConversationRunControls();
+  stopRunTranscript();
   threadConversation.clear?.();
   renderRunStatus({ state: "idle" });
   syncViewOpen();
@@ -934,6 +971,7 @@ async function openBackgroundAgentChat(id, name) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
   threadTitle.textContent = name || id || "Background agent";
   renderAgentHistory(threadConversation, Array.isArray(hRes.entries) ? hRes.entries : []);
+  projectAgentRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
 }
@@ -980,6 +1018,7 @@ async function openAgentSurface({ kind, id, name }) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   threadTitle.textContent = name || id || "Agent";
   renderAgentHistory(threadConversation, entries);
+  projectAgentRunTranscript();
   showThreadView({ focusAfter: threadComposer });
   renderRunStatus({ state: "idle" });
 }

@@ -192,6 +192,88 @@ export async function loadJournal() {
   return Array.isArray(journal) ? journal : [];
 }
 
+// ── the run transcript projection ────────────────────────────────────────
+// The AGENT view's LIVE chat-like transcript (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01):
+// a READ-ONLY projection of one run's LIVE progress events, composed into the
+// container WITHOUT starting or mutating a run. The RETAINED rows (the completed
+// task/tool-call/tool-result) are the history's job (renderAgentHistory in
+// ntp.js) — this subscription only streams what is NEW for the run. Never
+// touches the provider, the model dispatch, the permissions or the grants.
+
+/** Project ONE durable run into the container as a live, near-real-time
+ * transcript: the live progress events tagged with the run's execution id
+ * (tool-call / tool-result / text / done / error). Returns an unsubscribe
+ * function. Read-only: never mutates the run, the provider, the grants or the
+ * model. */
+export function renderRunTranscript(container, executionId, { onStatus = null } = {}) {
+  const c = container;
+  if (!c || !executionId) return () => {};
+  const toolCards = createToolCardQueue();
+  let unsub = () => {};
+  let unsubscribed = false;
+  const terminal = createRunTerminal({
+    onSettle: (status) => {
+      toolCards.flush(status);
+      unsubscribe();
+    },
+  });
+  const unsubscribe = () => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    unsub();
+  };
+
+  // The live progress for THIS run (near-real time).
+  unsub = subscribeProgress((ev) => {
+    if (!ev || typeof ev !== "object") return;
+    if (ev.type === "disconnect") { terminal.onPortError(); return; }
+    if (ev.runId !== executionId) return;
+    switch (ev.type) {
+      case "tool-call": {
+        onStatus?.({ state: "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
+        const card = typeof c.appendTool === "function"
+          ? c.appendTool({ name: ev.toolName, args: ev.toolArgs, status: "running" })
+          : appendBubble(c, "tool", `→ ${ev.toolName}`);
+        toolCards.push(ev.toolName, card);
+        break;
+      }
+      case "tool-result": {
+        const card = toolCards.take(ev.toolName);
+        const raw = safeToolResult(ev.result);
+        const summary = ev.result != null ? summarizeToolResult(ev.toolName, ev.result) : "";
+        const status = isToolErrorEvent(ev) ? "error" : "success";
+        if (card) {
+          card.setAttribute?.("tool-status", status);
+          if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
+          if (summary) card.setAttribute?.("tool-result", summary);
+          if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
+        } else if (typeof c.appendTool === "function") {
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, durationMs: ev.durationMs });
+        }
+        break;
+      }
+      case "text":
+        if (ev.text && ev.hasToolCalls) appendBubble(c, "agent", ev.text);
+        break;
+      case "done":
+        terminal.onPortDone(ev.aborted === true);
+        // The agent view has no other live source for the conclusion — append
+        // the streamed text on a NON-aborted settle (an aborted run reports no
+        // successful answer).
+        if (ev.aborted !== true && ev.text) appendBubble(c, "agent", ev.text);
+        break;
+      case "error":
+        terminal.onPortError();
+        onStatus?.({ state: "failed", message: ev.reason ?? ev.message ?? "error" });
+        break;
+      default:
+        break;
+    }
+  });
+
+  return unsubscribe;
+}
+
 // ── the run flow ───────────────────────────────────────────────────────────
 // The ONE place the task-start → live-conversation transition lives. Both the
 // hub + the chat drive it, so they transform identically.
