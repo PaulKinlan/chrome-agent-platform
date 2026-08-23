@@ -269,6 +269,20 @@ On resume after a coordinator or worker loss:
 - Next: produce the chrome.* API inventory + gap plan + per-API tool design
 - Recover: `git grep -n "chrome\.\|browserToolset\|managementToolset" -- extension/lib`
 - History:
+  - 2026-08-23 23:20 UTC — Phase 1 inventory DONE (Pro,
+    /tmp/cap-chrome-api-coverage/PRO.md 16505d51): exposed today = tabs,
+    sidePanel, scripting.executeScript(read_page), storage via 9 browser + 27
+    management tools; ALL 16 owner-named APIs missing. Tranche plan:
+    T1 windows+action+commands (read-only, no new permission) →
+    T2 alarms+bookmarks+notifications+idle+contextMenus (already declared) →
+    T3 tabGroups (sorting-hat unlock) → T4 downloads+scripting-register →
+    T5 system.memory/display/cpu+topSites+permissions-read →
+    T6 readingList+pageCapture (most sensitive). 10 explicit exclusions
+    (silent broad host access, declarativeNetRequest, webNavigation, history,
+    proxy/vpn, downloads.open, model-chosen navigate URLs,
+    notification-onclick-to-model-URL, contentSettings/cookies,
+    enterprise.management.install). Implementation starts after owner-visible
+    queue clears.
   - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
     revives the early "go through all Chrome extension APIs and create tools"
     request.
