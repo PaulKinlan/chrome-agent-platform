@@ -164,14 +164,14 @@ On resume after a coordinator or worker loss:
   analysis of how the Navigation API integration and state management
   actually work; do NOT use Gemini for this fix (two mistakes already)
 - Updated: 2026-08-23 23:40 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: Pro (assigned)
 - Workspace: none
 - Branch: none
 - Base: `a063324`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@3ab330a529ec5b1c6e8f58824305b50614ad4488` (0.2.207)
 - Acceptance: the browser history stack is the single source of truth for
   view state — back AND forward restore the exact prior view for every view
   class (hub, task, settings sections, assets, skills, agents) across
