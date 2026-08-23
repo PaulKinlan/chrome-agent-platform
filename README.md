@@ -36,16 +36,16 @@ isolated OPFS memory, run history, skills, and avatar.
   (on a schedule/hook) in a sandboxed worker, without re-invoking the model.
 - **System hooks** — the full `chrome.*` `on*` event surface as candidate hooks, with
   an owner-only authoritative deny-list.
-- **Shadow tool catalog + lazy capture** — Settings-only metadata diagnostics derive
-  bounded stable descriptors from the real built-in, browser, management, and WebMCP
-  sources, with deterministic lexical search and expiring non-authorizing references.
-  A canonical data-only table covers the exact 9 browser + 29 management tools with
-  namespaced capability, optional-permission, grant-scope, replay, gesture, mutation,
-  and route-family metadata. Capture projects that summary and digest for selected
-  descriptors only; every other descriptor is represented only by a bounded count.
-  The fixed two-tool wire remains shadow-only and repeatedly re-resolves live authority
-  around unchanged source closures. It is not provider-bound: eager tools remain
-  unchanged and capture cannot execute, request permission, grant, or install.
+- **Live bounded lazy tool provider** — every provider run receives exactly two fixed
+  definitions, `search_tools` and `execute_tool`, regardless of catalog size. Search
+  derives bounded metadata from the live built-in, browser, management, and WebMCP
+  sources and returns expiring, single-use, run/task/agent/origin/document/generation-
+  bound references; it never grants, approves, installs, or executes. Execute accepts
+  only a returned reference and revalidates live catalog/source/closure/package,
+  capability, permission, grant, enrollment, document, run, expiry, and replay fences
+  before validation, before dispatch, and after dispatch. Bundled Wasm rows remain
+  disabled catalog-only metadata with no provider reference or dispatch closure. The
+  retained Settings shadow capture remains a non-executing diagnostic view.
 - **Per-job OPFS workspace authority (source candidate)** — a service-worker-owned
   wrapper projects hash-verified read-only inputs into strict job roots, journals bounded
   scratch/output quotas, recovers interrupted writes, garbage-collects only validated

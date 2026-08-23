@@ -1,6 +1,6 @@
 # Tool Platform Architecture
 
-Status: shadow catalog and loaded-MV3 lazy capture public; exploratory MV3 Wasm probe Gate 0 independently passed; OPFS, bundled-package and pure WASI host authorities remain in source review; provider/runtime cutover remains planned.
+Status: live bounded lazy-provider cutover is a 0.2.180 release candidate; the loaded-MV3 shadow capture remains public, bundled Wasm remains catalog-only, and fresh browser acceptance plus independent release review remain pending.
 
 ## Provenance and factual precedent
 
@@ -134,71 +134,62 @@ A diagnostic selection reference is valid only while all recorded fences match:
 
 ```text
 runId
+taskId
 agentId
 origin
 documentId
+runGeneration
 catalogGeneration
 stableId
 sourceGeneration
-expiry
+closureGeneration
+package/descriptor/capability/permission/grant identity
+expiry + single-use replay state
 ```
 
 Search results for stale/disabled/owner-action-required tools may explain
 availability but do not receive a reference. A reference never represents a
 Chrome permission, product grant, WebMCP approval, package install, or execution
-authorization. The future `execute_tool` protocol must re-resolve the descriptor
-and re-run the current source dispatcher's complete live authority checks before
-invocation.
+authorization.
 
-## Shadow-only lazy protocol
+## Live bounded lazy protocol
 
-`CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01` is public and its metadata-only capture
-has loaded-MV3 evidence, but **no provider cutover**:
+`CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01` binds the reusable protocol core to
+every agent run while retaining the public Settings-only shadow capture:
 
-- `lazy-tool-wire.js` defines the fixed, always-small `search_tools` and
-  `execute_tool` descriptors and is the only lazy module imported by the
-  service-worker shadow route; `lazy-tool-protocol.js` holds the separately
-  unreachable injectable execution core;
-- search uses the existing lexical index and `ToolSelectionAuthority`, so only
-  ready tools receive opaque references and every result remains explicitly
-  non-authorizing;
-- execute accepts only a reference and bounded accessor-safe arguments, then
-  rebuilds the live catalog and re-resolves run, agent, origin, document,
-  catalog, source, stable and package identity before validation, immediately
+- the actual AI-SDK provider map contains exactly `search_tools` and
+  `execute_tool`; measured provider-definition bytes remain constant for
+  catalogs of 20, 100, and 1000 rows, and no dynamic descriptor/schema enters
+  provider options or prompts;
+- search rebuilds the live bounded lexical catalog and returns only in-scope
+  metadata. Ready rows receive expiring single-use references bound to the full
+  run/task/agent/origin/document/run-generation/catalog/source/closure/package/
+  capability/permission/grant identity; search never executes, approves,
+  installs, requests permission, or creates a grant;
+- execute atomically claims only a returned reference, rejects malformed,
+  invented, expired, restarted, cross-scope, concurrent, or replayed references,
+  and re-resolves every immutable and live authority fence before validation,
   before dispatch, and after dispatch;
-- source adapters keep each current AI tool's own Zod validation and execute
-  closure. Browser permissions/grants/run fences, management routes, memory
-  generation guards and WebMCP enrollment/approval/replay checks therefore stay
-  in their existing authorities; the lazy core owns no alternate dispatcher;
-- absent replay metadata remains `unknown`; cancellation, expiry, restart,
-  source removal and post-dispatch revocation fail closed; bounded outputs are
-  structurally secret-redacted before crossing the lazy boundary;
-- the Settings-only shadow route may capture the fixed two-tool wire plus only
-  the selected descriptor summaries. It reports `providerBound:false`,
-  `eagerBindingChanged:false`, `canExecute:false` and `canGrant:false`.
+- adapters retain each source's existing Zod/schema validator and exact dispatch
+  closure. Browser and management permissions/grants, memory run ownership, and
+  WebMCP enrollment/document/source/approval checks remain the only execution
+  authorities; source or closure replacement fails closed;
+- cancellation and mid-dispatch navigation/revocation discard output; bounded
+  results are structurally secret-redacted before crossing the provider
+  boundary; typed aborts remain AI-SDK tool errors;
+- bundled Wasm rows are always projected as disabled catalog-only metadata.
+  They receive no selection reference, validator, authorization callback, or
+  provider dispatch closure, regardless of their separate Settings admission;
+- immutable protected guidance, appended after owner customization, requires
+  hub, named/direct, background/durable, scheduled, hook, and site-worker runs
+  to search, inspect bounded results, execute the exact returned reference,
+  never invent/reuse references, and never treat discovery as authority.
 
-The reusable execution core is not reachable from a service-worker message
-route or provider. It exists so dispatcher parity and every fence can be
-independently reviewed before exposure. The existing eager tool map remains the
-production behavior. The exact public loaded extension proved that Settings
-received only the two fixed descriptors plus one bounded selected summary, the
-NTP caller was denied with a matching security event, and no full/non-selected
-schema, provider data, secret, execute, grant, install, package, permission or
-provider message crossed this shadow boundary.
-
-## Provider nondisclosure and cutover boundary
-
-Neither the public catalog nor the lazy successor adds the two protocol tools
-to an agent, alters protected prompts, or removes eager tool binding. Catalog
-contents are not appended to system prompts or model messages. The only runtime
-consumer remains the Settings-only diagnostic route, whose capture action is
-metadata-only and cannot invoke the execution core.
-
-The loaded-MV3 shadow gate proved bounded selected-only capture and absence of
-an execution action. Provider exposure remains a separate successor: it must
-prove selected dispatch parity across every existing source and expiry/restart/
-revocation/cancellation fences through the real service-worker lifecycle before
-eager binding may be removed.
+The original shadow route remains metadata-only and reports
+`providerBound:false`, `canExecute:false`, and `canGrant:false`. Its prior loaded
+browser evidence is historical evidence for that shadow surface only. The live
+0.2.180 candidate still requires fresh loaded-MV3 browser acceptance and an
+independent release review.
 
 ## Source-only OPFS workspace authority
 
@@ -457,9 +448,9 @@ also unresolved.
 
 ## Planned authority split
 
-1. **Lazy protocol:** public shadow capture verified; provider exposure/cutover
-   remains gated. Live source reauthorization exists only in the unreachable
-   injectable core.
+1. **Lazy protocol:** live fixed-pair provider cutover is implemented in the
+   0.2.180 candidate; fresh loaded-MV3 acceptance and independent review remain
+   the release gates.
 2. **MV3 runtime probe:** exploratory Gate 0 independently passed Wasm CSP,
    offscreen/fresh-Worker, OPFS, timeout/termination, import, memory and
    service-worker-rotation checks; it does not authorize product execution.
@@ -479,9 +470,9 @@ also unresolved.
 7. **Code-diff artifacts:** source candidate retains strict base/result CAS and
    derives bounded non-authoritative views; owner-visible apply/reject/undo and
    every workspace mutation remain a separate unavailable successor.
-8. **Chrome lazy tools:** source candidate canonicalizes exact 9+29 metadata
-   and selected-only summaries while provider exposure and every execution path
-   remain absent; loaded denial/revoke/race proof gates any later cutover.
+8. **Chrome lazy tools:** exact 9+29 metadata is available through the fixed
+   pair; existing closures and live permission/grant checks remain authoritative,
+   and loaded denial/revoke/race proof is still required for this candidate.
 9. **Tool Library UI:** reusable components for provenance, versions,
    capabilities, grants, revocation, quotas, and diagnostics.
 10. **Owner install lane:** only after package UI and distribution policy are
@@ -511,7 +502,6 @@ maximum does not cap the whole Worker heap.
   unreachable;
 - no embeddings, SQLite, Vectorize, or storage-engine decision;
 - no permission additions or `chrome.permissions.request` calls;
-- no provider binding or eager-binding cutover for the lazy protocol;
 - no reinterpretation of legacy `(origin, toolName)` approval as package
   authority;
 - no copying or executing Co-do binaries;

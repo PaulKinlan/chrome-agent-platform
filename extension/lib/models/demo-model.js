@@ -131,7 +131,56 @@ function runSlice(prompt) {
 }
 
 function toolResultCount(prompt) {
-  return runSlice(prompt).filter((m) => m?.role === "tool").length;
+  return runSlice(prompt).reduce((count, message) => {
+    if (message?.role !== "tool") return count;
+    if (!Array.isArray(message.content)) return count + 1;
+    return count + message.content.filter((part) =>
+      part?.type === "tool-result" || part?.type === "tool-error"
+    ).length;
+  }, 0);
+}
+
+function latestSelectionRef(prompt) {
+  const toolMessage = [...runSlice(prompt)].reverse().find((m) => m?.role === "tool");
+  if (!toolMessage) return null;
+  try {
+    return JSON.stringify(toolMessage).match(/sel_[a-f0-9]{36}/u)?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function lazyDemoCall(prompt, { delegate = false } = {}) {
+  const step = toolResultCount(prompt);
+  if (delegate) {
+    if (step === 0) {
+      return { id: "search_delegate", name: "search_tools", input: { query: "delegate_task", limit: 1 } };
+    }
+    if (step === 1) {
+      const selectionRef = latestSelectionRef(prompt);
+      return selectionRef
+        ? { id: "execute_delegate", name: "execute_tool", input: { selectionRef, arguments: { agentId: delegateAgentId(prompt), task: "run @demo-tools @demo-slow please" } } }
+        : null;
+    }
+    return null;
+  }
+  const plan = [
+    { type: "search", tool: "memory_set" },
+    { type: "execute", args: DEMO_ARGS },
+    { type: "search", tool: "memory_get" },
+    { type: "execute", args: { key: "demo" } },
+    { type: "search", tool: "memory_get" },
+    { type: "execute", args: { key: "demo" } },
+  ];
+  const action = plan[step];
+  if (!action) return null;
+  if (action.type === "search") {
+    return { id: `search_${step}`, name: "search_tools", input: { query: action.tool, limit: 1 } };
+  }
+  const selectionRef = latestSelectionRef(prompt);
+  return selectionRef
+    ? { id: `execute_${step}`, name: "execute_tool", input: { selectionRef, arguments: action.args } }
+    : null;
 }
 
 function demoAlreadyFinal(prompt) {
@@ -172,33 +221,19 @@ export function createDemoModel() {
 
     doGenerate(options) {
       const text = extractText(options.prompt);
-      if (wantsDelegate(options.prompt) && toolResultCount(options.prompt) === 0) {
+      const lazyCall = wantsDelegate(options.prompt)
+        ? lazyDemoCall(options.prompt, { delegate: true })
+        : wantsDemoTools(options.prompt) && !demoAlreadyFinal(options.prompt)
+        ? lazyDemoCall(options.prompt)
+        : null;
+      if (lazyCall) {
         return Promise.resolve({
-          content: [{ type: "tool-call", toolCallId: "call_demo_delegate", toolName: "delegate_task", input: JSON.stringify({ agentId: delegateAgentId(options.prompt), task: "run @demo-tools @demo-slow please" }) }],
-          finishReason: "tool-calls",
-          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
-          warnings: [],
-        });
-      }
-      if (wantsDemoTools(options.prompt) && toolResultCount(options.prompt) === 0 && !demoAlreadyFinal(options.prompt)) {
-        return Promise.resolve({
-          content: [{ type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) }],
-          finishReason: "tool-calls",
-          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
-          warnings: [],
-        });
-      }
-      if (wantsDemoTools(options.prompt) && toolResultCount(options.prompt) === 1 && !demoAlreadyFinal(options.prompt)) {
-        return Promise.resolve({
-          content: [{ type: "tool-call", toolCallId: "call_demo_get_1", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) }],
-          finishReason: "tool-calls",
-          usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
-          warnings: [],
-        });
-      }
-      if (wantsDemoTools(options.prompt) && toolResultCount(options.prompt) === 2 && !demoAlreadyFinal(options.prompt)) {
-        return Promise.resolve({
-          content: [{ type: "tool-call", toolCallId: "call_demo_get_2", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) }],
+          content: [{
+            type: "tool-call",
+            toolCallId: `call_demo_${lazyCall.id}`,
+            toolName: lazyCall.name,
+            input: JSON.stringify(lazyCall.input),
+          }],
           finishReason: "tool-calls",
           usage: { inputTokens: 8, outputTokens: 12, totalTokens: 20 },
           warnings: [],
@@ -231,10 +266,18 @@ export function createDemoModel() {
         start(controller) {
           controller.enqueue({ type: "stream-start", warnings: [] });
           let response = "";
-          if (wantsDel && toolResultCount(options.prompt) === 0) {
-            // STEP 1 (delegate): a REAL delegate_task call (the production
-            // model-facing path)
-            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_delegate", toolName: "delegate_task", input: JSON.stringify({ agentId: delegateAgentId(options.prompt), task: "run @demo-tools @demo-slow please" }) });
+          const lazyCall = wantsDel
+            ? lazyDemoCall(options.prompt, { delegate: true })
+            : wantsTools && !demoAlreadyFinal(options.prompt)
+            ? lazyDemoCall(options.prompt)
+            : null;
+          if (lazyCall) {
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: `call_demo_${lazyCall.id}`,
+              toolName: lazyCall.name,
+              input: JSON.stringify(lazyCall.input),
+            });
             controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
             controller.close();
             return;
@@ -300,28 +343,7 @@ export function createDemoModel() {
             controller.close();
             return;
           }
-              if (wantsTools && toolResultCount(options.prompt) === 0 && !demoAlreadyFinal(options.prompt)) {
-            // STEP 1 (tools): the WRITE — one call this step
-            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_set", toolName: "memory_set", input: JSON.stringify(DEMO_ARGS) });
-            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
-            controller.close();
-            return;
-          }
-          if (wantsTools && toolResultCount(options.prompt) === 1 && !demoAlreadyFinal(options.prompt)) {
-            // STEP 2 (tools): the FIRST read — the write is committed
-            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get_1", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
-            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
-            controller.close();
-            return;
-          }
-          if (wantsTools && toolResultCount(options.prompt) === 2 && !demoAlreadyFinal(options.prompt)) {
-            // STEP 3 (tools): the SECOND read — same-name calls stay distinct
-            controller.enqueue({ type: "tool-call", toolCallId: "call_demo_get_2", toolName: "memory_get", input: JSON.stringify({ key: "demo" }) });
-            controller.enqueue({ type: "finish", usage, finishReason: "tool-calls" });
-            controller.close();
-            return;
-          }
-          if (wantsTools && (toolResultCount(options.prompt) >= 3 || demoAlreadyFinal(options.prompt))) {
+          if (wantsTools && (toolResultCount(options.prompt) >= 6 || demoAlreadyFinal(options.prompt))) {
             // STEP 4 (tools): the final summary — the reads' VALUES speak for
             // themselves (the run's tool results are the assertion target). The
             // continuation step (tool history stripped) re-emits the same

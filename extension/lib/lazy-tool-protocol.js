@@ -7,10 +7,12 @@
 // dispatch and after dispatch; the existing source closure remains the only
 // permission/grant/cancellation/replay authority.
 
+import { tool } from "ai";
 import { z } from "zod";
 import {
   adaptBrowserTools,
   adaptBuiltinTools,
+  adaptBundledTools,
   adaptManagementTools,
   adaptWebMcpTools,
   buildToolCatalog,
@@ -19,10 +21,12 @@ import {
 } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
-export {
+import { assertRunOwned } from "./run-fence.js";
+import {
   buildLazyProviderCapture,
   LAZY_PROTOCOL_TOOL_WIRE,
 } from "./lazy-tool-wire.js";
+export { buildLazyProviderCapture, LAZY_PROTOCOL_TOOL_WIRE };
 import {
   hasLoneSurrogates,
   redactSecretText,
@@ -46,6 +50,7 @@ export const LAZY_TOOL_PROTOCOL_BOUNDS = Object.freeze({
   maxResultDepth: 8,
   maxResultNodes: 512,
   maxErrorBytes: 1024,
+  maxContextBytes: 256,
 });
 
 function ownData(value, key) {
@@ -239,9 +244,11 @@ function redactResultStrings(value) {
 function sourceContext(context, catalogGeneration) {
   return {
     runId: ownData(context, "runId"),
+    taskId: ownData(context, "taskId"),
     agentId: ownData(context, "agentId"),
     origin: ownData(context, "origin"),
     documentId: ownData(context, "documentId"),
+    runGeneration: ownData(context, "runGeneration"),
     catalogGeneration,
   };
 }
@@ -331,6 +338,37 @@ async function validateRecordArguments(record, args) {
   }
 }
 
+async function authorizeRecord(record, args, context, descriptor, phase) {
+  const authorize = ownData(record, "authorize");
+  if (typeof authorize !== "function") {
+    return fixedError("lazy-authority-unavailable");
+  }
+  let result;
+  try {
+    result = await authorize(args, Object.freeze({
+      signal: ownData(context, "signal"),
+      runId: ownData(context, "runId"),
+      taskId: ownData(context, "taskId"),
+      agentId: ownData(context, "agentId"),
+      origin: ownData(context, "origin"),
+      documentId: ownData(context, "documentId"),
+      runGeneration: ownData(context, "runGeneration"),
+      phase,
+      descriptor,
+    }));
+  } catch {
+    return fixedError("lazy-authority-denied");
+  }
+  if (
+    ownData(result, "ok") !== true ||
+    ownData(result, "permissionDigest") !== descriptor.permissionDigest ||
+    ownData(result, "grantDigest") !== descriptor.grantDigest
+  ) {
+    return fixedError("lazy-authority-stale-or-denied");
+  }
+  return Object.freeze({ ok: true });
+}
+
 export class LazyToolProtocol {
   #readSources;
   #selections;
@@ -374,7 +412,10 @@ export class LazyToolProtocol {
       return fixedError("lazy-source-unavailable");
     }
     const selectionRef = ownData(request, "selectionRef");
-    const firstResolved = this.#selections.resolve(
+    // Atomically claim the run-bound reference before the first async
+    // authorization/validation boundary. A concurrent or later reuse fails as
+    // replay even when every live source label remains unchanged.
+    const firstResolved = this.#selections.claim(
       selectionRef,
       sourceContext(context, first.catalog.generation),
       first.catalog,
@@ -387,42 +428,28 @@ export class LazyToolProtocol {
       return fixedError("lazy-arguments-invalid");
     }
     const firstRecord = first.byStableId.get(firstResolved.descriptor.stableId);
+    const firstAuthority = await authorizeRecord(
+      firstRecord,
+      args,
+      context,
+      firstResolved.descriptor,
+      "before-validation",
+    );
+    if (!firstAuthority.ok) return firstAuthority;
     const validated = await validateRecordArguments(firstRecord, args);
     if (!validated.ok) return validated;
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
 
-    // Validation was an async boundary. Rebuild and re-resolve immediately
-    // before dispatch so source/package/enrollment changes fail closed.
-    let before;
-    try {
-      before = await liveSnapshot(this.#readSources);
-    } catch {
-      return fixedError("lazy-source-unavailable");
-    }
-    const beforeResolved = this.#selections.resolve(
-      selectionRef,
-      sourceContext(context, before.catalog.generation),
-      before.catalog,
-    );
-    if (!beforeResolved.ok) return beforeResolved;
-    const beforeRecord = before.byStableId.get(
-      beforeResolved.descriptor.stableId,
-    );
-    const beforeValidated = await validateRecordArguments(beforeRecord, args);
-    if (!beforeValidated.ok) return beforeValidated;
-    if (isAborted(signal)) return fixedError("lazy-run-aborted");
-
-    // The live validator itself may await or initialize parser state. Resolve
-    // once more, then call the dispatcher synchronously from that exact record
-    // without another gap in which a different closure could be substituted.
+    // Validation is an async boundary. Rebuild and re-resolve every live
+    // scope/source/package/capability/permission/grant fence before dispatch.
     let dispatchSnapshot;
     try {
       dispatchSnapshot = await liveSnapshot(this.#readSources);
     } catch {
       return fixedError("lazy-source-unavailable");
     }
-    const dispatchResolved = this.#selections.resolve(
-      selectionRef,
+    const dispatchResolved = this.#selections.revalidateClaim(
+      firstResolved.claim,
       sourceContext(context, dispatchSnapshot.catalog.generation),
       dispatchSnapshot.catalog,
     );
@@ -430,6 +457,21 @@ export class LazyToolProtocol {
     const dispatchRecord = dispatchSnapshot.byStableId.get(
       dispatchResolved.descriptor.stableId,
     );
+    const beforeDispatchAuthority = await authorizeRecord(
+      dispatchRecord,
+      validated.data,
+      context,
+      dispatchResolved.descriptor,
+      "before-dispatch",
+    );
+    if (!beforeDispatchAuthority.ok) return beforeDispatchAuthority;
+    // Validate through the SAME live record whose closure will dispatch. A
+    // same-label closure/validator ABA cannot borrow an earlier validation.
+    const dispatchValidated = await validateRecordArguments(
+      dispatchRecord,
+      validated.data,
+    );
+    if (!dispatchValidated.ok) return dispatchValidated;
     const dispatch = ownData(dispatchRecord, "dispatch");
     if (typeof dispatch !== "function") {
       return fixedError("lazy-dispatch-unavailable");
@@ -437,15 +479,18 @@ export class LazyToolProtocol {
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
 
     let rawResult;
+    let dispatchError = null;
     try {
       rawResult = await dispatch(
-        beforeValidated.data,
+        dispatchValidated.data,
         Object.freeze({
           signal,
           runId: ownData(context, "runId"),
+          taskId: ownData(context, "taskId"),
           agentId: ownData(context, "agentId"),
           origin: ownData(context, "origin"),
           documentId: ownData(context, "documentId"),
+          runGeneration: ownData(context, "runGeneration"),
           replayMetadata: replayProjection(
             context,
             dispatchResolved.descriptor,
@@ -453,39 +498,62 @@ export class LazyToolProtocol {
         }),
       );
     } catch (error) {
-      return Object.freeze({
-        ok: false,
-        error: truncateUtf8(
-          safeProviderError(
-            typeof error === "string" ? error : "lazy dispatcher failed",
-          ),
-          LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes,
-        ),
-      });
+      // Preserve the platform's typed cancellation/ownership failures as real
+      // AI-SDK tool errors; a lazy wrapper must never turn an abort into a
+      // successful tool-result envelope.
+      if (
+        ownData(error, "name") === "RunAbortedError" ||
+        ownData(error, "name") === "AbortError"
+      ) {
+        throw error;
+      }
+      dispatchError = error;
     }
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
 
-    // Discard a result if the source or any scope/package/catalog fence changed
-    // while the existing dispatcher was awaiting its own authority boundaries.
+    // Discard both success and failure output if any live authority changed
+    // during dispatch. A relay/provider-style completion is never authority.
     let after;
     try {
       after = await liveSnapshot(this.#readSources);
     } catch {
       return fixedError("lazy-source-unavailable");
     }
-    const afterResolved = this.#selections.resolve(
-      selectionRef,
+    const afterResolved = this.#selections.revalidateClaim(
+      firstResolved.claim,
       sourceContext(context, after.catalog.generation),
       after.catalog,
     );
     if (!afterResolved.ok) return afterResolved;
-    if (!after.byStableId.has(afterResolved.descriptor.stableId)) {
-      return fixedError("lazy-dispatch-source-stale");
+    const afterRecord = after.byStableId.get(afterResolved.descriptor.stableId);
+    if (!afterRecord) return fixedError("lazy-dispatch-source-stale");
+    const afterAuthority = await authorizeRecord(
+      afterRecord,
+      dispatchValidated.data,
+      context,
+      afterResolved.descriptor,
+      "after-dispatch",
+    );
+    if (!afterAuthority.ok) return afterAuthority;
+    if (dispatchError) {
+      return Object.freeze({
+        ok: false,
+        selectedTool: afterResolved.descriptor.name,
+        error: truncateUtf8(
+          safeProviderError(
+            typeof dispatchError === "string"
+              ? dispatchError
+              : "lazy dispatcher failed",
+          ),
+          LAZY_TOOL_PROTOCOL_BOUNDS.maxErrorBytes,
+        ),
+      });
     }
     return Object.freeze({
       ok: true,
+      selectedTool: afterResolved.descriptor.name,
       result: projectResult(rawResult),
-      selectionRef: afterResolved.selectionRef,
+      selectionRef,
       authorizes: false,
       requiresLiveAuthorization: true,
       replay: replayProjection(context, afterResolved.descriptor),
@@ -521,11 +589,36 @@ function trustedAiValidator(aiTool) {
 function executableAiRecords(toolMap, adapter, context) {
   const inputs = adapter(toolMap, context);
   return inputs.map((descriptorInput) => {
-    const aiTool = ownData(toolMap, ownData(descriptorInput, "toolId"));
+    const toolId = ownData(descriptorInput, "toolId");
+    const aiTool = ownData(toolMap, toolId);
     const execute = ownData(aiTool, "execute");
+    const authorizationGuard = ownData(context, "authorizationGuard");
     return Object.freeze({
       descriptorInput,
       validateArguments: trustedAiValidator(aiTool),
+      authorize: async (args, authorityContext) => {
+        try {
+          await assertRunOwned();
+          if (typeof authorizationGuard === "function") {
+            const guarded = await authorizationGuard(Object.freeze({
+              toolId,
+              args,
+              phase: ownData(authorityContext, "phase"),
+              context: authorityContext,
+              descriptorInput,
+            }));
+            if (ownData(guarded, "ok") !== true) return { ok: false };
+            return guarded;
+          }
+          return {
+            ok: true,
+            permissionDigest: ownData(descriptorInput, "permissionDigest") ?? "none",
+            grantDigest: ownData(descriptorInput, "grantDigest") ?? "none",
+          };
+        } catch {
+          return { ok: false };
+        }
+      },
       dispatch: typeof execute === "function"
         ? (args, dispatchContext) =>
           execute(args, {
@@ -547,6 +640,76 @@ export function executableBrowserToolRecords(toolMap, context) {
 
 export function executableManagementToolRecords(toolMap, context) {
   return executableAiRecords(toolMap, adaptManagementTools, context);
+}
+
+export function executableBundledToolRecords(rows, context = {}) {
+  return adaptBundledTools(rows, context).map((descriptorInput) =>
+    Object.freeze({
+      descriptorInput,
+      validateArguments: null,
+      authorize: null,
+      dispatch: null,
+    })
+  );
+}
+
+export function createLazyProviderToolset({
+  readSources,
+  contextReader,
+  selectionAuthority,
+} = {}) {
+  const protocol = new LazyToolProtocol({ readSources, selectionAuthority });
+  if (typeof contextReader !== "function") {
+    throw new TypeError("lazy provider needs a run context reader");
+  }
+  const readContext = async () => {
+    let context;
+    try {
+      context = await contextReader();
+    } catch {
+      return null;
+    }
+    return context && typeof context === "object" ? context : null;
+  };
+  const tools = Object.freeze({
+    search_tools: tool({
+      description: LAZY_PROTOCOL_TOOL_WIRE[0].description,
+      inputSchema: z.object({
+        query: z.string().max(512),
+        limit: z.number().int().min(1).max(12).optional(),
+      }).strict(),
+      execute: async (request) => {
+        const context = await readContext();
+        return context
+          ? await protocol.search(request, context)
+          : fixedError("lazy-run-context-unavailable");
+      },
+    }),
+    execute_tool: tool({
+      description: LAZY_PROTOCOL_TOOL_WIRE[1].description,
+      inputSchema: z.object({
+        selectionRef: z.string().regex(/^sel_[a-f0-9]{36}$/u),
+        arguments: z.record(z.unknown()),
+      }).strict(),
+      execute: async (request) => {
+        const context = await readContext();
+        return context
+          ? await protocol.execute(request, context)
+          : fixedError("lazy-run-context-unavailable");
+      },
+    }),
+  });
+  return Object.freeze({
+    tools,
+    protocol,
+    diagnostics: () => Object.freeze({
+      ...protocol.diagnostics(),
+      providerBound: true,
+      eagerBindingChanged: true,
+      exposedToolNames: Object.freeze(Object.keys(tools)),
+      exposedToolCount: Object.keys(tools).length,
+    }),
+  });
 }
 
 export function executableWebMcpToolRecords(tools, context, dispatch) {
@@ -573,9 +736,34 @@ export function executableWebMcpToolRecords(tools, context, dispatch) {
     } catch {
       validator = async () => ({ ok: false });
     }
+    const authorizationGuard = ownData(context, "authorizationGuard");
     return Object.freeze({
       descriptorInput,
       validateArguments: validator,
+      authorize: async (args, authorityContext) => {
+        try {
+          await assertRunOwned();
+          if (typeof authorizationGuard === "function") {
+            const guarded = await authorizationGuard(Object.freeze({
+              name,
+              source: expectedSource,
+              args,
+              phase: ownData(authorityContext, "phase"),
+              context: authorityContext,
+              descriptorInput,
+            }));
+            if (ownData(guarded, "ok") !== true) return { ok: false };
+            return guarded;
+          }
+          return {
+            ok: true,
+            permissionDigest: ownData(descriptorInput, "permissionDigest") ?? "none",
+            grantDigest: ownData(descriptorInput, "grantDigest") ?? "none",
+          };
+        } catch {
+          return { ok: false };
+        }
+      },
       dispatch: typeof dispatch === "function"
         ? (args, dispatchContext) =>
           dispatch(Object.freeze({

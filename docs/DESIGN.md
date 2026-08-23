@@ -148,6 +148,16 @@ verification. Observed descendants that escape that group poison the serialized
 slot, and profile removal reuses the same exact-prefix/owner/symlink helper tested
 by hostile no-Chrome mutants. Durable receipts survive the temporary profile.
 
+## Tool-provider interaction contract
+
+Every run surface presents the model with the same bounded two-step interaction:
+`search_tools` returns non-authorizing in-scope metadata and a short-lived
+single-use reference; `execute_tool` accepts only that reference and revalidates
+live authority around the existing source closure. Dynamic catalog definitions
+never enter provider context. Disabled bundled rows remain discoverable metadata
+without a reference or execution affordance. This protected contract follows
+owner-authored prompt text, so customization cannot replace it.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

@@ -41,9 +41,11 @@ function safeFence(value) {
 function scopeContext(context) {
   return Object.freeze({
     runId: safeFence(ownData(context, "runId")),
+    taskId: safeFence(ownData(context, "taskId")),
     agentId: safeFence(ownData(context, "agentId")),
     origin: safeFence(ownData(context, "origin")),
     documentId: safeFence(ownData(context, "documentId")),
+    runGeneration: safeFence(ownData(context, "runGeneration")),
     catalogGeneration: safeFence(ownData(context, "catalogGeneration")),
   });
 }
@@ -65,8 +67,10 @@ function randomSelectionRef() {
 }
 
 function sameContext(a, b) {
-  return a.runId === b.runId && a.agentId === b.agentId &&
-    a.origin === b.origin && a.documentId === b.documentId &&
+  return a.runId === b.runId && a.taskId === b.taskId &&
+    a.agentId === b.agentId && a.origin === b.origin &&
+    a.documentId === b.documentId &&
+    a.runGeneration === b.runGeneration &&
     a.catalogGeneration === b.catalogGeneration;
 }
 
@@ -76,12 +80,17 @@ function packageIdentity(descriptor) {
     descriptor.packageId,
     descriptor.version,
     descriptor.digest,
+    descriptor.packageDigest,
     descriptor.capabilityDigest,
+    descriptor.permissionDigest,
+    descriptor.grantDigest,
+    descriptor.closureGeneration,
   ].map((value) => safeFence(value)).join("\u0000");
 }
 
 export class ToolSelectionAuthority {
   #records = new Map();
+  #consumed = new Map();
   #clock;
   #newRef;
 
@@ -94,9 +103,16 @@ export class ToolSelectionAuthority {
     for (const [selectionRef, record] of this.#records) {
       if (record.expiresAt <= now) this.#records.delete(selectionRef);
     }
+    for (const [selectionRef, expiresAt] of this.#consumed) {
+      if (expiresAt <= now) this.#consumed.delete(selectionRef);
+    }
     while (this.#records.size > TOOL_SELECTION_BOUNDS.maxTotalSelections) {
       const oldest = this.#records.keys().next().value;
       this.#records.delete(oldest);
+    }
+    while (this.#consumed.size > TOOL_SELECTION_BOUNDS.maxTotalSelections) {
+      const oldest = this.#consumed.keys().next().value;
+      this.#consumed.delete(oldest);
     }
   }
 
@@ -104,7 +120,10 @@ export class ToolSelectionAuthority {
     const now = this.#clock();
     this.#purge(now);
     const context = scopeContext(contextInput);
-    if (!context.runId || !context.agentId || !context.catalogGeneration) {
+    if (
+      !context.runId || !context.taskId || !context.agentId ||
+      !context.runGeneration || !context.catalogGeneration
+    ) {
       return Object.freeze({
         ok: false,
         error: "missing-selection-fence",
@@ -164,7 +183,8 @@ export class ToolSelectionAuthority {
       for (let attempts = 0; attempts < 4; attempts++) {
         const candidate = safeFence(this.#newRef());
         if (
-          /^sel_[a-f0-9]{36}$/u.test(candidate) && !this.#records.has(candidate)
+          /^sel_[a-f0-9]{36}$/u.test(candidate) &&
+          !this.#records.has(candidate) && !this.#consumed.has(candidate)
         ) {
           selectionRef = candidate;
           break;
@@ -219,7 +239,9 @@ export class ToolSelectionAuthority {
     if (!record) {
       return Object.freeze({
         ok: false,
-        error: "selection-missing-or-expired",
+        error: this.#consumed.has(selectionRef)
+          ? "selection-replayed"
+          : "selection-missing-or-expired",
       });
     }
     if (!sameContext(record.context, context)) {
@@ -241,6 +263,57 @@ export class ToolSelectionAuthority {
       descriptor,
       selectionRef,
       expiresAt: record.expiresAt,
+      authorizes: false,
+      requiresLiveAuthorization: true,
+    });
+  }
+
+  claim(selectionRefInput, contextInput, catalog) {
+    const resolved = this.resolve(selectionRefInput, contextInput, catalog);
+    if (!resolved.ok) return resolved;
+    const selectionRef = resolved.selectionRef;
+    const record = this.#records.get(selectionRef);
+    if (!record) return Object.freeze({ ok: false, error: "selection-replayed" });
+    this.#records.delete(selectionRef);
+    this.#consumed.set(selectionRef, record.expiresAt);
+    return Object.freeze({
+      ...resolved,
+      claim: Object.freeze({
+        stableId: record.stableId,
+        sourceGeneration: record.sourceGeneration,
+        packageIdentity: record.packageIdentity,
+        context: record.context,
+        expiresAt: record.expiresAt,
+      }),
+    });
+  }
+
+  revalidateClaim(claimInput, contextInput, catalog) {
+    const now = this.#clock();
+    this.#purge(now);
+    const claim = claimInput && typeof claimInput === "object" ? claimInput : {};
+    const context = scopeContext(contextInput);
+    if (Number(ownData(claim, "expiresAt")) <= now) {
+      return Object.freeze({ ok: false, error: "selection-missing-or-expired" });
+    }
+    if (!sameContext(ownData(claim, "context"), context)) {
+      return Object.freeze({ ok: false, error: "selection-scope-mismatch" });
+    }
+    if (catalog?.generation !== context.catalogGeneration) {
+      return Object.freeze({ ok: false, error: "selection-catalog-stale" });
+    }
+    const descriptor = catalog.byStableId?.[safeFence(ownData(claim, "stableId"))];
+    if (
+      !descriptor ||
+      descriptor.sourceGeneration !== ownData(claim, "sourceGeneration") ||
+      packageIdentity(descriptor) !== ownData(claim, "packageIdentity") ||
+      descriptor.availability !== "ready" || !scopeMatches(descriptor, context)
+    ) {
+      return Object.freeze({ ok: false, error: "selection-source-stale" });
+    }
+    return Object.freeze({
+      ok: true,
+      descriptor,
       authorizes: false,
       requiresLiveAuthorization: true,
     });

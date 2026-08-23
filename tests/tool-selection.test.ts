@@ -49,6 +49,8 @@ function fixture(count = 3) {
 function context(catalog, overrides = {}) {
   return {
     runId: "run-1",
+    taskId: "task-1",
+    runGeneration: "generation-1",
     agentId: "site:https://example.test",
     origin: "https://example.test",
     documentId: "doc-1",
@@ -78,6 +80,8 @@ Deno.test("tool selection: refs bind run/agent/origin/document/catalog/source ge
   for (
     const changed of [
       { runId: "run-2" },
+      { taskId: "task-2" },
+      { runGeneration: "generation-2" },
       { agentId: "hub" },
       { origin: "https://other.test" },
       { documentId: "doc-2" },

@@ -27,6 +27,7 @@ export const TOOL_CATALOG_BOUNDS = Object.freeze({
   maxCapabilityBytes: 96,
   maxIdentityBytes: 256,
   maxSourceGenerationBytes: 192,
+  maxAuthorityDigestBytes: 192,
   maxScopeBytes: 768,
 });
 
@@ -255,9 +256,6 @@ export function canonicalToolDescriptor(input) {
   if (!TOOL_SOURCE_KINDS.includes(sourceKind)) {
     throw new ToolCatalogValidationError("source-kind");
   }
-  if (sourceKind === "bundled-package") {
-    throw new ToolCatalogValidationError("package-authority-unwired");
-  }
   const packageId = boundedIdentity(ownData(input, "packageId"), "package-id");
   const toolId = boundedIdentity(ownData(input, "toolId"), "tool-id");
   const version = boundedIdentity(ownData(input, "version"), "version");
@@ -292,6 +290,36 @@ export function canonicalToolDescriptor(input) {
     "source-generation",
     { allowEmpty: false },
   );
+  const closureGeneration = boundedText(
+    ownData(input, "closureGeneration") ?? sourceGeneration,
+    TOOL_CATALOG_BOUNDS.maxSourceGenerationBytes,
+    "closure-generation",
+    { allowEmpty: false },
+  );
+  const packageDigest = boundedText(
+    ownData(input, "packageDigest") ?? sha256Hex(`${packageId}\u0000${version}\u0000${sourceGeneration}`),
+    TOOL_CATALOG_BOUNDS.maxAuthorityDigestBytes,
+    "package-digest",
+    { allowEmpty: false },
+  );
+  const permissionDigest = boundedText(
+    ownData(input, "permissionDigest") ?? "none",
+    TOOL_CATALOG_BOUNDS.maxAuthorityDigestBytes,
+    "permission-digest",
+    { allowEmpty: false },
+  );
+  const grantDigest = boundedText(
+    ownData(input, "grantDigest") ?? "none",
+    TOOL_CATALOG_BOUNDS.maxAuthorityDigestBytes,
+    "grant-digest",
+    { allowEmpty: false },
+  );
+  if (
+    sourceKind === "bundled-package" &&
+    !/^[a-f0-9]{64}$/u.test(packageDigest)
+  ) {
+    throw new ToolCatalogValidationError("package-digest");
+  }
   const dispatcherKind = boundedIdentity(
     ownData(input, "dispatcherKind"),
     "dispatcher-kind",
@@ -317,6 +345,10 @@ export function canonicalToolDescriptor(input) {
     schemaSummary,
     capabilities,
     dispatcherKind,
+    closureGeneration,
+    packageDigest,
+    permissionDigest,
+    grantDigest,
   }));
   const identity = {
     sourceKind,
@@ -324,9 +356,13 @@ export function canonicalToolDescriptor(input) {
     toolId,
     version,
     digest: descriptorDigest,
+    packageDigest,
     capabilityDigest,
+    permissionDigest,
+    grantDigest,
     scope,
     sourceGeneration,
+    closureGeneration,
   };
   const stableId = `tool:v1:${sha256Hex(canonicalJson(identity))}`;
   return Object.freeze({
@@ -512,7 +548,11 @@ function adaptAiToolMap(toolMap, context) {
         context.capabilities ?? [],
       scope: context.scope,
       sourceGeneration: context.sourceGeneration,
-      availability: context.availability ?? "ready",
+      closureGeneration: context.closureGeneration ?? context.sourceGeneration,
+      packageDigest: context.packageDigest,
+      permissionDigest: context.permissionDigestByTool?.[name] ?? context.permissionDigest,
+      grantDigest: context.grantDigestByTool?.[name] ?? context.grantDigest,
+      availability: context.availabilityByTool?.[name] ?? context.availability ?? "ready",
       dispatcherKind: context.dispatcherKind,
     });
   }
@@ -575,8 +615,45 @@ export function adaptWebMcpTools(tools, context) {
         documentId: context?.documentId ?? "",
       },
       sourceGeneration: context?.sourceGeneration ?? "unversioned",
-      availability: context?.availability ?? "ready",
+      closureGeneration: context?.closureGeneration ?? context?.sourceGeneration ?? "unversioned",
+      packageDigest: context?.packageDigest,
+      permissionDigest: context?.permissionDigestByTool?.[name] ?? context?.permissionDigest,
+      grantDigest: context?.grantDigestByTool?.[name] ?? context?.grantDigest,
+      availability: context?.availabilityByTool?.[name] ?? context?.availability ?? "ready",
       dispatcherKind: "webmcp",
+    });
+  }
+  return inputs;
+}
+
+/** Catalog-only bundled Wasm projection. A row may be searchable while still
+ * disabled for provider execution; only a separately supplied live dispatch
+ * closure can make it executable. Settings-preview admission never implies a
+ * provider route. */
+export function adaptBundledTools(rows, context = {}) {
+  const inputs = [];
+  for (const row of (Array.isArray(rows) ? rows : []).slice(0, TOOL_CATALOG_BOUNDS.maxDescriptors)) {
+    const toolId = ownData(row, "toolId");
+    const binary = ownData(row, "binary");
+    const packageDigest = ownData(binary, "sha256");
+    inputs.push({
+      sourceKind: "bundled-package",
+      packageId: ownData(row, "packageId"),
+      toolId,
+      version: ownData(row, "version"),
+      name: toolId,
+      aliases: [],
+      description: ownData(row, "description") ?? ownData(row, "displayName") ?? "",
+      inputSchema: context.inputSchemaByTool?.[toolId] ?? { type: "object", additionalProperties: false },
+      capabilities: ownData(row, "capabilities") ?? [],
+      scope: context.scope ?? { hub: true, agentId: "hub", origin: "", documentId: "" },
+      sourceGeneration: context.sourceGeneration ?? `bundled:${packageDigest}`,
+      closureGeneration: context.closureGeneration ?? "provider-route-absent",
+      packageDigest,
+      permissionDigest: "none",
+      grantDigest: "none",
+      availability: "disabled",
+      dispatcherKind: "bundled-wasm-disabled",
     });
   }
   return inputs;

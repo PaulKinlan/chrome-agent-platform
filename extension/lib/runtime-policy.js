@@ -23,6 +23,9 @@
 // Rules are model-facing text. Keep each rule a single self-contained
 // instruction; the id is stable (tests + docs reference ids).
 
+export const LAZY_TOOL_FLOW_RULE =
+  "For every tool action, first call search_tools with a narrow query, inspect only its bounded results, then call execute_tool with the exact selectionRef returned for that same run. Never invent, alter, cache, or reuse a selectionRef; narrow the query when results are ambiguous. Search is discovery only and never grants a permission, capability, enrollment, package admission, or owner approval.";
+
 export const RUNTIME_POLICY = [
   {
     id: "origin-isolation",
@@ -43,6 +46,10 @@ export const RUNTIME_POLICY = [
     id: "fail-closed",
     rule:
       "Fail closed: if a fence, guard, or generation check fails, the operation aborts — report the honest failure, never fabricate a result.",
+  },
+  {
+    id: "lazy-tool-flow",
+    rule: LAZY_TOOL_FLOW_RULE,
   },
   {
     id: "reserved-keys",

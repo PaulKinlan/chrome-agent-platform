@@ -100,13 +100,13 @@ Deno.test("tool catalog shadow: route remains Settings-only and absent from prov
   assertStringIncludes(worker, 'async "tool-catalog.shadow"(m, context)');
   assertStringIncludes(worker, 'context?.principal !== "owner-options"');
   assertEquals(PAGE_ALLOWED_ROUTES.has("tool-catalog.shadow"), false);
-  assertStringIncludes(worker, "...browserToolset(scoped)");
-  assertStringIncludes(worker, "managementToolset({");
-  assertStringIncludes(worker, "tools: await siteToolset(origin, cell)");
-  assert(!worker.includes("search_tools"));
-  assert(!worker.includes("execute_tool"));
+  assertStringIncludes(worker, "const liveBrowserTools = browserToolset(scoped)");
+  assertStringIncludes(worker, "const liveManagementTools = scoped ? {} : managementToolset({");
+  assertStringIncludes(worker, "readMasterLazySources");
+  assertStringIncludes(worker, "readSiteLazySources");
+  assertStringIncludes(agent, "const allTools = lazy.tools");
+  assertStringIncludes(agent, "createLazyProviderToolset");
   assert(!prompts.includes("tool-catalog.shadow"));
-  assert(!prompts.includes("selectionRef"));
   assert(!agent.includes("tool-catalog.shadow"));
 });
 

@@ -40,6 +40,7 @@ import {
   validatePreviewInput,
 } from "../lib/tool-exec-preview.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -169,6 +170,7 @@ import {
 import {
   browserToolset,
   captureTabScreenshot,
+  getBrowserControlGrantIdentity,
   isBrowserControlGranted,
   recordBrowserEvent,
   revokeBrowserControlGrant,
@@ -190,7 +192,14 @@ import {
 import { ShadowToolCatalogController } from "../lib/tool-catalog-shadow.js";
 import {
   capabilitiesByTool as canonicalChromeCapabilitiesByTool,
+  chromeToolCapability,
 } from "../lib/chrome-tool-capabilities.js";
+import {
+  executableBrowserToolRecords,
+  executableBundledToolRecords,
+  executableManagementToolRecords,
+  executableWebMcpToolRecords,
+} from "../lib/lazy-tool-protocol.js";
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -350,6 +359,7 @@ import {
   boundWebmcpError,
   buildWebmcpPageReport,
   hmacSha256Hex,
+  sha256Hex,
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
   redactSecrets,
@@ -829,6 +839,186 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
   }
 }
 
+async function lazyPermissionDigest() {
+  try {
+    const all = await chrome.permissions.getAll();
+    const permissions = Array.isArray(all?.permissions)
+      ? [...new Set(all.permissions.filter((v) => typeof v === "string"))].sort()
+      : [];
+    const origins = Array.isArray(all?.origins)
+      ? [...new Set(all.origins.filter((v) => typeof v === "string"))].sort()
+      : [];
+    return sha256Hex(JSON.stringify({ permissions, origins }));
+  } catch {
+    return sha256Hex("permissions-unavailable");
+  }
+}
+
+async function liveChromeLazyRecords({ browserTools, managementTools, executionId, scoped }) {
+  const version = String(chrome.runtime.getManifest()?.version ?? "0");
+  const extensionDigest = sha256Hex(`cap-extension:${version}`);
+  const permissionDigest = await lazyPermissionDigest();
+  const browserGrantDigest = sha256Hex(
+    String(await getBrowserControlGrantIdentity().catch(() => null) ?? "none"),
+  );
+  const managementGrantDigest = sha256Hex(
+    executionId && activeExecutions.has(executionId)
+      ? `approval-execution:${executionId}:active`
+      : `approval-execution:${executionId ?? "none"}:inactive`,
+  );
+  const scope = { hub: true, agentId: "hub", origin: "", documentId: "" };
+  const sourceGeneration = `extension:${version}:orchestrator:${generation}`;
+  const makeGuard = (expectedGrantDigest, sourceKind) => async ({ descriptorInput }) => {
+    const currentPermissionDigest = await lazyPermissionDigest();
+    const currentGrantDigest = sourceKind === "chrome-api"
+      ? sha256Hex(String(await getBrowserControlGrantIdentity().catch(() => null) ?? "none"))
+      : sha256Hex(
+        executionId && activeExecutions.has(executionId)
+          ? `approval-execution:${executionId}:active`
+          : `approval-execution:${executionId ?? "none"}:inactive`,
+      );
+    return {
+      ok: currentPermissionDigest === descriptorInput.permissionDigest &&
+        currentGrantDigest === expectedGrantDigest &&
+        currentGrantDigest === descriptorInput.grantDigest,
+      permissionDigest: currentPermissionDigest,
+      grantDigest: currentGrantDigest,
+    };
+  };
+  const records = [
+    ...executableBrowserToolRecords(browserTools, {
+      version,
+      sourceGeneration,
+      closureGeneration: `${sourceGeneration}:browser:${scoped ? "scoped" : "full"}`,
+      packageDigest: extensionDigest,
+      permissionDigest,
+      grantDigest: browserGrantDigest,
+      scope,
+      capabilitiesByTool: Object.fromEntries(
+        Object.keys(browserTools).map((name) => [
+          name,
+          chromeToolCapability(name, "chrome-api").capabilityTokens,
+        ]),
+      ),
+      authorizationGuard: makeGuard(browserGrantDigest, "chrome-api"),
+    }),
+    ...(Object.keys(managementTools).length
+      ? executableManagementToolRecords(managementTools, {
+        version,
+        sourceGeneration,
+        closureGeneration: `${sourceGeneration}:management:${executionId ?? "none"}`,
+        packageDigest: extensionDigest,
+        permissionDigest,
+        grantDigest: managementGrantDigest,
+        scope,
+        capabilitiesByTool: canonicalChromeCapabilitiesByTool(managementTools, "management"),
+        authorizationGuard: makeGuard(managementGrantDigest, "management"),
+      })
+      : []),
+    // Bundled rows are searchable catalog entries only. Their existing route is
+    // Settings-owner-click-only, so no provider dispatch closure exists here.
+    ...executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+      scope,
+      sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
+      closureGeneration: "provider-route-absent",
+    }),
+  ];
+  return records;
+}
+
+async function readSiteLazyScope(origin) {
+  const enrollment = await enrollmentSnapshot(origin);
+  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  const gate = gateMap[origin] ?? {};
+  return {
+    origin,
+    documentId: typeof gate.documentId === "string" ? gate.documentId : "",
+    runGeneration: String(enrollment.gen ?? 0),
+  };
+}
+
+async function readSiteLazySources(origin, runGenCell) {
+  const enrollment = await enrollmentSnapshot(origin);
+  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  const gate = gateMap[origin] ?? {};
+  const documentId = typeof gate.documentId === "string" ? gate.documentId : "";
+  const sourceGeneration = [
+    `enrollment:${enrollment.gen ?? 0}`,
+    `document:${documentId}`,
+    `epoch:${gate.epoch ?? 0}`,
+    `seq:${gate.seq ?? 0}`,
+  ].join(":");
+  const currentDocument = enrollment.enrolled && documentId &&
+    Number.isFinite(gate.epoch) && gate.epoch > 0;
+  const tools = await listTools(origin);
+  const permissionDigestByTool = {};
+  const availabilityByTool = {};
+  for (const sourceTool of tools) {
+    if (!sourceTool || typeof sourceTool.name !== "string") continue;
+    const approved = await isApproved(origin, sourceTool.name).catch(() => false);
+    permissionDigestByTool[sourceTool.name] = sha256Hex(`approved:${approved}`);
+    availabilityByTool[sourceTool.name] = currentDocument && approved
+      ? "ready"
+      : currentDocument ? "owner-action-required" : "stale";
+  }
+  const grantDigest = sha256Hex(sourceGeneration);
+  const packageDigest = sha256Hex(`webmcp:${origin}:${sourceGeneration}`);
+  const authorizationGuard = async ({ name, source, descriptorInput }) => {
+    const nowEnrollment = await enrollmentSnapshot(origin);
+    const nowGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+    const nowGate = nowGateMap[origin] ?? {};
+    const nowDocumentId = typeof nowGate.documentId === "string" ? nowGate.documentId : "";
+    const nowSourceGeneration = [
+      `enrollment:${nowEnrollment.gen ?? 0}`,
+      `document:${nowDocumentId}`,
+      `epoch:${nowGate.epoch ?? 0}`,
+      `seq:${nowGate.seq ?? 0}`,
+    ].join(":");
+    const current = (await listTools(origin)).find((row) =>
+      row?.name === name && row?.source === source
+    );
+    const approved = current
+      ? await isApproved(origin, name).catch(() => false)
+      : false;
+    const currentPermissionDigest = sha256Hex(`approved:${approved}`);
+    const currentGrantDigest = sha256Hex(nowSourceGeneration);
+    const runGen = runGenCell?.get?.() ?? null;
+    return {
+      ok: Boolean(
+        current && approved && nowEnrollment.enrolled &&
+        runGen != null && nowEnrollment.gen === runGen &&
+        nowSourceGeneration === descriptorInput.sourceGeneration &&
+        currentPermissionDigest === descriptorInput.permissionDigest &&
+        currentGrantDigest === descriptorInput.grantDigest
+      ),
+      permissionDigest: currentPermissionDigest,
+      grantDigest: currentGrantDigest,
+    };
+  };
+  return executableWebMcpToolRecords(tools, {
+    origin,
+    agentId: origin,
+    documentId,
+    version: "page-current",
+    sourceGeneration,
+    closureGeneration: sourceGeneration,
+    packageDigest,
+    permissionDigestByTool,
+    grantDigest,
+    availabilityByTool,
+    authorizationGuard,
+  }, ({ name, source, args }) =>
+    invokeSiteTool(
+      origin,
+      name,
+      args,
+      runGenCell?.get?.() ?? null,
+      source,
+      sourceGeneration,
+    )
+  );
+}
+
 // The orchestrator build (the memory, the workers, the tools). Shared by
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
@@ -870,7 +1060,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // double-append in the agent core.
         system: (await resolveSystemPrompt("worker", { skills })).text,
         skills: [],
-        tools: await siteToolset(origin, cell),
+        // WebMCP directories/navigation/approval are read for every lazy
+        // search/execute fence; no build-time snapshot reaches the provider.
+        tools: {},
+        readLazySources: () => readSiteLazySources(origin, cell),
+        readLazyScope: () => readSiteLazyScope(origin),
       };
     }));
     // multiAgent toggles fan-out (hub + per-site Site Agents) vs a solo hub agent.
@@ -879,6 +1073,12 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     const prefs = (await kvGet("cap:multiAgent")) ?? {};
     const multiAgent = prefs["cap:multiAgent"] !== false;
     const modelManagementDispatch = bindModelApprovalDispatcher(approvalExecutionId, dispatchRoute);
+    const liveBrowserTools = browserToolset(scoped);
+    const liveManagementTools = scoped ? {} : managementToolset({
+      // Immutable build-local capture. A stale tool closure keeps its original
+      // execution id, which activeExecutions rejects after the run finalizes.
+      callRoute: modelManagementDispatch,
+    });
     const orch = await createOrchestrator({
       model,
       masterMemory: mem,
@@ -891,18 +1091,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // browser mutation, a durable schedule, or a memory write (the wider-goal
       // review's "scoped != side-effect-free" finding).
       scoped,
-      extraTools: {
-        ...browserToolset(scoped),
-        // SCOPED (hook) runs do NOT get the destructive management toolset —
-        // untrusted browser event data must never drive delete_agent/
-        // delete_asset/revoke_capability/disenroll_origin (the wider-goal
-        // review's finding).
-        ...(scoped ? {} : managementToolset({
-          // Immutable build-local capture. A stale closure keeps its original
-          // id, which activeExecutions rejects after that run finalizes.
-          callRoute: modelManagementDispatch,
-        })),
-      },
+      extraTools: { ...liveBrowserTools, ...liveManagementTools },
+      readMasterLazySources: () => liveChromeLazyRecords({
+        browserTools: liveBrowserTools,
+        managementTools: liveManagementTools,
+        executionId: approvalExecutionId,
+        scoped,
+      }),
       delegateGuard: async (origin) => {
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
@@ -1096,7 +1291,14 @@ async function bindSnapshotGate(canonical, pickedTabId) {
   });
 }
 
-async function invokeSiteTool(origin, name, args, expectedGen = null) {
+async function invokeSiteTool(
+  origin,
+  name,
+  args,
+  expectedGen = null,
+  expectedSource = null,
+  expectedSourceGeneration = null,
+) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
   // Atomic snapshot (enrolled + generation read under the enrollment lock) — a
@@ -1139,6 +1341,9 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
   if (descriptor.source !== "declared" && descriptor.source !== "inferred") {
     return { error: `tool ${name} is not page-invocable (source ${descriptor.source})` };
   }
+  if (expectedSource && descriptor.source !== expectedSource) {
+    return { error: `tool ${name} source changed before invocation` };
+  }
   // The EXACT approved tab + document identity (the round-30 tab-binding
   // blocker): the picker's approved tab is bound in the snapshot gate at
   // enrollment, and the gate tracks the CURRENT document on that tab (its
@@ -1147,6 +1352,19 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
   // could come from one document while the invocation silently drove another.
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
   const binding = gateMap[canonical] ?? null;
+  const boundSourceGeneration = binding
+    ? [
+      `enrollment:${snap.gen ?? 0}`,
+      `document:${typeof binding.documentId === "string" ? binding.documentId : ""}`,
+      `epoch:${binding.epoch ?? 0}`,
+      `seq:${binding.seq ?? 0}`,
+    ].join(":")
+    : "";
+  if (
+    expectedSourceGeneration && boundSourceGeneration !== expectedSourceGeneration
+  ) {
+    return { error: `the approved document changed before ${name} could run` };
+  }
   if (
     !binding || binding.tabId == null ||
     typeof binding.documentId !== "string" || binding.documentId.length === 0 ||
@@ -1206,6 +1424,19 @@ async function invokeSiteTool(origin, name, args, expectedGen = null) {
       return {
         error: `origin ${canonical} was disenrolled during the call — result discarded`,
       };
+    }
+    if (expectedSourceGeneration) {
+      const afterGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+      const afterBinding = afterGateMap[canonical] ?? {};
+      const afterSourceGeneration = [
+        `enrollment:${after.gen ?? 0}`,
+        `document:${typeof afterBinding.documentId === "string" ? afterBinding.documentId : ""}`,
+        `epoch:${afterBinding.epoch ?? 0}`,
+        `seq:${afterBinding.seq ?? 0}`,
+      ].join(":");
+      if (afterSourceGeneration !== expectedSourceGeneration) {
+        return { error: `the approved document changed during ${name} — result discarded` };
+      }
     }
     return res ?? { ok: true };
   } catch (e) {
@@ -1567,7 +1798,19 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       let result;
       let runOutcome = null; // raw result or a provider's explicit { text, aborted } outcome
       try {
-        runOutcome = await orch.run(buildMultimodalTask(task, attachments), context, Array.isArray(history) ? history : [], runSkills);
+        runOutcome = await orch.run(
+          buildMultimodalTask(task, attachments),
+          context,
+          Array.isArray(history) ? history : [],
+          runSkills,
+          Object.freeze({
+            runId: executionId,
+            taskId,
+            runGeneration: String(executionId),
+            origin: "",
+            documentId: "",
+          }),
+        );
         result = (runOutcome && typeof runOutcome === "object" && !Array.isArray(runOutcome) && typeof runOutcome.text === "string")
           ? runOutcome.text
           : runOutcome;
@@ -4642,7 +4885,20 @@ const handlers = mergeRouteMaps(
         });
         // Thread the captured generation into a.run so the worker's memory/usage
         // commits revalidate THAT immutable identity (the round-22 ABA blocker).
-        return await a.run(task, "", [], gen);
+        return await a.run(
+          task,
+          "",
+          [],
+          gen,
+          undefined,
+          Object.freeze({
+            runId: execId,
+            taskId: logicalId,
+            origin: canonical,
+            documentId: "",
+            runGeneration: String(gen),
+          }),
+        );
       } finally {
         clearInterval(delegateHeartbeat);
         durableRunAborters.delete(execId);

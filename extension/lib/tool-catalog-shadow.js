@@ -40,6 +40,15 @@ export class ShadowToolCatalogController {
 
   async inspect(request = {}, context = {}) {
     const { catalog, index } = await this.#snapshot();
+    const selectionContext = {
+      runId: ownData(request, "runId"),
+      taskId: ownData(request, "taskId") ?? `shadow:${ownData(request, "runId") ?? "missing"}`,
+      agentId: ownData(request, "agentId"),
+      origin: ownData(request, "origin"),
+      documentId: ownData(request, "documentId") ?? ownData(context, "documentId"),
+      runGeneration: ownData(request, "runGeneration") ?? `shadow:${catalog.generation}`,
+      catalogGeneration: catalog.generation,
+    };
     const requestedAction = ownData(request, "action");
     const action = typeof requestedAction === "string"
       ? requestedAction
@@ -76,27 +85,17 @@ export class ShadowToolCatalogController {
       });
       return this.#selections.issue(
         search,
-        {
-          runId: ownData(request, "runId"),
-          agentId: ownData(request, "agentId"),
-          origin: ownData(request, "origin"),
-          documentId: ownData(request, "documentId") ??
-            ownData(context, "documentId"),
-          catalogGeneration: catalog.generation,
-        },
+        selectionContext,
         catalog,
         { ttlMs: ownData(request, "ttlMs") },
       );
     }
     if (action === "resolve") {
-      return this.#selections.resolve(ownData(request, "selectionRef"), {
-        runId: ownData(request, "runId"),
-        agentId: ownData(request, "agentId"),
-        origin: ownData(request, "origin"),
-        documentId: ownData(request, "documentId") ??
-          ownData(context, "documentId"),
-        catalogGeneration: catalog.generation,
-      }, catalog);
+      return this.#selections.resolve(
+        ownData(request, "selectionRef"),
+        selectionContext,
+        catalog,
+      );
     }
     if (action === "capture") {
       const search = searchToolIndex(index, ownData(request, "query"), {
@@ -104,14 +103,7 @@ export class ShadowToolCatalogController {
       });
       const selected = this.#selections.issue(
         search,
-        {
-          runId: ownData(request, "runId"),
-          agentId: ownData(request, "agentId"),
-          origin: ownData(request, "origin"),
-          documentId: ownData(request, "documentId") ??
-            ownData(context, "documentId"),
-          catalogGeneration: catalog.generation,
-        },
+        selectionContext,
         catalog,
         { ttlMs: ownData(request, "ttlMs") },
       );

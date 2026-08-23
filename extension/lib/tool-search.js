@@ -4,7 +4,7 @@
 // mutate source stores, request permissions, or create grants. The index is
 // rebuilt from the canonical catalog whenever its generation changes.
 
-import { truncateUtf8, utf8ByteLength } from "./pure.js";
+import { redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
 
 export const TOOL_SEARCH_BOUNDS = Object.freeze({
   maxQueryBytes: 512,
@@ -114,16 +114,20 @@ function scoreRow(row, query) {
   return score;
 }
 
+function boundedSearchText(value, maxBytes) {
+  return truncateUtf8(redactSecretText(String(value ?? "")), maxBytes);
+}
+
 export function projectToolSearchResult(descriptor) {
   return Object.freeze({
     stableId: descriptor.stableId,
     name: descriptor.name,
     aliases: descriptor.aliases,
-    summary: truncateUtf8(
+    summary: boundedSearchText(
       descriptor.description,
       TOOL_SEARCH_BOUNDS.maxSummaryBytes,
     ),
-    schemaSummary: truncateUtf8(
+    schemaSummary: boundedSearchText(
       descriptor.schemaSummary,
       TOOL_SEARCH_BOUNDS.maxSchemaSummaryBytes,
     ),
@@ -131,7 +135,10 @@ export function projectToolSearchResult(descriptor) {
     packageId: descriptor.packageId,
     version: descriptor.version,
     digest: descriptor.digest,
+    packageDigest: descriptor.packageDigest,
     capabilityDigest: descriptor.capabilityDigest,
+    permissionDigest: descriptor.permissionDigest,
+    grantDigest: descriptor.grantDigest,
     capabilities: descriptor.capabilities,
     scope: descriptor.scope,
     sourceGeneration: descriptor.sourceGeneration,

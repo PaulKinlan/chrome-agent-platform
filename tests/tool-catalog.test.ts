@@ -273,28 +273,31 @@ Deno.test("tool catalog: real declared/inferred WebMCP descriptors stay unknown 
   }
 });
 
-Deno.test("tool catalog: bundled-package source kind is reserved and hard-rejected fail-closed", () => {
-  assert(TOOL_SOURCE_KINDS.includes("bundled-package"), "TOOL_SOURCE_KINDS must include bundled-package");
-
+Deno.test("tool catalog: bundled-package metadata is searchable only with an exact digest and remains non-executable when disabled", () => {
+  assert(TOOL_SOURCE_KINDS.includes("bundled-package"));
   const packageInput = descriptor({
     sourceKind: "bundled-package",
     packageId: "cap.test-pkg",
     toolId: "sha256",
+    packageDigest: "a".repeat(64),
+    availability: "disabled",
+    dispatcherKind: "bundled-wasm-disabled",
   });
+  const canonical = canonicalToolDescriptor(packageInput);
+  assertEquals(canonical.packageDigest, "a".repeat(64));
+  assertEquals(canonical.availability, "disabled");
+  const catalog = buildToolCatalog([packageInput]);
+  assertEquals(catalog.descriptors.length, 1);
+  assertEquals(catalog.diagnostics.rejected, 0);
 
   let threw = false;
   try {
-    canonicalToolDescriptor(packageInput);
+    canonicalToolDescriptor({ ...packageInput, packageDigest: "not-a-digest" });
   } catch (err) {
     threw = true;
-    assertEquals(err.code, "package-authority-unwired");
+    assertEquals(err.code, "package-digest");
   }
-  assert(threw, "canonicalToolDescriptor must reject bundled-package in precursor PR1");
-
-  const catalog = buildToolCatalog([packageInput]);
-  assertEquals(catalog.descriptors.length, 0);
-  assertEquals(catalog.diagnostics.rejected, 1);
-  assertEquals(catalog.diagnostics.errors["package-authority-unwired"], 1);
+  assert(threw, "malformed bundled package identity must fail closed");
 });
 
 Deno.test("tool catalog: availability changes invalidate catalog generation", () => {

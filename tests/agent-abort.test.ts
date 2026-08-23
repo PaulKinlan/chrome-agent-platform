@@ -251,7 +251,14 @@ Deno.test("agent-abort: the PRODUCTION delegate_task fails on an aborted worker 
   // THROWS for an aborted worker — a returned {error} would be a SUCCESSFUL
   // tool-result). Assert: (a) the run's failure reflects the tool-error, and
   // (b) there is NO successful delegate_task result anywhere.
-  const delegateToolResults = workerEvents.filter((e) => e?.type === "tool-result" && /delegate_task/.test(JSON.stringify(e)));
+  const executeCalls = workerEvents.filter((e) =>
+    e?.type === "tool-call" && e?.toolName === "execute_tool"
+  );
+  assert(executeCalls.length >= 1, "delegation crossed the fixed execute_tool boundary");
+  const delegateToolResults = workerEvents.filter((e) =>
+    e?.type === "tool-result" && e?.toolName === "execute_tool" &&
+    e?.selectedTool === "delegate_task"
+  );
   const delegateResultText = JSON.stringify(delegateToolResults.map((e) => e?.result ?? e).join(" "));
   // a returned {error} object would appear as a tool-result here — the throw
   // path must NOT leave one
@@ -278,8 +285,11 @@ Deno.test("agent-abort: the sequenced demo reads BOTH observe the written value 
   const out = await agent.run("run @demo-tools please", "", []);
   assert(typeof out === "string" && out.length > 0, "the run completed with a text result");
   // the TWO memory_get tool results must each contain the newly written value
-  const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
-  assert(gets.length === 2, `exactly two memory_get results (got ${gets.length})`);
+  const gets = events.filter((e) =>
+    e?.type === "tool-result" && e?.toolName === "execute_tool" &&
+    e?.selectedTool === "memory_get"
+  );
+  assert(gets.length === 2, `exactly two execute_tool(memory_get) results (got ${gets.length})`);
   for (const g of gets) {
     const text = JSON.stringify(g);
     assert(text.includes("Espresso machine"), "the read returned the WRITTEN value (memory_get observed the committed write)");
@@ -361,8 +371,15 @@ Deno.test("agent-abort: the PRODUCTION delegate throws — ZERO delegate_task to
   const text = out && typeof out === "object" ? (out.text ?? out.error ?? "") : String(out);
   // ZERO successful delegate_task tool-results (the throw emits a tool-error,
   // never a result part)
-  const delegateResults = events.filter((e) => e?.type === "tool-result" && /delegate_task/.test(JSON.stringify(e)));
-  assertEquals(delegateResults.length, 0, "no successful delegate_task tool-result");
+  const executeCalls = events.filter((e) =>
+    e?.type === "tool-call" && e?.toolName === "execute_tool"
+  );
+  assert(executeCalls.length >= 1, "delegation reached the fixed execute_tool boundary");
+  const delegateResults = events.filter((e) =>
+    e?.type === "tool-result" && e?.toolName === "execute_tool" &&
+    e?.selectedTool === "delegate_task"
+  );
+  assertEquals(delegateResults.length, 0, "no successful execute_tool(delegate_task) result");
   // the final text is the authoritative FAILED outcome (the continuation
   // re-emits the prior summary — never a neutral rewrite)
   assert(/Delegation FAILED|aborted|failed/i.test(text), `the delegation failed in the final text (got: ${text.slice(0, 80)})`);
@@ -388,8 +405,11 @@ Deno.test("agent-abort: STATELESS sequencing — consecutive marker runs + non-m
   for (const out of [out1, out2]) {
     assert(typeof out === "string" && out.length > 0, "each consecutive marker run completes");
   }
-  const gets1 = events1.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
-  assert(gets1.length === 4, `two consecutive runs → 2+2 memory_get results (got ${gets1.length})`);
+  const gets1 = events1.filter((e) =>
+    e?.type === "tool-result" && e?.toolName === "execute_tool" &&
+    e?.selectedTool === "memory_get"
+  );
+  assert(gets1.length === 4, `two consecutive runs → 2+2 execute_tool(memory_get) results (got ${gets1.length})`);
   for (const g of gets1) {
     assert(JSON.stringify(g).includes("Espresso machine"), "every read in both runs observed the written value");
   }
@@ -480,7 +500,11 @@ Deno.test("agent-abort: an INTERVENING non-marker run resets the run boundary", 
   const r = await model.doStream({ prompt: [...first, inter, { role: "user", content: "run @demo-tools please" }], abortSignal: new AbortController().signal });
   let firstPart = null;
   for await (const p of r.stream) { if (p.type === "tool-call") { firstPart = p; break; } }
-  assert(firstPart !== null && firstPart.toolName === "memory_set", `the fresh marker run starts at SET (got ${JSON.stringify(firstPart)})`);
+  assert(
+    firstPart !== null && firstPart.toolName === "search_tools" &&
+      JSON.parse(firstPart.input).query === "memory_set",
+    `the fresh marker run starts by searching for SET (got ${JSON.stringify(firstPart)})`,
+  );
 });
 
 Deno.test("agent-abort: both reads DEEP-EQUAL the written value (parsed outputs, not substrings)", async () => {
@@ -496,8 +520,11 @@ Deno.test("agent-abort: both reads DEEP-EQUAL the written value (parsed outputs,
   });
   await agent.run("run @demo-tools please", "", []);
   const written = await mem.get("demo");
-  const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
-  assert(gets.length === 2, `two reads (got ${gets.length})`);
+  const gets = events.filter((e) =>
+    e?.type === "tool-result" && e?.toolName === "execute_tool" &&
+    e?.selectedTool === "memory_get"
+  );
+  assert(gets.length === 2, `two execute_tool(memory_get) reads (got ${gets.length})`);
   for (const g of gets) {
     // parse the SDK tool-result part's output value structurally
     const raw = g?.result;
@@ -548,32 +575,50 @@ Deno.test("agent-abort: structural output parsing — a tool-result with output.
 
 Deno.test("agent-abort: the ACTUAL AI SDK result contains EXACTLY ONE delegate_task tool-error and ZERO tool-result", async () => {
   __resetUsage();
-  const { streamText, tool } = await import("npm:ai@^7.0.66");
+  const { stepCountIs, streamText, tool } = await import("npm:ai@^7.0.66");
   const { z } = await import("npm:zod@^3.24.0");
   const { createDemoModel } = await import("../extension/lib/models/demo-model.js");
   const model = createDemoModel();
-  // the REAL delegate_task tool shape: execute THROWS the typed abort (the
-  // AI SDK then emits a tool-error part)
+  // The fixed provider pair: search returns the run-bound delegate reference;
+  // execute_tool then THROWS the typed abort on behalf of delegate_task.
+  const selectionRef = `sel_${"a".repeat(36)}`;
   const tools = {
-    delegate_task: tool({
-      inputSchema: z.object({ agentId: z.string(), task: z.string() }),
+    search_tools: tool({
+      inputSchema: z.object({ query: z.string(), limit: z.number().optional() }),
+      execute: async () => ({
+        ok: true,
+        results: [{ name: "delegate_task", selectionRef, authorizes: false }],
+      }),
+    }),
+    execute_tool: tool({
+      inputSchema: z.object({ selectionRef: z.string(), arguments: z.record(z.unknown()) }),
       execute: async () => {
         const err = new Error("delegation aborted — the worker for demo-site was aborted mid-run");
         err.name = "RunAbortedError";
+        err.selectedTool = "delegate_task";
         throw err;
       },
     }),
   };
-  const result = streamText({ model, prompt: "run @demo-delegate demo-site please", tools });
-  // the ACTUAL AI SDK content stream (the parts the SDK emits for the tool
-  // execution) — the tool-error + tool-result parts
+  const result = streamText({
+    model,
+    prompt: "run @demo-delegate demo-site please",
+    tools,
+    stopWhen: stepCountIs(3),
+  });
   const parts = [];
   for await (const p of result.fullStream) parts.push(p);
-  const delegateErrors = parts.filter((p) => p.type === "tool-error" && p.toolName === "delegate_task");
-  const delegateResults = parts.filter((p) => p.type === "tool-result" && p.toolName === "delegate_task");
-  assertEquals(delegateErrors.length, 1, "EXACTLY ONE delegate_task tool-error in the AI SDK content");
-  assertEquals(delegateResults.length, 0, "ZERO delegate_task tool-result in the AI SDK content");
-  assert(/abort|aborted/i.test(delegateErrors[0]?.error?.message ?? ""), "the tool-error carries the abort");
+  const searches = parts.filter((p) => p.type === "tool-result" && p.toolName === "search_tools");
+  const delegateErrors = parts.filter((p) =>
+    p.type === "tool-error" && p.toolName === "execute_tool"
+  );
+  const delegateResults = parts.filter((p) => p.type === "tool-result" && p.toolName === "execute_tool");
+  assertEquals(searches.length, 1, "EXACTLY ONE search_tools result precedes execution");
+  assert(JSON.stringify(searches[0]?.output).includes("delegate_task"), "search selected delegate_task metadata");
+  assertEquals(delegateErrors.length, 1, "EXACTLY ONE execute_tool(delegate_task) tool-error");
+  assertEquals(delegateResults.length, 0, "ZERO successful execute_tool result");
+  assertEquals(delegateErrors[0]?.error?.name, "RunAbortedError", "the typed abort survives execute_tool");
+  assert(/abort|aborted/i.test(delegateErrors[0]?.error?.message ?? ""), "the typed execute error carries the abort");
 });
 
 Deno.test("agent-abort: BOTH of the run's reads' parsed outputs deep-equal the COMPLETE written value (captured at the tool boundary — no fallback, no detached calls)", async () => {
@@ -622,9 +667,12 @@ Deno.test("agent-abort: BOTH of the run's reads' parsed outputs deep-equal the C
   // the run ALSO emitted exactly two memory_get tool-result events (the
   // bounded summaries — they cannot carry the full value, but the reads they
   // report happened, in the same count, with the same key)
-  const gets = events.filter((e) => e?.type === "tool-result" && /memory_get/.test(JSON.stringify(e)));
-  assert(gets.length === 2, `two memory_get tool-result events (got ${gets.length})`);
+  const gets = events.filter((e) =>
+    e?.type === "tool-result" && e?.toolName === "execute_tool" &&
+    e?.selectedTool === "memory_get"
+  );
+  assert(gets.length === 2, `two execute_tool(memory_get) result events (got ${gets.length})`);
   for (const g of gets) {
-    assert(/memory_get/.test(JSON.stringify(g)) && (g?.toolName === "memory_get" || /memory_get/.test(JSON.stringify(g?.result ?? ""))), "the event names the memory_get read");
+    assertEquals(g.selectedTool, "memory_get", "the fixed execute boundary names the selected read");
   }
 });

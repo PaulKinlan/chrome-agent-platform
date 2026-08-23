@@ -15,6 +15,12 @@ import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
 import { sha256Hex, utf8ByteLength } from "./pure.js";
 import { isToolResultFailure } from "./tool-summary.js";
+import {
+  createLazyProviderToolset,
+  executableBrowserToolRecords,
+  executableBuiltinToolRecords,
+  executableManagementToolRecords,
+} from "./lazy-tool-protocol.js";
 
 // The default system prompt = the versioned worker base (cap.worker.base) +
 // the immutable protected constraints, composed by the SINGLE composition
@@ -22,6 +28,32 @@ import { isToolResultFailure } from "./tool-summary.js";
 // prompts (with any owner override applied); this baseline is the fallback when
 // no composed prompt is supplied (tests, direct lib use).
 const DEFAULT_SYSTEM = baselineSystemPrompt("cap.worker.base");
+
+function ownData(value, key) {
+  try {
+    if (!value || typeof value !== "object") return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function selectedToolFromResult(result) {
+  const direct = ownData(result, "selectedTool");
+  if (typeof direct === "string") return direct;
+  const modelContent = ownData(result, "modelContent");
+  if (typeof modelContent !== "string" || modelContent.length > 128 * 1024) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(modelContent);
+    const selected = ownData(parsed, "selectedTool");
+    return typeof selected === "string" ? selected : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Extract the EXACT system message a provider/model adapter is about to
  * receive (AI-SDK LanguageModel options carry it either as `system` or as
@@ -332,6 +364,12 @@ export function createAgent({
   // `readOnlyMemory` (SCOPED hook runs): memory_set is omitted — untrusted
   // event data must never persist state.
   readOnlyMemory = false,
+  // Additional LIVE source records (WebMCP, Chrome/management, bundled
+  // catalog-only rows). Called for every search and every execute fence.
+  readLazySources = async () => [],
+  // Dynamic scope/document fence reader. The active run identity is merged
+  // after this result, so a source can never replace run/task/agent identity.
+  readLazyScope = async () => ({}),
 }) {
   // The worker's immutable run identity, captured at run START. Because master
   // runs are serialized (withRunLock), at most one run is active per agent, so a
@@ -339,7 +377,7 @@ export function createAgent({
   // at delegation start (or, for a direct run, captured here) — every worker
   // commit revalidates THAT generation, never "currently enrolled" (the round-22
   // ABA blocker).
-  let activeRun = null; // { gen: number|null, controller: AbortController }
+  let activeRun = null; // { gen, controller, identity:{runId,taskId,...} }
   // The IMMUTABLE usage-attempt identity: a FIFO queue of { id, occurredAt,
   // ordinal } pushed at the provider-attempt invocation boundary (doGenerate/
   // doStream) and consumed by onUsage. Agent-do dispatches ALL onUsage records
@@ -455,7 +493,58 @@ export function createAgent({
     },
   });
 
-  const allTools = { ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory), ...tools };
+  const sourceTools = {
+    ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory),
+    ...tools,
+  };
+  const instanceGeneration = `agent-instance:${crypto.randomUUID()}`;
+  const lazy = createLazyProviderToolset({
+    readSources: async () => {
+      const builtin = executableBuiltinToolRecords(sourceTools, {
+        version: "runtime-v1",
+        sourceGeneration: instanceGeneration,
+        closureGeneration: instanceGeneration,
+        packageDigest: sha256Hex(`cap.core-tools\u0000${instanceGeneration}`),
+        permissionDigest: "none",
+        grantDigest: "none",
+        scope: {
+          hub: id === "hub",
+          agentId: id,
+          origin: id === "hub" ? "" : id,
+          documentId: "",
+        },
+        capabilitiesByTool: Object.fromEntries(
+          Object.keys(sourceTools).map((toolName) => [toolName, [
+            toolName === "memory_set" ? "memory.write" :
+            toolName === "delegate_task" ? "agent.delegate" :
+            toolName === "list_agents" ? "agent.list" : "memory.read",
+          ]]),
+        ),
+      });
+      const extra = await readLazySources();
+      if (!Array.isArray(extra)) throw new Error("lazy source reader shape");
+      return [...builtin, ...extra];
+    },
+    contextReader: async () => {
+      if (!activeRun) return null;
+      const dynamic = await readLazyScope();
+      return Object.freeze({
+        signal: activeRun.controller.signal,
+        runId: ownData(activeRun.identity, "runId"),
+        taskId: ownData(activeRun.identity, "taskId"),
+        agentId: id,
+        origin: ownData(dynamic, "origin") ?? ownData(activeRun.identity, "origin") ?? (id === "hub" ? "" : id),
+        documentId: ownData(dynamic, "documentId") ?? ownData(activeRun.identity, "documentId") ?? "",
+        runGeneration: ownData(dynamic, "runGeneration") ?? ownData(activeRun.identity, "runGeneration") ?? String(activeRun.gen ?? "0"),
+        replayMetadata: ownData(activeRun.identity, "replayMetadata") ?? null,
+      });
+    },
+  });
+  // The provider receives exactly the two fixed lazy protocol tools. Every
+  // source closure above stays private until a fresh search result is resolved
+  // and execute_tool revalidates it; empty/ambiguous search never falls back to
+  // eager exposure.
+  const allTools = lazy.tools;
   // The skills layer composes BEFORE the protected constraints (the
   // protected-last invariant, docs/SYSTEM-PROMPTS.md): `system` arrives
   // already composed by lib/system-prompts.js (base + owner customization +
@@ -479,6 +568,10 @@ export function createAgent({
     systemPrompt: sysPrompt,
     tools: allTools,
     maxIterations,
+    // The fixed lazy protocol needs two dependent provider steps per logical
+    // tool action. Keep one bounded inner turn large enough for the demo's
+    // write + two reads without dropping its run-local selection sequence.
+    innerStepLimit: Math.max(2, Math.min(maxIterations, 8)),
     usage: { pricing: MODEL_PRICING },
     hooks: {
       // LIVE progress hooks — forward the agent-do step/tool lifecycle to the
@@ -505,7 +598,17 @@ export function createAgent({
         }
       },
       onPostToolUse: async (e) => {
-        try { progressCb?.({ type: "tool-result", toolName: e.toolName, step: e.step, durationMs: e.durationMs, result: summarizeToolResult(e.result), ok: !isToolResultFailure(e.result) }); } catch { /* ignore */ }
+        try {
+          progressCb?.({
+            type: "tool-result",
+            toolName: e.toolName,
+            selectedTool: selectedToolFromResult(e.result),
+            step: e.step,
+            durationMs: e.durationMs,
+            result: summarizeToolResult(e.result),
+            ok: !isToolResultFailure(e.result),
+          });
+        } catch { /* ignore */ }
       },
       onComplete: async (e) => {
         try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }
@@ -553,7 +656,7 @@ export function createAgent({
     // prompt bodies recompose into the system prompt BEFORE the protected
     // block (a fresh agent for this run), so referenced-skill instructions
     // never sit after the runtime policy.
-    run: async (task, context, history, runGen, runSkills) => {
+    run: async (task, context, history, runGen, runSkills, runIdentity = null) => {
       // Serialize the run behind any prior run of THIS worker (see runQueue above).
       // `execute` carries the full original body; the queue always advances even
       // if a run rejects, so a failed run can never poison later runs.
@@ -576,7 +679,18 @@ export function createAgent({
       // TYPED abort error, never a successful {error} object.
       if (aborted) throw new RunAbortedError("run aborted before start");
       const controller = new AbortController();
-      activeRun = { gen, controller };
+      const identityInput = runIdentity && typeof runIdentity === "object"
+        ? runIdentity
+        : {};
+      const identity = Object.freeze({
+        runId: String(ownData(identityInput, "runId") ?? crypto.randomUUID()),
+        taskId: String(ownData(identityInput, "taskId") ?? taskId ?? "adhoc"),
+        origin: String(ownData(identityInput, "origin") ?? (id === "hub" ? "" : id)),
+        documentId: String(ownData(identityInput, "documentId") ?? ""),
+        runGeneration: String(ownData(identityInput, "runGeneration") ?? gen ?? "0"),
+        replayMetadata: ownData(identityInput, "replayMetadata") ?? null,
+      });
+      activeRun = { gen, controller, identity };
       if (aborted || controller.signal.aborted) {
         activeRun = null;
         throw new RunAbortedError("run aborted before start");
@@ -649,6 +763,7 @@ export function createAgent({
       runQueue = result.then(() => {}, () => {});
       return result;
     },
+    lazyDiagnostics: () => lazy.diagnostics(),
     abort: () => {
       if (disposable) aborted = true;
       activeRun?.controller.abort();
@@ -700,7 +815,9 @@ export function createOrchestrator({
   workers = [], // [{ origin, memory, skills, tools }]
   multiAgent = true,
   taskId = "adhoc",
-  extraTools = {}, // browser-control + management tools (chrome.* — SW context)
+  extraTools = {}, // retained as private source closures; never provider-eager
+  readMasterLazySources = async () => [],
+  readMasterLazyScope = async () => ({}),
   delegateGuard = null, // async (origin) => { ok, error } — revalidates live
                         // enrollment/generation before a delegated worker runs
   scoped = false, // SCOPED (hook) runs: the master gets read-only memory (no
@@ -710,6 +827,7 @@ export function createOrchestrator({
                      // into BOTH the master agent and every delegated worker.
 }) {
   const workerAgents = new Map();
+  let currentRunIdentity = null;
   for (const w of workers) {
     const a = createAgent({
       model,
@@ -719,6 +837,11 @@ export function createOrchestrator({
       memory: w.memory,
       skills: w.skills ?? [],
       tools: w.tools ?? {},
+      readLazySources: w.readLazySources ?? (async () => []),
+      readLazyScope: w.readLazyScope ?? (async () => ({
+        origin: w.origin,
+        documentId: "",
+      })),
       taskId,
       // Thread the delegateGuard into each worker's memory tools so a worker's
       // memory_set revalidates its IMMUTABLE run-start generation before
@@ -800,7 +923,18 @@ export function createOrchestrator({
           // generic "No output generated").
           let result;
           try {
-            result = await a.run(task, undefined, undefined, gen);
+            result = await a.run(
+              task,
+              undefined,
+              undefined,
+              gen,
+              undefined,
+              Object.freeze({
+                ...(currentRunIdentity ?? {}),
+                origin: agentId,
+                runGeneration: String(gen),
+              }),
+            );
           } catch (e) {
             // ONLY an ABORT-shaped worker rejection becomes the typed error (a
             // REAL tool-error); any UNRELATED worker error (a tool failure, a
@@ -849,7 +983,15 @@ export function createOrchestrator({
     model,
     system: masterSystem ?? system,
     memory: masterMemory,
-    tools: { ...delegate, ...extraTools },
+    // `extraTools` stay out of this eager map. Their live records come from
+    // readMasterLazySources; only delegation's existing closures are added to
+    // the private built-in source map.
+    tools: delegate,
+    readLazySources: async () => {
+      const extra = await readMasterLazySources(extraTools);
+      return Array.isArray(extra) ? extra : [];
+    },
+    readLazyScope: readMasterLazyScope,
     taskId,
     onProgress,
     // SCOPED (hook) runs: the master's memory is READ-ONLY (no memory_set) —
@@ -860,13 +1002,25 @@ export function createOrchestrator({
   return {
     master,
     workers: workerAgents,
-    async run(task, context, history, runSkills) {
-      // Solo mode REUSES the master agent (which carries the non-delegation
-      // browser/management tools); it must NOT build a fresh agent that loses
-      // those capabilities. Multi-agent mode adds the delegate tools on top.
-      // `runSkills` (per-run /skill:<id> bodies) are threaded into the
-      // master's run so they recompose BEFORE the protected block.
-      return await master.run(task, context, history, undefined, runSkills);
+    async run(task, context, history, runSkills, runIdentity = null) {
+      // Solo/multi-agent runs expose the same two-tool provider surface. The
+      // logical/durable identity is held only for this serialized run and is
+      // inherited by delegated workers.
+      currentRunIdentity = runIdentity && typeof runIdentity === "object"
+        ? Object.freeze({ ...runIdentity })
+        : Object.freeze({ runId: crypto.randomUUID(), taskId });
+      try {
+        return await master.run(
+          task,
+          context,
+          history,
+          undefined,
+          runSkills,
+          currentRunIdentity,
+        );
+      } finally {
+        currentRunIdentity = null;
+      }
     },
     abort() {
       master.abort();
@@ -896,6 +1050,11 @@ export function createOrchestrator({
         memory: config.memory,
         skills: config.skills ?? [],
         tools: config.tools ?? {},
+        readLazySources: config.readLazySources ?? (async () => []),
+        readLazyScope: config.readLazyScope ?? (async () => ({
+          origin: config.origin,
+          documentId: "",
+        })),
         taskId,
         enrollmentGuard: delegateGuard
           ? async () => delegateGuard(config.origin)

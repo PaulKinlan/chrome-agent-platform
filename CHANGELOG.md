@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.180] — 2026-08-23
+- feat(tools): cut providers over to bounded lazy dispatch (CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01)
+
 ## [0.2.179] — 2026-08-23
 - feat(tools): admit bounded du Settings preview over an immutable per-job workspace seed (CAP-FB-20260823-TOOL-PREVIEW-DU-01)
 

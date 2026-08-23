@@ -5,19 +5,18 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 10:26 UTC. Reconciled against exact public
-> `origin/main@0354422b331315d2651474ce4ba11930fc272875` (`0.2.178`). Lazy,
-> security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
-> package bytes, the Store static boundary, the tool-platform foundation and
-> the 20-tool Settings preview posture remain exact; the catalog remains
-> `MERGED`. This separate `0.2.179` candidate admits only retained `du` through
-> the existing owner-click Settings preview with the immutable minimum seed and
-> `/job` default; tree and the other four packages remain disabled, so posture
-> is exactly 21/5 with no new route, permission, provider, page, OPFS,
-> persistence or mutation authority.
-> Branch status counts: **14 OPEN · 17 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 37 nonterminal and 40 terminal status entries
-> below are the complete 77-entry state.
+> Snapshot: 2026-08-23 12:45 UTC. Reconciled against exact public
+> `origin/main@54e3240e7df1e6c83fdd3ff9684917b6e3bfe215` (`0.2.179`). The
+> 21-enabled/5-disabled Settings posture, all bundled Wasm/CAS bytes, pure WASI
+> host, Store boundary, and owner-only package authority remain exact. This
+> separate `0.2.180` candidate cuts every run type over from eager dynamic
+> provider maps to the fixed bounded `search_tools`/`execute_tool` pair with
+> live run/source/permission/grant/document/replay revalidation and protected
+> non-authorizing discovery guidance. Fresh loaded-MV3 acceptance is still
+> required and Chrome is explicitly outside this candidate-finisher run.
+> Branch status counts: **14 OPEN · 18 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 38 nonterminal and 40 terminal status entries
+> below are the complete 78-entry state.
 
 ## Safety boundary
 
@@ -1609,6 +1608,28 @@ On resume after a coordinator or worker loss:
 - History:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D8).
+
+## [CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01] Cut live providers over to bounded lazy dispatch
+- Feedback: 2026-08-23 — provider context must remain constant as the callable catalog scales, without weakening live source, run, permission, grant, enrollment, document, package, or replay authority
+- Updated: 2026-08-23 12:45 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: implementation finisher
+- Workspace: active (local path private)
+- Branch: `feat/lazy-provider-cutover-0354422`
+- Base: `54e3240e7df1e6c83fdd3ff9684917b6e3bfe215`
+- Candidate: this tracker commit
+- Shipping: —
+- Acceptance: the actual AI-SDK provider map contains exactly fixed `search_tools` and `execute_tool` definitions at catalog sizes 20/100/1000; search returns bounded deterministic in-scope metadata and single-use run-bound non-authorizing references; execute accepts only a returned reference and revalidates immutable source/closure/package/capability identity plus live run/task/agent/origin/document/generation, permission, grant, revocation, expiry and replay authority before validation, before dispatch and after dispatch; bundled rows remain catalog-only; protected post-owner guidance covers every run surface
+- Review: independent candidate review required; prior K3 takeover diagnosis verified the partial direction and identified the corrected direct-agent origin fallback plus bounded test migration, but is not final release review
+- Gates: focused catalog/search/selection/protocol/cutover/system-prompt/abort/e2e 120/120 and final cutover/protocol/abort/e2e/shadow 53/53; changed-source type checks pass; exact candidate full serial no-Chrome 1195/1195 across 14 steps; two exact-candidate Store builds are byte-identical (132 shipped JS scan clean, 26 Wasm manifest/raw scan); two fresh Store packages are byte-identical at 224 entries; provider wire 646 bytes and actual AI-SDK definitions 812 bytes at each of 20/100/1000 rows; fresh CAS import census has 21 admitted with missing=[]; tree remains disabled; SQLite remains disabled with its exact eight-import gap; 26 CAS files have zero byte delta from the public parent
+- Blockers: Chrome is prohibited in this finisher run, so canonical loaded-MV3 behavior/denial/revoke/race evidence remains a required next gate; independent final candidate review is pending; no push authorized
+- Next: obtain independent diff/evidence review, then run the serialized loaded-MV3 browser gate without changing this candidate
+- Recover: `git show <candidate> -- extension/background/service-worker.js extension/lib/agent.js extension/lib/lazy-tool-protocol.js extension/lib/models/demo-model.js extension/lib/runtime-policy.js extension/lib/tool-catalog.js extension/lib/tool-search.js extension/lib/tool-selection.js tests/lazy-provider-cutover.test.ts tests/agent-abort.test.ts`
+- History:
+  - 2026-08-23 12:45 UTC — preserved the frozen old-base partial diff, recomposed it without conflict onto exact public 0.2.179, corrected direct-agent origin scope, migrated fixed-boundary abort/demo assertions, added atomic single-use replay claims and hostile lifecycle/provider-context coverage, and entered IN_REVIEW truthfully with browser acceptance still open.
+  - 2026-08-23 13:20 UTC — exact no-Chrome release gates completed: 1195/1195 full tests, deterministic Store build/package, 224-entry package, constant provider bytes, zero CAS delta, fresh 21-tool missing=[] census, tree disabled and exact SQLite eight-import gap; independent review and browser acceptance remain open.
 
 ---
 

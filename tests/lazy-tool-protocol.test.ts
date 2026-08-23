@@ -44,6 +44,8 @@ function adapterContext(overrides: Record<string, unknown> = {}) {
 function runContext(overrides: Record<string, unknown> = {}) {
   return {
     runId: "run-1",
+    taskId: "task-1",
+    runGeneration: "generation-1",
     agentId: "hub",
     origin: "",
     documentId: "hub-doc",
@@ -112,6 +114,14 @@ Deno.test("lazy protocol: search is non-authorizing and execute delegates throug
     "unknown",
   );
   assertEquals(calls, 1);
+  assertEquals(
+    await protocol.execute({
+      selectionRef: ref,
+      arguments: { value: "replayed" },
+    }, context),
+    { ok: false, error: "selection-replayed" },
+  );
+  assertEquals(calls, 1, "a consumed ref cannot dispatch twice");
   assertEquals(protocol.diagnostics().providerBound, false);
   assertEquals(protocol.diagnostics().grantsCreated, 0);
 });
@@ -342,10 +352,11 @@ Deno.test("lazy protocol: cancellation fences before and after the existing disp
 Deno.test("lazy protocol: validator replacement at an async boundary fails before dispatch", async () => {
   let reads = 0;
   let calls = 0;
-  const descriptorInput =
-    builtinRecords(() => ({ ok: true }))[0].descriptorInput;
+  const baseRecord = builtinRecords(() => ({ ok: true }))[0];
+  const descriptorInput = baseRecord.descriptorInput;
   const accepting = {
     descriptorInput,
+    authorize: baseRecord.authorize,
     validateArguments: async (args: unknown) => ({ ok: true, data: args }),
     dispatch: () => {
       calls++;
@@ -514,7 +525,11 @@ Deno.test("lazy protocol: hostile structured dispatcher errors never invoke gett
     selectionRef: ref,
     arguments: { value: "x" },
   }, context);
-  assertEquals(result, { ok: false, error: "lazy dispatcher failed" });
+  assertEquals(result, {
+    ok: false,
+    selectedTool: "echo",
+    error: "lazy dispatcher failed",
+  });
   assertEquals(getterCalls, 0);
 });
 
@@ -615,22 +630,18 @@ Deno.test("lazy provider capture: only two fixed protocol tools and selected sch
   assert(!wire.includes("not_selected_tool"));
 });
 
-Deno.test("lazy protocol: production providers and prompts remain unchanged by the shadow candidate", async () => {
+Deno.test("lazy protocol: production provider cutover binds only the fixed pair and protected flow guidance", async () => {
   const agent = await Deno.readTextFile("extension/lib/agent.js");
-  const prompts = await Deno.readTextFile("extension/lib/system-prompts.js");
+  const policy = await Deno.readTextFile("extension/lib/runtime-policy.js");
   const worker = await Deno.readTextFile(
     "extension/background/service-worker.js",
   );
-  const shadow = await Deno.readTextFile(
-    "extension/lib/tool-catalog-shadow.js",
-  );
-  assert(!agent.includes("search_tools"));
-  assert(!agent.includes("execute_tool"));
-  assert(!prompts.includes("search_tools"));
-  assert(!prompts.includes("execute_tool"));
-  assert(!worker.includes("new LazyToolProtocol"));
-  assertStringIncludes(shadow, 'from "./lazy-tool-wire.js"');
-  assert(!shadow.includes('from "./lazy-tool-protocol.js"'));
+  assertStringIncludes(agent, "createLazyProviderToolset");
+  assertStringIncludes(agent, "const allTools = lazy.tools");
+  assertStringIncludes(policy, "first call search_tools with a narrow query");
+  assertStringIncludes(policy, "then call execute_tool with the exact selectionRef");
+  assertStringIncludes(worker, "readMasterLazySources");
+  assertStringIncludes(worker, "readSiteLazySources");
   assertStringIncludes(worker, 'async "tool-catalog.shadow"(m, context)');
 });
 
