@@ -1619,6 +1619,11 @@ On resume after a coordinator or worker loss:
 - Recover:
   `git grep -n "BUILTIN-WASM-TOOLS\|gzip\|SBOM\|Tranche A" -- TASKS.md docs extension tests`
 - History:
+  - 2026-08-23 22:00 UTC — build integrity landed as 0.2.191 (45ca99f):
+    `npm run build` runs the package generator in verify mode by default
+    (fail-closed zero-drift over all 80 generated outputs) with full
+    regeneration only behind explicit --regen-tools; 1265/1265 full suite;
+    rebase conflict resolution dogfooded byte-exact (regen left zero diff).
   - 2026-08-22 09:30 UTC — factual Co-do inventory recorded as 39 tools across
     nine functional categories; it is a prioritization precedent, not a binary
     source.
