@@ -589,7 +589,7 @@ On resume after a coordinator or worker loss:
   interface shows nothing, so the owner cannot see or review what happened;
   agent runs should expose their full logs like a Task does (in agent view)
 - Updated: 2026-08-23 20:05 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: unassigned
@@ -597,7 +597,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@2f3a5879cb27c5b481eb02727d414a61e053ae8a` (0.2.195)
 - Acceptance: while an agent runs, the agent view renders a chat-like
   transcript of the run (owner-visible messages, tool calls, tool results,
   errors and status transitions) in near-real time; after completion or
