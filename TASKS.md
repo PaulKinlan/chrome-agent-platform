@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **39 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 66 nonterminal and 40 terminal status entries
-> below are the complete 106-entry state.
+> Branch status counts: **41 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 68 nonterminal and 40 terminal status entries
+> below are the complete 108-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,88 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-AGENT-WASM-DISCOVERY-01] Agent claims "no native WASM tools" despite 26 running; add list_tools; clarify "bundled packages"
+
+- Feedback: 2026-08-23 — product owner (repeat, unfixed): asking the agent
+  "what WebAssembly tools do you have?" returns "there are no native
+  WebAssembly tools available, execution is scoped to the sandbox JS/browser
+  environment" — yet Settings shows 26 bundled Wasm tools and bundled tool
+  previews RUN. Also "Bundled packages" is confusing (one surface says "no
+  bundled packages are emitted in this build" while 26 exist), tool counts
+  disagree (~70 somewhere), and search doesn't find them. Owner wants a
+  list_tools function and honest, consistent tool discovery
+- Updated: 2026-08-23 23:05 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bd85bf7`
+- Candidate: —
+- Shipping: —
+- Acceptance: the agent, when asked what tools/Wasm tools are available,
+  truthfully reports the admitted bundled Wasm tools (from the live catalog,
+  not a stale/empty claim); a list_tools (enumerate) capability returns the
+  real tool inventory by source (builtin/browser/management/bundled-wasm);
+  the "bundled packages" wording and empty-state are consistent with the 26
+  admitted packages; tool counts agree across surfaces; search finds them
+- Review: pending independent catalog/provider-truth/accessibility review
+- Gates: agent query "what wasm tools" returns the 26; list_tools enumerates
+  by source; no "no native wasm tools" false claim; count parity; empty-state
+  truth
+- Blockers: must not weaken the protected non-authorizing discovery guidance
+- Next: diagnose why the agent reports no Wasm tools (guidance text vs
+  catalog enumeration vs provider binding), then fix discovery + add
+  list_tools
+- Recover: `git grep -n "no native\|search_tools\|list_tools\|bundled" -- extension/lib/lazy-tool-protocol.js extension/lib/tool-catalog.js`
+- History:
+  - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
+    relates to the earlier search-coverage work (CAP-FB search rework) which
+    fixed name search but not agent enumeration/truth.
+
+## [CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01] Comprehensive Chrome extension API tool coverage
+
+- Feedback: 2026-08-23 — product owner (early request, still missing): the
+  browser tools are NOT a comprehensive set of Chrome extension APIs. The
+  tool is supposed to manage the entire browser, so the Chrome extension APIs
+  should be available as tools. Missing examples named: chrome.action
+  (icon/badge/background colour), alarms, bookmarks, downloads, contextMenus,
+  commands, idle, notifications, pageCapture, permissions, readingList,
+  scripting, sidePanel, system.memory, system.display, system.cpu, windows
+  (create/manage), tabGroups, topSites. Example: a "sorting hat" background
+  agent needs tabGroups but there's no tabGroups tool. The existing
+  management tools are liked; the rest is missing
+- Updated: 2026-08-23 23:05 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `bd85bf7`
+- Candidate: —
+- Shipping: —
+- Acceptance: an inventory of ALL chrome.* extension APIs, marking which are
+  already exposed as tools and which are missing; the missing high-value APIs
+  (action, alarms, bookmarks, downloads, contextMenus, commands, idle,
+  notifications, pageCapture, permissions, readingList, scripting, sidePanel,
+  system.*, windows, tabGroups, topSites) become bounded, permission-gated
+  tools with truthful schemas; each respects the owner-permission model and
+  does not silently broaden grants; dangerous/irrelevant APIs explicitly
+  excluded with rationale
+- Review: pending independent API-coverage/permissions/schema review
+- Gates: coverage inventory table; per-API bounded schema; permission gating;
+  no silent grant broadening; exclusion rationale for unsafe APIs
+- Blockers: needs a design/inventory phase before implementation; composes
+  with the permission model and the lazy tool catalog
+- Next: produce the chrome.* API inventory + gap plan + per-API tool design
+- Recover: `git grep -n "chrome\.\|browserToolset\|managementToolset" -- extension/lib`
+- History:
+  - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
+    revives the early "go through all Chrome extension APIs and create tools"
+    request.
+
+
 
 ## [CAP-FB-20260823-FACTORY-RESET-01] Settings "delete all / reset all" nuclear option
 
