@@ -636,8 +636,34 @@ export function truncateUtf8(text, maxBytes) {
  * checks browser-supplied sender metadata, never message-body claims. A tab
  * sender is rejected even if it claims the extension URL.
  */
-const OPTIONS_PRODUCT_HASHES = new Set([
+export const SETTINGS_SECTIONS = Object.freeze([
+  "providers",
+  "local-models",
+  "tool-library",
+  "agents",
+  "background",
+  "appearance",
+  "browser",
+  "permissions",
+  "approvals",
+  "hooks",
+  "prompts",
+  "usage",
+  "data",
+  "about",
+]);
+
+export function normalizeSettingsSectionId(hash) {
+  if (typeof hash !== "string" || !hash) return null;
+  const clean = hash.startsWith("#") ? hash.slice(1).trim() : hash.trim();
+  if (clean === "background-agents") return "background";
+  if (SETTINGS_SECTIONS.includes(clean)) return clean;
+  return null;
+}
+
+export const OPTIONS_PRODUCT_HASHES = new Set([
   "#providers", "#local-models", "#tool-library", "#agents", "#background",
+  "#background-agents",
   "#appearance", "#browser", "#permissions", "#approvals", "#hooks",
   "#prompts", "#usage", "#data", "#about",
 ]);

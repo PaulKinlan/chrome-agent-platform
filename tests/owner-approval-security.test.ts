@@ -211,7 +211,7 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
   assert(isExactOptionsSender(exact, id, url));
   assert(isExactOptionsSender({ id, url, documentId: "doc-2" }, id, url), "Chrome extension-page senders omit origin/frame/lifecycle metadata");
-  for (const hash of ["#providers", "#local-models", "#tool-library", "#agents", "#background", "#appearance", "#browser", "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data", "#about"]) {
+  for (const hash of ["#providers", "#local-models", "#tool-library", "#agents", "#background", "#background-agents", "#appearance", "#browser", "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data", "#about"]) {
     assert(isExactOptionsSender({ ...exact, url: url + hash }, id, url), `the exact Settings document owns ${hash}`);
   }
   assert(!isExactOptionsSender({ ...exact, url: url + "#foreign" }, id, url), "unknown fragments remain outside the owner surface");

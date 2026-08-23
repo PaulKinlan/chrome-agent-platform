@@ -1,6 +1,12 @@
 // options.js — the dedicated settings/configuration page.
 
-import { RECIPES } from "../lib/recipes.js";
+import {
+  RECIPES,
+} from "../lib/recipes.js";
+import {
+  SETTINGS_SECTIONS,
+  normalizeSettingsSectionId,
+} from "../lib/pure.js";
 import { RECIPE_ICON } from "../shared/recipe-icons.js";
 import {
   CAPABILITIES,
@@ -2106,20 +2112,38 @@ async function renderApprovals() {
 }
 
 // nav active state
-const sections = [
-  "providers",
-  "local-models",
-  "agents",
-  "background",
-  "appearance",
-  "browser",
-  "permissions",
-  "approvals",
-  "hooks",
-  "prompts",
-  "usage",
-  "data",
-];
+export function handleSettingsHashNavigation(hash) {
+  const sectionId = normalizeSettingsSectionId(hash);
+  if (!sectionId) return false;
+
+  const section = document.getElementById(sectionId);
+  if (!section) return false;
+
+  document.querySelectorAll(".nav-item").forEach((x) => {
+    const isTarget = x.dataset.section === sectionId ||
+      x.getAttribute("href") === `#${sectionId}` ||
+      (sectionId === "background" && (x.dataset.section === "background" || x.getAttribute("href") === "#background"));
+    if (isTarget) {
+      x.setAttribute("aria-current", "true");
+    } else {
+      x.removeAttribute("aria-current");
+    }
+  });
+
+  if (sectionId === "approvals") renderApprovals();
+  if (sectionId === "usage") renderUsage();
+
+  section.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const heading = section.querySelector("h2, h3");
+  if (heading) {
+    heading.setAttribute("tabindex", "-1");
+    heading.focus({ preventScroll: true });
+  }
+
+  return true;
+}
+
 document.querySelectorAll(".nav-item").forEach((a) => {
   a.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach((x) =>
@@ -2256,3 +2280,6 @@ async function renderAbout() {
   }
 }
 await renderAbout();
+
+handleSettingsHashNavigation(location.hash);
+window.addEventListener("hashchange", () => handleSettingsHashNavigation(location.hash));

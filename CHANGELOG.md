@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.196] — 2026-08-23
+- fix(navigation): route background agent Configure to options #background-agents deep-link with scroll and focus (CAP-FB-20260823-BACKGROUND-CONFIGURE-DEEPLINK-01)
+
 ## [0.2.195] — 2026-08-23
 - feat(agent-view): live run-log transcript projection (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01)
 

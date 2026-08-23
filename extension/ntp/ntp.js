@@ -493,7 +493,7 @@ async function renderBackgroundAgents() {
     el.innerHTML = `<div class="empty">No background agents running — <a href="#" class="hint-link" data-open-bg>enable one in Settings</a>.</div>`;
     el.querySelector("[data-open-bg]")?.addEventListener("click", (e) => {
       e.preventDefault();
-      openView("options/options.html", "Settings", e.currentTarget);
+      openView("options/options.html#background-agents", "Background agents", e.currentTarget);
     });
   } else {
     for (const a of active) {
@@ -1896,7 +1896,7 @@ assetQuickDrawer?.addEventListener("asset-reuse", async (event) => {
 
 document.getElementById("bg-configure")?.addEventListener(
   "click",
-  (e) => { e.preventDefault(); openView("options/options.html", "Settings", e.currentTarget); },
+  (e) => { e.preventDefault(); openView("options/options.html#background-agents", "Background agents", e.currentTarget); },
 );
 
 document.getElementById("browse-artifacts")?.addEventListener(
