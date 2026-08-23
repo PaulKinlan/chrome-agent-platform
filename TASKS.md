@@ -287,9 +287,20 @@ On resume after a coordinator or worker loss:
 - Gates: measured size/memory; licence allowlist disposition; CSP probe;
   OPFS model; isolation boundary analysis
 - Blockers: —
-- Next: feasibility research report
+- Next: owner decision on pursuing the MVS — resolve the four caveats:
+  default-tier admission (+ memory evidence gate), a bounded-memory Pyodide
+  build (stock 4 GB MAXIMUM_MEMORY exceeds every tier), the PSF-2.0 allowlist
+  line, and the top-level-only CSP constraint
 - Recover: `git grep -n "PYODIDE" -- TASKS.md`
 - History:
+  - 2026-08-23 22:45 UTC — feasibility research verdict FEASIBLE-WITH-CAVEATS
+    (Pro, /tmp/cap-pyodide-feasibility/PRO.md 869b8098): core 8–12 MB fits a
+    NEW default-tier admission (not tiny); MPL-2.0 in allowlist, CPython
+    PSF-2.0 needs a one-line addition; CSP already has wasm-unsafe-eval so the
+    core loads but eval/exec must be top-level-only; OPFS content-addressed
+    cache + per-job scratch; separate Emscripten dispatcher profile (no WASI
+    host widening); MVS = a stdin/stdout python tool over the cached core
+    reusing package authority.
   - 2026-08-23 22:05 UTC — captured from direct product-owner feedback.
 
 
