@@ -2562,11 +2562,16 @@ class MessageBubble extends Component {
       .body strong { font-weight:600; }
       .body em { font-style:italic; }
       /* rendered HTML output — the sandboxed iframe */
-      .html-frame { margin-top:4px; }
-      .html-frame iframe { width:100%; min-height:220px; max-height:480px; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
-      .genui { width:100%; }
+      .html-frame { margin-top:4px; width:100%; display:flex; flex-direction:column; }
+      .html-frame iframe { width:100%; min-height:360px; height:480px; max-height:80vh; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
+      .genui { width:100%; max-width:840px; }
       .genui-head { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin:0 0 6px; }
-      .genui .html-frame iframe { max-height:520px; }
+      .genui .html-frame iframe { width:100%; min-height:360px; height:520px; max-height:80vh; }
+      .genui-raw { margin-top:8px; width:100%; }
+      .genui-raw summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; color:var(--muted,#635e56); font-size:11.5px; padding:4px 0; user-select:none; }
+      .genui-raw summary::-webkit-details-marker { display:none; }
+      .genui-raw summary:hover { color:var(--text,#1d1b18); }
+      .genui-raw .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
       /* thinking trace — collapsible, muted, clearly not a wall of text */
       .think { width:100%; }
       .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
@@ -2642,21 +2647,45 @@ class MessageBubble extends Component {
       // The generative-UI tools (generate_ui / create_asset with type html)
       // render their HTML LIVE in the sandboxed double-iframe, inline.
       let genHtml = null, genName = null;
-      if ((name === "generate_ui" || name === "create_asset" || name === "update_asset") && args != null) {
-        try {
-          const parsed = JSON.parse(args);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            genName = typeof parsed.name === "string" ? parsed.name : null;
-            if (typeof parsed.html === "string") genHtml = parsed.html;
-            else if (parsed.type === "html" && typeof parsed.content === "string") genHtml = parsed.content;
-          }
-        } catch { /* args may be a raw HTML string, handled below */ }
-        if (genHtml == null && isHtmlDocument(args)) genHtml = args;
+      if (name === "generate_ui" || name === "create_asset" || name === "update_asset") {
+        if (args != null) {
+          try {
+            const parsed = typeof args === "string" ? JSON.parse(args) : args;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              if (typeof parsed.name === "string") genName = parsed.name;
+              if (typeof parsed.html === "string") genHtml = parsed.html;
+              else if (parsed.type === "html" && typeof parsed.content === "string") genHtml = parsed.content;
+              else if (typeof parsed.content === "string" && isHtmlDocument(parsed.content)) genHtml = parsed.content;
+            }
+          } catch { /* args may be raw HTML */ }
+          if (genHtml == null && isHtmlDocument(args)) genHtml = args;
+        }
+        if (genHtml == null && result != null) {
+          try {
+            const parsedRes = typeof result === "string" ? JSON.parse(result) : result;
+            if (parsedRes && typeof parsedRes === "object" && !Array.isArray(parsedRes)) {
+              if (typeof parsedRes.html === "string") genHtml = parsedRes.html;
+              else if (parsedRes.type === "html" && typeof parsedRes.content === "string") genHtml = parsedRes.content;
+              else if (parsedRes.asset && typeof parsedRes.asset === "object") {
+                if (typeof parsedRes.asset.name === "string" && !genName) genName = parsedRes.asset.name;
+                if (typeof parsedRes.asset.content === "string") genHtml = parsedRes.asset.content;
+              }
+            }
+          } catch { /* result may be raw HTML */ }
+          if (genHtml == null && isHtmlDocument(result)) genHtml = result;
+        }
       }
-      if (genHtml != null && isHtmlDocument(genHtml)) {
+      if (genHtml != null && (isHtmlDocument(genHtml) || name === "generate_ui")) {
+        const rawPayload = [
+          args ? `Arguments:\n${args}` : "",
+          result ? `Result:\n${result}` : "",
+          detail ? `Detail:\n${detail}` : "",
+        ].filter(Boolean).join("\n\n");
+
         markup = `<div class="genui" role="status">
           <div class="genui-head">${escapeHtml(genName || "Generated UI")}</div>
           ${renderHtmlFrame(genHtml)}
+          ${rawPayload ? `<details class="genui-raw"><summary>Raw payload</summary><pre class="tool-detail-raw">${escapeHtml(rawPayload)}</pre></details>` : ""}
         </div>`;
       } else {
         // The structured tool-call renderer: args/result/detail become a

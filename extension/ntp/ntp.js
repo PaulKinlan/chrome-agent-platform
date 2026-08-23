@@ -622,15 +622,16 @@ async function renderArtifacts() {
 async function openArtifactDialog(id, origin, fallbackName) {
   const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
   const asset = res?.ok ? res.asset : null;
-  if (!asset) { setStatus("Artifact not found", false); return; }
+  if (!asset) { setStatus("Artifact not found", false); return false; }
   const frameCleanups = [];
 
-  if (!asset) { setStatus("Artifact not found", false); return false; }
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", asset.name ?? fallbackName ?? "Artifact");
   const body = document.createElement("div");
-  body.style.minWidth = "min(76vw, 920px)";
-  body.style.minHeight = "200px";
+  body.style.minWidth = "min(88vw, 1100px)";
+  body.style.minHeight = "min(75vh, 720px)";
+  body.style.display = "flex";
+  body.style.flexDirection = "column";
   const type = asset.type ?? "data";
   const content = asset.content ?? "";
   if (type === "html" || (type === "text" && isHtmlDocument(content))) {
@@ -640,7 +641,26 @@ async function openArtifactDialog(id, origin, fallbackName) {
     frame.style.borderRadius = "10px";
     frame.style.overflow = "hidden";
     frame.style.background = "#fff";
+    frame.style.flex = "1";
+    frame.style.display = "flex";
+    frame.style.flexDirection = "column";
+    frame.style.minHeight = "min(70vh, 680px)";
     frame.innerHTML = renderHtmlFrame(content);
+    const htmlFrameEl = frame.querySelector(".html-frame");
+    if (htmlFrameEl) {
+      htmlFrameEl.style.flex = "1";
+      htmlFrameEl.style.display = "flex";
+      htmlFrameEl.style.flexDirection = "column";
+      htmlFrameEl.style.height = "100%";
+      const iframe = htmlFrameEl.querySelector("iframe");
+      if (iframe) {
+        iframe.style.flex = "1";
+        iframe.style.width = "100%";
+        iframe.style.height = "100%";
+        iframe.style.minHeight = "min(70vh, 680px)";
+        iframe.style.maxHeight = "none";
+      }
+    }
     frameCleanups.push(wireHtmlFrameContent(frame));
     const nonce = frame.querySelector(".html-frame")?.dataset?.frameNonce;
     if (nonce) frameCleanups.push(wireHtmlFramePreference(frame, { nonce, ...currentFramePreference() }));

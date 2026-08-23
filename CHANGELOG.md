@@ -2,6 +2,10 @@
 
 ## [0.2.198] — 2026-08-23
 - build(provenance): durable in-repo evidence tree (packages/bundled/evidence, minimum-consumption 51 blobs) becomes the sole generator root; full verify now works on any fresh checkout; total scrub of /tmp and absolute build-host paths from all shipped artifacts (owner directive: never reference outside the source tree) (CAP-FB-20260822-BUILTIN-WASM-TOOLS-01)
+## [0.2.196] — 2026-08-23
+- feat(render): expand HTML artifact iframe/dialog size and render generate_ui sandboxed (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01, CAP-FB-20260823-GENERATE-UI-RENDER-01)
+
+## [0.2.193]
 
 ## [0.2.197] — 2026-08-23
 - feat(onboarding): first-run browser-control consent — explicit owner opt-in to tab inspection/navigation control with truthful scope copy, graceful decline into reduced capability, and Settings revisit (CAP-FB-20260823-FIRST-RUN-BROWSER-CONTROL-CONSENT-01)
