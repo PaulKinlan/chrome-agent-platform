@@ -4202,6 +4202,84 @@ class AgentDialog extends Component {
 }
 customElements.define("agent-dialog", AgentDialog);
 
+/* confirmActionDialog({ title, body, confirmLabel, destructive }) — the ONE
+ * promise-based replacement for window.confirm/window.alert/window.prompt in
+ * extension pages (CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01). Built on a
+ * native <dialog> shown with showModal() so the focus trap, Escape (cancel),
+ * and focus-return are native browser behaviors. Resolves true ONLY from the
+ * explicit confirm control; the Cancel button, Escape, and backdrop
+ * light-dismiss all resolve false and mutate nothing. Caller text is assigned
+ * via textContent (never innerHTML). House theme vars, logical layout, and
+ * max-width:90vw keep it theme/RTL/narrow-safe; destructive dialogs name the
+ * exact object in the caller-provided body and focus Cancel by default. */
+let confirmDialogStyleMounted = false;
+function mountConfirmDialogStyle(doc) {
+  if (confirmDialogStyleMounted || doc.getElementById("cap-confirm-dialog-style")) {
+    confirmDialogStyleMounted = true;
+    return;
+  }
+  const style = doc.createElement("style");
+  style.id = "cap-confirm-dialog-style";
+  style.textContent = `
+.cap-confirm-dialog { background:var(--panel,#ffffff); color:var(--text,#1d1b18); border:1px solid var(--border,#e3e0d9); border-radius:14px; padding:20px; min-width:300px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,.4); }
+.cap-confirm-dialog::backdrop { background:rgba(0,0,0,.5); }
+.cap-confirm-title { margin:0 0 10px; font-size:16px; font-weight:700; }
+.cap-confirm-body { margin:0 0 18px; font-size:14px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.cap-confirm-actions { display:flex; justify-content:flex-end; gap:10px; }
+.cap-confirm-actions button { border-radius:10px; padding:8px 14px; font-size:13px; cursor:pointer; border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); color:var(--text,#1d1b18); }
+.cap-confirm-actions button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+.cap-confirm-accept { background:var(--accent,#0e6e63); border-color:transparent; color:var(--btn-fg,#ffffff); }
+.cap-confirm-accept:hover { background:var(--accent-hover,#0a5c53); }
+.cap-confirm-accept.destructive, .cap-confirm-accept.destructive:hover { background:var(--danger,#b3261e); }
+`;
+  (doc.head ?? doc.documentElement).append(style);
+  confirmDialogStyleMounted = true;
+}
+export function confirmActionDialog({ title = "Confirm", body = "", confirmLabel = "Confirm", destructive = false } = {}) {
+  return new Promise((resolve) => {
+    mountConfirmDialogStyle(document);
+    const dialog = document.createElement("dialog");
+    dialog.className = "cap-confirm-dialog";
+    dialog.setAttribute("aria-label", String(title));
+    const heading = document.createElement("h2");
+    heading.className = "cap-confirm-title";
+    heading.textContent = String(title);
+    const message = document.createElement("p");
+    message.className = "cap-confirm-body";
+    message.textContent = String(body);
+    const actions = document.createElement("div");
+    actions.className = "cap-confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "cap-confirm-cancel";
+    cancel.textContent = "Cancel";
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.className = destructive ? "cap-confirm-accept destructive" : "cap-confirm-accept";
+    accept.textContent = String(confirmLabel);
+    actions.append(cancel, accept);
+    dialog.append(heading, message, actions);
+    let settled = false;
+    const settle = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      resolve(ok);
+    };
+    cancel.addEventListener("click", () => settle(false));
+    accept.addEventListener("click", () => settle(true));
+    // Escape fires cancel; preventDefault keeps the close path single-owned by settle().
+    dialog.addEventListener("cancel", (e) => { e.preventDefault(); settle(false); });
+    // Light dismiss: with showModal() a click outside the content lands on the
+    // <dialog> element itself (the backdrop).
+    dialog.addEventListener("click", (e) => { if (e.target === dialog) settle(false); });
+    (document.body ?? document.documentElement).append(dialog);
+    dialog.showModal();
+    (destructive ? cancel : accept).focus();
+  });
+}
+
 /* <agent-picker> — THE ONE unified agent picker (CAP-FB-20260818-AGENT-ACCESS-01).
  * Every agent-choosing surface uses THIS component: the side panel's Agents
  * view, every composer's + menu "Choose agent" action, AND the /agent slash
@@ -6148,7 +6226,16 @@ class DurableRunRegistry extends Component {
   _context(run) { return String(run.taskPreview || run.agentId || run.kind || "run").slice(0, 120); }
   _cancellable(phase) { return durableRunActionsForPhase(phase).cancel; }
   _resumable(phase) { return durableRunActionsForPhase(phase).resume; }
-  _confirmCancel(run) { return globalThis.confirm?.(durableCancelConfirmationText(run)) === true; }
+  async _confirmCancel(run) {
+    // Native-modal confirm (never window.confirm): cancel/Escape/backdrop
+    // resolve false and mutate nothing; the body names the exact run.
+    return await confirmActionDialog({
+      title: "Cancel run",
+      body: durableCancelConfirmationText(run),
+      confirmLabel: "Cancel run",
+      destructive: true,
+    });
+  }
   _complete(executionId, action, result) {
     this._pending.delete(executionId);
     const ok = result?.ok === true || result?.cancelled === true;
@@ -6209,17 +6296,26 @@ class DurableRunRegistry extends Component {
   }
   _wire() {
     for (const button of this._root.querySelectorAll("button[data-action]")) {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
         const row = button.closest(".run");
         const run = this._runs.find((item) => item.executionId === row?.dataset.executionId);
         if (!run) return;
         const action = button.dataset.action;
         if (action === "cancel") {
-          if (!this._confirmCancel(run)) return;
+          if (!await this._confirmCancel(run)) return;
           this._emitAction("run-cancel", run, "Cancel");
         } else if (action === "resume") {
-          if (run.phase === "paused-side-effect-uncertain" && globalThis.confirm?.(`Retry ${this._context(run)}? A previous side effect may have completed, so retrying can repeat it.`) !== true) return;
-          if (run.phase === "paused-provider-change" && globalThis.confirm?.(`Resume ${this._context(run)} with the newly selected provider? The original provider identity is no longer active.`) !== true) return;
+          if (run.phase === "paused-side-effect-uncertain" && await confirmActionDialog({
+            title: "Retry run?",
+            body: `Retry ${this._context(run)}? A previous side effect may have completed, so retrying can repeat it.`,
+            confirmLabel: "Retry",
+            destructive: true,
+          }) !== true) return;
+          if (run.phase === "paused-provider-change" && await confirmActionDialog({
+            title: "Resume run?",
+            body: `Resume ${this._context(run)} with the newly selected provider? The original provider identity is no longer active.`,
+            confirmLabel: "Resume",
+          }) !== true) return;
           this._emitAction("run-resume", run, "Resume");
         } else this._emitAction("run-logs", run, "View logs");
       });

@@ -6,7 +6,7 @@
 // NTP's in-context view frame; messaging via lib/messages.js).
 
 import { send } from "../lib/messages.js";
-import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent } from "../shared/components.js";
+import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent, confirmActionDialog } from "../shared/components.js";
 
 const grid = document.getElementById("grid");
 const status = document.getElementById("status");
@@ -85,7 +85,13 @@ function wireCard(card) {
   });
   card.addEventListener("delete", async (e) => {
     const { id, name, origin } = e.detail ?? {};
-    if (!confirm(`Delete "${name}"?`)) return;
+    const ok = await confirmActionDialog({
+      title: "Delete artifact",
+      body: `Delete "${name}"?`,
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     const res = await send("asset.delete", { origin: origin ?? "master", id });
     if (res?.ok === false && res.error) {
       status.textContent = `Delete failed: ${res.error}`;

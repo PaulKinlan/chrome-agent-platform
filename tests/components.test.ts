@@ -108,11 +108,46 @@ Deno.test("durable run registry: confirmation is terminal, context-bound, and re
   }
   const Klass = registry.get("durable-run-registry");
   const element = new Klass();
-  let answer = false;
-  globalThis.confirm = (message) => { if (message !== text) throw new Error("wrong confirmation text"); return answer; };
-  if (element._confirmCancel({ taskPreview: "Publish report" }) !== false) throw new Error("dismissed confirmation accepted");
-  answer = true;
-  if (element._confirmCancel({ taskPreview: "Publish report" }) !== true) throw new Error("confirmed cancellation refused");
+  // The confirmation is now the native-modal promise dialog (never
+  // window.confirm); drive it through a minimal fake document.
+  class DialogFakeNode {
+    constructor(tag) {
+      this.tagName = tag; this.children = []; this.parent = null; this.listeners = {};
+      this.attributes = {}; this.textContent = ""; this.className = ""; this.id = ""; this.type = ""; this.open = false;
+    }
+    setAttribute(n, v) { this.attributes[n] = String(v); }
+    getAttribute(n) { return this.attributes[n] ?? null; }
+    append(...kids) { for (const k of kids) { k.parent = this; this.children.push(k); } }
+    addEventListener(t, f) { (this.listeners[t] ??= []).push(f); }
+    dispatch(t, e = {}) { e.target ??= this; e.preventDefault ??= () => {}; for (const f of this.listeners[t] ?? []) f(e); }
+    click() { this.dispatch("click", { target: this }); }
+    remove() { if (this.parent) { const i = this.parent.children.indexOf(this); if (i >= 0) this.parent.children.splice(i, 1); this.parent = null; } }
+    focus() {}
+    showModal() { this.open = true; }
+    close() { this.open = false; this.dispatch("close"); }
+  }
+  const fakeDoc = {
+    head: new DialogFakeNode("head"), body: new DialogFakeNode("body"), documentElement: new DialogFakeNode("html"),
+    createElement: (tag) => new DialogFakeNode(tag),
+    getElementById(id) { return this.head.children.find((c) => c.id === id) ?? null; },
+  };
+  const prevDoc = globalThis.document;
+  globalThis.document = fakeDoc;
+  try {
+    const run = { taskPreview: "Publish report" };
+    const denied = element._confirmCancel(run);
+    const dialog1 = fakeDoc.body.children.filter((c) => c.tagName === "dialog").pop();
+    if (!dialog1 || dialog1.open !== true) throw new Error("confirmation dialog not shown modally");
+    if (dialog1.children[1].textContent !== text) throw new Error("wrong confirmation text");
+    dialog1.children[2].children[0].click(); // Cancel — mutate-nothing path
+    if (await denied !== false) throw new Error("dismissed confirmation accepted");
+    const approved = element._confirmCancel(run);
+    const dialog2 = fakeDoc.body.children.filter((c) => c.tagName === "dialog").pop();
+    dialog2.children[2].children[1].click(); // the confirm control
+    if (await approved !== true) throw new Error("confirmed cancellation refused");
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc;
+  }
 });
 
 Deno.test("durable run registry: exact-ID dispatch suppresses duplicates and exposes success/error completion", async () => {

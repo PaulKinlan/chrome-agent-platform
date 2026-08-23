@@ -33,7 +33,7 @@ import {
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
-import "../shared/components.js";
+import { confirmActionDialog } from "../shared/components.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -1984,10 +1984,16 @@ async function renderPrompts() {
     await load();
   }
 
-  scopeSelect.addEventListener("change", () => {
+  scopeSelect.addEventListener("change", async () => {
     // Switching scopes reloads the editor (re-seeding the draft) — confirm
     // before discarding unsaved edits (the review's dirty-switch finding).
-    if (editor.dirty && !globalThis.confirm("Discard the unsaved prompt edits and switch scope?")) {
+    // Native-modal confirm; cancel/Escape/backdrop resolve false and mutate nothing.
+    if (editor.dirty && !await confirmActionDialog({
+      title: "Discard unsaved edits?",
+      body: "Discard the unsaved prompt edits and switch scope?",
+      confirmLabel: "Discard",
+      destructive: true,
+    })) {
       // Restore the selector to the scope the editor still shows.
       scopeSelect.value = loadedScope;
       return;

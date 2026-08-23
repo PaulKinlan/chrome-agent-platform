@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.192] — 2026-08-23
+- feat(ui): replace window.confirm with native promise dialogs (CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01)
+
 ## [0.2.191] — 2026-08-23
 - feat(build): verify-only bundled tool generation in the default build path (CAP-FB-20260823-BUILD-TOOL-BUNDLING-01)
 
