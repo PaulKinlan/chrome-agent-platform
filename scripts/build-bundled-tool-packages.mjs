@@ -105,6 +105,38 @@ function catalogRow(toolId) {
   return row;
 }
 
+// ── Agent-useful descriptions (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01) ──
+// Each description carries: plain function, when to choose, in/out shape, key flags,
+// bounds, and a concrete example. Provenance/library names stay in SBOM/licence fields.
+export const AGENT_DESCRIPTIONS = Object.freeze({
+  base64: "base64 - encode or decode base64 text and binary data. Use to encode binary data as text or decode base64 strings (stdin <=2 KiB). Key flag: -d (decode).",
+  md5sum: "md5sum - compute legacy 128-bit MD5 hash checksum values. Use to hash files or verify non-security data integrity (stdin <=2 KiB).",
+  sha256sum: "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure data integrity (stdin <=2 KiB).",
+  sha512sum: "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security file hashing and verification (stdin <=2 KiB).",
+  xxd: "xxd - convert binary data to hex dumps and reconstruct it. Use to inspect byte data or edit binary formats (stdin <=2 KiB). Key flag: -p.",
+  uuid: "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs for records. Key flag: -n <count> (max 64).",
+  wc: "wc - count lines, words, characters, and bytes in text streams. Use to measure file length and text size (stdin <=2 KiB). Flags: -l, -w, -c.",
+  head: "head - extract the first or leading lines from a text stream. Use to inspect the beginning or preview the start of a file (stdin <=2 KiB). Key flag: -n.",
+  tail: "tail - extract the last or trailing lines from a text stream. Use to inspect the end or preview the bottom of a log file (stdin <=2 KiB). Key flag: -n.",
+  cut: "cut - extract columns or delimiter-separated fields from text. Use to parse CSV, TSV, or tabular data columns (stdin <=2 KiB). Flags: -d, -f.",
+  sort: "sort - sort lines of text alphabetically or numerically in C locale. Use to organize and order list data (stdin <=2 KiB). Flags: -r, -n.",
+  uniq: "uniq - remove adjacent duplicate lines from sorted text. Use to deduplicate list data and filter unique lines (stdin <=2 KiB). Flags: -c, -d.",
+  tr: "tr - translate, replace, delete, or squeeze characters in text. Use to search and replace characters or shift case (stdin <=2 KiB). Flags: -d, -s.",
+  grep: "grep - search and find matching lines using regular expressions. Use to search, find, or filter text data (stdin <=2 KiB). Flags: -i, -v, -n.",
+  diff: "diff - compare text documents and calculate diff changes. Use for file editing and comparing revisions by viewing differences (args <=1 KiB each).",
+  patch: "patch - apply unified diff changes to source text. Use for editing files and updating text from patches (args <=1 KiB each).",
+  toml2json: "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config file data (stdin <=2 KiB).",
+  markdown: "markdown - convert Markdown formatted text into safe HTML markup. Use to render and view formatted document content (stdin <=2 KiB).",
+  du: "du - measure disk usage and file sizes across directory folders. Use to check file and folder space consumption (up to 4096 entries).",
+  stat: "stat - inspect file and directory metadata including size and type. Use to check file existence and details (read-only /job path).",
+  tree: "tree - display directory and folder file structures as visual text trees. Use to explore workspace and folder layout (up to 4096 nodes).",
+  touch: "touch - create new empty files or update file timestamps. Use to create, touch, or update files in scratch space. Flags: -t, -c.",
+  truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. Flag: -s.",
+  csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows (stdin <=2 KiB).",
+  gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams (stdin <=2 KiB, base64 output <=64 KiB). Key flag: -d.",
+  sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational database data (JSON <=2 KiB)."
+});
+
 // ── Read + hash-verify every binary against its evidence inventory ──────────
 function verifiedBinary(lane, toolId, rel, expectedSha, expectedBytes) {
   const bytes = readFileSync(join(PATHS[lane], rel));
@@ -138,7 +170,7 @@ for (const toolId of LANES.c2.tools) {
   if (sha256(wasm) !== "5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81" || wasm.byteLength !== 10581) throw new Error("csvtool hash/size mismatch");
   const buildB = readFileSync(join(PATHS.csvtool, "build-b/csvtool.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("csvtool reproducibility broken (build-a != build-b)");
-  packages.push({ toolId: "csvtool", lane: "csvtool", bytes: wasm, row: null, spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.csvtool, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/csvtool.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; LLD 22.1.8", buildScriptLane: "csvtool", displayName: "Bounded clean-room RFC 4180 CSV stream tool", category: "text", description: "Clean-room bounded RFC 4180 CSV stream filter (stdin/stdout only); CAP-authored, Apache-2.0.", caveats: ["Stdin/stdout only; no file operands."], replayClass: "read-only", capabilities: ["compute", "text.transform"] });
+  packages.push({ toolId: "csvtool", lane: "csvtool", bytes: wasm, row: null, spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.csvtool, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/csvtool.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; LLD 22.1.8", buildScriptLane: "csvtool", displayName: "csvtool", category: "text", description: AGENT_DESCRIPTIONS.csvtool, caveats: ["Stdin/stdout only; no file operands."], replayClass: "read-only", capabilities: ["compute", "text.transform"] });
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
@@ -147,7 +179,7 @@ for (const toolId of LANES.c2.tools) {
   if (sha256(wasm) !== bin.sha256 || wasm.byteLength !== bin.bytes) throw new Error("gzip hash/size mismatch");
   if (sha256(readFileSync(join(PATHS.d3, "inventory.json"))) !== "7ddeea056eec79eaa0c496522297d9f381293532816f2085611c027584482af9") throw new Error("d3 inventory hash mismatch");
   const mem = d3.tools[0].memory;
-  packages.push({ toolId: "gzip", lane: "gzip", bytes: wasm, row: null, spdx: "Zlib AND Apache-2.0", licenseFile: "extension/wasm/licenses/Zlib-1.3.1.txt", notices: "extension/wasm/licenses/CAP-authored-Apache-2.0.txt", sbom: { src: join(PATHS.d3, "sbom/gzip-zlib-minigzip-stdio.cdx.json"), rel: "extension/wasm/sbom/gzip.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; wasm-ld 22.1.8", buildScriptLane: "gzip", displayName: "Bounded RFC 1952 gzip stream tool (zlib 1.3.1 minigzip)", category: "data", description: "Upstream zlib 1.3.1 Z_SOLO minigzip RFC1952 compressor/decompressor over stdin/stdout only; experimental, no canonical gzip claim.", caveats: ["Stdin/stdout only; rejects file operands, recursion, unknown options.", "Experimental candidate; not the canonical full gzip."], replayClass: "read-only", capabilities: ["compute", "text.transform"], memoryOverride: { initialPages: mem.initialPages, maxPages: mem.maxPages } });
+  packages.push({ toolId: "gzip", lane: "gzip", bytes: wasm, row: null, spdx: "Zlib AND Apache-2.0", licenseFile: "extension/wasm/licenses/Zlib-1.3.1.txt", notices: "extension/wasm/licenses/CAP-authored-Apache-2.0.txt", sbom: { src: join(PATHS.d3, "sbom/gzip-zlib-minigzip-stdio.cdx.json"), rel: "extension/wasm/sbom/gzip.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; wasm-ld 22.1.8", buildScriptLane: "gzip", displayName: "gzip", category: "data", description: AGENT_DESCRIPTIONS.gzip, caveats: ["Stdin/stdout only; rejects file operands, recursion, unknown options.", "Experimental candidate; not the canonical full gzip."], replayClass: "read-only", capabilities: ["compute", "text.transform"], memoryOverride: { initialPages: mem.initialPages, maxPages: mem.maxPages } });
 }
 
 // ── Clean + recreate output trees ───────────────────────────────────────────
@@ -302,9 +334,9 @@ const SQLITE_EXPECT = {
     sbom: { src: null, bytes: sbomBytes, rel: "extension/wasm/sbom/sqlite3-query-bounded.cdx.json", format: "cyclonedx-json@1.5" },
     toolchain: "wasi-sdk clang 18.1.2", buildScriptLane: "sqlite3",
     sourceAnchor: SOURCE_SQLITE,
-    displayName: "Bounded SQLite 3.46.0 query tool (upstream amalgamation)",
+    displayName: "sqlite3_query_bounded",
     category: "data",
-    description: "SQLite 3.46.0 amalgamation query tool (upstream Blessing) with CAP-authored wrapper/host (Apache-2.0). ATTACH/DETACH/load_extension denied by runtime authorizer.",
+    description: AGENT_DESCRIPTIONS.sqlite3_query_bounded,
     caveats: [
       "Memory tranche has no external persistence; may later be classified read-only for replay only after runtime wiring.",
       "Workspace tranche is mutating and requires a sole bounded workspace preopen.",
@@ -349,7 +381,7 @@ for (const pkg of packages) {
   const meta = pkg.row ?? pkg;
   const capabilities = [...meta.capabilities].sort();
   const capabilityDigest = sha256(enc.encode(canonicalJson(capabilities)));
-  const description = String(meta.description);
+  const description = AGENT_DESCRIPTIONS[pkg.toolId] ?? String(meta.description);
   if (!/^[\x20-\x7e]{1,256}$/.test(description)) throw new Error(`${pkg.toolId}: description not ASCII/bounded`);
   const manifest = {
     schemaVersion: 1,
@@ -424,7 +456,7 @@ for (const pkg of packages) {
   const disabledCaveats = Array.isArray(meta.caveats) ? meta.caveats : [];
   descriptorRows.push({
     packageId: manifest.package.id, version: "1.0.0", toolId: pkg.toolId, lane: pkg.lane,
-    displayName: String(meta.displayName ?? meta.displayName), category: String(meta.category),
+    displayName: String(pkg.toolId), category: String(meta.category),
     description, caveats: settingsPreview ? admittedCaveats : disabledCaveats,
     capabilities, replayClass: meta.replayClass,
     licence: { spdx: pkg.spdx, file: pkg.licenseFile, notices: pkg.notices ?? null },

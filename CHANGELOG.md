@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.210] — 2026-08-24
+- feat(tools): Unix-name-first tool naming and agent-useful descriptions — displayName === tool name for all 26, descriptions lead with the tool name (concise, jargon-free, ≤256B), Settings preview selector labels aligned, live search vocabulary verified (CAP-FB-20260823-TOOL-NAMING-01)
+
 ## [0.2.209] — 2026-08-24
 - fix(wasm): use runtime-URL dynamic import for task worker host to keep bundles scanner-clean (CAP-FB-20260823-WASM-TASK-EXECUTION-01)
 

@@ -6947,29 +6947,29 @@ class ToolLibrary extends Component {
           ONLY on your explicit click; there is no catalog or provider selection authority.</p>
         <label class="preview-tool-label">Tool
           <select class="preview-tool" autocomplete="off">
-            <option value="csvtool">csvtool — RFC 4180 CSV stream filter</option>
-            <option value="uuid">uuid — RFC 4122 v4 generator (CSPRNG)</option>
-            <option value="head">head — first lines of stdin</option>
-            <option value="tail">tail — last lines of stdin</option>
-            <option value="cut">cut — select fields from each line</option>
-            <option value="base64">base64 — RFC 4648 encode/decode stream</option>
-            <option value="md5sum">md5sum — MD5 digest (legacy, NOT security)</option>
-            <option value="sha256sum">sha256sum — SHA-256 digest</option>
-            <option value="sha512sum">sha512sum — SHA-512 digest</option>
-            <option value="wc">wc — line/word/byte counts</option>
-            <option value="xxd">xxd — hex dump (plain)</option>
-            <option value="sort">sort — sort lines of stdin</option>
-            <option value="uniq">uniq — omit repeated lines</option>
-            <option value="tr">tr — translate characters</option>
-            <option value="grep">grep — search lines by pattern</option>
-            <option value="toml2json">toml2json — convert TOML to JSON</option>
-            <option value="markdown">markdown — CommonMark to safe HTML (cmark 0.31.1)</option>
-            <option value="diff">diff — unified diff over two documents</option>
-            <option value="patch">patch — apply a unified diff</option>
-            <option value="stat">stat — inspect immutable job-file metadata</option>
-            <option value="du">du — summarize immutable job usage</option>
-            <option value="tree">tree — display immutable job hierarchy</option>
-            <option value="gzip">gzip — bounded zlib/minigzip RFC 1952 wrapper</option>
+            <option value="csvtool">csvtool — parse, transform, and edit RFC 4180 CSV spreadsheet table data</option>
+            <option value="uuid">uuid — generate random UUID v4 unique identifier strings</option>
+            <option value="head">head — extract first lines from a text stream</option>
+            <option value="tail">tail — extract last lines from a text stream</option>
+            <option value="cut">cut — extract columns or delimiter-separated fields</option>
+            <option value="base64">base64 — encode or decode base64 text and binary data</option>
+            <option value="md5sum">md5sum — compute legacy 128-bit MD5 hash checksum values</option>
+            <option value="sha256sum">sha256sum — compute cryptographic 256-bit SHA-256 hash digests</option>
+            <option value="sha512sum">sha512sum — compute cryptographic 512-bit SHA-512 hash digests</option>
+            <option value="wc">wc — count lines, words, characters, and bytes</option>
+            <option value="xxd">xxd — convert binary data to hex dumps and reconstruct it</option>
+            <option value="sort">sort — sort lines of text in C locale</option>
+            <option value="uniq">uniq — remove adjacent duplicate lines from sorted text</option>
+            <option value="tr">tr — translate, replace, delete, or squeeze characters</option>
+            <option value="grep">grep — search and find matching lines using regex</option>
+            <option value="toml2json">toml2json — convert TOML configuration text to JSON</option>
+            <option value="markdown">markdown — convert Markdown formatted text to safe HTML</option>
+            <option value="diff">diff — compare text documents and calculate diff changes</option>
+            <option value="patch">patch — apply unified diff changes to source text</option>
+            <option value="stat">stat — inspect file and directory metadata</option>
+            <option value="du">du — measure disk usage across directory folders</option>
+            <option value="tree">tree — display directory file structures as visual trees</option>
+            <option value="gzip">gzip — compress or decompress data streams</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>

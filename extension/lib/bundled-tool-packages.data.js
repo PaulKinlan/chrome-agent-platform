@@ -6,9 +6,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "base64",
   "lane": "a2",
-  "displayName": "Bounded RFC 4648 base64 encoding and decoding stream filter",
+  "displayName": "base64",
   "category": "data",
-  "description": "Bounded RFC 4648 base64 encoding and decoding stream filter",
+  "description": "base64 - encode or decode base64 text and binary data. Use to encode binary data as text or decode base64 strings (stdin <=2 KiB). Key flag: -d (decode).",
   "caveats": [
    "Stdin-only stream filter; supports encode and decode. Invalid padding or characters rejected fail-closed with exit code 1.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -43,9 +43,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "md5sum",
   "lane": "a2",
-  "displayName": "Bounded MD5 legacy digest filter (not for security/signatures)",
+  "displayName": "md5sum",
   "category": "crypto",
-  "description": "Bounded MD5 legacy digest filter (not for security/signatures)",
+  "description": "md5sum - compute legacy 128-bit MD5 hash checksum values. Use to hash files or verify non-security data integrity (stdin <=2 KiB).",
   "caveats": [
    "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -80,9 +80,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "sha256sum",
   "lane": "a2",
-  "displayName": "Bounded FIPS 180-4 SHA-256 cryptographic digest filter",
+  "displayName": "sha256sum",
   "category": "crypto",
-  "description": "Bounded FIPS 180-4 SHA-256 cryptographic digest filter",
+  "description": "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure data integrity (stdin <=2 KiB).",
   "caveats": [
    "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -117,9 +117,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "sha512sum",
   "lane": "a2",
-  "displayName": "Bounded FIPS 180-4 SHA-512 cryptographic digest filter",
+  "displayName": "sha512sum",
   "category": "crypto",
-  "description": "Bounded FIPS 180-4 SHA-512 cryptographic digest filter",
+  "description": "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security file hashing and verification (stdin <=2 KiB).",
   "caveats": [
    "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -154,9 +154,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "xxd",
   "lane": "a2",
-  "displayName": "Bounded hex dump and binary reconstruction filter",
+  "displayName": "xxd",
   "category": "data",
-  "description": "Bounded hex dump and binary reconstruction filter",
+  "description": "xxd - convert binary data to hex dumps and reconstruct it. Use to inspect byte data or edit binary formats (stdin <=2 KiB). Key flag: -p.",
   "caveats": [
    "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -191,9 +191,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "uuid",
   "lane": "a2",
-  "displayName": "WASI-CSPRNG RFC 4122 UUID v4 generator",
+  "displayName": "uuid",
   "category": "crypto",
-  "description": "WASI-CSPRNG RFC 4122 UUID v4 generator",
+  "description": "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs for records. Key flag: -n <count> (max 64).",
   "caveats": [
    "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID).",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -228,9 +228,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "wc",
   "lane": "a2",
-  "displayName": "Bounded POSIX-style stdin line, word, and byte count filter",
+  "displayName": "wc",
   "category": "text",
-  "description": "Bounded POSIX-style stdin line, word, and byte count filter",
+  "description": "wc - count lines, words, characters, and bytes in text streams. Use to measure file length and text size (stdin <=2 KiB). Flags: -l, -w, -c.",
   "caveats": [
    "Counts lines, whitespace-delimited words, and bytes. Input bounded by the exact 8 MiB stdin ceiling.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -265,9 +265,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "head",
   "lane": "a2",
-  "displayName": "Bounded stdin line-prefix filter",
+  "displayName": "head",
   "category": "text",
-  "description": "Bounded stdin line-prefix filter",
+  "description": "head - extract the first or leading lines from a text stream. Use to inspect the beginning or preview the start of a file (stdin <=2 KiB). Key flag: -n.",
   "caveats": [
    "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -302,9 +302,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "tail",
   "lane": "a2",
-  "displayName": "Bounded stdin line-suffix filter",
+  "displayName": "tail",
   "category": "text",
-  "description": "Bounded stdin line-suffix filter",
+  "description": "tail - extract the last or trailing lines from a text stream. Use to inspect the end or preview the bottom of a log file (stdin <=2 KiB). Key flag: -n.",
   "caveats": [
    "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -339,9 +339,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "cut",
   "lane": "a2",
-  "displayName": "Bounded single-field delimiter column extraction filter",
+  "displayName": "cut",
   "category": "text",
-  "description": "Bounded single-field delimiter column extraction filter",
+  "description": "cut - extract columns or delimiter-separated fields from text. Use to parse CSV, TSV, or tabular data columns (stdin <=2 KiB). Flags: -d, -f.",
   "caveats": [
    "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -376,9 +376,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "sort",
   "lane": "b2",
-  "displayName": "Bounded stdin line sort in the C byte locale",
+  "displayName": "sort",
   "category": "text",
-  "description": "Bounded stdin line sort in the C byte locale",
+  "description": "sort - sort lines of text alphabetically or numerically in C locale. Use to organize and order list data (stdin <=2 KiB). Flags: -r, -n.",
   "caveats": [
    "Stdin-only line sort in the C byte locale. Options: -n (numeric, no exponent notation), -r (reverse), -u (unique). File operands rejected.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -413,9 +413,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "uniq",
   "lane": "b2",
-  "displayName": "Bounded adjacent full-line run filter",
+  "displayName": "uniq",
   "category": "text",
-  "description": "Bounded adjacent full-line run filter",
+  "description": "uniq - remove adjacent duplicate lines from sorted text. Use to deduplicate list data and filter unique lines (stdin <=2 KiB). Flags: -c, -d.",
   "caveats": [
    "Filters adjacent duplicate lines without field/character skipping. Options: -c (count), -d (repeated only), -u (unique only). Stdin-only.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -450,9 +450,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "tr",
   "lane": "b2",
-  "displayName": "Bounded streaming byte-locale translate/delete/squeeze filter",
+  "displayName": "tr",
   "category": "text",
-  "description": "Bounded streaming byte-locale translate/delete/squeeze filter",
+  "description": "tr - translate, replace, delete, or squeeze characters in text. Use to search and replace characters or shift case (stdin <=2 KiB). Flags: -d, -s.",
   "caveats": [
    "Translates, deletes (-d), or squeezes (-s) characters in byte locale with complement and POSIX character classes. Unsupported equivalence classes and repeat expressions rejected.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -487,9 +487,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "grep",
   "lane": "b2",
-  "displayName": "Bounded POSIX BRE/ERE stdin line selection filter",
+  "displayName": "grep",
   "category": "text",
-  "description": "Bounded POSIX BRE/ERE stdin line selection filter",
+  "description": "grep - search and find matching lines using regular expressions. Use to search, find, or filter text data (stdin <=2 KiB). Flags: -i, -v, -n.",
   "caveats": [
    "Stdin text selection filter. Options: -i, -v, -n, -c, -F, -E. NUL input and file operands are rejected.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -524,9 +524,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "diff",
   "lane": "b2",
-  "displayName": "Bounded LCS-based unified diff over two literal text arguments",
+  "displayName": "diff",
   "category": "text",
-  "description": "Bounded LCS-based unified diff over two literal text arguments",
+  "description": "diff - compare text documents and calculate diff changes. Use for file editing and comparing revisions by viewing differences (args <=1 KiB each).",
   "caveats": [
    "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error).",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -561,9 +561,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "patch",
   "lane": "b2",
-  "displayName": "Bounded exact unified-diff application over literal text arguments",
+  "displayName": "patch",
   "category": "text",
-  "description": "Bounded exact unified-diff application over literal text arguments",
+  "description": "patch - apply unified diff changes to source text. Use for editing files and updating text from patches (args <=1 KiB each).",
   "caveats": [
    "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -598,9 +598,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "toml2json",
   "lane": "b2",
-  "displayName": "Bounded TOML to JSON direct converter (pinned tomlc99)",
+  "displayName": "toml2json",
   "category": "data",
-  "description": "Bounded TOML to JSON direct converter (pinned tomlc99)",
+  "description": "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config file data (stdin <=2 KiB).",
   "caveats": [
    "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -636,9 +636,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "markdown",
   "lane": "c2",
-  "displayName": "Bounded CommonMark HTML renderer based on pinned cmark 0.31.1",
+  "displayName": "markdown",
   "category": "data",
-  "description": "Bounded CommonMark HTML renderer based on pinned cmark 0.31.1",
+  "description": "markdown - convert Markdown formatted text into safe HTML markup. Use to render and view formatted document content (stdin <=2 KiB).",
   "caveats": [
    "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority.",
@@ -675,9 +675,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "du",
   "lane": "c2",
-  "displayName": "Bounded directory and file usage counter for OPFS job workspaces",
+  "displayName": "du",
   "category": "file",
-  "description": "Bounded directory and file usage counter for OPFS job workspaces",
+  "description": "du - measure disk usage and file sizes across directory folders. Use to check file and folder space consumption (up to 4096 entries).",
   "caveats": [
    "Reports apparent bytes rounded to 1 KiB (or human units), not physical blocks. Bounded to depth 64, 100,000 entries; symlink directories are not followed",
    "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed, using /job by default (explicit owner click); no provider, page or OPFS authority.",
@@ -713,9 +713,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "stat",
   "lane": "c2",
-  "displayName": "Bounded file metadata inspector for OPFS job workspaces",
+  "displayName": "stat",
   "category": "file",
-  "description": "Bounded file metadata inspector for OPFS job workspaces",
+  "description": "stat - inspect file and directory metadata including size and type. Use to check file existence and details (read-only /job path).",
   "caveats": [
    "Reports stable path, type, size, and mtime fields; POSIX permission bits are omitted. Explicitly not GNU formatting/options",
    "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed (explicit owner click); no provider, page or OPFS authority.",
@@ -751,9 +751,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "tree",
   "lane": "c2",
-  "displayName": "Bounded deterministic directory tree visualizer for OPFS job workspaces",
+  "displayName": "tree",
   "category": "file",
-  "description": "Bounded deterministic directory tree visualizer for OPFS job workspaces",
+  "description": "tree - display directory and folder file structures as visual text trees. Use to explore workspace and folder layout (up to 4096 nodes).",
   "caveats": [
    "Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed",
    "Settings-only bounded read-only preview over the immutable nested in-memory /job/inputs seed (explicit owner click); no provider, page or OPFS authority.",
@@ -789,9 +789,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "touch",
   "lane": "c2",
-  "displayName": "Bounded file creator and timestamp mutator for OPFS job workspaces",
+  "displayName": "touch",
   "category": "file",
-  "description": "Bounded file creator and timestamp mutator for OPFS job workspaces",
+  "description": "touch - create new empty files or update file timestamps. Use to create, touch, or update files in scratch space. Flags: -t, -c.",
   "caveats": [
    "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed. Requires future reviewed execution adapter to restrict writes to approved mutable path classes (scratch/output, never immutable inputs), and enforce symlink, cross-job, and over-quota rejection fail closed. Not currently executable/admitted."
   ],
@@ -825,9 +825,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "truncate",
   "lane": "c2",
-  "displayName": "Bounded file length truncator and expander for OPFS job workspaces",
+  "displayName": "truncate",
   "category": "file",
-  "description": "Bounded file length truncator and expander for OPFS job workspaces",
+  "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. Flag: -s.",
   "caveats": [
    "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed. Requires future reviewed execution adapter to restrict writes to mutable path classes and enforce traversal and quota fail-closed rules. Not currently executable/admitted."
   ],
@@ -861,9 +861,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "csvtool",
   "lane": "csvtool",
-  "displayName": "Bounded clean-room RFC 4180 CSV stream tool",
+  "displayName": "csvtool",
   "category": "text",
-  "description": "Clean-room bounded RFC 4180 CSV stream filter (stdin/stdout only); CAP-authored, Apache-2.0.",
+  "description": "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows (stdin <=2 KiB).",
   "caveats": [
    "Stdin/stdout only; no file operands.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -898,9 +898,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "gzip",
   "lane": "gzip",
-  "displayName": "Bounded RFC 1952 gzip stream tool (zlib 1.3.1 minigzip)",
+  "displayName": "gzip",
   "category": "data",
-  "description": "Upstream zlib 1.3.1 Z_SOLO minigzip RFC1952 compressor/decompressor over stdin/stdout only; experimental, no canonical gzip claim.",
+  "description": "gzip - compress or decompress data streams. Use to compress and decompress files or streams (stdin <=2 KiB, base64 output <=64 KiB). Key flag: -d.",
   "caveats": [
    "Stdin/stdout only; rejects file operands, recursion, unknown options.",
    "Experimental candidate; not the canonical full gzip.",
@@ -936,9 +936,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "version": "1.0.0",
   "toolId": "sqlite3_query_bounded",
   "lane": "sqlite3",
-  "displayName": "Bounded SQLite 3.46.0 query tool (upstream amalgamation)",
+  "displayName": "sqlite3_query_bounded",
   "category": "data",
-  "description": "SQLite 3.46.0 amalgamation query tool (upstream Blessing) with CAP-authored wrapper/host (Apache-2.0). ATTACH/DETACH/load_extension denied by runtime authorizer.",
+  "description": "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational database data (JSON <=2 KiB).",
   "caveats": [
    "Memory tranche has no external persistence; may later be classified read-only for replay only after runtime wiring.",
    "Workspace tranche is mutating and requires a sole bounded workspace preopen.",
