@@ -239,11 +239,14 @@ On resume after a coordinator or worker loss:
     scoped per task/agent, revocable in a Settings Local folders pane;
     local-dir files are NOT artifacts (OPFS + createAssetKeyed remain the
     only promotion path); fs-read and fs-write separate capabilities;
-    watcher = polling + manifest-diff with honest bounds (5s default,
-    idle-gated, ≤10k entries/1MiB, fail-closed too-large — explicitly not
-    real-time). Phase-2 tranches: grants store + Settings pane → picker
-    affordance → fs-read/list → re-grant flow → fs-write/scan/watch.
-    Awaiting owner plan approval before implementation.
+    watcher = FileSystemObserver (owner correction; verified shipped in
+    Chrome 133 desktop, stable, no origin trial): observe(handle,
+    {recursive:true}) with FileSystemChangeRecord batches, unobserve/
+    disconnect lifecycle; feature-detect ('FileSystemObserver' in self) with
+    polling fallback ONLY where unsupported; desktop-only caveat recorded.
+    Phase-2 tranches: grants store + Settings pane → picker affordance →
+    fs-read/list → re-grant flow → fs-write/scan/watch. OWNER PLAN APPROVED
+    (conditional on the FileSystemObserver watcher correction).
   - 2026-08-23 23:10 UTC — captured from product-owner voice feedback.
 
 
