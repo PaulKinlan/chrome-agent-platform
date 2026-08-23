@@ -747,6 +747,42 @@ On resume after a coordinator or worker loss:
 - Review: independent source/package and loaded-MV3 evidence reviews PASS
 - Next: —
 
+## [CAP-FB-20260823-GZIP-SETTINGS-ADMISSION-01] Bounded gzip owner-Settings preview (Release 0.2.183)
+
+- Feedback: 2026-08-23 — after FND-1, admit only retained gzip through the
+  explicit-owner-click Settings preview using lossless base64 in both directions
+- Updated: 2026-08-23 14:15 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: gzip admission worker
+- Workspace: active (local path private)
+- Branch: `feat/gzip-admission-13936ec`
+- Base: speculative FND-1 candidate `13936ecfdf3f8ff9b1b97da7db2d5f2099bd537a` (0.2.182)
+- Candidate: this commit (0.2.183)
+- Shipping: —
+- Acceptance: exactly 23 enabled / 3 disabled; gzip alone is appended after tree.
+  Its deeply frozen spec accepts exact argv `[]`/`["-d"]`, uses base64 stdout,
+  bounds text input to 2,048 UTF-8 bytes, canonical-base64 input to 2,048
+  characters / 1,536 decoded bytes, and binary output to 65,536 raw bytes.
+  Text mode rejects BOM, NUL and lone surrogates; decompression rejects every
+  malformed/noncanonical standard-base64 shape before Worker spawn. Both
+  directions return only complete canonical base64, including arbitrary binary
+  and empty output. Failures discard output and counters. The one-button UI adds
+  only native Compress text / Decompress base64 modes and inert textContent
+  rendering. gzip CAS, SBOM, `Zlib AND Apache-2.0`, capabilities, 32/256 memory
+  and `canonicalNameClaim:false` remain unchanged. touch, truncate and SQLite
+  stay disabled. No provider, page, filesystem, OPFS, permission, network,
+  persistence, export, clipboard, Blob, download or route authority is added.
+- Gates: exact retained gzip Worker hello/binary/empty/cap/cap+1/bomb/corruption
+  vectors; runtime no-overshoot; service/UI hostile tests; all 22 predecessor
+  known answers; fresh 23/3 import census; focused and full serial no-Chrome
+  tests; deterministic generator/build/scanners/Store package; independent review
+- Review: independent source/package review required; Chrome and security suite
+  intentionally not run in this source lane
+- Blockers: speculative until FND-1 candidate lands
+- Next: review this exact successor; loaded-MV3 gzip journeys remain residual
+
 ## [CAP-FB-20260823-LOSSLESS-ENVELOPE-01] Lossless Worker result envelope (Release 0.2.182)
 
 - Feedback: 2026-08-23 — land only the generic FND-1 lossless stdout envelope;

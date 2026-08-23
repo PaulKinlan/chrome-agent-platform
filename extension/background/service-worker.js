@@ -2723,7 +2723,12 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: String(envelope?.error ?? "tool preview failed") };
     }
     try {
-      return { ok: true, result: boundPreviewResult(envelope.result) };
+      return {
+        ok: true,
+        result: boundPreviewResult(envelope.result, {
+          stdoutEncoding: spec.stdoutEncoding,
+        }),
+      };
     } catch (error) {
       return { ok: false, error: `tool preview result rejected: ${error?.code ?? error}` };
     }

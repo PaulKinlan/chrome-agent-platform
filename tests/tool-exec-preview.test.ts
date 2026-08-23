@@ -236,7 +236,7 @@ Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", (
 });
 
 Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exact)", () => {
-  for (const toolId of ["gzip", "evil", "csvtool.extra", "CsvTool", ""]) {
+  for (const toolId of ["evil", "csvtool.extra", "CsvTool", ""]) {
     let threw = null;
     try { validatePreviewInput({ toolId, args: [], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assertEquals(threw, "preview_unknown_tool", `unknown tool ${JSON.stringify(toolId)} rejected`);
@@ -244,21 +244,22 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   // every allowlisted tool SURVIVES validation with its exact toolId intact
   // (the SW resolves the spec from the validated toolId — a dropped toolId
   // would make every tool unknown).
-  for (const toolId of PREVIEW_TOOL_IDS) {
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "gzip")) {
     const validated = validatePreviewInput({ toolId, args: ["-n", "2"], stdin: "a\nb" });
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
-  // the allowlist is EXACTLY the 22 tools (tree is the sole appended tranche)
+  assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "hello" }).toolId, "gzip");
+  // gzip is the sole 23rd tool and remains appended after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
     assert(typeof spec.casSha === "string" && /^[0-9a-f]{64}$/.test(spec.casSha), `${spec.toolId} casSha`);
     assert(Number.isSafeInteger(spec.size) && spec.size > 0, `${spec.toolId} size`);
     assertEquals(spec.argv0, spec.toolId, "argv0 == the exact toolId");
-    assertEquals(spec.stdoutEncoding, "utf8", `${spec.toolId}: every predecessor explicitly remains UTF-8`);
+    assertEquals(spec.stdoutEncoding, spec.toolId === "gzip" ? "base64" : "utf8", `${spec.toolId}: immutable output encoding`);
   }
 });
 
@@ -362,7 +363,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 22 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 23 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -456,10 +457,10 @@ Deno.test("preview: revalidation fails closed on every mutant (sha/size/imports/
 });
 
 Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () => {
-  const ok = boundPreviewResult({ ok: true, phase: "completed", exitCode: 0, stdout: "a,b\n1,2", stdoutBase64: null, stderr: "", errno: null, error: null });
+  const ok = boundPreviewResult({ ok: true, phase: "completed", exitCode: 0, stdout: "a,b\n1,2", stdoutBase64: null, stdoutBytes: 7, stderr: "", errno: null, error: null }, { stdoutEncoding: "utf8" });
   assertEquals(ok.ok, true);
   assertEquals(ok.stdout, "a,b\n1,2");
-  const failed = boundPreviewResult({ ok: false, phase: "proc-exit", exitCode: 1, stdout: "", stdoutBase64: null, stderr: "", errno: 0, error: "boom" });
+  const failed = boundPreviewResult({ ok: false, phase: "proc-exit", exitCode: 1, stdout: "", stdoutBase64: null, stdoutBytes: 0, stderr: "", counters: null, errno: 0, error: "boom" }, { stdoutEncoding: "utf8" });
   assertEquals(failed.ok, false);
   assertEquals(failed.error, "boom");
   // hostile shapes fail closed
@@ -471,15 +472,15 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
     { ok: true, stdout: "text", stdoutBase64: "dGV4dA==", stderr: "" },
   ]) {
     let threw = null;
-    try { boundPreviewResult(bad); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+    try { boundPreviewResult(bad, { stdoutEncoding: "utf8" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assert(threw !== null, `expected rejection for ${JSON.stringify(bad)?.slice(0, 40)}`);
   }
 });
 
-Deno.test("preview: the EXACT 22-tool static allowlist is admitted as settings-preview (other 4 unchanged)", () => {
+Deno.test("preview: the EXACT 23-tool static allowlist admits gzip only (other 3 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -487,7 +488,8 @@ Deno.test("preview: the EXACT 22-tool static allowlist is admitted as settings-p
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 4, "the other 4 rows remain disabled");
+  assertEquals(notAdmitted.length, 3, "touch, truncate and sqlite remain disabled");
+  assertEquals(notAdmitted.map((row) => row.toolId).sort(), ["sqlite3_query_bounded", "touch", "truncate"]);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);
     assertEquals(JSON.stringify(spec.workspaceSeed), JSON.stringify({ files: [{ path: "inputs/f.bin", bytes: [104, 105] }] }));
@@ -526,6 +528,15 @@ Deno.test("preview: the EXACT 22-tool static allowlist is admitted as settings-p
   // per-tool caps: the digest tools carry the crypto set
   assertEquals(JSON.stringify(previewSpecFor("md5sum").caps), JSON.stringify(["compute", "crypto"]));
   assertEquals(JSON.stringify(previewSpecFor("sha256sum").caps), JSON.stringify(["compute", "crypto"]));
+  const gzip = previewSpecFor("gzip");
+  assertEquals(gzip.stdoutEncoding, "base64");
+  assertEquals(JSON.stringify(gzip.acceptedExitCodes), JSON.stringify([0]));
+  assertEquals(JSON.stringify(gzip.allowedArgs), JSON.stringify([[], ["-d"]]));
+  assertEquals(gzip.maxTextInputBytes, 2048);
+  assertEquals(gzip.maxBase64InputChars, 2048);
+  assertEquals(gzip.maxDecodedInputBytes, 1536);
+  assertEquals(gzip.maxBinaryOutputBytes, 65536);
+  assert(Object.isFrozen(gzip) && Object.isFrozen(gzip.allowedArgs) && gzip.allowedArgs.every(Object.isFrozen));
   assertEquals(JSON.stringify(previewSpecFor("base64").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("wc").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("xxd").caps), JSON.stringify(["compute", "text.transform"]));

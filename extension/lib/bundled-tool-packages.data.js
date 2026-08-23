@@ -903,7 +903,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "Upstream zlib 1.3.1 Z_SOLO minigzip RFC1952 compressor/decompressor over stdin/stdout only; experimental, no canonical gzip claim.",
   "caveats": [
    "Stdin/stdout only; rejects file operands, recursion, unknown options.",
-   "Experimental candidate; not the canonical full gzip."
+   "Experimental candidate; not the canonical full gzip.",
+   "Settings-only bounded text/canonical-base64 preview (explicit owner click); lossless binary output is canonical base64; no provider, page, filesystem or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -925,9 +926,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.gzip-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.sqlite3.query.bounded",

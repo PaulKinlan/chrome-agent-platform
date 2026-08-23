@@ -1,6 +1,6 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
 // (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
-// static allowlist of bundled packages (22 tools) may be run ONLY from the
+// static allowlist of bundled packages (23 tools) may be run ONLY from the
 // exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:
@@ -21,6 +21,7 @@
 
 import { createWasiJob } from "./wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
+import { decodeCanonicalBase64 } from "./wasm-base64.js";
 
 // The wasm-bytes cap = the executor's maxWasmBytes (the tiny-tier max, 4 MiB —
 // the B2 tools are 164–325 KB); the METADATA/request JSON cap (maxRequestBytes
@@ -85,10 +86,19 @@ export const PREVIEW_SPECS = Object.freeze(
           // accepts only exit 0. NEVER request-borne — the SW copies this into
           // the trusted job envelope.
           acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
-          // Release FND-1 makes output encoding trusted and explicit at every
-          // job layer. All currently admitted previews remain byte-identical
-          // UTF-8 tools; binary admission is a later release.
-          stdoutEncoding: "utf8",
+          // Output policy is immutable spec authority. gzip alone uses the
+          // lossless binary arm; every predecessor remains byte-identical UTF-8.
+          stdoutEncoding: row.toolId === "gzip" ? "base64" : "utf8",
+          ...(row.toolId === "gzip" ? {
+            allowedArgs: Object.freeze([
+              Object.freeze([]),
+              Object.freeze(["-d"]),
+            ]),
+            maxTextInputBytes: 2048,
+            maxBase64InputChars: 2048,
+            maxDecodedInputBytes: 1536,
+            maxBinaryOutputBytes: 65536,
+          } : {}),
           // Immutable per-tool workspace seeds. stat/du retain their minimum
           // deterministic input; tree alone gets the nested seed required to
           // exercise directory synthesis. Specs hold FROZEN DENSE PLAIN byte
@@ -142,6 +152,20 @@ function plainData(value) {
 
 function utf8Bytes(value) {
   return encoder.encode(String(value)).byteLength;
+}
+
+function hasLoneSurrogate(value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return true;
+      index++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function randomHex(bytes) {
@@ -218,6 +242,11 @@ export function validatePreviewInput(raw) {
   if (!Array.isArray(raw.args) || raw.args.length > PREVIEW_LIMITS.maxArgs) {
     fail("preview_args");
   }
+  // gzip is intentionally not a generic argv surface: only exact compress []
+  // and decompress ["-d"] modes are admitted, before any Worker can spawn.
+  if (raw.toolId === "gzip" && !spec.allowedArgs.some(
+    (allowed) => JSON.stringify(allowed) === JSON.stringify(raw.args),
+  )) fail("preview_args");
   // The per-tool arg bounds from the immutable spec (diff/patch get the exact
   // 1024/doc + 2048 total; the 17 others stay 512/1024).
   const { maxArgBytes, maxArgTotalBytes } = spec.argBounds;
@@ -237,8 +266,25 @@ export function validatePreviewInput(raw) {
   });
   if (totalBytes > maxArgTotalBytes) fail("preview_args");
   if (typeof raw.stdin !== "string") fail("preview_stdin");
-  const stdinBytes = utf8Bytes(raw.stdin);
-  if (stdinBytes > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin");
+  if (raw.toolId === "gzip") {
+    if (args.length === 0) {
+      // TextEncoder replaces malformed scalar values, so reject those values
+      // first. A BOM or NUL is outside this intentionally narrow text mode.
+      if (raw.stdin.charCodeAt(0) === 0xfeff || raw.stdin.includes("\0") ||
+          hasLoneSurrogate(raw.stdin) || utf8Bytes(raw.stdin) > spec.maxTextInputBytes) {
+        fail("preview_gzip_text");
+      }
+    } else {
+      if (raw.stdin.length > spec.maxBase64InputChars) fail("preview_gzip_base64");
+      let decoded;
+      try { decoded = decodeCanonicalBase64(raw.stdin); }
+      catch { fail("preview_gzip_base64"); }
+      if (decoded.byteLength > spec.maxDecodedInputBytes) fail("preview_gzip_base64");
+    }
+  } else {
+    const stdinBytes = utf8Bytes(raw.stdin);
+    if (stdinBytes > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin");
+  }
   // The validated toolId MUST survive (the SW resolves the spec from it — a
   // dropped toolId would make every allowlisted tool appear unknown).
   return Object.freeze({
@@ -277,7 +323,6 @@ export function buildPreviewJob({ input, authority, quota = null }) {
       typeof authority.callId !== "string" || typeof authority.origin !== "string") {
     fail("preview_authority");
   }
-  const stdinBytes = encoder.encode(input.stdin);
   // argv0 = the EXACT requested toolId (the WASI `_start` command convention
   // requires argv[0]). It is resolved from the validated input — never typed
   // by the UI and never request-borne beyond the allowlisted toolId.
@@ -287,6 +332,14 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     ? spec.defaultArgs
     : input.args;
   const args = [spec.argv0, ...effectiveArgs];
+  let stdinBytes;
+  if (input.toolId === "gzip" && input.args.length === 1) {
+    try { stdinBytes = decodeCanonicalBase64(input.stdin); }
+    catch { fail("preview_gzip_base64"); }
+    if (stdinBytes.byteLength > spec.maxDecodedInputBytes) fail("preview_gzip_base64");
+  } else {
+    stdinBytes = encoder.encode(input.stdin);
+  }
   const job = createWasiJob({
     tier: "tiny",
     context: {
@@ -303,8 +356,12 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     quota: quota ?? {
       hostCalls: 50_000,
       pathCalls: 4096,
-      stdinBytes: PREVIEW_LIMITS.maxStdinBytes,
-      stdoutBytes: PREVIEW_LIMITS.maxStdoutBytes,
+      stdinBytes: input.toolId === "gzip"
+        ? (input.args.length === 1 ? spec.maxDecodedInputBytes : spec.maxTextInputBytes)
+        : PREVIEW_LIMITS.maxStdinBytes,
+      stdoutBytes: input.toolId === "gzip"
+        ? spec.maxBinaryOutputBytes
+        : PREVIEW_LIMITS.maxStdoutBytes,
       stderrBytes: PREVIEW_LIMITS.maxStderrBytes,
       fileBytes: 10 * 1024 * 1024,
       fileSize: 10 * 1024 * 1024,
@@ -405,29 +462,66 @@ export async function revalidatePreviewExecution({
   });
 }
 
-/** Bound a result envelope for the Settings UI (never echo unbounded bytes). */
-export function boundPreviewResult(result, maxTextBytes = PREVIEW_LIMITS.maxOutputTextBytes) {
+/** Bind a result to trusted per-tool output authority for the Settings UI. */
+export function boundPreviewResult(result, {
+  stdoutEncoding,
+  maxTextBytes = PREVIEW_LIMITS.maxOutputTextBytes,
+} = {}) {
   if (!plainData(result)) fail("preview_result_shape");
-  const boundedString = (value, label) => {
+  if (stdoutEncoding !== "utf8" && stdoutEncoding !== "base64") {
+    fail("preview_result_encoding");
+  }
+  const boundedString = (value, label, limit = maxTextBytes) => {
     if (typeof value !== "string") fail(`preview_result_${label}`);
-    if (utf8Bytes(value) > maxTextBytes) {
-      fail(`preview_result_${label}_over_budget`);
-    }
+    if (utf8Bytes(value) > limit) fail(`preview_result_${label}_over_budget`);
     return value;
   };
   const ok = result.ok === true;
-  // FND-1 does not admit a binary UI tool: every current immutable preview
-  // spec is utf8, so the service/UI boundary requires the inactive arm. A
-  // later admission must bind a binary spec explicitly rather than trusting a
-  // result-borne mode.
-  if (result.stdoutBase64 !== null) fail("preview_result_stdout_base64");
+  let stdout;
+  let stdoutBase64;
+  let stdoutBytes;
+  if (ok && stdoutEncoding === "utf8") {
+    if (result.stdoutBase64 !== null || typeof result.stdout !== "string" ||
+        !Number.isSafeInteger(result.stdoutBytes) || result.stdoutBytes < 0 ||
+        utf8Bytes(result.stdout) !== result.stdoutBytes) fail("preview_result_stdout");
+    stdout = boundedString(result.stdout, "stdout");
+    stdoutBase64 = null;
+    stdoutBytes = result.stdoutBytes;
+  } else if (ok) {
+    if (result.stdout !== null || typeof result.stdoutBase64 !== "string" ||
+        result.stdoutBase64.length > EXECUTOR_BOUNDS.maxBase64ResponseChars ||
+        !Number.isSafeInteger(result.stdoutBytes) || result.stdoutBytes < 0) {
+      fail("preview_result_stdout_base64");
+    }
+    let decoded;
+    try { decoded = decodeCanonicalBase64(result.stdoutBase64); }
+    catch { fail("preview_result_stdout_base64"); }
+    if (decoded.byteLength !== result.stdoutBytes ||
+        decoded.byteLength > EXECUTOR_BOUNDS.maxBinaryResponseBytes) {
+      fail("preview_result_stdout_base64");
+    }
+    stdout = null;
+    stdoutBase64 = result.stdoutBase64;
+    stdoutBytes = result.stdoutBytes;
+  } else {
+    if (result.stdout !== "" || result.stdoutBase64 !== null || result.stdoutBytes !== 0 ||
+        result.stderr !== "" || result.counters !== null) {
+      fail("preview_result_failure_output");
+    }
+    stdout = "";
+    stdoutBase64 = null;
+    stdoutBytes = 0;
+  }
   return Object.freeze({
     ok,
     phase: typeof result.phase === "string" ? result.phase : "unknown",
     exitCode: Number.isSafeInteger(result.exitCode) ? result.exitCode : null,
-    stdout: ok ? boundedString(result.stdout, "stdout") : "",
+    stdoutEncoding,
+    stdout,
+    stdoutBase64,
+    stdoutBytes,
     stderr: ok ? boundedString(result.stderr, "stderr") : "",
     errno: Number.isSafeInteger(result.errno) ? result.errno : null,
-    error: ok ? null : boundedString(String(result.error ?? "").slice(0, 512), "error"),
+    error: ok ? null : boundedString(String(result.error ?? "").slice(0, 512), "error", 512),
   });
 }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.183] — 2026-08-23
+- feat(tools): admit gzip as the 23rd bounded owner-Settings preview with exact text/canonical-base64 modes and lossless binary output (CAP-FB-20260823-GZIP-SETTINGS-ADMISSION-01)
+
 ## [0.2.182] — 2026-08-23
 - feat(wasi): add the bounded lossless UTF-8/base64 Worker result-envelope foundation; all 22 previews remain UTF-8 and gzip remains disabled (CAP-FB-20260823-LOSSLESS-ENVELOPE-01)
 

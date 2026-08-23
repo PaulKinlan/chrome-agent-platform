@@ -6434,14 +6434,16 @@ class ToolLibrary extends Component {
     if (this._rendered) this._render();
   }
   set previewResult(value) {
-    // Bounded preview output: the SW already bounded the envelope; this setter
-    // only accepts the validated shape + caps the rendered text (defense in depth).
+    // Bounded preview output: the SW already bound the result to the immutable
+    // tool encoding. Render only inert text; raw bytes never reach the DOM.
     const out = this._root.querySelector(".preview-output");
     if (!out) return;
     this._previewResult = value && typeof value === "object" ? value : null;
     if (value && typeof value === "object") {
       out.classList.toggle("error", value.ok !== true);
-      const text = value.ok === true
+      const text = value.ok === true && value.stdoutEncoding === "base64"
+        ? `gzip output · ${Number.isSafeInteger(value.stdoutBytes) ? value.stdoutBytes : 0} bytes · canonical base64\n${String(value.stdoutBase64 ?? "")}`
+        : value.ok === true
         ? String(value.stdout ?? "")
         : String(value.error ?? "preview failed");
       out.textContent = text.slice(0, 256 * 1024);
@@ -6458,8 +6460,12 @@ class ToolLibrary extends Component {
     if (out) out.textContent = value === true ? "Running…" : out.textContent;
   }
   // Per-tool example/help copy (static, bounded — the tool selector shows it).
-  _previewHelp(toolId) {
+  _previewHelp(toolId, gzipMode = "compress") {
     switch (toolId) {
+      case "gzip":
+        return gzipMode === "decompress"
+          ? "Decompress canonical standard base64 only (≤2,048 characters / 1,536 decoded bytes); output stays canonical base64."
+          : "Compress bounded UTF-8 text (≤2,048 bytes); output is the complete canonical-base64 gzip member.";
       case "uuid":
         return 'Example: args "-n 2" + empty stdin → two RFC 4122 v4 UUIDs (one per line).';
       case "head":
@@ -6530,7 +6536,12 @@ class ToolLibrary extends Component {
       const argsInput = this._root.querySelector(".preview-args");
       const stdinInput = this._root.querySelector(".preview-stdin");
       const toolId = String(toolSelect?.value ?? "csvtool");
-      if (this._isTwoDocument(toolId)) {
+      if (toolId === "gzip") {
+        const mode = String(this._root.querySelector(".preview-gzip-mode")?.value ?? "compress");
+        const args = mode === "decompress" ? ["-d"] : [];
+        const stdin = String(stdinInput?.value ?? "");
+        this._emit("tool-preview-request", { toolId, args, stdin, sourceEvent });
+      } else if (this._isTwoDocument(toolId)) {
         const docA = String(this._root.querySelector(".preview-doc-a")?.value ?? "");
         const docB = String(this._root.querySelector(".preview-doc-b")?.value ?? "");
         // The two documents ride args[1..2] (the current binaries' argv
@@ -6549,15 +6560,46 @@ class ToolLibrary extends Component {
       const help = this._root.querySelector(".preview-help");
       const twoDoc = this._root.querySelector(".preview-two-doc");
       const stdinLabel = this._root.querySelector(".preview-stdin-label");
+      const stdinInput = this._root.querySelector(".preview-stdin");
       const argsLabel = this._root.querySelector(".preview-args-label");
+      const gzipControls = this._root.querySelector(".preview-gzip-controls");
+      const gzipModeSelect = this._root.querySelector(".preview-gzip-mode");
+      const stdinLabelText = this._root.querySelector(".preview-stdin-label-text");
       const twoDocMode = this._isTwoDocument(toolId);
-      if (help) help.textContent = this._previewHelp(toolId);
+      const gzipMode = toolId === "gzip";
+      if (help) help.textContent = this._previewHelp(toolId, String(gzipModeSelect?.value ?? "compress"));
       if (twoDoc) twoDoc.hidden = !twoDocMode;
-      // BOTH the normal Arguments + Stdin controls hide in two-document mode
-      // and are restored on switch back.
+      if (gzipControls) gzipControls.hidden = !gzipMode;
+      // Two-document mode hides both generic controls. gzip keeps stdin but
+      // replaces free-form argv with its exact native mode select.
       if (stdinLabel) stdinLabel.hidden = twoDocMode;
-      if (argsLabel) argsLabel.hidden = twoDocMode;
+      if (stdinInput) {
+        stdinInput.hidden = twoDocMode;
+        stdinInput.placeholder = gzipMode
+          ? (gzipModeSelect?.value === "decompress" ? "H4sI…" : "Enter bounded UTF-8 text")
+          : "a,b\n1,2\n3,4";
+      }
+      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode;
+      if (stdinLabelText) stdinLabelText.textContent = gzipMode
+        ? (gzipModeSelect?.value === "decompress" ? "Canonical base64 gzip input" : "UTF-8 text input")
+        : "Stdin (bounded)";
+      this.previewResult = null;
       this._updateDocCounts();
+    });
+    this._root.querySelector(".preview-gzip-mode")?.addEventListener("change", (event) => {
+      const mode = String(event?.target?.value ?? "compress");
+      const help = this._root.querySelector(".preview-help");
+      const label = this._root.querySelector(".preview-stdin-label-text");
+      const stdin = this._root.querySelector(".preview-stdin");
+      if (help) help.textContent = this._previewHelp("gzip", mode);
+      if (label) label.textContent = mode === "decompress"
+        ? "Canonical base64 gzip input"
+        : "UTF-8 text input";
+      if (stdin) {
+        stdin.value = "";
+        stdin.placeholder = mode === "decompress" ? "H4sI…" : "Enter bounded UTF-8 text";
+      }
+      this.previewResult = null;
     });
     this._root.querySelector(".preview-doc-a")?.addEventListener("input", () => this._updateDocCounts());
     this._root.querySelector(".preview-doc-b")?.addEventListener("input", () => this._updateDocCounts());
@@ -6603,7 +6645,8 @@ class ToolLibrary extends Component {
       .preview select { display:block; width:100%; box-sizing:border-box; margin-top:4px;
         border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
-      .preview-help { margin:8px 0 0; font-size:12px; color:var(--muted, #625d57); }
+      .preview-help { margin:8px 0 0; font-size:12px; color:var(--muted, #625d57); overflow-wrap:anywhere; }
+      .preview-gzip-controls { margin-block-start:8px; }
       .preview-two-doc { margin-top:10px; }
       .preview-doc-label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
       .preview-doc { display:block; width:100%; box-sizing:border-box; margin-top:4px;
@@ -6617,6 +6660,7 @@ class ToolLibrary extends Component {
         border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
       .preview textarea { resize:vertical; font-family:ui-monospace, monospace; }
+      .preview [hidden] { display:none; }
       .preview .preview-run { margin-top:10px; padding:6px 14px; border:1px solid var(--border, #ddd8d2);
         border-radius:999px; background:var(--accent, #0b57d0); color:#fff; font:inherit; font-size:13px;
         cursor:pointer; }
@@ -6667,17 +6711,23 @@ class ToolLibrary extends Component {
             <option value="stat">stat — inspect immutable job-file metadata</option>
             <option value="du">du — summarize immutable job usage</option>
             <option value="tree">tree — display immutable job hierarchy</option>
+            <option value="gzip">gzip — bounded zlib/minigzip RFC 1952 wrapper</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
+        <label class="preview-gzip-controls" hidden>Mode
+          <select class="preview-gzip-mode" autocomplete="off">
+            <option value="compress">Compress text</option>
+            <option value="decompress">Decompress base64</option>
+          </select>
+        </label>
         <label class="preview-args-label">Arguments
           <input class="preview-args" type="text" autocomplete="off"
             placeholder="(none) — e.g. -n 2" maxlength="128" />
         </label>
-        <label class="preview-stdin-label">Stdin (bounded)
-          <textarea class="preview-stdin" rows="4" maxlength="2048"
-            placeholder="a,b&#10;1,2&#10;3,4"></textarea>
-        </label>
+        <label class="preview-stdin-label" for="preview-stdin"><span class="preview-stdin-label-text">Stdin (bounded)</span></label>
+        <textarea class="preview-stdin" id="preview-stdin" rows="4" maxlength="2048"
+          placeholder="a,b&#10;1,2&#10;3,4"></textarea>
         <div class="preview-two-doc" hidden>
           <label class="preview-doc-label" for="preview-doc-a">Document A</label>
           <textarea class="preview-doc preview-doc-a" id="preview-doc-a" rows="4"

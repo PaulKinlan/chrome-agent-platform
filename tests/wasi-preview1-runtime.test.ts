@@ -816,6 +816,9 @@ Deno.test("WASI fd_write: stdio and files support bounded partial IO; input writ
   assertEquals(h.memory.u32(200), 5);
   assertEquals(dec.decode(h.runtime.snapshot().stdout), "abcde");
   assertEquals(h.wasi.fd_write(1, 100, 1, 200), WASI_ERRNO.EFBIG);
+  const afterFullWrite = h.runtime.snapshot();
+  assertEquals(dec.decode(afterFullWrite.stdout), "abcde", "EFBIG writes zero additional stdout bytes");
+  assertEquals(afterFullWrite.counters.stdoutBytes, 5, "stdout never overshoots its exact quota");
   assertEquals(h.wasi.fd_write(2, 100, 1, 200), WASI_ERRNO.SUCCESS);
   assertEquals(h.memory.u32(200), 3);
   assertEquals(dec.decode(h.runtime.snapshot().stderr), "abc");

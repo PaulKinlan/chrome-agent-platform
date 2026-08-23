@@ -63,8 +63,15 @@ isolated OPFS memory, run history, skills, and avatar.
   immutable Settings preview spec now supplies required `stdoutEncoding`; the Worker
   returns an exact UTF-8/base64 tagged union bounded to 64 KiB raw / 87,384 canonical
   base64 characters, while failures and timeouts discard partial output and counters.
-  All current 22 tools remain byte-identical UTF-8 previews; gzip remains one of the
-  exact 4 disabled packages, with no selector, CAS, manifest or authority change.
+  All current 22 tools remain byte-identical UTF-8 previews in that foundation release.
+- **Owner-only gzip Settings preview (0.2.183 source candidate)** — appends the retained
+  bounded zlib/minigzip-derived gzip wrapper as exact tool 23, with only `Compress text`
+  and `Decompress base64` modes. The immutable spec limits text to 2,048 UTF-8 bytes,
+  canonical-base64 input to 2,048 characters / 1,536 decoded bytes, and binary output
+  to 65,536 bytes. Both directions render only canonical base64 through inert
+  `textContent`; gzip keeps `canonicalNameClaim:false`. The exact posture is 23 enabled /
+  3 disabled, with unchanged CAS/SBOM/licence/capabilities/memory and no provider, page,
+  filesystem, OPFS, network, permission, persistence, export, clipboard or route expansion.
 - **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
   immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
   and an exact-token package registry WAL record bundled metadata only. Import module

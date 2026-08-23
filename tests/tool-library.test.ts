@@ -25,17 +25,26 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree"];
+  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip"];
   for (const toolId of selectorOrder) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
-  const actualSelectorOrder = [...block.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
-  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and du is appended after all 20 predecessors");
+  const toolSelectMarkup = block.slice(block.indexOf('class="preview-tool"'), block.indexOf("</select>", block.indexOf('class="preview-tool"')));
+  const actualSelectorOrder = [...toolSelectMarkup.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
+  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and gzip is appended after tree as tool 23");
   assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
   assertMatch(block, /args "\/job\/inputs\/f\.bin"/, "stat help gives the exact immutable-seed guest path");
   assertMatch(block, /leave args empty for the immutable "\/job" default/, "du help names its safe immutable default");
   assertMatch(block, /read-only deterministic inputs\/f\.bin seed/, "du help names its bounded deterministic seed");
-  assertNotMatch(block, /type="file"|showOpenFilePicker|upload/i, "du/stat add no picker/upload authority");
+  assertNotMatch(block, /type="file"|showOpenFilePicker|upload/i, "gzip/du/stat add no picker/upload authority");
+  assertMatch(block, /gzip — bounded zlib\/minigzip RFC 1952 wrapper/, "gzip label is truthful and does not claim full/canonical gzip");
+  assertMatch(block, /class="preview-gzip-mode"/, "gzip-only native mode select exists");
+  assertMatch(block, /option value="compress">Compress text/, "compress text mode exists");
+  assertMatch(block, /option value="decompress">Decompress base64/, "decompress base64 mode exists");
+  assertMatch(block, /mode === "decompress" \? \["-d"\] : \[\]/, "gzip argv is derived from the exact mode only");
+  assertMatch(block, /argsLabel\.hidden = twoDocMode \|\| gzipMode/, "free-form arguments hide for gzip and two-document tools");
+  assertMatch(block, /gzipControls\.hidden = !gzipMode/, "gzip mode control is restored/hidden on tool switches");
+  assertMatch(block, /this\.previewResult = null/, "tool/mode switches clear stale output");
   // the two-document mode hides BOTH the normal Arguments and Stdin controls
   assertMatch(block, /const argsLabel = this\._root\.querySelector\("\.preview-args-label"\)/, "the args label is queried for the toggle");
   assertMatch(block, /if \(argsLabel\) argsLabel\.hidden = twoDocMode/, "the args control hides in two-document mode");
@@ -50,6 +59,8 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   assertNotMatch(block, /createElement\("button"/, "no programmatic buttons");
   assertNotMatch(block, /\bfetch\s*\(|XMLHttpRequest|new WebSocket|sendMessage/, "the component performs no network/message calls itself");
   assertNotMatch(block, /chrome\.permissions/, "the component touches no permissions");
+  assertMatch(block, /out\.textContent = text/, "gzip base64 is rendered inertly through textContent");
+  assertNotMatch(block, /navigator\.clipboard|Blob\s*\(|URL\.createObjectURL|download\s*=|innerHTML\s*=/, "gzip adds no export, clipboard, Blob or HTML sink");
   // No OTHER action verbs as affordances in the component's markup/copy (Run is
   // the single permitted explicit-owner-click affordance).
   const otherActions = block.match(/>\s*(?:Install|Update|Revoke|Grant|Execute|Verify|Copy|Download|Remove|Enable|Disable)\s*</g) ?? [];
@@ -104,6 +115,7 @@ Deno.test("tool-library: responsive/RTL/theme rules are logical-property only", 
   const block = await componentSource();
   assertNotMatch(block, /(?:^|[\s{;])(?:margin-left|margin-right|padding-left|padding-right|border-left|border-right)\s*:/, "no physical inline properties (RTL-safe by construction)");
   assertMatch(block, /@media \(max-width:560px\)/, "narrow reflow breakpoint present");
+  assertMatch(block, /width:100%|inline-size:100%/, "mode/select/input controls remain narrow-layout bounded");
   assertMatch(block, /min-inline-size:0|min-inline-size: 0/, "shrink-safe rows");
   assertMatch(block, /overflow-wrap:anywhere/, "unbreakable digest/meta strings wrap");
   assertMatch(block, /var\(--accent|var\(--border/, "design tokens consumed");
@@ -229,4 +241,115 @@ Deno.test("tool-library: _render with settingsPreviewTools revealing csvtool doe
   previewEl.hidden = true;
   library.summary = { descriptorCount: 25, bySource: {}, catalogDiagnostics: {}, selectionDiagnostics: {} };
   assertEquals(previewEl.hidden, true, "the preview panel stays hidden without the list");
+});
+
+// Execute the real ToolLibrary._wire change callbacks. This catches lexical
+// binding defects that a source-string assertion cannot (the original gzip
+// handler referenced the click callback's block-scoped stdinInput).
+Deno.test("tool-library: gzip tool/mode handlers update controls and restore generic mode without throwing", async () => {
+  class FakeElement {
+    constructor(value = "") {
+      this.value = value;
+      this.hidden = false;
+      this.placeholder = "";
+      this.textContent = "";
+      this.listeners = new Map();
+      this.attrs = {};
+    }
+    addEventListener(type, listener) { this.listeners.set(type, listener); }
+    emit(type) { this.listeners.get(type)?.({ target: this }); }
+    getAttribute(name) { return this.attrs[name] ?? null; }
+    setAttribute(name, value) { this.attrs[name] = value; }
+    scrollIntoView() {}
+    get classList() { return { toggle() {}, add() {}, remove() {}, contains() { return false; } }; }
+  }
+
+  const registry = new Map();
+  globalThis.HTMLElement = class {
+    addEventListener() {}
+    dispatchEvent() { return true; }
+    getAttribute() { return null; }
+    hasAttribute() { return false; }
+  };
+  globalThis.customElements = {
+    define(name, cls) { registry.set(name, cls); },
+    get(name) { return registry.get(name); },
+  };
+  globalThis.window = globalThis;
+  globalThis.CustomEvent = class { constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; } };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.document = {
+    createElement: (tag) => new FakeElement(tag),
+    querySelector: () => null,
+    head: { appendChild() {} },
+    getElementById: () => null,
+  };
+
+  const mod = await import("../extension/shared/components.js?gzip-handler-regression");
+  const ToolLibraryClass = mod.ToolLibrary ?? registry.get("tool-library");
+  assert(ToolLibraryClass, "ToolLibrary class exported/registered");
+
+  const tool = new FakeElement("csvtool");
+  const mode = new FakeElement("compress");
+  const run = new FakeElement();
+  const help = new FakeElement();
+  const twoDoc = new FakeElement();
+  const stdinLabel = new FakeElement();
+  const stdin = new FakeElement("prior input");
+  const argsLabel = new FakeElement();
+  const args = new FakeElement();
+  const gzipControls = new FakeElement();
+  const stdinLabelText = new FakeElement();
+  const output = new FakeElement();
+  const docA = new FakeElement();
+  const docB = new FakeElement();
+  const docACount = new FakeElement();
+  const docBCount = new FakeElement();
+  const bySelector = new Map([
+    [".preview-run", run], [".preview-tool", tool], [".preview-help", help],
+    [".preview-two-doc", twoDoc], [".preview-stdin-label", stdinLabel],
+    [".preview-stdin", stdin], [".preview-args-label", argsLabel], [".preview-args", args],
+    [".preview-gzip-controls", gzipControls], [".preview-gzip-mode", mode],
+    [".preview-stdin-label-text", stdinLabelText], [".preview-output", output],
+    [".preview-doc-a", docA], [".preview-doc-b", docB],
+    ["#preview-doc-a-count", docACount], ["#preview-doc-b-count", docBCount],
+  ]);
+  const root = { querySelector(selector) { return bySelector.get(selector) ?? null; } };
+  const library = Object.create(ToolLibraryClass.prototype);
+  library._root = root;
+  library._previewBusy = false;
+  library._previewResult = null;
+  library._wire();
+
+  let threw = null;
+  try {
+    tool.value = "gzip";
+    tool.emit("change");
+  } catch (error) {
+    threw = error;
+  }
+  assertEquals(threw, null, `gzip compress tool change must not throw: ${threw?.message ?? threw}`);
+  assertEquals(gzipControls.hidden, false);
+  assertEquals(argsLabel.hidden, true);
+  assertEquals(stdin.hidden, false);
+  assertEquals(stdinLabelText.textContent, "UTF-8 text input");
+  assertEquals(stdin.placeholder, "Enter bounded UTF-8 text");
+  assertMatch(help.textContent, /complete canonical-base64 gzip member/);
+
+  stdin.value = "will be cleared";
+  mode.value = "decompress";
+  mode.emit("change");
+  assertEquals(stdin.value, "", "mode switch clears stale cross-mode input");
+  assertEquals(stdinLabelText.textContent, "Canonical base64 gzip input");
+  assertEquals(stdin.placeholder, "H4sI…");
+  assertMatch(help.textContent, /canonical standard base64 only/);
+  assertEquals(argsLabel.hidden, true, "free-form args remain hidden in decompress mode");
+
+  tool.value = "csvtool";
+  tool.emit("change");
+  assertEquals(gzipControls.hidden, true);
+  assertEquals(argsLabel.hidden, false, "switch away restores generic arguments");
+  assertEquals(stdin.hidden, false);
+  assertEquals(stdinLabelText.textContent, "Stdin (bounded)");
+  assertEquals(stdin.placeholder, "a,b\n1,2\n3,4");
 });
