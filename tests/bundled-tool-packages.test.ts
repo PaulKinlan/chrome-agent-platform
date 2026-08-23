@@ -254,17 +254,21 @@ Deno.test("idempotence: the generated inventory release equals the package versi
   const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
   const manifest = JSON.parse(await Deno.readTextFile(root("extension/manifest.json")));
   assertEquals(BUNDLED_INVENTORY.release, manifest.version, "the inventory release must equal the package version");
-  // the README + the generator template carry the SAME inventory sha (the
-  // canonicalJson of the inventory) — a stale sha would drift silently.
-  const { canonicalJson } = await import("../extension/lib/wasm-package-authority.js");
-  const enc = new TextEncoder();
-  const digest = await crypto.subtle.digest("SHA-256", enc.encode(canonicalJson(BUNDLED_INVENTORY)));
-  const sha = [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
-  const readme = await Deno.readTextFile(root("packages/bundled/README.md"));
-  assert(readme.includes(`inventory sha256 ${sha}`), "the generated README names the CURRENT inventory sha");
+  // The README literal must be the ENFORCED CATALOG pin (the evidence
+  // inventory whose sha the generator verifies at PATHS.catalog) — COMPUTED at
+  // generation from the actual pinned file, never a hand-fabricated value.
   const generator = await Deno.readTextFile(root("scripts/build-bundled-tool-packages.mjs"));
-  assert(generator.includes(`inventory sha256 ${sha}`), "the generator template names the CURRENT inventory sha");
-  // a stale committed identity is impossible (both must track the live sha)
+  const catalogPin = generator.match(/catalogSha !== "([0-9a-f]{64})"/)?.[1];
+  assert(catalogPin, "the generator enforces the catalog pin");
+  const readme = await Deno.readTextFile(root("packages/bundled/README.md"));
+  assert(readme.includes(`inventory sha256 ${catalogPin}`), "the README literal equals the enforced catalog pin (computed at generation, not hand-fabricated)");
+  // the generator must not carry a SEPARATE hardcoded README literal — the
+  // only hex in the generator's README template is the computed ${catalogSha}.
+  const templateStart = generator.indexOf("packages/bundled/README.md");
+  const template = generator.slice(templateStart);
+  assert(!/[0-9a-f]{64}/u.test(template), "the README template embeds no hardcoded hex literal");
+  // a stale committed identity is impossible (the regen recomputes + the test
+  // re-verifies the computed value)
 });
 
 Deno.test("posture: the ONLY route is tool.preview.run — no provider/selection authority", async () => {

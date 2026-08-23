@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.184] — 2026-08-23
+- feat(workspace): scratch seed classes + transactional scratch-file foundation (CAP-FB-20260823-SCRATCH-S1-01)
+
 ## [0.2.183] — 2026-08-23
 - feat(tools): admit gzip as the 23rd bounded owner-Settings preview with exact text/canonical-base64 modes and lossless binary output (CAP-FB-20260823-GZIP-SETTINGS-ADMISSION-01)
 

@@ -1313,3 +1313,142 @@ Deno.test("WASI source boundary: only two new pure modules exist and no product 
   assert(Object.isFrozen(SUPPORTED_WASI_PREVIEW1_IMPORTS));
   assert(Object.isFrozen(REBUILT_WASI_IMPORTS));
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// S1 rollback hygiene: the recycleDynamicFd helper + the FILE/DIRECTORY
+// cleanup refactor (no accepted-syscall-matrix change).
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("S1 rollback: a FILE open failure (missing path, no create) closes nothing and reuses the same fd", () => {
+  const workspace = new MemoryWorkspace();
+  const h = harness({ workspace });
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE;
+  const first = openPath(h, "scratch/work.txt", rights);
+  assertEquals(first.errno, WASI_ERRNO.SUCCESS);
+  const firstFd = first.fd;
+  assertEquals(h.wasi.fd_close(firstFd), WASI_ERRNO.SUCCESS);
+  // a missing-path open (no create) allocates an fd, then the workspace open
+  // fails -> the FILE catch recycles the fd -> the errno 44 is returned.
+  const pathPtr = 2000;
+  const length = putPath(h.memory, pathPtr, "scratch/missing.txt");
+  const miss = h.wasi.path_open(3, 0, pathPtr, length, 0, rights, 0n, 0, 3000);
+  assertEquals(miss, WASI_ERRNO.ENOENT, "the missing open returns ENOENT");
+  assertEquals(workspace.closed, 1, "only the first close happened; no handle was acquired for the failed open");
+  // the next VALID open reuses the exact same fd number.
+  const second = openPath(h, "scratch/work.txt", rights);
+  assertEquals(second.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(second.fd, firstFd, "the failed open's fd is immediately reusable");
+  assertEquals(h.wasi.fd_close(second.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(workspace.closed, 2);
+});
+
+Deno.test("S1 rollback: an OOB opened-fd pointer returns EFAULT with no fd/free-list drift", () => {
+  const workspace = new MemoryWorkspace();
+  const h = harness({ workspace });
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE;
+  const first = openPath(h, "scratch/work.txt", rights);
+  assertEquals(first.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(first.fd), WASI_ERRNO.SUCCESS);
+  const pathPtr = 2000;
+  const length = putPath(h.memory, pathPtr, "scratch/work.txt");
+  const errno = h.wasi.path_open(3, 0, pathPtr, length, 0, rights, 0n, 0, 100000);
+  assertEquals(errno, WASI_ERRNO.EFAULT, "the OOB opened-fd span faults before any allocation");
+  assertEquals(workspace.closed, 1, "no handle was ever acquired");
+  // the free list is intact: the next open reuses the first fd.
+  const second = openPath(h, "scratch/work.txt", rights);
+  assertEquals(second.fd, first.fd, "no drift after the faulted open");
+  assertEquals(h.wasi.fd_close(second.fd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("S1 rollback: the DIRECTORY branch keeps identical reuse on an OOB word write", () => {
+  const workspace = new MemoryWorkspace();
+  const h = harness({ workspace });
+  const ok = openDir(h, "scratch");
+  assertEquals(ok.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(ok.fd), WASI_ERRNO.SUCCESS);
+  const pathPtr = 2000;
+  const length = putPath(h.memory, pathPtr, "scratch");
+  const profile = {
+    dirflags: WASI_LIBC_OPENDIR_PROFILE.dirflags,
+    oflags: WASI_LIBC_OPENDIR_PROFILE.oflags,
+    rightsBase: WASI_LIBC_OPENDIR_PROFILE.requestedBase,
+    rightsInheriting: WASI_LIBC_OPENDIR_PROFILE.requestedInheriting,
+    fdflags: WASI_LIBC_OPENDIR_PROFILE.fdflags,
+    preopenFd: 4,
+  };
+  const errno = h.wasi.path_open(
+    profile.preopenFd, profile.dirflags, pathPtr, length,
+    profile.oflags, profile.rightsBase, profile.rightsInheriting,
+    profile.fdflags, 100000,
+  );
+  assertEquals(errno, WASI_ERRNO.EFAULT, "the DIRECTORY OOB span faults");
+  const again = openDir(h, "scratch");
+  assertEquals(again.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(again.fd, ok.fd, "the directory fd is reused after the fault");
+  assertEquals(h.wasi.fd_close(again.fd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("S1 rollback: a double fd_close stays EBADF and the counters on a failed open are +1 host/+1 path", () => {
+  const workspace = new MemoryWorkspace();
+  const h = harness({ workspace });
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE;
+  const first = openPath(h, "scratch/work.txt", rights);
+  assertEquals(first.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(first.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(first.fd), WASI_ERRNO.EBADF, "double close stays EBADF");
+  // a failed open counts +1 host +1 path with zero file bytes and baseline fds
+  const pathPtr = 2000;
+  const length = putPath(h.memory, pathPtr, "scratch/missing.txt");
+  assertEquals(h.wasi.path_open(3, 0, pathPtr, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.ENOENT);
+  const counters = h.runtime.snapshot().counters;
+  assert(counters.pathCalls >= 2, "pathCalls incremented");
+  assert(counters.hostCalls >= 2, "hostCalls incremented");
+  assertEquals(counters.fileBytes, 0, "no file bytes on the failed open");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// S1 reachability reconciliation: the runtime NEVER calls createScratchFile
+// directly; the intended internal missing-scratch create is reached ONLY via
+// the workspace.open() path that path_open drives (createScratchFile is the
+// workspace-internal machinery). This KAT proves the exact reachability: a
+// runtime path_open(CREAT) on a scratch path creates the file in the REAL
+// workspace through the generic open.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("S1 reachability: the runtime's path_open(CREAT) on a scratch path creates the file via the workspace.open internal path", () => {
+  const workspace = new MemoryWorkspace();
+  const h = harness({ workspace });
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE;
+  const pathPtr = 2000;
+  const length = putPath(h.memory, pathPtr, "scratch/gen.bin");
+  const errno = h.wasi.path_open(3, 0, pathPtr, length, WASI_OFLAGS.CREAT, rights, 0n, 0, 3000);
+  assertEquals(errno, WASI_ERRNO.SUCCESS, "the generic FILE open with CREAT succeeds on the scratch path");
+  const fd = h.memory.u32(3000);
+  // the file exists in the REAL workspace + a write round-trips
+  const stat = workspace.stat("scratch/gen.bin");
+  assertEquals(stat.type, "file");
+  setIovecs(h.memory, 4000, [{ pointer: 5000, length: 2 }]);
+  h.memory.put(5000, new Uint8Array([0x61, 0x62])); // "ab"
+  assertEquals(h.wasi.fd_write(fd, 4000, 1, 4100), WASI_ERRNO.SUCCESS);
+  assertEquals(workspace.stat("scratch/gen.bin").size, 2, "the write reached the real workspace");
+  assertEquals(h.wasi.fd_close(fd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("S1 rollback: three consecutive failed opens each recycle their selected fd exactly once (no free-list drift)", () => {
+  const workspace = new MemoryWorkspace();
+  const h = harness({ workspace });
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE;
+  // three failed opens (missing path, no create) — each selects an fd that is
+  // recycled exactly once; a subsequent valid open + two more failures must
+  // keep the fd numbers stable (no hole-scan masking).
+  const pathPtr = 2000;
+  const length = putPath(h.memory, pathPtr, "scratch/missing.txt");
+  const first = openPath(h, "scratch/work.txt", rights);
+  assertEquals(first.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(first.fd), WASI_ERRNO.SUCCESS);
+  for (let i = 0; i < 3; i++) {
+    assertEquals(h.wasi.path_open(3, 0, pathPtr, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.ENOENT);
+  }
+  const again = openPath(h, "scratch/work.txt", rights);
+  assertEquals(again.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(again.fd, first.fd, "the free list stays lowest-consumed across the repeated failures");
+  assertEquals(h.wasi.fd_close(again.fd), WASI_ERRNO.SUCCESS);
+});

@@ -233,3 +233,69 @@ export function buildWasiStdoutBytesWasm(inputBytes) {
     ...section(11, dataPayload),
   ]);
 }
+
+/** A READ-ONLY scratch witness fixture (scratch S1 real-Worker isolation):
+ * path_open("scratch/work.bin", dirflags0, oflags0, narrow FD_READ rights)
+ * + fd_read up to 8 bytes from offset 0 + echo the buffer to stdout + fd_close.
+ * Emits ONLY the seeded bytes — never writes. */
+export function buildScratchReadWitnessWasm() {
+  const t0 = [0x60, 4, 0x7f, 0x7f, 0x7f, 0x7f, 1, 0x7f]; // (i32,i32,i32,i32)->i32 (fd_write/fd_read)
+  const t1 = [0x60, 9, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7e, 0x7e, 0x7f, 0x7f, 1, 0x7f]; // path_open
+  const t2 = [0x60, 1, 0x7f, 1, 0x7f];                   // (i32)->i32 (fd_close)
+  const t3 = [0x60, 0, 0];                               // () -> ()
+  const typePayload = [4, ...t0, ...t1, ...t2, ...t3];
+  const imp = (m, n, ti) => [...nameBytes(m), ...nameBytes(n), 0x00, ti];
+  const importPayload = [4,
+    ...imp("wasi_snapshot_preview1", "fd_write", 0),
+    ...imp("wasi_snapshot_preview1", "path_open", 1),
+    ...imp("wasi_snapshot_preview1", "fd_read", 0),
+    ...imp("wasi_snapshot_preview1", "fd_close", 2),
+  ];
+  const funcPayload = [1, 0x03];
+  const memoryPayload = [1, 0x01, 0x01, 0x01];
+  const PATH = [...new TextEncoder().encode("scratch/work.bin")]; // 16 bytes
+  const iovec = [0x30, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00];  // ptr 0x30, len 8
+  const dataPayload = [
+    4,
+    0x00, 0x41, ...u32leb(0x10), 0x0b, ...u32leb(PATH.length), ...PATH,
+    0x00, 0x41, ...u32leb(0x30), 0x0b, ...u32leb(8), ...Array.from({ length: 8 }, () => 0x00),
+    0x00, 0x41, ...u32leb(0x100), 0x0b, ...u32leb(iovec.length), ...iovec,
+    0x00, 0x41, ...u32leb(0x200), 0x0b, ...u32leb(8), ...Array.from({ length: 8 }, () => 0x00),
+  ];
+  const exportPayload = [
+    2,
+    ...nameBytes("run"), 0x00, 0x04,
+    ...nameBytes("memory"), 0x02, 0x00,
+  ];
+  const CHECK = [0x41, 0x00, 0x47, 0x04, 0x40, 0x00, 0x0b];
+  // rights = FD_READ(2) | FD_SEEK(4) | FD_TELL(32) | FD_FILESTAT_GET(2097152)
+  const rights = 2097190;
+  const body = [
+    // path_open(3, 0, 0x10, 16, 0, rights, 0, 0, 0x200)
+    0x41, 0x03, 0x41, 0x00, 0x41, 0x10, 0x41, 0x10, 0x41, 0x00,
+    0x42, ...u64leb(rights), 0x42, 0x00, 0x41, 0x00, 0x41, 0x80, 0x04,
+    0x10, 0x01, ...CHECK,
+    // fd = load(0x200); fd_read(fd, 0x100, 1, 0x300)
+    0x41, 0x80, 0x04, 0x28, 0x02, 0x00,
+    0x41, 0x80, 0x02, 0x41, 0x01, 0x41, 0x80, 0x06,
+    0x10, 0x02, ...CHECK,
+    // fd_write(1, 0x100, 1, 0x300) — echo the read buffer via the same iovec
+    0x41, 0x01, 0x41, 0x80, 0x02, 0x41, 0x01, 0x41, 0x80, 0x06,
+    0x10, 0x00, ...CHECK,
+    // fd_close(fd) — the witness leaves zero open dynamic fds
+    0x41, 0x80, 0x04, 0x28, 0x02, 0x00,
+    0x10, 0x03, ...CHECK,
+    0x0b,
+  ];
+  const codePayload = [1, ...u32leb(1 + body.length), 0x00, ...body];
+  return new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ...section(1, typePayload),
+    ...section(2, importPayload),
+    ...section(3, funcPayload),
+    ...section(5, memoryPayload),
+    ...section(7, exportPayload),
+    ...section(10, codePayload),
+    ...section(11, dataPayload),
+  ]);
+}

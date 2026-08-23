@@ -770,6 +770,29 @@ export function createWasiPreview1Runtime({
     return fd;
   }
 
+  // Private fd release helper (scratch S1 rollback hygiene): delete the exact
+  // dynamic record when it is the expected record (never a replacement/foreign
+  // record), then push the id into the free list once and keep it numerically
+  // sorted so allocateFd consumes its lowest member. Only integer fds >= 5 are
+  // ever deleted/recycled; fd0..4 are never touched.
+  function recycleDynamicFd(fd, expectedRecord) {
+    if (!Number.isInteger(fd) || fd < 5) return;
+    const record = fds.get(fd);
+    if (record === undefined) {
+      if (!freeFds.includes(fd)) {
+        freeFds.push(fd);
+        freeFds.sort((a, b) => a - b);
+      }
+      return;
+    }
+    if (expectedRecord !== undefined && record !== expectedRecord) return;
+    fds.delete(fd);
+    if (!freeFds.includes(fd)) {
+      freeFds.push(fd);
+      freeFds.sort((a, b) => a - b);
+    }
+  }
+
   const argsBytes = job.args.map((arg) => encoder.encode(`${arg}\0`));
   const argvBytes = argsBytes.reduce((sum, bytes) => sum + bytes.byteLength, 0);
 
@@ -976,9 +999,7 @@ export function createWasiPreview1Runtime({
         try {
           writeU32(openedFdPtr, fd);
         } catch (error) {
-          fds.delete(fd);
-          freeFds.push(fd);
-          freeFds.sort((a, b) => a - b);
+          recycleDynamicFd(fd, fds.get(fd));
           throw error;
         }
         return WASI_ERRNO.SUCCESS;
@@ -1046,12 +1067,26 @@ export function createWasiPreview1Runtime({
         });
         writeU32(openedFdPtr, fd);
       } catch (error) {
-        if (fds.get(fd)?.handle === handle) fds.delete(fd);
+        // Rollback hygiene: close the acquired FILE handle exactly once and
+        // recycle the fd ONLY when the close succeeded and the record still
+        // matches. If the close throws, do NOT advertise/recycle an id while
+        // a live handle may remain; the failure still propagates fail-closed.
+        const record = fds.get(fd);
+        let closeOk = true;
         try {
           if (handle && typeof handle.close === "function") {
             syncResult(handle.close());
           }
-        } catch { /* guarded cleanup only */ }
+        } catch {
+          closeOk = false;
+        }
+        // Recycle the SELECTED fd exactly once — even when the failure preceded
+        // the fd record/putFd (record === undefined: the fd was allocated and
+        // never registered) — provided the close succeeded and no foreign
+        // record replaced it.
+        if (closeOk && (record === undefined || record.handle === handle)) {
+          recycleDynamicFd(fd, record);
+        }
         throw error;
       }
       return WASI_ERRNO.SUCCESS;
@@ -1216,9 +1251,7 @@ export function createWasiPreview1Runtime({
         fault(WASI_ERRNO.EBADF);
       }
       if (record.kind === FD_KIND.FILE) syncResult(record.handle.close());
-      fds.delete(fd);
-      freeFds.push(fd);
-      freeFds.sort((a, b) => a - b);
+      recycleDynamicFd(fd, record);
       return WASI_ERRNO.SUCCESS;
     },
 

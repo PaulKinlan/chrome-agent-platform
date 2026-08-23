@@ -1861,3 +1861,101 @@ Deno.test("lifecycle: a spawn failure FAILS CLOSED — never a main-thread fallb
     (e) => e?.executorCode === "worker-spawn",
   );
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// S1 real-Worker gate2: seeded scratch read/write witnesses + fresh-worker
+// isolation + transport mutation + hostile transported seeds (no Chrome).
+// ──────────────────────────────────────────────────────────────────────────
+import { buildScratchReadWitnessWasm } from "./wasm-fixture-builder.mjs";
+
+async function runS1Worker({ workspaceSeed, wasmBytes = buildWasiFdRoundTripWasm(), stdin = new Uint8Array(0) }) {
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
+  const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
+  const job = makeJob({
+    stdin,
+    workspaceSeed,
+    quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 10_000, pathCalls: 1_000, stdinBytes: 64, stdoutBytes: 4096, stderrBytes: 4096, fileBytes: 4096, fileSize: 4096, dynamicFds: 8 },
+  });
+  const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+  return await host.handleJob({ type: "wasm.job", job: rehydrated, wasmBytes });
+}
+
+Deno.test("S1 real Worker: a raw trusted scratch seed clones per job; a second fresh Worker observes the ORIGINAL bytes", async () => {
+  const seed = { files: [{ path: "scratch/work.bin", bytes: [1, 2, 3, 4, 5, 6, 7, 8] }] };
+  // Worker 1: the fd-round-trip wasm OPENS scratch/work.bin (existing, CREAT is
+  // the generic behavior) + writes "hello" + reads it back + echoes.
+  const job1 = await runS1Worker({ workspaceSeed: seed, wasmBytes: buildWasiFdRoundTripWasm() });
+  assert(job1.ok === true, JSON.stringify(job1));
+  assertEquals(job1.stdout, "hello", "the write witness is emitted");
+  assertEquals(job1.counters.fileBytes, 10, "5 write + 5 read");
+  assertEquals(job1.counters.openDynamicFds, 0, "the fd closed");
+  // Worker 2 with the SAME canonical seed uses the READ-ONLY witness fixture —
+  // it MUST observe the original seeded bytes, NOT Worker 1's mutation.
+  const witness = buildScratchReadWitnessWasm();
+  const job2 = await runS1Worker({ workspaceSeed: seed, wasmBytes: witness });
+  assert(job2.ok === true, JSON.stringify(job2));
+  assertEquals(job2.stdout, "\x01\x02\x03\x04\x05\x06\x07\x08", "Worker 2 sees the ORIGINAL seeded bytes");
+  assertEquals(job2.counters.fileBytes, 8, "8 read bytes");
+  assertEquals(job2.counters.openDynamicFds, 0, "the witness closed its fd");
+});
+
+Deno.test("S1 real Worker: mutating an ASSERTED caller byte AFTER the canonicalization does not change the Worker clone", async () => {
+  const seedBytes = [1, 2, 3, 4, 5, 6, 7, 8];
+  const seed = { files: [{ path: "scratch/work.bin", bytes: seedBytes }] };
+  const witness = buildScratchReadWitnessWasm();
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
+  const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
+  const job = makeJob({ workspaceSeed: seed });
+  // Canonicalize ONCE through the exact host boundary (createWasiJob deep-
+  // freezes the canonical) — then mutate the FIRST (asserted) byte of the
+  // caller's ORIGINAL array. A shared-storage design would observe the
+  // mutation; the deep clone must not.
+  const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
+  const canonical = createWasiJob(job);
+  const rehydrated = { ...canonical, stdin: new Uint8Array(canonical.stdin) };
+  seedBytes[0] = 255; // the ASSERTED first byte — the witness reads it
+  const result = await host.handleJob({ type: "wasm.job", job: rehydrated, wasmBytes: witness });
+  assert(result.ok === true, JSON.stringify(result));
+  assertEquals(result.stdout, "\x01\x02\x03\x04\x05\x06\x07\x08", "the Worker clone is a deep independent copy");
+  assertEquals(result.counters.openDynamicFds, 0, "the witness closed its fd (zero open dynamic fds)");
+});
+
+Deno.test("S1 real Worker: hostile transported scratch seeds fail BEFORE instantiation; output-class seeds fail", async () => {
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
+  const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
+  for (const [label, workspaceSeed] of [
+    ["scratch 9th file", { files: Array.from({ length: 9 }, (_, i) => ({ path: `scratch/s${i}.bin`, bytes: [i] })) }],
+    ["scratch over total", { files: [{ path: "scratch/big.bin", bytes: new Array(10 * 1024 * 1024 + 1).fill(1) }] }],
+    ["output class", { files: [{ path: "output/x.bin", bytes: [1] }] }],
+    ["unknown class", { files: [{ path: "etc/x.bin", bytes: [1] }] }],
+    ["getter row", { files: [{ path: "scratch/g.bin", get bytes() { return [1]; } }] }],
+    ["file-as-dir-prefix", { files: [{ path: "scratch/d", bytes: [1] }, { path: "scratch/d/c", bytes: [2] }] }],
+  ]) {
+    const job = makeJob({ workspaceSeed });
+    const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
+    let threw = null;
+    let res = null;
+    try {
+      res = await host.handleJob({ type: "wasm.job", job: rehydrated, wasmBytes: buildScratchReadWitnessWasm() });
+    } catch (error) {
+      threw = error;
+    }
+    const failure = threw ?? res;
+    assert(failure !== null && (failure.ok === false || threw !== null), `${label}: expected a failure`);
+    const text = threw ? String(threw?.message ?? threw) : JSON.stringify(res);
+    assert(text.includes("job-seed"), `${label}: the transported seed fails before Wasm instantiation: ${text}`);
+    if (res && res.ok === false) {
+      assertEquals(res.stdout, "", `${label}: no partial output`);
+      assertEquals(res.counters, null, `${label}: counters discarded`);
+    }
+  }
+});
+
+Deno.test("S1 real Worker: the fd round-trip writes a scratch file through the REAL transport with exact counters", async () => {
+  const res = await runS1Worker({ workspaceSeed: { files: [] }, wasmBytes: buildWasiFdRoundTripWasm() });
+  assert(res.ok === true, JSON.stringify(res));
+  assertEquals(res.stdout, "hello");
+  assertEquals(res.counters.fileBytes, 10);
+  assertEquals(res.counters.pathCalls, 1);
+  assertEquals(res.counters.openDynamicFds, 0);
+});
