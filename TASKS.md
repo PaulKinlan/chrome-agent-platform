@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **42 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 69 nonterminal and 40 terminal status entries
-> below are the complete 109-entry state.
+> Branch status counts: **43 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 70 nonterminal and 40 terminal status entries
+> below are the complete 110-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,48 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-WASM-TASK-EXECUTION-01] Execute bundled WASM tools from a task (provider dispatch closure)
+
+- Feedback: 2026-08-23 — product owner asked how WASM tools get called from a
+  task. Audit finding: bundled WASM tools are currently DISCOVERY-ONLY from
+  the agent — search_tools/list_tools find them, but their provider records
+  carry dispatch:null (closureGeneration "provider-route-absent"); execution
+  is Settings-owner-click preview only. A task's agent therefore cannot
+  actually run them yet
+- Updated: 2026-08-23 23:30 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `8bb5d40`
+- Candidate: —
+- Shipping: —
+- Acceptance: a run-bound, per-call-revalidated provider dispatch closure for
+  admitted bundled WASM tools — execute_tool(selectionRef, args) runs the tool
+  in a fresh dedicated Worker from the immutable CAS package bytes, over a
+  per-job workspace seeded from the task's inputs (inputs/ projection),
+  returning the bounded lossless result envelope to the model; search results
+  never grant execution (selectionRef revalidation against
+  run/origin/agent/document/generation on every call); Settings-owner-click
+  preview remains the separate owner route; immutable package/allowedArgs/
+  accepted-exits/encoding bounds stay spec-owned, never request-borne
+- Review: pending independent execution-authority/workspace/replay review
+- Gates: per-call revalidation (stale/cross-run refs fail); workspace seeding
+  from task inputs; bounded result; immutable-spec enforcement; no package
+  bytes or capabilities from the request
+- Blockers: composes with the lazy protocol, the scratch/workspace model, and
+  the immutable package authority
+- Next: design the bundled-wasm dispatch closure (workspace seeding + Worker
+  instantiation + result envelope), gated on the existing execution host
+- Recover: `git grep -n "executableBundledToolRecords\|provider-route-absent" -- extension`
+- History:
+  - 2026-08-23 23:30 UTC — captured from product-owner question; audit
+    confirmed dispatch:null for bundled rows (service-worker.js,
+    lazy-tool-protocol.js executableBundledToolRecords).
+
+
 
 ## [CAP-FB-20260823-PERSISTENT-FS-ACCESS-01] Persistent local filesystem access via directory/file handles (Co-do-style)
 
