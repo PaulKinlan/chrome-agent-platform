@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **26 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 53 nonterminal and 40 terminal status entries
-> below are the complete 93-entry state.
+> Branch status counts: **27 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 54 nonterminal and 40 terminal status entries
+> below are the complete 94-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,46 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01] Bundled tool descriptions must be agent-useful, not internal jargon
+
+- Feedback: 2026-08-23 — product owner: the bundled Wasm tool descriptions
+  are poor ("Bounded TOML to JSON direct converter (pinned tomlc99)") — a
+  consuming tool/model cannot work out when or how to use them; provenance
+  jargon does not belong in the functional description
+- Updated: 2026-08-23 21:50 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `a8e3479e` (post-notification tip)
+- Candidate: —
+- Shipping: —
+- Acceptance: every bundled tool description is written for a consuming
+  model/owner — plain-language function, when to choose it, input and output
+  shapes, key flags and arguments, bounded limits, and one concrete example;
+  internal provenance pins (library names, source pins) move to
+  provenance/SBOM fields, never the functional description; all descriptions
+  fit the existing descriptor/schema byte bounds without widening them;
+  search aliases and the tool-library surface stay consistent; KATs assert
+  the required content elements and the absence of jargon patterns
+- Review: pending independent truth/schema, search-relevance, accessibility
+  and loaded-MV3 review
+- Gates: per-tool content-element KATs; descriptor schema bounds unchanged;
+  byte-stable regeneration; search queries still resolve; before/after
+  comparison for a sample of tools
+- Blockers: —
+- Next: inventory every current description and draft the agent-useful
+  replacement set within the existing byte bounds
+- Recover: `git grep -n "Bounded\|pinned" -- extension/lib/bundled-tool-packages.data.js packages/bundled`
+- History:
+  - 2026-08-23 21:50 UTC — captured from direct product-owner feedback;
+    complements the search-alias coverage fix by improving the human/model
+    readable layer.
+
+
 
 ## [CAP-FB-20260823-FIRST-RUN-DUPLICATE-TEST-ASSET-01] First run creates many test assets instead of one
 

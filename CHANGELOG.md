@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.189] — 2026-08-23
+- chore(tasks): capture owner request for agent-useful bundled tool descriptions (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01)
+
 ## [0.2.188] — 2026-08-23
 - chore(tasks): mark NOTIFICATION-CLICK-ACTION-01 MERGED with landing attestation
 
