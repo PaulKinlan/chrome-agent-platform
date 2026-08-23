@@ -20,6 +20,7 @@ import {
   isPromptApiAvailable,
 } from "./models/prompt-api-model.js";
 import { createDemoModel } from "./models/demo-model.js";
+import { createLocalOpfsModel } from "./models/local-opfs-model.js";
 import { kvGet, kvSet } from "./kv.js";
 
 const DEFAULTS = {
@@ -87,6 +88,12 @@ export const PROVIDER_CHOICES = [
     label: "Chrome Prompt API (Gemini nano, on-device)",
     needsKey: false,
     needsModel: false,
+  },
+  {
+    id: "local-opfs",
+    label: "Local OPFS Model (on-device GGUF)",
+    needsKey: false,
+    needsModel: true,
   },
 ];
 
@@ -157,6 +164,16 @@ export async function resolveModelFromConfig(cfg) {
       model: createDemoModel(),
       modelId: "demo-local",
       providerName: "demo (prompt api unavailable)",
+    };
+  }
+
+  if (id === "local-opfs") {
+    const modelId = cfg.model || "gemma-4-e4b-it-qat-q4_0";
+    const model = createLocalOpfsModel({ modelId });
+    return {
+      model,
+      modelId,
+      providerName: "local-opfs",
     };
   }
 

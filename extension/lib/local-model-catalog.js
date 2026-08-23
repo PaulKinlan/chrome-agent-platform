@@ -85,6 +85,11 @@ export const LOCAL_MODEL_CATALOG = Object.freeze([
   }),
 ]);
 
+export function getCatalogModel(modelId, catalog = LOCAL_MODEL_CATALOG) {
+  if (typeof modelId !== "string" || !modelId) return null;
+  return catalog.find((m) => m.id === modelId) || null;
+}
+
 export function isPublisherSourceUrl(value) {
   try {
     const url = new URL(value);
@@ -249,14 +254,15 @@ export function localModelFeasibility(environment = {}) {
     );
   }
   return Object.freeze({
-    feasible: false,
+    feasible: environment.opfs === true && environment.memory64 === true,
     warnings: Object.freeze(warnings),
     runtimeImplemented: false,
-    opfsInstallImplemented: false,
-    removalImplemented: false,
+    opfsInstallImplemented: true,
+    removalImplemented: true,
+    userControlledRemoval: true,
     evictionAuthorized: false,
     automaticEviction: false,
     removalPolicy:
-      "Model removal and eviction are not implemented or authorized in this slice.",
+      "User-controlled model removal only; automatic eviction is disabled per settled policy.",
   });
 }

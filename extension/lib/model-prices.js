@@ -79,6 +79,8 @@ export const MODEL_PRICING = {
   "gemini-3.7-flash": { input: 0.75, output: 3.75 },
   "gemini-nano": { input: 0, output: 0 },
   "gemini-nano-prompt-api": { input: 0, output: 0 },
+  "gemma-4-e4b-it-qat-q4_0": { input: 0, output: 0 },
+  "gemma-4-26b-a4b-it-qat-q4_0": { input: 0, output: 0 },
   "gemma2": { input: 0, output: 0 },
   "glm-4.5": { input: 0.6, output: 2.2 },
   "glm-4.5-air": { input: 0.2, output: 1.1 },

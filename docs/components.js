@@ -6377,16 +6377,20 @@ class DurableRunRegistry extends Component {
 }
 customElements.define("durable-run-registry", DurableRunRegistry);
 
-/* <local-model-catalog> — publisher-origin model metadata + preflight states.
- * The host owns the immutable catalogue and performs the bounded network probe;
- * this shared component only renders truthful state and emits `model-preflight`.
+/* <local-model-catalog> — publisher-origin model metadata + on-demand OPFS install states.
+ * (CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01)
+ * The host owns the immutable catalogue and executes explicit owner-requested downloads
+ * and user-controlled removals.
  */
 class LocalModelCatalog extends Component {
   constructor() {
     super();
     this._models = [];
-    this._feasibility = { warnings: [], runtimeImplemented: false, opfsInstallImplemented: false };
+    this._feasibility = { warnings: [], runtimeImplemented: false, opfsInstallImplemented: true, removalImplemented: true };
     this._probeStates = new Map();
+    this._installed = new Map();
+    this._progress = new Map();
+    this._selectedModelId = null;
   }
   set models(value) {
     this._models = Array.isArray(value) ? value : [];
@@ -6398,6 +6402,28 @@ class LocalModelCatalog extends Component {
     if (this._rendered) { this._render(); this._wire(); }
   }
   get feasibility() { return this._feasibility; }
+  setInstalled(installedList) {
+    this._installed.clear();
+    if (Array.isArray(installedList)) {
+      for (const item of installedList) {
+        if (item?.id) this._installed.set(item.id, item);
+      }
+    }
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  setProgress(modelId, progress) {
+    if (!this._models.some((model) => model.id === modelId)) return;
+    if (!progress) {
+      this._progress.delete(modelId);
+    } else {
+      this._progress.set(modelId, progress);
+    }
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  setSelected(modelId) {
+    this._selectedModelId = modelId;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
   setProbeState(modelId, state, message = "") {
     if (!this._models.some((model) => model.id === modelId)) return;
     this._probeStates.set(modelId, { state, message });
@@ -6427,10 +6453,14 @@ class LocalModelCatalog extends Component {
         background:var(--panel, #fff); color:var(--text, #24211f); }
       button.primary { border-color:var(--accent, #0e6e63); background:var(--accent, #0e6e63);
         color:var(--accent-contrast, #fff); }
+      button.danger { border-color:var(--danger, #b3261e); color:var(--danger, #b3261e); }
+      button.danger:hover { background:var(--danger, #b3261e); color:#fff; }
       button:disabled { opacity:.5; cursor:not-allowed; }
       button:focus-visible { outline:2px solid var(--accent, #0e6e63); outline-offset:2px; }
-      .state[data-state="passed"] { color:var(--success, #0e6e63); }
-      .state[data-state="failed"] { color:var(--danger, #b3261e); }
+      .state[data-state="passed"], .state[data-state="installed"] { color:var(--success, #0e6e63); font-weight:600; }
+      .state[data-state="failed"], .state[data-state="error"] { color:var(--danger, #b3261e); }
+      .progress-bar { inline-size:100%; block-size:6px; background:var(--border,#ddd8d2); border-radius:3px; overflow:hidden; margin-top:8px; }
+      .progress-fill { block-size:100%; background:var(--accent,#0e6e63); transition:inline-size .1s ease; }
       @media (max-width:560px) { .head { grid-template-columns:1fr; } .size { white-space:normal; } }
     `, `<div class="warnings"></div><div class="catalog"></div><p class="policy"></p>`);
 
@@ -6450,7 +6480,11 @@ class LocalModelCatalog extends Component {
 
     const catalog = this._root.querySelector(".catalog");
     for (const model of this._models) {
-      const probe = this._probeStates.get(model.id) ?? { state: "idle", message: "Run the publisher preflight to enable Download." };
+      const probe = this._probeStates.get(model.id) ?? { state: "idle", message: "Run publisher preflight or download directly on demand." };
+      const isInstalled = this._installed.has(model.id);
+      const isSelected = this._selectedModelId === model.id;
+      const progress = this._progress.get(model.id);
+
       const article = document.createElement("article");
       article.className = "model";
       article.dataset.modelId = model.id;
@@ -6482,44 +6516,105 @@ class LocalModelCatalog extends Component {
 
       const actions = document.createElement("div");
       actions.className = "actions";
-      const preflight = document.createElement("button");
-      preflight.type = "button";
-      preflight.className = "preflight";
-      preflight.textContent = probe.state === "probing" ? "Probing publisher…" : "Probe publisher";
-      preflight.disabled = probe.state === "probing";
-      // Model-bound accessible names: the label names the exact model, so a
-      // screen reader never hears two identical "Probe publisher" buttons.
-      preflight.setAttribute("aria-label", `Probe publisher for ${model.name}`);
-      const download = document.createElement("button");
-      download.type = "button";
-      download.className = "primary download";
-      download.textContent = "Download";
-      download.disabled = probe.state !== "passed";
-      download.setAttribute("aria-label", `Download ${model.name}`);
-      download.setAttribute("aria-describedby", `model-state-${model.id}`);
-      const state = document.createElement("span");
-      state.id = `model-state-${model.id}`;
-      state.className = "state";
-      state.dataset.state = probe.state;
-      state.setAttribute("role", "status");
-      state.setAttribute("aria-live", "polite");
-      state.textContent = probe.message;
-      actions.append(preflight, download, state);
+
+      if (isInstalled) {
+        const selectBtn = document.createElement("button");
+        selectBtn.type = "button";
+        selectBtn.className = isSelected ? "primary selected" : "select";
+        selectBtn.textContent = isSelected ? "Selected for inference" : "Select for inference";
+        selectBtn.setAttribute("aria-label", `Select ${model.name} for inference`);
+
+        const verifyBtn = document.createElement("button");
+        verifyBtn.type = "button";
+        verifyBtn.className = "verify";
+        verifyBtn.textContent = "Verify integrity";
+        verifyBtn.setAttribute("aria-label", `Verify integrity of ${model.name}`);
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "danger delete";
+        deleteBtn.textContent = "Delete from OPFS";
+        deleteBtn.setAttribute("aria-label", `Delete ${model.name} from OPFS`);
+
+        const statusSpan = document.createElement("span");
+        statusSpan.className = "state";
+        statusSpan.dataset.state = "installed";
+        statusSpan.setAttribute("role", "status");
+        statusSpan.textContent = "Installed in OPFS (integrity verified)";
+
+        actions.append(selectBtn, verifyBtn, deleteBtn, statusSpan);
+      } else if (progress) {
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "danger cancel-download";
+        cancelBtn.textContent = "Cancel download";
+        cancelBtn.setAttribute("aria-label", `Cancel download of ${model.name}`);
+
+        const progressText = document.createElement("span");
+        progressText.className = "state";
+        progressText.dataset.state = "downloading";
+        progressText.setAttribute("role", "status");
+        progressText.textContent = `Downloading ${progress.fileName ?? ""} · ${progress.percent?.toFixed(1) ?? 0}% (${((progress.loadedBytes || 0) / (1024 * 1024 * 1024)).toFixed(2)} GiB / ${model.installedGiB})`;
+
+        const progressBar = document.createElement("div");
+        progressBar.className = "progress-bar";
+        const progressFill = document.createElement("div");
+        progressFill.className = "progress-fill";
+        progressFill.style.inlineSize = `${Math.min(100, progress.percent || 0)}%`;
+        progressBar.append(progressFill);
+
+        actions.append(cancelBtn, progressText);
+        article.append(head, files, actions, progressBar);
+        catalog.append(article);
+        continue;
+      } else {
+        const preflight = document.createElement("button");
+        preflight.type = "button";
+        preflight.className = "preflight";
+        preflight.textContent = probe.state === "probing" ? "Probing publisher…" : "Probe publisher";
+        preflight.disabled = probe.state === "probing";
+        preflight.setAttribute("aria-label", `Probe publisher for ${model.name}`);
+
+        const download = document.createElement("button");
+        download.type = "button";
+        download.className = "primary download";
+        download.textContent = "Download";
+        download.disabled = probe.state !== "passed";
+        download.setAttribute("aria-label", `Download ${model.name}`);
+        download.setAttribute("aria-describedby", `model-state-${model.id}`);
+
+        const state = document.createElement("span");
+        state.id = `model-state-${model.id}`;
+        state.className = "state";
+        state.dataset.state = probe.state;
+        state.setAttribute("role", "status");
+        state.setAttribute("aria-live", "polite");
+        state.textContent = probe.message;
+
+        actions.append(preflight, download, state);
+      }
+
       article.append(head, files, actions);
       catalog.append(article);
     }
 
     const policy = this._root.querySelector(".policy");
-    policy.textContent = "Runtime inference, full OPFS installation, model removal, and eviction are not implemented or authorized in this slice.";
+    policy.textContent = "Publisher-source downloads only. Stored locally in Origin Private File System (OPFS). User-controlled removal; automatic eviction is disabled.";
   }
   _wire() {
     for (const article of this._root.querySelectorAll(".model")) {
       const modelId = article.dataset.modelId;
       article.querySelector(".preflight")?.addEventListener("click", () => this._emit("model-preflight", { modelId }));
-      article.querySelector(".download")?.addEventListener("click", () => {
-        const state = article.querySelector(".state");
-        if (state) state.textContent = "Full OPFS install is not implemented in this slice. No download started.";
-
+      article.querySelector(".download")?.addEventListener("click", () => this._emit("model-download", { modelId }));
+      article.querySelector(".cancel-download")?.addEventListener("click", () => this._emit("model-cancel", { modelId }));
+      article.querySelector(".select")?.addEventListener("click", () => this._emit("model-select", { modelId }));
+      article.querySelector(".verify")?.addEventListener("click", () => this._emit("model-verify", { modelId }));
+      article.querySelector(".delete")?.addEventListener("click", () => {
+        const model = this._models.find((m) => m.id === modelId);
+        const name = model?.name ?? modelId;
+        if (globalThis.confirm?.(`Delete ${name} from local OPFS storage? This will release its storage quota.`) !== false) {
+          this._emit("model-delete", { modelId });
+        }
       });
     }
   }

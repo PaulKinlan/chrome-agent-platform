@@ -267,7 +267,7 @@ Deno.test("preflight stops at the first failed file and unknown models never rea
   assert(!unknown.ok && calls === 1, "unknown model reached fetch");
 });
 
-Deno.test("feasibility states no auto-eviction and keeps runtime/OPFS install unimplemented", () => {
+Deno.test("feasibility states no auto-eviction and reflects OPFS install and user removal policy", () => {
   const state = localModelFeasibility({
     deviceMemory: 4,
     memory64: false,
@@ -284,18 +284,17 @@ Deno.test("feasibility states no auto-eviction and keeps runtime/OPFS install un
     "OPFS warning missing",
   );
   assert(
-    state.runtimeImplemented === false &&
-      state.opfsInstallImplemented === false,
-    "unimplemented capability claimed",
+    state.opfsInstallImplemented === true,
+    "OPFS install implemented state",
   );
-  assert(state.automaticEviction === false, "automatic eviction enabled");
+  assert(state.automaticEviction === false, "automatic eviction disabled per settled policy");
   assert(
-    state.removalPolicy.includes("not implemented or authorized"),
-    "removal policy must not promise an unimplemented owner-only removal path",
+    state.userControlledRemoval === true && state.removalImplemented === true,
+    "user-controlled removal enabled per settled policy",
   );
   assert(
-    state.removalImplemented === false && state.evictionAuthorized === false,
-    "removal/eviction capability claimed",
+    state.removalPolicy.includes("User-controlled model removal only"),
+    "removal policy must state user-controlled removal only",
   );
 });
 
@@ -316,9 +315,9 @@ Deno.test("local model UI contract exposes exact size, disabled-until-pass and t
   );
   assert(
     source.includes(
-      "Runtime inference, full OPFS installation, model removal, and eviction are not implemented or authorized",
+      "Publisher-source downloads only. Stored locally in Origin Private File System (OPFS). User-controlled removal; automatic eviction is disabled.",
     ),
-    "unimplemented/unauthorized state missing",
+    "policy copy must state publisher downloads and user-controlled removal",
   );
   assert(
     source.includes('preflight.setAttribute("aria-label", `Probe publisher for ${model.name}`)'),

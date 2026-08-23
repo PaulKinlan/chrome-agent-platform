@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.208] — 2026-08-23
+- feat(models): on-demand publisher-source model download with streaming integrity, resumable OPFS install, and owner deletion — inference honestly deferred until a pinned on-device engine is bundled (CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01)
+
 ## [0.2.207] — 2026-08-23
 - fix(navigation): history stack as single source of truth — back AND forward restore exact view/title/name, in-app back parity with browser back, unknown routes fail closed to hub, transitions settle scroll/focus; owner repros 1–3 pinned as named KATs (CAP-FB-20260823-NAVIGATION-STATE-02)
 
