@@ -85,6 +85,10 @@ export const PREVIEW_SPECS = Object.freeze(
           // accepts only exit 0. NEVER request-borne — the SW copies this into
           // the trusted job envelope.
           acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
+          // Release FND-1 makes output encoding trusted and explicit at every
+          // job layer. All currently admitted previews remain byte-identical
+          // UTF-8 tools; binary admission is a later release.
+          stdoutEncoding: "utf8",
           // Immutable per-tool workspace seeds. stat/du retain their minimum
           // deterministic input; tree alone gets the nested seed required to
           // exercise directory synthesis. Specs hold FROZEN DENSE PLAIN byte
@@ -294,6 +298,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     args,
     stdin: stdinBytes,
     acceptedExitCodes: spec.acceptedExitCodes,
+    stdoutEncoding: spec.stdoutEncoding,
     workspaceSeed: spec.workspaceSeed,
     quota: quota ?? {
       hostCalls: 50_000,
@@ -411,6 +416,11 @@ export function boundPreviewResult(result, maxTextBytes = PREVIEW_LIMITS.maxOutp
     return value;
   };
   const ok = result.ok === true;
+  // FND-1 does not admit a binary UI tool: every current immutable preview
+  // spec is utf8, so the service/UI boundary requires the inactive arm. A
+  // later admission must bind a binary spec explicitly rather than trusting a
+  // result-borne mode.
+  if (result.stdoutBase64 !== null) fail("preview_result_stdout_base64");
   return Object.freeze({
     ok,
     phase: typeof result.phase === "string" ? result.phase : "unknown",

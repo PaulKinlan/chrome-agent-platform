@@ -215,9 +215,11 @@ Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", (
     // is immutable spec data; no request can forge or replace any of it.
     { toolId: "du", args: [], stdin: "", workspaceSeed: { files: [] } },
     { toolId: "du", args: [], stdin: "", acceptedExitCodes: [0, 1] },
+    { toolId: "du", args: [], stdin: "", stdoutEncoding: "base64" },
     { toolId: "du", args: [], stdin: "", defaultArgs: ["/jobx"] },
     { toolId: "tree", args: [], stdin: "", workspaceSeed: { files: [] } },
     { toolId: "tree", args: [], stdin: "", acceptedExitCodes: [0, 1] },
+    { toolId: "tree", args: [], stdin: "", stdoutEncoding: "base64" },
     { toolId: "tree", args: [], stdin: "", defaultArgs: ["/job"] },
     { toolId: "tree", args: [], stdin: "", packageId: "cap.bundled.du" },
     { toolId: "tree", args: [], stdin: "", capabilities: ["file.write"] },
@@ -256,6 +258,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assert(typeof spec.casSha === "string" && /^[0-9a-f]{64}$/.test(spec.casSha), `${spec.toolId} casSha`);
     assert(Number.isSafeInteger(spec.size) && spec.size > 0, `${spec.toolId} size`);
     assertEquals(spec.argv0, spec.toolId, "argv0 == the exact toolId");
+    assertEquals(spec.stdoutEncoding, "utf8", `${spec.toolId}: every predecessor explicitly remains UTF-8`);
   }
 });
 
@@ -279,6 +282,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assertEquals(job.context.callId, authority.callId);
   assertEquals(job.context.origin, authority.origin);
   assertEquals(job.tier, "tiny");
+  assertEquals(job.stdoutEncoding, "utf8", "the immutable spec supplies explicit UTF-8 output policy");
   // argv0 = the EXACT requested toolId (the WASI _start command convention
   // requires argv[0]; the Settings UI stays command-only).
   assertEquals(job.args[0], "csvtool", "argv0 is the program name");
@@ -452,14 +456,20 @@ Deno.test("preview: revalidation fails closed on every mutant (sha/size/imports/
 });
 
 Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () => {
-  const ok = boundPreviewResult({ ok: true, phase: "completed", exitCode: 0, stdout: "a,b\n1,2", stderr: "", errno: null, error: null });
+  const ok = boundPreviewResult({ ok: true, phase: "completed", exitCode: 0, stdout: "a,b\n1,2", stdoutBase64: null, stderr: "", errno: null, error: null });
   assertEquals(ok.ok, true);
   assertEquals(ok.stdout, "a,b\n1,2");
-  const failed = boundPreviewResult({ ok: false, phase: "proc-exit", exitCode: 1, stdout: "", stderr: "", errno: 0, error: "boom" });
+  const failed = boundPreviewResult({ ok: false, phase: "proc-exit", exitCode: 1, stdout: "", stdoutBase64: null, stderr: "", errno: 0, error: "boom" });
   assertEquals(failed.ok, false);
   assertEquals(failed.error, "boom");
   // hostile shapes fail closed
-  for (const bad of [null, "x", { ok: true }, { ok: true, stdout: "x".repeat(300 * 1024) }]) {
+  for (const bad of [
+    null,
+    "x",
+    { ok: true },
+    { ok: true, stdout: "x".repeat(300 * 1024), stdoutBase64: null },
+    { ok: true, stdout: "text", stdoutBase64: "dGV4dA==", stderr: "" },
+  ]) {
     let threw = null;
     try { boundPreviewResult(bad); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assert(threw !== null, `expected rejection for ${JSON.stringify(bad)?.slice(0, 40)}`);

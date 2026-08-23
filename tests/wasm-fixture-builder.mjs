@@ -178,3 +178,58 @@ export function buildWasiEntryExportWasm({ exportName, callsProcExit = false, ex
     ...section(11, dataPayload),
   ]);
 }
+
+/** A minimal run() fixture that writes the supplied raw bytes to stdout in one
+ * real fd_write call. The two-page memory permits the 64 KiB boundary vectors. */
+export function buildWasiStdoutBytesWasm(inputBytes) {
+  const bytes = inputBytes instanceof Uint8Array
+    ? inputBytes
+    : new Uint8Array(inputBytes);
+  if (bytes.byteLength > 65_537) throw new TypeError("fixture_stdout_bound");
+
+  const tWrite = [0x60, 4, 0x7f, 0x7f, 0x7f, 0x7f, 1, 0x7f];
+  const typePayload = [2, ...tWrite, 0x60, 0x00, 0x00];
+  const imp = (m, n, ti) => [...nameBytes(m), ...nameBytes(n), 0x00, ti];
+  const importPayload = [1, ...imp("wasi_snapshot_preview1", "fd_write", 0)];
+  const funcPayload = [1, 0x01];
+  const memoryPayload = [1, 0x01, 0x02, 0x02];
+  const DATA_PTR = 0x100;
+  const IOVEC_PTR = 0x10;
+  const NWRITTEN_PTR = 0x20;
+  const iovec = [
+    DATA_PTR & 0xff, (DATA_PTR >>> 8) & 0xff, 0, 0,
+    bytes.byteLength & 0xff, (bytes.byteLength >>> 8) & 0xff,
+    (bytes.byteLength >>> 16) & 0xff, (bytes.byteLength >>> 24) & 0xff,
+  ];
+  const dataPayload = [
+    2,
+    0x00, 0x41, ...u32leb(IOVEC_PTR), 0x0b, ...u32leb(iovec.length), ...iovec,
+    0x00, 0x41, ...u32leb(DATA_PTR), 0x0b, ...u32leb(bytes.byteLength), ...bytes,
+  ];
+  const exportPayload = [
+    2,
+    ...nameBytes("run"), 0x00, 0x01,
+    ...nameBytes("memory"), 0x02, 0x00,
+  ];
+  const body = [
+    0x41, 0x01,
+    0x41, ...u32leb(IOVEC_PTR),
+    0x41, 0x01,
+    0x41, ...u32leb(NWRITTEN_PTR),
+    0x10, 0x00,
+    0x1a,
+    0x0b,
+  ];
+  const codePayload = [1, ...u32leb(1 + body.length), 0x00, ...body];
+
+  return new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ...section(1, typePayload),
+    ...section(2, importPayload),
+    ...section(3, funcPayload),
+    ...section(5, memoryPayload),
+    ...section(7, exportPayload),
+    ...section(10, codePayload),
+    ...section(11, dataPayload),
+  ]);
+}

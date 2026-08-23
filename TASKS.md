@@ -747,6 +747,36 @@ On resume after a coordinator or worker loss:
 - Review: independent source/package and loaded-MV3 evidence reviews PASS
 - Next: —
 
+## [CAP-FB-20260823-LOSSLESS-ENVELOPE-01] Lossless Worker result envelope (Release 0.2.182)
+
+- Feedback: 2026-08-23 — land only the generic FND-1 lossless stdout envelope;
+  gzip and every new authority remain deferred
+- Updated: 2026-08-23 13:55 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: lossless-envelope worker
+- Workspace: active (local path private)
+- Branch: `feat/lossless-envelope-b054037`
+- Base: public `b054037a3c8ea387a5fd2d85551e1a5919cab9fe` (0.2.181)
+- Candidate: this commit (0.2.182)
+- Shipping: —
+- Acceptance: trusted immutable `stdoutEncoding` is required at every job layer.
+  The exact 16-key result union preserves UTF-8 text or complete canonical base64,
+  caps raw stdout at 65,536 bytes and base64 at 87,384 characters, and discards
+  all partial output/counters on every failure or timeout. Strict executor
+  validation rejects malformed/noncanonical arms and byte/counter mismatches.
+  All 22 current previews explicitly remain UTF-8 with byte-identical known
+  answers; gzip remains disabled. No selector, admission, CAS, manifest,
+  permission, provider, page, OPFS, filesystem, route or execution authority delta.
+- Gates: focused schema/Worker/executor/preview tests; full serial no-Chrome suite;
+  production Store build/scanners; deterministic generator and Store package;
+  fresh 22/4 import census and package/CAS identity comparison
+- Review: independent source/package review required; Chrome and security suite
+  intentionally not run in this foundation lane
+- Blockers: —
+- Next: review this single candidate; gzip admission remains a separate release
+
 ## [CAP-FB-20260823-TOOL-PREVIEW-TREE-01] Bounded tree Settings preview (Release 0.2.181)
 
 - Feedback: 2026-08-23 — after du and the live lazy-provider cutover landed,

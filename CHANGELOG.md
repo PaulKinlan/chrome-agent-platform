@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.182] — 2026-08-23
+- feat(wasi): add the bounded lossless UTF-8/base64 Worker result-envelope foundation; all 22 previews remain UTF-8 and gzip remains disabled (CAP-FB-20260823-LOSSLESS-ENVELOPE-01)
+
 ## [0.2.181] — 2026-08-23
 - feat(tools): admit bounded tree Settings preview over an immutable nested job seed (CAP-FB-20260823-TOOL-PREVIEW-TREE-01)
 

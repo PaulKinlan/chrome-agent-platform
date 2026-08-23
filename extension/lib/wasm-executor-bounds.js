@@ -12,6 +12,8 @@ export const EXECUTOR_BOUNDS = Object.freeze({
   maxWasmBytes: 4 * 1024 * 1024,
   maxRequestBytes: 64 * 1024,
   maxResponseBytes: 64 * 1024,
+  maxBinaryResponseBytes: 64 * 1024,
+  maxBase64ResponseChars: 4 * Math.ceil((64 * 1024) / 3),
   maxTransportErrorBytes: 1024,
   maxSessionIdBytes: 256,
   maxWorkerInstanceIdBytes: 128,

@@ -148,7 +148,7 @@ export const PATH_CLASS_RIGHTS = Object.freeze({
 });
 
 const encoder = new TextEncoder();
-const JOB_KEYS = Object.freeze(["acceptedExitCodes", "args", "context", "quota", "stdin", "tier", "workspaceSeed"]);
+const JOB_KEYS = Object.freeze(["acceptedExitCodes", "args", "context", "quota", "stdin", "stdoutEncoding", "tier", "workspaceSeed"]);
 const CONTEXT_KEYS = Object.freeze([
   "callId",
   "executionId",
@@ -286,6 +286,12 @@ export function createWasiJob(value) {
     acceptedExitCodes.some((code) => !Number.isInteger(code) || code < 0 || code > 255) ||
     JSON.stringify(acceptedExitCodes) !== JSON.stringify([...new Set(acceptedExitCodes)].sort((a, b) => a - b))
   ) fail("job-accepted-exits");
+  // Trusted immutable output policy, derived from the per-tool spec and never
+  // request-borne. It is required: a missing or unknown value cannot fall back
+  // to the lossy text path.
+  if (input.stdoutEncoding !== "utf8" && input.stdoutEncoding !== "base64") {
+    fail("job_stdout_encoding");
+  }
   const workspaceSeed = validateWorkspaceSeed(input.workspaceSeed);
   return Object.freeze({
     context: createWasiContext(input.context),
@@ -293,6 +299,7 @@ export function createWasiJob(value) {
     stdin: Object.freeze([...input.stdin]),
     quota,
     acceptedExitCodes: Object.freeze(acceptedExitCodes),
+    stdoutEncoding: input.stdoutEncoding,
     workspaceSeed, // already deep-frozen by the validator
     tier: input.tier,
   });

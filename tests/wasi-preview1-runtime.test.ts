@@ -173,6 +173,7 @@ function rawJob(
     stdin,
     tier,
     acceptedExitCodes: [0],
+    stdoutEncoding: "utf8",
     workspaceSeed: { files: [] },
   };
 }

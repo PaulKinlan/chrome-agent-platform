@@ -20,10 +20,11 @@ import {
 } from "../extension/lib/wasm-executor.js";
 import { createOffscreenWasmHost, validateOffscreenRequest } from "../extension/lib/wasm-offscreen-host.js";
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
-import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm } from "./wasm-fixture-builder.mjs";
+import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm, buildWasiStdoutBytesWasm } from "./wasm-fixture-builder.mjs";
 import { createWasiPreview1Runtime, SUPPORTED_WASI_PREVIEW1_IMPORTS } from "../extension/lib/wasi-preview1-runtime.js";
-import { WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS, WasiProcExit } from "../extension/lib/wasm-host-types.js";
+import { createWasiJob, WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS, WasiProcExit } from "../extension/lib/wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
+import { encodeCanonicalBase64 } from "../extension/lib/wasm-base64.js";
 
 const WORKER_URL = new URL("../extension/lib/wasm-execution-worker.js", import.meta.url).href;
 
@@ -82,6 +83,7 @@ function makeJob(overrides = {}) {
     stdin: new Uint8Array(0),
     quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 64, stderrBytes: 64, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
     acceptedExitCodes: [0],
+    stdoutEncoding: "utf8",
     workspaceSeed: { files: [] },
     ...overrides,
   };
@@ -143,7 +145,58 @@ Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT 
     assertEquals(res.ok, true, `${toolId}: ${JSON.stringify(res)}`);
     assertEquals(res.phase, "completed", toolId);
     assertEquals(res.stdout, contract.expect, `${toolId} exact contract output`);
+    assertEquals(res.stdoutBase64, null, `${toolId}: binary arm remains inactive`);
   }
+});
+
+// The predecessor A1 tranche completes the 22-tool known-answer matrix. UUID
+// is intentionally random, so its exact contract is two canonical v4 lines;
+// every deterministic tool is byte-for-byte pinned.
+const A1_CONTRACTS = {
+  csvtool: { stdin: "a,b\n1,2\n3,4", args: ["cat"], expect: "a,b\n1,2\n3,4\n" },
+  head: { stdin: "a\nb\nc\n", args: ["-n", "2"], expect: "a\nb\n" },
+  tail: { stdin: "a\nb\nc\n", args: ["-n", "2"], expect: "b\nc\n" },
+  cut: { stdin: "a,b\n1,2\n", args: ["-d", ",", "-f", "2"], expect: "b\n2\n" },
+};
+
+Deno.test("FND-1 predecessor KAT: csvtool/uuid/head/tail/cut retain exact UTF-8 result arms", async () => {
+  const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  for (const [toolId, contract] of Object.entries(A1_CONTRACTS)) {
+    const spec = PREVIEW_SPECS[toolId];
+    const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
+    const job = makeJob({
+      args: [toolId, ...contract.args],
+      stdin: new TextEncoder().encode(contract.stdin),
+      quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 1024, stderrBytes: 256, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
+    });
+    const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+    const host = createOffscreenWasmHost({ executor, authority: AUTHORITY });
+    const result = await host.handleJob({ type: "wasm.job", job, wasmBytes: casBytes });
+    assertEquals(result.ok, true, `${toolId}: ${JSON.stringify(result)}`);
+    assertEquals(result.stdout, contract.expect, `${toolId}: exact predecessor output`);
+    assertEquals(result.stdoutBase64, null, `${toolId}: binary arm remains inactive`);
+  }
+
+  const uuidSpec = PREVIEW_SPECS.uuid;
+  const uuidBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${uuidSpec.casSha}.wasm`));
+  const uuidJob = makeJob({
+    args: ["uuid", "-n", "2"],
+    quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 1024, stderrBytes: 256, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
+  });
+  const uuidHost = createOffscreenWasmHost({
+    executor: new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 }),
+    authority: AUTHORITY,
+  });
+  const uuid = await uuidHost.handleJob({ type: "wasm.job", job: uuidJob, wasmBytes: uuidBytes });
+  assertEquals(uuid.ok, true, JSON.stringify(uuid));
+  assertEquals(uuid.stdoutBase64, null);
+  const lines = uuid.stdout.trimEnd().split("\n");
+  assertEquals(lines.length, 2, "exactly two UUID lines");
+  for (const line of lines) {
+    assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(line), `canonical UUID v4: ${line}`);
+  }
+  assert(lines[0] !== lines[1], "the two generated UUIDs differ");
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -170,6 +223,7 @@ Deno.test("stat Release E: the EXACT workspace-read output through the real Work
   const res = await runStat(["/job/inputs/f.bin"], STAT_SEED);
   assertEquals(res.ok, true, JSON.stringify(res));
   assertEquals(res.stdout, "path=/job/inputs/f.bin\ntype=regular file\nsize=2\nmtime=0.000000000\n", "the EXACT stat output (regular file — the C2 kind() string)");
+  assertEquals(res.stdoutBase64, null, "stat remains on the explicit UTF-8 arm");
   // mtime zero is the runtime's hardcoded writeFilestat zero (the host exposes
   // no wall-clock identity), not a stored seed mtime.
   // a MISSING path → exit 1 + no stale
@@ -190,7 +244,7 @@ Deno.test("stat Release E: the EXACT workspace-read output through the real Work
 
 Deno.test("stat Release E: the workspace-seed schema fails closed on every hostile shape + accepts empty/nested files", async () => {
   const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
-  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["stat"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, acceptedExitCodes: [0], workspaceSeed: { files: [] } };
+  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["stat"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, acceptedExitCodes: [0], stdoutEncoding: "utf8", workspaceSeed: { files: [] } };
   const assertSeedFailure = (label, seed) => {
     let caught = null;
     try { createWasiJob({ ...base, workspaceSeed: seed }); } catch (error) { caught = error; }
@@ -409,6 +463,7 @@ Deno.test("du/tree admission: exact 12-import retained binaries and exact isolat
   const duSeeded = await runDirectoryTool("du", DU_SHA, ["/job"], seed);
   assertEquals(duSeeded.ok, true, JSON.stringify(duSeeded));
   assertEquals(duSeeded.stdout, "1\t/job/inputs\n1\t/job\n");
+  assertEquals(duSeeded.stdoutBase64, null, "du remains on the explicit UTF-8 arm");
   assertEquals(duSeeded.stderr, "");
   assertEquals(duSeeded.counters, {
     hostCalls: 23,
@@ -452,6 +507,7 @@ Deno.test("du/tree admission: exact 12-import retained binaries and exact isolat
   const treeSeeded = await runDirectoryTool("tree", TREE_SHA, ["/job/inputs"], treeSeed);
   assertEquals(treeSeeded.ok, true, JSON.stringify(treeSeeded));
   assertEquals(treeSeeded.stdout, treeOutput);
+  assertEquals(treeSeeded.stdoutBase64, null, "tree remains on the explicit UTF-8 arm");
   assertEquals(treeSeeded.stderr, "");
   assertEquals(treeSeeded.counters, {
     hostCalls: 29,
@@ -509,6 +565,7 @@ Deno.test("diff/patch Release C: EXACT outputs + accepted-exit + exit2/no-stale 
   assertEquals(differing.ok, true, JSON.stringify(differing));
   assertEquals(differing.phase, "completed", JSON.stringify(differing));
   assertEquals(differing.stdout, "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "the exact diff hunk");
+  assertEquals(differing.stdoutBase64, null, "diff remains on the explicit UTF-8 arm");
   // diff identical → exit 0 → ok:true + empty
   const identical = await runDiffPatch("diff", ["a\nb\n", "a\nb\n"], [0, 1]);
   assertEquals(identical.ok, true, JSON.stringify(identical));
@@ -522,6 +579,7 @@ Deno.test("diff/patch Release C: EXACT outputs + accepted-exit + exit2/no-stale 
   const patched = await runDiffPatch("patch", ["a\nb\n", "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"], [0]);
   assertEquals(patched.ok, true, JSON.stringify(patched));
   assertEquals(patched.stdout, "a\nc\n", "the patched text");
+  assertEquals(patched.stdoutBase64, null, "patch remains on the explicit UTF-8 arm");
   // patch malformed → exit 2 → failure + no stale
   const malformed = await runDiffPatch("patch", ["a\nb\n", "not-a-diff"], [0]);
   assertEquals(malformed.ok, false, "malformed patch fails");
@@ -535,7 +593,7 @@ Deno.test("diff/patch Release C: EXACT outputs + accepted-exit + exit2/no-stale 
 
 Deno.test("diff/patch Release C: schema/forgery/bounds mutants fail closed", async () => {
   const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
-  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["diff", "a", "b"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, workspaceSeed: [] };
+  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["diff", "a", "b"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, stdoutEncoding: "utf8", workspaceSeed: [] };
   const hostile = [
     ["missing-0", { ...base, acceptedExitCodes: [1] }],
     ["unsorted", { ...base, acceptedExitCodes: [1, 0] }],
@@ -695,6 +753,7 @@ Deno.test("markdown Release B: EXACT safe-HTML contracts through the real Worker
   const heading = await runMarkdown([], "# Hi");
   assertEquals(heading.ok, true, JSON.stringify(heading));
   assertEquals(heading.stdout, "<h1>Hi</h1>\n", "exact heading HTML");
+  assertEquals(heading.stdoutBase64, null, "markdown remains on the explicit UTF-8 arm");
   const raw = await runMarkdown([], "<script>alert(1)</script>");
   assertEquals(raw.ok, true, JSON.stringify(raw));
   assertEquals(raw.stdout, "<!-- raw HTML omitted -->\n", "raw HTML omitted (CMARK_OPT_SAFE)");
@@ -855,6 +914,7 @@ Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT exampl
     });
     assertEquals(res.ok, true, `${toolId}: ${JSON.stringify(res)}`);
     assertEquals(res.stdout, contract.expect, `${toolId} exact contract output`);
+    assertEquals(res.stdoutBase64, null, `${toolId}: binary arm remains inactive`);
   }
   // an INVALID grep regex `[` is a bounded proc-exit(2) with NO stale stdout
   const grepSpec = PREVIEW_SPECS.grep;
@@ -1111,6 +1171,74 @@ async function runRealWorker(wasmBytes, overrides = {}) {
   return await host.handleJob(makeRequest({ wasmBytes, ...overrides }));
 }
 
+function stdoutJob(stdoutEncoding, stdoutBytes) {
+  return makeJob({
+    stdoutEncoding,
+    quota: {
+      ...WASI_HOST_DEFAULT_QUOTA,
+      hostCalls: 1000,
+      pathCalls: 100,
+      stdinBytes: 64,
+      stdoutBytes,
+      stderrBytes: 64,
+      fileBytes: 1024,
+      fileSize: 1024,
+      dynamicFds: 4,
+    },
+  });
+}
+
+Deno.test("FND-1 worker union: UTF-8 stays byte-exact; invalid raw UTF-8 and empty binary are lossless base64", async () => {
+  const text = await runRealWorker(buildWasiEntryExportWasm({ exportName: "run" }));
+  assertEquals(text.ok, true, JSON.stringify(text));
+  assertEquals(text.stdout, "hi");
+  assertEquals(text.stdoutBase64, null);
+  assertEquals(text.stdoutBytes, 2);
+  assertEquals(text.counters.stdoutBytes, 2);
+
+  const raw = new Uint8Array([0xff, 0x00, 0x80]);
+  const binary = await runRealWorker(buildWasiStdoutBytesWasm(raw), {
+    job: stdoutJob("base64", raw.byteLength),
+  });
+  assertEquals(binary.ok, true, JSON.stringify(binary));
+  assertEquals(binary.stdout, null, "binary is never UTF-8-decoded");
+  assertEquals(binary.stdoutBase64, "/wCA", "invalid UTF-8 bytes have exact canonical base64");
+  assertEquals(binary.stdoutBytes, 3);
+  assertEquals(binary.counters.stdoutBytes, 3);
+
+  const empty = await runRealWorker(RUN_WASM, { job: stdoutJob("base64", 0) });
+  assertEquals(empty.ok, true, JSON.stringify(empty));
+  assertEquals(empty.stdout, null);
+  assertEquals(empty.stdoutBase64, "", "empty binary success uses the populated empty-string arm");
+  assertEquals(empty.stdoutBytes, 0);
+});
+
+Deno.test("FND-1 worker bound: complete 64 KiB base64 succeeds; 64 KiB+1 fails all-or-nothing", async () => {
+  const atCap = new Uint8Array(EXECUTOR_BOUNDS.maxBinaryResponseBytes);
+  for (let index = 0; index < atCap.length; index++) atCap[index] = index & 0xff;
+  const success = await runRealWorker(buildWasiStdoutBytesWasm(atCap), {
+    job: stdoutJob("base64", atCap.byteLength),
+  });
+  assertEquals(success.ok, true, JSON.stringify(success));
+  assertEquals(success.stdout, null);
+  assertEquals(success.stdoutBase64, encodeCanonicalBase64(atCap));
+  assertEquals(success.stdoutBase64.length, 87_384, "exact maximum canonical character count");
+  assertEquals(success.stdoutBytes, 65_536);
+
+  const over = new Uint8Array(EXECUTOR_BOUNDS.maxBinaryResponseBytes + 1);
+  over.fill(0xa5);
+  const failure = await runRealWorker(buildWasiStdoutBytesWasm(over), {
+    job: stdoutJob("base64", over.byteLength),
+  });
+  assertEquals(failure.ok, false, JSON.stringify(failure));
+  assert(String(failure.error).includes("response-over-budget"), failure.error);
+  assertEquals(failure.stdout, "");
+  assertEquals(failure.stdoutBase64, null);
+  assertEquals(failure.stdoutBytes, 0);
+  assertEquals(failure.stderrBytes, 0);
+  assertEquals(failure.counters, null);
+});
+
 Deno.test("audit: an over-tier memory declaration is rejected BEFORE instantiation (phase memory-rejected)", async () => {
   const res = await runRealWorker(OVER_TIER_MEMORY_WASM);
   assert(!res.ok && res.phase === "memory-rejected", JSON.stringify(res));
@@ -1163,6 +1291,9 @@ Deno.test("worker export selection: `_start` with proc_exit(2) FAILS with errno 
   assertEquals(res.phase, "proc-exit", JSON.stringify(res));
   assertEquals(res.errno, 2, JSON.stringify(res));
   assertEquals(res.stdout, "", "the failure schema keeps no stale stdout");
+  assertEquals(res.stdoutBase64, null, "the failure schema keeps no stale binary stdout");
+  assertEquals(res.stdoutBytes, 0);
+  assertEquals(res.counters, null);
 });
 
 Deno.test("worker export selection: NEITHER run nor _start rejects with export-missing", async () => {
@@ -1204,12 +1335,13 @@ Deno.test("schemas: the worker RESULT is EXACT-key validated (extra keys, field 
     stdoutBytes: 0,
     stderrBytes: 0,
     stdout: "",
+    stdoutBase64: null,
     stderr: "",
     workerInstanceId: "w-1",
     error: null,
     errno: null,
   };
-  assert(validateWorkerResult(base, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1" }).ok);
+  assert(validateWorkerResult(base, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1", stdoutEncoding: "utf8" }).ok);
   for (const bad of [
     { ...base, junk: 1 },                                // extra key
     { ...base, sessionId: "other" },                     // identity mismatch
@@ -1223,8 +1355,111 @@ Deno.test("schemas: the worker RESULT is EXACT-key validated (extra keys, field 
     { ...base, phase: "unknown-phase" },
   ]) {
     let caught = null;
-    try { validateWorkerResult(bad, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1" }); } catch (e) { caught = e; }
+    try { validateWorkerResult(bad, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1", stdoutEncoding: "utf8" }); } catch (e) { caught = e; }
     assert(caught, `must reject: ${JSON.stringify(bad)?.slice(0, 100)}`);
+  }
+});
+
+Deno.test("FND-1 schemas: stdoutEncoding is required/trusted at host and Worker layers", async () => {
+  const valid = makeJob();
+  assertEquals(createWasiJob(valid).stdoutEncoding, "utf8");
+  const { stdoutEncoding: _removed, ...missing } = valid;
+  for (const [candidate, expected] of [
+    [missing, "job_shape"],
+    [{ ...valid, stdoutEncoding: "binary" }, "job_stdout_encoding"],
+    [{ ...valid, stdoutEncoding: null }, "job_stdout_encoding"],
+  ]) {
+    let code = null;
+    try { createWasiJob(candidate); } catch (error) { code = error?.message ?? null; }
+    assertEquals(code, expected);
+  }
+
+  const { validateJobEnvelope } = await import("../extension/lib/wasm-execution-worker.js");
+  const envelope = { ...makeRunEnvelope(), sessionId: "session-1" };
+  assertEquals(validateJobEnvelope(envelope).job.stdoutEncoding, "utf8");
+  let workerCode = null;
+  try {
+    validateJobEnvelope({ ...envelope, job: { ...envelope.job, stdoutEncoding: "binary" } });
+  } catch (error) {
+    workerCode = error?.executorCode ?? null;
+  }
+  assertEquals(workerCode, "job-stdout-encoding");
+});
+
+Deno.test("FND-1 executor union rejects missing/extra/both/neither and every noncanonical base64 mutant", () => {
+  const binaryBase = {
+    type: TRANSPORT_MESSAGE_TYPES.RESULT,
+    sessionId: "session-1",
+    executionId: "exec-1",
+    jobId: "call-1",
+    ok: true,
+    phase: "completed",
+    result: null,
+    counters: { hostCalls: 3, pathCalls: 0, fileBytes: 0, stdinBytesRead: 0, stdoutBytes: 1, stderrBytes: 0, openDynamicFds: 0 },
+    stdoutBytes: 1,
+    stderrBytes: 0,
+    stdout: null,
+    stdoutBase64: "YQ==",
+    stderr: "",
+    workerInstanceId: "w-1",
+    error: null,
+    errno: null,
+  };
+  const expected = { jobId: "call-1", sessionId: "session-1", executionId: "exec-1", stdoutEncoding: "base64" };
+  const accepted = validateWorkerResult(binaryBase, expected);
+  assertEquals(accepted.stdout, null);
+  assertEquals(accepted.stdoutBase64, "YQ==", "canonical base64 is preserved unchanged");
+
+  const { stdoutBase64: _missingArm, ...missingArm } = binaryBase;
+  const mutants = [
+    missingArm,
+    { ...binaryBase, extra: true },
+    { ...binaryBase, stdout: "a" },
+    { ...binaryBase, stdoutBase64: null },
+    { ...binaryBase, stdoutBase64: "éAAA" },
+    { ...binaryBase, stdoutBase64: "YQ==\n" },
+    { ...binaryBase, stdoutBase64: "YQ-_" },
+    { ...binaryBase, stdoutBase64: "YQ=" },
+    { ...binaryBase, stdoutBase64: "Y===" },
+    { ...binaryBase, stdoutBase64: "YR==" },
+    { ...binaryBase, stdoutBase64: "YQ" },
+    { ...binaryBase, stdoutBase64: "A".repeat(EXECUTOR_BOUNDS.maxBase64ResponseChars + 4) },
+    { ...binaryBase, stdoutBytes: 2, counters: { ...binaryBase.counters, stdoutBytes: 2 } },
+    { ...binaryBase, counters: { ...binaryBase.counters, stdoutBytes: 2 } },
+  ];
+  for (const mutant of mutants) {
+    let rejected = null;
+    try { validateWorkerResult(mutant, expected); } catch (error) { rejected = error?.executorCode ?? null; }
+    assert(rejected, `mutant must reject: ${JSON.stringify(mutant).slice(0, 100)}`);
+  }
+  for (const stdoutEncoding of [undefined, null, "binary", "UTF8"]) {
+    let rejected = null;
+    try { validateWorkerResult(binaryBase, { ...expected, stdoutEncoding }); } catch (error) { rejected = error?.executorCode ?? null; }
+    assertEquals(rejected, "result-stdout-encoding");
+  }
+
+  const failure = {
+    ...binaryBase,
+    ok: false,
+    phase: "runtime-error",
+    counters: null,
+    stdoutBytes: 0,
+    stderrBytes: 0,
+    stdout: "",
+    stdoutBase64: null,
+    stderr: "",
+    error: "bounded failure",
+  };
+  assertEquals(validateWorkerResult(failure, expected).stdoutBase64, null);
+  for (const mutant of [
+    { ...failure, stdout: "partial" },
+    { ...failure, stdoutBase64: "YQ==" },
+    { ...failure, stdoutBytes: 1 },
+    { ...failure, counters: { ...binaryBase.counters } },
+  ]) {
+    let rejected = null;
+    try { validateWorkerResult(mutant, expected); } catch (error) { rejected = error?.executorCode ?? null; }
+    assert(rejected, "failure partial/counters mutant rejects");
   }
 });
 
@@ -1304,6 +1539,10 @@ Deno.test("timeout: a never-responding worker is TERMINATED and a SECOND run wor
     authority: AUTHORITY,
   });
   assert(!res.ok && res.phase === "timeout", JSON.stringify(res));
+  assertEquals(res.stdout, "", "timeout has no partial text");
+  assertEquals(res.stdoutBase64, null, "timeout has no partial binary");
+  assertEquals(res.stdoutBytes, 0);
+  assertEquals(res.counters, null);
   assertEquals(terminated, 1, "the worker was terminated exactly once");
   // a SECOND run on the SAME executor works (no listener/residue leaks)
   const realExecutor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 5000 });
@@ -1374,7 +1613,7 @@ Deno.test("REAL worker: the fd round-trip wasm performs path_open/write/seek/rea
   assertEquals(res.counters.stdoutBytes, 5, JSON.stringify(res));
   assertEquals(res.counters.openDynamicFds, 0, JSON.stringify(res));
   assertEquals(res.stdoutBytes, 5, JSON.stringify(res));
-  // NON-VACUITY (the 15-key envelope preserves the CONTENT): fd_read + the
+  // NON-VACUITY (the 16-key envelope preserves the CONTENT): fd_read + the
   // stdout echo use the 0x210 READ iovec at the GARBAGE-seeded 0x20 buffer —
   // the echoed stdout can ONLY be the FILE bytes a real fd_read wrote there.
   assertEquals(res.stdout, "hello", JSON.stringify(res));
@@ -1442,9 +1681,9 @@ Deno.test("schemas: phase↔ok conflicts and hostile failure fields are rejected
     sessionId: "session-1", executionId: "exec-1", jobId: "call-1", ok: true, phase: "completed",
     result: null,
     counters: { hostCalls: 3, pathCalls: 0, fileBytes: 0, stdinBytesRead: 0, stdoutBytes: 5, stderrBytes: 0, openDynamicFds: 0 },
-    stdoutBytes: 5, stderrBytes: 0, stdout: "hello", stderr: "", workerInstanceId: "w-1", error: null, errno: null,
+    stdoutBytes: 5, stderrBytes: 0, stdout: "hello", stdoutBase64: null, stderr: "", workerInstanceId: "w-1", error: null, errno: null,
   };
-  assert(validateWorkerResult(okBase, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1" }).ok);
+  assert(validateWorkerResult(okBase, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1", stdoutEncoding: "utf8" }).ok);
   for (const bad of [
     { ...okBase, ok: true, phase: "runtime-error" },              // ok+non-completed phase
     { ...okBase, ok: false, phase: "completed" },                  // fail+completed phase
@@ -1455,7 +1694,7 @@ Deno.test("schemas: phase↔ok conflicts and hostile failure fields are rejected
     { ...okBase, ok: false, phase: "import-rejected", error: "x", counters: { hostCalls: 1, pathCalls: 0, fileBytes: 0, stdinBytesRead: 0, stdoutBytes: 0, stderrBytes: 0, openDynamicFds: 0 } }, // failure with counters
   ]) {
     let caught = null;
-    try { validateWorkerResult(bad, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1" }); } catch (e) { caught = e; }
+    try { validateWorkerResult(bad, { jobId: "call-1", sessionId: "session-1", executionId: "exec-1", stdoutEncoding: "utf8" }); } catch (e) { caught = e; }
     assert(caught, `must reject: ${JSON.stringify(bad)?.slice(0, 140)}`);
   }
 });

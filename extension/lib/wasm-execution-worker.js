@@ -25,6 +25,7 @@ import { auditWasmBinary, WASM_PACKAGE_LIMITS } from "./wasm-package-authority.j
 import { createSyncWorkspace, validateWorkspaceSeed } from "./wasm-sync-workspace.js";
 import { TRANSPORT_MESSAGE_TYPES } from "./wasm-executor.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
+import { encodeCanonicalBase64 } from "./wasm-base64.js";
 
 function failClosed(code, detail) {
   const error = new Error(`worker fail-closed: ${code}`);
@@ -47,7 +48,7 @@ const workerInstanceId = (globalThis.crypto?.randomUUID
   : `worker_${Math.random().toString(36).slice(2)}_${Date.now()}`);
 
 const JOB_ENVELOPE_KEYS = Object.freeze(["type", "sessionId", "job", "wasmBytes"]);
-const JOB_INNER_KEYS = Object.freeze(["acceptedExitCodes", "context", "args", "stdin", "quota", "tier", "workspaceSeed"]);
+const JOB_INNER_KEYS = Object.freeze(["acceptedExitCodes", "context", "args", "stdin", "quota", "stdoutEncoding", "tier", "workspaceSeed"]);
 const CONTEXT_KEYS = Object.freeze(["executionId", "callId", "origin", "workspaceRoot"]);
 
 function exactKeys(value, keys, code) {
@@ -87,6 +88,9 @@ export function validateJobEnvelope(raw) {
   } catch (error) {
     if (String(error?.message ?? "") === "job-seed") throw failClosed("job-seed");
     throw failClosed("job-seed", String(error?.message ?? error));
+  }
+  if (raw.job.stdoutEncoding !== "utf8" && raw.job.stdoutEncoding !== "base64") {
+    throw failClosed("job-stdout-encoding");
   }
   if (!plainData(raw.job.context)) throw failClosed("job-context");
   exactKeys(raw.job.context, CONTEXT_KEYS, "job-context");
@@ -186,6 +190,7 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
         stdin: new Uint8Array(job.stdin ?? []),
         quota: job.quota,
         acceptedExitCodes: job.acceptedExitCodes,
+        stdoutEncoding: job.stdoutEncoding,
         workspaceSeed: job.workspaceSeed,
       },
       memory: {
@@ -257,6 +262,30 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
         throw error;
       }
     }
+    // Snapshot output once, then bind the complete raw byte arrays to the
+    // immutable job encoding. Never slice/truncate: an over-budget success is
+    // converted to the bounded all-or-nothing failure envelope below.
+    const rawStdout = snapshot.stdout;
+    const rawStderr = snapshot.stderr;
+    if (rawStdout.byteLength > EXECUTOR_BOUNDS.maxBinaryResponseBytes ||
+        rawStderr.byteLength > EXECUTOR_BOUNDS.maxResponseBytes) {
+      throw failClosed("response-over-budget");
+    }
+    let stdout;
+    let stdoutBase64;
+    if (job.stdoutEncoding === "utf8") {
+      stdout = new TextDecoder("utf-8", { fatal: true }).decode(rawStdout);
+      stdoutBase64 = null;
+    } else if (job.stdoutEncoding === "base64") {
+      stdout = null;
+      stdoutBase64 = encodeCanonicalBase64(rawStdout);
+      if (stdoutBase64.length > EXECUTOR_BOUNDS.maxBase64ResponseChars) {
+        throw failClosed("response-over-budget");
+      }
+    } else {
+      throw failClosed("job-stdout-encoding");
+    }
+    const stderr = new TextDecoder("utf-8", { fatal: true }).decode(rawStderr);
     respond(Object.freeze({
       type: TRANSPORT_MESSAGE_TYPES.RESULT,
       sessionId,
@@ -266,10 +295,11 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
       phase: "completed",
       result: null,
       counters: snapshot.counters,
-      stdoutBytes: snapshot.stdout.byteLength,
-      stderrBytes: snapshot.stderr.byteLength,
-      stdout: new TextDecoder().decode(snapshot.stdout).slice(0, EXECUTOR_BOUNDS.maxResponseBytes),
-      stderr: new TextDecoder().decode(snapshot.stderr).slice(0, EXECUTOR_BOUNDS.maxResponseBytes),
+      stdoutBytes: rawStdout.byteLength,
+      stderrBytes: rawStderr.byteLength,
+      stdout,
+      stdoutBase64,
+      stderr,
       workerInstanceId,
       error: null,
       errno: null,
@@ -301,6 +331,7 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
       stdoutBytes: 0,
       stderrBytes: 0,
       stdout: "",
+      stdoutBase64: null,
       stderr: "",
       workerInstanceId,
       error: String(error?.message ?? error).slice(0, EXECUTOR_BOUNDS.maxTransportErrorBytes),
@@ -334,6 +365,7 @@ self.onmessage = (event) => {
       stdoutBytes: 0,
       stderrBytes: 0,
       stdout: "",
+      stdoutBase64: null,
       stderr: "",
       workerInstanceId,
       error: String(error?.message ?? error).slice(0, EXECUTOR_BOUNDS.maxTransportErrorBytes),

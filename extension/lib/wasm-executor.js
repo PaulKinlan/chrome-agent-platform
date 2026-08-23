@@ -19,6 +19,7 @@
 //   - no ambient credentials: the worker receives only the bounded payload.
 
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
+import { decodeCanonicalBase64 } from "./wasm-base64.js";
 
 export const TRANSPORT_MESSAGE_TYPES = Object.freeze({
   JOB: "wasm.job",
@@ -89,11 +90,9 @@ export function checkJobAgainstAuthority(job, authority) {
  * nothing); `counters` is an exact-key bounded record; failure fields have an
  * exact shape; ok/phase consistency is enforced. */
 const RESULT_KEYS = Object.freeze([
-  // EXACTLY 15: type, sessionId, executionId, jobId, ok, phase, result,
-  // counters, stdoutBytes, stderrBytes, stdout, stderr, workerInstanceId,
-  // error, errno
+  // EXACTLY 16: the predecessor envelope plus the tagged stdoutBase64 arm.
   "type", "sessionId", "executionId", "jobId", "ok", "phase", "result",
-  "counters", "stdoutBytes", "stderrBytes", "stdout", "stderr",
+  "counters", "stdoutBytes", "stderrBytes", "stdout", "stdoutBase64", "stderr",
   "workerInstanceId", "error", "errno",
 ]);
 const COUNTER_KEYS = Object.freeze([
@@ -109,7 +108,10 @@ const FAILURE_PHASES = new Set([
 ]);
 const PHASES = new Set([...OK_PHASES, ...FAILURE_PHASES]);
 
-export function validateWorkerResult(raw, { jobId, sessionId, executionId = null }) {
+export function validateWorkerResult(raw, { jobId, sessionId, executionId = null, stdoutEncoding }) {
+  if (stdoutEncoding !== "utf8" && stdoutEncoding !== "base64") {
+    throw failClosed("result-stdout-encoding");
+  }
   if (!plainData(raw)) throw failClosed("result-shape");
   if (JSON.stringify(Object.keys(raw).sort()) !== JSON.stringify([...RESULT_KEYS].sort())) {
     throw failClosed("result-shape");
@@ -154,10 +156,32 @@ export function validateWorkerResult(raw, { jobId, sessionId, executionId = null
         raw.stderrBytes !== raw.counters.stderrBytes) {
       throw failClosed("result-bytes-mismatch");
     }
-    // the bounded stdout/stderr CONTENT must be exact strings whose UTF-8 byte
-    // length matches the byte counts.
-    if (typeof raw.stdout !== "string" || utf8Bytes(raw.stdout) !== raw.stdoutBytes ||
-        typeof raw.stderr !== "string" || utf8Bytes(raw.stderr) !== raw.stderrBytes) {
+    // The immutable job encoding selects exactly one output arm. Text stays
+    // exact UTF-8; binary stays inert canonical base64 and is never decoded as
+    // text. Canonical decoding includes strict grammar + re-encode equality.
+    if (stdoutEncoding === "utf8") {
+      if (typeof raw.stdout !== "string" || raw.stdoutBase64 !== null ||
+          utf8Bytes(raw.stdout) !== raw.stdoutBytes) {
+        throw failClosed("result-content");
+      }
+    } else {
+      if (raw.stdout !== null || typeof raw.stdoutBase64 !== "string" ||
+          raw.stdoutBase64.length > EXECUTOR_BOUNDS.maxBase64ResponseChars) {
+        throw failClosed("result-content");
+      }
+      let decoded;
+      try {
+        decoded = decodeCanonicalBase64(raw.stdoutBase64);
+      } catch {
+        throw failClosed("result-content");
+      }
+      if (decoded.byteLength > EXECUTOR_BOUNDS.maxBinaryResponseBytes ||
+          decoded.byteLength !== raw.stdoutBytes ||
+          decoded.byteLength !== raw.counters.stdoutBytes) {
+        throw failClosed("result-bytes-mismatch");
+      }
+    }
+    if (typeof raw.stderr !== "string" || utf8Bytes(raw.stderr) !== raw.stderrBytes) {
       throw failClosed("result-content");
     }
   } else {
@@ -170,14 +194,15 @@ export function validateWorkerResult(raw, { jobId, sessionId, executionId = null
     if (raw.stdoutBytes !== 0 || raw.stderrBytes !== 0) {
       throw failClosed("result-conflict");
     }
-    if (raw.stdout !== "" || raw.stderr !== "") throw failClosed("result-conflict");
+    if (raw.stdout !== "" || raw.stdoutBase64 !== null || raw.stderr !== "") {
+      throw failClosed("result-conflict");
+    }
     if (raw.errno !== null && !Number.isSafeInteger(raw.errno)) {
       throw failClosed("result-conflict");
     }
   }
   return Object.freeze({
-    // the FULL 15-key envelope: the bounded validated stdout/stderr CONTENT is
-    // PRESERVED (never dropped) alongside the byte counts.
+    // The full exact envelope preserves the selected output arm unchanged.
     type: raw.type,
     sessionId: raw.sessionId,
     executionId: raw.executionId,
@@ -188,8 +213,9 @@ export function validateWorkerResult(raw, { jobId, sessionId, executionId = null
     counters: raw.ok === true ? Object.freeze({ ...raw.counters }) : null,
     stdoutBytes: raw.stdoutBytes,
     stderrBytes: raw.stderrBytes,
-    stdout: raw.ok === true ? boundedString(raw.stdout, EXECUTOR_BOUNDS.maxResponseBytes) : "",
-    stderr: raw.ok === true ? boundedString(raw.stderr, EXECUTOR_BOUNDS.maxResponseBytes) : "",
+    stdout: raw.ok === true ? raw.stdout : "",
+    stdoutBase64: raw.ok === true ? raw.stdoutBase64 : null,
+    stderr: raw.ok === true ? raw.stderr : "",
     workerInstanceId: raw.workerInstanceId,
     error: raw.ok === true ? null : boundedString(raw.error, EXECUTOR_BOUNDS.maxTransportErrorBytes),
     errno: Number.isSafeInteger(raw.errno) ? raw.errno : null,
@@ -310,6 +336,7 @@ export class WasmExecutor {
             jobId: String(job?.context?.callId ?? ""),
             sessionId: fences.sessionId,
             executionId: fences.executionId,
+            stdoutEncoding: job.stdoutEncoding,
           }));
         } catch (error) {
           finish(error);
@@ -328,6 +355,7 @@ export class WasmExecutor {
           ok: false, phase: "timeout",
           error: "wall deadline exceeded; worker terminated",
           workerInstanceId: null, counters: null, stdoutBytes: 0, stderrBytes: 0,
+          stdout: "", stdoutBase64: null, stderr: "",
           result: null, errno: null,
         });
       }

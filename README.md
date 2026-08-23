@@ -59,6 +59,12 @@ isolated OPFS memory, run history, skills, and avatar.
   are immutable spec authority rather than request fields. It adds no provider/page,
   permission, route, OPFS, persistence, mutation, runtime-import, or package-install
   authority; the Settings posture is exactly 22 enabled and 4 disabled.
+- **Lossless Worker result-envelope foundation (0.2.182 source candidate)** — every
+  immutable Settings preview spec now supplies required `stdoutEncoding`; the Worker
+  returns an exact UTF-8/base64 tagged union bounded to 64 KiB raw / 87,384 canonical
+  base64 characters, while failures and timeouts discard partial output and counters.
+  All current 22 tools remain byte-identical UTF-8 previews; gzip remains one of the
+  exact 4 disabled packages, with no selector, CAS, manifest or authority change.
 - **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
   immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
   and an exact-token package registry WAL record bundled metadata only. Import module

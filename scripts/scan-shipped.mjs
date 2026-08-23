@@ -196,7 +196,7 @@ function scriptTarget(node, knownScripts) {
 // file with ANY direct dynamic WebAssembly call/constructor — and any deviating
 // call shape in the canonical file — is a violation.
 const EXECUTION_HOST_CANONICAL_PATH = "extension/lib/wasm-execution-worker.js";
-const EXECUTION_HOST_CANONICAL_LOCATION = { line: 220, column: 25 };
+const EXECUTION_HOST_CANONICAL_LOCATION = { line: 225, column: 25 };
 const EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 // The EXACT allowed arguments of the single canonical call: the first argument
 // is the identifier `wasmBytes`, the second is the member `runtime.imports`.
@@ -213,7 +213,7 @@ const EXECUTION_HOST_ALLOWED_ARG1_PROP = "imports";
 // exact line/column) and a bounded count of 1; any other Worker/SharedWorker
 // node — literal or not — in any file stays flagged.
 const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
-const WORKER_HOST_CANONICAL_LOCATION = { line: 200, column: 9 };
+const WORKER_HOST_CANONICAL_LOCATION = { line: 226, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // The bounded JS-minifier host constructs its fresh Worker through an injected
 // `WorkerCtor` (the `{ WorkerCtor = globalThis.Worker }` dependency). It is a
