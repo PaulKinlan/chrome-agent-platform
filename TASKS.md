@@ -262,14 +262,14 @@ On resume after a coordinator or worker loss:
   disagree (~70 somewhere), and search doesn't find them. Owner wants a
   list_tools function and honest, consistent tool discovery
 - Updated: 2026-08-23 23:05 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `bd85bf7`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@42913cd7192df712e1f49834307597f7396dd21a` (0.2.203)
 - Acceptance: the agent, when asked what tools/Wasm tools are available,
   truthfully reports the admitted bundled Wasm tools (from the live catalog,
   not a stale/empty claim); a list_tools (enumerate) capability returns the
@@ -467,14 +467,14 @@ On resume after a coordinator or worker loss:
   away and come back, it doesn't come back — returning to a running task must
   restore it
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@ed682603cdf48c284188a9f2f1941d854ccd2023` (0.2.204)
 - Acceptance: navigating away from a running task and returning restores the
   live task view (transcript, status, controls) from the durable run state;
   a completed/failed task shows its terminal state; no duplicate or lost run;
@@ -621,7 +621,7 @@ On resume after a coordinator or worker loss:
   navigation — going to Settings and pressing back breaks the UI; history
   must work correctly, using the modern Navigation API
 - Updated: 2026-08-23 22:20 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: unassigned
@@ -629,7 +629,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `de7138c`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@b26d4dbb4ba6bec18a15bc7007ee8acd4b0b61f0` (0.2.202)
 - Acceptance: browser back/forward navigates Settings and all extension
   views without breaking the UI; history entries are real and consistent;
   deep links (e.g. #background-agents, #browser) survive back/forward; the
