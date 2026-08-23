@@ -214,6 +214,23 @@ Deno.test("posture: descriptors admitted EXACTLY for the 19-tool settings-previe
   assert(caveat.includes("Raw HTML and dangerous javascript: URLs are omitted/disabled"), "the cmark XSS caveat is preserved");
 });
 
+Deno.test("idempotence: the generated inventory release equals the package version + regeneration is stable (no stale release identity)", async () => {
+  const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
+  const manifest = JSON.parse(await Deno.readTextFile(root("extension/manifest.json")));
+  assertEquals(BUNDLED_INVENTORY.release, manifest.version, "the inventory release must equal the package version");
+  // the README + the generator template carry the SAME inventory sha (the
+  // canonicalJson of the inventory) — a stale sha would drift silently.
+  const { canonicalJson } = await import("../extension/lib/wasm-package-authority.js");
+  const enc = new TextEncoder();
+  const digest = await crypto.subtle.digest("SHA-256", enc.encode(canonicalJson(BUNDLED_INVENTORY)));
+  const sha = [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  const readme = await Deno.readTextFile(root("packages/bundled/README.md"));
+  assert(readme.includes(`inventory sha256 ${sha}`), "the generated README names the CURRENT inventory sha");
+  const generator = await Deno.readTextFile(root("scripts/build-bundled-tool-packages.mjs"));
+  assert(generator.includes(`inventory sha256 ${sha}`), "the generator template names the CURRENT inventory sha");
+  // a stale committed identity is impossible (both must track the live sha)
+});
+
 Deno.test("posture: the ONLY route is tool.preview.run — no provider/selection authority", async () => {
   const sw = await Deno.readTextFile(root("extension/background/service-worker.js"));
   assert(sw.includes("tool.preview.run"), "the Settings preview route exists");

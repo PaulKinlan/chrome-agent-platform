@@ -5,19 +5,20 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 00:53 UTC. Reconciled against exact public
-> `origin/main@1733967f3e76dfc8e5ad8bfb8bce3b3cffec5b63` (`0.2.174`). Lazy,
+> Snapshot: 2026-08-23 01:20 UTC. Reconciled against exact public
+> `origin/main@9e13cfbcbe5978a42c4d40e3a3ac360f2392fa8a` (`0.2.175`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary, the tool-platform foundation and
 > the Settings preview tranches (5 → 19 tools) remain exact; the catalog
-> remains `MERGED`. This branch adds the diff/patch Settings previews (Release
-> C) as the `0.2.175` step — the 18th/19th admitted tools (19/7 posture); the
-> markdown Release B landed public as `0.2.174`; the runtime's
-> `fd_fdstat_set_flags` linkage-only import landed as public `0.2.173`
-> (SQLite gap 9→8); no route/perm/provider/page/OPFS expansion.
+> remains `MERGED`. This branch is the runtime-only `0.2.176` step: fd 3 keeps
+> its exact `.` preopen identity and a new fd 4 `/job` alias binds the SAME
+> per-job workspace with identical descriptor kind and rights, matching the
+> retained bounded filesystem tools without changing relative-path semantics.
+> stat remains disabled/unadmitted (19/7 posture); no seed, import, route,
+> permission, provider, page, OPFS or mutation authority is added.
 > Branch status counts: **14 OPEN · 15 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 38 DONE · 0 ABANDONED**. The 35 nonterminal and 38 terminal status entries
-> below are the complete 73-entry state.
+> 39 DONE · 0 ABANDONED**. The 35 nonterminal and 39 terminal status entries
+> below are the complete 74-entry state.
 
 ## Safety boundary
 
@@ -718,20 +719,51 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
 
 
+## [CAP-FB-20260823-WASI-JOB-PREOPEN-01] Exact `/job` guest preopen (runtime-only Release D)
+
+- Feedback: 2026-08-23 — the retained bounded filesystem binaries require the
+  conventional absolute guest mount `/job`; fd 3's former guest name `.` made
+  libc pass `job/inputs/...` instead of the class-relative `inputs/...` path
+- Updated: 2026-08-23 01:20 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: runtime foundation on this branch
+- Workspace: active (local path private)
+- Branch: `fix/job-preopen-9e13cfb`
+- Base: public `9e13cfbcbe5978a42c4d40e3a3ac360f2392fa8a` (0.2.175)
+- Candidate: this commit (0.2.176)
+- Shipping: —
+- Acceptance: fd 3 remains the exact `.` PREOPEN/DIRECTORY fallback; fd 4 is
+  an exact `/job` alias with the same kind/flags/base rights/inherited rights
+  and SAME per-job workspace. fd 5 is the preopen-scan EBADF boundary; dynamic
+  allocation skips the alias and still counts only dynamic FDs; both preopens
+  reject close. path stat/open accept either PREOPEN kind with decodePath
+  unchanged. The actual retained stat Wasm/libc maps argv
+  `/job/inputs/f.bin` to the exact host adapter path `inputs/f.bin`, while
+  `/job`, `/jobx/...`, a relative path and traversal are refused before the
+  adapter. stat remains disabled and no seed schema, package admission, import,
+  route or permission is added.
+- Gates: focused 66/66; full 1172/1172 (14 steps); build rc 0 (seam scan
+  clean); Store package/validate OK (224 entries)
+- Review: pending independent source/package review
+- Next: after this runtime-only slice lands, rebase the separately preserved
+  bounded workspace-seed/stat admission candidate and review it independently
+
 ## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-06] diff/patch Settings previews (Release C)
 
 - Feedback: 2026-08-23 — diff/patch take two documents via argv; the worker's
   nonzero-exit semantics needed a trusted accepted-exit classification
-- Updated: 2026-08-23 00:53 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-23 01:03 UTC
+- Status: DONE
 - Resume: —
 - Priority: P0
-- Owner: admission tranche on this branch
+- Owner: landed on public main
 - Workspace: active (local path private)
 - Branch: `feat/diff-patch-preview-3858c5e`
 - Base: public `1733967f3e76dfc8e5ad8bfb8bce3b3cffec5b63` (0.2.174)
-- Candidate: this commit (0.2.175)
-- Shipping: —
+- Candidate: `9e13cfbcbe5978a42c4d40e3a3ac360f2392fa8a`
+- Shipping: `origin/main@9e13cfbcbe5978a42c4d40e3a3ac360f2392fa8a` (public 0.2.175)
 - Acceptance: immutable per-tool acceptedExitCodes (diff [0,1], patch/others
   [0]; never request-borne; the trusted job schema enforces sorted/unique/
   contains-0) so the worker preserves the snapshot/stdout/counters for the
@@ -744,9 +776,10 @@ On resume after a coordinator or worker loss:
   posture; NUL/BOM rejection scoped to diff/patch
 - Gates: full 1170/1170 (14 steps), build rc 0 (seam scan clean), Store
   package/validate OK (224 entries)
-- Review: pending (source review + the loaded-MV3 browser gate)
-- Next: loaded-MV3 acceptance for the two-document flow + the accepted-exit
-  vectors once the reviews close
+- Review: independent source/package PASS; held-lock loaded-MV3 33/33 PASS on
+  the exact Store archive; exact differing/identical diff, successful/malformed
+  patch, regressions, page denial, diagnostics and cleanup all verified
+- Next: —
 ## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-05] markdown Settings preview (Release B)
 
 - Feedback: 2026-08-22 — the markdown binary links after the Release A import;
@@ -855,8 +888,9 @@ On resume after a coordinator or worker loss:
   job/context/quota/FD constructors, then expose a synchronous
   `wasi_snapshot_preview1` table over injected bounded byte-memory and workspace
   adapters; no OPFS handle is constructed; args, empty environment, fd 0/1/2,
-  fd3 exact `.` preopen, read/write/seek/tell/close/fdstat/filestat, path stat/
-  open, random, monotonic clock, realtime `ENOTSUP` and typed `proc_exit` obey
+  fd3 exact `.` preopen plus the same-workspace fd4 `/job` alias (identical
+  rights), read/write/seek/tell/close/fdstat/filestat, path stat/open, random,
+  monotonic clock, realtime `ENOTSUP` and typed `proc_exit` obey
   wasm32 little-endian pointer/iovec/u64 bounds, preflighted alias/OOB checks,
   partial IO, cancellation and host/stdin/stdout/stderr/path/dynamic-FD/file-byte/
   file-size quotas; normalized UTF-8 relative paths reject traversal and symlink

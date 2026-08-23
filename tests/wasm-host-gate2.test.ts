@@ -22,7 +22,7 @@ import { createOffscreenWasmHost, validateOffscreenRequest } from "../extension/
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { buildWasiEntryExportWasm, buildWasiFdRoundTripWasm } from "./wasm-fixture-builder.mjs";
 import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtime.js";
-import { WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS } from "../extension/lib/wasm-host-types.js";
+import { WASI_FDFLAGS, WASI_HOST_DEFAULT_QUOTA, WASI_ERRNO, WASI_RIGHTS, WASI_OFLAGS, WasiProcExit } from "../extension/lib/wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
 
 const WORKER_URL = new URL("../extension/lib/wasm-execution-worker.js", import.meta.url).href;
@@ -214,6 +214,114 @@ Deno.test("diff/patch Release C: schema/forgery/bounds mutants fail closed", asy
   let threw = null;
   try { validatePreviewInput({ toolId: "diff", args: ["a", "b"], stdin: "", acceptedExitCodes: [9] }); } catch (e) { threw = e?.code ?? null; }
   assertEquals(threw, "preview_request_shape", "an extra request key is rejected");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Runtime-only `/job` preopen correction — actual retained C2 stat/libc path
+// resolution. stat stays disabled: this proves mount mapping only, with an
+// injected read-only adapter and NO seed schema or package admission.
+// ──────────────────────────────────────────────────────────────────────────
+async function runActualStatAgainstCapture(guestPath) {
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === "stat");
+  assert(row, "the retained stat package row exists");
+  assertEquals(row.admitted, false, "stat remains disabled in the runtime-only slice");
+  const wasmBytes = new Uint8Array(
+    await Deno.readFile(`${repoRoot}extension/wasm/cas/${row.binary.sha256}.wasm`),
+  );
+  const seenPaths = [];
+  const job = makeJob({
+    args: ["stat", guestPath],
+    quota: {
+      ...WASI_HOST_DEFAULT_QUOTA,
+      hostCalls: 10_000,
+      pathCalls: 100,
+      stdinBytes: 64,
+      stdoutBytes: 1024,
+      stderrBytes: 1024,
+      fileBytes: 1024,
+      fileSize: 1024,
+      dynamicFds: 4,
+    },
+  });
+  const workspace = Object.freeze({
+    root: job.context.workspaceRoot,
+    stat(path) {
+      seenPaths.push(path);
+      if (path !== "inputs/f.bin") {
+        const error = new Error("ENOENT");
+        error.code = "ENOENT";
+        throw error;
+      }
+      return { type: "file", size: 2, mtime: 0 };
+    },
+    open() {
+      throw new Error("stat must not open a file");
+    },
+  });
+  let instance = null;
+  const runtime = createWasiPreview1Runtime({
+    job,
+    workspace,
+    memory: {
+      size: () => instance?.exports?.memory?.buffer?.byteLength ?? 0,
+      read: (pointer, length) => {
+        const buffer = instance?.exports?.memory?.buffer;
+        if (!buffer || pointer + length > buffer.byteLength) return new Uint8Array(0);
+        return new Uint8Array(buffer, pointer, length);
+      },
+      write: (pointer, bytes) => {
+        const buffer = instance?.exports?.memory?.buffer;
+        if (!buffer || pointer + bytes.byteLength > buffer.byteLength) {
+          throw new Error("memory-write-oob");
+        }
+        new Uint8Array(buffer).set(bytes, pointer);
+      },
+    },
+  });
+  ({ instance } = await WebAssembly.instantiate(wasmBytes, runtime.imports));
+  let exitCode = 0;
+  try {
+    instance.exports._start();
+  } catch (error) {
+    if (!(error instanceof WasiProcExit)) throw error;
+    exitCode = error.code;
+  }
+  const snapshot = runtime.snapshot();
+  return {
+    exitCode,
+    seenPaths,
+    stdout: new TextDecoder().decode(snapshot.stdout),
+    stderr: new TextDecoder().decode(snapshot.stderr),
+  };
+}
+
+Deno.test("/job preopen: actual retained stat libc maps /job/inputs/f.bin to exact class-relative inputs/f.bin", async () => {
+  const result = await runActualStatAgainstCapture("/job/inputs/f.bin");
+  assertEquals(result.exitCode, 0, JSON.stringify(result));
+  assertEquals(result.seenPaths, ["inputs/f.bin"], "libc strips only the /job preopen prefix");
+  assertEquals(
+    result.stdout,
+    "path=/job/inputs/f.bin\ntype=regular file\nsize=2\nmtime=0.000000000\n",
+    "the actual retained C2 stat binary output is byte-exact",
+  );
+  assertEquals(result.stderr, "");
+});
+
+Deno.test("/job preopen: actual stat refuses non-mount and traversal argv before the workspace adapter", async () => {
+  for (const guestPath of [
+    "/job",
+    "/jobx/inputs/f.bin",
+    "/other/inputs/f.bin",
+    "inputs/f.bin",
+    "/job/../inputs/f.bin",
+  ]) {
+    const result = await runActualStatAgainstCapture(guestPath);
+    assertEquals(result.exitCode, 1, guestPath);
+    assertEquals(result.seenPaths, [], `${guestPath} never reaches the workspace adapter`);
+    assertEquals(result.stdout, "", guestPath);
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────────────

@@ -60,7 +60,14 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
 
 const SUPPORTED_IMPORT_SET = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
-const PREOPEN_NAME = ".";
+// Keep the original fd 3 `.` preopen for relative-path compatibility and add
+// one exact alias for the retained bounded filesystem tools' absolute guest
+// mount. wasi-libc normalizes `.` to the empty fallback prefix and selects the
+// longer `/job` component prefix for `/job/...`, then passes class-relative
+// host paths such as `inputs/f.bin`. Both aliases bind the SAME per-job
+// workspace with the SAME rights; no new storage authority exists.
+const PREOPEN_NAMES = Object.freeze({ 3: ".", 4: "/job" });
+const STATIC_FD_COUNT = 5;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -358,16 +365,18 @@ export function createWasiPreview1Runtime({
     path: "",
     handle: null,
   });
-  putFd({
-    fd: 3,
-    kind: FD_KIND.PREOPEN,
-    filetype: WASI_FILETYPE.DIRECTORY,
-    flags: 0,
-    rights: rootRights,
-    offset: 0n,
-    path: PREOPEN_NAME,
-    handle: null,
-  });
+  for (const fd of [3, 4]) {
+    putFd({
+      fd,
+      kind: FD_KIND.PREOPEN,
+      filetype: WASI_FILETYPE.DIRECTORY,
+      flags: 0,
+      rights: rootRights,
+      offset: 0n,
+      path: PREOPEN_NAMES[fd],
+      handle: null,
+    });
+  }
 
   function memorySize() {
     const size = syncResult(memory.size());
@@ -601,7 +610,7 @@ export function createWasiPreview1Runtime({
   }
 
   function allocateFd() {
-    if (fds.size - 4 >= job.quota.dynamicFds) fault(WASI_ERRNO.ENOSPC);
+    if (fds.size - STATIC_FD_COUNT >= job.quota.dynamicFds) fault(WASI_ERRNO.ENOSPC);
     if (freeFds.length) return freeFds.shift();
     let fd = 4;
     while (fds.has(fd)) fd++;
@@ -657,11 +666,12 @@ export function createWasiPreview1Runtime({
     },
 
     fd_prestat_get: (fdValue, prestatPtr) => {
-      if (asU32(fdValue) !== 3) fault(WASI_ERRNO.EBADF);
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
       const bytes = new Uint8Array(8);
       new DataView(bytes.buffer).setUint32(
         4,
-        encoder.encode(PREOPEN_NAME).byteLength,
+        encoder.encode(record.path).byteLength,
         true,
       );
       writeBytes(prestatPtr, bytes);
@@ -669,9 +679,10 @@ export function createWasiPreview1Runtime({
     },
 
     fd_prestat_dir_name: (fdValue, pathPtr, pathLength) => {
-      if (asU32(fdValue) !== 3) fault(WASI_ERRNO.EBADF);
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
       const requested = asU32(pathLength);
-      const name = encoder.encode(PREOPEN_NAME);
+      const name = encoder.encode(record.path);
       if (requested < name.byteLength) fault(WASI_ERRNO.ENAMETOOLONG);
       span(pathPtr, requested);
       writeBytes(pathPtr, name);
@@ -719,7 +730,8 @@ export function createWasiPreview1Runtime({
     },
 
     path_filestat_get: (fdValue, flagsValue, pathPtr, pathLength, statPtr) => {
-      if (asU32(fdValue) !== 3) fault(WASI_ERRNO.EBADF);
+      const preopen = fdFor(fdValue);
+      if (preopen.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
       const flags = asU32(flagsValue);
       if (flags !== 0 || (flags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)) {
         fault(WASI_ERRNO.ENOTSUP);
@@ -742,7 +754,8 @@ export function createWasiPreview1Runtime({
       fdflagsValue,
       openedFdPtr,
     ) => {
-      if (asU32(fdValue) !== 3) fault(WASI_ERRNO.EBADF);
+      const preopen = fdFor(fdValue);
+      if (preopen.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
       const dirflags = asU32(dirflagsValue);
       const oflags = asU32(oflagsValue);
       const fdflags = asU32(fdflagsValue);
@@ -977,7 +990,6 @@ export function createWasiPreview1Runtime({
     fd_close: (fdValue) => {
       const fd = asU32(fdValue);
       if (fd <= 2) return WASI_ERRNO.SUCCESS;
-      if (fd === 3) fault(WASI_ERRNO.EBADF);
       const record = fdFor(fd);
       if (record.kind !== FD_KIND.FILE) fault(WASI_ERRNO.EBADF);
       syncResult(record.handle.close());
@@ -1062,7 +1074,7 @@ export function createWasiPreview1Runtime({
           stdinBytesRead: state.stdinOffset,
           stdoutBytes: state.stdoutBytes,
           stderrBytes: state.stderrBytes,
-          openDynamicFds: fds.size - 4,
+          openDynamicFds: fds.size - STATIC_FD_COUNT,
         }),
         stdout: concat(state.stdout, state.stdoutBytes),
         stderr: concat(state.stderr, state.stderrBytes),

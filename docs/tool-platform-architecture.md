@@ -293,7 +293,7 @@ libraries:
 - `wasi-preview1-runtime.js` takes injected synchronous bounded byte-memory and
   workspace adapters. It never constructs an OPFS handle. Its fixed
   `wasi_snapshot_preview1` object implements bounded argv, an exactly empty
-  environment, fd 0/1/2 streams, fd 3 preopen name `.`, file read/write/seek/
+  environment, fd 0/1/2 streams, fd 3 preopen name `.` plus the same-workspace fd 4 guest alias `/job`, file read/write/seek/
   tell/close/fdstat/filestat, preopen/path stat/open, 64 KiB random, monotonic
   clock, explicit `CLOCK_REALTIME` `ENOTSUP`, and typed `proc_exit`;
 - wasm32 pointers and iovec tables are snapshotted and checked as little-endian

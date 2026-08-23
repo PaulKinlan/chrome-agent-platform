@@ -187,12 +187,12 @@ function openPath(
   h,
   path,
   rights,
-  { oflags = 0, fdflags = 0, openedPtr = 3000 } = {},
+  { oflags = 0, fdflags = 0, openedPtr = 3000, preopenFd = 3 } = {},
 ) {
   const pathPtr = 2000;
   const length = putPath(h.memory, pathPtr, path);
   const errno = h.wasi.path_open(
-    3,
+    preopenFd,
     0,
     pathPtr,
     length,
@@ -455,22 +455,47 @@ Deno.test("WASI args/environment KAT: LE pointers, UTF-8 argv and an exactly emp
   );
 });
 
-Deno.test("WASI preopen/fd stat KAT: fd3 is exact dot root and stdio/file types are bounded", () => {
+Deno.test("WASI preopen/fd stat KAT: fd3 dot + fd4 /job aliases have identical bounded descriptor rights", () => {
   const h = harness();
   assertEquals(h.wasi.fd_prestat_get(3, 100), WASI_ERRNO.SUCCESS);
   assertEquals(h.memory.bytes[100], 0);
-  assertEquals(h.memory.u32(104), 1);
+  assertEquals(h.memory.u32(104), 1, "fd3 dot name length");
+  assertEquals(h.wasi.fd_prestat_dir_name(3, 120, 0), WASI_ERRNO.ENAMETOOLONG);
   assertEquals(h.wasi.fd_prestat_dir_name(3, 120, 1), WASI_ERRNO.SUCCESS);
   assertEquals(h.memory.text(120, 1), ".");
-  assertEquals(h.wasi.fd_prestat_get(2, 100), WASI_ERRNO.EBADF);
-  assertEquals(h.wasi.fd_prestat_dir_name(3, 120, 0), WASI_ERRNO.ENAMETOOLONG);
+
+  assertEquals(h.wasi.fd_prestat_get(4, 140), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[140], 0);
+  assertEquals(h.memory.u32(144), 4, "fd4 /job name length");
+  for (const shortLength of [0, 1, 2, 3]) {
+    assertEquals(
+      h.wasi.fd_prestat_dir_name(4, 160, shortLength),
+      WASI_ERRNO.ENAMETOOLONG,
+      `short /job preopen buffer ${shortLength}`,
+    );
+  }
+  assertEquals(h.wasi.fd_prestat_dir_name(4, 160, 4), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.text(160, 4), "/job");
+  assertEquals(h.wasi.fd_prestat_get(5, 100), WASI_ERRNO.EBADF, "libc scan stops at fd5");
+  assertEquals(h.wasi.fd_prestat_dir_name(5, 160, 4), WASI_ERRNO.EBADF);
+
   assertEquals(h.wasi.fd_fdstat_get(0, 200), WASI_ERRNO.SUCCESS);
   assertEquals(h.memory.bytes[200], WASI_FILETYPE.CHARACTER_DEVICE);
-  assertEquals(h.wasi.fd_fdstat_get(3, 240), WASI_ERRNO.SUCCESS);
-  assertEquals(h.memory.bytes[240], WASI_FILETYPE.DIRECTORY);
-  assertEquals(h.wasi.fd_filestat_get(3, 300), WASI_ERRNO.SUCCESS);
-  assertEquals(h.memory.bytes[316], WASI_FILETYPE.DIRECTORY);
-  assertEquals(h.memory.u64(332), 0n);
+  const rootRights = WASI_RIGHTS.PATH_OPEN |
+    WASI_RIGHTS.PATH_CREATE_FILE |
+    WASI_RIGHTS.PATH_FILESTAT_GET;
+  const inheritedRights = PATH_CLASS_RIGHTS.inputs.rights |
+    PATH_CLASS_RIGHTS.scratch.rights |
+    PATH_CLASS_RIGHTS.output.rights;
+  for (const [fd, pointer] of [[3, 240], [4, 280]]) {
+    assertEquals(h.wasi.fd_fdstat_get(fd, pointer), WASI_ERRNO.SUCCESS);
+    assertEquals(h.memory.bytes[pointer], WASI_FILETYPE.DIRECTORY);
+    assertEquals(h.memory.u64(pointer + 8), rootRights, `fd${fd} base rights`);
+    assertEquals(h.memory.u64(pointer + 16), inheritedRights, `fd${fd} inherited rights`);
+    assertEquals(h.wasi.fd_filestat_get(fd, pointer + 40), WASI_ERRNO.SUCCESS);
+    assertEquals(h.memory.bytes[pointer + 56], WASI_FILETYPE.DIRECTORY);
+    assertEquals(h.wasi.fd_close(fd), WASI_ERRNO.EBADF, `fd${fd} preopen cannot close`);
+  }
 });
 
 Deno.test("WASI path normalization/stat: relative classes work; traversal, NUL, invalid UTF-8 and symlink flags fail", () => {
@@ -482,6 +507,13 @@ Deno.test("WASI path normalization/stat: relative classes work; traversal, NUL, 
   );
   assertEquals(h.memory.bytes[1116], WASI_FILETYPE.REGULAR_FILE);
   assertEquals(h.memory.u64(1132), 6n);
+  assertEquals(
+    h.wasi.path_filestat_get(4, 0, 1000, length, 1180),
+    WASI_ERRNO.SUCCESS,
+    "the /job alias reaches the exact same class-relative workspace path",
+  );
+  assertEquals(h.memory.bytes[1196], WASI_FILETYPE.REGULAR_FILE);
+  assertEquals(h.memory.u64(1212), 6n);
   for (
     const [path, errno] of [
       ["../inputs/in.txt", WASI_ERRNO.EPERM],
@@ -545,7 +577,13 @@ Deno.test("WASI path_open rights: inputs read-only, scratch rw, output write-onl
     WASI_RIGHTS.FD_TELL | WASI_RIGHTS.FD_FILESTAT_GET;
   const input = openPath(h, "inputs/in.txt", readRights);
   assertEquals(input.errno, WASI_ERRNO.SUCCESS);
-  assertEquals(input.fd, 4);
+  assertEquals(input.fd, 5);
+  const aliasInput = openPath(h, "inputs/in.txt", readRights, {
+    openedPtr: 3020,
+    preopenFd: 4,
+  });
+  assertEquals(aliasInput.errno, WASI_ERRNO.SUCCESS, "fd4 alias accepts path_open");
+  assertEquals(aliasInput.fd, 6, "dynamic allocation skips both static preopens");
   assertEquals(
     openPath(h, "inputs/in.txt", WASI_RIGHTS.FD_WRITE).errno,
     WASI_ERRNO.ENOTCAPABLE,
@@ -654,7 +692,7 @@ Deno.test("WASI path_open: an unexpected result-memory failure closes and forget
   memory.failWriteAt = null;
   const retry = openPath(h, "inputs/in.txt", rights);
   assertEquals(retry.errno, WASI_ERRNO.SUCCESS);
-  assertEquals(retry.fd, 4);
+  assertEquals(retry.fd, 5);
 });
 
 Deno.test("WASI fd_read: stdin/file iovecs are little-endian, partial, EOF-safe and alias/OOB guarded", () => {

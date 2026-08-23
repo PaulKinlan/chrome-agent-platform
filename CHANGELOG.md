@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.176] — 2026-08-23
+- fix(wasi): add bounded /job preopen alias (CAP-FB-20260823-WASI-JOB-PREOPEN-01)
+
 ## [0.2.175] — 2026-08-23
 - feat(tools): diff/patch Settings previews (two-document, accepted-exit) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-06)
 
