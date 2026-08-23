@@ -225,8 +225,12 @@ On resume after a coordinator or worker loss:
   bytes or capabilities from the request
 - Blockers: composes with the lazy protocol, the scratch/workspace model, and
   the immutable package authority
-- Next: design the bundled-wasm dispatch closure (workspace seeding + Worker
-  instantiation + result envelope), gated on the existing execution host
+- Next: land after re-review of the hardened candidate
+- Owner policy (2026-08-23, explicit): bundled tools are APPROVED to run in
+  tasks because they are installed (admitted) in the build — admission is the
+  grant. Gate = admitted-in-live-catalog + valid owner run; per-call
+  revalidation (stale/cross-run refs, CAS re-check, spec immutability)
+  unchanged. Documented at the assertion site, never a silent default.
 - Recover: `git grep -n "executableBundledToolRecords\|provider-route-absent" -- extension`
 - History:
   - 2026-08-23 23:30 UTC — captured from product-owner question; audit
