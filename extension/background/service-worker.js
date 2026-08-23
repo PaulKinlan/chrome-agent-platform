@@ -391,6 +391,7 @@ import {
   consumeApproved,
   createApprovalStore,
   createPendingApproval,
+  isOwnerDirectApproval,
   listPendingApprovals,
   opaqueTargetRef,
   payloadDigest,
@@ -2286,6 +2287,16 @@ function approvalExecutionId(context) {
 async function requireOwnerApproval(context, action, target, payload) {
   const executionId = approvalExecutionId(context);
   if (!executionId || !target) return { ok: false, error: "This operation requires owner approval in Settings." };
+  // Owner-DIRECT actions: the owner's own click in an extension UI document IS
+  // the approval — deleting an artifact from the artifact view must never wait
+  // on a hidden Settings decision (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01).
+  // Model-initiated calls of the same action keep the full approval flow below.
+  if (isOwnerDirectApproval(context, action)) {
+    let directRef = "";
+    try { directRef = await opaqueTargetRef(target); } catch { /* audited without a ref */ }
+    if (directRef) securityApprovalEvent("owner-direct", action, directRef);
+    return { ok: true };
+  }
   let digest;
   let targetRef;
   try {

@@ -122,10 +122,15 @@ export function securityEvent(kind, detail = "") {
  * generic redactor would otherwise treat any long hex as possible key material.
  */
 export function securityApprovalEvent(decision, action, targetRef) {
-  if (!new Set(["requested", "approved", "denied", "consumed"]).has(decision)) return null;
+  if (!new Set(["requested", "approved", "denied", "consumed", "owner-direct"]).has(decision)) {
+    return null;
+  }
   if (typeof action !== "string" || !/^[a-z][a-z.-]{0,63}$/.test(action)) return null;
   if (typeof targetRef !== "string" || !/^[0-9a-f]{32}$/.test(targetRef)) return null;
-  const kind = `owner-${decision}`;
+  // "owner-direct" is its own audit marker (a direct owner UI action approved
+  // and consumed in one step); the other decisions keep the owner-<decision>
+  // kind so existing diagnostics filters are unchanged.
+  const kind = decision === "owner-direct" ? "owner-direct" : `owner-${decision}`;
   const entry = safeEntry("warn", "approval", "security", kind);
   // These three fields passed the strict primitive grammar above; preserve the
   // HMAC reference for correlation instead of sending it through generic

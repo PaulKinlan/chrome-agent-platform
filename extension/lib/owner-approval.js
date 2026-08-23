@@ -43,6 +43,26 @@ export class CanonicalPayloadError extends Error {
   }
 }
 
+// Owner-DIRECT actions (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01): for
+// these actions, a browser-attested owner UI document's own in-page action IS
+// the approval — the owner's click is the authority, so the operation must
+// never demand a pre-granted Settings decision (the hidden-dependency bug).
+// Agent-initiated calls (principal "model") and every other destructive action
+// keep the full approval flow. A page/content-script principal can never
+// satisfy this predicate: the router denies asset routes to page senders before
+// any handler runs, and the predicate only matches extension-document
+// principals with a non-empty browser-supplied documentId.
+export const OWNER_DIRECT_ACTIONS = new Set([
+  "asset.delete",
+]);
+
+export function isOwnerDirectApproval(context, action) {
+  if (!OWNER_DIRECT_ACTIONS.has(action)) return false;
+  const principal = context?.principal;
+  if (principal !== "extension" && principal !== "owner-options") return false;
+  return typeof context.documentId === "string" && context.documentId.length > 0;
+}
+
 const nodeEncoding = new WeakMap();
 const fieldEncoding = new WeakMap();
 const encoder = new TextEncoder();

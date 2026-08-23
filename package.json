@@ -1,12 +1,11 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.193",
+  "version": "0.2.194",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform \u2014 agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
     "build": "node build.mjs --target=store",
-    "build:regen-tools": "node build.mjs --target=store --regen-tools",
     "sync:gallery": "node scripts/sync-gallery.mjs",
     "check:gallery": "node scripts/sync-gallery.mjs --check",
     "watch": "node build.mjs --watch",

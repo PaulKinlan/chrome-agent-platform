@@ -1414,7 +1414,14 @@ async function renderPermissions() {
     hint.className = "muted";
     hint.textContent = cap.hint;
 
-    row.append(name, state, hint);
+    // Truth-in-UI: every permission row states the ACTIONS it gates, so a
+    // grant never leaves a silently-required invisible dependency behind
+    // (the ARTIFACT-DELETE finding).
+    const gates = document.createElement("span");
+    gates.className = "perm-gates muted";
+    gates.textContent = cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`;
+
+    row.append(name, state, hint, gates);
     if (!granted) {
       const btn = document.createElement("button");
       btn.type = "button";

@@ -75,6 +75,45 @@ async function render() {
   }
 }
 
+// Native <dialog> confirmation for artifact deletion (the direct owner
+// action). The modal names the EXACT object being deleted; Cancel and Escape
+// mutate nothing. Resolves true only on an explicit Delete click.
+function confirmDeleteDialog(name, type) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "delete-dialog";
+    const heading = document.createElement("h3");
+    heading.textContent = "Delete artifact";
+    const body = document.createElement("p");
+    body.textContent = `Delete "${name ?? "Untitled"}" (${type ?? "data"})? This permanently removes it from the artifact store.`;
+    const controls = document.createElement("div");
+    controls.className = "dialog-controls";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "danger";
+    del.textContent = "Delete";
+    controls.append(cancel, del);
+    dialog.append(heading, body, controls);
+    document.body.append(dialog);
+    const close = (confirmed) => {
+      dialog.close();
+      dialog.remove();
+      resolve(confirmed);
+    };
+    cancel.addEventListener("click", () => close(false));
+    del.addEventListener("click", () => close(true));
+    dialog.addEventListener("cancel", (e) => { e.preventDefault(); close(false); });
+    dialog.addEventListener("close", () => { dialog.remove(); resolve(false); }, { once: true });
+    // Default focus lands on the LEAST destructive control (Cancel); Escape
+    // cancels. The deletion itself still requires the explicit Delete click.
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+
 function wireCard(card) {
   card.addEventListener("open", (e) => {
     // Item 53/54: open the artifact in an <agent-dialog> (the full live render)
@@ -84,14 +123,10 @@ function wireCard(card) {
     openArtifactDialog(id, origin ?? "master");
   });
   card.addEventListener("delete", async (e) => {
-    const { id, name, origin } = e.detail ?? {};
-    const ok = await confirmActionDialog({
-      title: "Delete artifact",
-      body: `Delete "${name}"?`,
-      confirmLabel: "Delete",
-      destructive: true,
-    });
-    if (!ok) return;
+    const { id, name, type, origin } = e.detail ?? {};
+    // Direct owner action: the modal names the artifact; confirming deletes it
+    // with NO permission grant (the owner's click is the approval).
+    if (!(await confirmDeleteDialog(name, type))) return;
     const res = await send("asset.delete", { origin: origin ?? "master", id });
     if (res?.ok === false && res.error) {
       status.textContent = `Delete failed: ${res.error}`;

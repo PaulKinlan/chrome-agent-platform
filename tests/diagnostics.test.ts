@@ -67,6 +67,18 @@ Deno.test("diagnostics: approval audit retains only validated action + opaque re
   assertEquals(mod.securityApprovalEvent("denied", "asset.delete", "raw-target"), null);
 });
 
+Deno.test("diagnostics: owner-direct audit marker is its own kind and rejects bad refs", () => {
+  fresh();
+  const ref = "b".repeat(32);
+  const entry = mod.securityApprovalEvent("owner-direct", "asset.delete", ref);
+  assert(entry);
+  assertEquals(entry.kind, "owner-direct");
+  assert(entry.message.includes("owner-direct") && entry.message.includes("asset.delete"));
+  // Same closed grammar: unknown decisions and raw targets still fail closed.
+  assertEquals(mod.securityApprovalEvent("owner-directly", "asset.delete", ref), null);
+  assertEquals(mod.securityApprovalEvent("owner-direct", "asset.delete", "raw"), null);
+});
+
 Deno.test("diagnostics: securityClear empties the security buffer", () => {
   fresh();
   mod.securityEvent("blocked-action", "page route denied");

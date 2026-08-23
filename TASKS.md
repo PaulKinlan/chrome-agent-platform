@@ -575,14 +575,14 @@ On resume after a coordinator or worker loss:
   is no way to know a permission is required because it is hidden in Settings
   and never re-surfaced after granting
 - Updated: 2026-08-23 20:08 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P0
 - Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
-- Candidate: —
+- Workspace: `/home/paulkinlan/worktrees/cap-artifact-delete-6a6c3a1`
+- Branch: detached
+- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
+- Candidate: GLM implementation (owner-direct `asset.delete` + native dialog + gates rows)
 - Shipping: —
 - Acceptance: deleting an artifact from the artifact view succeeds as a direct
   owner action without any permission grant; if any capability genuinely
@@ -604,6 +604,23 @@ On resume after a coordinator or worker loss:
 - Recover: `git grep -n "artifact.delete\|deleteArtifact\|permissions.request" -- extension`
 - History:
   - 2026-08-23 20:08 UTC — captured from direct product-owner feedback as P0.
+  - 2026-08-23 20:35 UTC — audit result: the ONLY artifact-delete surfaces are
+    the artifacts gallery (owner UI), the model `delete_asset` management tool,
+    and Settings approval resolution; NO Chrome permission is involved anywhere
+    (artifacts live in OPFS). The "permission" was the owner-approval
+    orchestration gate applied unconditionally — a real gate for model-initiated
+    deletes, an accidental hidden dependency for direct owner clicks.
+    Implementation: `OWNER_DIRECT_ACTIONS`/`isOwnerDirectApproval` (pure,
+    lib/owner-approval.js) lets a browser-attested `extension`/`owner-options`
+    document's `asset.delete` through with an `owner-direct` audit event; model
+    and page principals keep the full approval flow; the gallery's
+    `window.confirm` became a native `<dialog>` naming the artifact (Cancel and
+    Escape mutate nothing); every Settings permission row now states the actions
+    it gates (`gates` field, rendered on the row; storage's row states the OPFS
+    artifact exemption); the Approvals section copy now says agent-initiated
+    operations pause there and direct owner actions never do. Focused gates:
+    owner-approval-security, diagnostics, capability-gates (new),
+    tools-management, sw-route-modularization, artifacts, artifact-tx — 83/83.
 
 ## [CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01] Replace all window.confirm with native dialog modals
 

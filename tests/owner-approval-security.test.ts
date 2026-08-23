@@ -4,6 +4,7 @@
 import { assert, assertEquals, assertNotEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
   MAX_PENDING_APPROVALS,
+  OWNER_DIRECT_ACTIONS,
   approvalPendingCount,
   bindModelApprovalDispatcher,
   canonicalArray,
@@ -15,6 +16,7 @@ import {
   consumeApproved,
   createApprovalStore,
   createPendingApproval,
+  isOwnerDirectApproval,
   listPendingApprovals,
   opaqueTargetRefWithKey,
   payloadDigest,
@@ -29,6 +31,39 @@ const payload = canonicalRecord(
   canonicalField("origin", canonicalScalar("https://example.com")),
   canonicalField("id", canonicalScalar("a_1")),
 );
+
+Deno.test("owner-direct approval: a browser-attested owner UI document's asset.delete IS the approval", () => {
+  // Direct owner UI documents (the artifacts gallery / Settings) pass with NO
+  // pre-granted Settings decision.
+  assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, "asset.delete"), true);
+  assertEquals(isOwnerDirectApproval({ principal: "owner-options", documentId: "doc-2" }, "asset.delete"), true);
+  // Agent/model-initiated deletes keep the full approval flow.
+  assertEquals(isOwnerDirectApproval({ principal: "model", executionId: "exec-1" }, "asset.delete"), false);
+  // Page/content-script principals can never claim owner-direct authority.
+  assertEquals(isOwnerDirectApproval({ principal: "page", documentId: "doc-3" }, "asset.delete"), false);
+  // No browser-attested document → fail closed.
+  assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "" }, "asset.delete"), false);
+  assertEquals(isOwnerDirectApproval({ principal: "extension" }, "asset.delete"), false);
+  assertEquals(isOwnerDirectApproval({ principal: "owner-options", documentId: 7 }, "asset.delete"), false);
+  // Only asset.delete is owner-direct: every other destructive action keeps
+  // the Settings approval flow even from a UI document.
+  for (const other of ["asset.update", "script.delete", "script.update", "agent.delete", "capability.revoke", "hooks.subscribe"]) {
+    assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, other), false, other);
+  }
+  // Malformed inputs fail closed without throwing.
+  assertEquals(isOwnerDirectApproval(null, "asset.delete"), false);
+  assertEquals(isOwnerDirectApproval(undefined, "asset.delete"), false);
+  assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, undefined), false);
+});
+
+Deno.test("owner-direct scope is exactly the audited action set (no silent widening)", () => {
+  assertEquals([...OWNER_DIRECT_ACTIONS], ["asset.delete"]);
+  // Every owner-direct action passes the audit grammar; widening this set
+  // requires a new permission-model review.
+  for (const direct of OWNER_DIRECT_ACTIONS) {
+    assert(typeof direct === "string" && /^[a-z][a-z.-]{0,63}$/.test(direct), direct);
+  }
+});
 
 Deno.test("approval payload: raw structures/prototypes/accessors/proxies/cycles fail closed without observation", async () => {
   let getter = 0;

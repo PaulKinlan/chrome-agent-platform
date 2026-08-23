@@ -1,5 +1,6 @@
 # Changelog
 
+<<<<<<< HEAD
 ## [0.2.193]
 
 - fix(build): bundled-tool generator verify degrades HONESTLY on fresh checkouts — missing /tmp evidence trees now produce a clear WARNING + pass instead of failing `npm run build` (portability regression from 0.2.191); regeneration still hard-fails without evidence; full verify unchanged where the frozen trees exist (CAP-FB-20260822-BUILTIN-WASM-TOOLS-01)
@@ -24,6 +25,10 @@
 - feat(ui): Settings tool-library native details groups + bounded per-tool summary (CAP-FB-20260823-TOOL-LIBRARY-DETAILS-01)
 - fix(ui): shadow catalog projects the bundled tools so the Settings details list names all 26 bundled packages
 - note: 0.2.186, 0.2.187, 0.2.188 and 0.2.189 were inadvertently consumed by tracker chore hook bumps with no release content; this release continues the details slice from 0.2.185.
+=======
+## [0.2.187] — 2026-08-23
+- fix(permissions): artifact deletion is a direct owner action — no hidden approval (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01)
+>>>>>>> eebe072 (fix(permissions): artifact deletion is a direct owner action — no hidden approval (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01))
 
 ## [0.2.186] — 2026-08-23
 - chore(tasks): sweep 12 IN_REVIEW entries to MERGED with ancestry/byte-containment proof; retain 2 truthful residuals

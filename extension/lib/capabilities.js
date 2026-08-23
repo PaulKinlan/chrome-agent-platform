@@ -13,49 +13,60 @@
 
 import { exactOriginPattern } from "./permission-orchestration.js";
 
+// The `gates` field states the ACTIONS each permission gates (Settings
+// renders it on every row) — a permission row must never leave the owner
+// wondering what an entry silently controls (the ARTIFACT-DELETE finding:
+// artifact deletion itself needs NO permission; it lives in the extension's
+// own OPFS space).
 export const CAPABILITIES = [
   {
     id: "storage",
     permissions: ["storage"],
     label: "Memory & settings",
     hint: "Persist settings, tasks, usage and enrollment across restarts. Without it the hub still runs, but nothing survives a restart.",
+    gates: "Gates: saving settings, tasks, usage history and site enrollments to chrome.storage. Artifacts and scripts (OPFS) never need it.",
   },
   {
     id: "alarms",
     permissions: ["alarms"],
     label: "Scheduled tasks",
     hint: "Run the agent on a schedule (or after a delay). Without it, scheduled tasks are unavailable.",
+    gates: "Gates: creating schedules and delayed tasks; scheduled agent runs.",
   },
   {
     id: "tabs",
     permissions: ["tabs"],
     label: "Browser control",
     hint: "Open/navigate/close/list tabs. This permission reads the browsing history (Chrome warns) and is granted from a headed browser; screenshots use the separate Screenshots capability instead.",
+    gates: "Gates: opening, navigating, closing and listing tabs; reading tab URLs and titles.",
   },
   {
     id: "activeTab",
     permissions: ["activeTab"],
     label: "Screenshots",
     hint: "Enables Chrome's TRANSIENT owner-invoked capture: click the extension icon while viewing a page to capture that page. It never authorizes a background or model-selected capture (those need exact site access). Silent (no Chrome warning).",
-
+    gates: "Gates: capturing the page you are viewing, only when you click the extension icon.",
   },
   {
     id: "scripting",
     permissions: ["scripting"],
     label: "Site Agents",
     hint: "Find and use tools made available by sites you add. Chrome asks for access only to those sites.",
+    gates: "Gates: injecting the site-agent bridge into origins you enroll.",
   },
   {
     id: "notifications",
     permissions: ["notifications"],
     label: "Notifications",
     hint: "Surface scheduled-task completions as system notifications.",
+    gates: "Gates: showing system notifications (scheduled-task completions).",
   },
   {
     id: "sidePanel",
     permissions: ["sidePanel"],
     label: "Side panel",
     hint: "Open the hub in Chrome's side panel alongside a page.",
+    gates: "Gates: opening the hub in Chrome's side panel.",
   },
 ];
 
