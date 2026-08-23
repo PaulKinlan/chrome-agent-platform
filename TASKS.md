@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **38 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 65 nonterminal and 40 terminal status entries
-> below are the complete 105-entry state.
+> Branch status counts: **39 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 66 nonterminal and 40 terminal status entries
+> below are the complete 106-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,42 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-FACTORY-RESET-01] Settings "delete all / reset all" nuclear option
+
+- Feedback: 2026-08-23 — product owner: from Settings, add a "delete all /
+  reset all" nuclear option that wipes everything back to a true first-run
+  state — needed so the first-run experience can be tested frequently
+- Updated: 2026-08-23 23:00 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `1f18fcf`
+- Candidate: —
+- Shipping: —
+- Acceptance: a clearly-labelled, owner-only "Reset all / Delete all" action in
+  Settings wipes ALL extension state (agents, tasks, artifacts, memory,
+  scheduled jobs, permission grants, OPFS models + evidence caches, settings,
+  usage) and restores a genuine first-run state so the onboarding guide runs
+  again; requires an explicit, hard-to-trigger-by-accident confirmation
+  (destructive dialog naming the consequences, not a single click); reports
+  truthfully what was removed; leaves the extension installed and functional;
+  no partial-reset state (all-or-nothing, fail-closed)
+- Review: pending independent data-deletion/owner-authority/accessibility
+  review
+- Gates: reset wipes every storage class (enumerate them); first-run flag
+  restored; confirmation is deliberate; cancel mutates nothing; no partial
+  reset; works with OPFS + storage + caches
+- Blockers: must use the native dialog pattern (CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01)
+- Next: enumerate every storage class, design the all-or-nothing reset +
+  confirmation, implement
+- Recover: `git grep -n "reset\|clearAll\|firstRun" -- extension/lib extension/options`
+- History:
+  - 2026-08-23 23:00 UTC — captured from product-owner voice feedback.
+
+
 
 ## [CAP-FB-20260823-SETTINGS-PERM-LAYOUT-01] Settings permission rows: gates and description overlap, unreadable
 
