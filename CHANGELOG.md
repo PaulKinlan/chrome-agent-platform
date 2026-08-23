@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.186] — 2026-08-23
+- chore(tasks): sweep 12 IN_REVIEW entries to MERGED with ancestry/byte-containment proof; retain 2 truthful residuals
+
 ## [0.2.185] — 2026-08-23
 - chore(tasks): reconcile tracker to public 0.2.183; add owner P0/P1 entries (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01, ARTIFACT-DELETE-PERMISSION-01, DIALOG-CONFIRM-MODERNIZATION-01, NOTIFICATION-CLICK-ACTION-01)
 

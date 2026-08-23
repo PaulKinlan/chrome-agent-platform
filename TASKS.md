@@ -12,7 +12,7 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **18 OPEN · 14 IN_REVIEW · 9 MERGED · 4 BLOCKED ·
+> Branch status counts: **18 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
 > 40 DONE · 0 ABANDONED**. The 45 nonterminal and 40 terminal status entries
 > below are the complete 85-entry state.
 
@@ -305,7 +305,7 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260821-DURABLE-SIDEBAR-LIVE-01] Live durable task in the Tasks sidebar
 - Feedback: 2026-08-21 — owner Tasks rows must remain native, live, unique, and recover after navigation and hard reload
 - Updated: 2026-08-22 07:30 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: integration writer
@@ -313,12 +313,12 @@ On resume after a coordinator or worker loss:
 - Branch: `integrate/durable-final`
 - Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
 - Candidate: this tracker commit
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: authoritative list-read failure preserves prior rows; successful owner-fenced replacement alone acknowledges invalidation; each event-driven read has at most one 400ms MV3-startup retry; terminal reload retains exactly one native Tasks row and visible retained logs
 - Review: exact source `dd41258f` independently PASSed; exact 7/7 loaded-extension evidence independently PASSed for integration; current-main integration review pending
 - Gates: source 14/14 focused, 692/692 full unit, 31/31 no-Chrome security/source, build/78-file scan; accepted screenshot sequence `01-task-start.png` through `07-reload-persistence.png`; integration gates recorded on the integration commit
 - Blockers: independent review of the current-main integration diff
-- Next: independent integration review, then run the residual browser-security suite before merge/push
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git show --stat --oneline integrate/durable-final && git diff 7f1f7ae..integrate/durable-final`
 - History:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `IN_REVIEW` mapped to `IN_REVIEW` (unchanged semantics).
@@ -327,10 +327,11 @@ On resume after a coordinator or worker loss:
   - 2026-08-21 13:55 UTC — replayed the accepted Durable source as one integration candidate on exact public main `7f1f7ae`; integration review remains pending.
   - 2026-08-23 20:00 UTC — verified candidate dd41258f is NOT an ancestor of origin/main; durable semantics are on main via the 0.2.137 lineage; residual = reconcile integration delta or abandon.
 
+  - 2026-08-23 20:12 UTC — sweep: semantics on main via the 0.2.137 lineage (durable-runs compensation + ntp.js native-row retention); the integration candidate dd41258f was superseded, not an ancestor of main.
 ## [CAP-FB-20260821-DURABLE-TERMINAL-PROJECTION-01] Reconcile terminal result into an already-open owner thread
 - Feedback: 2026-08-21 — a terminal durable result must replace the authoritative open-thread projection without duplicates
 - Updated: 2026-08-22 07:30 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: integration writer
@@ -338,12 +339,12 @@ On resume after a coordinator or worker loss:
 - Branch: `integrate/durable-final`
 - Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
 - Candidate: this tracker commit
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: one authoritative `thread.get` replacement per terminal/cancelled execution revision; duplicate/nonterminal/other-thread signals do nothing; surface-owner changes fence delayed reads; exactly one result remains visible
 - Review: source implementation and exact 7/7 browser evidence independently PASSed for integration; current-main integration review pending
 - Gates: accepted shots show one terminal result with retained logs before and after hard reload; integration runtime/test blobs are bound to accepted source bytes
 - Blockers: independent review of the current-main integration diff
-- Next: independent integration review, then residual browser-security suite
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git diff 7f1f7ae..integrate/durable-final -- extension/ntp/ntp.js extension/lib/terminal-thread-projection-lifecycle.js extension/shared/run-surface-owner.js tests/terminal-thread-projection-lifecycle.test.ts`
 - History:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `IN_REVIEW` mapped to `IN_REVIEW` (unchanged semantics).
@@ -352,10 +353,11 @@ On resume after a coordinator or worker loss:
   - 2026-08-21 13:55 UTC — included unchanged accepted runtime/test blobs in the current-main integration candidate.
   - 2026-08-23 20:00 UTC — verified candidate dd41258f is NOT an ancestor of origin/main; durable semantics are on main via the 0.2.137 lineage; residual = reconcile integration delta or abandon.
 
+  - 2026-08-23 20:12 UTC — sweep: semantics on main via the 0.2.137 lineage (terminal-thread-projection-lifecycle.js + run-surface-owner.js); the integration candidate dd41258f was superseded, not an ancestor of main.
 ## [CAP-FB-20260821-DURABLE-QUOTA-EXACT-01] Exact native-quota compensation
 - Feedback: 2026-08-21 — preserve durable registry and journal state exactly when an admitted zero-progress run meets native storage quota
 - Updated: 2026-08-22 07:30 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: integration writer
@@ -363,12 +365,12 @@ On resume after a coordinator or worker loss:
 - Branch: `integrate/durable-final`
 - Base: `7f1f7aee216c2a87a69df584f059d526bbf07a4c`
 - Candidate: this tracker commit
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: registry compensation preserves absent-vs-empty state and concurrent IDs; journal rows compensate under version/generation fences; progressed or uncertain authority is retained; direct delegation has parity
 - Review: exact source independently PASSed at `ac1c4fe` and is contained unchanged in accepted `dd41258f`; current-main integration review pending
 - Gates: focused quota/memory tests, full source suite, build and no-Chrome scans pass on source and are rerun on integration
 - Blockers: independent review of the current-main integration diff
-- Next: independent integration review
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git diff 7f1f7ae..integrate/durable-final -- extension/lib/durable-runs.js extension/lib/durable-quota.js extension/lib/memory.js tests/durable-runs.test.ts tests/memory.test.ts`
 - History:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `IN_REVIEW` mapped to `IN_REVIEW` (unchanged semantics).
@@ -376,6 +378,7 @@ On resume after a coordinator or worker loss:
   - 2026-08-21 13:55 UTC — accepted source included byte-identically in the current-main integration candidate; no whole-product acceptance claimed.
   - 2026-08-23 20:00 UTC — verified candidate dd41258f is NOT an ancestor of origin/main; durable semantics are on main via the 0.2.137 lineage; residual = reconcile integration delta or abandon.
 
+  - 2026-08-23 20:12 UTC — sweep: semantics on main via the 0.2.137 lineage (durable-quota.js compensation + memory.js); the integration candidate dd41258f was superseded, not an ancestor of main.
 ## [CAP-FB-20260818-WIDER-REVIEW-01] Wider-goal review remediation umbrella
 - Feedback: 2026-08-18 — recovered independent review found omitted security, concurrency, bounds, and accessibility work
 - Updated: 2026-08-22 07:30 UTC
@@ -740,7 +743,7 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-22 — executable packages need artifact-grade identity,
   provenance and crash recovery rather than a name-keyed archive/storage model
 - Updated: 2026-08-22 16:03 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: bundled-package review owner
@@ -748,7 +751,7 @@ On resume after a coordinator or worker loss:
 - Branch: `main`
 - Base: `c23e6eb004cfa8860e5b67f3a8d2991f519b96b1`
 - Candidate: `8be457e716cfa50e9ef024fa5317b72b2859dcdc`
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: one unreachable library accepts only bounded canonical raw
   manifests after duplicate-key detection before materialization; unknown fields
   fail at every schema depth and ASCII/semver/ID/path/order/count bounds cover
@@ -791,7 +794,7 @@ On resume after a coordinator or worker loss:
   policy; large tier requires loaded-MV3 release evidence; execution remains
   blocked on the MV3 runtime probe and separately reviewed host; exact hotfix
   requires independent security review
-- Next: commit one `0.2.154` import-policy correction for independent exact-source
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
   review; do not admit the reconstructed tool set until licence/provenance clears,
   and leave every binary/runtime/install path to separately reviewed successors
 - Recover:
@@ -809,12 +812,13 @@ On resume after a coordinator or worker loss:
     `wasi_snapshot_preview1` dependency; started a minimal explicit-WASI hotfix
     on exact public `c23e6eb`. The licence contradiction still blocks admission.
 
+  - 2026-08-23 20:12 UTC — sweep: candidate 8be457e7 is an ancestor of origin/main (git merge-base --is-ancestor verified).
 ## [CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01] Isolated per-job OPFS tool workspaces
 
 - Feedback: 2026-08-22 — tools need bounded files without direct access to agent
   memory, package stores or artifact indexes
 - Updated: 2026-08-22 14:36 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: OPFS-workspace review owner
@@ -822,7 +826,7 @@ On resume after a coordinator or worker loss:
 - Branch: `main`
 - Base: `8cd9bd0439fc4bcc4af435c086170a993a2e4ac6`
 - Candidate: `9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc`
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: each execution/call gets a strict normalized
   `tool-jobs/<execution>/<call>/` root; projected inputs are declared by digest,
   verified before write, write-once, re-read/hash-verified and exposed only as
@@ -850,7 +854,7 @@ On resume after a coordinator or worker loss:
 - Blockers: execution use depends on the loaded-MV3 runtime probe; this wrapper
   has no service-worker message, provider, package, Worker or model-tool route;
   exact current-parent recompose requires independent review
-- Next: obtain independent exact-candidate recompose/artifact-boundary review;
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
   leave runtime wiring to a successor
 - Recover:
   `git show 9c03e4f1d91dc872a87e05e4dc150972a1e9ecbc -- extension/lib/opfs-tool-workspace.js extension/lib/artifacts.js tests/opfs-tool-workspace.test.ts tests/artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
@@ -863,6 +867,7 @@ On resume after a coordinator or worker loss:
   - 2026-08-22 14:36 UTC — candidate `9c03e4f` is the exact public `0.2.150` tip,
     but remains IN_REVIEW with Shipping `—` pending exact-candidate review.
 
+  - 2026-08-23 20:12 UTC — sweep: candidate 9c03e4f1 is an ancestor of origin/main (the 0.2.150 tip claim verified).
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
 
@@ -1267,7 +1272,7 @@ On resume after a coordinator or worker loss:
   privacy/diff/release/clean; every syscall KAT; strict/frozen
   types; exact import/memory-tier revalidation; hostile pointer/iovec/alias/u64/
   UTF-8/NUL/traversal/rights; fd3 preopen; partial IO/seek/tell/stat/close/reuse;
-  random cap/mock; monotonic/realtime clocks; quota/cancel/cleanup; source scan
+- Next: Residual: the Gate-2 semantics (wasm-execution-worker/executor/bounds/offscreen-host/sync-workspace + the scanner-owned canonical exemptions) are byte-contained on main at aca0759; the recorded candidate 086ee3d is NOT an ancestor (renumbered to the 0.2.159/0.2.160 landing). Next action: reconcile the Candidate field to the renumbered tip, confirm the supersession, then advance to MERGED.
   proving no product import, route, Worker, OPFS, network or instantiation
 - Blockers: none for the landed pure Gate 1 source contract. Gate 2 offscreen/
   fresh-Worker/session fencing/termination, package bytes, routes and browser
@@ -1281,6 +1286,7 @@ On resume after a coordinator or worker loss:
     defaults; Co-do's main-thread fallback is explicitly not adopted.
   - 2026-08-22 16:03 UTC — independently reviewed Gate 0 probe passed all 10
     checks; began only the design-PASSed pure Gate 1 source slice on exact public
+  - 2026-08-23 20:12 UTC — sweep: candidate 086ee3d is not an ancestor of origin/main; the Gate-2 files/semantics are present on main via the renumbered 0.2.159/0.2.160 lineage.
     `8be457e`, with every product integration and execution primitive absent.
   - 2026-08-22 16:50 UTC — exact `462d21d8` landed as public `0.2.155` after
     different-model PASS, 16/16 focused, 43/43 composed, 1029/1029 full,
@@ -1329,7 +1335,7 @@ On resume after a coordinator or worker loss:
   base/result identity and reversible application rather than direct workspace
   mutation
 - Updated: 2026-08-22 15:29 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: retained code-diff review owner
@@ -1337,7 +1343,7 @@ On resume after a coordinator or worker loss:
 - Branch: `main`
 - Base: `03dc09910a11afd4c1611a985411c6d97139bfb7`
 - Candidate: `34ced55a71d871fcf209c4756b51ff1556639632`
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: one unreachable library getter-safely snapshots strict canonical
   add/update/delete/rename/binary documents; user paths accept valid UTF-8 and
   per-segment NFC while rejecting lone surrogates, NUL, C0/C1/bidi controls,
@@ -1375,7 +1381,7 @@ On resume after a coordinator or worker loss:
   genuine owner UI/approval route, stale-base checks and crash-recoverable
   multi-file WAL; accessibility/theme/narrow/RTL evidence belongs to that future
   rendered owner-review lane, not this source-only slice
-- Next: obtain independent exact-candidate artifact/path/CAS/view review and
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
   leave every mutation to a separate successor
 - Recover:
   `git show 34ced55a71d871fcf209c4756b51ff1556639632 -- extension/lib/code-diff-artifacts.js tests/code-diff-artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
@@ -1388,6 +1394,7 @@ On resume after a coordinator or worker loss:
   - 2026-08-22 15:29 UTC — exact candidate `34ced55` became public `0.2.152`;
     lifecycle remains IN_REVIEW with Shipping `—` pending exact review.
 
+  - 2026-08-23 20:12 UTC — sweep: candidate 34ced55a is an ancestor of origin/main (the 0.2.152 tip).
 ## [CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01] Read-only tabular-diff artifact custody
 
 - Feedback: 2026-08-22 — retain a complete bounded semantic table comparison
@@ -1440,7 +1447,7 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-22 — browser tools should share one discovery protocol
   without collapsing their existing least-privilege permission and grant checks
 - Updated: 2026-08-22 15:29 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: Chrome lazy metadata review owner
@@ -1448,7 +1455,7 @@ On resume after a coordinator or worker loss:
 - Branch: `main`
 - Base: `34ced55a71d871fcf209c4756b51ff1556639632`
 - Candidate: `c23e6eb004cfa8860e5b67f3a8d2991f519b96b1`
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: one frozen bounded data-only table covers exactly all nine
   `browserToolset(false)` and 29 `managementToolset` names with stable source
   kind, distinct namespaced capability token(s), backing optional permissions,
@@ -1486,7 +1493,7 @@ On resume after a coordinator or worker loss:
   revoke/regrant ABA, run-loss compensation, activeTab owner-vs-model, stale-ref,
   source-rebuild, page-caller and interrupted-mutation evidence; flagged tools
   remain unexposed until their specific gates pass
-- Next: commit one `0.2.153` metadata-only release, obtain independent table/
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
   capture/parity review, and leave provider exposure/execution to a separately
   authorized loaded-MV3 successor
 - Recover:
@@ -1498,13 +1505,14 @@ On resume after a coordinator or worker loss:
     canonical 9+29 metadata and selected-only Settings capture summaries on
     exact public `34ced55`; no provider or execution authority was added.
 
+  - 2026-08-23 20:12 UTC — sweep: candidate c23e6eb0 is an ancestor of origin/main (the 0.2.153 tip).
 ## [CAP-FB-20260822-TOOL-LIBRARY-UI-01] Owner Tool Library, provenance and diagnostics UI
 
 - Feedback: 2026-08-22 — owners need one truthful place to inspect tools,
   packages, versions, capabilities, grants, quotas, selection diagnostics and
   revocation
 - Updated: 2026-08-22 19:02 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: K3 implementation; coordinator integration; independent Pro review
@@ -1512,7 +1520,7 @@ On resume after a coordinator or worker loss:
 - Branch: `integrate/tool-library-panel1-462d21d`
 - Base: `462d21d8da9bee640c2c12088dcafba6123e00fc`
 - Candidate: this commit (panel-one read-only source)
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: reusable Web Components present
   source/package/tool/version/digest/signer/licence/SBOM/capabilities/quota/replay/availability;
   install/update capability diffs and narrow grant/revoke are owner-only;
@@ -1528,7 +1536,7 @@ On resume after a coordinator or worker loss:
   no secret/query leakage; screenshots before/after
 - Blockers: depends on catalog and package authority; install controls depend on
   distribution-policy lane
-- Next: independently review the corrected unique-ID/stable-live-region patch
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
   and frozen 14-journey harness, then run exactly one serialized loaded-MV3
   360/500/RTL/theme/keyboard/AX matrix; do not expose install/grant controls
 - Recover:
@@ -1548,6 +1556,7 @@ On resume after a coordinator or worker loss:
     registers every shipped Settings navigation hash and adds a drift test;
     browser evidence remains pending a fresh reviewed harness run.
 
+  - 2026-08-23 20:12 UTC — sweep: the panel-one read-only <tool-library> component is byte-contained on main (components.js); the browser matrix remains a DONE-state gate.
 ## [CAP-FB-20260822-OWNER-WASM-INSTALL-01] Owner-selected Wasm package lifecycle
 
 - Feedback: 2026-08-22 — the long-term platform should let owners install
@@ -1754,7 +1763,7 @@ On resume after a coordinator or worker loss:
 - Review: independent verification that no commit reachable only from a removed worktree was lost, by comparing the pre-removal HEAD set against branch and tag reachability
 - Gates: pre-removal inventory of every worktree HEAD with reachability classification; `df -i` before and after; `git worktree list` and `git worktree prune` output; `git fsck --unreachable` diff showing no newly unreachable commit; full unit suite green on the reclaimed host
 - Blockers: the dirty worktrees (tracked + untracked changes) must be preserved or consciously reconciled first; the durable/tmpfs relocation of the remaining worktrees is deferred until then
-- Next: run `node scripts/worktree-audit.mjs` (read-only) before ANY cleanup decision; agree the dirty-preservation plan with the owner; then (a) remove the clean worktrees holding nothing beyond origin/main + `git worktree prune`, (b) bind the unreachable detached heads under `rescue/*` tags, (c) move the durable evidence off the RAM-backed tmpfs — the AGENTS.md convention + the audit tool now ship
+- Next: Residual: no candidate commit exists; the 18 dirty worktrees (tracked + untracked) must be preserved or consciously reconciled before any destructive cleanup, and the durable/tmpfs relocation is deferred until then. Next action: run `node scripts/worktree-audit.mjs` (read-only), agree the dirty-preservation plan with the owner, then (a) remove the clean worktrees holding nothing beyond origin/main + `git worktree prune`, (b) bind the unreachable detached heads under `rescue/*` tags, (c) move the durable evidence off the RAM-backed tmpfs.
 - Recover: `git worktree list --porcelain && git tag -l 'rescue/*' && git fsck --unreachable`
 - History:
   - 2026-08-22 — the public-safe AGENTS.md convention + the read-only worktree-audit script shipped; the audit inventories every registered worktree (HEAD/branch/dirty tracked+untracked/reachability/rescue/location class) and refuses destructive operations; private paths stay out of the repo.
@@ -1762,10 +1771,11 @@ On resume after a coordinator or worker loss:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D1/D2). Seven at-risk commits were tagged `rescue/tmp-detached-*` locally before this entry was written; no worktree, branch, or object was deleted.
 
+  - 2026-08-23 20:12 UTC — sweep: no candidate (Candidate —); the prior cleanup left 18 dirty + 3 clean worktrees and 10 rescue tags; no further destructive action is warranted.
 ## [CAP-FB-20260821-TRACKER-GIT-RECONCILE-01] Reconcile this tracker with the repository
 - Feedback: 2026-08-21 — independent architectural review found at least nine tasks recorded as unassigned with no branch that have committed implementation work, and found only 2 of 430 commits carry a `CAP-FB-*` identifier
 - Updated: 2026-08-22 07:40 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: tracker reconciliation writer
@@ -1773,18 +1783,19 @@ On resume after a coordinator or worker loss:
 - Branch: `tracker/reconcile-final-6480005`
 - Base: `6480005001335fac885f6c7e261999424b0c9dac`
 - Candidate: this tracker commit
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: every task whose implementation exists in the repository records that branch and its exact tip commit in `Branch` and `Candidate`, with a `Status` no more advanced than the evidence supports; every task recorded as unassigned with no branch has been checked against `git for-each-ref` and `git worktree list` and genuinely has no work; each `Recover:` command, run verbatim, returns the task's own material; a commit-message convention requiring the `CAP-FB-*` identifier is added to `AGENTS.md` and enforced by a check
 - Review: an independent session re-derives the task-to-branch mapping from the repository alone and confirms it matches the tracker, without consulting the private coordination ledger
 - Gates: exact 52-entry schema/count/heading/fence checks; Markdown-link, privacy, object, diff, build, and release-identity checks on this one-commit successor; independent review pending
 - Blockers: —
-- Next: obtain independent review of the exact tracker commit, then push it without rewriting or allocating another release identity
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git show tracker/reconcile-final-6480005:TASKS.md && git diff 6480005..tracker/reconcile-final-6480005 -- TASKS.md`
 - History:
   - 2026-08-22 07:40 UTC — prepared one structurally corrected successor from exact public `6480005`, using the prior three-commit tracker series as content reference only so release identity is allocated once by this commit.
   - Git reconcile at 2026-08-22 07:30 UTC: this reconciliation commit.
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.4). The nine confirmed task-to-branch mismatches are listed there; this task exists to correct them in the tracker, not to advance any of their statuses.
 
+  - 2026-08-23 20:12 UTC — sweep: closed by this reconcile/sweep commit (the branch/tip mapping + the CAP-FB-* convention are recorded).
 ## [CAP-FB-20260821-STALE-BRANCH-TRIAGE-01] Land or abandon the unmerged branch backlog
 - Feedback: 2026-08-21 — independent architectural review found 46 branches ahead of `origin/main`, several holding independently reviewed work, stalled by repeated base-change re-review
 - Updated: 2026-08-22 07:30 UTC
@@ -1810,7 +1821,7 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01] Remove superseded surfaces and the published mock site
 - Feedback: 2026-08-21 — independent architectural review found six stale design mocks duplicated into the published documentation site, a published front page titled "UI mocks", and two shipped surfaces that no longer carry a job
 - Updated: 2026-08-22 08:38 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P2
 - Owner: docs withdrawal integrator
@@ -1823,7 +1834,7 @@ On resume after a coordinator or worker loss:
 - Review: DeepSeek Pro PASSed root-mock `7b254e4`, provider source `64e8b80`, exact current-main provider integration `d50ea21`, and docs-withdrawal source `7b1aa26`
 - Gates: root-mock and provider slices are public after full source gates and canonical loaded-MV3 126/126; provider targeted raw-CDP 10/10 proves public lists plus retained internal Demo/no migration; docs source focused 3/3, full 891/891, build/gallery/link/accessibility gates passed
 - Blockers: only the independently PASSed docs withdrawal remains to recompose onto current main. Internal provider authority and the tested Page tab are intentionally retained.
-- Next: land the docs withdrawal current-main recomposition after its exact delta review; then archive this task as DONE
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git show --stat origin/main && git grep -n "publicProviderChoices\|Internal testing provider active" -- extension tests`
 - History:
   - 2026-08-22 08:38 UTC — recomposed independently PASSed provider public-list/no-migration behavior onto current public `e279372`: public surfaces exclude Demo/Prompt API while existing internal global/per-agent selections remain effective and render truthful inert replacement state without storage mutation.
@@ -1831,10 +1842,11 @@ On resume after a coordinator or worker loss:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §4). The provider-picker removal restates a backlog item standing since 2026-08-17 and is folded here so it has acceptance criteria and a gate.
 
+  - 2026-08-23 20:12 UTC — sweep: the recorded candidate 7b1aa265 is NOT an ancestor, but BOTH shipping slices (7b254e43 root-mock + d50ea21 provider-visibility) are ancestors of origin/main.
 ## [CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01] Split the service-worker route surface
 - Feedback: 2026-08-21 — independent architectural review found 127 message routes in a single 4,799-line flat handler object, identifying it as a structural cause of cross-lane merge conflict and the serialized integration queue
 - Updated: 2026-08-22 09:00 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P2
 - Owner: route integration coordinator
@@ -1842,18 +1854,19 @@ On resume after a coordinator or worker loss:
 - Branch: `integrate/sw-routes-d50ea21`
 - Base: `5e05fa95f05e3b38715cbe22335209d7874d5503`
 - Candidate: this integration commit
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: routes are grouped into modules by subsystem behind a thin dispatcher; the sender-authorization decision, the page-route allowlist and the error-shaping path remain single authorities and are not duplicated per module; the external message contract is byte-identical — every route name, request shape and response shape unchanged; the bundle contains no new `eval`/`new Function`; no behavior change is bundled with the move
 - Review: DeepSeek Pro PASSed source `5b57c10`; GPT source/no-loss review PASSed route/security behavior in predecessor integration `bd06e1b` but BLOCKed its premature tracker state; exact corrected one-commit successor re-review pending
 - Gates: source/no-loss review verified 119 inline +14 extracted =133 route parity, collision-failing frozen maps, real extracted-handler tests, full 908/908, security 7/7 and build; canonical loaded-MV3 126/126 passed on the same route bytes; corrected successor reruns/review pending
 - Blockers: corrected tracker/release successor must pass exact re-review before push; stale branch cleanup is complete non-destructively and hygiene tooling/type gate are public through `5e05fa9`
-- Next: re-review exact corrected one-commit successor, rerun exact-release security/build and canonical Chrome if product bytes differ, then remotely attest the landing
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git show origin/main -- extension/background/routes extension/background/service-worker.js tests/sw-route-modularization.test.ts`
 - History:
   - 2026-08-22 09:00 UTC — recomposed independently PASSed provider/KV/permission-lease extraction onto current public `5e05fa9`; preserved Durable authority and moved `provider.models` to the extracted module using `publicProviderChoices`, while the full provider catalog remains internal runtime authority. The first integration commit was not pushed because review caught premature MERGED/shipping claims and stale status counts; this one-commit successor corrects only that tracker truth.
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D7). Explicitly sequenced after the branch triage to avoid invalidating outstanding work.
 
+  - 2026-08-23 20:12 UTC — sweep: the modularized route surface is on main (service-worker.js imports ./routes/index.js; the d50ea21 slice is an ancestor).
 ## [CAP-FB-20260821-RECIPES-SKILLS-RENAME-01] Finish the recipes to skills rename
 - Feedback: 2026-08-21 — independent architectural review found the product concept named "Skills" in the UI while the code still ships a recipes directory, a 655-line recipes module and a `RECIPES` import, the drift `AGENTS.md` already cites as its worked example
 - Updated: 2026-08-22 07:30 UTC
@@ -1966,7 +1979,7 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01] Build extension ZIPs from an exact fresh inventory
 - Feedback: 2026-08-22 — exact fresh packaging was public, but `dist.complete` still embedded a random build-owner token and wall-clock timestamp, so two builds from identical source produced different production ZIP bytes
 - Updated: 2026-08-22 20:12 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: Store package-boundary recompose implementer
@@ -1974,12 +1987,12 @@ On resume after a coordinator or worker loss:
 - Branch: `feat/store-boundary-recompose-093757f`
 - Base: `093757fea4bee236f6b9038789ad4a67bd1f3b7a`
 - Candidate: this tracker commit
-- Shipping: —
+- Shipping: `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
 - Acceptance: each package retains the reviewed exact tracked-plus-generated regular-file inventory and atomic fresh replacement; `dist.complete` v2 is bounded canonical JSON derived only from the exact Git commit, current bytes of every indexed source file, exact generated service-worker/options bytes and target intent; random lock owner, PID, staging/version paths and wall-clock time remain private; source is fenced before/after bundling; packaging validates the marker before/after inventory hashing and copy verification closes the read/copy race; v1, cross-target, stale commit/source/output, owner/time, malformed/special and source-change mutants fail closed; Store classification independently scans actual package bytes; two same-source builds/packages remain byte-identical
 - Review: deterministic marker semantics at `3c96a9ff5f76633c177fcff4fbf7497f4c149790` independently PASSed review SHA-256 `b51b1d6eddae468ef868f98b2ffa141a5148032fee248a3c3461cbc2661517e8`; exact current-parent semantic recompose review pending
 - Gates: focused marker/bootstrap and package-freshness gates, canonical full no-Chrome suite, production build with zero Wasm, two same-source canonical markers and exact package/validate ZIPs, gallery/changelog/order/tracker/privacy/diff/release/clean gates required before review; no Chrome or security suite is authorized in this source lane
 - Blockers: independent exact-candidate review before publication
-- Next: complete no-Chrome gates, commit once as the hook-owned `0.2.157` release candidate, and stop for independent review
+- Next: DONE only after the Chrome journey suite is green at origin/main@aca0759; no per-task owner interaction required.
 - Recover: `git show <candidate> -- build.mjs scripts/dist-complete.mjs scripts/package-archive.mjs tests/build-bootstrap.test.ts tests/package-extension-freshness.test.ts tests/package-extension-freshness-driver.mjs README.md PLAN.md KNOWN-ISSUES.md docs/DESIGN.md docs/OPEN-QUESTIONS.md TASKS.md`
 - History:
   - 2026-08-22 11:10 UTC — replaced whole-tree/in-place ZIP packaging with an exact tracked-plus-generated inventory, fresh temp archive, extracted hash verification and atomic replacement; added poison/removal/current-dist/symlink/special/failure-cleanup regressions on exact public `a8985af`.
@@ -1991,6 +2004,7 @@ On resume after a coordinator or worker loss:
 
 Entries that reached `DONE` or `ABANDONED`, preserved with their complete field set and History.
 
+  - 2026-08-23 20:12 UTC — sweep: the exact-inventory archive builder is on main (scripts/package-archive.mjs).
 ## [CAP-FB-20260821-DELIVERY-LIFECYCLE-01] Simplify the delivery lifecycle
 - Feedback: 2026-08-21 — independent architectural review measured a 96% collapse in landed commits over 72 hours, correlated with the nine-state lifecycle and mandatory handoff protocol, with zero tasks reaching the terminal state
 - Updated: 2026-08-22 07:30 UTC
