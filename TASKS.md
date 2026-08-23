@@ -189,6 +189,19 @@ On resume after a coordinator or worker loss:
 - Next: write the design/plan (prior art: Co-do's handle persistence)
 - Recover: `git grep -n "showDirectoryPicker\|FileSystemDirectoryHandle" -- extension`
 - History:
+  - 2026-08-23 23:25 UTC — Phase 1 design DONE, verdict FEASIBLE (Pro,
+    /tmp/cap-persistent-fs-access/PRO.md 3c1dec3a): picker is window +
+    user-gesture only (never model-callable); handles persisted in an
+    fs-grants IndexedDB store with honest re-grant flow (queryPermission →
+    granted/prompt/denied, no auto-prompt); Add directory/file affordance
+    scoped per task/agent, revocable in a Settings Local folders pane;
+    local-dir files are NOT artifacts (OPFS + createAssetKeyed remain the
+    only promotion path); fs-read and fs-write separate capabilities;
+    watcher = polling + manifest-diff with honest bounds (5s default,
+    idle-gated, ≤10k entries/1MiB, fail-closed too-large — explicitly not
+    real-time). Phase-2 tranches: grants store + Settings pane → picker
+    affordance → fs-read/list → re-grant flow → fs-write/scan/watch.
+    Awaiting owner plan approval before implementation.
   - 2026-08-23 23:10 UTC — captured from product-owner voice feedback.
 
 
