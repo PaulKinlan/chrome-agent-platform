@@ -503,16 +503,25 @@ On resume after a coordinator or worker loss:
   notification, clicking it does nothing; it should at least return the owner
   to the agent's task view / run log, or the agent should be able to define
   code to run on click (possibly as part of its continued agent loop)
-- Updated: 2026-08-23 20:09 UTC
-- Status: OPEN
+- Updated: 2026-08-23 20:45 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
+- Owner: k3 (integrator) / Gemini (implementation) / Flash (review)
+- Workspace: /home/paulkinlan/worktrees/cap-notification-click-6a6c3a1
+- Branch: none (landed from detached candidate)
 - Base: `aca0759e6a8ebfe82c9dba0650566eeeb15334d0`
-- Candidate: —
-- Shipping: —
+- Candidate: landed as `a8e347969080efbbdc6aaa9a0bc87016724497c3` (0.2.187)
+- Shipping: LIVE on `origin/main@a8e347969080efbbdc6aaa9a0bc87016724497c3` —
+  ff-only landing on `0ce9f0e`; unique-ref fetch attestation (local main ==
+  origin/main == a8e34796; ancestry: 0ce9f0e and 6a6c3a1 both ancestors);
+  public rebuild green; full suite 1253/1253 incl. custody; scan-shipped
+  24/24. Integrator hardening disclosed: N-2 expectedAgentId was inert in the
+  reviewed candidate (producer-only) — the run.resume consumer guard
+  (agent_mismatch, fail-closed, positioned after lookup/before dispatch) was
+  added by k3 with a source-pin test; the sw-route baseline (135→138) was
+  extended for the three new routes (Gemini miss). Flash review 4497ad5e…,
+  Gemini impl a6a45895… bind the pre-hardening tree.
 - Acceptance: every agent-created Chrome notification has a click behavior;
   the default opens/focuses the extension to the exact agent task view and
   retained run log for that execution; when no explicit click target is
