@@ -35,6 +35,7 @@ import {
   enrollOutcomeState,
   siteAgentSetupMessage,
 } from "../shared/site-agent-copy.js";
+import { createNavigationController } from "../lib/navigation-controller.js";
 // Side-effect import: registers the shared Web Components (switch-toggle,
 // permission-row, capability-row, …) so the settings page uses the SAME
 // design-system components as the hub + the docs showcase (one component,
@@ -2112,7 +2113,7 @@ async function renderApprovals() {
 }
 
 // nav active state
-export function handleSettingsHashNavigation(hash) {
+export function handleSettingsHashNavigation(hash, isTraverse = false) {
   const sectionId = normalizeSettingsSectionId(hash);
   if (!sectionId) return false;
 
@@ -2120,10 +2121,10 @@ export function handleSettingsHashNavigation(hash) {
   if (!section) return false;
 
   document.querySelectorAll(".nav-item").forEach((x) => {
-    const isTarget = x.dataset.section === sectionId ||
+    const match = x.dataset.section === sectionId ||
       x.getAttribute("href") === `#${sectionId}` ||
       (sectionId === "background" && (x.dataset.section === "background" || x.getAttribute("href") === "#background"));
-    if (isTarget) {
+    if (match) {
       x.setAttribute("aria-current", "true");
     } else {
       x.removeAttribute("aria-current");
@@ -2133,7 +2134,10 @@ export function handleSettingsHashNavigation(hash) {
   if (sectionId === "approvals") renderApprovals();
   if (sectionId === "usage") renderUsage();
 
-  section.scrollIntoView({ behavior: "smooth", block: "start" });
+  section.scrollIntoView({
+    behavior: isTraverse ? "auto" : "smooth",
+    block: "start",
+  });
 
   const heading = section.querySelector("h2, h3");
   if (heading) {
@@ -2144,14 +2148,22 @@ export function handleSettingsHashNavigation(hash) {
   return true;
 }
 
+// Navigation controller: adopts modern window.navigation API with popstate/hashchange fallback
+// for Settings sections and deep links (CAP-FB-20260823-NAVIGATION-BACK-01).
+export const navigationController = createNavigationController({
+  win: window,
+  normalizeHash: normalizeSettingsSectionId,
+  isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+  onNavigate: async ({ hash, sectionId, isTraverse }) => {
+    return handleSettingsHashNavigation(hash || `#${sectionId}`, isTraverse);
+  },
+});
+
 document.querySelectorAll(".nav-item").forEach((a) => {
-  a.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach((x) =>
-      x.removeAttribute("aria-current")
-    );
-    a.setAttribute("aria-current", "true");
-    if (a.dataset.section === "approvals") renderApprovals();
-    if (a.dataset.section === "usage") renderUsage();
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    const targetHash = a.getAttribute("href") || `#${a.dataset.section}`;
+    navigationController.navigate(targetHash);
   });
 });
 
@@ -2280,6 +2292,5 @@ async function renderAbout() {
   }
 }
 await renderAbout();
+await navigationController.syncCurrent();
 
-handleSettingsHashNavigation(location.hash);
-window.addEventListener("hashchange", () => handleSettingsHashNavigation(location.hash));

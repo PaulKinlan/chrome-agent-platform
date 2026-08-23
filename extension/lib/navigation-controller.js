@@ -1,0 +1,209 @@
+// lib/navigation-controller.js — Modern Navigation API controller and View Router
+// for extension pages and Settings views (CAP-FB-20260823-NAVIGATION-BACK-01).
+//
+// Invariants:
+//   - Uses modern window.navigation (navigate, navigatesuccess, navigateerror) where available.
+//   - Graceful fallback to popstate + hashchange when Navigation API is absent.
+//   - Exactly ONE active listener registration per window/document (no duplicate listeners).
+//   - History is the single source of truth: every view transition produces a real history entry.
+//   - Back/forward traversal restores full UI state (aria-current, data renders, scroll, focus, overlay state).
+//   - Deep links and reloads restore the exact target view/section.
+//   - Stale/invalid hashes fail closed safely without crashing.
+
+export const NAVIGATION_EVENT_TYPES = Object.freeze({
+  NAVIGATE: "navigate",
+  SUCCESS: "navigatesuccess",
+  ERROR: "navigateerror",
+});
+
+/**
+ * Creates a navigation controller for a document/window.
+ */
+export function createNavigationController({
+  win = typeof window !== "undefined" ? window : null,
+  onNavigate = null,
+  onError = null,
+  normalizeHash = (h) => (h ? h.replace(/^#/, "") : null),
+  isAllowedHash = () => true,
+} = {}) {
+  if (!win) {
+    return {
+      navigate: () => false,
+      dispose: () => {},
+      isModern: false,
+    };
+  }
+
+  let disposed = false;
+  const isModern = Boolean(win.navigation && typeof win.navigation.addEventListener === "function");
+
+  let currentHash = win.location?.hash ?? "";
+  let lastNavigationSuccess = true;
+
+  const handleHashChange = async (newHash, { isTraverse = false, info = null } = {}) => {
+    if (disposed) return false;
+    currentHash = newHash;
+    const cleanId = normalizeHash(newHash);
+    if (!cleanId || !isAllowedHash(cleanId)) {
+      lastNavigationSuccess = false;
+      return false;
+    }
+    if (typeof onNavigate === "function") {
+      try {
+        await onNavigate({
+          hash: newHash,
+          sectionId: cleanId,
+          isTraverse,
+          info,
+        });
+        lastNavigationSuccess = true;
+        return true;
+      } catch (err) {
+        lastNavigationSuccess = false;
+        if (typeof onError === "function") {
+          onError(err);
+        }
+        return false;
+      }
+    }
+    lastNavigationSuccess = true;
+    return true;
+  };
+
+  // Modern Navigation API Listener
+  const onModernNavigate = (event) => {
+    if (disposed) return;
+    const destinationUrl = event.destination?.url ? new URL(event.destination.url) : null;
+    const destinationHash = destinationUrl?.hash ?? "";
+
+    if (event.canIntercept && destinationUrl && destinationUrl.pathname === win.location.pathname) {
+      event.intercept({
+        async handler() {
+          await handleHashChange(destinationHash, {
+            isTraverse: event.navigationType === "traverse",
+            info: event.info,
+          });
+        },
+      });
+    }
+  };
+
+  const onModernSuccess = (_event) => {
+    // Navigation committed successfully
+  };
+
+  const onModernError = (event) => {
+    if (typeof onError === "function" && event?.error) {
+      onError(event.error);
+    }
+  };
+
+  // Fallback History API Listeners
+  const onPopState = (event) => {
+    if (disposed) return;
+    handleHashChange(win.location.hash, { isTraverse: true, info: event.state });
+  };
+
+  const onNativeHashChange = () => {
+    if (disposed) return;
+    handleHashChange(win.location.hash, { isTraverse: false });
+  };
+
+  // Register exactly one listener set
+  if (isModern) {
+    win.navigation.addEventListener("navigate", onModernNavigate);
+    win.navigation.addEventListener("navigatesuccess", onModernSuccess);
+    win.navigation.addEventListener("navigateerror", onModernError);
+  } else {
+    win.addEventListener("popstate", onPopState);
+    win.addEventListener("hashchange", onNativeHashChange);
+  }
+
+  return {
+    isModern,
+    get currentHash() {
+      return currentHash;
+    },
+    async navigate(targetHash, { replace = false, info = null } = {}) {
+      if (disposed) return false;
+      const formatted = targetHash.startsWith("#") ? targetHash : `#${targetHash}`;
+      const cleanId = normalizeHash(formatted);
+      if (!cleanId || !isAllowedHash(cleanId)) {
+        return false;
+      }
+
+      if (isModern && typeof win.navigation.navigate === "function") {
+        try {
+          const currentUrl = new URL(win.location.href);
+          currentUrl.hash = formatted;
+          const navResult = win.navigation.navigate(currentUrl.href, {
+            history: replace ? "replace" : "push",
+            info,
+          });
+          if (navResult?.finished) {
+            await navResult.finished;
+          }
+          return lastNavigationSuccess;
+        } catch (e) {
+          // Fall back to location hash assignment
+        }
+      }
+
+      if (replace && win.history?.replaceState) {
+        win.history.replaceState(info, "", formatted);
+      } else if (win.history?.pushState) {
+        win.history.pushState(info, "", formatted);
+      } else {
+        win.location.hash = formatted;
+      }
+
+      return await handleHashChange(formatted, { isTraverse: false, info });
+    },
+    syncCurrent() {
+      if (disposed) return;
+      return handleHashChange(win.location.hash, { isTraverse: false });
+    },
+    dispose() {
+      disposed = true;
+      if (isModern) {
+        win.navigation.removeEventListener("navigate", onModernNavigate);
+        win.navigation.removeEventListener("navigatesuccess", onModernSuccess);
+        win.navigation.removeEventListener("navigateerror", onModernError);
+      } else {
+        win.removeEventListener("popstate", onPopState);
+        win.removeEventListener("hashchange", onNativeHashChange);
+      }
+    },
+  };
+}
+
+/**
+ * Parses an NTP hash into a structured route descriptor.
+ * Supported shapes:
+ *   - "" or "#" -> { route: "hub" }
+ *   - "#thread=<id>" -> { route: "thread", id: "<id>" }
+ *   - "#agent=<kind>:<id>" -> { route: "agent", kind: "<kind>", id: "<id>" }
+ *   - "#view=<path>" -> { route: "view", path: "<path>" }
+ *   - "#omnibox=<mode>:<query>" -> { route: "omnibox", mode: "<mode>", query: "<query>" }
+ */
+export function parseNtpHash(hash) {
+  if (typeof hash !== "string" || !hash || hash === "#") {
+    return { route: "hub" };
+  }
+  const clean = hash.startsWith("#") ? hash.slice(1).trim() : hash.trim();
+  if (!clean) return { route: "hub" };
+
+  const mThread = /^thread=(.+)$/.exec(clean);
+  if (mThread) return { route: "thread", id: decodeURIComponent(mThread[1]) };
+
+  const mAgent = /^agent=([^:]+):(.+)$/.exec(clean);
+  if (mAgent) return { route: "agent", kind: decodeURIComponent(mAgent[1]), id: decodeURIComponent(mAgent[2]) };
+
+  const mView = /^view=(.+)$/.exec(clean);
+  if (mView) return { route: "view", path: decodeURIComponent(mView[1]) };
+
+  const mOmnibox = /^omnibox=([^:]+):(.+)$/.exec(clean);
+  if (mOmnibox) return { route: "omnibox", mode: decodeURIComponent(mOmnibox[1]), query: decodeURIComponent(mOmnibox[2]) };
+
+  return { route: "hub" };
+}

@@ -1,7 +1,16 @@
 # Changelog
 
+## [0.2.203] — 2026-08-23
+- feat(nav): adopt Navigation API with history fallback for Settings and back button routing (CAP-FB-20260823-NAVIGATION-BACK-01)
+
+## [0.2.202] — 2026-08-23
+- feat(nav): adopt Navigation API with history fallback for Settings and back button routing (CAP-FB-20260823-NAVIGATION-BACK-01)
+- feat(render): expand HTML artifact iframe/dialog size and render generate_ui sandboxed (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01, CAP-FB-20260823-GENERATE-UI-RENDER-01)
+- feat(deeplink): support background agents configure deep-link into Settings (CAP-FB-20260823-BACKGROUND-CONFIGURE-DEEPLINK-01)
+
 ## [0.2.198] — 2026-08-23
 - build(provenance): durable in-repo evidence tree (packages/bundled/evidence, minimum-consumption 51 blobs) becomes the sole generator root; full verify now works on any fresh checkout; total scrub of /tmp and absolute build-host paths from all shipped artifacts (owner directive: never reference outside the source tree) (CAP-FB-20260822-BUILTIN-WASM-TOOLS-01)
+
 ## [0.2.196] — 2026-08-23
 - feat(render): expand HTML artifact iframe/dialog size and render generate_ui sandboxed (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01, CAP-FB-20260823-GENERATE-UI-RENDER-01)
 

@@ -39,6 +39,7 @@ import {
   VIEW_ROUTE,
 } from "./view-transition.js";
 import { applySidebarNubPolicy } from "./view-policy.js";
+import { parseNtpHash } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.js";
 import {
   SITE_AGENT_COPY,
@@ -918,7 +919,12 @@ function showThreadView(options = {}) {
 function hideThreadView({
   focusAfter =
     document.querySelector('#thread-sidebar [aria-current="true"]') || composer,
+  fromNavigation = false,
 } = {}) {
+  if (!fromNavigation && typeof window !== "undefined" && window.history?.back && location.hash && location.hash !== "#") {
+    window.history.back();
+    return;
+  }
   const sourceRoute = activeViewRoute;
   withViewTransition(() => {
     hideThreadViewInner();
@@ -986,6 +992,13 @@ async function openThread(id) {
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
   syncConversationRunControls();
+
+  if (typeof window !== "undefined" && window.history?.pushState) {
+    const hash = `#thread=${encodeURIComponent(id)}`;
+    if (location.hash !== hash) {
+      window.history.pushState({ route: "thread", id }, "", hash);
+    }
+  }
   // Hide the previous run's banner at the ownership hand-off, not after the
   // asynchronous thread read. The old run continues and journals in the SW.
   renderRunStatus({ state: "idle" });
@@ -1024,6 +1037,13 @@ async function openBackgroundAgentChat(id, name) {
   currentAgentKind = "background";
   currentThreadId = null;
   syncConversationRunControls();
+
+  if (typeof window !== "undefined" && window.history?.pushState) {
+    const hash = `#agent=background:${encodeURIComponent(id)}`;
+    if (location.hash !== hash) {
+      window.history.pushState({ route: "agent", kind: "background", id }, "", hash);
+    }
+  }
   renderRunStatus({ state: "idle" });
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
@@ -1071,6 +1091,13 @@ async function openAgentSurface({ kind, id, name }) {
   currentAgentKind = kind;
   currentThreadId = null;
   syncConversationRunControls();
+
+  if (typeof window !== "undefined" && window.history?.pushState) {
+    const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
+    if (location.hash !== hash) {
+      window.history.pushState({ route: "agent", kind, id }, "", hash);
+    }
+  }
   renderRunStatus({ state: "idle" });
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
@@ -1880,6 +1907,18 @@ function openView(path, title, trigger) {
   viewFrame.src = chrome.runtime.getURL(path);
   viewFrame.title = title;
   viewTitle.textContent = title;
+
+  if (typeof window !== "undefined" && window.history?.pushState) {
+    const hash = `#view=${encodeURIComponent(path)}`;
+    if (location.hash !== hash) {
+      try {
+        window.history.pushState({ route: "view", path, title }, title, hash);
+      } catch {
+        // Ignored in non-browser testing contexts
+      }
+    }
+  }
+
   withViewTransition(() =>
     viewFocus.open(trigger, () => {
       // Only ONE overlay at a time (item 48): the settings/directory/recipes
@@ -1895,7 +1934,12 @@ function openView(path, title, trigger) {
     focusAfter: viewFrame,
   });
 }
-function closeView() {
+function closeView({ fromNavigation = false } = {}) {
+  if (!fromNavigation && typeof window !== "undefined" && window.history?.back && location.hash && location.hash !== "#") {
+    window.history.back();
+    return;
+  }
+
   const sourceRoute = activeViewRoute;
   withViewTransition(() => {
     hideViewInner();
@@ -1916,6 +1960,67 @@ function closeView() {
   renderFirstRunGuide().then(() => {
     if (shouldRestoreGuideFocus && !firstRunGuide?.hidden) firstRunGuide.focusNextAction?.();
   });
+}
+
+// ── Multi-Page App Navigation API Router ────────────────────────────────────
+let isApplyingHashRoute = false;
+async function applyCurrentHashRoute(isTraverse = false) {
+  if (isApplyingHashRoute) return;
+  isApplyingHashRoute = true;
+  try {
+    const parsed = parseNtpHash(location.hash);
+    if (parsed.route === "hub") {
+      if (!viewOverlay?.hidden) {
+        closeView({ fromNavigation: true });
+      }
+      if (!threadView?.hidden) {
+        hideThreadView({ fromNavigation: true });
+      }
+    } else if (parsed.route === "thread") {
+      if (!viewOverlay?.hidden) hideViewInner();
+      if (currentThreadId !== parsed.id || threadView?.hidden) {
+        await openThread(parsed.id, { pushHistory: false });
+      }
+    } else if (parsed.route === "agent") {
+      if (!viewOverlay?.hidden) hideViewInner();
+      if (parsed.kind === "background") {
+        if (currentAgentId !== parsed.id || currentAgentKind !== "background" || threadView?.hidden) {
+          await openBackgroundAgentChat(parsed.id, null, { pushHistory: false });
+        }
+      } else {
+        if (currentAgentId !== parsed.id || currentAgentKind !== parsed.kind || threadView?.hidden) {
+          await openAgentSurface({ kind: parsed.kind, id: parsed.id }, { pushHistory: false });
+        }
+      }
+    } else if (parsed.route === "view") {
+      const expectedSrc = chrome.runtime?.getURL ? chrome.runtime.getURL(parsed.path) : parsed.path;
+      if (viewOverlay?.hidden || viewFrame.src !== expectedSrc) {
+        openView(parsed.path, "View", null, { pushHistory: false });
+      }
+    }
+  } finally {
+    isApplyingHashRoute = false;
+  }
+}
+
+// Support browser back/forward navigation when in-context view overlay or thread is open
+if (typeof window !== "undefined") {
+  if (window.navigation && typeof window.navigation.addEventListener === "function") {
+    window.navigation.addEventListener("navigate", (event) => {
+      const destUrl = event.destination?.url ? new URL(event.destination.url) : null;
+      if (event.canIntercept && destUrl && destUrl.pathname === location.pathname) {
+        event.intercept({
+          async handler() {
+            await applyCurrentHashRoute(event.navigationType === "traverse");
+          },
+        });
+      }
+    });
+  } else {
+    window.addEventListener("popstate", () => {
+      applyCurrentHashRoute(true).catch(() => {});
+    });
+  }
 }
 
 document.getElementById("view-back")?.addEventListener("click", closeView);
@@ -2067,7 +2172,13 @@ async function handleOmniboxEntry() {
     await runThreadTurn(query, []);
   }
 }
-handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));
+
+async function bootNtpRoutes() {
+  await handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));
+  // At boot/startup: restore current hash route (#view=, #thread=, #agent=) on reload
+  await applyCurrentHashRoute(false).catch((e) => console.error("boot route failed", e?.message ?? e));
+}
+bootNtpRoutes();
 
 // ---- agent-script host (the on-demand fallback) ---------------------
 // The SW announces `cap:script-run-announce` then addresses the source to the
