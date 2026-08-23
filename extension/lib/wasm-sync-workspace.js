@@ -62,76 +62,82 @@ function seedFail() {
 
 const EMPTY_WORKSPACE_SEED = Object.freeze({ files: Object.freeze([]) });
 
-function hasExactOwnKeys(value, expected) {
-  try {
-    const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key !== "string") || keys.length !== expected.length) return false;
-    const sortedExpected = [...expected].sort();
-    return [...keys].sort().every((key, index) => key === sortedExpected[index]);
-  } catch {
-    return false;
+function exactOwnDataValues(value, expectedKeys, expectedPrototype) {
+  if (typeof value !== "object" || value === null ||
+      Array.isArray(value) || Object.getPrototypeOf(value) !== expectedPrototype) seedFail();
+  const ownKeys = Reflect.ownKeys(value);
+  const expectedKeySet = new Set(expectedKeys);
+  if (ownKeys.length !== expectedKeys.length ||
+      ownKeys.some((key) => typeof key !== "string" || !expectedKeySet.has(key))) seedFail();
+  const values = Object.create(null);
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor)) seedFail();
+    values[key] = descriptor.value;
   }
+  return values;
+}
+
+function exactPlainArrayValues(value, maxLength) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) seedFail();
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > maxLength) seedFail();
+  const length = lengthDescriptor.value;
+  const expectedKeys = Array.from({ length }, (_, index) => String(index));
+  expectedKeys.push("length");
+  const ownKeys = Reflect.ownKeys(value);
+  const expectedKeySet = new Set(expectedKeys);
+  if (ownKeys.length !== expectedKeys.length ||
+      ownKeys.some((key) => typeof key !== "string" || !expectedKeySet.has(key))) seedFail();
+  const values = [];
+  for (let index = 0; index < length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !("value" in descriptor)) seedFail();
+    values.push(descriptor.value);
+  }
+  return values;
 }
 
 // Validate a trusted workspace seed. The schema is EXACTLY
-// `workspaceSeed: { files: [{ path, bytes }] }`:
-// the outer object carries ONLY the `files` key; each file is an EXACT-key
-// {path, bytes} record; paths are unique relative `inputs/<file>` (at least one
-// segment past `inputs`, nested freely within the SYNC_WORKSPACE_BOUNDS
-// path/segment ceilings — the shared boundedPath machinery is reused); bytes
-// are dense plain arrays of integers 0..255 (zero bytes allowed). EVERY schema
-// failure carries the stable `job-seed` code. Returns a deep-frozen canonical
-// form: the outer object + files + records + dense byte arrays all frozen.
+// `workspaceSeed: { files: [{ path, bytes }] }`. Every layer must be a plain
+// ordinary object/array with only the exact OWN DATA properties: no getters,
+// sparse indexes, extra string/symbol keys, or custom/null prototypes. Proxy
+// traps are caught and normalized to the stable job-seed failure (transparent
+// non-trapping proxies are not distinguishable in JavaScript). Paths are
+// unique relative `inputs/<file>` and bytes are dense integers 0..255. Returns
+// a deep-frozen canonical clone.
 export function validateWorkspaceSeed(seed) {
-  if (typeof seed !== "object" || seed === null || Array.isArray(seed) ||
-      Object.getPrototypeOf(seed) !== Object.prototype ||
-      !hasExactOwnKeys(seed, ["files"])) seedFail();
-  if (!Array.isArray(seed.files) || seed.files.length > WORKSPACE_SEED_LIMITS.maxFiles) {
+  try {
+    const outer = exactOwnDataValues(seed, ["files"], Object.prototype);
+    const inputFiles = exactPlainArrayValues(outer.files, WORKSPACE_SEED_LIMITS.maxFiles);
+    const seen = new Set();
+    let total = 0;
+    const files = [];
+    for (const inputFile of inputFiles) {
+      const file = exactOwnDataValues(inputFile, ["path", "bytes"], Object.prototype);
+      const path = file.path;
+      if (typeof path !== "string" || path.includes("\0") ||
+          path.startsWith("/") || path.includes("\\")) seedFail();
+      boundedPath(path);
+      const segments = path.split("/");
+      if (segments[0] !== "inputs" || segments.length < 2 || seen.has(path)) seedFail();
+      seen.add(path);
+      const inputBytes = exactPlainArrayValues(file.bytes, WORKSPACE_SEED_LIMITS.maxFileBytes);
+      const dense = [];
+      for (const byte of inputBytes) {
+        if (!Number.isInteger(byte) || byte < 0 || byte > 255) seedFail();
+        dense.push(byte);
+      }
+      total += dense.length;
+      if (total > WORKSPACE_SEED_LIMITS.maxTotalBytes) seedFail();
+      files.push(Object.freeze({ path, bytes: Object.freeze(dense) }));
+    }
+    return Object.freeze({ files: Object.freeze(files) });
+  } catch {
     seedFail();
   }
-  const seen = new Set();
-  let total = 0;
-  const files = [];
-  for (const file of seed.files) {
-    if (!file || typeof file !== "object" || Array.isArray(file) ||
-        Object.getPrototypeOf(file) !== Object.prototype ||
-        !hasExactOwnKeys(file, ["path", "bytes"])) seedFail();
-    const path = file.path;
-    if (typeof path !== "string" || path.includes("\0") ||
-        path.startsWith("/") || path.includes("\\")) seedFail();
-    let segments;
-    try {
-      // the shared boundedPath enforces the UTF-8 path + segment byte ceilings
-      // and rejects empty/`.`/`..` segments; then require `inputs/<file>`.
-      boundedPath(path);
-      segments = path.split("/");
-      if (segments[0] !== "inputs" || segments.length < 2) seedFail();
-    } catch (error) {
-      seedFail();
-    }
-    if (seen.has(path)) seedFail();
-    seen.add(path);
-    const bytes = file.bytes;
-    if (!Array.isArray(bytes) || Object.getPrototypeOf(bytes) !== Array.prototype ||
-        bytes.length > WORKSPACE_SEED_LIMITS.maxFileBytes ||
-        !hasExactOwnKeys(bytes, [
-          ...Array.from({ length: bytes.length }, (_, index) => String(index)),
-          "length",
-        ])) {
-      seedFail();
-    }
-    const dense = [];
-    for (let index = 0; index < bytes.length; index++) {
-      if (!(index in bytes)) seedFail(); // a hole is not dense
-      const byte = bytes[index];
-      if (!Number.isInteger(byte) || byte < 0 || byte > 255) seedFail();
-      dense.push(byte);
-    }
-    total += dense.length;
-    if (total > WORKSPACE_SEED_LIMITS.maxTotalBytes) seedFail();
-    files.push(Object.freeze({ path, bytes: Object.freeze(dense) }));
-  }
-  return Object.freeze({ files: Object.freeze(files) });
 }
 
 export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPACE_SEED } = {}) {

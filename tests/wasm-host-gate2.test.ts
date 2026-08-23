@@ -191,7 +191,26 @@ Deno.test("stat Release E: the EXACT workspace-read output through the real Work
 Deno.test("stat Release E: the workspace-seed schema fails closed on every hostile shape + accepts empty/nested files", async () => {
   const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
   const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["stat"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 }, acceptedExitCodes: [0], workspaceSeed: { files: [] } };
-  // the outer shape is EXACT {files:[...]} — extra/missing/renamed outer keys fail
+  const assertSeedFailure = (label, seed) => {
+    let caught = null;
+    try { createWasiJob({ ...base, workspaceSeed: seed }); } catch (error) { caught = error; }
+    assert(caught instanceof TypeError, `${label}: stable TypeError`);
+    assertEquals(caught?.message, "job-seed", `${label}: stable message`);
+    assertEquals(caught?.code, "job-seed", `${label}: stable code`);
+  };
+  const outerAccessor = {};
+  Object.defineProperty(outerAccessor, "files", { enumerable: true, get() { throw new Error("getter-ran"); } });
+  const outerCustomProto = Object.create({ hostile: true });
+  outerCustomProto.files = [];
+  const filesExtra = []; filesExtra.extra = 1;
+  const filesSymbol = []; filesSymbol[Symbol("x")] = 1;
+  const filesSparse = Array(1);
+  const filesCustomProto = []; Object.setPrototypeOf(filesCustomProto, { hostile: true });
+  const filesNullProto = []; Object.setPrototypeOf(filesNullProto, null);
+  const filesAccessor = [];
+  Object.defineProperty(filesAccessor, "0", { enumerable: true, get() { throw new Error("getter-ran"); } });
+  const throwing = (target, trap) => new Proxy(target, { [trap]() { throw new Error(`proxy-${trap}`); } });
+  // Every layer is exact OWN DATA shape: outer object + files container.
   const outerCases = [
     ["outer-extra", { files: [], extra: 1 }],
     ["outer-missing", {}],
@@ -200,16 +219,39 @@ Deno.test("stat Release E: the workspace-seed schema fails closed on every hosti
     ["outer-undefined", undefined],
     ["outer-files-string", { files: "x" }],
     ["outer-symbol", Object.assign({ files: [] }, { [Symbol("x")]: 1 })],
+    ["outer-accessor", outerAccessor],
+    ["outer-custom-proto", outerCustomProto],
+    ["outer-null-proto", Object.assign(Object.create(null), { files: [] })],
+    ["files-extra", { files: filesExtra }],
+    ["files-symbol", { files: filesSymbol }],
+    ["files-sparse", { files: filesSparse }],
+    ["files-custom-proto", { files: filesCustomProto }],
+    ["files-null-proto", { files: filesNullProto }],
+    ["files-accessor-index", { files: filesAccessor }],
+    ["proxy-outer", throwing({ files: [] }, "getPrototypeOf")],
+    ["proxy-files", { files: throwing([], "ownKeys") }],
   ];
-  for (const [label, seed] of outerCases) {
-    let threw = null;
-    try { createWasiJob({ ...base, workspaceSeed: seed }); } catch (e) { threw = String(e?.message ?? ""); }
-    assertEquals(threw, "job-seed", `${label} fails closed`);
-  }
-  // record/byte shapes: sparse/float/out-of-range/prototype/dup/mutation
+  for (const [label, seed] of outerCases) assertSeedFailure(label, seed);
+  // record/byte shapes: accessors/prototypes/sparse/float/range/dup/path
+  const recordAccessor = { bytes: [1] };
+  Object.defineProperty(recordAccessor, "path", { enumerable: true, get() { throw new Error("getter-ran"); } });
+  const recordCustomProto = Object.create({ hostile: true });
+  recordCustomProto.path = "inputs/a"; recordCustomProto.bytes = [1];
+  const bytesAccessor = [1];
+  Object.defineProperty(bytesAccessor, "0", { enumerable: true, get() { throw new Error("getter-ran"); } });
+  const bytesCustomProto = [1]; Object.setPrototypeOf(bytesCustomProto, { hostile: true });
+  const bytesNullProto = [1]; Object.setPrototypeOf(bytesNullProto, null);
   const recordCases = [
     ["record-extra", { files: [{ path: "inputs/a", bytes: [1], extra: 1 }] }],
     ["record-missing", { files: [{ path: "inputs/a" }] }],
+    ["record-accessor", { files: [recordAccessor] }],
+    ["record-custom-proto", { files: [recordCustomProto] }],
+    ["record-null-proto", { files: [Object.assign(Object.create(null), { path: "inputs/a", bytes: [1] })] }],
+    ["bytes-accessor", { files: [{ path: "inputs/a", bytes: bytesAccessor }] }],
+    ["bytes-custom-proto", { files: [{ path: "inputs/a", bytes: bytesCustomProto }] }],
+    ["bytes-null-proto", { files: [{ path: "inputs/a", bytes: bytesNullProto }] }],
+    ["proxy-record", { files: [throwing({ path: "inputs/a", bytes: [1] }, "getOwnPropertyDescriptor")] }],
+    ["proxy-bytes", { files: [{ path: "inputs/a", bytes: throwing([1], "getOwnPropertyDescriptor") }] }],
     ["sparse-bytes", { files: [{ path: "inputs/a", bytes: [1, , 3] }] }],
     ["float-byte", { files: [{ path: "inputs/a", bytes: [1.5] }] }],
     ["out-of-range-byte", { files: [{ path: "inputs/a", bytes: [256] }] }],
@@ -225,19 +267,7 @@ Deno.test("stat Release E: the workspace-seed schema fails closed on every hosti
     ["dotdot", { files: [{ path: "inputs/../a", bytes: [1] }] }],
     ["nul-path", { files: [{ path: "inputs/a\u0000b", bytes: [1] }] }],
   ];
-  for (const [label, seed] of recordCases) {
-    let threw = null;
-    try { createWasiJob({ ...base, workspaceSeed: seed }); } catch (e) { threw = String(e?.message ?? ""); }
-    assertEquals(threw, "job-seed", `${label} fails closed`);
-  }
-  // a proto-tainted record fails (prototype check)
-  const proto = { files: [] };
-  const evil = Object.create(null);
-  evil.path = "inputs/a"; evil.bytes = [1];
-  proto.files = [evil];
-  let threw = null;
-  try { createWasiJob({ ...base, workspaceSeed: proto }); } catch (e) { threw = String(e?.message ?? ""); }
-  assertEquals(threw, "job-seed", "proto-tainted record fails closed");
+  for (const [label, seed] of recordCases) assertSeedFailure(label, seed);
   // EMPTY bytes are ACCEPTED (≤32 KiB includes 0) + a NESTED valid path is accepted
   const empty = createWasiJob({ ...base, workspaceSeed: { files: [{ path: "inputs/empty.bin", bytes: [] }] } });
   assertEquals(empty.workspaceSeed.files[0].bytes.length, 0, "zero-byte seeded file accepted");
