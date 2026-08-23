@@ -346,7 +346,7 @@ Deno.test("fd_readdir D-minus: the production workspace seeds root and nested im
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Runtime-only fd_readdir foundation — du admission, tree remains disabled
+// Runtime-only fd_readdir foundation — du + tree Settings admissions
 // ──────────────────────────────────────────────────────────────────────────
 const DU_SHA = "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d";
 const TREE_SHA = "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb";
@@ -376,7 +376,7 @@ async function runDirectoryTool(toolId, sha, args, workspaceSeed, acceptedExitCo
   return await host.handleJob({ type: "wasm.job", job, wasmBytes });
 }
 
-Deno.test("du admission: exact 12-import retained du/tree binaries, du exact real-Worker traces, tree remains unadmitted", async () => {
+Deno.test("du/tree admission: exact 12-import retained binaries and exact isolated real-Worker traces", async () => {
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const exactImports = [
     "args_get",
@@ -395,11 +395,10 @@ Deno.test("du admission: exact 12-import retained du/tree binaries, du exact rea
   for (const [toolId, sha] of [["du", DU_SHA], ["tree", TREE_SHA]]) {
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
     assertEquals(row?.binary?.sha256, sha, `${toolId}: exact retained CAS`);
-    assertEquals(row?.admitted, toolId === "du", `${toolId}: admission posture`);
-    assertEquals(row?.disabled, toolId !== "du", `${toolId}: disabled posture`);
-    if (toolId === "tree") {
-      assertEquals(row?.disabledReason, "runtime-linked-awaiting-admission", "tree remains a separately gated admission");
-    }
+    assertEquals(row?.admitted, true, `${toolId}: admitted to Settings preview`);
+    assertEquals(row?.settingsPreview, true, `${toolId}: Settings-only posture`);
+    assertEquals(row?.disabled, false, `${toolId}: enabled posture`);
+    assertEquals(row?.disabledReason, null, `${toolId}: no stale disabled reason`);
     const bytes = await Deno.readFile(new URL(`../extension/wasm/cas/${sha}.wasm`, import.meta.url));
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((row) => row.name).sort();
     assertEquals(imports, exactImports, `${toolId}: frozen 12-import census`);
@@ -445,16 +444,21 @@ Deno.test("du admission: exact 12-import retained du/tree binaries, du exact rea
   assertEquals(duFresh.stderr, "");
   assertEquals(duFresh.counters, duSeeded.counters, "fresh Worker repeats exact counters without workspace leakage");
 
-  const treeSeeded = await runDirectoryTool("tree", TREE_SHA, ["/job"], seed);
+  const treeSeed = { files: [
+    { path: "inputs/f.bin", bytes: [104, 105] },
+    { path: "inputs/sub/g.txt", bytes: [103] },
+  ] };
+  const treeOutput = "/job/inputs\n├── f.bin\n└── sub/\n    └── g.txt\n\n1 directories, 2 files\n";
+  const treeSeeded = await runDirectoryTool("tree", TREE_SHA, ["/job/inputs"], treeSeed);
   assertEquals(treeSeeded.ok, true, JSON.stringify(treeSeeded));
-  assertEquals(treeSeeded.stdout, "/job\n└── inputs/\n    └── f.bin\n\n1 directories, 1 files\n");
+  assertEquals(treeSeeded.stdout, treeOutput);
   assertEquals(treeSeeded.stderr, "");
   assertEquals(treeSeeded.counters, {
-    hostCalls: 26,
-    pathCalls: 9,
+    hostCalls: 29,
+    pathCalls: 11,
     fileBytes: 0,
     stdinBytesRead: 0,
-    stdoutBytes: 67,
+    stdoutBytes: 87,
     stderrBytes: 0,
     openDynamicFds: 0,
   });
@@ -464,11 +468,22 @@ Deno.test("du admission: exact 12-import retained du/tree binaries, du exact rea
   assertEquals(treeEmpty.stderr, "");
   assertEquals(treeEmpty.counters?.openDynamicFds, 0);
 
-  const treeFile = await runDirectoryTool("tree", TREE_SHA, ["/job/inputs/f.bin"], seed, [0, 1]);
-  assertEquals(treeFile.ok, true, JSON.stringify(treeFile));
-  assertEquals(treeFile.stdout, "", "accepted diagnostic exit has no stale stdout");
-  assertEquals(treeFile.stderr, "tree: /job/inputs/f.bin: not a directory\n");
-  assertEquals(treeFile.counters?.openDynamicFds, 0);
+  // Tree keeps accepted exits at exact [0]. File, missing, traversal and foreign
+  // mount operands therefore fail without promoting partial output/counters.
+  for (const operand of ["/job/inputs/f.bin", "/job/inputs/nope", "/job/../escape", "/etc", "/jobx", "../escape"]) {
+    const denied = await runDirectoryTool("tree", TREE_SHA, [operand], treeSeed);
+    assertEquals(denied.ok, false, `${operand}: denied`);
+    assertEquals(denied.phase, "proc-exit", `${operand}: bounded process failure`);
+    assert([1, 2].includes(denied.errno), `${operand}: retained exit is 1 or 2`);
+    assertEquals(denied.stdout, "", `${operand}: no stale stdout`);
+    assertEquals(denied.stderr, "", `${operand}: no stale stderr`);
+    assertEquals(denied.counters, null, `${operand}: failed snapshots are not promoted`);
+  }
+  const treeFresh = await runDirectoryTool("tree", TREE_SHA, ["/job/inputs"], treeSeed);
+  assertEquals(treeFresh.ok, true, JSON.stringify(treeFresh));
+  assertEquals(treeFresh.stdout, treeOutput, "fresh Worker receives only its exact seed");
+  assertEquals(treeFresh.stderr, "");
+  assertEquals(treeFresh.counters, treeSeeded.counters, "fresh Worker repeats exact counters without stale state");
 });
 
 // ──────────────────────────────────────────────────────────────────────────

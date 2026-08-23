@@ -163,11 +163,11 @@ const LICENSE_WRITES = {
 const probe = new WasmPackageAuthority();
 const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // The technically-admitted Settings-preview allowlist (the static tranches):
-// the 21 tools in SETTINGS_PREVIEW_LANES expose bounded Settings-only previews
+// the 22 tools in SETTINGS_PREVIEW_LANES expose bounded Settings-only previews
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
@@ -342,6 +342,7 @@ for (const pkg of packages) {
   const STALE_PRE_ADMISSION_PHRASES = [
     "implementation/provenance still pending owner admission",
     "If narrowed to stdin-only in product integration, that contract requires an explicit adapter check",
+    "Requires future reviewed execution adapter; not currently executable/admitted.",
     "Requires future reviewed execution adapter to map only exact per-job CAP OPFS authority to WASI /job; not currently executable/admitted",
     "Requires future reviewed execution adapter to enforce path classes; not currently executable/admitted.",
     "Requires future reviewed execution adapter to enforce bounded path classes and reject symlink following; not currently executable/admitted.",
@@ -352,10 +353,14 @@ for (const pkg of packages) {
     "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed (explicit owner click); no provider, page or OPFS authority.";
   const DU_ADMITTED_CAVEAT =
     "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed, using /job by default (explicit owner click); no provider, page or OPFS authority.";
+  const TREE_ADMITTED_CAVEAT =
+    "Settings-only bounded read-only preview over the immutable nested in-memory /job/inputs seed (explicit owner click); no provider, page or OPFS authority.";
   const FILE_READ_DECLARED_CAVEAT = pkg.toolId === "stat"
     ? "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
     : pkg.toolId === "du"
     ? "file.read is confined to bounded recursive enumeration of the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
+    : pkg.toolId === "tree"
+    ? "file.read is confined to bounded recursive enumeration of the immutable nested per-job inputs seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
     : "file.read remains declared in the manifest; the route projects NO files into the fresh empty per-job workspace, so a file operand cannot read owner data and fails closed (path normalization prevents escape/cross-job).";
   const cleanedCaveats = (Array.isArray(meta.caveats) ? meta.caveats : []).map((caveat) => {
     let out = String(caveat);
@@ -369,12 +374,11 @@ for (const pkg of packages) {
     ...cleanedCaveats,
     pkg.toolId === "stat" ? STAT_ADMITTED_CAVEAT
       : pkg.toolId === "du" ? DU_ADMITTED_CAVEAT
+      : pkg.toolId === "tree" ? TREE_ADMITTED_CAVEAT
       : GENERIC_ADMITTED_CAVEAT,
     ...(capabilities.includes("file.read") ? [FILE_READ_DECLARED_CAVEAT] : []),
   ];
-  const disabledCaveats = pkg.toolId === "tree"
-    ? ["Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed. The retained binary is runtime-linked through the bounded read-only directory host but awaits separate Settings preview admission."]
-    : (Array.isArray(meta.caveats) ? meta.caveats : []);
+  const disabledCaveats = Array.isArray(meta.caveats) ? meta.caveats : [];
   descriptorRows.push({
     packageId: manifest.package.id, version: "1.0.0", toolId: pkg.toolId, lane: pkg.lane,
     displayName: String(meta.displayName ?? meta.displayName), category: String(meta.category),
@@ -386,9 +390,7 @@ for (const pkg of packages) {
     canonicalNameClaim: false,
     ...(settingsPreview
       ? { admitted: true, settingsPreview: true, disabled: false, disabledReason: null }
-      : { admitted: false, disabled: true, disabledReason: pkg.toolId === "tree"
-        ? "runtime-linked-awaiting-admission"
-        : (pkg.disabledReason ?? "no-execution-host") }),
+      : { admitted: false, disabled: true, disabledReason: pkg.disabledReason ?? "no-execution-host" }),
   });
 }
 
@@ -485,12 +487,12 @@ grant, or catalog entry
 consumes this package. Node host sources under host/ are public Apache-2.0
 provenance only — they are not shipped runtime code.
 `);
-writeFileSync(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 21-tool Settings-preview tranche)
+writeFileSync(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 22-tool Settings-preview tranche)
 
 26 single-tool Wasm packages generated by \`scripts/build-bundled-tool-packages.mjs\`
 from the frozen, independently reviewed evidence trees under \`/tmp/cap-fixed-tools-*\`,
 \`/tmp/cap-csvtool-cleanroom/\`, and \`/tmp/cap-23-tool-catalog-metadata-v3/\`
-(inventory sha256 c947d957bbd699754ad3afcf6540242dd3fb573548a82b067c467d1f3a5d8bc0).
+(inventory sha256 69a7099f7736903f21eddf6f89f4f964ec4f79c0c3121fdcbc6abe7114eb92de).
 
 - Binaries ship content-addressed in \`extension/wasm/cas/<sha256>.wasm\`.
 - Manifests are authority-schema-exact canonical JSON in \`extension/wasm/manifests/\`.
@@ -500,12 +502,11 @@ from the frozen, independently reviewed evidence trees under \`/tmp/cap-fixed-to
   tranche \`csvtool\`, \`uuid\`, \`head\`, \`tail\`, \`cut\`, \`base64\`,
   \`md5sum\`, \`sha256sum\`, \`sha512sum\`, \`wc\`, \`xxd\`, \`sort\`,
   \`uniq\`, \`tr\`, \`grep\`, \`toml2json\`, \`markdown\`, \`diff\`,
-  \`patch\`, \`stat\`, \`du\` are
+  \`patch\`, \`stat\`, \`du\`, \`tree\` are
   \`admitted:true\` + \`settingsPreview:true\` (Settings-only bounded previews,
   explicit owner click, argv0 = the exact toolId; no catalog/provider selection
-  authority). The other 5 remain \`admitted:false\`, \`disabled:true\` (reason
-  \`no-execution-host\`, \`runtime-linked-awaiting-admission\`, or
-  \`runtime-imports-unimplemented\`), \`canonicalNameClaim:false\`,
+  authority). The other 4 remain \`admitted:false\`, \`disabled:true\` (reason
+  \`no-execution-host\` or \`runtime-imports-unimplemented\`), \`canonicalNameClaim:false\`,
   \`sourceKind:"bundled-package"\`.
 - The ONLY execution route is \`tool.preview.run\` (exact Settings options
   document sender; the toolId resolves through the immutable spec map +

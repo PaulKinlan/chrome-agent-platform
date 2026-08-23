@@ -6500,6 +6500,8 @@ class ToolLibrary extends Component {
         return 'Example: args "/job/inputs/f.bin" → "path=/job/inputs/f.bin\\ntype=regular file\\nsize=2\\nmtime=0.000000000\\n" (read-only immutable job seed).';
       case "du":
         return 'Example: leave args empty for the immutable "/job" default → "1\\t/job/inputs\\n1\\t/job\\n" (read-only deterministic inputs/f.bin seed).';
+      case "tree":
+        return 'Example: leave args empty for the immutable "/job/inputs" default → a sorted Unicode tree with f.bin and sub/g.txt (read-only nested seed).';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6664,6 +6666,7 @@ class ToolLibrary extends Component {
             <option value="patch">patch — apply a unified diff</option>
             <option value="stat">stat — inspect immutable job-file metadata</option>
             <option value="du">du — summarize immutable job usage</option>
+            <option value="tree">tree — display immutable job hierarchy</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>

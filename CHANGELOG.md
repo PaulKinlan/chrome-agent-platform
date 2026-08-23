@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.181] — 2026-08-23
+- feat(tools): admit bounded tree Settings preview over an immutable nested job seed (CAP-FB-20260823-TOOL-PREVIEW-TREE-01)
+
 ## [0.2.180] — 2026-08-23
 - feat(tools): cut providers over to bounded lazy dispatch (CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01)
 

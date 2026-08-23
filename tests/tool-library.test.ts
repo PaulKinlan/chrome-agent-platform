@@ -25,7 +25,7 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du"];
+  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree"];
   for (const toolId of selectorOrder) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }

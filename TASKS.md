@@ -747,6 +747,46 @@ On resume after a coordinator or worker loss:
 - Review: independent source/package and loaded-MV3 evidence reviews PASS
 - Next: —
 
+## [CAP-FB-20260823-TOOL-PREVIEW-TREE-01] Bounded tree Settings preview (Release 0.2.181)
+
+- Feedback: 2026-08-23 — after du and the live lazy-provider cutover landed,
+  admit only the retained tree binary through the existing owner-only Settings
+  preview without adding package, provider, page, OPFS, permission, route, or
+  mutation authority
+- Updated: 2026-08-23 13:15 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: tree admission worker
+- Workspace: active (local path private)
+- Branch: `feat/tree-admission-349d762`
+- Base: public `349d762475538cfce4e4bf201395ba4e47a6475b` (0.2.180)
+- Candidate: this commit (0.2.181)
+- Shipping: —
+- Acceptance: exactly 22 enabled / 4 disabled. tree alone is appended after du
+  in the Settings selector and immutable preview allowlist. Its retained CAS is
+  `65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb`
+  (39,108 bytes), with exact accepted exits `[0]`, deeply frozen nested seed
+  `inputs/f.bin=[104,105]` plus `inputs/sub/g.txt=[103]`, and deeply frozen
+  default operand `/job/inputs`; request fields cannot forge seed/default/exit,
+  package, or capability authority. The fresh real Worker emits the exact sorted
+  Unicode tree and measured counters (29 host, 11 path, 87 stdout bytes, zero
+  stdin/stderr/open dynamic FDs). Empty, hostile and fresh-worker runs prove no
+  stale output or workspace state. All 12 imports are already supported. No CAS,
+  runtime, route, permission, provider, page, OPFS, persistence or mutation
+  authority changes.
+- Gates: focused preview/package/real-Worker/selector 100/100; full serial
+  no-Chrome 1195/1195 across 14 steps; production Store build clean; generator
+  rerun byte-idempotent; fresh 22-tool import census has `missing=[]`; remaining
+  disabled exact 4 with SQLite's exact eight-import gap; 26 CAS files have zero
+  delta from the public parent. Exact clean-commit Store package runs after this
+  source commit so its deterministic marker binds the final object.
+- Review: independent source/package review required; Chrome intentionally not run
+  in this source/package lane
+- Blockers: —
+- Next: commit one clean candidate, build/package that exact object, then obtain
+  independent review
+
 ## [CAP-FB-20260823-TOOL-PREVIEW-DU-01] Bounded du Settings preview (Release 0.2.179)
 
 - Feedback: 2026-08-23 — after the bounded `fd_readdir` runtime foundation

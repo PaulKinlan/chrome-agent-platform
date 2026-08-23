@@ -1,6 +1,6 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
 // (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
-// static allowlist of bundled packages (21 tools) may be run ONLY from the
+// static allowlist of bundled packages (22 tools) may be run ONLY from the
 // exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:
@@ -85,18 +85,25 @@ export const PREVIEW_SPECS = Object.freeze(
           // accepts only exit 0. NEVER request-borne — the SW copies this into
           // the trusted job envelope.
           acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
-          // The immutable workspace seed (stat + du receive the same minimum
-          // deterministic input; every predecessor other than stat stays empty).
-          // The spec holds FROZEN DENSE PLAIN byte arrays — never a mutable
-          // Uint8Array — so the spec object itself is deep-immutable.
-          workspaceSeed: row.toolId === "stat" || row.toolId === "du"
+          // Immutable per-tool workspace seeds. stat/du retain their minimum
+          // deterministic input; tree alone gets the nested seed required to
+          // exercise directory synthesis. Specs hold FROZEN DENSE PLAIN byte
+          // arrays — never mutable Uint8Arrays — so this authority is deep immutable.
+          workspaceSeed: row.toolId === "tree"
+            ? Object.freeze({ files: Object.freeze([
+              Object.freeze({ path: "inputs/f.bin", bytes: Object.freeze([104, 105]) }),
+              Object.freeze({ path: "inputs/sub/g.txt", bytes: Object.freeze([103]) }),
+            ]) })
+            : row.toolId === "stat" || row.toolId === "du"
             ? Object.freeze({ files: Object.freeze([Object.freeze({ path: "inputs/f.bin", bytes: Object.freeze([104, 105]) })]) })
             : Object.freeze({ files: Object.freeze([]) }),
-          // du alone has an immutable safe default operand. It is applied only
-          // when the owner leaves generic Arguments empty and is never carried
-          // by the request as package/capability/seed/exit authority.
+          // Recursive readers alone have immutable safe default operands. They
+          // apply only when the owner leaves generic Arguments empty and are
+          // never request-borne package/capability/seed/exit authority.
           ...(row.toolId === "du"
             ? { defaultArgs: Object.freeze(["/job"]) }
+            : row.toolId === "tree"
+            ? { defaultArgs: Object.freeze(["/job/inputs"]) }
             : {}),
           argBounds: row.toolId === "diff" || row.toolId === "patch"
             ? TWO_DOCUMENT_BOUNDS

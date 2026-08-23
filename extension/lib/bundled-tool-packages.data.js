@@ -755,7 +755,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "file",
   "description": "Bounded deterministic directory tree visualizer for OPFS job workspaces",
   "caveats": [
-   "Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed. The retained binary is runtime-linked through the bounded read-only directory host but awaits separate Settings preview admission."
+   "Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed",
+   "Settings-only bounded read-only preview over the immutable nested in-memory /job/inputs seed (explicit owner click); no provider, page or OPFS authority.",
+   "file.read is confined to bounded recursive enumeration of the immutable nested per-job inputs seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
   "capabilities": [
    "compute",
@@ -777,9 +779,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.tree-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "runtime-linked-awaiting-admission"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.touch",

@@ -52,6 +52,13 @@ isolated OPFS memory, run history, skills, and avatar.
   terminal jobs, and promotes output only through content-digest-bound keyed artifact
   WAL creates. No message, provider, package, or execution route reaches the wrapper;
   loaded-MV3 use remains blocked on a separately reviewed route/Worker successor.
+- **Owner-only tree Settings preview (0.2.181 source candidate)** — the exact retained
+  39,108-byte tree CAS runs only after an explicit Settings click over a deeply frozen
+  in-memory `/job/inputs` seed containing `f.bin` and `sub/g.txt`. Its exact `[0]`
+  accepted-exit policy, default operand, package/capability identity, and nested seed
+  are immutable spec authority rather than request fields. It adds no provider/page,
+  permission, route, OPFS, persistence, mutation, runtime-import, or package-install
+  authority; the Settings posture is exactly 22 enabled and 4 disabled.
 - **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
   immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
   and an exact-token package registry WAL record bundled metadata only. Import module
