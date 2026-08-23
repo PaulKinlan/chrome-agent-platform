@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **31 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 58 nonterminal and 40 terminal status entries
-> below are the complete 98-entry state.
+> Branch status counts: **38 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 65 nonterminal and 40 terminal status entries
+> below are the complete 105-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,197 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-SETTINGS-PERM-LAYOUT-01] Settings permission rows: gates and description overlap, unreadable
+
+- Feedback: 2026-08-23 — product owner: in the Settings permissions section,
+  each sub-setting (memory, settings, etc.) has a "gates" column and a
+  description that OVERLAP — the text is unreadable; they should sit next to
+  each other or use a better layout
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: permission/capability rows render with the gates and
+  description clearly separated (side-by-side or stacked), no overlap,
+  readable at narrow widths; wrapping is clean; AX labels intact
+- Review: pending independent layout/accessibility review
+- Gates: narrow/RTL/theme screenshots; no overlap at 360px; AX readable
+- Blockers: —
+- Next: reproduce the overlap and fix the row grid/flex layout
+- Recover: `git grep -n "gates\|capability" -- extension/options/options.js`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+
+## [CAP-FB-20260823-SECTION-ANCHOR-LINKS-01] Deep-link anchors for every Settings section
+
+- Feedback: 2026-08-23 — product owner: deep-link into any individual section
+  — put a small anchor icon next to each section heading (visible on hover);
+  clicking the anchor or heading copies the section link to the clipboard
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: every Settings section heading has a hover-revealed anchor;
+  clicking anchor/heading copies a working deep link (#section) to the
+  clipboard with visible confirmation; the link navigates and scrolls to the
+  section; composes with the Navigation API routing
+- Review: pending independent navigation/clipboard/accessibility review
+- Gates: copy-to-clipboard works; link round-trips to the section; hover
+  reveal; keyboard reachable; clipboard-permission fallback message
+- Blockers: composes with CAP-FB-20260823-NAVIGATION-BACK-01
+- Next: add anchor buttons + clipboard copy to section headings
+- Recover: `git grep -n "SETTINGS_SECTIONS\|hashchange" -- extension/options`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+
+## [CAP-FB-20260823-USAGE-TRACKING-FIX-01] Usage tracking is not working
+
+- Feedback: 2026-08-23 — product owner: usage still isn't working — the usage
+  tracking needs to be fixed
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: model usage is recorded truthfully per run/provider, attributed
+  correctly, and displayed in the Usage Settings section; survives reload;
+  no missing/misattributed records; zero records when nothing ran
+- Review: pending independent data-truth/storage/accessibility review
+- Gates: run→record attribution matrix; reload persistence; empty-state truth
+- Blockers: —
+- Next: reproduce the missing/misattributed usage records and fix the pipeline
+- Recover: `git grep -n "usage\|UsageRecord" -- extension/lib extension/options`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback;
+    supersedes the closed CAP-FB-20260818-USAGE-RECORDING-01 which regressed.
+
+## [CAP-FB-20260823-DURABLE-TASK-RESTORE-01] Durable running task does not resume when returning to it
+
+- Feedback: 2026-08-23 — product owner: if a task is executing and you move
+  away and come back, it doesn't come back — returning to a running task must
+  restore it
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: navigating away from a running task and returning restores the
+  live task view (transcript, status, controls) from the durable run state;
+  a completed/failed task shows its terminal state; no duplicate or lost run;
+  works across navigation and reload
+- Review: pending independent durable-state/navigation/accessibility review
+- Gates: leave-and-return restore for running/completed/failed; reload
+  consistency; no duplicate projection
+- Blockers: composes with CAP-FB-20260823-AGENT-RUN-VISIBILITY-01 (landed)
+- Next: reproduce the lost-task-on-return and wire the restore
+- Recover: `git grep -n "durable-runs\|latestRunForSurface" -- extension`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+
+## [CAP-FB-20260823-TASK-INLINE-EDIT-01] Task title should be click-to-edit, not a separate edit button
+
+- Feedback: 2026-08-23 — product owner: in the task view, remove the separate
+  Edit button — clicking the title text should edit it directly; on hover it
+  should look editable; the edit button looks messy (the agents one is more
+  justified, tasks less so)
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: task title is click-to-edit inline with a clear hover affordance
+  (editable cursor/outline); the separate edit button is removed from the
+  task view; escape cancels, enter/blur commits; agent edit affordance
+  reviewed separately
+- Review: pending independent UX/accessibility review
+- Gates: click-to-edit round-trip; hover affordance; keyboard edit; cancel/commit
+- Blockers: —
+- Next: convert the task title to an inline-editable element
+- Recover: `git grep -n "edit\|rename" -- extension/ntp extension/shared`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+
+## [CAP-FB-20260823-COLLAPSED-PANEL-HEADER-01] Collapsing the side panel removes the header and shifts lists
+
+- Feedback: 2026-08-23 — product owner: when the side menu/panel is collapsed,
+  the "Chrome Agent Platform" heading disappears and the task/agent lists get
+  pushed up — the lists should stay in the same location, not shift
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: collapsing/expanding the side panel keeps the task/agent lists
+  at a stable position; the header collapses gracefully without pushing
+  content up; layout transition is smooth and does not jump
+- Review: pending independent layout/accessibility review
+- Gates: collapsed/expanded position parity; no vertical jump; smooth transition
+- Blockers: —
+- Next: stabilize the list position when the panel collapses
+- Recover: `git grep -n "collapse\|sidebar" -- extension/sidepanel extension/shared`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+
+## [CAP-FB-20260823-CREATE-AGENT-DIALOG-01] Create-agent dialog: clipped focus, footer buttons, skills collapse, scroll passthrough
+
+- Feedback: 2026-08-23 — product owner: the create-agent dialog looks wrong —
+  the focused input/text editor is clipped; the Create/Cancel buttons should
+  sit in a footer OUTSIDE the scroll region; the skills section should
+  collapse/compress so it doesn't push Create/Cancel off-screen (skills stay
+  visible but compact); and when the dialog scroll reaches the bottom it must
+  NOT pass through to the page behind (block scroll chaining)
+- Updated: 2026-08-23 22:50 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `4e2b573`
+- Candidate: —
+- Shipping: —
+- Acceptance: create-agent dialog shows the full focused input without
+  clipping; Create/Cancel are in a fixed footer outside the scrollable body;
+  the skills section collapses/compresses to keep the footer visible; dialog
+  scroll does not chain to the background page (overscroll contained);
+  keyboard focus order is correct
+- Review: pending independent dialog/accessibility/scroll review
+- Gates: focused-input not clipped; sticky footer; skills collapse; no scroll
+  passthrough; focus trap + Escape; narrow widths
+- Blockers: —
+- Next: fix the dialog clipping, add a sticky footer, make skills collapsible,
+  contain overscroll
+- Recover: `git grep -n "create-agent\|agent-dialog\|skills" -- extension/shared`
+- History:
+  - 2026-08-23 22:50 UTC — captured from product-owner voice feedback.
+
+
 
 ## [CAP-FB-20260823-TOOL-NAMING-01] Bundled tool names must lead with the Unix tool name
 
@@ -1026,7 +1217,7 @@ On resume after a coordinator or worker loss:
 
 ## [CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01] Downloadable in-extension local model management
 - Feedback: 2026-08-19 — product-owner voice feedback requested on-demand local models inside the extension; the transcript's apparent “Gemma 4” wording is uncertain and is not a model claim, while Gemma and Qwen are the requested model families
-- Updated: 2026-08-22 07:30 UTC
+- Updated: 2026-08-23 22:50 UTC
 - Status: OPEN
 - Resume: —
 - Priority: P0
@@ -1047,6 +1238,13 @@ On resume after a coordinator or worker loss:
   - Git reconcile at 2026-08-22 07:30 UTC: the Gemma 4 catalog/preflight SLICE landed on origin/main; the full download/install/inference acceptance is NOT met — the task stays OPEN.
   - 2026-08-19 21:08 UTC — captured the local-model request as research-first OPEN work; no Ollama dependency, model identity, size, quantization, licence, runtime, or storage backend is inferred or approved from the uncertain voice transcription.
   - 2026-08-20 03:25 UTC — replayed the independently accepted public-safe task capture onto exact current public main; the extension-managed download goal remains OPEN, with no runtime, model identity or size, quantization, source or licence, update/version, storage/ownership/quota/eviction/atomicity/recovery, integrity, or supply-chain/security choice approved.
+  - 2026-08-23 22:50 UTC — OWNER: the Gemma-4 download says "publisher
+    preflight passed, download available" but "runtime inference, full OPFS
+    installation, model removal and eviction are not implemented or
+    authorised in this slice" — these must be COMPLETED, not deferred. The
+    hardened download candidate (Gemini 9552fe0, K3 supply-chain review
+    pending) is the base; finish OPFS install + runtime inference +
+    removal/eviction end-to-end.
   - 2026-08-23 20:35 UTC — OWNER ESCALATION: product owner demanded the
     Gemma and other model download/install path be implemented immediately;
     priority raised P1 → P0 and an implementation lane assigned. Runtime
