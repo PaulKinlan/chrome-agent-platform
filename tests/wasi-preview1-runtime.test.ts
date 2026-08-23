@@ -149,6 +149,7 @@ function rawJob(
     quota,
     stdin,
     tier,
+    acceptedExitCodes: [0],
   };
 }
 

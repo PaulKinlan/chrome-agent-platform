@@ -89,6 +89,7 @@ export function createOffscreenWasmHost({ executor, authority }) {
               stdin: job.stdin,
               quota: job.quota,
               tier: job.tier,
+              acceptedExitCodes: job.acceptedExitCodes,
             },
             wasmBytes: Array.from(wasmBytes),
           }),

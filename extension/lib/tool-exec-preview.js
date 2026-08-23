@@ -1,6 +1,6 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
 // (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
-// static allowlist of bundled packages (17 tools) may be run ONLY from the
+// static allowlist of bundled packages (19 tools) may be run ONLY from the
 // exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:
@@ -56,6 +56,13 @@ import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
 // it resolves HERE (packageId, manifest rel, CAS SHA/size, caps, argv0). The
 // request never carries bytes, digests or capabilities; every run re-validates
 // the manifest + CAS through the REAL package authority.
+// diff/patch take the two documents as argv[1..2] (the current binaries'
+// contract — strlen-based C strings, multiline legal, NUL truncates by C
+// semantics); their per-arg bound is EXACTLY the createWasiJob 1024-byte cap
+// (2 docs + flags fit the 2048 total; the global host schema is unchanged).
+const TWO_DOCUMENT_BOUNDS = Object.freeze({ maxArgBytes: 1024, maxArgTotalBytes: 2048 });
+const SINGLE_DOCUMENT_BOUNDS = Object.freeze({ maxArgBytes: 512, maxArgTotalBytes: 1024 });
+
 export const PREVIEW_SPECS = Object.freeze(
   Object.fromEntries(
     BUNDLED_TOOL_PACKAGE_ROWS
@@ -73,6 +80,14 @@ export const PREVIEW_SPECS = Object.freeze(
           size: row.binary?.bytes,
           caps: Object.freeze([...(row.capabilities ?? [])].sort()),
           argv0: row.toolId,
+          // The immutable acceptedExitCodes: diff's exit 1 is the NORMAL
+          // "differences found" result (the hunk on stdout); everything else
+          // accepts only exit 0. NEVER request-borne — the SW copies this into
+          // the trusted job envelope.
+          acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
+          argBounds: row.toolId === "diff" || row.toolId === "patch"
+            ? TWO_DOCUMENT_BOUNDS
+            : SINGLE_DOCUMENT_BOUNDS,
         }),
       ]),
   ),
@@ -174,21 +189,29 @@ export function validatePreviewInput(raw) {
     JSON.stringify(Object.keys(raw).sort()) !==
     JSON.stringify(["args", "stdin", "toolId"].sort())
   ) fail("preview_request_shape");
-  if (typeof raw.toolId !== "string" || !previewSpecFor(raw.toolId)) {
-    fail("preview_unknown_tool");
-  }
+  const spec = previewSpecFor(raw.toolId);
+  if (!spec) fail("preview_unknown_tool");
   if (!Array.isArray(raw.args) || raw.args.length > PREVIEW_LIMITS.maxArgs) {
     fail("preview_args");
   }
+  // The per-tool arg bounds from the immutable spec (diff/patch get the exact
+  // 1024/doc + 2048 total; the 17 others stay 512/1024).
+  const { maxArgBytes, maxArgTotalBytes } = spec.argBounds;
   let totalBytes = 0;
+  // The leading-BOM rejection is scoped to the two-document tools ONLY: the
+  // diff/patch binaries are NUL/C-string argv consumers where a BOM would
+  // corrupt argv[0]-adjacent parsing. The predecessor 17 keep their exact
+  // prior argv behavior (a leading BOM in an arg is accepted as before).
+  const rejectLeadingBom = raw.toolId === "diff" || raw.toolId === "patch";
   const args = raw.args.map((arg) => {
     if (typeof arg !== "string" || arg.includes("\0")) fail("preview_args");
+    if (rejectLeadingBom && arg.charCodeAt(0) === 0xfeff) fail("preview_args");
     const bytes = utf8Bytes(arg);
-    if (bytes > PREVIEW_LIMITS.maxArgBytes) fail("preview_args");
+    if (bytes > maxArgBytes) fail("preview_args");
     totalBytes += bytes;
     return arg;
   });
-  if (totalBytes > PREVIEW_LIMITS.maxArgTotalBytes) fail("preview_args");
+  if (totalBytes > maxArgTotalBytes) fail("preview_args");
   if (typeof raw.stdin !== "string") fail("preview_stdin");
   const stdinBytes = utf8Bytes(raw.stdin);
   if (stdinBytes > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin");
@@ -247,6 +270,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     },
     args,
     stdin: stdinBytes,
+    acceptedExitCodes: spec.acceptedExitCodes,
     quota: quota ?? {
       hostCalls: 50_000,
       pathCalls: 4096,

@@ -81,6 +81,7 @@ function makeJob(overrides = {}) {
     args: [],
     stdin: new Uint8Array(0),
     quota: { ...WASI_HOST_DEFAULT_QUOTA, hostCalls: 1000, pathCalls: 100, stdinBytes: 64, stdoutBytes: 64, stderrBytes: 64, fileBytes: 1024, fileSize: 1024, dynamicFds: 4 },
+    acceptedExitCodes: [0],
     ...overrides,
   };
 }
@@ -142,6 +143,77 @@ Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT 
     assertEquals(res.phase, "completed", toolId);
     assertEquals(res.stdout, contract.expect, `${toolId} exact contract output`);
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// (B15) diff/patch Settings preview — accepted-exit + two-document contracts
+// ──────────────────────────────────────────────────────────────────────────
+const DIFF_SHA = "47d674035f83bf0de7b4a2ae5ee7d5e6bbe505713974ec6e5c83b2c379307c6f";
+
+async function runDiffPatch(tool, args, acceptedExitCodes) {
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
+  const row = BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === tool);
+  const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${row.binary.sha256}.wasm`));
+  const job = makeJob({ stdin: new Uint8Array(0) });
+  const rehydrated = { ...job, stdin: new Uint8Array(job.stdin), acceptedExitCodes };
+  const executor = new WasmExecutor({ workerUrl: WORKER_URL, callMs: 15000 });
+  const host = createOffscreenWasmHost({ executor, authority: { ...AUTHORITY } });
+  return await host.handleJob({ type: "wasm.job", job: { ...rehydrated, args: [tool, ...args] }, wasmBytes });
+}
+
+Deno.test("diff/patch Release C: EXACT outputs + accepted-exit + exit2/no-stale through the real Worker", async () => {
+  // diff exit 1 (differences found) is an ACCEPTED exit → ok:true + the hunk preserved
+  const differing = await runDiffPatch("diff", ["a\nb\n", "a\nc\n"], [0, 1]);
+  assertEquals(differing.ok, true, JSON.stringify(differing));
+  assertEquals(differing.phase, "completed", JSON.stringify(differing));
+  assertEquals(differing.stdout, "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n", "the exact diff hunk");
+  // diff identical → exit 0 → ok:true + empty
+  const identical = await runDiffPatch("diff", ["a\nb\n", "a\nb\n"], [0, 1]);
+  assertEquals(identical.ok, true, JSON.stringify(identical));
+  assertEquals(identical.stdout, "", "identical → empty");
+  // diff usage error → exit 2 NOT accepted → failure + no stale
+  const usage = await runDiffPatch("diff", ["only-one"], [0, 1]);
+  assertEquals(usage.ok, false, "usage error fails");
+  assertEquals(usage.errno, 2, "exit 2");
+  assertEquals(usage.stdout, "", "no stale stdout");
+  // patch success → exit 0 → ok:true + the patched text
+  const patched = await runDiffPatch("patch", ["a\nb\n", "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"], [0]);
+  assertEquals(patched.ok, true, JSON.stringify(patched));
+  assertEquals(patched.stdout, "a\nc\n", "the patched text");
+  // patch malformed → exit 2 → failure + no stale
+  const malformed = await runDiffPatch("patch", ["a\nb\n", "not-a-diff"], [0]);
+  assertEquals(malformed.ok, false, "malformed patch fails");
+  assertEquals(malformed.errno, 2, "exit 2");
+  assertEquals(malformed.stdout, "", "no stale stdout");
+  // a NON-accepted code (exit 2 with acceptedExitCodes [0] only) stays failure
+  const denied = await runDiffPatch("diff", ["only-one"], [0]);
+  assertEquals(denied.ok, false, "non-accepted exit stays a failure");
+  assertEquals(denied.errno, 2, "errno preserved");
+});
+
+Deno.test("diff/patch Release C: schema/forgery/bounds mutants fail closed", async () => {
+  const { createWasiJob } = await import("../extension/lib/wasm-host-types.js");
+  const base = { tier: "tiny", context: { executionId: "e-1", callId: "c-1", origin: "https://a.example", workspaceRoot: "tool-jobs/e-1/c-1/" }, args: ["diff", "a", "b"], stdin: new Uint8Array(0), quota: { hostCalls: 50000, pathCalls: 4096, stdinBytes: 2048, stdoutBytes: 1024*1024, stderrBytes: 256*1024, fileBytes: 10*1024*1024, fileSize: 10*1024*1024, dynamicFds: 256 } };
+  const hostile = [
+    ["missing-0", { ...base, acceptedExitCodes: [1] }],
+    ["unsorted", { ...base, acceptedExitCodes: [1, 0] }],
+    ["duplicate", { ...base, acceptedExitCodes: [0, 0] }],
+    ["out-of-range", { ...base, acceptedExitCodes: [0, 300] }],
+    ["fractional", { ...base, acceptedExitCodes: [0.5, 0] }],
+    ["empty", { ...base, acceptedExitCodes: [] }],
+    ["oversize", { ...base, acceptedExitCodes: [0, 1, 2, 3] }],
+  ];
+  for (const [label, job] of hostile) {
+    let threw = null;
+    try { createWasiJob(job); } catch (e) { threw = String(e?.message ?? e?.code ?? ""); }
+    assertEquals(threw, "job-accepted-exits", `${label} fails closed`);
+  }
+  // a request-borne acceptedExitCodes is IMPOSSIBLE (the request schema has no such key)
+  const { validatePreviewInput } = await import("../extension/lib/tool-exec-preview.js");
+  let threw = null;
+  try { validatePreviewInput({ toolId: "diff", args: ["a", "b"], stdin: "", acceptedExitCodes: [9] }); } catch (e) { threw = e?.code ?? null; }
+  assertEquals(threw, "preview_request_shape", "an extra request key is rejected");
 });
 
 // ──────────────────────────────────────────────────────────────────────────

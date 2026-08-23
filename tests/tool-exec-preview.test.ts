@@ -224,7 +224,7 @@ Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", (
 });
 
 Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exact)", () => {
-  for (const toolId of ["diff", "gzip", "evil", "csvtool.extra", "CsvTool", ""]) {
+  for (const toolId of ["gzip", "evil", "csvtool.extra", "CsvTool", ""]) {
     let threw = null;
     try { validatePreviewInput({ toolId, args: [], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assertEquals(threw, "preview_unknown_tool", `unknown tool ${JSON.stringify(toolId)} rejected`);
@@ -239,7 +239,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   }
   // the allowlist is EXACTLY the 17 tools
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "grep", "head", "markdown", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -284,6 +284,40 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assertEquals([...job.stdin].length, "a,b\n1,2".length);
   // quota is bounded by the preview limits
   assertEquals(job.quota.stdinBytes, PREVIEW_LIMITS.maxStdinBytes);
+  // per-tool arg bounds: the 17 stay 512/1024; diff/patch get the EXACT
+  // 1024/doc + 2048 total (the createWasiJob 1024 cap — the host schema
+  // unchanged); an over-bound doc is rejected
+  const diffSpec = previewSpecFor("diff");
+  assertEquals(diffSpec.argBounds.maxArgBytes, 1024, "diff per-doc bound");
+  assertEquals(diffSpec.argBounds.maxArgTotalBytes, 2048, "diff total bound");
+  assertEquals(previewSpecFor("csvtool").argBounds.maxArgBytes, 512, "the 17 stay 512/arg");
+  const diffInput = validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1024)], stdin: "" });
+  assertEquals(diffInput.args.length, 2, "two 1024-byte docs accepted");
+  let threw = null;
+  try { validatePreviewInput({ toolId: "diff", args: ["a".repeat(1025), "b"], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assertEquals(threw, "preview_args", "a 1025-byte doc rejects (per-arg 1024 cap)");
+  threw = null;
+  try { validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1025)], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assertEquals(threw, "preview_args", "the second doc over 1024 rejects");
+  threw = null;
+  try { validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1024), "c"], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assertEquals(threw, "preview_args", "three docs exceed the 2048 total");
+  // NUL in a doc rejects (all tools); the leading-BOM rejection is scoped to
+  // diff/patch ONLY — the predecessor 17 keep their PRIOR acceptance behavior
+  threw = null;
+  try { validatePreviewInput({ toolId: "diff", args: ["a\u0000b", "c"], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assertEquals(threw, "preview_args", "NUL in a doc rejects");
+  threw = null;
+  try { validatePreviewInput({ toolId: "diff", args: ["\ufeffa", "c"], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assertEquals(threw, "preview_args", "BOM in a diff doc rejects");
+  // REGRESSION: a predecessor (grep) arg with a leading BOM follows the PRIOR
+  // acceptance (the normal-17 behavior is byte-unchanged)
+  const bomArg = validatePreviewInput({ toolId: "grep", args: ["\ufeffx"], stdin: "" });
+  assertEquals(JSON.stringify(bomArg.args), JSON.stringify(["\ufeffx"]), "a predecessor leading-BOM arg is accepted as before");
+  // the 17 keep rejecting >512/1024
+  threw = null;
+  try { validatePreviewInput({ toolId: "grep", args: ["a".repeat(513)], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assertEquals(threw, "preview_args", "the 17 reject >512/arg");
   // argv0 + the user args stay inside the WASI arg bounds (64 args / 4096 bytes)
   const wide = buildPreviewJob({
     input: { toolId: "csvtool", args: Array.from({ length: PREVIEW_LIMITS.maxArgs }, () => "x"), stdin: "" },
@@ -292,7 +326,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assertEquals(wide.args.length, PREVIEW_LIMITS.maxArgs + 1, "max user args + argv0");
   assert(wide.args.length <= 64, "total args inside the WASI MAX_ARGS bound");
   // a hostile authority (extra key / wrong origin) fails closed
-  let threw = null;
+  threw = null;
   try {
     buildPreviewJob({
       input: { toolId: "csvtool", args: [], stdin: "" },
@@ -302,7 +336,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 17 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 19 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -410,10 +444,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 17-tool static allowlist is admitted as settings-preview (other 9 unchanged)", () => {
+Deno.test("preview: the EXACT 19-tool static allowlist is admitted as settings-preview (other 7 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "grep", "head", "markdown", "md5sum", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "grep", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "tail", "toml2json", "tr", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -421,7 +455,7 @@ Deno.test("preview: the EXACT 17-tool static allowlist is admitted as settings-p
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 9, "the other 9 rows are unchanged");
+  assertEquals(notAdmitted.length, 7, "the other 7 rows are unchanged");
   assertEquals(JSON.stringify(previewSpecFor("sort").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("toml2json").caps), JSON.stringify(["compute", "data.read", "data.write"]));
   // per-tool caps: the digest tools carry the crypto set

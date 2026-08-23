@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.2.174",
+ "release": "0.2.175",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -26,7 +26,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.diff",
    "version": "1.0.0",
-   "digest": "9ecaac98f1ec0b165e9f90f6cf4038d151e44b01faea4a18a47f0be691e83801"
+   "digest": "979a7418a522d389d66a55d7fba8787a6506e78c5dc9319b1286ff95188def51"
   },
   {
    "pkg": "cap.bundled.du",
@@ -61,7 +61,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.patch",
    "version": "1.0.0",
-   "digest": "2450fa172a1698b6a1f11a142988c1f21e7464c32a5ad171c719ebfae040e848"
+   "digest": "f26df74c3cf2b687d05debd0ad2f3db4b6b92fc7fefb743ebe30d4d36b992ed6"
   },
   {
    "pkg": "cap.bundled.sha256sum",
@@ -322,8 +322,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.diff-1.0.0.manifest.json",
-   "sha256": "9ecaac98f1ec0b165e9f90f6cf4038d151e44b01faea4a18a47f0be691e83801",
-   "size": 1655
+   "sha256": "979a7418a522d389d66a55d7fba8787a6506e78c5dc9319b1286ff95188def51",
+   "size": 1663
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.du-1.0.0.manifest.json",
@@ -357,8 +357,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.patch-1.0.0.manifest.json",
-   "sha256": "2450fa172a1698b6a1f11a142988c1f21e7464c32a5ad171c719ebfae040e848",
-   "size": 1664
+   "sha256": "f26df74c3cf2b687d05debd0ad2f3db4b6b92fc7fefb743ebe30d4d36b992ed6",
+   "size": 1672
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sha256sum-1.0.0.manifest.json",

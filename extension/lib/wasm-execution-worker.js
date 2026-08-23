@@ -47,7 +47,7 @@ const workerInstanceId = (globalThis.crypto?.randomUUID
   : `worker_${Math.random().toString(36).slice(2)}_${Date.now()}`);
 
 const JOB_ENVELOPE_KEYS = Object.freeze(["type", "sessionId", "job", "wasmBytes"]);
-const JOB_INNER_KEYS = Object.freeze(["context", "args", "stdin", "quota", "tier"]);
+const JOB_INNER_KEYS = Object.freeze(["acceptedExitCodes", "context", "args", "stdin", "quota", "tier"]);
 const CONTEXT_KEYS = Object.freeze(["executionId", "callId", "origin", "workspaceRoot"]);
 
 function exactKeys(value, keys, code) {
@@ -72,6 +72,13 @@ export function validateJobEnvelope(raw) {
   }
   if (!plainData(raw.job)) throw failClosed("job-inner");
   exactKeys(raw.job, JOB_INNER_KEYS, "job-inner");
+  // the trusted acceptedExitCodes: bounded sorted-unique ints incl. 0
+  const aec = raw.job.acceptedExitCodes;
+  if (
+    !Array.isArray(aec) || aec.length < 1 || aec.length > 3 || !aec.includes(0) ||
+    aec.some((code) => !Number.isInteger(code) || code < 0 || code > 255) ||
+    JSON.stringify(aec) !== JSON.stringify([...new Set(aec)].sort((x, y) => x - y))
+  ) throw failClosed("job-accepted-exits");
   if (!plainData(raw.job.context)) throw failClosed("job-context");
   exactKeys(raw.job.context, CONTEXT_KEYS, "job-context");
   if (!Array.isArray(raw.job.args)) throw failClosed("job-args");
@@ -169,6 +176,7 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
         args: Array.isArray(job.args) ? job.args : [],
         stdin: new Uint8Array(job.stdin ?? []),
         quota: job.quota,
+        acceptedExitCodes: job.acceptedExitCodes,
       },
       memory: {
         // Wasm memory is reached through instance.EXPORTS.memory (the export),
@@ -218,10 +226,15 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
       fn();
       snapshot = runtime.snapshot();
     } catch (error) {
-      if (error instanceof WasiProcExit && error.code === 0) {
-        // `_start` success: proc_exit(0) IS the normal WASI command
-        // completion — snapshot the output so bounded stdout/stderr content
-        // is preserved (never dropped).
+      if (
+        error instanceof WasiProcExit &&
+        Array.isArray(job?.acceptedExitCodes) &&
+        job.acceptedExitCodes.includes(error.code)
+      ) {
+        // The tool's NORMAL nonzero completion (trusted per-tool accepted exit
+        // codes from the immutable spec — e.g. diff's exit 1 "differences
+        // found"): snapshot the output so the hunk/stdout + counters are
+        // preserved. Exit 0 is always accepted (contains 0 is schema-enforced).
         snapshot = runtime.snapshot();
       } else if (error instanceof WasiProcExit) {
         // Nonzero: the CURRENT failure schema — ok:false phase proc-exit with

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.175] — 2026-08-23
+- feat(tools): diff/patch Settings previews (two-document, accepted-exit) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-06)
+
 ## [0.2.174] — 2026-08-22
 - feat(tools): markdown Settings preview (cmark 0.31.1 safe HTML; Release B) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-05)
 

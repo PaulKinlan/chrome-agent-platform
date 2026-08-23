@@ -146,7 +146,7 @@ export const PATH_CLASS_RIGHTS = Object.freeze({
 });
 
 const encoder = new TextEncoder();
-const JOB_KEYS = Object.freeze(["args", "context", "quota", "stdin", "tier"]);
+const JOB_KEYS = Object.freeze(["acceptedExitCodes", "args", "context", "quota", "stdin", "tier"]);
 const CONTEXT_KEYS = Object.freeze([
   "callId",
   "executionId",
@@ -271,11 +271,25 @@ export function createWasiJob(value) {
     !(input.stdin instanceof Uint8Array) ||
     input.stdin.byteLength > quota.stdinBytes
   ) fail("job_stdin");
+  // The trusted acceptedExitCodes: a bounded sorted-unique array that MUST
+  // contain 0 (exit 0 is always a success); supplied by the SW from the
+  // immutable spec — never request-borne.
+  if (
+    !Array.isArray(input.acceptedExitCodes) ||
+    input.acceptedExitCodes.length < 1 || input.acceptedExitCodes.length > 3 ||
+    !input.acceptedExitCodes.includes(0)
+  ) fail("job-accepted-exits");
+  const acceptedExitCodes = [...input.acceptedExitCodes];
+  if (
+    acceptedExitCodes.some((code) => !Number.isInteger(code) || code < 0 || code > 255) ||
+    JSON.stringify(acceptedExitCodes) !== JSON.stringify([...new Set(acceptedExitCodes)].sort((a, b) => a - b))
+  ) fail("job-accepted-exits");
   return Object.freeze({
     context: createWasiContext(input.context),
     args: Object.freeze(args),
     stdin: Object.freeze([...input.stdin]),
     quota,
+    acceptedExitCodes: Object.freeze(acceptedExitCodes),
     tier: input.tier,
   });
 }

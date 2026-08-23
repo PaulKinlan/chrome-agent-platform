@@ -6492,30 +6492,69 @@ class ToolLibrary extends Component {
         return 'Example: (no args) + stdin "title = \"x\"\n[n]\na = 1\n" → "{\"title\":\"x\",\"n\":{\"a\":1}}\n".';
       case "markdown":
         return 'Example: (no args) + stdin "# Hi" → "<h1>Hi</h1>\n" (safe HTML — raw HTML and javascript: URLs omitted; --unsafe is disabled).';
+      case "diff":
+        return 'Two documents (≤1 KiB each): Document A "a\nb\n" + Document B "a\nc\n" → the unified hunk (exit 1 is a normal result).';
+      case "patch":
+        return 'Two documents (≤1 KiB each): Document A the original + Document B a unified diff → the patched text (exact-position only).';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
   }
+  _isTwoDocument(toolId) {
+    return toolId === "diff" || toolId === "patch";
+  }
+  _updateDocCounts() {
+    const root = this._root;
+    const enc = new TextEncoder();
+    const a = root.querySelector(".preview-doc-a");
+    const b = root.querySelector(".preview-doc-b");
+    const ca = root.querySelector("#preview-doc-a-count");
+    const cb = root.querySelector("#preview-doc-b-count");
+    if (a && ca) ca.textContent = `${enc.encode(String(a.value ?? "")).byteLength} bytes`;
+    if (b && cb) cb.textContent = `${enc.encode(String(b.value ?? "")).byteLength} bytes`;
+  }
   _wire() {
     // The ONLY interactive paths: the explicit owner click that runs the
-    // selected tool's Settings preview + the tool selector (help refresh).
-    // No other control exists in this component.
+    // selected tool's Settings preview + the tool selector (help refresh +
+    // the two-document mode toggle) + the per-document byte counters. No other
+    // control exists in this component.
     this._root.querySelector(".preview-run")?.addEventListener("click", (sourceEvent) => {
       if (this._previewBusy) return;
       const toolSelect = this._root.querySelector(".preview-tool");
       const argsInput = this._root.querySelector(".preview-args");
       const stdinInput = this._root.querySelector(".preview-stdin");
       const toolId = String(toolSelect?.value ?? "csvtool");
-      const args = String(argsInput?.value ?? "").trim() === ""
-        ? []
-        : String(argsInput?.value ?? "").split(/\s+/);
-      const stdin = String(stdinInput?.value ?? "");
-      this._emit("tool-preview-request", { toolId, args, stdin, sourceEvent });
+      if (this._isTwoDocument(toolId)) {
+        const docA = String(this._root.querySelector(".preview-doc-a")?.value ?? "");
+        const docB = String(this._root.querySelector(".preview-doc-b")?.value ?? "");
+        // The two documents ride args[1..2] (the current binaries' argv
+        // contract); stdin stays empty; NUL/BOM rejected by validation.
+        this._emit("tool-preview-request", { toolId, args: [docA, docB], stdin: "", sourceEvent });
+      } else {
+        const args = String(argsInput?.value ?? "").trim() === ""
+          ? []
+          : String(argsInput?.value ?? "").split(/\s+/);
+        const stdin = String(stdinInput?.value ?? "");
+        this._emit("tool-preview-request", { toolId, args, stdin, sourceEvent });
+      }
     });
     this._root.querySelector(".preview-tool")?.addEventListener("change", (event) => {
+      const toolId = String(event?.target?.value ?? "csvtool");
       const help = this._root.querySelector(".preview-help");
-      if (help) help.textContent = this._previewHelp(String(event?.target?.value ?? "csvtool"));
+      const twoDoc = this._root.querySelector(".preview-two-doc");
+      const stdinLabel = this._root.querySelector(".preview-stdin-label");
+      const argsLabel = this._root.querySelector(".preview-args-label");
+      const twoDocMode = this._isTwoDocument(toolId);
+      if (help) help.textContent = this._previewHelp(toolId);
+      if (twoDoc) twoDoc.hidden = !twoDocMode;
+      // BOTH the normal Arguments + Stdin controls hide in two-document mode
+      // and are restored on switch back.
+      if (stdinLabel) stdinLabel.hidden = twoDocMode;
+      if (argsLabel) argsLabel.hidden = twoDocMode;
+      this._updateDocCounts();
     });
+    this._root.querySelector(".preview-doc-a")?.addEventListener("input", () => this._updateDocCounts());
+    this._root.querySelector(".preview-doc-b")?.addEventListener("input", () => this._updateDocCounts());
   }
   _render() {
     // Mount ONCE: the live region must be a STABLE node so a polite
@@ -6559,6 +6598,15 @@ class ToolLibrary extends Component {
         border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
       .preview-help { margin:8px 0 0; font-size:12px; color:var(--muted, #625d57); }
+      .preview-two-doc { margin-top:10px; }
+      .preview-doc-label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
+      .preview-doc { display:block; width:100%; box-sizing:border-box; margin-top:4px;
+        border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
+        font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f);
+        font-family:ui-monospace, monospace; resize:vertical; }
+      .preview-doc:focus-visible { outline:2px solid var(--accent, #0b57d0); outline-offset:2px; }
+      .preview-doc-count { margin:2px 0 0; font-size:11px; color:var(--muted, #625d57);
+        font-variant-numeric:tabular-nums; }
       .preview input, .preview textarea { display:block; width:100%; box-sizing:border-box; margin-top:4px;
         border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md, 8px);
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
@@ -6608,6 +6656,8 @@ class ToolLibrary extends Component {
             <option value="grep">grep — search lines by pattern</option>
             <option value="toml2json">toml2json — convert TOML to JSON</option>
             <option value="markdown">markdown — CommonMark to safe HTML (cmark 0.31.1)</option>
+            <option value="diff">diff — unified diff over two documents</option>
+            <option value="patch">patch — apply a unified diff</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
@@ -6619,6 +6669,16 @@ class ToolLibrary extends Component {
           <textarea class="preview-stdin" rows="4" maxlength="2048"
             placeholder="a,b&#10;1,2&#10;3,4"></textarea>
         </label>
+        <div class="preview-two-doc" hidden>
+          <label class="preview-doc-label" for="preview-doc-a">Document A</label>
+          <textarea class="preview-doc preview-doc-a" id="preview-doc-a" rows="4"
+            aria-describedby="preview-doc-a-count" spellcheck="false"></textarea>
+          <p class="preview-doc-count" id="preview-doc-a-count">0 bytes</p>
+          <label class="preview-doc-label" for="preview-doc-b">Document B</label>
+          <textarea class="preview-doc preview-doc-b" id="preview-doc-b" rows="4"
+            aria-describedby="preview-doc-b-count" spellcheck="false"></textarea>
+          <p class="preview-doc-count" id="preview-doc-b-count">0 bytes</p>
+        </div>
         <button class="preview-run" type="button">Run preview</button>
         <pre class="preview-output" aria-live="polite"></pre>
       </div>

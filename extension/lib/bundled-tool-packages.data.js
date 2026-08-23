@@ -528,7 +528,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded LCS-based unified diff over two literal text arguments",
   "caveats": [
-   "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error)."
+   "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error).",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -550,9 +551,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.diff-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.patch",
@@ -563,7 +565,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "Bounded exact unified-diff application over literal text arguments",
   "caveats": [
-   "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation."
+   "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation.",
+   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
   ],
   "capabilities": [
    "compute",
@@ -585,9 +588,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.patch-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.toml2json",

@@ -5,18 +5,19 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 00:22 UTC. Reconciled against exact public
-> `origin/main@8cf4c1d90750ca85245422fb8b954ab7c87e9e75` (`0.2.173`). Lazy,
+> Snapshot: 2026-08-23 00:53 UTC. Reconciled against exact public
+> `origin/main@1733967f3e76dfc8e5ad8bfb8bce3b3cffec5b63` (`0.2.174`). Lazy,
 > security-suite serialization, pure WASI Gate 1, Tool Library, deterministic
 > package bytes, the Store static boundary, the tool-platform foundation and
-> the Settings preview tranches (5 → 17 tools) remain exact; the catalog
-> remains `MERGED`. This branch adds the markdown Settings preview (Release B)
-> as the `0.2.174` step — the 17th admitted tool; the runtime's
+> the Settings preview tranches (5 → 19 tools) remain exact; the catalog
+> remains `MERGED`. This branch adds the diff/patch Settings previews (Release
+> C) as the `0.2.175` step — the 18th/19th admitted tools (19/7 posture); the
+> markdown Release B landed public as `0.2.174`; the runtime's
 > `fd_fdstat_set_flags` linkage-only import landed as public `0.2.173`
-> (SQLite gap 9→8); no provider/page/OPFS authority.
+> (SQLite gap 9→8); no route/perm/provider/page/OPFS expansion.
 > Branch status counts: **14 OPEN · 15 IN_REVIEW · 2 MERGED · 4 BLOCKED ·
-> 37 DONE · 0 ABANDONED**. The 35 active entries and 37 archived terminal
-> entries below are the complete 72-entry state.
+> 38 DONE · 0 ABANDONED**. The 35 nonterminal and 38 terminal status entries
+> below are the complete 73-entry state.
 
 ## Safety boundary
 
@@ -716,21 +717,50 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
 
-## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-05] markdown Settings preview (Release B)
 
-- Feedback: 2026-08-22 — the markdown binary links after the Release A import;
-  admit the cmark safe-HTML preview (17th tool)
-- Updated: 2026-08-23 00:05 UTC
+## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-06] diff/patch Settings previews (Release C)
+
+- Feedback: 2026-08-23 — diff/patch take two documents via argv; the worker's
+  nonzero-exit semantics needed a trusted accepted-exit classification
+- Updated: 2026-08-23 00:53 UTC
 - Status: IN_REVIEW
 - Resume: —
 - Priority: P0
 - Owner: admission tranche on this branch
 - Workspace: active (local path private)
-- Branch: `feat/markdown-preview-8cf4c1d`
-- Base: `8cf4c1d90750ca85245422fb8b954ab7c87e9e75`
-- Candidate: `c04f346…` → this amended commit (0.2.174; the generator
-  truthfulness + TASKS reconciliation amendment)
+- Branch: `feat/diff-patch-preview-3858c5e`
+- Base: public `1733967f3e76dfc8e5ad8bfb8bce3b3cffec5b63` (0.2.174)
+- Candidate: this commit (0.2.175)
 - Shipping: —
+- Acceptance: immutable per-tool acceptedExitCodes (diff [0,1], patch/others
+  [0]; never request-borne; the trusted job schema enforces sorted/unique/
+  contains-0) so the worker preserves the snapshot/stdout/counters for the
+  accepted diff exit 1 while every other nonzero stays failure/no-stale;
+  per-tool argBounds diff/patch EXACT 1024/doc + 2048 total (the host schema
+  unchanged; the predecessor 17 stay 512/1024 with byte-unchanged argv incl.
+  leading-BOM acceptance); the accessible two-document UI for diff/patch only
+  (labels, byte counters, focus-visible, 360px-safe; the normal 17 controls
+  hidden in two-document mode and restored on switch back); exactly 19/7
+  posture; NUL/BOM rejection scoped to diff/patch
+- Gates: full 1170/1170 (14 steps), build rc 0 (seam scan clean), Store
+  package/validate OK (224 entries)
+- Review: pending (source review + the loaded-MV3 browser gate)
+- Next: loaded-MV3 acceptance for the two-document flow + the accepted-exit
+  vectors once the reviews close
+## [CAP-FB-20260822-TOOL-PREVIEW-EXEC-05] markdown Settings preview (Release B)
+
+- Feedback: 2026-08-22 — the markdown binary links after the Release A import;
+  admit the cmark safe-HTML preview (17th tool)
+- Updated: 2026-08-23 00:56 UTC
+- Status: DONE
+- Resume: —
+- Priority: P0
+- Owner: landed on public main
+- Workspace: active (local path private)
+- Branch: `feat/markdown-preview-8cf4c1d`
+- Base: public `8cf4c1d90750ca85245422fb8b954ab7c87e9e75` (0.2.173)
+- Candidate: `1733967f3e76dfc8e5ad8bfb8bce3b3cffec5b63`
+- Shipping: `origin/main@1733967f3e76dfc8e5ad8bfb8bce3b3cffec5b63` (public 0.2.174)
 - Acceptance: exactly 17 enabled / 9 disabled; the exact safe-HTML contracts
   through the real Worker (# Hi → <h1>Hi</h1>\n; raw <script> omitted; javascript:
   href scrubbed; --unsafe → proc-exit 2 no stale; file operand denied); the
