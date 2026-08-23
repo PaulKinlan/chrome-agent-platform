@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **29 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 56 nonterminal and 40 terminal status entries
-> below are the complete 96-entry state.
+> Branch status counts: **30 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 57 nonterminal and 40 terminal status entries
+> below are the complete 97-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,42 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260823-NAVIGATION-BACK-01] Back button breaks Settings navigation — adopt the Navigation API
+
+- Feedback: 2026-08-23 — product owner: the back button does not work with
+  navigation — going to Settings and pressing back breaks the UI; history
+  must work correctly, using the modern Navigation API
+- Updated: 2026-08-23 22:20 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `de7138c`
+- Candidate: —
+- Shipping: —
+- Acceptance: browser back/forward navigates Settings and all extension
+  views without breaking the UI; history entries are real and consistent;
+  deep links (e.g. #background-agents, #browser) survive back/forward; the
+  implementation uses the modern Navigation API (window.navigation
+  navigate/navigatesuccess/navigateerror) with a history-API fallback where
+  the Navigation API is unavailable; no duplicate listeners, no broken view
+  state after any back/forward sequence; view transitions remain correct
+- Review: pending independent navigation-state, accessibility, and
+  loaded-MV3 review
+- Gates: back/forward matrix across Settings sections and deep links;
+  reload-after-back consistency; keyboard/browser-button parity; no orphaned
+  listeners; narrow/RTL/theme unaffected
+- Blockers: —
+- Next: reproduce the Settings back-break, then implement Navigation-API
+  routing with history fallback
+- Recover: `git grep -n "history.pushState\|history.back\|window.navigation\|hashchange" -- extension`
+- History:
+  - 2026-08-23 22:20 UTC — captured from direct product-owner feedback.
+
+
 
 ## [CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01] Extended Unix/system tool family admissions
 
