@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.206] — 2026-08-23
+- feat(wasm): wire model-invoked task execution dispatch closures for admitted bundled tools — owner policy: admission is the grant; run-bound revalidation per call, dedicated offscreen host, typed failure envelopes, disabled tools fail closed (CAP-FB-20260823-WASM-TASK-EXECUTION-01)
+
 ## [0.2.205] — 2026-08-23
 - feat(tools): Chrome API coverage tranche 1 — windows list/create/focus/close/move, action set/get state, commands list; zero new manifest permissions, grant-lock origin re-reads, owner-scoped action state, registry parity 46 tools (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01)
 

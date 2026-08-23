@@ -50,6 +50,7 @@ export const PREVIEW_LIMITS = Object.freeze({
 });
 
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
+import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 
 // The immutable trusted spec map for the Settings-only preview allowlist. It is
 // DERIVED at module load from the generated immutable descriptor rows (only the
@@ -525,3 +526,220 @@ export function boundPreviewResult(result, {
     error: ok ? null : boundedString(String(result.error ?? "").slice(0, 512), "error", 512),
   });
 }
+
+import { WasmExecutor } from "./wasm-executor.js";
+import { createOffscreenWasmHost } from "./wasm-offscreen-host.js";
+
+/**
+ * Executes a bundled WASI job for a task or preview run, reusing the shared
+ * revalidation, job synthesis, execution host dispatch, and result bounds.
+ *
+ * Seeding policy:
+ *   - Inputs: Referenced input projection (attachments -> inputs/<sha256>.bin) is
+ *     deferred until the task-scoped attachment reference contract lands. The
+ *     workspace is seeded with the immutable per-tool static seed or empty.
+ *   - Scratch: Fresh per-call sync workspace.
+ *   - Output: Bounded stdout (utf8 / base64), all-or-nothing failure semantics.
+ */
+export async function executeBundledWasiJob({
+  toolId,
+  args = [],
+  stdin = "",
+  runContext = {},
+  fetchFn = typeof fetch !== "undefined" ? fetch : null,
+  createWorker = null,
+  now = null,
+} = {}) {
+  const spec = previewSpecFor(toolId);
+  if (!spec) {
+    return Object.freeze({
+      ok: false,
+      phase: "failed",
+      error: `unknown_bundled_tool: ${toolId}`,
+      stdoutEncoding: "utf8",
+      stdout: "",
+      stdoutBase64: null,
+      stdoutBytes: 0,
+      stderr: "",
+      errno: null,
+      exitCode: null,
+    });
+  }
+
+  let input;
+  try {
+    input = validatePreviewInput({
+      toolId,
+      args: Array.isArray(args) ? args : [],
+      stdin: typeof stdin === "string" ? stdin : "",
+    });
+  } catch (err) {
+    return Object.freeze({
+      ok: false,
+      phase: "failed",
+      error: `invalid_input: ${err.message || err}`,
+      stdoutEncoding: spec.stdoutEncoding,
+      stdout: "",
+      stdoutBase64: null,
+      stdoutBytes: 0,
+      stderr: "",
+      errno: null,
+      exitCode: null,
+    });
+  }
+
+  const manifestUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
+    ? chrome.runtime.getURL(spec.manifestRel)
+    : spec.manifestRel;
+  const casUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
+    ? chrome.runtime.getURL(spec.casRel)
+    : spec.casRel;
+
+  let manifestText;
+  let casBytes;
+  try {
+    if (!fetchFn) throw new Error("fetch unavailable in this environment");
+    const mRes = await fetchFn(manifestUrl);
+    if (!mRes.ok) throw new Error(`manifest fetch failed (${mRes.status})`);
+    manifestText = await mRes.text();
+    const cRes = await fetchFn(casUrl);
+    if (!cRes.ok) throw new Error(`CAS fetch failed (${cRes.status})`);
+    casBytes = new Uint8Array(await cRes.arrayBuffer());
+  } catch (err) {
+    return Object.freeze({
+      ok: false,
+      phase: "failed",
+      error: `asset_fetch_failed: ${err.message || err}`,
+      stdoutEncoding: spec.stdoutEncoding,
+      stdout: "",
+      stdoutBase64: null,
+      stdoutBytes: 0,
+      stderr: "",
+      errno: null,
+      exitCode: null,
+    });
+  }
+
+  try {
+    await revalidatePreviewExecution({
+      toolId,
+      manifestText,
+      casBytes,
+      inventory: BUNDLED_INVENTORY,
+      now,
+    });
+  } catch (err) {
+    return Object.freeze({
+      ok: false,
+      phase: "failed",
+      error: `revalidation_failed: ${err.code || err.message || err}`,
+      stdoutEncoding: spec.stdoutEncoding,
+      stdout: "",
+      stdoutBase64: null,
+      stdoutBytes: 0,
+      stderr: "",
+      errno: null,
+      exitCode: null,
+    });
+  }
+
+  const authority = buildPreviewAuthority({
+    origin: typeof runContext.origin === "string" && runContext.origin.startsWith("http")
+      ? runContext.origin
+      : PREVIEW_SETTINGS_ORIGIN,
+    documentId: typeof runContext.documentId === "string" ? runContext.documentId : "task-run",
+    now,
+  });
+
+  const job = buildPreviewJob({ input, authority });
+
+  // 1. Task-lane dedicated fresh Worker host path (if Worker or createWorker is available)
+  const canSpawnWorker = typeof createWorker === "function" ||
+    (typeof Worker !== "undefined" && typeof chrome !== "undefined" && chrome.runtime?.getURL);
+
+  if (canSpawnWorker) {
+    try {
+      const workerUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
+        ? chrome.runtime.getURL("lib/wasm-execution-worker.js")
+        : "lib/wasm-execution-worker.js";
+      const executor = new WasmExecutor({
+        workerUrl,
+        createWorker: createWorker || undefined,
+        callMs: PREVIEW_LIMITS.wallMs,
+      });
+      const host = createOffscreenWasmHost({ executor, authority });
+      const rawResult = await host.handleJob({
+        type: "wasm.job",
+        job: { ...job, stdin: new Uint8Array(job.stdin) },
+        wasmBytes,
+      });
+      return boundPreviewResult(rawResult, { stdoutEncoding: spec.stdoutEncoding });
+    } catch (err) {
+      return Object.freeze({
+        ok: false,
+        phase: "failed",
+        error: `execution_worker_failed: ${err.message || err}`,
+        stdoutEncoding: spec.stdoutEncoding,
+        stdout: "",
+        stdoutBase64: null,
+        stdoutBytes: 0,
+        stderr: "",
+        errno: null,
+        exitCode: null,
+      });
+    }
+  }
+
+  // 2. Options-context preview fallback path (if in extension environment with options page open)
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage && runContext.origin === PREVIEW_SETTINGS_ORIGIN) {
+    const envelope = await new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const timer = setTimeout(
+        () => finish({ ok: false, error: "tool execution timed out" }),
+        PREVIEW_LIMITS.wallMs + 5000,
+      );
+      chrome.runtime.sendMessage({
+        type: "wasm.preview.options",
+        authority,
+        job,
+        wasmBytes: Array.from(casBytes),
+        wallMs: PREVIEW_LIMITS.wallMs,
+      }).then(
+        (res) => { clearTimeout(timer); finish(res); },
+        (err) => { clearTimeout(timer); finish({ ok: false, error: String(err?.message ?? err) }); },
+      );
+    });
+
+    if (envelope?.ok && envelope.result) {
+      return boundPreviewResult(envelope.result, { stdoutEncoding: spec.stdoutEncoding });
+    }
+    return Object.freeze({
+      ok: false,
+      phase: "failed",
+      error: envelope?.error || "execution_failed",
+      stdoutEncoding: spec.stdoutEncoding,
+      stdout: "",
+      stdoutBase64: null,
+      stdoutBytes: 0,
+      stderr: "",
+      errno: null,
+      exitCode: null,
+    });
+  }
+
+  // 3. Typed fail-closed error envelope when no WASI execution host is available
+  return Object.freeze({
+    ok: false,
+    phase: "failed",
+    error: "wasi_task_host_unavailable",
+    stdoutEncoding: spec.stdoutEncoding,
+    stdout: "",
+    stdoutBase64: null,
+    stdoutBytes: 0,
+    stderr: "",
+    errno: null,
+    exitCode: null,
+  });
+}
+

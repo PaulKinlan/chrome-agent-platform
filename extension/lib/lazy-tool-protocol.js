@@ -26,7 +26,11 @@ import {
   buildLazyProviderCapture,
   LAZY_PROTOCOL_TOOL_WIRE,
 } from "./lazy-tool-wire.js";
-export { buildLazyProviderCapture, LAZY_PROTOCOL_TOOL_WIRE };
+import {
+  executeBundledWasiJob,
+  previewSpecFor,
+  validatePreviewInput,
+} from "./tool-exec-preview.js";
 import {
   hasLoneSurrogates,
   redactSecretText,
@@ -724,15 +728,149 @@ export function executableManagementToolRecords(toolMap, context) {
   return executableAiRecords(toolMap, adaptManagementTools, context);
 }
 
-export function executableBundledToolRecords(rows, context = {}) {
-  return adaptBundledTools(rows, context).map((descriptorInput) =>
-    Object.freeze({
+export { buildLazyProviderCapture, LAZY_PROTOCOL_TOOL_WIRE };
+
+/**
+ * Single insertion point for model-invoked bundled WebAssembly execution authorization.
+ *
+ * Owner Policy Decision (2026-08-23):
+ * "They're all approved to run because they are installed"
+ *
+ * Bundled WebAssembly tools are approved to run in owner/agent tasks because they are
+ * technically installed (admitted) in the extension build. The build admission serves
+ * as the owner grant.
+ *
+ * Authorization invariants:
+ *   1. Admission & Availability: The tool must be in the admitted set of the live catalog
+ *      at call time (`spec` exists, `descriptorInput.availability !== "disabled"`, not revoked).
+ *      Disabled or revoked packages fail closed immediately.
+ *   2. Run Ownership: The call must be within a valid, active owner run (`await assertRunOwned()`).
+ *   3. Context Guard: If a run-level authorization guard is present, it is evaluated.
+ *   4. Per-Call Execution Revalidation: Package CAS SHA/size, manifest digests, auditWasmBinary,
+ *      and spec immutability are independently re-checked at dispatch time by the executor.
+ */
+export async function assertBundledExecutionAuthority({
+  toolId,
+  descriptorInput,
+  validatedArgs,
+  context,
+} = {}) {
+  // 1. Run ownership check (active, non-aborted owner run)
+  await assertRunOwned();
+
+  // 2. Admission check (owner policy: admission in build is the execution grant)
+  const spec = previewSpecFor(toolId);
+  if (!spec || descriptorInput?.availability === "disabled") {
+    const error = new Error(`tool_${toolId}_not_admitted: bundled package is disabled or unadmitted`);
+    error.code = "tool_not_admitted";
+    throw error;
+  }
+
+  // 3. Optional context guard verification
+  if (typeof context?.authorizationGuard === "function") {
+    const guarded = await context.authorizationGuard({
+      name: toolId,
+      source: "bundled-package",
+      args: validatedArgs,
       descriptorInput,
-      validateArguments: null,
-      authorize: null,
-      dispatch: null,
-    })
-  );
+    });
+    if (guarded?.ok !== true) {
+      const error = new Error(`authorization_guard_rejected for tool ${toolId}`);
+      error.code = "authorization_guard_rejected";
+      throw error;
+    }
+  }
+
+  return Object.freeze({
+    ok: true,
+    authorized: true,
+    policy: "owner-build-admission",
+    toolId,
+    permissionDigest: "none",
+    grantDigest: "none",
+  });
+}
+
+export function executableBundledToolRecords(rows, context = {}) {
+  return adaptBundledTools(rows, context).map((descriptorInput) => {
+    const toolId = descriptorInput.toolId;
+    const spec = previewSpecFor(toolId);
+    const isAdmitted = Boolean(spec && descriptorInput.availability !== "disabled");
+
+    const validator = async (rawArgs) => {
+      if (!isAdmitted) {
+        return { ok: false, error: `tool_${toolId}_disabled` };
+      }
+      try {
+        let normalizedArgs = [];
+        let normalizedStdin = "";
+        if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+          if (Array.isArray(rawArgs.args)) {
+            normalizedArgs = rawArgs.args.filter((a) => typeof a === "string");
+          }
+          if (typeof rawArgs.stdin === "string") {
+            normalizedStdin = rawArgs.stdin;
+          } else if (typeof rawArgs.input === "string") {
+            normalizedStdin = rawArgs.input;
+          } else if (typeof rawArgs.text === "string") {
+            normalizedStdin = rawArgs.text;
+          } else if (typeof rawArgs.docA === "string" && typeof rawArgs.docB === "string") {
+            normalizedArgs = [rawArgs.docA, rawArgs.docB];
+          }
+        } else if (typeof rawArgs === "string") {
+          normalizedStdin = rawArgs;
+        } else if (Array.isArray(rawArgs)) {
+          normalizedArgs = rawArgs.filter((a) => typeof a === "string");
+        }
+
+        const validated = validatePreviewInput({
+          toolId,
+          args: normalizedArgs,
+          stdin: normalizedStdin,
+        });
+        return { ok: true, data: validated };
+      } catch (err) {
+        return { ok: false, error: `invalid_arguments: ${err?.message || err}` };
+      }
+    };
+
+    const authorizer = async (validatedArgs, _authorityContext) => {
+      try {
+        return await assertBundledExecutionAuthority({
+          toolId,
+          descriptorInput,
+          validatedArgs,
+          context,
+        });
+      } catch (err) {
+        return { ok: false, error: `authorization_failed: ${err?.message || err}` };
+      }
+    };
+
+    const dispatcher = async (validatedArgs, runContext) => {
+      if (typeof context.dispatchBundledTool === "function") {
+        return await context.dispatchBundledTool({
+          toolId,
+          args: validatedArgs,
+          context: runContext,
+          descriptorInput,
+        });
+      }
+      return await executeBundledWasiJob({
+        toolId,
+        args: validatedArgs.args,
+        stdin: validatedArgs.stdin,
+        runContext,
+      });
+    };
+
+    return Object.freeze({
+      descriptorInput,
+      validateArguments: isAdmitted ? validator : null,
+      authorize: isAdmitted ? authorizer : null,
+      dispatch: isAdmitted ? dispatcher : null,
+    });
+  });
 }
 
 export function createLazyProviderToolset({

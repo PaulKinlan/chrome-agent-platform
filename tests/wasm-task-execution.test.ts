@@ -1,0 +1,285 @@
+// tests/wasm-task-execution.test.ts — Verification of model-invoked WebAssembly task
+// execution dispatch closures, argument validation, authorization, and output bounding
+// (CAP-FB-20260823-WASM-TASK-EXECUTION-01).
+// @ts-nocheck
+
+import {
+  assertBundledExecutionAuthority,
+  createLazyProviderToolset,
+  executableBundledToolRecords,
+  LazyToolProtocol,
+} from "../extension/lib/lazy-tool-protocol.js";
+import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
+import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "../extension/lib/bundled-tool-packages.data.js";
+import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
+import {
+  executeBundledWasiJob,
+  previewSpecFor,
+  PREVIEW_LIMITS,
+} from "../extension/lib/tool-exec-preview.js";
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message || "Assertion failed");
+  }
+}
+
+function assertEquals(actual, expected, message) {
+  if (actual !== expected) {
+    throw new Error(`${message || "Assertion failed"}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+Deno.test("executableBundledToolRecords: constructs non-null validateArguments, authorize, and dispatch for admitted tools", () => {
+  const records = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+    sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
+  });
+
+  assertEquals(records.length, 26, "exact 26 bundled tool records");
+
+  for (const rec of records) {
+    const toolId = rec.descriptorInput.toolId;
+    const spec = previewSpecFor(toolId);
+    if (spec && rec.descriptorInput.availability !== "disabled") {
+      assert(typeof rec.validateArguments === "function", `admitted tool ${toolId} must have validateArguments`);
+      assert(typeof rec.authorize === "function", `admitted tool ${toolId} must have authorize`);
+      assert(typeof rec.dispatch === "function", `admitted tool ${toolId} must have dispatch`);
+    } else {
+      assertEquals(rec.validateArguments, null, `disabled tool ${toolId} must have null validateArguments`);
+      assertEquals(rec.authorize, null, `disabled tool ${toolId} must have null authorize`);
+      assertEquals(rec.dispatch, null, `disabled tool ${toolId} must have null dispatch`);
+    }
+  }
+});
+
+Deno.test("executableBundledToolRecords: validateArguments validates valid and rejects hostile arguments", async () => {
+  const records = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+  });
+
+  const base64Rec = records.find((r) => r.descriptorInput.toolId === "base64");
+  assert(base64Rec, "base64 record must exist");
+
+  // Valid args
+  const valid1 = await base64Rec.validateArguments({ stdin: "hello world" });
+  assertEquals(valid1.ok, true);
+  assertEquals(valid1.data.toolId, "base64");
+  assertEquals(valid1.data.stdin, "hello world");
+
+  // Valid with flags
+  const valid2 = await base64Rec.validateArguments({ args: ["-d"], stdin: "aGVsbG8=" });
+  assertEquals(valid2.ok, true);
+  assertEquals(valid2.data.args.includes("-d"), true);
+
+  // Hostile / oversized stdin (>2 KiB)
+  const hugeStdin = "a".repeat(3000);
+  const invalid1 = await base64Rec.validateArguments({ stdin: hugeStdin });
+  assertEquals(invalid1.ok, false, "oversized stdin must fail validation");
+
+  // Two document tool (diff)
+  const diffRec = records.find((r) => r.descriptorInput.toolId === "diff");
+  assert(diffRec, "diff record must exist");
+
+  const validDiff = await diffRec.validateArguments({ docA: "a\nb\n", docB: "a\nc\n" });
+  assertEquals(validDiff.ok, true);
+  assertEquals(validDiff.data.args.length, 2);
+});
+
+Deno.test("executeBundledWasiJob: real manifest and CAS bytes revalidation with typed error envelope on absent host", async () => {
+  const spec = previewSpecFor("base64");
+  assert(spec, "base64 spec must exist");
+
+  const fileFetcher = async (url) => {
+    const cleanPath = url.replace(/^chrome-extension:\/\/[^/]+\//, "").replace(/^\//, "");
+    const absPath = new URL(`../extension/${cleanPath}`, import.meta.url);
+    const bytes = await Deno.readFile(absPath);
+    return {
+      ok: true,
+      status: 200,
+      text: async () => new TextDecoder().decode(bytes),
+      arrayBuffer: async () => bytes.buffer,
+    };
+  };
+
+  const res = await executeBundledWasiJob({
+    toolId: "base64",
+    args: [],
+    stdin: "hello",
+    runContext: { origin: "https://example.com", documentId: "doc-1" },
+    fetchFn: fileFetcher,
+  });
+
+  // Without a live Worker host spawned, it returns the typed no-partial error envelope
+  assertEquals(res.ok, false);
+  assertEquals(res.phase, "failed");
+  assertEquals(res.error, "wasi_task_host_unavailable");
+  assertEquals(res.stdout, "");
+  assertEquals(res.stdoutBytes, 0);
+});
+
+Deno.test("assertBundledExecutionAuthority: admits installed tools and fails closed on disabled/unadmitted tools", async () => {
+  clearRunFence();
+  const controller = new AbortController();
+  setRunFence({ signal: controller.signal, assertOwned: async () => {} });
+
+  try {
+    const records = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+      scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+    });
+
+    const base64Rec = records.find((r) => r.descriptorInput.toolId === "base64");
+    const sqliteRec = records.find((r) => r.descriptorInput.toolId === "sqlite3_query_bounded");
+
+    // Admitted tool succeeds under active valid run fence
+    const auth1 = await assertBundledExecutionAuthority({
+      toolId: "base64",
+      descriptorInput: base64Rec.descriptorInput,
+      validatedArgs: { toolId: "base64", args: [], stdin: "test" },
+      context: {},
+    });
+    assertEquals(auth1.ok, true);
+    assertEquals(auth1.authorized, true);
+    assertEquals(auth1.policy, "owner-build-admission");
+
+    // Disabled tool fails closed
+    let sqliteThrew = false;
+    try {
+      await assertBundledExecutionAuthority({
+        toolId: "sqlite3_query_bounded",
+        descriptorInput: sqliteRec.descriptorInput,
+        validatedArgs: { toolId: "sqlite3_query_bounded", args: [], stdin: "{}" },
+        context: {},
+      });
+    } catch (err) {
+      sqliteThrew = true;
+      assert(err.message.includes("tool_sqlite3_query_bounded_not_admitted"), "disabled tool must be rejected");
+    }
+    assertEquals(sqliteThrew, true, "disabled tool must throw in assertBundledExecutionAuthority");
+
+    // Unadmitted descriptor fails closed
+    let unadmittedThrew = false;
+    try {
+      await assertBundledExecutionAuthority({
+        toolId: "unadmitted_tool",
+        descriptorInput: { toolId: "unadmitted_tool", availability: "disabled" },
+        validatedArgs: {},
+        context: {},
+      });
+    } catch {
+      unadmittedThrew = true;
+    }
+    assertEquals(unadmittedThrew, true, "unadmitted tool must fail closed");
+  } finally {
+    clearRunFence();
+  }
+});
+
+Deno.test("assertBundledExecutionAuthority: fails closed when run ownership is aborted or lost", async () => {
+  const records = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+  });
+  const base64Rec = records.find((r) => r.descriptorInput.toolId === "base64");
+
+  // 1. Aborted run signal
+  setRunFence({ signal: { aborted: true } });
+  let abortThrew = false;
+  try {
+    await assertBundledExecutionAuthority({
+      toolId: "base64",
+      descriptorInput: base64Rec.descriptorInput,
+      validatedArgs: { toolId: "base64", args: [], stdin: "test" },
+      context: {},
+    });
+  } catch (err) {
+    abortThrew = true;
+    assert(err.message.includes("run aborted"), "aborted run must throw");
+  }
+  assertEquals(abortThrew, true, "aborted run fence must reject execution");
+
+  // 2. Ownership loss during assertOwned check
+  setRunFence({
+    signal: { aborted: false },
+    assertOwned: async () => {
+      throw new Error("durable_run_ownership_lost");
+    },
+  });
+  let ownershipThrew = false;
+  try {
+    await assertBundledExecutionAuthority({
+      toolId: "base64",
+      descriptorInput: base64Rec.descriptorInput,
+      validatedArgs: { toolId: "base64", args: [], stdin: "test" },
+      context: {},
+    });
+  } catch (err) {
+    ownershipThrew = true;
+    assert(err.message.includes("durable_run_ownership_lost"), "ownership loss must throw");
+  }
+  assertEquals(ownershipThrew, true, "ownership loss must reject execution");
+
+  clearRunFence();
+});
+
+Deno.test("LazyToolProtocol end-to-end: search -> claim selectionRef -> execute dispatch", async () => {
+  clearRunFence();
+  const controller = new AbortController();
+  setRunFence({ signal: controller.signal, assertOwned: async () => {} });
+
+  try {
+    const records = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+      scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+      sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
+      dispatchBundledTool: async ({ toolId, args }) => {
+        return {
+          ok: true,
+          toolId,
+          stdout: `Executed ${toolId} with stdin: ${args.stdin}`,
+          stdoutBytes: 30,
+          exitCode: 0,
+        };
+      },
+    });
+
+    const protocol = new LazyToolProtocol({
+      readSources: async () => records,
+      selectionAuthority: new ToolSelectionAuthority(),
+    });
+
+    const context = {
+      runId: "run-e2e-1",
+      taskId: "task-e2e-1",
+      agentId: "hub",
+      origin: "master",
+      documentId: "",
+      runGeneration: "1",
+    };
+
+    // Step 1: Search for base64
+    const searchResult = await protocol.search({ query: "base64", limit: 1 }, context);
+    assertEquals(searchResult.ok, true);
+    assertEquals(searchResult.results.length, 1);
+    const selectionRef = searchResult.results[0].selectionRef;
+    assert(typeof selectionRef === "string" && selectionRef.startsWith("sel_"), "must receive valid selectionRef");
+
+    // Step 2: Execute tool with selectionRef
+    const execResult = await protocol.execute({
+      selectionRef,
+      arguments: { stdin: "hello" },
+    }, context);
+
+    assertEquals(execResult.ok, true);
+    assert(JSON.stringify(execResult).includes("Executed base64 with stdin: hello"));
+
+    // Step 3: Replay with same selectionRef must fail closed (single-use token)
+    const replayResult = await protocol.execute({
+      selectionRef,
+      arguments: { stdin: "hello again" },
+    }, context);
+
+    assertEquals(replayResult.ok, false, "replaying claimed selectionRef must fail");
+  } finally {
+    clearRunFence();
+  }
+});

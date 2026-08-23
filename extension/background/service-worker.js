@@ -927,12 +927,12 @@ async function liveChromeLazyRecords({ browserTools, managementTools, executionI
         authorizationGuard: makeGuard(managementGrantDigest, "management"),
       })
       : []),
-    // Bundled rows are searchable catalog entries only. Their existing route is
-    // Settings-owner-click-only, so no provider dispatch closure exists here.
+    // Admitted bundled Wasm packages provide spec-derived validation, run-bound
+    // authorization, and task execution dispatch closures through the shared core.
     ...executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
       scope,
       sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
-      closureGeneration: "provider-route-absent",
+      closureGeneration: "task-execution-core",
     }),
   ];
   return records;

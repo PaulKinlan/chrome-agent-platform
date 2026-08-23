@@ -636,6 +636,9 @@ export function adaptBundledTools(rows, context = {}) {
     const toolId = ownData(row, "toolId");
     const binary = ownData(row, "binary");
     const packageDigest = ownData(binary, "sha256");
+    const isAdmitted = row?.admitted === true && row?.disabled !== true;
+    const availability = context?.availabilityByTool?.[toolId] ?? (isAdmitted ? "ready" : "disabled");
+    const dispatcherKind = context?.dispatcherKind ?? (isAdmitted ? "bundled-wasm-task" : "bundled-wasm-disabled");
     inputs.push({
       sourceKind: "bundled-package",
       packageId: ownData(row, "packageId"),
@@ -652,8 +655,8 @@ export function adaptBundledTools(rows, context = {}) {
       packageDigest,
       permissionDigest: "none",
       grantDigest: "none",
-      availability: "disabled",
-      dispatcherKind: "bundled-wasm-disabled",
+      availability,
+      dispatcherKind,
     });
   }
   return inputs;
