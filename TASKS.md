@@ -383,7 +383,8 @@ On resume after a coordinator or worker loss:
     review): 8 tools — windows list/create/focus/close/move, action
     set/get state, commands list — zero new manifest permissions, grant-lock
     origin re-reads (smuggle-class defense), owner-scoped action state,
-    registry parity 46 tools, 1309/1309 suite.
+    registry parity 46 tools, 1309/1309 suite. LANDED as 0.2.205
+    (origin/main@0d308ce14430e4d1c7f24b23e6e0c1686733517d).
   - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
     revives the early "go through all Chrome extension APIs and create tools"
     request.
