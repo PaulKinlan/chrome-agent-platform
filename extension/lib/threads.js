@@ -52,15 +52,40 @@ function boundText(text, max = MAX_MESSAGE_CHARS) {
   return s.length > max ? s.slice(0, max) : s;
 }
 
-/** Trim a thread's messages to the count + byte budget (drop the OLDEST). */
+/** Trim a thread's messages to the count + byte budget (drop the OLDEST),
+ * but NEVER evict the final turn's terminal assistant/error row + its
+ * triggering user row (a self-embedding tool-row blowout must not drop the
+ * question or its answer). */
 function trimMessages(messages) {
-  let entries = messages.slice(-MAX_MESSAGES);
+  const entries = messages.slice(-MAX_MESSAGES);
+  const keepFrom = protectedTailStart(entries);
+  let prefix = entries.slice(0, keepFrom);
+  const tail = entries.slice(keepFrom);
   while (
-    entries.length > 1 && utf8Bytes(JSON.stringify(entries)) > MAX_THREAD_BYTES
+    prefix.length > 0 &&
+    utf8Bytes(JSON.stringify([...prefix, ...tail])) > MAX_THREAD_BYTES
   ) {
-    entries = entries.slice(1);
+    prefix = prefix.slice(1);
   }
-  return entries;
+  return [...prefix, ...tail];
+}
+
+/** The index of the first message that must never be evicted: the user row
+ * immediately before the LAST terminal (assistant/error) row. If there is no
+ * terminal row, nothing is protected (the count/budget trim applies as before).
+ * If there is a terminal but no preceding user, protect just the terminal. */
+function protectedTailStart(entries) {
+  let terminalIdx = -1;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const m = entries[i];
+    if (m && (m.role === "assistant" || m.role === "error")) { terminalIdx = i; break; }
+  }
+  if (terminalIdx < 0) return entries.length;
+  for (let i = terminalIdx - 1; i >= 0; i--) {
+    const m = entries[i];
+    if (m && m.role === "user") return i;
+  }
+  return terminalIdx;
 }
 
 /** The thread index (most-recent-first). */
@@ -233,26 +258,45 @@ export async function appendThreadMessage(id, message) {
   const { role = "assistant", content = "" } = message ?? {};
   thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
   const att = sanitizeAttachments(message?.attachments);
+  const isTool = Boolean(message?.toolName);
   // TOOL rows pass through their structured fields (toolName/toolStatus/args/
   // result/ok/duration + the pairing callId) so a reopened thread can replay
-  // them as ONE terminal card per call — the thread is not just text.
-  thread.messages.push({
+  // them as ONE terminal card per call — the thread is not just text. The tool
+  // RESULT is bounded (the DEFECT B self-embedding loop: a memory_get of
+  // thread:<id> returning the whole body can no longer store an unbounded copy
+  // of the thread back into itself).
+  const entry = {
     role,
     content: boundText(content),
     ts: Date.now(),
     ...(att ? { attachments: att } : {}),
-    ...(message?.toolName
+    ...(isTool
       ? {
         toolName: message.toolName,
         toolStatus: message.toolStatus ?? "running",
         toolArgs: message.toolArgs ?? null,
-        toolResult: message.toolResult ?? null,
+        toolResult: message.toolResult != null ? boundText(message.toolResult) : null,
         toolOk: message.toolOk ?? null,
         toolDuration: message.toolDuration ?? null,
         toolCallId: message.toolCallId ?? null,
       }
       : {}),
-  });
+  };
+  // DEFECT A (the ordering): a tool row for an execution whose terminal
+  // assistant/error row is ALREADY committed (the durable outbox commits the
+  // terminal first; the post-run tool replay runs after) must land BEFORE that
+  // terminal row — never after — so the thread ends on the terminal, not a
+  // tool row. The insert is keyed by the immutable executionId.
+  const execId = message?.executionId;
+  if (isTool && execId) {
+    const terminalIdx = thread.messages.findIndex(
+      (m) => m?.executionId === execId && (m.role === "assistant" || m.role === "error"),
+    );
+    if (terminalIdx >= 0) thread.messages.splice(terminalIdx, 0, entry);
+    else thread.messages.push(entry);
+  } else {
+    thread.messages.push(entry);
+  }
   thread.messages = trimMessages(thread.messages);
   thread.updatedAt = Date.now();
   // Tool-card replay may happen after the durable terminal outbox has already

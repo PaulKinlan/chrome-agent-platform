@@ -3085,6 +3085,9 @@ const handlers = mergeRouteMaps(
               toolOk: p.ok ?? null,
               toolDuration: p.durationMs ?? null,
               toolCallId: p.callId ?? `replay:${threadRunInstance}:${p.tool}`,
+              // The insert-before-terminal key: the tool row lands BEFORE this
+              // execution's already-committed terminal assistant/error row.
+              executionId: result?.executionId ?? null,
             }).catch(() => {});
           }
         }
