@@ -1228,6 +1228,8 @@ function configField(labelText, tag, value, rows) {
   wrap.style.flexDirection = "column";
   wrap.style.gap = "4px";
   wrap.style.fontSize = "13px";
+  wrap.style.boxSizing = "border-box";
+  wrap.style.width = "100%";
   const lbl = document.createElement("span");
   lbl.textContent = labelText;
   lbl.style.fontWeight = "600";
@@ -1238,6 +1240,9 @@ function configField(labelText, tag, value, rows) {
   el.style.borderRadius = "8px";
   el.style.background = "var(--bg,#f7f6f3)";
   el.style.color = "var(--text,#1d1b18)";
+  el.style.boxSizing = "border-box";
+  el.style.width = "100%";
+  el.style.outlineOffset = "0px";
   if (tag === "textarea") { el.rows = rows ?? 3; el.style.resize = "vertical"; }
   else { el.type = "text"; }
   el.value = value ?? "";
@@ -1341,6 +1346,9 @@ function openQuickCreateAgent() {
 
 // Build the rich agent dialog. Returns via the onSave/onSaved callbacks (the
 // dialog owns its own lifecycle).
+// Build the rich agent dialog (CAP-FB-20260823-CREATE-AGENT-DIALOG-01).
+// Features: non-clipped focus outline, sticky outside-scroll footer with
+// Create/Cancel, collapsible skills section, and overscroll-behavior: contain.
 async function buildAgentConfigDialog(opts) {
   const skillsRes = await send("skill.list").catch(() => ({ skills: [] }));
   const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
@@ -1348,13 +1356,30 @@ async function buildAgentConfigDialog(opts) {
 
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", opts.title);
-  const body = document.createElement("div");
-  body.style.display = "flex";
-  body.style.flexDirection = "column";
-  body.style.gap = "12px";
-  body.style.minWidth = "min(64vw, 520px)";
-  body.style.maxHeight = "min(76vh, 640px)";
-  body.style.overflow = "auto";
+
+  // Outer container: structural flex column with overscroll containment
+  const container = document.createElement("div");
+  container.className = "agent-config-container";
+  container.style.display = "flex";
+  container.style.flexDirection = "column";
+  container.style.minWidth = "min(88vw, 540px)";
+  container.style.maxHeight = "min(78vh, 680px)";
+  container.style.overflow = "hidden";
+  container.style.overscrollBehavior = "contain";
+  container.style.boxSizing = "border-box";
+
+  // Scrollable body: padded so focused elements and focus rings are not clipped
+  const scrollBody = document.createElement("div");
+  scrollBody.className = "agent-config-scroll";
+  scrollBody.style.display = "flex";
+  scrollBody.style.flexDirection = "column";
+  scrollBody.style.gap = "14px";
+  scrollBody.style.flex = "1 1 auto";
+  scrollBody.style.overflowY = "auto";
+  scrollBody.style.overscrollBehavior = "contain";
+  scrollBody.style.padding = "4px 6px";
+  scrollBody.style.scrollPadding = "12px";
+  scrollBody.style.boxSizing = "border-box";
 
   // Avatar: a preview + regenerate (edit only) + a custom upload.
   let avatarValue = opts.avatar ?? null;
@@ -1398,7 +1423,7 @@ async function buildAgentConfigDialog(opts) {
     fr.readAsDataURL(f);
   });
   avatarRow.append(avatarImg, avatarLabel, uploadBtn, uploadInput);
-  body.append(avatarRow);
+  scrollBody.append(avatarRow);
 
   const nameField = configField("Name", "input", opts.name ?? "");
 
@@ -1419,19 +1444,42 @@ async function buildAgentConfigDialog(opts) {
   mic.addEventListener("mic-error", (e) => setStatus(e?.detail?.message ?? "mic error", false));
   const refineBtn = configButton("Refine", "secondary");
   roleTools.append(mic, refineBtn);
-  body.append(nameField.wrap, roleField.wrap, roleTools);
+  scrollBody.append(nameField.wrap, roleField.wrap, roleTools);
 
-  // Skills (pull-in).
-  const skillsBox = document.createElement("fieldset");
-  skillsBox.style.border = "1px solid var(--border,#e3e0d9)";
-  skillsBox.style.borderRadius = "8px";
-  skillsBox.style.padding = "10px";
-  skillsBox.style.margin = "0";
-  const legend = document.createElement("legend");
-  legend.textContent = "Skills";
-  legend.style.fontWeight = "600";
-  legend.style.fontSize = "13px";
-  skillsBox.append(legend);
+  // Collapsible skills section
+  const skillsDetails = document.createElement("details");
+  skillsDetails.className = "skills-collapse";
+  skillsDetails.style.border = "1px solid var(--border,#e3e0d9)";
+  skillsDetails.style.borderRadius = "8px";
+  skillsDetails.style.padding = "0";
+  skillsDetails.style.margin = "0";
+  skillsDetails.style.background = "var(--panel,#ffffff)";
+  skillsDetails.style.overflow = "hidden";
+
+  const selectedInitialCount = [...agentSkillIds].filter((id) => available.some((s) => (s?.id ?? s?.name ?? String(s)) === id)).length;
+  const skillsSummary = document.createElement("summary");
+  skillsSummary.style.padding = "10px 12px";
+  skillsSummary.style.fontWeight = "600";
+  skillsSummary.style.fontSize = "13px";
+  skillsSummary.style.cursor = "pointer";
+  skillsSummary.style.display = "flex";
+  skillsSummary.style.alignItems = "center";
+  skillsSummary.style.justifyContent = "space-between";
+  skillsSummary.style.userSelect = "none";
+  skillsSummary.innerHTML = `<span>Skills</span><span class="skill-count" style="font-size:12px;color:var(--muted,#635e56);font-weight:normal;">${selectedInitialCount > 0 ? `${selectedInitialCount} selected` : `${available.length} available`}</span>`;
+  skillsDetails.append(skillsSummary);
+
+  const skillsList = document.createElement("div");
+  skillsList.className = "skills-list";
+  skillsList.style.padding = "8px 12px 10px";
+  skillsList.style.maxHeight = "180px";
+  skillsList.style.overflowY = "auto";
+  skillsList.style.overscrollBehavior = "contain";
+  skillsList.style.display = "flex";
+  skillsList.style.flexDirection = "column";
+  skillsList.style.gap = "6px";
+  skillsList.style.borderTop = "1px solid var(--border,#e3e0d9)";
+
   const skillChecks = new Map();
   if (!available.length) {
     const none = document.createElement("p");
@@ -1439,7 +1487,7 @@ async function buildAgentConfigDialog(opts) {
     none.style.fontSize = "12.5px";
     none.style.color = "var(--muted,#635e56)";
     none.style.margin = "4px 0 0";
-    skillsBox.append(none);
+    skillsList.append(none);
   } else {
     for (const s of available) {
       const id = s?.id ?? s?.name ?? String(s);
@@ -1452,14 +1500,20 @@ async function buildAgentConfigDialog(opts) {
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = agentSkillIds.has(id);
+      cb.addEventListener("change", () => {
+        const count = [...skillChecks.values()].filter((c) => c.checked).length;
+        const countEl = skillsSummary.querySelector(".skill-count");
+        if (countEl) countEl.textContent = count > 0 ? `${count} selected` : `${available.length} available`;
+      });
       const text = document.createElement("span");
       text.textContent = `${s.name ?? id} — ${s.description ?? ""}`.replace(/\s+—\s*$/, "");
       row.append(cb, text);
       skillChecks.set(id, cb);
-      skillsBox.append(row);
+      skillsList.append(row);
     }
   }
-  body.append(skillsBox);
+  skillsDetails.append(skillsList);
+  scrollBody.append(skillsDetails);
 
   // Core assets: files whose content becomes part of the agent's context.
   const coreAssets = [];
@@ -1489,8 +1543,6 @@ async function buildAgentConfigDialog(opts) {
     const d = e?.detail ?? {};
     const file = d.file;
     let content = d.content ?? "";
-    // Text files: read the actual text (the model can read it); images/other:
-    // keep the data URL as a reference.
     if (file && (typeof file.type === "string" && file.type.startsWith("text/") || /\.(txt|md|json|csv|html|css|js|ts)$/i.test(file.name ?? ""))) {
       try {
         content = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsText(file); });
@@ -1512,20 +1564,31 @@ async function buildAgentConfigDialog(opts) {
   }
   renderAssets();
   assetsBox.append(attach, assetsList);
-  body.append(assetsBox);
+  scrollBody.append(assetsBox);
 
-  // Actions.
-  const actions = document.createElement("div");
-  actions.style.display = "flex";
-  actions.style.justifyContent = "flex-end";
-  actions.style.gap = "8px";
+  // Sticky footer outside the scrollable body (Create / Cancel always visible)
+  const footer = document.createElement("div");
+  footer.className = "agent-config-footer";
+  footer.style.display = "flex";
+  footer.style.justifyContent = "flex-end";
+  footer.style.gap = "8px";
+  footer.style.paddingTop = "12px";
+  footer.style.marginTop = "4px";
+  footer.style.borderTop = "1px solid var(--border,#e3e0d9)";
+  footer.style.background = "var(--panel,#ffffff)";
+  footer.style.flex = "0 0 auto";
+  footer.style.position = "sticky";
+  footer.style.bottom = "0";
+  footer.style.zIndex = "10";
+
   const regenBtn = opts.canRegenerateAvatar ? configButton("Regenerate avatar", "secondary") : null;
   const cancelBtn = configButton("Cancel", "secondary");
   const saveBtn = configButton(opts.savedLabel ?? "Save", "primary");
-  if (regenBtn) actions.append(regenBtn);
-  actions.append(cancelBtn, saveBtn);
-  body.append(actions);
-  dialog.append(body);
+  if (regenBtn) footer.append(regenBtn);
+  footer.append(cancelBtn, saveBtn);
+
+  container.append(scrollBody, footer);
+  dialog.append(container);
   document.body.append(dialog);
 
   refineBtn.addEventListener("click", async () => {

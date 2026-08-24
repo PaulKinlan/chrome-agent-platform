@@ -4228,13 +4228,13 @@ class AgentDialog extends Component {
     const title = this.getAttribute("title") || "";
     mountTemplate(this, `
       :host { display:contents; }
-      .dialog { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:14px; padding:20px; min-width:320px; max-width:90vw; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,.4); color:var(--text,#1d1b18); }
+      .dialog { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:14px; padding:20px; min-width:320px; max-width:90vw; max-height:85vh; overflow:hidden; overscroll-behavior:contain; box-shadow:0 20px 60px rgba(0,0,0,.4); color:var(--text,#1d1b18); display:flex; flex-direction:column; }
       .dialog::backdrop { background:rgba(0,0,0,.5); }
-      .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+      .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex:0 0 auto; }
       .title { font-weight:700; font-size:16px; }
-      .x { background:transparent; border:0; color:var(--text,#1d1b18); cursor:pointer; padding:4px; }
+      .x { background:transparent; border:0; color:var(--text,#1d1b18); cursor:pointer; padding:4px; border-radius:4px; }
       .x:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .body { color:var(--text,#1d1b18); }
+      .body { color:var(--text,#1d1b18); flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
     `, `<dialog part="dialog" class="dialog" aria-label="${escapeHtml(title)}">
         <div class="head"><span class="title">${escapeHtml(title)}</span>
           <button type="button" class="x" aria-label="Close">${ICONS.close}</button></div>

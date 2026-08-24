@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.215] — 2026-08-24
+- fix(dialog): create-agent dialog — unclipped focus, sticky Create/Cancel footer outside the scroll body, collapsible skills section with live count, overscroll containment at all layers (CAP-FB-20260823-CREATE-AGENT-DIALOG-01)
+
 ## [0.2.214] — 2026-08-24
 - feat(ntp): task/panel cluster — task title is click-to-edit inline (separate edit button kept for named agents only), and the collapsed side panel keeps the task/agent lists at a stable vertical position (CAP-FB-20260823-TASK-INLINE-EDIT-01, COLLAPSED-PANEL-HEADER-01)
 
