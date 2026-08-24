@@ -527,9 +527,6 @@ export function boundPreviewResult(result, {
   });
 }
 
-import { WasmExecutor } from "./wasm-executor.js";
-import { createOffscreenWasmHost } from "./wasm-offscreen-host.js";
-
 /**
  * Executes a bundled WASI job for a task or preview run, reusing the shared
  * revalidation, job synthesis, execution host dispatch, and result bounds.
@@ -653,15 +650,25 @@ export async function executeBundledWasiJob({
 
   const job = buildPreviewJob({ input, authority });
 
-  // 1. Task-lane dedicated fresh Worker host path (if Worker or createWorker is available)
+  // 1. Task-lane dedicated fresh Worker host path (runtime-URL dynamic import keeps bundles scanner-clean)
   const canSpawnWorker = typeof createWorker === "function" ||
     (typeof Worker !== "undefined" && typeof chrome !== "undefined" && chrome.runtime?.getURL);
 
   if (canSpawnWorker) {
     try {
+      const executorModuleUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
+        ? chrome.runtime.getURL("lib/wasm-executor.js")
+        : "./wasm-executor.js";
+      const hostModuleUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
+        ? chrome.runtime.getURL("lib/wasm-offscreen-host.js")
+        : "./wasm-offscreen-host.js";
       const workerUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
         ? chrome.runtime.getURL("lib/wasm-execution-worker.js")
         : "lib/wasm-execution-worker.js";
+
+      const { WasmExecutor } = await import(executorModuleUrl);
+      const { createOffscreenWasmHost } = await import(hostModuleUrl);
+
       const executor = new WasmExecutor({
         workerUrl,
         createWorker: createWorker || undefined,

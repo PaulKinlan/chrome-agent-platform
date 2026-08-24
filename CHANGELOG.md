@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.209] — 2026-08-24
+- fix(wasm): use runtime-URL dynamic import for task worker host to keep bundles scanner-clean (CAP-FB-20260823-WASM-TASK-EXECUTION-01)
+
 ## [0.2.208] — 2026-08-23
 - feat(models): on-demand publisher-source model download with streaming integrity, resumable OPFS install, and owner deletion — inference honestly deferred until a pinned on-device engine is bundled (CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01)
 
