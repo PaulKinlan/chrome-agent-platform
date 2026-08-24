@@ -104,6 +104,7 @@ import {
   RunAbortedError,
 } from "../lib/agent.js";
 import { clearUsage, getUsage, recordUsage } from "../lib/usage.js";
+import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
   diagnosticList,
@@ -1024,27 +1025,28 @@ async function readSiteLazySources(origin, runGenCell) {
   }
   const grantDigest = sha256Hex(sourceGeneration);
   const packageDigest = sha256Hex(`webmcp:${origin}:${sourceGeneration}`);
-  const authorizationGuard = async ({ name, source, descriptorInput }) => {
-    const nowEnrollment = await enrollmentSnapshot(origin);
-    const current = (await listTools(origin)).find((row) =>
-      row?.name === name && row?.source === source
-    );
-    const approved = current
-      ? await isApproved(origin, name).catch(() => false)
-      : false;
-    const currentPermissionDigest = sha256Hex(`approved:${approved}`);
-    const currentGrantDigest = ownData(descriptorInput, "grantDigest") ?? "none";
-    const runGen = runGenCell?.get?.() ?? null;
-    return {
-      ok: Boolean(
-        current && approved && nowEnrollment.enrolled &&
-        runGen != null && nowEnrollment.gen === runGen &&
-        currentPermissionDigest === descriptorInput.permissionDigest
-      ),
-      permissionDigest: currentPermissionDigest,
-      grantDigest: currentGrantDigest,
-    };
-  };
+  // The authorization guard is the EXTRACTED, unit-tested factory
+  // (lib/webmcp-authority.js) — the previous inline guard referenced an
+  // unimported `ownData`, so every evaluation threw ReferenceError and the
+  // protocol's catch mapped it to a blind `lazy-authority-stale-or-denied`
+  // (CAP-FB-20260824-WEBMCP-LAZYAUTH-01). Every denial now carries a named
+  // reason, surfaced to the diagnostics ring so the owner can see WHICH
+  // conjunct failed instead of hitting an inscrutable dead-end.
+  const authorizationGuard = createWebmcpAuthorizationGuard({
+    origin,
+    enrollmentSnapshot,
+    listTools,
+    isApproved,
+    runGenCell,
+    onDeny: (decision, target) => {
+      pushDiagnostic(
+        "warn",
+        `WebMCP tool authorization denied: ${decision.reason} (${target.name} on ${target.origin})`,
+        "webmcp",
+        "authorization",
+      );
+    },
+  });
   return executableWebMcpToolRecords(tools, {
     origin,
     agentId: origin,
