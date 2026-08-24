@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.235] — 2026-08-24
+- feat(providers): add scoped local-model routes (Gemma Wasm, Prompt API, Ollama, LM Studio) (CAP-FEATURE-LOCAL-MODELS-01)
+
 ## [0.2.231] — 2026-08-24
 - fix(ui): fix artifact iframe sizing and render generate_ui output as sandboxed UI (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01 & CAP-FB-20260823-GENERATE-UI-RENDER-01)
 

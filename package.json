@@ -1,7 +1,7 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.235",  "private": true,
-  "type": "module",
+  "version": "0.2.236",
+  "private": true,  "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
     "build": "node build.mjs --target=store",

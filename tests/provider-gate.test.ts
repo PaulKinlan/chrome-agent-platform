@@ -691,7 +691,7 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   const publicModels = await dispatch({ type: "provider.models" }, ownerSender);
   assertEquals(
     publicModels?.choices?.map((choice) => choice.id),
-    ["openai", "anthropic", "gemini", "deepseek", "openai-compatible", "ollama"],
+    ["openai", "anthropic", "gemini", "deepseek", "openai-compatible", "ollama", "lm-studio"],
     "provider.models returns the exact public provider list",
   );
   assert(

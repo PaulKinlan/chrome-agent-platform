@@ -17,6 +17,7 @@ const PUBLIC_IDS = [
   "deepseek",
   "openai-compatible",
   "ollama",
+  "lm-studio",
 ];
 
 Deno.test("provider public list: filters internal choices without changing runtime authority", () => {

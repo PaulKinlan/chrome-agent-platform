@@ -266,3 +266,116 @@ export function localModelFeasibility(environment = {}) {
       "User-controlled model removal only; automatic eviction is disabled per settled policy.",
   });
 }
+
+/** The supported local model routes for onboarding and settings. */
+export const SUPPORTED_LOCAL_MODEL_ROUTES = Object.freeze([
+  Object.freeze({
+    id: "local-opfs",
+    name: "Gemma 4 (on-device Wasm)",
+    kind: "embedded-wllama",
+    description: "Run Google Gemma 4 QAT q4_0 entirely in-browser via WebAssembly and OPFS. Zero network requests during inference.",
+    defaultEndpoint: null,
+    needsEndpoint: false,
+    needsDownload: true,
+    defaultModel: "gemma-4-e4b-it-qat-q4_0",
+  }),
+  Object.freeze({
+    id: "prompt-api",
+    name: "Chrome Prompt API (Gemini nano)",
+    kind: "built-in-browser",
+    description: "Chrome's built-in on-device Gemini nano model. Zero network, zero download, availability depends on Chrome version and flags.",
+    defaultEndpoint: null,
+    needsEndpoint: false,
+    needsDownload: false,
+    defaultModel: "gemini-nano",
+  }),
+  Object.freeze({
+    id: "ollama",
+    name: "Ollama (local server)",
+    kind: "localhost-openai-compatible",
+    description: "Connect to a local Ollama instance running on your machine (e.g. llama3, mistral, gemma).",
+    defaultEndpoint: "http://localhost:11434/v1",
+    needsEndpoint: true,
+    needsDownload: false,
+    defaultModel: "llama3.2",
+  }),
+  Object.freeze({
+    id: "lm-studio",
+    name: "LM Studio (local server)",
+    kind: "localhost-openai-compatible",
+    description: "Connect to a local LM Studio server running on your machine with any loaded GGUF model.",
+    defaultEndpoint: "http://localhost:1234/v1",
+    needsEndpoint: true,
+    needsDownload: false,
+    defaultModel: "local-model",
+  }),
+]);
+
+/** Validate and canonicalize a localhost endpoint for local models. */
+export function validateLocalEndpoint(urlStr) {
+  if (typeof urlStr !== "string" || !urlStr.trim()) {
+    return { ok: false, error: "endpoint_required", message: "A local endpoint URL is required." };
+  }
+  let parsed;
+  try {
+    parsed = new URL(urlStr.trim());
+  } catch {
+    return { ok: false, error: "invalid_url", message: "Invalid endpoint URL." };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: "invalid_protocol", message: "Endpoint must use http: or https: protocol." };
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost");
+  if (!isLocal) {
+    return { ok: false, error: "non_local_host", message: "Local model endpoints must point to localhost or 127.0.0.1." };
+  }
+  let cleanPath = parsed.pathname;
+  if (!cleanPath.endsWith("/v1") && !cleanPath.includes("/v1/")) {
+    cleanPath = cleanPath.replace(/\/+$/, "") + "/v1";
+  }
+  const baseURL = `${parsed.protocol}//${parsed.host}${cleanPath}`;
+  return {
+    ok: true,
+    origin: parsed.origin,
+    baseURL,
+  };
+}
+
+/** Check configuration status for a local model route.
+ * @param {string} routeId
+ * @param {{ isOpfsInstalled?: boolean, isPromptApiReady?: boolean, providerConfig?: any }} [options]
+ */
+export function inspectLocalModelRoute(routeId, { isOpfsInstalled = false, isPromptApiReady = false, providerConfig = null } = {}) {
+  const route = SUPPORTED_LOCAL_MODEL_ROUTES.find((r) => r.id === routeId);
+  if (!route) return { id: routeId, available: false, status: "unknown", note: "Unknown route" };
+
+  if (route.id === "local-opfs") {
+    return {
+      id: route.id,
+      name: route.name,
+      available: isOpfsInstalled === true,
+      status: isOpfsInstalled ? "installed" : "download-required",
+      note: isOpfsInstalled ? "Gemma 4 model downloaded and ready in OPFS." : "Requires downloading Gemma 4 to OPFS storage in Settings → Local models.",
+    };
+  }
+
+  if (route.id === "prompt-api") {
+    return {
+      id: route.id,
+      name: route.name,
+      available: isPromptApiReady === true,
+      status: isPromptApiReady ? "ready" : "unavailable",
+      note: isPromptApiReady ? "Chrome Prompt API (Gemini nano) is available." : "Prompt API is not supported or enabled in this browser instance.",
+    };
+  }
+
+  const isConfigured = providerConfig?.provider === route.id && Boolean(providerConfig?.baseURL);
+  return {
+    id: route.id,
+    name: route.name,
+    available: true,
+    status: isConfigured ? "configured" : "not-configured",
+    note: isConfigured ? `Connected to ${providerConfig.baseURL}` : `Ready to connect to local server (default ${route.defaultEndpoint}).`,
+  };
+}

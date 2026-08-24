@@ -84,6 +84,13 @@ export const PROVIDER_CHOICES = [
     needsModel: true,
   },
   {
+    id: "lm-studio",
+    label: "LM Studio (local, OpenAI-compatible)",
+    needsKey: false,
+    baseURL: "http://localhost:1234/v1",
+    needsModel: true,
+  },
+  {
     id: "prompt-api",
     label: "Chrome Prompt API (Gemini nano, on-device)",
     needsKey: false,
@@ -105,6 +112,7 @@ const OPENAI_COMPATIBLE_IDS = new Set([
   "gemini",
   "deepseek",
   "ollama",
+  "lm-studio",
 ]);
 
 export async function getProviderConfig() {

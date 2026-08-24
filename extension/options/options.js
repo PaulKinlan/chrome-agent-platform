@@ -119,6 +119,16 @@ const PROVIDERS = [
     onDevice: false,
     models: [], // free-text — local model names
   },
+  {
+    id: "lm-studio",
+    name: "LM Studio (local)",
+    hint: "A local LM Studio server.",
+    baseURL: "http://localhost:1234/v1",
+    needsKey: false,
+    needsModel: true,
+    onDevice: false,
+    models: [], // free-text — local model names
+  },
 ];
 
 const THEMES = [
@@ -860,7 +870,7 @@ async function renderProviders(restoreFocus = false) {
         </div>
       </div>
       ${
-      p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama"
+      p.needsKey || p.onDevice || p.id === "openai" || p.id === "ollama" || p.id === "lm-studio"
         ? `
       <fieldset class="fields">
         <legend class="sr-only">${p.name} credentials</legend>
