@@ -921,7 +921,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `0fae090`
 - Candidate: —
-- Shipping: —
+- Shipping: Lane A contract slice `origin/main@5e623a526aafb80a77e2c527ceddf5a5425a8d7a` (0.2.235); Lane B real interpreter + tool-surface wiring deferred (browser-gated)
 - Acceptance: a feasibility decision with evidence — Pyodide (or alternative)
   core size and memory footprint measured against the extension's budget,
   CSP/wasm interaction verified in loaded MV3, licence disposition (Pyodide
