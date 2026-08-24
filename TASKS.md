@@ -4084,3 +4084,15 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - Recover: `git grep -n "MAX_ROLE_LEN\|maxlength\|role.*slice" -- extension/lib/named-agents.js extension/ntp extension/sidepanel`
 - History:
   - 2026-08-24 22:10 UTC — captured from product-owner feedback with the Sorting Hat example (input ~2.5KB, saved ~200 chars).
+
+## [CAP-FB-20260824-TASK-AGENT-BOUNDARY-01] @mention task vanished from the list and became the agent's conversation — MERGED
+
+- Feedback: 2026-08-24 — product owner: creating a task that @mentions an agent made it disappear from the task list and strand the owner in the agent's view; a task should stay a task that talks TO agents, not become the agent's conversation.
+- Status: MERGED
+- Priority: P0
+- Shipping: `origin/main@b2742c3eefc525250904a48591319cf5251ddd55` (0.2.248)
+- Root cause: the composer mention branch called openAgentSurface → currentThreadId=null → DIRECT agent routes (agent.delegate/named-agent.run/background-agent.run) journaled to the agent's own store and never created a thread (dates to unified picker 38ae7ae, not the recent thread fixes).
+- Fix: mention = delegation directive ON the hub task; the thread is kept and the mention passed; conversation.js routes mentions via agent.run (the thread route); agent.run dispatches to the delegation handlers WITH threadId; all three routes carry threadId into durable admission/resume args so the outbox commits the terminal INTO the thread (crash-safe, idempotent by executionId); resume replays restore threadId; pre-admission refusals commit an error terminal (never stuck running). Agent sandbox semantics untouched.
+- Review: PASS (Gemini 661a8805), 1511/1511.
+- History:
+  - 2026-08-24 22:25 UTC — LANDED at 0.2.248. Mentioned tasks now persist to the list, reopen as [user, assistant], follow-ups continue the same thread, and the agent's result returns into the task thread.
