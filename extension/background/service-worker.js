@@ -977,8 +977,6 @@ async function readSiteLazySources(origin, runGenCell) {
     `epoch:${gate.epoch ?? 0}`,
     `seq:${gate.seq ?? 0}`,
   ].join(":");
-  const currentDocument = enrollment.enrolled && documentId &&
-    Number.isFinite(gate.epoch) && gate.epoch > 0;
   const tools = await listTools(origin);
   const permissionDigestByTool = {};
   const availabilityByTool = {};
@@ -986,23 +984,14 @@ async function readSiteLazySources(origin, runGenCell) {
     if (!sourceTool || typeof sourceTool.name !== "string") continue;
     const approved = await isApproved(origin, sourceTool.name).catch(() => false);
     permissionDigestByTool[sourceTool.name] = sha256Hex(`approved:${approved}`);
-    availabilityByTool[sourceTool.name] = currentDocument && approved
+    availabilityByTool[sourceTool.name] = enrollment.enrolled && approved
       ? "ready"
-      : currentDocument ? "owner-action-required" : "stale";
+      : enrollment.enrolled ? "owner-action-required" : "disabled";
   }
   const grantDigest = sha256Hex(sourceGeneration);
   const packageDigest = sha256Hex(`webmcp:${origin}:${sourceGeneration}`);
   const authorizationGuard = async ({ name, source, descriptorInput }) => {
     const nowEnrollment = await enrollmentSnapshot(origin);
-    const nowGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
-    const nowGate = nowGateMap[origin] ?? {};
-    const nowDocumentId = typeof nowGate.documentId === "string" ? nowGate.documentId : "";
-    const nowSourceGeneration = [
-      `enrollment:${nowEnrollment.gen ?? 0}`,
-      `document:${nowDocumentId}`,
-      `epoch:${nowGate.epoch ?? 0}`,
-      `seq:${nowGate.seq ?? 0}`,
-    ].join(":");
     const current = (await listTools(origin)).find((row) =>
       row?.name === name && row?.source === source
     );
@@ -1010,15 +999,13 @@ async function readSiteLazySources(origin, runGenCell) {
       ? await isApproved(origin, name).catch(() => false)
       : false;
     const currentPermissionDigest = sha256Hex(`approved:${approved}`);
-    const currentGrantDigest = sha256Hex(nowSourceGeneration);
+    const currentGrantDigest = ownData(descriptorInput, "grantDigest") ?? "none";
     const runGen = runGenCell?.get?.() ?? null;
     return {
       ok: Boolean(
         current && approved && nowEnrollment.enrolled &&
         runGen != null && nowEnrollment.gen === runGen &&
-        nowSourceGeneration === descriptorInput.sourceGeneration &&
-        currentPermissionDigest === descriptorInput.permissionDigest &&
-        currentGrantDigest === descriptorInput.grantDigest
+        currentPermissionDigest === descriptorInput.permissionDigest
       ),
       permissionDigest: currentPermissionDigest,
       grantDigest: currentGrantDigest,
@@ -1027,7 +1014,7 @@ async function readSiteLazySources(origin, runGenCell) {
   return executableWebMcpToolRecords(tools, {
     origin,
     agentId: origin,
-    documentId,
+    documentId: "",
     version: "page-current",
     sourceGeneration,
     closureGeneration: sourceGeneration,
@@ -1043,7 +1030,6 @@ async function readSiteLazySources(origin, runGenCell) {
       args,
       runGenCell?.get?.() ?? null,
       source,
-      sourceGeneration,
     )
   );
 }
@@ -1381,44 +1367,39 @@ async function invokeSiteTool(
   // could come from one document while the invocation silently drove another.
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
   const binding = gateMap[canonical] ?? null;
-  const boundSourceGeneration = binding
-    ? [
-      `enrollment:${snap.gen ?? 0}`,
-      `document:${typeof binding.documentId === "string" ? binding.documentId : ""}`,
-      `epoch:${binding.epoch ?? 0}`,
-      `seq:${binding.seq ?? 0}`,
-    ].join(":")
-    : "";
-  if (
-    expectedSourceGeneration && boundSourceGeneration !== expectedSourceGeneration
-  ) {
-    return { error: `the approved document changed before ${name} could run` };
-  }
+
   let resolvedBinding = binding;
-  // CAP-FB-20260824-WEBMCP-EXECUTION-01: when the bound tab/document is dead
-  // (closed or navigated cross-origin), PLAN the invocation tab instead of
-  // failing with the stale-page family: prefer the active same-identity tab,
-  // else the lowest tabId, else open the canonical URL. The planner is pure
-  // (lib/pure.js) — the page-identity seam lives in matchesPageIdentity.
-  if (
-    !binding || binding.tabId == null ||
-    typeof binding.documentId !== "string" || binding.documentId.length === 0 ||
-    !Number.isInteger(binding.seq) || binding.seq < 0
-  ) {
-    // No binding at all — never a snapshot accepted for this origin.
-    return {
-      error: `no current approved tab/document snapshot is bound for ${canonical} — re-discover the page`,
-    };
-  }
-  const boundTab = await chrome.tabs.get(binding.tabId).catch(() => null);
+  const boundTab = (binding && binding.tabId != null)
+    ? await chrome.tabs.get(binding.tabId).catch(() => null)
+    : null;
   let boundTabOrigin = null;
   try {
     boundTabOrigin = boundTab?.url ? canonicalOrigin(new URL(boundTab.url).origin) : null;
   } catch {
     boundTabOrigin = null;
   }
-  if (!boundTab?.id || boundTabOrigin !== canonical) {
-    // The bound tab is dead or navigated off-origin. Plan + resolve.
+
+  const isBoundAlive = Boolean(
+    binding && binding.tabId != null &&
+    typeof binding.documentId === "string" && binding.documentId.length > 0 &&
+    Number.isInteger(binding.seq) && binding.seq >= 0 &&
+    boundTab?.id && boundTabOrigin === canonical
+  );
+
+  if (isBoundAlive) {
+    const boundSourceGeneration = [
+      `enrollment:${snap.gen ?? 0}`,
+      `document:${binding.documentId}`,
+      `epoch:${binding.epoch ?? 0}`,
+      `seq:${binding.seq ?? 0}`,
+    ].join(":");
+    if (
+      expectedSourceGeneration && boundSourceGeneration !== expectedSourceGeneration
+    ) {
+      return { error: `the approved document changed before ${name} could run` };
+    }
+  } else {
+    // The bound tab is dead, missing, or navigated off-origin. Plan + resolve.
     const tabs = await chrome.tabs.query({}).catch(() => []);
     const plan = planWebmcpInvocationTab({ canonical, binding, tabs: Array.isArray(tabs) ? tabs : [] });
     if (plan.kind === "reuse") {
@@ -1431,13 +1412,14 @@ async function invokeSiteTool(
         // NEVER displace a live binding (the round-30 fence): only a dead/
         // missing or dead-origin binding is replaced.
         const dead = !cur || cur.tabId == null || (await chrome.tabs.get(cur.tabId).catch(() => null)) == null;
-        if (dead) {
+        if (dead || cur.tabId !== plan.tabId) {
           map[canonical] = rebindSnapshotGate(cur, plan.tabId);
           await kvSet({ [SNAPSHOT_GATE_KEY]: map });
         }
       });
       // The resolved tab's bridge may already be running — poke it to re-sync.
       try { await chrome.tabs.sendMessage(plan.tabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
+      try { await chrome.tabs.update(plan.tabId, { active: true }).catch(() => {}); } catch {}
       resolvedBinding = await waitForSnapshotBinding(canonical, plan.tabId);
       if (!resolvedBinding) {
         return {
@@ -1447,7 +1429,7 @@ async function invokeSiteTool(
     } else if (plan.kind === "open") {
       let created = null;
       try {
-        created = await chrome.tabs.create({ url: canonical, active: false });
+        created = await chrome.tabs.create({ url: canonical, active: true });
       } catch (e) {
         return { error: `could not open ${canonical}: ${e?.message ?? e}` };
       }

@@ -118,3 +118,145 @@ Deno.test("SW wiring: the invocation planner + rebind + readiness are wired into
   assert(sw.includes("documentId: resolvedBinding.documentId"), "documentId-addressed sendMessage (the resolved document)");
   assert(sw.includes("enrollment.poke"), "the reuse path pokes the bridge to re-sync");
 });
+
+Deno.test("delegated WebMCP: lazy tool sources report ready when enrolled & approved without open tab", async () => {
+  const { executableWebMcpToolRecords, LazyToolProtocol } = await import("../extension/lib/lazy-tool-protocol.js");
+  const { ToolSelectionAuthority } = await import("../extension/lib/tool-selection.js");
+
+  const dispatched = [];
+  const tools = [{
+    name: "book_table_le_petit_bistro",
+    source: "declared",
+    description: "Book a table at Le Petit Bistro",
+    inputSchema: {
+      type: "object",
+      properties: { partySize: { type: "number" }, date: { type: "string" } },
+      required: ["partySize", "date"],
+    },
+  }];
+
+  const origin = "https://googlechromelabs.github.io";
+  const records = executableWebMcpToolRecords(tools, {
+    origin,
+    agentId: origin,
+    documentId: "", // no open tab initially
+    version: "page-current",
+    sourceGeneration: "enrollment:1:document::epoch:0:seq:0",
+    closureGeneration: "enrollment:1:document::epoch:0:seq:0",
+    packageDigest: "sha256-pkg",
+    permissionDigestByTool: {
+      book_table_le_petit_bistro: "sha256-perm",
+    },
+    grantDigest: "sha256-grant",
+    availabilityByTool: {
+      book_table_le_petit_bistro: "ready", // ready because enrolled & approved
+    },
+    authorizationGuard: async () => ({
+      ok: true,
+      permissionDigest: "sha256-perm",
+      grantDigest: "sha256-grant",
+    }),
+  }, ({ name, source, args }) => {
+    dispatched.push({ name, source, args });
+    return { ok: true, result: "Table booked for 2 on 2026-08-25" };
+  });
+
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority(),
+  });
+
+  const context = {
+    signal: new AbortController().signal,
+    runId: "run-1",
+    taskId: "task-1",
+    agentId: origin,
+    origin,
+    documentId: "",
+    runGeneration: "1",
+    catalogGeneration: "1",
+  };
+
+  const search = await protocol.search({ query: "book table" }, context);
+  assertEquals(search.ok, true);
+  assertEquals(search.results.length, 1);
+  assertEquals(search.results[0].name, "book_table_le_petit_bistro");
+  assertEquals(search.results[0].availability, "ready");
+  assert(typeof search.results[0].selectionRef === "string", "selectionRef must be issued");
+
+  // Execution succeeds through the protocol dispatch
+  const exec = await protocol.execute({
+    selectionRef: search.results[0].selectionRef,
+    arguments: { partySize: 2, date: "2026-08-25" },
+  }, context);
+
+  assertEquals(exec.ok, true);
+  assertEquals(dispatched.length, 1);
+  assertEquals(dispatched[0].name, "book_table_le_petit_bistro");
+  assertEquals(dispatched[0].args.partySize, 2);
+});
+
+Deno.test("delegated WebMCP: unapproved tool reports owner-action-required without selectionRef", async () => {
+  const { executableWebMcpToolRecords, LazyToolProtocol } = await import("../extension/lib/lazy-tool-protocol.js");
+  const { ToolSelectionAuthority } = await import("../extension/lib/tool-selection.js");
+
+  const tools = [{
+    name: "mutate_something",
+    source: "declared",
+    description: "Mutate something",
+    inputSchema: { type: "object", properties: { val: { type: "string" } } },
+  }];
+
+  const origin = "https://googlechromelabs.github.io";
+  const records = executableWebMcpToolRecords(tools, {
+    origin,
+    agentId: origin,
+    documentId: "",
+    version: "page-current",
+    sourceGeneration: "enrollment:1:document::epoch:0:seq:0",
+    closureGeneration: "enrollment:1:document::epoch:0:seq:0",
+    packageDigest: "sha256-pkg",
+    permissionDigestByTool: { mutate_something: "sha256-unapproved" },
+    grantDigest: "sha256-grant",
+    availabilityByTool: {
+      mutate_something: "owner-action-required",
+    },
+  }, () => ({ ok: false }));
+
+  const protocol = new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority(),
+  });
+
+  const context = {
+    signal: new AbortController().signal,
+    runId: "run-2",
+    taskId: "task-2",
+    agentId: origin,
+    origin,
+    documentId: "",
+    runGeneration: "1",
+    catalogGeneration: "1",
+  };
+
+  const search = await protocol.search({ query: "mutate" }, context);
+  assertEquals(search.ok, true);
+  assertEquals(search.results.length, 1);
+  assertEquals(search.results[0].availability, "owner-action-required");
+  assertEquals(search.results[0].selectionRef, null, "unapproved tool must not receive selectionRef");
+});
+
+Deno.test("delegated WebMCP: invokeSiteTool source contract requires tab opening & focus on dead/missing binding", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // Invariant 1: availability is ready when enrolled and approved (not gating on open tab presence)
+  assert(sw.includes('availabilityByTool[sourceTool.name] = enrollment.enrolled && approved'), "readSiteLazySources availability calculation");
+  // Invariant 2: invokeSiteTool checks alive bound tab before deciding to plan vs execute directly
+  assert(sw.includes('const isBoundAlive = Boolean('), "isBoundAlive check in invokeSiteTool");
+  // Invariant 3: opening new tab activates and focuses it
+  assert(sw.includes('chrome.tabs.create({ url: canonical, active: true })'), "open tab creates focused tab");
+  // Invariant 4: reusing tab activates and focuses it
+  assert(sw.includes('chrome.tabs.update(plan.tabId, { active: true })'), "reuse tab activates existing tab");
+  // Invariant 5: descriptor re-verified on freshly bound page before dispatch
+  assert(sw.includes('tool ${name} is not present on the freshly bound page'), "descriptor re-verification");
+});
+

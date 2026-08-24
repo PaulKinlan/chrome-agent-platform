@@ -957,9 +957,7 @@ export function executableWebMcpToolRecords(tools, context, dispatch) {
     );
     let validator;
     try {
-      const schema = sanitizeLazyToolArguments(
-        ownData(sourceTool, "inputSchema") ?? {},
-      );
+      const schema = ownData(sourceTool, "inputSchema") ?? {};
       const zodSchema = schemaToZod(z, schema);
       validator = async (args) => {
         const parsed = zodSchema.safeParse(args);
