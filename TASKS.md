@@ -438,14 +438,14 @@ On resume after a coordinator or worker loss:
   description that OVERLAP — the text is unreadable; they should sit next to
   each other or use a better layout
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@9316947cb59317da684b31cd87be38a13a1e8f6e` (0.2.212)
 - Acceptance: permission/capability rows render with the gates and
   description clearly separated (side-by-side or stacked), no overlap,
   readable at narrow widths; wrapping is clean; AX labels intact
@@ -463,14 +463,14 @@ On resume after a coordinator or worker loss:
   — put a small anchor icon next to each section heading (visible on hover);
   clicking the anchor or heading copies the section link to the clipboard
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@9316947cb59317da684b31cd87be38a13a1e8f6e` (0.2.212)
 - Acceptance: every Settings section heading has a hover-revealed anchor;
   clicking anchor/heading copies a working deep link (#section) to the
   clipboard with visible confirmation; the link navigates and scrolls to the
@@ -489,14 +489,14 @@ On resume after a coordinator or worker loss:
 - Feedback: 2026-08-23 — product owner: usage still isn't working — the usage
   tracking needs to be fixed
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@9316947cb59317da684b31cd87be38a13a1e8f6e` (0.2.212)
 - Acceptance: model usage is recorded truthfully per run/provider, attributed
   correctly, and displayed in the Usage Settings section; survives reload;
   no missing/misattributed records; zero records when nothing ran
