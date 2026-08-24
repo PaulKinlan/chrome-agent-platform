@@ -144,6 +144,35 @@ class MemoryWorkspace {
       rollback: () => { if (!committed) this.files.delete(path); return true; },
     };
   }
+  createDirectory(path) {
+    if (this.files.has(path) || this.dirs.has(path)) throw Object.assign(new Error("exists"), { code: "EEXIST" });
+    const parent = path.split("/").slice(0, -1).join("/");
+    if (parent !== "scratch" && !this.dirs.has(parent) &&
+        ![...this.files.keys()].some((k) => k.startsWith(`${parent}/`))) {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+    this.dirs.add(path);
+    return { commit: () => true, rollback: () => { this.dirs.delete(path); return true; } };
+  }
+  removeDirectory(path) {
+    if (!this.dirs.has(path)) throw Object.assign(new Error("notdir"), { code: "ENOTDIR" });
+    const prefix = `${path}/`;
+    if ([...this.files.keys()].some((k) => k.startsWith(prefix))) {
+      throw Object.assign(new Error("notempty"), { code: "ENOTEMPTY" });
+    }
+    this.dirs.delete(path);
+    return { commit: () => true, rollback: () => { this.dirs.add(path); return true; } };
+  }
+  unlinkFile(path) {
+    const row = this.files.get(path);
+    if (!row) {
+      const isDir = this.dirs.has(path) || [...this.files.keys()].some((k) => k.startsWith(`${path}/`));
+      if (isDir) throw Object.assign(new Error("isdir"), { code: "EISDIR" });
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+    this.files.delete(path);
+    return { commit: () => true, rollback: () => { this.files.set(path, row); return true; } };
+  }
   readdir(path) {
     const prefix = path === "." ? "" : `${path}/`;
     const hasChildren = [...this.files.keys()].some((key) => key.startsWith(prefix));
@@ -625,7 +654,11 @@ Deno.test("WASI preopen/fd stat KAT: fd3 dot + fd4 /job aliases have identical b
   const rootRights = WASI_RIGHTS.PATH_OPEN |
     WASI_RIGHTS.PATH_CREATE_FILE |
     WASI_RIGHTS.PATH_FILESTAT_GET |
-    WASI_RIGHTS.FD_READDIR;
+    WASI_RIGHTS.FD_READDIR |
+    // R11: the lock-pair + journal-unlink path rights (both preopen aliases).
+    WASI_RIGHTS.PATH_CREATE_DIRECTORY |
+    WASI_RIGHTS.PATH_REMOVE_DIRECTORY |
+    WASI_RIGHTS.PATH_UNLINK_FILE;
   const inheritedRights = PATH_CLASS_RIGHTS.inputs.rights |
     PATH_CLASS_RIGHTS.scratch.rights |
     PATH_CLASS_RIGHTS.output.rights;
@@ -1392,9 +1425,14 @@ Deno.test("WASI source boundary: only two new pure modules exist and no product 
       `${rel} remains unbound`,
     );
   }
+  // R11: the first22 stay byte-for-byte; the six append in the exact order.
   assertEquals(
-    SUPPORTED_WASI_PREVIEW1_IMPORTS,
-    [...SUPPORTED_WASI_PREVIEW1_IMPORTS].sort(),
+    SUPPORTED_WASI_PREVIEW1_IMPORTS.slice(0, 22),
+    ["args_get", "args_sizes_get", "clock_time_get", "environ_get", "environ_sizes_get", "fd_close", "fd_fdstat_get", "fd_fdstat_set_flags", "fd_filestat_get", "fd_filestat_set_size", "fd_prestat_dir_name", "fd_prestat_get", "fd_read", "fd_readdir", "fd_seek", "fd_tell", "fd_write", "path_filestat_get", "path_filestat_set_times", "path_open", "proc_exit", "random_get"],
+  );
+  assertEquals(
+    SUPPORTED_WASI_PREVIEW1_IMPORTS.slice(22),
+    ["fd_sync", "path_create_directory", "path_remove_directory", "path_unlink_file", "path_readlink", "poll_oneoff"],
   );
   assert(Object.isFrozen(SUPPORTED_WASI_PREVIEW1_IMPORTS));
   assert(Object.isFrozen(REBUILT_WASI_IMPORTS));
@@ -1892,9 +1930,9 @@ Deno.test("R5 syscall mutants: kind/right/class/ceiling; rollback leaves bytes+a
 
 Deno.test("R5 census + boundary: SUPPORTED is exactly +1 (fd_filestat_set_size); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("fd_filestat_set_size"), true);
-  // R6 added path_filestat_set_times (the §4 census 21→22); this test was the
-  // R5 pin (21) — updated to the R6 census.
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 22, "the R6 census 21→22, deliberate");
+  // R6 added path_filestat_set_times (21→22); R11 added the six sqlite imports
+  // (22→28). This test was the R5 pin (21) — updated to the R11 census.
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 28, "the R11 census 22→28, deliberate");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planFdFilestatSetSize").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
@@ -1970,7 +2008,7 @@ Deno.test("R6 syscall mutants: fd3/right/flags/NOW/missing/dir fail closed, no m
 
 Deno.test("R6 census + boundary: SUPPORTED +1 (path_filestat_set_times); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("path_filestat_set_times"), true);
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 22, "the §4 census 21→22, deliberate");
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 28, "the R11 census 22→28, deliberate");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planPathFilestatSetTimes").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
@@ -2058,17 +2096,19 @@ Deno.test("R10 syscall: read/write projections are masked scratch rights with in
   assertEquals(h.memory.u64(3200 + 8), SQLITE_DB_OPEN_PROFILE.readProjection, "read projection 0x200026");
   assertEquals(h.memory.u64(3200 + 16), 0n, "read inheriting 0");
   assertEquals(h.wasi.fd_close(rfd), WASI_ERRNO.SUCCESS);
-  // write open: workspace/fresh.db → scratch/fresh.db, projected 0x600066 (create).
+  // write open: a FRESH harness so the fresh.db establishes its own binding
+  // (the R11 one-DB rule would deny a second basename on the read harness).
+  const h2 = harness();
   const wp = 2100;
-  const wlen = putPath(h.memory, wp, "workspace/fresh.db");
-  const wErrno = h.wasi.path_open(3, 0, wp, wlen, WASI_OFLAGS.CREAT, SQLITE_DB_OPEN_PROFILE.writeBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3100);
+  const wlen = putPath(h2.memory, wp, "workspace/fresh.db");
+  const wErrno = h2.wasi.path_open(3, 0, wp, wlen, WASI_OFLAGS.CREAT, SQLITE_DB_OPEN_PROFILE.writeBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3100);
   assertEquals(wErrno, WASI_ERRNO.SUCCESS);
-  const wfd = h.memory.u32(3100);
-  assertEquals(h.wasi.fd_fdstat_get(wfd, 3264), WASI_ERRNO.SUCCESS);
-  assertEquals(h.memory.u64(3264 + 8), SQLITE_DB_OPEN_PROFILE.writeProjection, "write projection 0x600066");
-  assertEquals(h.memory.u64(3264 + 16), 0n, "write inheriting 0");
-  assertEquals(h.workspace.files.has("scratch/fresh.db"), true, "the aliased scratch DB was created");
-  assertEquals(h.wasi.fd_close(wfd), WASI_ERRNO.SUCCESS);
+  const wfd = h2.memory.u32(3100);
+  assertEquals(h2.wasi.fd_fdstat_get(wfd, 3264), WASI_ERRNO.SUCCESS);
+  assertEquals(h2.memory.u64(3264 + 8), SQLITE_DB_OPEN_PROFILE.writeProjection | WASI_RIGHTS.FD_SYNC, "write projection 0x600076");
+  assertEquals(h2.memory.u64(3264 + 16), 0n, "write inheriting 0");
+  assertEquals(h2.workspace.files.has("scratch/fresh.db"), true, "the aliased scratch DB was created");
+  assertEquals(h2.wasi.fd_close(wfd), WASI_ERRNO.SUCCESS);
 });
 
 Deno.test("R10 near-miss: fd4/non-workspace path/oflags±bit fall through to the generic branch; no alias applies", () => {
@@ -2085,4 +2125,112 @@ Deno.test("R10 near-miss: fd4/non-workspace path/oflags±bit fall through to the
   const p3 = 2000; const l3 = putPath(h.memory, p3, "workspace");
   assertEquals(h.wasi.path_open(3, 0, p3, l3, 0, SQLITE_DB_OPEN_PROFILE.readBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, openedPtr), WASI_ERRNO.EPERM);
   assertEquals(h.workspace.files.has("scratch/test.db"), true, "the existing scratch DB is untouched");
+});
+
+// ── R11 sqlite six-import completion (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01) ─
+function bindSqlite(h, basename = "test.db") {
+  const p = 2000;
+  const len = putPath(h.memory, p, `workspace/${basename}`);
+  const errno = h.wasi.path_open(3, 0, p, len, WASI_OFLAGS.CREAT, SQLITE_DB_OPEN_PROFILE.writeBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3000);
+  assertEquals(errno, WASI_ERRNO.SUCCESS);
+  return h.memory.u32(3000);
+}
+
+Deno.test("R11 errno + rights surface: EBUSY10/ENOTEMPTY55; fd3 0x6046600 / fd4 0x6146600 / inheriting 0x600066", () => {
+  assertEquals(WASI_ERRNO.EBUSY, 10);
+  assertEquals(WASI_ERRNO.ENOTEMPTY, 55);
+  const h = harness();
+  assertEquals(h.wasi.fd_fdstat_get(3, 2000), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(2000 + 8), 0x6046600n, "fd3 base rights");
+  assertEquals(h.memory.u64(2000 + 16), 0x600066n, "fd3 inheriting");
+  assertEquals(h.wasi.fd_fdstat_get(4, 2064), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(2064 + 8), 0x6146600n, "fd4 base rights");
+  assertEquals(h.memory.u64(2064 + 16), 0x600066n, "fd4 inheriting");
+});
+
+Deno.test("R11 fd_sync: exact FILE+FD_SYNC only; read/generic denied; no-op counters", () => {
+  const h = harness();
+  const dbfd = bindSqlite(h);
+  assertEquals(h.wasi.fd_sync(dbfd), WASI_ERRNO.SUCCESS, "the DB write fd has FD_SYNC");
+  assertEquals(h.wasi.fd_sync(0), WASI_ERRNO.EBADF, "stdin not FILE");
+  assertEquals(h.wasi.fd_sync(3), WASI_ERRNO.EBADF, "preopen not FILE");
+  assertEquals(h.wasi.fd_sync(999), WASI_ERRNO.EBADF, "unopened EBADF");
+  // a generic scratch FILE (no FD_SYNC) → ENOTCAPABLE.
+  const g = openPath(h, "scratch/work.txt", WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE);
+  assertEquals(g.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_sync(g.fd), WASI_ERRNO.ENOTCAPABLE, "generic FILE lacks FD_SYNC");
+  assertEquals(h.wasi.fd_close(dbfd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R11 lock pair: exact bound lock create/remove; binding gate + alias + errno lattice", () => {
+  const h = harness();
+  // before binding → ENOTCAPABLE before path memory.
+  const p0 = 2000; const l0 = putPath(h.memory, p0, "workspace/test.db.lock");
+  assertEquals(h.wasi.path_create_directory(3, p0, l0), WASI_ERRNO.ENOTCAPABLE);
+  const dbfd = bindSqlite(h);
+  // create the exact lock (fd3 workspace alias + fd4 scratch spelling converge).
+  const p1 = 2100; const l1 = putPath(h.memory, p1, "workspace/test.db.lock");
+  assertEquals(h.wasi.path_create_directory(3, p1, l1), WASI_ERRNO.SUCCESS);
+  // the create again → EEXIST.
+  assertEquals(h.wasi.path_create_directory(3, p1, l1), WASI_ERRNO.EEXIST);
+  // wrong scratch lock (different basename) → ENOTCAPABLE.
+  const p2 = 2200; const l2 = putPath(h.memory, p2, "workspace/other.db.lock");
+  assertEquals(h.wasi.path_create_directory(3, p2, l2), WASI_ERRNO.ENOTCAPABLE);
+  // inputs → EACCES before existence.
+  const p3 = 2300; const l3 = putPath(h.memory, p3, "inputs/x.lock");
+  assertEquals(h.wasi.path_create_directory(3, p3, l3), WASI_ERRNO.EACCES);
+  // remove the exact lock.
+  assertEquals(h.wasi.path_remove_directory(3, p1, l1), WASI_ERRNO.SUCCESS);
+  // remove again → ENOTDIR (the missing explicit dir).
+  assertEquals(h.wasi.path_remove_directory(3, p1, l1), WASI_ERRNO.ENOTDIR);
+  // ENOTEMPTY55: a child under the lock blocks the removal.
+  assertEquals(h.wasi.path_create_directory(3, p1, l1), WASI_ERRNO.SUCCESS);
+  h.workspace.files.set("scratch/test.db.lock/child", { type: "file", bytes: enc.encode("x") });
+  assertEquals(h.wasi.path_remove_directory(3, p1, l1), WASI_ERRNO.ENOTEMPTY);
+  assertEquals(h.wasi.fd_close(dbfd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R11 unlink: exact bound journal only; DB/lock/foreign denied before existence", () => {
+  const h = harness();
+  const dbfd = bindSqlite(h);
+  h.workspace.files.set("scratch/test.db-journal", { type: "file", bytes: enc.encode("jx") });
+  // the DB path → ENOTCAPABLE (not the journal).
+  const p0 = 2000; const l0 = putPath(h.memory, p0, "workspace/test.db");
+  assertEquals(h.wasi.path_unlink_file(3, p0, l0), WASI_ERRNO.ENOTCAPABLE);
+  // the lock path → ENOTCAPABLE.
+  const p1 = 2000; const l1 = putPath(h.memory, p1, "workspace/test.db.lock");
+  assertEquals(h.wasi.path_unlink_file(3, p1, l1), WASI_ERRNO.ENOTCAPABLE);
+  // the exact journal → SUCCESS (the name released).
+  const p2 = 2000; const l2 = putPath(h.memory, p2, "workspace/test.db-journal");
+  assertEquals(h.wasi.path_unlink_file(3, p2, l2), WASI_ERRNO.SUCCESS);
+  assertEquals(h.workspace.files.has("scratch/test.db-journal"), false, "the journal was unlinked");
+  // the missing journal → ENOENT.
+  assertEquals(h.wasi.path_unlink_file(3, p2, l2), WASI_ERRNO.ENOENT);
+  assertEquals(h.wasi.fd_close(dbfd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R11 journal auxiliary: the derived write-profile open after binding → 0x600076/0", () => {
+  const h = harness();
+  const dbfd = bindSqlite(h);
+  const p = 2000; const len = putPath(h.memory, p, "workspace/test.db-journal");
+  const errno = h.wasi.path_open(3, 0, p, len, WASI_OFLAGS.CREAT, SQLITE_DB_OPEN_PROFILE.writeBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3200);
+  assertEquals(errno, WASI_ERRNO.SUCCESS);
+  const jfd = h.memory.u32(3200);
+  assertEquals(h.wasi.fd_fdstat_get(jfd, 3264), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(3264 + 8), 0x600076n, "journal write projection (FD_SYNC included)");
+  assertEquals(h.memory.u64(3264 + 16), 0n, "journal inheriting 0");
+  // a second DB basename → ENOTCAPABLE (no binding rotation).
+  const p2 = 2000; const len2 = putPath(h.memory, p2, "workspace/other.db");
+  assertEquals(h.wasi.path_open(3, 0, p2, len2, WASI_OFLAGS.CREAT, SQLITE_DB_OPEN_PROFILE.writeBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3300), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.wasi.fd_close(jfd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(dbfd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R11 stubs: path_readlink ENOTCAPABLE (no PATH_READLINK grant) with zero accessors; poll_oneoff ENOTSUP", () => {
+  const h = harness();
+  assertEquals(h.wasi.path_readlink(3, 0, 0, 0, 0, 0), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.wasi.path_readlink(0, 0, 0, 0, 0, 0), WASI_ERRNO.EBADF, "stdio not PREOPEN/DIR");
+  assertEquals(h.wasi.path_readlink(999, 0, 0, 0, 0, 0), WASI_ERRNO.EBADF, "unopened");
+  assertEquals(h.wasi.poll_oneoff(0, 0, 0, 0), WASI_ERRNO.ENOTSUP);
+  assertEquals(h.wasi.poll_oneoff(1.5, 0, 0, 0), WASI_ERRNO.EINVAL, "non-integer scalar");
 });

@@ -648,3 +648,60 @@ Deno.test("S2 dirs: the S1 reentry rule covers the dir primitives (EINVAL during
   assertEquals(ws._inspect().directories.length, 0, "no dir was created");
   fileTx.rollback();
 });
+
+// ── R11 unlinkFile (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01) ──────────
+Deno.test("R11 unlinkFile: missing ENOENT / directory EISDIR / wrong class EPERM; the transaction removes and rolls back the exact entry", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/t/c/", seed: { files: [{ path: "scratch/db-journal", bytes: [1, 2, 3] }] } });
+  // wrong class / missing / dir.
+  for (const [p, code] of [["inputs/x", "EPERM"], ["scratch/missing", "ENOENT"]]) {
+    let got = null;
+    try { ws.unlinkFile(p); } catch (e) { got = e?.code; }
+    assertEquals(got, code, p);
+  }
+  // the exact FILE → the provisional delete + rollback restores the identity.
+  const before = ws._inspect();
+  const tx = ws.unlinkFile("scratch/db-journal");
+  assert(Object.isFrozen(tx), "the transaction is frozen");
+  assertEquals(ws._inspect().files.includes("scratch/db-journal"), false, "provisional removal");
+  assertEquals(tx.rollback(), true);
+  const after = ws._inspect();
+  assertEquals(after.files.includes("scratch/db-journal"), true, "rollback restores the name");
+  assertEquals(after.entries.find((e) => e.path === "scratch/db-journal").bytes, [1, 2, 3], "rollback restores the exact bytes");
+  // the commit releases it.
+  const tx2 = ws.unlinkFile("scratch/db-journal");
+  assertEquals(tx2.commit(), true);
+  assertEquals(ws._inspect().files.includes("scratch/db-journal"), false, "committed removal");
+  // a recreate mints a FRESH entry (not the deleted identity).
+  ws.createScratchFile("scratch/db-journal").commit();
+  assertEquals(ws._inspect().files.includes("scratch/db-journal"), true, "the recreate");
+  assertEquals(ws._inspect().entries.find((e) => e.path === "scratch/db-journal").bytes, [], "fresh zero-byte entry");
+});
+
+Deno.test("R11 unlinkFile: an open handle on the SAME entry identity blocks (EBUSY); an unrelated handle does not", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/t/c/", seed: { files: [{ path: "scratch/db-journal", bytes: [1, 2, 3] }, { path: "scratch/db", bytes: [9] }] } });
+  const journalHandle = ws.open("scratch/db-journal", { read: true, write: true });
+  const dbHandle = ws.open("scratch/db", { read: true, write: true });
+  let got = null;
+  try { ws.unlinkFile("scratch/db-journal"); } catch (e) { got = e?.code; }
+  assertEquals(got, "EBUSY", "the same-entry open handle blocks");
+  // close the final journal handle → the retry succeeds (the unrelated DB
+  // handle never blocked the journal's unlink).
+  journalHandle.close();
+  assertEquals(ws.unlinkFile("scratch/db-journal").commit(), true, "after close the journal unlink succeeds");
+  dbHandle.close();
+});
+
+Deno.test("R11 unlinkFile: reentry EINVAL during a provisional transaction; repeat/mixed terminals EINVAL", () => {
+  const ws = createSyncWorkspace({ root: "tool-jobs/t/c/", seed: { files: [{ path: "scratch/db-journal", bytes: [1] }] } });
+  const tx = ws.unlinkFile("scratch/db-journal");
+  let got = null;
+  try { ws.unlinkFile("scratch/db-journal"); } catch (e) { got = e?.code; }
+  assertEquals(got, "EINVAL", "a second unlink during the provisional slot");
+  assertEquals(tx.commit(), true);
+  let got2 = null;
+  try { tx.commit(); } catch (e) { got2 = e?.code; }
+  assertEquals(got2, "EINVAL", "repeat commit");
+  let got3 = null;
+  try { tx.rollback(); } catch (e) { got3 = e?.code; }
+  assertEquals(got3, "EINVAL", "rollback after commit");
+});

@@ -201,8 +201,8 @@ Deno.test("gzip retained Worker: malformed header/truncation/deflate/CRC failure
   }
 });
 
-Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED22 with exact 25/1 posture", async () => {
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 22, "R6: path_filestat_set_times admitted (the §4 census 21→22)");
+Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED28 with exact 25/1 posture", async () => {
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 28, "R11: the six sqlite imports admitted (the §4 census 22→28)");
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
   const census = new Map();
   for (const row of BUNDLED_TOOL_PACKAGE_ROWS) {
@@ -220,10 +220,7 @@ Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED22 wit
   assertEquals(disabled.map((row) => row.toolId).sort(), ["sqlite3_query_bounded"]);
   assertEquals(census.get("touch"), [], "R6: path_filestat_set_times is now SUPPORTED, so touch's missing list is EMPTY — the R9 admission flips the descriptor only (no new import)");
   assertEquals(census.get("truncate"), [], "R5: fd_filestat_set_size is now SUPPORTED, so truncate's missing list is EMPTY — the R8 admission flips the descriptor only (no new import)");
-  assertEquals(census.get("sqlite3_query_bounded"), [
-    "fd_sync", "path_create_directory",
-    "path_readlink", "path_remove_directory", "path_unlink_file", "poll_oneoff",
-  ], "R6: sqlite's computed missing list drops path_filestat_set_times (6 remain); the linkage stays disabled");
+  assertEquals(census.get("sqlite3_query_bounded"), [], "R11: the six sqlite imports are now SUPPORTED — sqlite's missing list is EMPTY (import-complete, still disabled)");
 });
 
 Deno.test("gzip service boundary: trusted expected encoding admits one arm and rejects hostile/mismatched arms", () => {

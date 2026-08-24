@@ -553,7 +553,7 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     try {
       files.set(p, provisional);
       handle = makeHandle(p, provisional, handleId, id, provisionalHolder);
-      handles.set(handleId, { path: p, handle });
+      handles.set(handleId, { path: p, entry: provisional, handle });
       let txRecord;
       txRecord = Object.freeze({
         handle,
@@ -677,6 +677,58 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     });
   };
 
+  // R11 (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01): the transactional
+  // scratch-file unlink — the ONE canonical path removal. Closure-private
+  // kind/current-entry/open-handle checks (EBUSY by entry identity, never path
+  // string). The runtime calls it exactly once after its exact-binding gate;
+  // this method owns all kind/ENOENT/EISDIR/EBUSY/provisional-delete policy.
+  const unlinkFile = (path) => {
+    if (activeTransaction !== null) throw failClosed("EINVAL");
+    const p = boundedPath(path);
+    const segments = p.split("/");
+    if (segments[0] !== "scratch" || segments.length < 2) throw failClosed("EPERM");
+    const entry = files.get(p);
+    const isDirectory = directories.has(p) ||
+      (entry === undefined && [...files.keys()].some((key) => key.startsWith(`${p}/`)));
+    if (entry === undefined && isDirectory) throw failClosed("EISDIR");
+    if (entry === undefined) throw failClosed("ENOENT");
+    for (const record of handles.values()) {
+      if (record.path === p && record.entry === entry) throw failClosed("EBUSY");
+    }
+    // Provisional delete + the frozen exact transaction (one shared slot).
+    let state = "provisional";
+    files.delete(p);
+    let txRecord;
+    txRecord = Object.freeze({
+      commit() {
+        if (state !== "provisional") throw failClosed("EINVAL");
+        if (activeTransaction !== txRecord || files.has(p)) throw failClosed("EIO");
+        try {
+          if (testFaults?.commitThrow) throw new Error("injected commit fault");
+          state = "committed";
+          activeTransaction = null;
+          return true;
+        } catch (error) {
+          // Forced-COMMITTED/EIO: the name/storage remain released, no
+          // reinsert, the active slot clears; reported honestly.
+          state = "committed";
+          if (activeTransaction === txRecord) activeTransaction = null;
+          throw failClosed("EIO");
+        }
+      },
+      rollback() {
+        if (state !== "provisional") throw failClosed("EINVAL");
+        if (activeTransaction !== txRecord || files.has(p)) throw failClosed("EIO");
+        files.set(p, entry);
+        activeTransaction = null;
+        state = "rolled-back";
+        return true;
+      },
+    });
+    activeTransaction = txRecord;
+    return txRecord;
+  };
+
   const open = (path, options = {}) => {
     // The one-provisional reentry rule covers open() too: while a transaction
     // is provisional, any state-touching allocation must fail EINVAL so a
@@ -735,7 +787,7 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     const id = reserveHandleId();
     const handleId = `h${id}`;
     const handle = makeHandle(p, current, handleId, id, { value: false });
-    handles.set(handleId, { path: p, handle });
+    handles.set(handleId, { path: p, entry: current, handle });
     return handle;
   };
 
@@ -774,6 +826,7 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     createScratchFile,
     createDirectory,
     removeDirectory,
+    unlinkFile,
     // introspection for the no-Chrome tests (never an execution authority)
     // Test-safe canonical introspection (copy-only, frozen; never an execution
     // authority): the canonical bytes/mtimes/handles/allocator snapshot so the

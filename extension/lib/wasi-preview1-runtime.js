@@ -59,6 +59,12 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "path_open",
   "proc_exit",
   "random_get",
+  "fd_sync",
+  "path_create_directory",
+  "path_remove_directory",
+  "path_unlink_file",
+  "path_readlink",
+  "poll_oneoff",
 ]);
 
 import { SCRATCH_FILE_LIMITS } from "./wasm-sync-workspace.js";
@@ -132,12 +138,14 @@ function mapAdapterError(error) {
   } catch { /* hostile adapter errors collapse to EIO */ }
   return ({
     EACCES: WASI_ERRNO.EACCES,
+    EBUSY: WASI_ERRNO.EBUSY,
     EEXIST: WASI_ERRNO.EEXIST,
     EFBIG: WASI_ERRNO.EFBIG,
     EISDIR: WASI_ERRNO.EISDIR,
     ENOENT: WASI_ERRNO.ENOENT,
     ENOSPC: WASI_ERRNO.ENOSPC,
     ENOTDIR: WASI_ERRNO.ENOTDIR,
+    ENOTEMPTY: WASI_ERRNO.ENOTEMPTY,
     EPERM: WASI_ERRNO.EPERM,
   })[code] ?? WASI_ERRNO.EIO;
 }
@@ -622,13 +630,23 @@ export function createWasiPreview1Runtime({
   const fds = new Map();
   const freeFds = [];
   const rootRights = WASI_RIGHTS.PATH_OPEN | WASI_RIGHTS.PATH_CREATE_FILE |
-    WASI_RIGHTS.PATH_FILESTAT_GET | WASI_RIGHTS.FD_READDIR;
+    WASI_RIGHTS.PATH_FILESTAT_GET | WASI_RIGHTS.FD_READDIR |
+    // R11 (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01): the lock-pair + the
+    // journal-unlink path rights — reported on BOTH preopen aliases so the
+    // syscalls' requireRight matches the reported surface; the class masks
+    // and the FILE/DIR/stdio records never gain these path bits.
+    WASI_RIGHTS.PATH_CREATE_DIRECTORY | WASI_RIGHTS.PATH_REMOVE_DIRECTORY |
+    WASI_RIGHTS.PATH_UNLINK_FILE;
   // R6 (A-1): path_filestat_set_times is fd4-only (the /job preopen) — fd3 `.`
   // keeps rootRights; fd4 adds the set-times bit so the syscall's fd===4 gate
   // matches the reported surface (fd3 must NOT report the right it cannot use).
   const fd4Rights = rootRights | WASI_RIGHTS.PATH_FILESTAT_SET_TIMES;
   const inheritedRights = PATH_CLASS_RIGHTS.inputs.rights |
     PATH_CLASS_RIGHTS.scratch.rights | PATH_CLASS_RIGHTS.output.rights;
+  // R11: the per-job, in-memory, non-serialized SQLite path binding — null
+  // until the first successful exact R10 DB-profile open; derives the exact
+  // lock/journal paths from the one DB basename. Never request/result-borne.
+  let sqlitePathBinding = null;
 
   function putFd(record) {
     fds.set(record.fd, createFdRecord(record));
@@ -949,6 +967,45 @@ export function createWasiPreview1Runtime({
       root: "scratch",
       policy: PATH_CLASS_RIGHTS.scratch,
     });
+  }
+
+  // R11: the alias-aware bounded path decoder for the lock-pair + the unlink.
+  // The leading `workspace/` is rewritten to `scratch/` (the immutable R10
+  // alias); `inputs`/`output`/`scratch` roots stay their own classes (never
+  // aliased). Returns the canonical path + root; the caller owns the
+  // class/exact-binding gates.
+  function decodeBoundPath(pointer, length) {
+    const bytes = readBytes(pointer, length);
+    if (
+      bytes.byteLength === 0 ||
+      bytes.byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_BYTES
+    ) fault(WASI_ERRNO.ENAMETOOLONG);
+    let text;
+    try {
+      text = decoder.decode(bytes);
+    } catch {
+      fault(WASI_ERRNO.EINVAL);
+    }
+    if (
+      text.includes("\0") || text.includes("\\") || text.startsWith("/") ||
+      text.endsWith("/")
+    ) fault(WASI_ERRNO.EPERM);
+    const canonical = text.startsWith("workspace/")
+      ? `scratch/${text.slice("workspace/".length)}`
+      : text;
+    const parts = canonical.split("/");
+    if (parts.length < 2) fault(WASI_ERRNO.EPERM);
+    for (const part of parts) {
+      const encoded = encoder.encode(part);
+      if (!part || part === "." || part === "..") fault(WASI_ERRNO.EPERM);
+      if (encoded.byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_SEGMENT_BYTES) {
+        fault(WASI_ERRNO.ENAMETOOLONG);
+      }
+      for (const byte of encoded) {
+        if (byte < 0x20 || byte === 0x7f) fault(WASI_ERRNO.EINVAL);
+      }
+    }
+    return Object.freeze({ path: canonical, root: parts[0] });
   }
 
   function validateDirText(text, { allowRoot, requireClass }) {
@@ -1425,10 +1482,33 @@ export function createWasiPreview1Runtime({
       ) {
         const writeProfile = oflags === SQLITE_DB_OPEN_PROFILE.writeOflags;
         const resolved = decodeSqliteDbPath(pathPtr, pathLength);
+        // R11: the per-job binding + the derived journal auxiliary + FD_SYNC.
+        // The derived lock/journal are validated BEFORE any FILE mutation; a
+        // pre-binding `-journal` open is a generic near-miss (EPERM, no
+        // authority); a second DB/foreign path cannot rotate the binding.
+        const basename = resolved.path.slice("scratch/".length);
+        const lockPath = `${resolved.path}.lock`;
+        const journalPath = `${resolved.path}-journal`;
+        if (
+          encoder.encode(`${basename}.lock`).byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_SEGMENT_BYTES ||
+          encoder.encode(`${basename}-journal`).byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_SEGMENT_BYTES ||
+          lockPath.length > WASI_HOST_HARD_LIMITS.MAX_PATH_BYTES ||
+          journalPath.length > WASI_HOST_HARD_LIMITS.MAX_PATH_BYTES
+        ) fault(WASI_ERRNO.ENAMETOOLONG);
+        let auxiliaryJournal = false;
+        if (sqlitePathBinding === null) {
+          if (resolved.path.endsWith("-journal")) fault(WASI_ERRNO.EPERM);
+        } else {
+          if (resolved.path === sqlitePathBinding.journalPath && writeProfile) {
+            auxiliaryJournal = true;
+          } else if (resolved.path !== sqlitePathBinding.dbPath) {
+            fault(WASI_ERRNO.ENOTCAPABLE);
+          }
+        }
         span(openedFdPtr, 4);
         const fd = allocateFd();
         const projectedBase = writeProfile
-          ? SQLITE_DB_OPEN_PROFILE.writeProjection
+          ? (SQLITE_DB_OPEN_PROFILE.writeProjection | WASI_RIGHTS.FD_SYNC)
           : SQLITE_DB_OPEN_PROFILE.readProjection;
         let handle;
         try {
@@ -1458,6 +1538,16 @@ export function createWasiPreview1Runtime({
             handle,
           });
           writeU32(openedFdPtr, fd);
+          // Establish the immutable binding only after the DB open + the fd
+          // record + the fd-result output committed. The auxiliary journal
+          // open never establishes/replaces it.
+          if (sqlitePathBinding === null && !auxiliaryJournal) {
+            sqlitePathBinding = Object.freeze({
+              dbPath: resolved.path,
+              lockPath,
+              journalPath,
+            });
+          }
         } catch (error) {
           const record = fds.get(fd);
           let closeOk = true;
@@ -1746,12 +1836,87 @@ export function createWasiPreview1Runtime({
       state.lastClock = now;
       return WASI_ERRNO.SUCCESS;
     },
+
+    fd_sync: (fdValue) => {
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.FILE) fault(WASI_ERRNO.EBADF);
+      requireRight(record, WASI_RIGHTS.FD_SYNC);
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    path_create_directory: (fdValue, pathPtr, pathLength) => {
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
+      requireRight(record, WASI_RIGHTS.PATH_CREATE_DIRECTORY);
+      if (sqlitePathBinding === null) fault(WASI_ERRNO.ENOTCAPABLE);
+      const resolved = decodeBoundPath(pathPtr, pathLength);
+      if (resolved.root !== "scratch") fault(WASI_ERRNO.EACCES);
+      if (resolved.path !== sqlitePathBinding.lockPath) fault(WASI_ERRNO.ENOTCAPABLE);
+      const tx = syncResult(workspace.createDirectory(resolved.path));
+      if (!tx || typeof tx.commit !== "function" || typeof tx.rollback !== "function") {
+        fault(WASI_ERRNO.EIO);
+      }
+      tx.commit();
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    path_remove_directory: (fdValue, pathPtr, pathLength) => {
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
+      requireRight(record, WASI_RIGHTS.PATH_REMOVE_DIRECTORY);
+      if (sqlitePathBinding === null) fault(WASI_ERRNO.ENOTCAPABLE);
+      const resolved = decodeBoundPath(pathPtr, pathLength);
+      if (resolved.root !== "scratch") fault(WASI_ERRNO.EACCES);
+      if (resolved.path !== sqlitePathBinding.lockPath) fault(WASI_ERRNO.ENOTCAPABLE);
+      const tx = syncResult(workspace.removeDirectory(resolved.path));
+      if (!tx || typeof tx.commit !== "function" || typeof tx.rollback !== "function") {
+        fault(WASI_ERRNO.EIO);
+      }
+      tx.commit();
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    path_unlink_file: (fdValue, pathPtr, pathLength) => {
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
+      requireRight(record, WASI_RIGHTS.PATH_UNLINK_FILE);
+      if (sqlitePathBinding === null) fault(WASI_ERRNO.ENOTCAPABLE);
+      const resolved = decodeBoundPath(pathPtr, pathLength);
+      if (resolved.root !== "scratch") fault(WASI_ERRNO.EACCES);
+      if (resolved.path !== sqlitePathBinding.journalPath) fault(WASI_ERRNO.ENOTCAPABLE);
+      const tx = syncResult(workspace.unlinkFile(resolved.path));
+      if (!tx || typeof tx.commit !== "function" || typeof tx.rollback !== "function") {
+        fault(WASI_ERRNO.EIO);
+      }
+      tx.commit();
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    path_readlink: (fdValue) => {
+      const record = fdFor(fdValue);
+      if (record.kind !== FD_KIND.PREOPEN && record.kind !== FD_KIND.DIR) {
+        fault(WASI_ERRNO.EBADF);
+      }
+      requireRight(record, WASI_RIGHTS.PATH_READLINK);
+      return WASI_ERRNO.ENOTSUP;
+    },
+
+    poll_oneoff: (inPtr, outPtr, nsubscriptions, neventsPtr) => {
+      asU32(inPtr);
+      asU32(outPtr);
+      asU32(nsubscriptions);
+      asU32(neventsPtr);
+      span(neventsPtr, 4);
+      return WASI_ERRNO.ENOTSUP;
+    },
   };
 
   const wasi = {};
   for (const name of SUPPORTED_WASI_PREVIEW1_IMPORTS) {
     const pathCall = name === "path_open" || name === "path_filestat_get" ||
-      name === "path_filestat_set_times" || name === "fd_readdir";
+      name === "path_filestat_set_times" || name === "fd_readdir" ||
+      name === "path_create_directory" || name === "path_remove_directory" ||
+      name === "path_unlink_file" || name === "path_readlink";
     wasi[name] = syscall(implementation[name], { path: pathCall });
   }
   wasi.proc_exit = (codeValue) => {

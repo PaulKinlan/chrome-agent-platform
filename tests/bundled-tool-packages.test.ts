@@ -393,7 +393,7 @@ Deno.test("sqlite manifest: canonical bytes, composite licence, exact notice/SBO
   assert(!JSON.stringify(sbom).includes("Evaluation-Only") && !JSON.stringify(sbom).includes("pending-owner"), "stale evaluation/pending wording must be gone");
 });
 
-Deno.test("sqlite binary: exact 24 imports and the SEVEN-function computed gap under the frozen EIGHT-function census (R5: fd_filestat_set_size supported)", async () => {
+Deno.test("sqlite binary: exact 24 imports and the EMPTY computed gap (R11: import-complete, still disabled)", async () => {
   const wasm = await Deno.readFile(root(`extension/wasm/cas/${SQLITE_WASM_SHA}.wasm`));
   const audit = auditWasmBinary(wasm, JSON.parse(await Deno.readTextFile(root(SQLITE_MANIFEST_REL))).executables[0], {});
   const names = audit.imports.map((i) => i.name).sort();
@@ -402,18 +402,17 @@ Deno.test("sqlite binary: exact 24 imports and the SEVEN-function computed gap u
   assertEquals(audit.measured.memoryInitial, 64);
   assertEquals(audit.measured.memoryMax, 512);
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
-  // §7 (the linkage-only note): SQLITE_GAP_8 stays the FROZEN eight-function census
-  // until R11, but the computed gap is now SIX — fd_filestat_set_size (R5) +
-  // path_filestat_set_times (R6) are deliberately SUPPORTED while the sqlite
-  // linkage stays disabled.
+  // R11: the six sqlite imports (fd_sync, path_create_directory,
+  // path_remove_directory, path_unlink_file, path_readlink, poll_oneoff) are
+  // now SUPPORTED — the computed gap is EMPTY (import-complete, still
+  // disabled; the R12 admission is a separate slice).
   assertEquals(
-    SQLITE_IMPORTS_24.filter((n) => !supported.has(n)).sort(),
-    SQLITE_GAP_8.filter((n) => n !== "fd_filestat_set_size" && n !== "path_filestat_set_times").sort(),
-    "computed gap = frozen census minus fd_filestat_set_size minus path_filestat_set_times",
+    SQLITE_IMPORTS_24.filter((n) => !supported.has(n)),
+    [],
+    "R11: the computed gap is EMPTY (the six imports landed)",
   );
-  // the runtime must NOT have grown the remaining six in this commit
-  for (const gap of SQLITE_GAP_8.filter((n) => n !== "fd_filestat_set_size" && n !== "path_filestat_set_times")) {
-    assert(!supported.has(gap), `runtime unexpectedly implements ${gap}`);
+  for (const gap of SQLITE_GAP_8) {
+    assert(supported.has(gap), `R11: ${gap} IS supported (the six-import completion)`);
   }
   assert(supported.has("fd_filestat_set_size"), "R5: fd_filestat_set_size IS supported (deliberate)");
   assert(supported.has("path_filestat_set_times"), "R6: path_filestat_set_times IS supported (deliberate)");

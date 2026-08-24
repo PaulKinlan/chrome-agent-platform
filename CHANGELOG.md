@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.227] — 2026-08-24
+- feat(wasi): sqlite six-import completion — fd_sync, path_create_directory, path_remove_directory, path_unlink_file, path_readlink, poll_oneoff; per-job immutable db/lock/journal binding, derived -journal auxiliary, journal-only unlink with entry-identity EBUSY, readlink/poll fail-closed stubs (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01)
+
 ## [0.2.226] — 2026-08-24
 - feat(workspace): transactional scratch directory primitives (S2) — explicit empty-directory representation, create/remove with full collision lattice, root protection, stat/readdir union, S1 transaction reentry rule (CAP-FB-20260823-S2-DIRS-01)
 

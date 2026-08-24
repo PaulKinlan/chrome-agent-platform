@@ -786,7 +786,7 @@ Deno.test("fd_fdstat_set_flags: import linkage — the wasi table exposes it + t
   assert(m, "supported import set found");
   const names = [...m[1].matchAll(/"([a-z_0-9]+)"/g)].map((x) => x[1]);
   assertEquals(names.includes("fd_fdstat_set_flags"), true, "supported set includes fd_fdstat_set_flags");
-  assertEquals(names.length, 22, "path_filestat_set_times is the exact twenty-second supported import (R6)");
+  assertEquals(names.length, 28, "poll_oneoff is the exact twenty-eighth supported import (R11)");
 });
 
 Deno.test("fd_fdstat_set_flags: error ORDER — unknown fd EBADF first; invalid bits EINVAL on a valid no-right fd; known change ENOTCAPABLE on a current fd", () => {
