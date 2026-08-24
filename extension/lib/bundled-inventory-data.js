@@ -11,132 +11,132 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.base64",
    "version": "1.0.0",
-   "digest": "7d88bd64506a033db9b7cd14c3da52a209ab2c85fc38a2b756a00a3d85b1b96d"
+   "digest": "961a8b5299debff5caa972ad648055da4181c4cada01579fdd8ad4064ee778a3"
   },
   {
    "pkg": "cap.bundled.csvtool",
    "version": "1.0.0",
-   "digest": "b34dd415bd3296edc0440066ddaa3a048f251306fe66f9847d0f2a89f36dd1eb"
+   "digest": "4711cfcd4eb89849789f074f421e06a104effe59decd5eb893d1b9c38b1e73c2"
   },
   {
    "pkg": "cap.bundled.cut",
    "version": "1.0.0",
-   "digest": "b29d3d651ba4590f48529c6a1b03f8706d7dc248555650be77a79259d4884a14"
+   "digest": "394b4b97b4af356d27701f6e966faf900436513a0b51f0ab9ba04ab88b4dbb14"
   },
   {
    "pkg": "cap.bundled.diff",
    "version": "1.0.0",
-   "digest": "d8b9542e3914a77d6d24e998d471f426f0bcd517db7affaa507efd0c28e3a395"
+   "digest": "0df40615b3a9a8d10e5ea3458a0eb1457c341fc04a46d740f1aad43872f58e4c"
   },
   {
    "pkg": "cap.bundled.du",
    "version": "1.0.0",
-   "digest": "d6725e27ca9b9967c9faee0f8b1f6aee2128334d26da7b16c89b448e1fc5ac70"
+   "digest": "e4323d6b8661d2323f3f60c1787cbd001910808f85d9a77d68b0bb86da70fcff"
   },
   {
    "pkg": "cap.bundled.grep",
    "version": "1.0.0",
-   "digest": "889ee0a15e07bdc61c29635b93efe235e3b6169a015555cf05697af004715316"
+   "digest": "843e37216aadad174acd1e003b398b7bde03bbfebd2b2f5575ac5421763f8c12"
   },
   {
    "pkg": "cap.bundled.gzip",
    "version": "1.0.0",
-   "digest": "32b15ec5a3cfabe14224b18b5da322c4e7d1e61b2ee1b706c111133d517fc47b"
+   "digest": "486d8548f2d123cb5474645460ac854037c692c3d316d5386e6365b88d369f88"
   },
   {
    "pkg": "cap.bundled.head",
    "version": "1.0.0",
-   "digest": "32118bed7157487ecf4a3aa8f5b1b3940c06701f744dc00b7dcf73710d9c2470"
+   "digest": "6ae3c0371efc56a72e5e946e459d1cadfbfd4957e32c5965679c4ce05a113485"
   },
   {
    "pkg": "cap.bundled.markdown",
    "version": "1.0.0",
-   "digest": "c7c8af0ea5d55eaf82688def168a7b5091e690a2f8415b9ef7fb286b1bce3f60"
+   "digest": "c899510d964d2177216a834cbb498e4872526349dc464de76863f59ab878ec07"
   },
   {
    "pkg": "cap.bundled.md5sum",
    "version": "1.0.0",
-   "digest": "7f68488334f23c0ad9c3c23d19cecabeee97e631c62f5281c863b0cb621e203d"
+   "digest": "89fb270b8007f376b4aea312cca3ac14a23f530d50049f67f031757ff0ec7083"
   },
   {
    "pkg": "cap.bundled.patch",
    "version": "1.0.0",
-   "digest": "22f97e37506dd500b8cfe92ada4c39f8c016a3264ec0ed860a98d0b0d3d9cea6"
+   "digest": "5e864edcdad1039a4e81141e254689e270a407c8c85ca66d3a80fb5c5ae062cd"
   },
   {
    "pkg": "cap.bundled.sha256sum",
    "version": "1.0.0",
-   "digest": "c74b5b582f2aa30c9e5442937e4d4bc3cf1e36ca90be257da88beeb2b0c3813f"
+   "digest": "65688c83e75bca952d51250cdc28003fd3945e6f7ac5882346b87248d95c89ad"
   },
   {
    "pkg": "cap.bundled.sha512sum",
    "version": "1.0.0",
-   "digest": "5eb976aa087aa8c4fdd34f1442b29858ab540334db81dc2378e0a9d73239279f"
+   "digest": "46724754f72dcb1be48f192e359325e95bdf3fa9283aba8025406421cce68940"
   },
   {
    "pkg": "cap.bundled.sort",
    "version": "1.0.0",
-   "digest": "d67adbee5f7acc2c2611e016327985a9a5fdd795160b0eb2e0b5bdab716f3c67"
+   "digest": "d451f5ed7f41608ff68950eddc996d10a225327c81b36966ca54a001b408cc22"
   },
   {
    "pkg": "cap.bundled.sqlite3.query.bounded",
    "version": "1.0.0",
-   "digest": "44e7237898e26186287e87411c666cc086234ba1c4b9c24964ed459e69a2981d"
+   "digest": "6c0af23f3e81580217ccbea8efc71b077088c073729ef6a42725f3c04b843bfd"
   },
   {
    "pkg": "cap.bundled.stat",
    "version": "1.0.0",
-   "digest": "f0cbed6d6c78533665e25fc6c20aceec4de35c60d91c0ab5db1c3bc4192a6349"
+   "digest": "e2c274f2c69d0cd2a138789a092ecd405b6d49a6a0bc705ed150bdadf3a846db"
   },
   {
    "pkg": "cap.bundled.tail",
    "version": "1.0.0",
-   "digest": "6fa1281fffbd07c6e6e951bd2e4db24964ed1a65c9c4f139d694fb57dadbb4f4"
+   "digest": "0d0230c92e9152d9a2a3dd5cc65c6d0075d8b8712473cb9a86b954892af00911"
   },
   {
    "pkg": "cap.bundled.toml2json",
    "version": "1.0.0",
-   "digest": "bcbdb5816dffa9d5c76dac5f7d99019632b4f3fceecdff23c9c8005269ac5fa1"
+   "digest": "06da00e5f9699cb22e1211a79acc5d87fe574ea4aca476c7ae9c63bccfa9f6c4"
   },
   {
    "pkg": "cap.bundled.touch",
    "version": "1.0.0",
-   "digest": "eb25e1675676ca1a422fc66b032ab4f368592590e48651df451113c70ffd5a66"
+   "digest": "1e1c2c823d4ecf6e805f2d9660dc873b5e43072ad7041bc1646898649a6b48d3"
   },
   {
    "pkg": "cap.bundled.tr",
    "version": "1.0.0",
-   "digest": "eec7732f6ac4c378722b9d166df82bd31499e02cf164f6c5d926a6e097dd7cac"
+   "digest": "4ceb4ff4c06ead252c88c57bc1f240d7888f76bf4fc6dc543d8b351de07c1b2a"
   },
   {
    "pkg": "cap.bundled.tree",
    "version": "1.0.0",
-   "digest": "165db6ec02cdb9c16e58204b1ccb61ba7c5931f128e57595cde485bf905d0b72"
+   "digest": "9bd2b5cd72660e6fd2e6d2c72db3b9990c890050cbc8ad19c1981515e74a78fa"
   },
   {
    "pkg": "cap.bundled.truncate",
    "version": "1.0.0",
-   "digest": "958af384205d23f212a2740c933dd9416fb3244a4cb1614b149c47c3ffe68a89"
+   "digest": "1a0a8bb2ba34135eaae0b79474f522f7ecbab4f7713e441ec143a3eb63aa1c41"
   },
   {
    "pkg": "cap.bundled.uniq",
    "version": "1.0.0",
-   "digest": "648d532168e20762aff69dc5de5f8e449f9c3dda45302bf90d94906fe8ea53da"
+   "digest": "be62ab822910854dfbe67776b63f354703475e11a5263bcecaa8513462f59419"
   },
   {
    "pkg": "cap.bundled.uuid",
    "version": "1.0.0",
-   "digest": "96710f71d7c9acd7ec62b6538962c9cef0545ea72c83a1d618c328d69829dc4b"
+   "digest": "b846db4811b6ac0127299a65ccf241aeebd94610d03609afdee0085c90438cf9"
   },
   {
    "pkg": "cap.bundled.wc",
    "version": "1.0.0",
-   "digest": "44ccea91b99884e91dd63e28b9a14decdde6a3b5db7bbf0eb41805b0be1db322"
+   "digest": "a0d9c97e50c68bac1867569f1349428bebefcb2d2b9c0699ae296bc9e1ca4a39"
   },
   {
    "pkg": "cap.bundled.xxd",
    "version": "1.0.0",
-   "digest": "8597f273e95dfac21065061ec68f155da18905a14bf7b026a6b2526d9e2abee1"
+   "digest": "9e241cf7874d4b96f9c88a136f6b991637bf878974413f7d3eef2c4f974e9eae"
   }
  ],
  "files": [
@@ -307,133 +307,133 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.base64-1.0.0.manifest.json",
-   "sha256": "7d88bd64506a033db9b7cd14c3da52a209ab2c85fc38a2b756a00a3d85b1b96d",
-   "size": 1754
+   "sha256": "961a8b5299debff5caa972ad648055da4181c4cada01579fdd8ad4064ee778a3",
+   "size": 1809
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json",
-   "sha256": "b34dd415bd3296edc0440066ddaa3a048f251306fe66f9847d0f2a89f36dd1eb",
-   "size": 1751
+   "sha256": "4711cfcd4eb89849789f074f421e06a104effe59decd5eb893d1b9c38b1e73c2",
+   "size": 1831
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.cut-1.0.0.manifest.json",
-   "sha256": "b29d3d651ba4590f48529c6a1b03f8706d7dc248555650be77a79259d4884a14",
-   "size": 1727
+   "sha256": "394b4b97b4af356d27701f6e966faf900436513a0b51f0ab9ba04ab88b4dbb14",
+   "size": 1781
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.diff-1.0.0.manifest.json",
-   "sha256": "d8b9542e3914a77d6d24e998d471f426f0bcd517db7affaa507efd0c28e3a395",
-   "size": 1752
+   "sha256": "0df40615b3a9a8d10e5ea3458a0eb1457c341fc04a46d740f1aad43872f58e4c",
+   "size": 1846
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.du-1.0.0.manifest.json",
-   "sha256": "d6725e27ca9b9967c9faee0f8b1f6aee2128334d26da7b16c89b448e1fc5ac70",
-   "size": 1720
+   "sha256": "e4323d6b8661d2323f3f60c1787cbd001910808f85d9a77d68b0bb86da70fcff",
+   "size": 1818
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.grep-1.0.0.manifest.json",
-   "sha256": "889ee0a15e07bdc61c29635b93efe235e3b6169a015555cf05697af004715316",
-   "size": 1747
+   "sha256": "843e37216aadad174acd1e003b398b7bde03bbfebd2b2f5575ac5421763f8c12",
+   "size": 1799
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.gzip-1.0.0.manifest.json",
-   "sha256": "32b15ec5a3cfabe14224b18b5da322c4e7d1e61b2ee1b706c111133d517fc47b",
-   "size": 1810
+   "sha256": "486d8548f2d123cb5474645460ac854037c692c3d316d5386e6365b88d369f88",
+   "size": 1874
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.head-1.0.0.manifest.json",
-   "sha256": "32118bed7157487ecf4a3aa8f5b1b3940c06701f744dc00b7dcf73710d9c2470",
-   "size": 1743
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.markdown-1.0.0.manifest.json",
-   "sha256": "c7c8af0ea5d55eaf82688def168a7b5091e690a2f8415b9ef7fb286b1bce3f60",
+   "sha256": "6ae3c0371efc56a72e5e946e459d1cadfbfd4957e32c5965679c4ce05a113485",
    "size": 1794
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.markdown-1.0.0.manifest.json",
+   "sha256": "c899510d964d2177216a834cbb498e4872526349dc464de76863f59ab878ec07",
+   "size": 1887
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.md5sum-1.0.0.manifest.json",
-   "sha256": "7f68488334f23c0ad9c3c23d19cecabeee97e631c62f5281c863b0cb621e203d",
-   "size": 1717
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.patch-1.0.0.manifest.json",
-   "sha256": "22f97e37506dd500b8cfe92ada4c39f8c016a3264ec0ed860a98d0b0d3d9cea6",
-   "size": 1735
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.sha256sum-1.0.0.manifest.json",
-   "sha256": "c74b5b582f2aa30c9e5442937e4d4bc3cf1e36ca90be257da88beeb2b0c3813f",
-   "size": 1732
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.sha512sum-1.0.0.manifest.json",
-   "sha256": "5eb976aa087aa8c4fdd34f1442b29858ab540334db81dc2378e0a9d73239279f",
-   "size": 1734
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.sort-1.0.0.manifest.json",
-   "sha256": "d67adbee5f7acc2c2611e016327985a9a5fdd795160b0eb2e0b5bdab716f3c67",
-   "size": 1742
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
-   "sha256": "44e7237898e26186287e87411c666cc086234ba1c4b9c24964ed459e69a2981d",
-   "size": 2003
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.stat-1.0.0.manifest.json",
-   "sha256": "f0cbed6d6c78533665e25fc6c20aceec4de35c60d91c0ab5db1c3bc4192a6349",
-   "size": 1727
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.tail-1.0.0.manifest.json",
-   "sha256": "6fa1281fffbd07c6e6e951bd2e4db24964ed1a65c9c4f139d694fb57dadbb4f4",
-   "size": 1742
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.toml2json-1.0.0.manifest.json",
-   "sha256": "bcbdb5816dffa9d5c76dac5f7d99019632b4f3fceecdff23c9c8005269ac5fa1",
-   "size": 1837
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.touch-1.0.0.manifest.json",
-   "sha256": "eb25e1675676ca1a422fc66b032ab4f368592590e48651df451113c70ffd5a66",
-   "size": 1754
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.tr-1.0.0.manifest.json",
-   "sha256": "eec7732f6ac4c378722b9d166df82bd31499e02cf164f6c5d926a6e097dd7cac",
-   "size": 1742
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.tree-1.0.0.manifest.json",
-   "sha256": "165db6ec02cdb9c16e58204b1ccb61ba7c5931f128e57595cde485bf905d0b72",
-   "size": 1733
-  },
-  {
-   "rel": "extension/wasm/manifests/cap.bundled.truncate-1.0.0.manifest.json",
-   "sha256": "958af384205d23f212a2740c933dd9416fb3244a4cb1614b149c47c3ffe68a89",
+   "sha256": "89fb270b8007f376b4aea312cca3ac14a23f530d50049f67f031757ff0ec7083",
    "size": 1792
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.patch-1.0.0.manifest.json",
+   "sha256": "5e864edcdad1039a4e81141e254689e270a407c8c85ca66d3a80fb5c5ae062cd",
+   "size": 1846
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.sha256sum-1.0.0.manifest.json",
+   "sha256": "65688c83e75bca952d51250cdc28003fd3945e6f7ac5882346b87248d95c89ad",
+   "size": 1857
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.sha512sum-1.0.0.manifest.json",
+   "sha256": "46724754f72dcb1be48f192e359325e95bdf3fa9283aba8025406421cce68940",
+   "size": 1795
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.sort-1.0.0.manifest.json",
+   "sha256": "d451f5ed7f41608ff68950eddc996d10a225327c81b36966ca54a001b408cc22",
+   "size": 1796
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
+   "sha256": "6c0af23f3e81580217ccbea8efc71b077088c073729ef6a42725f3c04b843bfd",
+   "size": 2094
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.stat-1.0.0.manifest.json",
+   "sha256": "e2c274f2c69d0cd2a138789a092ecd405b6d49a6a0bc705ed150bdadf3a846db",
+   "size": 1830
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.tail-1.0.0.manifest.json",
+   "sha256": "0d0230c92e9152d9a2a3dd5cc65c6d0075d8b8712473cb9a86b954892af00911",
+   "size": 1797
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.toml2json-1.0.0.manifest.json",
+   "sha256": "06da00e5f9699cb22e1211a79acc5d87fe574ea4aca476c7ae9c63bccfa9f6c4",
+   "size": 1919
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.touch-1.0.0.manifest.json",
+   "sha256": "1e1c2c823d4ecf6e805f2d9660dc873b5e43072ad7041bc1646898649a6b48d3",
+   "size": 1838
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.tr-1.0.0.manifest.json",
+   "sha256": "4ceb4ff4c06ead252c88c57bc1f240d7888f76bf4fc6dc543d8b351de07c1b2a",
+   "size": 1804
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.tree-1.0.0.manifest.json",
+   "sha256": "9bd2b5cd72660e6fd2e6d2c72db3b9990c890050cbc8ad19c1981515e74a78fa",
+   "size": 1826
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.truncate-1.0.0.manifest.json",
+   "sha256": "1a0a8bb2ba34135eaae0b79474f522f7ecbab4f7713e441ec143a3eb63aa1c41",
+   "size": 1870
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.uniq-1.0.0.manifest.json",
-   "sha256": "648d532168e20762aff69dc5de5f8e449f9c3dda45302bf90d94906fe8ea53da",
-   "size": 1747
+   "sha256": "be62ab822910854dfbe67776b63f354703475e11a5263bcecaa8513462f59419",
+   "size": 1784
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.uuid-1.0.0.manifest.json",
-   "sha256": "96710f71d7c9acd7ec62b6538962c9cef0545ea72c83a1d618c328d69829dc4b",
-   "size": 1711
+   "sha256": "b846db4811b6ac0127299a65ccf241aeebd94610d03609afdee0085c90438cf9",
+   "size": 1768
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.wc-1.0.0.manifest.json",
-   "sha256": "44ccea91b99884e91dd63e28b9a14decdde6a3b5db7bbf0eb41805b0be1db322",
-   "size": 1721
+   "sha256": "a0d9c97e50c68bac1867569f1349428bebefcb2d2b9c0699ae296bc9e1ca4a39",
+   "size": 1776
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.xxd-1.0.0.manifest.json",
-   "sha256": "8597f273e95dfac21065061ec68f155da18905a14bf7b026a6b2526d9e2abee1",
-   "size": 1723
+   "sha256": "9e241cf7874d4b96f9c88a136f6b991637bf878974413f7d3eef2c4f974e9eae",
+   "size": 1779
   },
   {
    "rel": "extension/wasm/sbom/a2.cdx.json",

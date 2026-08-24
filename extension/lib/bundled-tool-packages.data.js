@@ -8,7 +8,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "base64",
   "category": "data",
-  "description": "base64 - encode or decode base64 text and binary data. Use to encode binary data as text or decode base64 strings (stdin <=2 KiB). Key flag: -d (decode).",
+  "description": "base64 - encode or decode base64 text and binary data. Use to encode binary as text or decode base64 strings. In/out: stdin (<=2 KiB) to stdout. Key flag: -d (decode). Example: stdin 'hello' -> 'aGVsbG8=\\n'.",
   "caveats": [
    "Stdin-only stream filter; supports encode and decode. Invalid padding or characters rejected fail-closed with exit code 1.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -45,7 +45,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "md5sum",
   "category": "crypto",
-  "description": "md5sum - compute legacy 128-bit MD5 hash checksum values. Use to hash files or verify non-security data integrity (stdin <=2 KiB).",
+  "description": "md5sum - compute legacy 128-bit MD5 hash checksums. Use for non-security file verification. In/out: stdin (<=2 KiB) to 32-hex digest. No flags. Example: stdin 'hello' -> '5d41402abc4b2a76b9719d911017c592'.",
   "caveats": [
    "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -82,7 +82,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "sha256sum",
   "category": "crypto",
-  "description": "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure data integrity (stdin <=2 KiB).",
+  "description": "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure integrity. In/out: stdin (<=2 KiB) to 64-hex digest. No flags. Example: stdin 'hello' -> '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
   "caveats": [
    "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -119,7 +119,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "sha512sum",
   "category": "crypto",
-  "description": "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security file hashing and verification (stdin <=2 KiB).",
+  "description": "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security hashing. In/out: stdin (<=2 KiB) to 128-hex digest. No flags. Example: stdin 'hello' -> the 128-hex digest.",
   "caveats": [
    "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -156,7 +156,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "xxd",
   "category": "data",
-  "description": "xxd - convert binary data to hex dumps and reconstruct it. Use to inspect byte data or edit binary formats (stdin <=2 KiB). Key flag: -p.",
+  "description": "xxd - convert binary data to hex dumps and reconstruct it. Use for byte-level inspection. In/out: stdin (<=2 KiB) to hex stdout. Key flag: -p (plain hex). Example: -p + stdin 'Hi' -> '4869\\n'.",
   "caveats": [
    "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -193,7 +193,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "uuid",
   "category": "crypto",
-  "description": "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs for records. Key flag: -n <count> (max 64).",
+  "description": "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs. In/out: empty stdin to UUID stdout. Key flag: -n <count> (max 64). Example: -n 2 -> two UUID lines.",
   "caveats": [
    "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID).",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -230,7 +230,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "wc",
   "category": "text",
-  "description": "wc - count lines, words, characters, and bytes in text streams. Use to measure file length and text size (stdin <=2 KiB). Flags: -l, -w, -c.",
+  "description": "wc - count lines, words, characters, and bytes in text. Use to measure file length and text size. In/out: stdin (<=2 KiB) to count tuple. Flags: -l, -w, -c. Example: stdin 'a b\\n' -> '1 2 4\\n'.",
   "caveats": [
    "Counts lines, whitespace-delimited words, and bytes. Input bounded by the exact 8 MiB stdin ceiling.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -267,7 +267,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "head",
   "category": "text",
-  "description": "head - extract the first or leading lines from a text stream. Use to inspect the beginning or preview the start of a file (stdin <=2 KiB). Key flag: -n.",
+  "description": "head - extract the leading lines from a text stream. Use to inspect the start of a file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'a\\nb'.",
   "caveats": [
    "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -304,7 +304,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "tail",
   "category": "text",
-  "description": "tail - extract the last or trailing lines from a text stream. Use to inspect the end or preview the bottom of a log file (stdin <=2 KiB). Key flag: -n.",
+  "description": "tail - extract the trailing lines from a text stream. Use to inspect the end of a log file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'b\\nc'.",
   "caveats": [
    "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -341,7 +341,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "a2",
   "displayName": "cut",
   "category": "text",
-  "description": "cut - extract columns or delimiter-separated fields from text. Use to parse CSV, TSV, or tabular data columns (stdin <=2 KiB). Flags: -d, -f.",
+  "description": "cut - extract columns or delimiter-separated fields from text. Use to parse CSV or TSV columns. In/out: stdin (<=2 KiB) to column stdout. Flags: -d, -f. Example: -d , -f 2 + stdin 'a,b,c' -> 'b'.",
   "caveats": [
    "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -378,7 +378,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "sort",
   "category": "text",
-  "description": "sort - sort lines of text alphabetically or numerically in C locale. Use to organize and order list data (stdin <=2 KiB). Flags: -r, -n.",
+  "description": "sort - sort lines of text alphabetically or numerically in C locale. Use to order list data. In/out: stdin (<=2 KiB) to sorted stdout. Flags: -r, -n. Example: stdin 'b\\na\\n' -> 'a\\nb\\n'.",
   "caveats": [
    "Stdin-only line sort in the C byte locale. Options: -n (numeric, no exponent notation), -r (reverse), -u (unique). File operands rejected.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -415,7 +415,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "uniq",
   "category": "text",
-  "description": "uniq - remove adjacent duplicate lines from sorted text. Use to deduplicate list data and filter unique lines (stdin <=2 KiB). Flags: -c, -d.",
+  "description": "uniq - remove adjacent duplicate lines from sorted text. Use to deduplicate lists. In/out: stdin (<=2 KiB) to unique stdout. Flags: -c, -d. Example: stdin 'a\\na\\nb' -> 'a\\nb'.",
   "caveats": [
    "Filters adjacent duplicate lines without field/character skipping. Options: -c (count), -d (repeated only), -u (unique only). Stdin-only.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -452,7 +452,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "tr",
   "category": "text",
-  "description": "tr - translate, replace, delete, or squeeze characters in text. Use to search and replace characters or shift case (stdin <=2 KiB). Flags: -d, -s.",
+  "description": "tr - translate, replace, delete, or squeeze characters in text. Use to search and replace characters or shift case. In/out: stdin (<=2 KiB) to stdout. Flags: -d, -s. Example: 'a-z' 'A-Z' + stdin 'hi' -> 'HI'.",
   "caveats": [
    "Translates, deletes (-d), or squeezes (-s) characters in byte locale with complement and POSIX character classes. Unsupported equivalence classes and repeat expressions rejected.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -489,7 +489,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "grep",
   "category": "text",
-  "description": "grep - search and find matching lines using regular expressions. Use to search, find, or filter text data (stdin <=2 KiB). Flags: -i, -v, -n.",
+  "description": "grep - search and find matching lines using regular expressions. Use to search, find, or filter text. In/out: stdin (<=2 KiB) to matching lines. Flags: -i, -v, -n. Example: -n 'foo' -> '1:foo'.",
   "caveats": [
    "Stdin text selection filter. Options: -i, -v, -n, -c, -F, -E. NUL input and file operands are rejected.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -526,7 +526,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "diff",
   "category": "text",
-  "description": "diff - compare text documents and calculate diff changes. Use for file editing and comparing revisions by viewing differences (args <=1 KiB each).",
+  "description": "diff - compare text documents and calculate diff changes. Use to compare revisions by viewing differences, or for file editing. In/out: two text args (<=1 KiB each) to unified diff. No flags. Example: 'a\\nb\\n' and 'a\\nc\\n' -> hunk diff.",
   "caveats": [
    "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error).",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -563,7 +563,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "patch",
   "category": "text",
-  "description": "patch - apply unified diff changes to source text. Use for editing files and updating text from patches (args <=1 KiB each).",
+  "description": "patch - apply unified diff hunks to a source text document. Use to update files or do editing from patches. In/out: source text arg + diff arg (<=1 KiB each) to patched stdout. No flags. Example: source 'a\\nb\\n' + diff -> 'a\\nc\\n'.",
   "caveats": [
    "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -600,7 +600,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "b2",
   "displayName": "toml2json",
   "category": "data",
-  "description": "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config file data (stdin <=2 KiB).",
+  "description": "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config data. In/out: valid TOML stdin (<=2 KiB) to JSON stdout. No flags. Example: stdin 'a = 1' -> '{\"a\":1}\\n'.",
   "caveats": [
    "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -638,7 +638,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "c2",
   "displayName": "markdown",
   "category": "data",
-  "description": "markdown - convert Markdown formatted text into safe HTML markup. Use to render and view formatted document content (stdin <=2 KiB).",
+  "description": "markdown - convert Markdown formatted text into safe HTML. Use to render and view formatted content. In/out: Markdown stdin (<=2 KiB) to HTML stdout. No flags; safe mode is enforced. Example: stdin '# Hi' -> '<h1>Hi</h1>\\n'.",
   "caveats": [
    "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority.",
@@ -677,7 +677,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "c2",
   "displayName": "du",
   "category": "file",
-  "description": "du - measure disk usage and file sizes across directory folders. Use to check file and folder space consumption (up to 4096 entries).",
+  "description": "du - measure disk usage and file sizes across directories. Use to check file and folder space. In/out: optional /job path operand (default /job) to usage stdout. Bounded to 4096 entries. No flags. Example: empty args -> '1\\t/job'.",
   "caveats": [
    "Reports apparent bytes rounded to 1 KiB (or human units), not physical blocks. Bounded to depth 64, 100,000 entries; symlink directories are not followed",
    "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed, using /job by default (explicit owner click); no provider, page or OPFS authority.",
@@ -715,7 +715,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "c2",
   "displayName": "stat",
   "category": "file",
-  "description": "stat - inspect file and directory metadata including size and type. Use to check file existence and details (read-only /job path).",
+  "description": "stat - inspect file and directory metadata including size and type. Use to check file existence and details. In/out: /job path operand to stat stdout. Read-only. No flags. Example: '/job/inputs/f.bin' -> 'size=2\\ntype=regular file'.",
   "caveats": [
    "Reports stable path, type, size, and mtime fields; POSIX permission bits are omitted. Explicitly not GNU formatting/options",
    "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed (explicit owner click); no provider, page or OPFS authority.",
@@ -753,7 +753,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "c2",
   "displayName": "tree",
   "category": "file",
-  "description": "tree - display directory and folder file structures as visual text trees. Use to explore workspace and folder layout (up to 4096 nodes).",
+  "description": "tree - display directory file structures as visual text trees. Use to explore workspace and folder layout. In/out: optional /job path operand to tree stdout. Bounded to 4096 nodes. No flags. Example: empty args -> directory tree.",
   "caveats": [
    "Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed",
    "Settings-only bounded read-only preview over the immutable nested in-memory /job/inputs seed (explicit owner click); no provider, page or OPFS authority.",
@@ -791,7 +791,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "c2",
   "displayName": "touch",
   "category": "file",
-  "description": "touch - create new empty files or update file timestamps. Use to create, touch, or update files in scratch space. Flags: -t, -c.",
+  "description": "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
   "caveats": [
    "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed",
    "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.",
@@ -830,7 +830,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "c2",
   "displayName": "truncate",
   "category": "file",
-  "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. Flag: -s.",
+  "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   "caveats": [
    "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed",
    "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.",
@@ -869,7 +869,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "csvtool",
   "displayName": "csvtool",
   "category": "text",
-  "description": "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows (stdin <=2 KiB).",
+  "description": "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   "caveats": [
    "Stdin/stdout only; no file operands.",
    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
@@ -906,7 +906,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "gzip",
   "displayName": "gzip",
   "category": "data",
-  "description": "gzip - compress or decompress data streams. Use to compress and decompress files or streams (stdin <=2 KiB, base64 output <=64 KiB). Key flag: -d.",
+  "description": "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   "caveats": [
    "Stdin/stdout only; rejects file operands, recursion, unknown options.",
    "Experimental candidate; not the canonical full gzip.",
@@ -944,7 +944,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "sqlite3",
   "displayName": "sqlite3_query_bounded",
   "category": "data",
-  "description": "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational database data (JSON <=2 KiB).",
+  "description": "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   "caveats": [
    "Memory tranche has no external persistence.",
    "Package-level capability union is intentionally conservative.",

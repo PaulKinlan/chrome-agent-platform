@@ -968,14 +968,14 @@ On resume after a coordinator or worker loss:
   consuming tool/model cannot work out when or how to use them; provenance
   jargon does not belong in the functional description
 - Updated: 2026-08-23 21:50 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P1
 - Owner: unassigned
-- Workspace: none
-- Branch: none
+- Workspace: `/home/paulkinlan/worktrees/cap-tool-desc-enrich-45a539b`
+- Branch: detached
 - Base: `a8e3479e` (post-notification tip)
-- Candidate: —
+- Candidate: GLM audit + enrichment (six-element agent-useful descriptions)
 - Shipping: —
 - Acceptance: every bundled tool description is written for a consuming
   model/owner — plain-language function, when to choose it, input and output
@@ -998,6 +998,20 @@ On resume after a coordinator or worker loss:
   - 2026-08-23 21:50 UTC — captured from direct product-owner feedback;
     complements the search-alias coverage fix by improving the human/model
     readable layer.
+  - 2026-08-25 00:20 UTC — audit + enrichment: the v4 descriptions were
+    concise but lacked the six elements (In/out, key flags, bounds, and a
+    concrete example) the task's acceptance lists. Enriched every
+    description with name-first function + when-to-use + In/out shape +
+    flags + bounds + example, measured ≤256B each (175-255 B). The map is
+    still the single source (AGENT_DESCRIPTIONS in the build script); the
+    regen is byte-stable (bundled-tool-packages.data.js, inventory digests,
+    and the 26 manifests regenerated; CAS/SBOM/licences byte-identical).
+    Focused gates: tool-descriptions 3/3 + bundled-tool-packages 23/23 +
+    tool-library 11/11 + chrome-tool-capabilities 14/14 + tool-exec-preview
+    13/13 + wasm-package-authority 16/16 + scan-shipped 24/24 +
+    lazy-tool-protocol + tool-catalog-shadow = 127/127. KAT now asserts the
+    six elements per tool (displayName≡toolId, prefix, In/out, flags, and
+    Example).
 
 
 
