@@ -36,18 +36,18 @@ function trim() {
 // The run flow (identical to the hub): append the user turn, stream live
 // progress, append the result. The composer stays live throughout — a follow-up
 // is a nudge in the same thread. `agent` (the + menu's Choose agent chip / a
-// committed /agent: option) routes the run DIRECTLY to that agent by its
-// canonical id — its own memory/skills, never a name lookup.
+// committed /agent: option) is an @MENTION: the task stays the hub's thread
+// and the run delegates to the referenced agent, whose result is committed
+// back into this thread (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01) — a mentioned
+// task no longer vanishes from the task list.
 async function runTask(text, attachments = [], agent = null) {
-  // Continue the ACTIVE thread (a follow-up is a nudge in the SAME thread), not
-  // a fresh global-journal run. A routed agent run is NOT threaded (it is
-  // journaled in the agent's own store).
+  // Continue the ACTIVE thread (a follow-up is a nudge in the SAME thread),
+  // including for a mentioned delegation — the task is always threaded.
   await runConversationTurn(body, {
     text,
     attachments,
-    threadId: agent?.ref ? null : (activeThreadId ?? null),
-    agentId: agent?.id ?? null,
-    agentKind: agent?.kind ?? null,
+    threadId: activeThreadId ?? null,
+    mention: agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name ?? agent.id } : null,
   }).then((res) => {
     if (res?.threadId) activeThreadId = res.threadId;
   });

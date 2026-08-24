@@ -676,7 +676,7 @@ export function projectThreadMessages(thread) {
   return output;
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
   // this turn no longer owns the surface (a newer turn started, or the user
@@ -873,7 +873,26 @@ export async function runConversationTurn(container, { text, attachments = [], h
   //    runs the task in the background agent's own memory.
   let res;
   try {
-    if (agentKind === "site") {
+    if (mention?.id) {
+      // An @mention on a TASK (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01): the
+      // task stays the HUB's task — it persists to the task list as its own
+      // thread — and the mention is a delegation directive the SW routes
+      // deterministically to the referenced agent (its own sandbox), whose
+      // result is committed back into THIS task thread. This is NOT the
+      // agent-chat surface (which still routes directly via agentId/agentKind).
+      if (mention.kind === "site" && attachments.length && typeof c.appendSystem === "function") {
+        c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
+      }
+      res = await send("agent.run", {
+        task: text,
+        id: String(Date.now()),
+        runId,
+        attachments,
+        history,
+        threadId,
+        mention: { kind: mention.kind ?? null, id: mention.id, name: mention.name ?? mention.id },
+      });
+    } else if (agentKind === "site") {
       // A Site Agent: direct delegation to the enrolled origin's worker agent
       // (agent.delegate — generation-fenced, journaled to the site's OWN OPFS
       // store). Site delegation carries the task TEXT only (no attachments yet,

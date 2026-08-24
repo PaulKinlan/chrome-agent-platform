@@ -494,7 +494,7 @@ Deno.test("NTP showThreadView keeps follow-ups focus-neutral and explicit agent 
     "already-open routes return before transitions and focus only an explicit target",
   );
   assert(
-    /async function runThreadTurn\(text, attachments = \[\]\)\s*\{[\s\S]*?showThreadView\(\);/
+    /async function runThreadTurn\(text, attachments = \[\], mention = null\)\s*\{[\s\S]*?showThreadView\(\);/
       .test(js),
     "follow-up turns retain the focus-neutral no-argument route",
   );

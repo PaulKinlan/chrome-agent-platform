@@ -1756,8 +1756,11 @@ runStatusEl?.addEventListener("action", () => {
  * orphaned "running…" is reset exactly once, never clobbering a newer run). */
 let statusOwner = 0;
 
-/** Run a turn in the thread surface (a new task, or a nudge). */
-async function runThreadTurn(text, attachments = []) {
+/** Run a turn in the thread surface (a new task, or a nudge). `mention` is an
+ * @-mention delegation directive ({kind,id,name}): the task stays the hub's
+ * thread and the run delegates to the referenced agent, whose result lands
+ * back in this thread (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01). */
+async function runThreadTurn(text, attachments = [], mention = null) {
   const owner = runSurfaceOwner.claim();
   showThreadView();
   setStatus("running…", false);
@@ -1777,6 +1780,7 @@ async function runThreadTurn(text, attachments = []) {
     onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
     agentId: agentAtStart, // null for a thread; set when chatting with a named/background agent
     agentKind: kindAtStart,
+    mention: mention ?? null,
     isStale: () => !owns(),
     projectionOwner: owner,
   });
@@ -1826,12 +1830,16 @@ composer.addEventListener("send", async (ev) => {
   syncConversationRunControls();
   threadConversation.clear?.();
   if (agent?.ref) {
-    // The unified agent routing (CAP-FB-20260818-AGENT-ACCESS-01): the + menu's
-    // Choose agent chip / a committed /agent: option carries the CANONICAL ref;
-    // the run goes DIRECTLY to that agent (its own memory/skills), never
-    // resolved by name. Open its surface so the run is visible in context.
-    await openAgentSurface({ kind: agent.kind, id: agent.id, name: agent.name });
-    await runThreadTurn(task, attachments);
+    // An @mention on a NEW task (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01): the
+    // task stays the HUB's task — created as its own thread (it appears in
+    // the task list) — and the mention is dispatched as a delegation to the
+    // referenced agent, whose result returns INTO the task. Referencing an
+    // agent must NOT turn the task into that agent's own conversation.
+    currentAgentId = null;
+    currentAgentKind = null;
+    syncConversationRunControls();
+    threadTitle.textContent = "New task";
+    await runThreadTurn(task, attachments, { kind: agent.kind, id: agent.id, name: agent.name });
     return;
   }
   currentAgentId = null; // the hub composer is the MASTER agent, not a named-agent chat
@@ -1846,9 +1854,16 @@ composer.addEventListener("status", (ev) => {
 
 threadComposer.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail;
+  if (agent?.ref && !currentAgentKind) {
+    // An @mention in a task's follow-up: delegate to the referenced agent and
+    // bring the result BACK into THIS thread (the task stays the hub's task —
+    // it must never switch into the agent's own conversation).
+    await runThreadTurn(text, attachments, { kind: agent.kind, id: agent.id, name: agent.name });
+    return;
+  }
   if (agent?.ref) {
-    // Direct THIS message to the chosen agent: the surface switches to that
-    // agent's own conversation (its journal), and the run routes by ID.
+    // In an agent's OWN conversation the chip still navigates: direct THIS
+    // message to the chosen agent's surface (its journal), routed by ID.
     await openAgentSurface({ kind: agent.kind, id: agent.id, name: agent.name });
   }
   await runThreadTurn(text, attachments);

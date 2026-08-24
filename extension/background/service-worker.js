@@ -150,6 +150,7 @@ import {
 import { pairToolJournal } from "../shared/conversation.js";
 import {
   appendThreadMessage,
+  commitThreadTerminal,
   continueThread,
   createThread,
   deleteThread,
@@ -3041,12 +3042,40 @@ const handlers = mergeRouteMaps(
     // Track the last tool the run attempted, so a failure can name the tool
     // that was in flight (the per-task error view shows WHY it failed).
     let lastTool = null;
+    // An @mention on a task (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01): the task
+    // stays the HUB's task — its thread is created above (it appears in the
+    // task list) — and the mention dispatches a DETERMINISTIC delegation to
+    // the referenced agent (its own sandbox/memory), whose durable outbox
+    // commits the terminal row back into THIS thread. The task never becomes
+    // the agent's own conversation and never vanishes from the list.
+    const mention = (m.mention && typeof m.mention === "object" && typeof m.mention.id === "string" && m.mention.id)
+      ? { kind: String(m.mention.kind ?? ""), id: m.mention.id, name: String(m.mention.name ?? m.mention.id) }
+      : null;
+    const mentionRoute = mention
+      ? mention.kind === "site" ? "agent.delegate"
+      : mention.kind === "named" ? "named-agent.run"
+      : mention.kind === "background" ? "background-agent.run"
+      : null
+      : null;
     // The thread's OWN tool-row persistence: after the run, the run's REAL
     // tool rows are read from the JOURNAL (the production writer — reliable)
     // and paired into ONE terminal card per call appended to the thread, so a
     // reopened thread restores the tool cards (the persisted-history boundary).
     const threadRunInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     try {
+      if (mention && !mentionRoute) {
+        result = { ok: false, error: `cannot delegate to ${mention.name}: unknown agent kind ${mention.kind}` };
+      } else if (mentionRoute === "agent.delegate") {
+        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId });
+      } else if (mentionRoute) {
+        result = await handlers[mentionRoute]({
+          id: mention.id,
+          task: m.task,
+          attachments: bounded,
+          runId: m.runId ?? null,
+          threadId,
+        });
+      } else {
       result = await runTask({
         id: m.id,
         task: m.task,
@@ -3067,6 +3096,22 @@ const handlers = mergeRouteMaps(
         // the task/result history that came before.
         history: threadHistory,
       });
+      }
+      // A delegation that failed BEFORE durable admission (unknown agent,
+      // not-enrolled origin, bad kind) registers no outbox, so nothing else
+      // will commit the thread terminal — commit the error directly so the
+      // task is never stuck "running". When an executionId exists the
+      // delegate's own durable flow owns the terminal (idempotent by
+      // executionId); a cancellation outbox is likewise left untouched.
+      if (mention && threadId && result && !result.ok && !result.executionId) {
+        await commitThreadTerminal(threadId, `mention-refusal:${threadId}:${Date.now().toString(36)}`, {
+          role: "error",
+          content: result.error ?? "delegation failed",
+          category: result.errorCategory ?? "error",
+          reason: result.errorReason ?? undefined,
+          action: result.errorAction ?? undefined,
+        }).catch(() => {});
+      }
     } catch (e) {
       // A provider/tool exception must NOT leave the thread permanently
       // "running" (the wider-goal review's failure-lifecycle finding: the outer
@@ -3447,7 +3492,7 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, refined };
   },
-  async "named-agent.run"({ id, task, attachments, runId, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
+  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
     // RUN/DELEGATE a task to a named agent (the wider-goal review found named
     // agents had CRUD/grep/avatar but no run path). The agent runs the task
     // with its OWN OPFS sandbox (namedAgentMemory — its memory + history), so
@@ -3486,7 +3531,11 @@ const handlers = mergeRouteMaps(
         resumeToken: _resumeToken,
         allowProviderChange: _allowProviderChange,
         resumeRoute: "named-agent.run",
-        resumeRouteArgs: { id, runId: runTag },
+        resumeRouteArgs: { id, runId: runTag, threadId: threadId ?? null },
+        // An @mention task's terminal commits into the HUB thread (idempotent
+        // by executionId via the durable outbox) — the result returns to the
+        // task, never stranded in the agent's own journal only.
+        threadId: threadId ?? null,
         // The agent's OWN system-prompt scope (agent:<slug>) — a per-agent
         // override composes over the hub base (inheriting the hub override when
         // the agent has none), and its role rides as the agent-role layer.
@@ -4330,7 +4379,7 @@ const handlers = mergeRouteMaps(
     let result;
     try {
       if (request.route === "agent.delegate") {
-        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
+        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, threadId: request.threadId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
@@ -4669,7 +4718,7 @@ const handlers = mergeRouteMaps(
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
   },
-  async "background-agent.run"({ id, task, attachments, runId, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
+  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false }) {
     const recipe = await resolveRecipe(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
@@ -4689,7 +4738,10 @@ const handlers = mergeRouteMaps(
         resumeToken: _resumeToken,
         allowProviderChange: _allowProviderChange,
         resumeRoute: "background-agent.run",
-        resumeRouteArgs: { id, runId: runTag },
+        resumeRouteArgs: { id, runId: runTag, threadId: threadId ?? null },
+        // @mention tasks: the terminal commits into the hub thread (see
+        // named-agent.run) — the result returns to the task.
+        threadId: threadId ?? null,
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: `background:${recipe.id}` });
         },
@@ -5128,7 +5180,7 @@ const handlers = mergeRouteMaps(
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false }) {
+  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
@@ -5159,11 +5211,16 @@ const handlers = mergeRouteMaps(
       kind: "delegate",
       agentId: canonical,
       taskPreview: task,
+      // An @mention task keeps the HUB thread as its home: the delegate run's
+      // durable outbox commits the terminal row into THAT thread (idempotent by
+      // executionId), so the result lands back in the task — and survives an
+      // SW crash between dispatch and commit.
+      threadId: threadId ?? null,
       // The canonical terminal journal is master-owned so restart recovery can
       // never recreate a site store after disenrollment. The per-site audit row
       // below remains generation-fenced telemetry.
       journalTarget: "master",
-      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), generation: gen, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), generation: gen, threadId: threadId ?? null, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
     });
     // Failed admission was already compensated by start(); no readable
     // authority exists, so rollback would be both unnecessary and unsafe.
@@ -5465,6 +5522,7 @@ async function resumeInterruptedRuns() {
         result = await handlers["agent.delegate"]({
           origin: request.origin,
           task: request.task,
+          threadId: request.threadId ?? null,
           _executionId: run.executionId,
           _resumeGeneration: request.generation,
           _resumeToken: claimed.token,
