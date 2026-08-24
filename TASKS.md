@@ -539,6 +539,13 @@ On resume after a coordinator or worker loss:
     set/get state, commands list — zero new manifest permissions, grant-lock
     origin re-reads (smuggle-class defense), owner-scoped action state,
     registry parity 46 tools, 1309/1309 suite. LANDED as 0.2.205
+  - 2026-08-24 15:55 UTC — TRANCHE 2 LANDED (0.2.225,
+    origin/main@4e4cdee967d6355f0d9b4246000e343d2f29b100): 12 tools — alarms
+    create/list/clear, bookmarks create/list/remove, notifications
+    notify/clear, idle query, contextMenus create/list/remove; all five
+    permissions already-declared (manifest version-only); 58 total platform
+    tools; dangerous-pair verified (context enum only, no onclick/click-URL
+    authority).
     (origin/main@0d308ce14430e4d1c7f24b23e6e0c1686733517d).
   - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
     revives the early "go through all Chrome extension APIs and create tools"
