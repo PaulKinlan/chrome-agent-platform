@@ -280,14 +280,14 @@ On resume after a coordinator or worker loss:
   (the agent is named by origin) but WebMCP can declare PAGE-level tools — the
   identity model must distinguish pages, not just origins
 - Updated: 2026-08-24 14:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `84bd49c`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@9f4a63c98252e0ca7b7c625699f978d7cc05a4c1` (0.2.252)
 - Acceptance: WebMCP site-agent identity includes page/path scoping so
   same-origin pages with different declared tools remain distinct; agent
   naming surfaces the page where relevant; tool resolution matches the
@@ -300,6 +300,8 @@ On resume after a coordinator or worker loss:
   origin-only model
 - Recover: `git grep -n "canonicalOrigin\|siteAgent\|webmcp" -- extension/lib/site-identity.js extension/lib/tools.js`
 - History:
+  - 2026-08-25 00:xx UTC — LANDED at 0.2.252 after r2: page/path-scoped site-agent identity — per-page toolDirectory slices so same-origin pages' tools coexist (no flapping), browser-attested tab URL wins over reported pageUrl (no path spoofing), empty snapshot clears only the reporting page's slice, origin-only fallback intact. r1 REVISE (directory-flap blocker) closed + re-verified with Pro's own probes (f102d6b4); 1563/1563.
+
   - 2026-08-24 14:50 UTC — captured from product-owner feedback; elevates the
     existing page-scoped-identity task with a concrete product symptom.
 
@@ -976,7 +978,7 @@ On resume after a coordinator or worker loss:
 - Branch: detached
 - Base: `a8e3479e` (post-notification tip)
 - Candidate: GLM audit + enrichment (six-element agent-useful descriptions)
-- Shipping: —
+- Shipping: `origin/main@4c421ee9ade0aa3d8d601e277758adda6e01a131` (0.2.251)
 - Acceptance: every bundled tool description is written for a consuming
   model/owner — plain-language function, when to choose it, input and output
   shapes, key flags and arguments, bounded limits, and one concrete example;
@@ -995,6 +997,8 @@ On resume after a coordinator or worker loss:
   replacement set within the existing byte bounds
 - Recover: `git grep -n "Bounded\|pinned" -- extension/lib/bundled-tool-packages.data.js packages/bundled`
 - History:
+  - 2026-08-25 00:xx UTC — LANDED at 0.2.251: all 26 bundled tool descriptions enriched with six agent-useful elements (175–255 B, ASCII, no canonicalNameClaim); CAS binaries/SBOM/licences byte-identical (zero drift). Review PASS (Gemini 58643c11), 127/127.
+
   - 2026-08-23 21:50 UTC — captured from direct product-owner feedback;
     complements the search-alias coverage fix by improving the human/model
     readable layer.
