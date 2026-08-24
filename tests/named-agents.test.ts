@@ -361,3 +361,28 @@ Deno.test("bounds family at the new caps: name 120, skills 128, core asset 128 K
   const mapProbe = await createNamedAgent({ name: "probe", role: "r" });
   assertEquals(mapProbe.ok, true);
 });
+
+Deno.test("role bounds r2 (Gemini review): the SW update-route normalization layer canNOT silently clip — source pins", async () => {
+  // The P0's edit path flows NTP Edit → named-agent.update → normalizedNamedPatch
+  // → updateNamedAgent. r1 fixed the authority; r2 removes the SW layer's
+  // hardcoded slices that defeated it. Behavioral coverage of the flow lives in
+  // the authority KATs above (the SW route table has no behavioral harness —
+  // repo precedent); these pins close the class at the SW layer.
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const patchFn = sw.slice(sw.indexOf("function normalizedNamedPatch"), sw.indexOf("function namedPatchPayload"));
+  assert(!patchFn.includes("trim().slice(0, 200)"), "no hardcoded 200-char role slice remains in the update-route normalization");
+  assert(!patchFn.includes("skills.slice(0, 32)"), "no hardcoded 32-skill slice remains");
+  assert(patchFn.includes("skills.slice(0, MAX_SKILLS)"), "the skills bound references the IMPORTED constant (drift-proof)");
+  assert(/import\s*\{[^}]*MAX_ROLE_LEN[^}]*MAX_SKILLS[^}]*\}\s*from "\.\.\/lib\/named-agents\.js"/s.test(sw)
+      || /MAX_ROLE_LEN,[\s\S]{0,400}from "\.\.\/lib\/named-agents\.js"/.test(sw),
+    "the SW imports the bounds from the single authority");
+  // end-to-end through the authority with the exact patch shape the route builds
+  const created = await createNamedAgent({ name: "Route Shape", role: "v1" });
+  assertEquals(created.ok, true);
+  const bigRole = "route-level role. ".repeat(1700); // ≈30.6KB — under the 32000 cap; the old layer would clip to 200
+  const updated = await updateNamedAgent(created.agent.id, { name: "Route Shape", role: bigRole, skills: Array.from({ length: 64 }, (_, i) => `s${i}`) });
+  assertEquals(updated.ok, true);
+  const after = await getNamedAgent(created.agent.id);
+  assertEquals(after.role, bigRole.trim(), "the full role survives the update-route patch shape VERBATIM (modulo the intentional edge trim)");
+  assertEquals(after.skills.length, 64, ">32 skills survive the route patch shape");
+});

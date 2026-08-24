@@ -29,8 +29,8 @@ const AGENTS_KEY = "cap:namedAgents";
 // roles, the P0 this family raise fixes).
 const MAX_AGENTS = 200;
 const MAX_NAME_LEN = 120;
-const MAX_ROLE_LEN = 32000;
-const MAX_SKILLS = 128;
+export const MAX_ROLE_LEN = 32000;
+export const MAX_SKILLS = 128;
 const MAX_CORE_ASSETS = 8;
 const MAX_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
 

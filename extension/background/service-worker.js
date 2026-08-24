@@ -142,6 +142,8 @@ import {
   normalizeAgentProvider,
   normalizeCoreAssets,
   preserveExistingProviderKey,
+  MAX_ROLE_LEN,
+  MAX_SKILLS,
   setNamedAgentProvider,
   slugifyAgentId,
   updateNamedAgent,
@@ -2499,9 +2501,15 @@ function namedCandidatePayload(candidate) {
 function normalizedNamedPatch({ name, role, avatar, skills, coreAssets }) {
   const patch = Object.create(null);
   patch.name = name === undefined ? undefined : String(name).trim();
-  patch.role = role === undefined ? undefined : String(role).trim().slice(0, 200);
+  // CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01 r2 (Gemini review): NO slice here —
+  // the previous hardcoded .slice(0, 200) silently clipped roles BEFORE they
+  // reached updateNamedAgent, defeating the raised bound. The authority
+  // (named-agents.js) trims + rejects over-cap honestly BEFORE the approval
+  // gate runs, so a big role never reaches the approval payload. Skills keep
+  // the list bound via the IMPORTED constant so the layers cannot drift again.
+  patch.role = role === undefined ? undefined : String(role).trim();
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
-  patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, 32) : []);
+  patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : []);
   patch.coreAssets = coreAssets === undefined ? undefined : normalizeCoreAssets(coreAssets);
   return patch;
 }
