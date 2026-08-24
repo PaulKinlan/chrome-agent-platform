@@ -42,6 +42,9 @@ const argv = process.argv.slice(2);
 const type = argv.find((a) => !a.startsWith("-")) || "patch";
 const mi = argv.findIndex((a) => a === "--message" || a === "-m");
 const message = mi >= 0 ? argv[mi + 1] : null;
+const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
+const userNote = uni >= 0 ? argv[uni + 1] : null;
+const finalNote = userNote ? userNote.trim() : (message ? message.replace(/^\[[^\]]*\]\s*/, "").trim() : null);
 
 const pkgPath = join(ROOT, "package.json");
 const lockPath = join(ROOT, "package-lock.json");
@@ -73,13 +76,12 @@ if (lock) {
   writeJson(lockPath, lock);
 }
 
-// Prepend a CHANGELOG entry ONLY when we have a message (the commit message).
+// Prepend a CHANGELOG entry ONLY when we have a user note or commit message.
 const changelogPath = join(ROOT, "CHANGELOG.md");
-if (existsSync(changelogPath) && message) {
+if (existsSync(changelogPath) && finalNote) {
   const date = new Date().toISOString().slice(0, 10);
   const existing = readFileSync(changelogPath, "utf-8");
-  const clean = message.replace(/^\[[^\]]*\]\s*/, "").trim();
-  const entry = `\n## [${next}] — ${date}\n- ${clean}\n`;
+  const entry = `\n## [${next}] — ${date}\n- ${finalNote}\n`;
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
 }

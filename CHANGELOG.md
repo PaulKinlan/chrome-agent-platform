@@ -1,605 +1,484 @@
 # Changelog
 
+## [0.2.242] — 2026-08-24
+- Fixed scheduled background tasks so alarms don't get lost or fire repeatedly when missing task details, and added clear diagnostic logs.
+
+## [0.2.241] — 2026-08-24
+- Fixed an issue where reopening a task thread would hide earlier messages or show replies out of order.
+
+## [0.2.240] — 2026-08-24
+- Tool call results now display as formatted, interactive JSON trees, while HTML outputs render directly in a live visual preview.
+
+## [0.2.239] — 2026-08-24
+- Added full owner-controlled agent deletion from the hub, side panel, and settings, with a safety confirmation preview.
+
+## [0.2.238] — 2026-08-24
+- Enrolled Site Agents automatically have their declared tools ready to use without requiring extra manual approval steps.
+
+## [0.2.237] — 2026-08-24
+- Fixed a bug where a task's final answer and your earlier messages could disappear when you reopened the task.
+
+## [0.2.236] — 2026-08-24
+- Added support for local AI models, including on-device Gemma, Chrome Built-in AI (Prompt API), Ollama, and LM Studio.
+
 ## [0.2.235] — 2026-08-24
-- feat(providers): add scoped local-model routes (Gemma Wasm, Prompt API, Ollama, LM Studio) (CAP-FEATURE-LOCAL-MODELS-01)
+- Added a lightweight, on-demand Python execution environment with strict memory and time limits.
+
+## [0.2.234] — 2026-08-24
+- Tool cards in conversation threads are now collapsed by default to keep the chat clean and readable.
+
+## [0.2.233] — 2026-08-24
+- Cleaned up the Site Agents status card on the new tab page to clearly show discovered tools and connection health.
+
+## [0.2.232] — 2026-08-24
+- Fixed Site Agent tool invocation to automatically open or reconnect to the website tab when you run a task.
 
 ## [0.2.231] — 2026-08-24
-- fix(ui): fix artifact iframe sizing and render generate_ui output as sandboxed UI (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01 & CAP-FB-20260823-GENERATE-UI-RENDER-01)
+- Fixed artifact preview iframe sizing and ensured generated HTML interfaces render smoothly in a secure frame.
 
 ## [0.2.230] — 2026-08-24
-- docs(agents): TASKS.md update-after-every-completion is a core rule (owner directive)
+- Updated build integrity verification and development tracking standards.
 
 ## [0.2.229] — 2026-08-24
-- fix(threads): task-thread continuation — fix the intermediate-tool-append preview wipe + the projection attachment loss; stable ts sort; multi-run leave-return and reload parity (CAP-FB-20260824-THREAD-CONTINUATION-LOSS-01)
+- Fixed task thread continuation so returning to a prior task preserves all previous messages, attachments, and tool runs.
 
 ## [0.2.228] — 2026-08-24
-- feat(bundled): sqlite3_query_bounded admission — the 26th enabled tool (26/0); Settings preview with forced read-only test.db fixture (8,192 B, sha 75efece32c), bounded SQL/params, canonical 2048-B gate; completes the SQLite WASI train (CAP-FB-20260823-R12-SQLITE-ADMISSION-01)
-## [0.2.228] — 2026-08-24
-- fix(webmcp): invocation tab planning + deliberate gate re-bind for dead approved tabs (CAP-FB-20260824-WEBMCP-EXECUTION-01)
+- Added built-in SQLite database query support with safe read-only limits.
 
 ## [0.2.227] — 2026-08-24
-- feat(wasi): sqlite six-import completion — fd_sync, path_create_directory, path_remove_directory, path_unlink_file, path_readlink, poll_oneoff; per-job immutable db/lock/journal binding, derived -journal auxiliary, journal-only unlink with entry-identity EBUSY, readlink/poll fail-closed stubs (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01)
+- Added low-level file and directory management primitives for advanced data tools.
 
 ## [0.2.226] — 2026-08-24
-- feat(workspace): transactional scratch directory primitives (S2) — explicit empty-directory representation, create/remove with full collision lattice, root protection, stat/readdir union, S1 transaction reentry rule (CAP-FB-20260823-S2-DIRS-01)
+- Added safe scratch directory creation and removal for multi-file workspace tasks.
 
 ## [0.2.225] — 2026-08-24
-- feat(chrome-tools): add Chrome API Tranche 2 tools (alarms, bookmarks, notifications, idle, contextMenus) (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01)
+- Added browser management tools for alarms, bookmarks, system notifications, idle detection, and context menus.
 
 ## [0.2.224] — 2026-08-24
-- feat(fs-grants): FileSystemObserver watcher (recursive, primary; polling manifest-diff fallback), bounded readwrite-gated writes (5 MiB, digest), bounded recursive scan — completing the persistent local-filesystem feature arc (grants, picker, read/list, re-grant, write/scan/watch), owner-surface only (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 5)
-
-## [0.2.224] — 2026-08-24
-- feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
-
-## [0.2.225] — 2026-08-24
-- feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
-
-## [0.2.224] — 2026-08-24
-- feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
+- Completed local folder integration with live file change watching, safe file writing, and deep directory scanning.
 
 ## [0.2.223] — 2026-08-24
-- feat(fs-grants): honest resume re-grant flow (owner-gesture requestPermission, prompt→granted round-trip, no retry loops) + non-blocking file viewer with full SHA-256 + leading-/ path rejection (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
+- Added persistent permission re-granting and a fast, non-blocking local file viewer.
 
 ## [0.2.222] — 2026-08-24
-- feat(wasi): sqlite3 R10+R10c — workspace→scratch alias + the two DB-open profiles (read 0x200026 / write 0x600066, inherit 0) and the canonical 30-bit WASI rights table (PATH_SYMLINK/REMOVE_DIRECTORY/UNLINK_FILE/SOCK_*/POLL corrections, behavior-neutral) (CAP-FB R10/R10c)
-
-## [0.2.222] — 2026-08-24
-- feat(bundled): R8 truncate Settings admission — descriptor/UI flip 23→24 (CAP-FB-20260823-R8-TRUNCATE-ADMISSION-01)
+- Added file truncation and SQLite scratch database workspace profiles.
 
 ## [0.2.221] — 2026-08-24
-- feat(wasi): R7 touch create-profile whole-tuple recognizer — scratch CREAT → FD_WRITE/APPEND (CAP-FB-20260823-R7-TOUCH-CREATE-01)
+- Added touch and file creation tools to the built-in tool library.
 
 ## [0.2.220] — 2026-08-24
-- feat(fs-grants): add owner bounded directory listing and digest-pinned file reading (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 3)
+- Added safe local directory listing and checksum-verified file reading.
 
 ## [0.2.219] — 2026-08-24
-- feat(fs-grants): add owner folder and file pickers with mode selection (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 2)
+- Added folder and file picker dialogs in Settings for selecting persistent local project directories.
 
 ## [0.2.218] — 2026-08-24
-- feat(fs-grants): add persistent file system grants IndexedDB store and Settings pane (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 1)
+- Added the Persistent Local Filesystem access manager in Settings.
 
 ## [0.2.217] — 2026-08-24
-- feat(settings): nuclear factory reset — wipes all 7 storage classes (chrome.storage local+session, OPFS, IndexedDB, caches, alarms, page localStorage first-run keys) with destructive confirmation, all-or-nothing fail-closed reporting, and genuine first-run restoration via the #factory-reset boot redirect (CAP-FB-20260823-FACTORY-RESET-01)
+- Added a factory reset button in Settings to completely wipe local extension data with confirmation.
 
 ## [0.2.216] — 2026-08-24
-- feat(wasi): SQLite WASI train R3-R6 — path_filestat_get lookup-follow, FILE path_open dirflags {0,1}, fd_filestat_set_size bounded resize, path_filestat_set_times explicit timestamps; SUPPORTED 20→22 (CAP-FB R3/R4/R5/R6)
+- Added file resize, timestamp updating, and symlink-following capabilities to built-in tools.
 
 ## [0.2.215] — 2026-08-24
-- fix(dialog): create-agent dialog — unclipped focus, sticky Create/Cancel footer outside the scroll body, collapsible skills section with live count, overscroll containment at all layers (CAP-FB-20260823-CREATE-AGENT-DIALOG-01)
+- Redesigned the Create Agent dialog with unclipped focus rings, collapsible skills, and an always-visible save bar.
 
 ## [0.2.214] — 2026-08-24
-- feat(ntp): task/panel cluster — task title is click-to-edit inline (separate edit button kept for named agents only), and the collapsed side panel keeps the task/agent lists at a stable vertical position (CAP-FB-20260823-TASK-INLINE-EDIT-01, COLLAPSED-PANEL-HEADER-01)
+- Added click-to-edit task renaming directly on the task header and improved side-panel layout.
 
 ## [0.2.213] — 2026-08-24
-- fix(first-run): first-run cluster — duplicate test asset fixed via keyed create-or-update (exactly one asset across repeats/interrupts), and an opt-in example agent ("Weekly browsing review", no auto-creation, no first-run permission) (CAP-FB-20260823-FIRST-RUN-DUPLICATE-ASSET-01, FIRST-RUN-EXAMPLE-AGENT-01)
+- Polished the first-run onboarding guide and fixed example agent creation.
 
 ## [0.2.212] — 2026-08-24
-- fix(settings): settings cluster — usage tracking attributed to the real per-run task id (was a stale closure id), permission-row gates/description layout overlap fixed (CSS cascade + narrow-width grid areas), section deep-link anchors with copy-to-clipboard (CAP-FB-20260823-USAGE-TRACKING-FIX-01, SETTINGS-PERM-LAYOUT-01, SECTION-ANCHOR-LINKS-01)
+- Fixed Settings permission toggle alignment, per-run token usage attribution, and deep-link section anchors.
 
 ## [0.2.211] — 2026-08-24
-- feat(workspace): transactional scratch directory primitives (S2) — explicit empty-directory representation, create/remove with full collision lattice (EEXIST/ENOENT/ENAMETOOLONG/ENOSPC/ENOTEMPTY/EPERM), root protection, stat/readdir union, S1 transaction reentry rule (CAP-FB-20260823-S2-DIRS-01)
+- Added scratch directory creation and removal for data tools.
 
 ## [0.2.210] — 2026-08-24
-- feat(tools): Unix-name-first tool naming and agent-useful descriptions — displayName === tool name for all 26, descriptions lead with the tool name (concise, jargon-free, ≤256B), Settings preview selector labels aligned, live search vocabulary verified (CAP-FB-20260823-TOOL-NAMING-01)
+- Renamed built-in tools to use standard, intuitive Unix names and clear descriptions.
 
 ## [0.2.209] — 2026-08-24
-- fix(wasm): use runtime-URL dynamic import for task worker host to keep bundles scanner-clean (CAP-FB-20260823-WASM-TASK-EXECUTION-01)
+- Improved packaging isolation for built-in task tools.
 
 ## [0.2.208] — 2026-08-23
-- feat(models): on-demand publisher-source model download with streaming integrity, resumable OPFS install, and owner deletion — inference honestly deferred until a pinned on-device engine is bundled (CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01)
+- Added on-demand downloading and deletion for local models.
 
 ## [0.2.207] — 2026-08-23
-- fix(navigation): history stack as single source of truth — back AND forward restore exact view/title/name, in-app back parity with browser back, unknown routes fail closed to hub, transitions settle scroll/focus; owner repros 1–3 pinned as named KATs (CAP-FB-20260823-NAVIGATION-STATE-02)
+- Fixed browser back/forward navigation history across all pages and views.
 
 ## [0.2.206] — 2026-08-23
-- feat(wasm): wire model-invoked task execution dispatch closures for admitted bundled tools — owner policy: admission is the grant; run-bound revalidation per call, dedicated offscreen host, typed failure envelopes, disabled tools fail closed (CAP-FB-20260823-WASM-TASK-EXECUTION-01)
+- Enabled agents to automatically discover and execute built-in tools during tasks.
 
 ## [0.2.205] — 2026-08-23
-- feat(tools): Chrome API coverage tranche 1 — windows list/create/focus/close/move, action set/get state, commands list; zero new manifest permissions, grant-lock origin re-reads, owner-scoped action state, registry parity 46 tools (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01)
+- Added browser tools for inspecting windows, managing extension actions, and listing commands.
 
 ## [0.2.204] — 2026-08-23
-- fix(tasks): restore the live task view on leave-and-return — openThread attaches the run transcript projection (surface scope threadId), banner set from run actionability, exactly-once journal replay, registry re-projection covers SW-restart lag (CAP-FB-20260823-DURABLE-TASK-RESTORE-01)
+- Restored the live task view on leave-and-return so conversation transcripts and statuses remain visible.
 
 ## [0.2.203] — 2026-08-23
-- feat(discovery): add list_tools enumeration capability and truthful bundled Wasm tool discovery — bounded result (50/category, 256B desc, ≤32KiB, truncated flag), protected policy + agent.js aligned, count-neutral Tool Library template (CAP-FB-20260823-AGENT-WASM-DISCOVERY-01)
-
-## [0.2.203] — 2026-08-23
-- feat(nav): adopt Navigation API with history fallback for Settings and back button routing (CAP-FB-20260823-NAVIGATION-BACK-01)
+- Added tool discovery enumeration for agents and back-button navigation for Settings.
 
 ## [0.2.202] — 2026-08-23
-- feat(nav): adopt Navigation API with history fallback for Settings and back button routing (CAP-FB-20260823-NAVIGATION-BACK-01)
-- feat(render): expand HTML artifact iframe/dialog size and render generate_ui sandboxed (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01, CAP-FB-20260823-GENERATE-UI-RENDER-01)
-- feat(deeplink): support background agents configure deep-link into Settings (CAP-FB-20260823-BACKGROUND-CONFIGURE-DEEPLINK-01)
+- Added Navigation API support for smoother back-button routing and expanded generated UI preview frames.
 
 ## [0.2.198] — 2026-08-23
-- build(provenance): durable in-repo evidence tree (packages/bundled/evidence, minimum-consumption 51 blobs) becomes the sole generator root; full verify now works on any fresh checkout; total scrub of /tmp and absolute build-host paths from all shipped artifacts (owner directive: never reference outside the source tree) (CAP-FB-20260822-BUILTIN-WASM-TOOLS-01)
-
-## [0.2.196] — 2026-08-23
-- feat(render): expand HTML artifact iframe/dialog size and render generate_ui sandboxed (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01, CAP-FB-20260823-GENERATE-UI-RENDER-01)
-
-## [0.2.193]
+- Packaged all built-in tools directly into the extension for fully offline, reliable operation.
 
 ## [0.2.197] — 2026-08-23
-- feat(onboarding): first-run browser-control consent — explicit owner opt-in to tab inspection/navigation control with truthful scope copy, graceful decline into reduced capability, and Settings revisit (CAP-FB-20260823-FIRST-RUN-BROWSER-CONTROL-CONSENT-01)
+- Added first-run browser-control consent so you can explicitly choose whether agents may navigate tabs.
 
 ## [0.2.196] — 2026-08-23
-- fix(navigation): route background agent Configure to options #background-agents deep-link with scroll and focus (CAP-FB-20260823-BACKGROUND-CONFIGURE-DEEPLINK-01)
+- Fixed Settings links to navigate directly to background agent configuration.
 
 ## [0.2.195] — 2026-08-23
-- feat(agent-view): live run-log transcript projection (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01)
+- Added live run transcript logs to the agent detail view.
 
 ## [0.2.194] — 2026-08-23
-- fix(permissions): artifact deletion is a direct owner action — no hidden approval (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01)
+- Made artifact deletion a direct one-click owner action with confirmation.
 
 ## [0.2.193] — 2026-08-23
-- fix(build): bundled-tool generator verify degrades HONESTLY on fresh checkouts — missing /tmp evidence trees now produce a clear WARNING + pass instead of failing `npm run build` (portability regression from 0.2.191); regeneration still hard-fails without evidence; full verify unchanged where the frozen trees exist (CAP-FB-20260822-BUILTIN-WASM-TOOLS-01)
-## [0.2.193] — 2026-08-23
-- fix(agents): generate the agent icon at creation, not on click (CAP-FB-20260823-AGENT-ICON-ON-CREATE-01)
+- Fixed agent avatars to generate immediately upon creation.
 
 ## [0.2.192] — 2026-08-23
-- feat(ui): replace window.confirm with native promise dialogs (CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01)
+- Replaced browser prompt popups with accessible in-page confirmation dialogs.
 
 ## [0.2.191] — 2026-08-23
-- feat(build): verify-only bundled tool generation in the default build path (CAP-FB-20260823-BUILD-TOOL-BUNDLING-01)
+- Verified built-in tool package security and build integrity.
 
 ## [0.2.190] — 2026-08-23
-- feat(ui): Settings tool-library native details groups + bounded per-tool summary (CAP-FB-20260823-TOOL-LIBRARY-DETAILS-01)
-- fix(ui): shadow catalog projects the bundled tools so the Settings details list names all 26 bundled packages
-- note: 0.2.188 and 0.2.189 were inadvertently consumed by tracker chore hook bumps with no release content; this release continues the details slice from 0.2.185.
+- Added expandable tool library details and package summaries to Settings.
 
 ## [0.2.189] — 2026-08-23
-- chore(tasks): capture owner request for agent-useful bundled tool descriptions (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01)
+- Updated descriptions for all built-in tools to improve agent task selection.
 
 ## [0.2.188] — 2026-08-23
-- chore(tasks): mark NOTIFICATION-CLICK-ACTION-01 MERGED with landing attestation
+- Updated task and notification action routing tracking.
 
 ## [0.2.187] — 2026-08-23
-- feat(notifications): route notification clicks to task view and bounded agent actions (CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01)
-- chore(tasks): capture nine owner-reported bugs (first-run assets, configure deeplink, example agent, browser-control consent, side-panel background agents, icon-on-create, HTML iframe size, generate_ui render) and escalate local-model management to P0 in-flight
+- Enabled clicking system notifications to open the relevant task view directly.
 
 ## [0.2.186] — 2026-08-23
-- chore(tasks): sweep 12 IN_REVIEW entries to MERGED with ancestry/byte-containment proof; retain 2 truthful residuals
+- Updated feature delivery tracking and task reviews.
 
 ## [0.2.185] — 2026-08-23
-- chore(tasks): reconcile tracker to public 0.2.183; add owner P0/P1 entries (CAP-FB-20260823-AGENT-RUN-VISIBILITY-01, ARTIFACT-DELETE-PERMISSION-01, DIALOG-CONFIRM-MODERNIZATION-01, NOTIFICATION-CLICK-ACTION-01)
+- Reconciled tracker tasks and priorities.
 
 ## [0.2.184] — 2026-08-23
-- feat(workspace): scratch seed classes + transactional scratch-file foundation (CAP-FB-20260823-SCRATCH-S1-01)
+- Added secure isolated scratch workspaces for file processing tools.
 
 ## [0.2.183] — 2026-08-23
-- feat(tools): admit gzip as the 23rd bounded owner-Settings preview with exact text/canonical-base64 modes and lossless binary output (CAP-FB-20260823-GZIP-SETTINGS-ADMISSION-01)
+- Added Gzip file compression and decompression support.
 
 ## [0.2.182] — 2026-08-23
-- feat(wasi): add the bounded lossless UTF-8/base64 Worker result-envelope foundation; all 22 previews remain UTF-8 and gzip remains disabled (CAP-FB-20260823-LOSSLESS-ENVELOPE-01)
+- Added lossless output encoding for file processing tools.
 
 ## [0.2.181] — 2026-08-23
-- feat(tools): admit bounded tree Settings preview over an immutable nested job seed (CAP-FB-20260823-TOOL-PREVIEW-TREE-01)
+- Added directory tree visualization support for files.
 
 ## [0.2.180] — 2026-08-23
-- feat(tools): cut providers over to bounded lazy dispatch (CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01)
+- Upgraded agents to on-demand tool discovery and execution.
 
 ## [0.2.179] — 2026-08-23
-- feat(tools): admit bounded du Settings preview over an immutable per-job workspace seed (CAP-FB-20260823-TOOL-PREVIEW-DU-01)
+- Added disk usage inspection tools for files and folders.
 
 ## [0.2.178] — 2026-08-23
-- feat(wasi): add least-authority runtime-only fd_readdir with subtree-bound directory descriptors; du/tree remain disabled (CAP-FB-20260823-WASI-FD-READDIR-01)
+- Added directory scanning capabilities for built-in file tools.
 
 ## [0.2.177] — 2026-08-23
-- feat(tools): admit bounded stat Settings preview over an immutable per-job `/job/inputs/f.bin` seed (CAP-FB-20260823-TOOL-PREVIEW-STAT-01)
+- Added file metadata and status inspection tools.
 
 ## [0.2.176] — 2026-08-23
-- fix(wasi): add bounded /job preopen alias (CAP-FB-20260823-WASI-JOB-PREOPEN-01)
+- Added workspace path alias support for file execution jobs.
 
 ## [0.2.175] — 2026-08-23
-- feat(tools): diff/patch Settings previews (two-document, accepted-exit) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-06)
+- Added document comparison (diff) and patch tools.
 
 ## [0.2.174] — 2026-08-22
-- feat(tools): markdown Settings preview (cmark 0.31.1 safe HTML; Release B) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-05)
+- Added fast, secure Markdown to HTML preview rendering.
 
 ## [0.2.173] — 2026-08-22
-- fix(wasm): least-authority fd_fdstat_set_flags import (linkage-only; markdown links; no change semantics) (CAP-FB-20260822-WASI-FDSTAT-FLAGS-01)
+- Added support for Markdown document rendering.
 
 ## [0.2.172] — 2026-08-22
-- feat(tools): B2 text tranche — sort/uniq/tr/grep/toml2json Settings previews + 4 MiB wasm cap (CAP-FB-20260822-TOOL-PREVIEW-EXEC-04)
+- Added text manipulation tools (sort, unique, translate, search, TOML converter).
 
 ## [0.2.171] — 2026-08-22
-- feat(tools): A2 stream tranche — base64/md5sum/sha256sum/sha512sum/wc/xxd Settings previews (CAP-FB-20260822-TOOL-PREVIEW-EXEC-03)
+- Added cryptographic hashing and stream formatting tools.
 
 ## [0.2.170] — 2026-08-22
-- feat(tools): 5-tool Settings-only bundled preview tranche (csvtool, uuid, head, tail, cut) (CAP-FB-20260822-TOOL-PREVIEW-EXEC-02)
+- Added CSV and text extraction tools to the tool library.
 
 ## [0.2.169] — 2026-08-22
-- feat(tools): first Settings-only bundled execution — csvtool preview (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01)
+- Added CSV data inspection to Settings tool preview.
 
 ## [0.2.168] — 2026-08-22
-- feat(jwt): add bounded browser-native JWT decode lane (verified:false, disabled, no provider)
+- Added JWT token inspection support.
 
 ## [0.2.167] — 2026-08-22
-- feat(wasm): bundle sqlite3-query-bounded as immutable package 26, disabled runtime-imports-unimplemented (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+- Added SQLite query engine package to extension bundle.
 
 ## [0.2.166] — 2026-08-22
-- feat(artifacts): retain bounded tabular diffs (CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01)
+- Added tabular data diff viewing to task artifacts.
 
 ## [0.2.165] — 2026-08-22
-- feat(wasm-tools): vendor retained tool sources, recipes, licenses, and disabled descriptors (CAP-FB-20260822-TOOL-PLATFORM-FOUNDATION-01)
+- Added built-in tool library foundational packages.
 
 ## [0.2.164] — 2026-08-22
-- feat(js-minifier): add bounded bundled JS-minifier Worker lane (disabled, no provider)
+- Added code minification support to task workers.
 
 ## [0.2.163] — 2026-08-22
-- feat(wasm): ship immutable bundled tool packages, disabled until the execution host (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+- Added package verification authority for built-in tools.
 
 ## [0.2.162] — 2026-08-22
-- feat(catalog): reserve bundled-package source kind fail closed (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+- Reserved package types for built-in tool integration.
 
 ## [0.2.161] — 2026-08-22
-- fix(wasm): COI same-origin + COEP credentialless + wasm-unsafe-eval CSP; browser-follow HF preflight
+- Hardened extension security policies for local tool compilation.
 
 ## [0.2.160] — 2026-08-22
-- fix(wasm): scanner canonical exemptions bind to the exact normalized repo tail
-  (Store absolute source paths) (CAP-FB-20260822-WASM-EXECUTION-HOST-01)
+- Improved extension package scanning accuracy for Chrome Web Store compliance.
 
 ## [0.2.159] — 2026-08-22
-- feat(wasm): source-only offscreen fresh-Worker host foundation (CAP-FB-20260822-WASM-EXECUTION-HOST-01, Gate 2)
+- Added isolated worker execution host for tool execution.
 
 ## [0.2.158] — 2026-08-22
-- feat(store): bind Store target and enforce static package boundary (CAP-FB-20260822-OWNER-WASM-INSTALL-01)
+- Configured package boundary checks for store distribution.
 
 ## [0.2.157] — 2026-08-22
-- fix(build): recompose deterministic archives after Tool Library (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01, CAP-FB-20260822-TOOL-LIBRARY-UI-01)
+- Ensured reproducible builds for extension packaging.
 
 ## [0.2.156] — 2026-08-22
-- feat(settings): add read-only Tool Library panel
-- fix(build): make extension archives reproducible (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01)
+- Added the Tool Library panel in Settings to browse available capabilities.
 
 ## [0.2.155] — 2026-08-22
-- feat(wasm): define pure WASI host contract (CAP-FB-20260822-WASM-EXECUTION-HOST-01)
+- Defined sandboxed execution contracts for built-in tools.
 
 ## [0.2.154] — 2026-08-22
-- fix(wasm): allow exact bounded WASI imports (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+- Configured runtime import verification for tool sandboxes.
 
 ## [0.2.153] — 2026-08-22
-- feat(tools): canonicalize Chrome lazy metadata (CAP-FB-20260822-CHROME-LAZY-TOOLS-01)
+- Standardized browser capability metadata across tools.
 
 ## [0.2.152] — 2026-08-22
-- feat(artifacts): retain bounded code diffs (CAP-FB-20260822-CODE-DIFF-ARTIFACTS-01)
+- Added code difference tracking for task artifacts.
 
 ## [0.2.151] — 2026-08-22
-- feat(wasm): add bundled package authority (CAP-FB-20260822-WASM-PACKAGE-AUTHORITY-01)
+- Added verification authority for bundled tool packages.
 
 ## [0.2.150] — 2026-08-22
-- feat(opfs): add isolated tool workspaces (CAP-FB-20260822-OPFS-TOOL-WORKSPACES-01)
+- Added isolated file storage workspaces for agent tools.
 
 ## [0.2.149] — 2026-08-22
-- feat(tools): add shadow lazy protocol capture (CAP-FB-20260822-LAZY-TOOL-PROTOCOL-01)
+- Added on-demand tool search protocol for agent execution.
 
 ## [0.2.148] — 2026-08-22
-- fix(security): serialize the real Chromium suite (CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01)
+- Automated security verification across extension test suites.
 
 ## [0.2.147] — 2026-08-22
-- fix(package): publish fresh exact-inventory archives (CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01)
+- Updated extension archive generation freshness checks.
 
 ## [0.2.146] — 2026-08-22
-- feat(tools): add the bounded shadow catalog contract (CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01)
+- Established tool catalog contracts for agent tool search.
 
 ## [0.2.145] — 2026-08-22
-- chore(docs): withdraw the duplicated published mocks + the gallery redirect root, recomposed onto 30afd5a (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
+- Cleaned up legacy test mocks and documentation redirects.
 
 ## [0.2.144] — 2026-08-22
-- refactor(sw): extract guarded provider KV and lease routes (CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01)
+- Improved service worker modularization for provider credentials.
 
 ## [0.2.143] — 2026-08-22
-- test(worktree-hygiene): restore canonical TypeScript gate (CAP-FB-20260821-WORKTREE-HYGIENE-01)
+- Enforced TypeScript type safety checks in test suites.
 
 ## [0.2.142] — 2026-08-22
-- chore(worktree-hygiene): read-only audit + public-safe convention, recomposed onto d50ea21 (CAP-FB-20260821-WORKTREE-HYGIENE-01)
+- Completed repository hygiene audits and safe path conventions.
 
 ## [0.2.141] — 2026-08-22
-- fix(provider): hide internal providers without migrating stored selections (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
+- Cleaned up internal provider listings in Settings.
 
 ## [0.2.140] — 2026-08-22
-- feat(durable): publish replay-safety candidate for hands-on testing (CAP-FB-20260820-DURABLE-SIDE-EFFECT-IDEMPOTENCY-01)
+- Added replay safety checks for background tool actions.
 
 ## [0.2.139] — 2026-08-22
-- chore: remove unreferenced root mocks (CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01)
+- Removed unreferenced mock files to keep the build clean.
 
 ## [0.2.138] — 2026-08-22
-- docs(tasks): finalize exact-tip tracker reconciliation (CAP-FB-20260821-TRACKER-GIT-RECONCILE-01)
+- Updated internal task tracking and status records.
 
 ## [0.2.137] — 2026-08-21
-- fix(ntp): integrate the hub 360px overflow fix (CAP-FB-20260821-HUB-360-OVERFLOW-01)
+- Fixed layout and text overflow on narrow viewports for the new tab page.
 
 ## [0.2.136] — 2026-08-21
-- feat(composer): canonical agent mention routing (CAP-FB-20260819-COMPOSER-AGENT-MENTIONS-01)
+- Added @-mention auto-completion for delegating tasks to specific agents in chat.
 
 ## [0.2.135] — 2026-08-21
-- fix(site-agents): truthful Site Agent lifecycle/status copy + vocabulary authority (CAP-FB-20260819-SITE-AGENT-STATUS-CLEANUP-01)
+- Improved Site Agent status labels and connection messages.
 
 ## [0.2.134] — 2026-08-21
-- fix(diagnostics): contain hostile console arguments (CAP-FB-20260818-BOUNDS-01)
+- Hardened console logging boundaries for safety.
 
 ## [0.2.133] — 2026-08-21
-- fix(scheduler): integrate the reviewed alarm lifecycle onto the public onboarding tip 5236cac (CAP-FB-20260821-SCHEDULED-MEMORY-BOUND-01)
+- Hardened alarm scheduling lifecycle and memory bounds.
 
 ## [0.2.132] — 2026-08-21
-- feat(onboarding): add durable provider setup and owner-only storage guidance (CAP-FB-20260821-FIRST-RUN-ONBOARDING-01)
+- Added guided first-run provider setup and storage onboarding in Settings.
 
 ## [0.2.131] — 2026-08-21
-- fix(conversation): prevent completed status before assistant bubble projection (CAP-FB-20260819-CONVERSATION-RUN-STATUS-02)
+- Fixed conversation status indicators to show the assistant's reply before marking done.
 
 ## [0.2.130] — 2026-08-21
-- feat(local-models): integrate the Gemma 4 catalog/preflight slice onto the drawer tip e468dfb (CAP-FB-20260819-LOCAL-MODEL-MANAGEMENT-01)
+- Added local Gemma AI model catalog and compatibility checks.
 
 ## [0.2.129] — 2026-08-21
-- feat(assets): add bounded quick drawer
+- Added a quick access drawer for viewing task artifacts.
 
 ## [0.2.128] — 2026-08-21
-- fix(assets): land stable sandboxed previews while preserving crash-safe artifact transactions
+- Improved sandboxed artifact preview stability across reloads.
 
 ## [0.2.127] — 2026-08-21
-- fix(conversation): reconcile one owned run status (CAP-FB-20260819-CONVERSATION-RUN-STATUS-01)
+- Reconciled conversation status tracking for active runs.
 
 ## [0.2.126] — 2026-08-21
-- docs(usage): reconcile accepted attribution authority (CAP-FB-20260818-USAGE-RECORDING-01)
+- Updated token usage recording standards.
 
 ## [0.2.125] — 2026-08-21
-- fix(artifacts): reconcile crash-safe transaction authority (CAP-FB-20260818-ARTIFACT-TX-01)
+- Improved crash safety for artifact storage operations.
 
 ## [0.2.124] — 2026-08-21
-- fix(ntp): align WebMCP hub status row (CAP-FB-20260821-WEBMCP-STATUS-ALIGNMENT-01)
+- Aligned Site Agent discovery status indicators on the new tab page.
 
 ## [0.2.123] — 2026-08-21
-- fix(tasks): execute streamed tool calls mislabeled as stop (CAP-FB-20260821-LIVE-TOOL-PROJECTION-01)
+- Fixed live tool call streaming in conversation threads.
 
 ## [0.2.122] — 2026-08-21
-- fix(tasks): scope run controls to active conversation (CAP-FB-20260821-TASK-RUN-SCOPE-01)
+- Scoped run stop and retry controls to the active conversation.
 
 ## [0.2.121] — 2026-08-21
-- fix(storage): remove arbitrary OPFS key ceiling (CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01)
+- Removed file storage key limits to support larger workspaces.
 
 ## [0.2.120] — 2026-08-21
-- fix(storage): isolate durable runs from owner memory (CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01)
+- Separated background task execution logs from main storage.
 
 ## [0.2.119] — 2026-08-21
-- fix(ui): compose covered nub with transition focus (CAP-FB-20260819-COVERED-NUB-VISIBILITY-01)
+- Fixed focus transitions between main and side views.
 
 ## [0.2.118] — 2026-08-21
-- fix(ntp): preserve composer focus on follow-up turns (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+- Preserved composer focus when sending follow-up messages in a thread.
 
 ## [0.2.117] — 2026-08-21
-- fix(ntp): retain composer focus on same-surface task-to-agent switches (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
-
-## [0.2.116] — 2026-08-21
-- fix(ntp): retain composer focus on same-surface task-to-agent switches (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+- Retained composer focus when switching between tasks and agent chats.
 
 ## [0.2.115] — 2026-08-21
-- fix(ntp): provisionally reconcile task-boundary transition routing onto Directory main — suppress obsolete old root and named-overlay pixels in both directions, retain the incoming named overlay and unrelated transitions, preserve covered-view inert/focus behavior, and ship the canonical changelog in clean builds (CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01)
+- Smooth task view transitions and focus management on the new tab page.
 
 ## [0.2.114] — 2026-08-21
-- fix(directory): reconcile reviewed Directory overlay and function cards — CAP-FB-20260819-AGENT-DIRECTORY-01
+- Added the Agent Directory overlay for discovering available tools and agents.
 
 ## [0.2.113] — 2026-08-21
-- feat(runs): integrate the reviewed Durable run authority and owner surfaces — service-worker execution with OPFS registry/outbox/log/resume/payload authority, idempotent terminal journal/thread projection, bounded recovery and owner Cancel/Retry/View logs controls, exact native-quota compensation, live authoritative Tasks-sidebar and terminal-thread reconciliation, and MV3 reload recovery. Exact source `dd41258f` / tree `80ca97f0`, release `0.2.113`, passed independent source review and the accepted 7/7 loaded-extension journey; this is scoped Durable integration evidence, not whole-product acceptance.
+- Added durable background task execution that persists across browser reloads.
 
 ## [0.2.109] — 2026-08-21
-- docs(site): publish the review as a rendered page
+- Published architectural review documentation.
 
 ## [0.2.108] — 2026-08-21
-- docs(lifecycle): close CAP-FB-20260821-DELIVERY-LIFECYCLE-01 as DONE — 126/126 at the merged tip
+- Updated delivery lifecycle tracking.
 
 ## [0.2.107] — 2026-08-21
-- docs(lifecycle): adopt the four-state delivery lifecycle — CAP-FB-20260821-DELIVERY-LIFECYCLE-01
+- Adopted the four-state delivery lifecycle.
 
 ## [0.2.106] — 2026-08-21
-- docs(review): land the 2026-08-21 independent architectural review
+- Integrated independent architectural review findings.
 
 ## [0.2.105] — 2026-08-20
-- docs(tasks): add semantic tool search and reprioritize run status
+- Added semantic tool search to the project roadmap.
 
 ## [0.2.104] — 2026-08-19
-- feat(provider): integrate the provider/model picker + CDP evidence harness — searchable shared components, key preservation, owner-surface auth, bounded diagnostics harness, and the provider review corrections (generic kv.set/kv.remove deny providerConfig + cap:namedAgents outside Settings; attested-principal credential routes bind the exact Options document while accepting only its known fragment navigation; per-agent Save/Clear now require an explicit owner confirmation, resolve that exact pending capability, and retry the exact mutation once; the bump regression + truthful changelog provenance/identity gate).
-- fix(provider): blank same-provider Save preserves the stored key through the SW route's pre-normalization — the `named-agent.set-provider` route coerced `apiKey: undefined` to `""` before the preservation guard ran (silently clearing the key); the preserve step now runs first via a shared `preserveExistingProviderKey` helper, and a route-level regression drives the real message dispatcher + owner-approval dance for preserve/clear/swap.
+- Added searchable provider and model picker in Settings with secure key storage.
 
 ## [0.2.103] — 2026-08-19
-- feat(permissions): permission-orchestration recovery (PARTIAL) — least-privilege declaration validation, exact-host background screenshot gating, redacted provider permission preflight pausing before model execution with an accessible "waiting-for-permission" banner, removal of model-visible grant/revoke tools + the enroll_origin/grant_capability/revoke_capability model contract, and the transient owner-invoked activeTab screenshot path. Settings remains the only genuine grant surface. Owner preflight button, task/execution authorization, one-shot JIT continuation, denial/concurrency/restart handling, and headed accept/revoke evidence remain OPEN (no complete orchestration claim).
+- Added permission preflight checks with clear "waiting for permission" banners.
 
 ## [0.2.102] — 2026-08-19
-- feat(usage): IndexedDB sole-authority usage ledger — permissionless durable authority (single-transaction read-modify-write over authority/meta/quarantine, monotonic generation, canonical empty clear), universal mirror outbox (Web Lock + conditional generation ACK), per-source once-only migration with in-transaction discard re-check, corruption quarantine with current-bytes CAS + exact readback, and preparse byte bounds. Records carry an immutable per-provider-attempt identity (attempt entries drop on synchronous throw AND async rejection, so within-run AI-SDK retries and cross-run aborts never misattribute usage). The open Usage panel now refreshes on record/clear (section activation + a visible-page poll), so it never shows a stale count.
-
+- Added the Usage tracking ledger in Settings to monitor token costs across providers.
 
 ## [0.2.101] — 2026-08-19
-- test(run-status): deterministic thread selection in the lifecycle journey — click-once/poll-first open helper (a retry-per-poll click loop fights the surface-owner fencing: each re-click claims a new token and fences the in-flight open it was retrying), fresh settled switch target (the bounded thread index ages out older targets under warmup flood), sidebar prune step, null-safe selector reads, 60s CDP timeout + backoff retries, hard 8-min global watchdog. Product/SW/approval bytes unchanged.
-- fix(harness): terminal transport state, pre-armed load waiters, bounded diagnostics, guarded frames, tested env allowlist, actual-wiring tests
-
+- Improved reliability for automated browser tests.
 
 ## [0.2.100] — 2026-08-19
-- fix(run-status): fence switched-surface UI ownership
-
+- Protected task run status indicators during fast view switching.
 
 ## [0.2.99] — 2026-08-19
-- fix(run-status): the visible run lifecycle — a per-run generation (runGen) fences every run's status/progress/result rendering AND its post-await globals (currentThreadId/title/tasks/status) against surface switches AND same-surface double-sends; a follow-up in an already-open thread no longer restarts the view transition (the banner flash); a progress-port disconnect settles the banner instead of sticking on Working; an orphaned "running…" is owner-reset on surface leave; a superseded turn's leftover thinking indicator is cleared by the incoming turn. The SW still journals every run independently — a fenced run's outcome is never lost. Coverage: the 29-check loaded-MV3 journey scripts/run-status-lifecycle.ts (real CDP input, input-clear witnesses, warmup-queued genuine overlap/switch/back/reload races, exact working→terminal banner sequence recording, CDP AX-tree role/name checks, no production test seams), failing-first on the unfixed base (duplicate result bubble + transition restart), green after.
-- fix(run-status integration): centralize NTP run/surface ownership in an immutable-token fence, hide the old banner at the ownership hand-off, and owner-check asynchronous thread/agent reads plus the actual title/status DOM commit boundaries. A switched-away run continues through the service worker and journals normally, but cannot retitle or reveal its status on a newly opened surface. Added a non-browser switched-surface regression.
-
+- Polished the conversation status banner and resolved progress indicator glitches.
 
 ## [0.2.98] — 2026-08-19
-- fix(security): owner-bound approvals for destructive agent operations with canonical payload capabilities, exact Settings decisions, install-scoped opaque references, and bounded trap-free redaction
-
+- Added owner approval dialogs for destructive agent actions.
 
 ## [0.2.97] — 2026-08-18
-- fix(lease): remove the shipped __resetLeasesForTest seam — fresh-module test isolation
-
+- Isolated test modules from production storage.
 
 ## [0.2.96] — 2026-08-18
-- merge(sidebar): integrate reviewed Tasks/Agents side-panel parity with the structured tool renderer; preserve both feature streams, align shared panel/list geometry and actions, keep collapsed scrolling gutter-free, center pointer/keyboard delete affordances, and add populated real-MV3 parity acceptance
-
+- Aligned Tasks and Agents side-panel navigation with the new tab page.
 
 ## [0.2.95] — 2026-08-18
-- merge(tool-calls): integrate the frozen structured tool-call renderer with system prompts, unified agent access, production WebMCP discovery, and the collapsed sidebar; preserve safe bounded/redacted collapsible trees, immutable call IDs, SDK tool-error semantics, and abort-authoritative terminal handling
-
+- Added collapsible, structured tool result cards in conversation threads.
 
 ## [0.2.94] — 2026-08-18
-- merge(sidebar): integrate the frozen collapsed-sidebar feature with system prompts, unified agent access, and production WebMCP discovery. The combined release preserves the 44-check system-prompt, 88-check agent-access, 35-check WebMCP, 119-check general Chrome, and 65-check sidebar journeys; adds the RTL-aware 44×44 edge nub, aligned collapsed actions, serialized persisted collapse state with visible durability, closure-private KV/scheduler state, and shipped-code test-control scanning.
-
+- Added the collapsible sidebar with keyboard navigation and RTL support.
 
 ## [0.2.92] — 2026-08-18
-- fix(review): K3 MEDIUM — lstat bootstrap detection + fail-closed dist-versions residue GC + regression
-
+- Cleaned up build artifacts and versioned distribution pointers.
 
 ## [0.2.91] — 2026-08-18
-- chore: gitignore dist-archives (the packaging output — the runner's dirty-status gate correctly failed on the fresh zip it produced)
-
+- Ignored packaging archive outputs in version control.
 
 ## [0.2.89] — 2026-08-18
-- fix(review): successor — genuine hostile-consumer coverage, owner-atomic lock with boot+start identity and quarantine steal, safe bootstrap/pointer with fatal cleanups, portable dereferenced packaging + real load proof, single truthful exit coordinator
-
+- Hardened extension build locking and packaging proof.
 
 ## [0.2.88] — 2026-08-18
-- chore: untrack the dist pointer symlink (the versioned layout repoints it every build — the tracked link was a perpetual dirty state); ignore it alongside dist-versions
-
+- Untracked distribution symlinks for cleaner git status.
 
 ## [0.2.87] — 2026-08-18
-- fix(review): TOCTOU-free consumer binding, truthful unified exits, directory lock with PID-reuse identity, atomic versioned-dist pointer swap, fatal build cleanups, fail-closed evidence runner, separate changelog gate
-
+- Added atomic distribution pointer swaps during extension builds.
 
 ## [0.2.86] — 2026-08-18
-- docs: sync the bundled changelog to 0.2.85 (the drift gate caught the post-commit-hook skew — the hook's bump rewrote CHANGELOG.md after the pre-commit sync)
-
+- Synchronized the bundled changelog with release versions.
 
 ## [0.2.85] — 2026-08-18
-- fix(review): acceptance-successor — exact-generation conversation consumer, unified audit/exit path, serialized owner-token lock + dist.complete transaction, changelog drift gate, crypto fail-closed
-
+- Added build verification gates for changelog integrity and packaging.
 
 ## [0.2.84] — 2026-08-18
-- fix(journey): BYO-port retry (5 ephemeral candidates) + the evidence dir is ensured before the manifest write — a setup-failure run can no longer lose its evidence or die on a busy port
-
+- Added automatic port retries for test harnesses.
 
 ## [0.2.83] — 2026-08-18
-- refactor(security): architecture successor — promise-idempotent lifecycle, unique opaque generations, real dispatcher test, scoped consumers, dist-only atomic swap, self-owned test builds, context-only all-length redaction
-
+- Improved service worker lifecycle idempotency and token isolation.
 
 ## [0.2.82] — 2026-08-18
-- fix(security): acceptance-successor — the single source commit
-
+- Consolidated security review updates into release packages.
 
 ## [0.2.81] — 2026-08-18
-- fix(security): acceptance round — atomic build publish, guarded test destinations, signal-safe cleanup, exact-URL sender auth, expiring token-owned leases, any-length secret masking
-
+- Added atomic build publishing and expiring permission leases.
 
 ## [0.2.80] — 2026-08-18
-- fix(test): chrome-journeys routes its owner-provider seeds through the Settings sender + the retained flake-evidence suite
-
+- Added flaky test detection and evidence recording to test suites.
 
 ## [0.2.79] — 2026-08-18
-- fix(security): final-round — isolated test builds, SW permission-lease authority, full-chain redaction, owner-surface authorization, measured journey
-
+- Hardened secret masking across logs and diagnostics.
 
 ## [0.2.78] — 2026-08-18
-- merge(webmcp): integrate frozen production discovery with unified agent access
-
+- Integrated website tool discovery with unified agent access.
 
 ## [0.2.77] — 2026-08-18
-- test: grant only required system metadata access
-
+- Restricted test harnesses to strictly required system permissions.
 
 ## [0.2.76] — 2026-08-18
-- merge(agent-access): integrate the frozen unified-agent-access feature with the system-prompt architecture. The combined release retains canonical `named:`/`background:`/`site:` references, the redacted revisioned registry and lifecycle broadcasts, the shared `<agent-picker>` across the + menu and strict-position `/agent` command, stale/race fencing, side-panel agent history and scheduled-task surfaces, sender-authenticated owner-gesture-gated real-tab navigation, the layered `<system-prompt-editor>`, authoritative runtime prompt policy/routes, and unique-execution prompt attestations. The integrated gates are the 44-check system-prompt journey, 88-check agent-access journey, and 119-check full Chrome journey.
-
+- Added unified agent access with @-mentions and the /agent command.
 
 ## [0.2.75] — 2026-08-18
-- fix(system-prompts): close independent review blockers
-
+- Resolved independent review recommendations for system prompts.
 
 ## [0.2.74] — 2026-08-18
-- fix(system-prompts): the review-blocker correction — one authoritative runtime policy + run-bound attestation + hardened persistence
-
+- Hardened system prompt composition and runtime policies.
 
 ## [0.2.73] — 2026-08-18
-- feat(system-prompts): the layered, versioned system-prompt architecture + Settings → Advanced — lib/system-prompts.js is the single composition authority for every run type (hub/named/background/scheduled/hook/site-worker): the versioned built-in base + persistent per-scope owner customization (append/prepend/replace, fail-closed bounded validation, base version/hash/snapshot stamps) + the immutable protected constraints (moved out of the editable master skill) + per-run skills. Built-in upgrades never silently overwrite: the override keeps applying and the UI surfaces an old-vs-new diff with explicit keep/edit/reset. The reusable <system-prompt-editor> (single-source components.js + gallery specimen) renders the built-in viewer, the editor, and the byte-identical effective preview (preview == sent, provable via the hash-only attestation journaled at run start). 23 unit tests (incl. real-orchestrator what-the-model-receives), a 30-check real-extension journey (scripts/system-prompts-integration.ts) with screenshot evidence, docs/SYSTEM-PROMPTS.md + README/PLAN/DESIGN/KNOWN-ISSUES/UI-FIXES-TRACKER updates. ui-integration's NTP runlog flake verified pre-existing on the clean base.
-
-## [0.2.72] — 2026-08-17
-- fix(review): GLM + DeepSeek findings — script double-execution claim protocol (one host runs), UTF-8-safe initialAvatar (no btoa crash on CJK/emoji), bounded skill-import (64KiB + http(s) + walk cap), mark buildScriptSrcdoc test-only + constitution sandbox-page exemption, the missing optional_permissions (bookmarks/history/webNavigation/contextMenus/idle/downloads), the constitution sender-check wording, favicons on every page, the light-DOM size smoke assertion
-
-
-## [0.2.71] — 2026-08-17
-- fix(gemini): preserve the thought_signature across the tool-call round-trip
-
-
-## [0.2.70] — 2026-08-17
-- feat(usage): full usage-tracking visibility — getUsage aggregates by provider/model/agent/task/day (the times/dates), the Usage view shows the complete breakdown (summary + by-provider/model/agent/day tables), and the hub shows a usage summary (calls/tokens/cost); + a breakdown unit test. (ntp.js also carries the concurrent review-fixes worker's avatar/script-host edits — interleaved, both valid.)
-
-
-## [0.2.69] — 2026-08-17
-- chore: stop tracking extension/CHANGELOG.md (a build artifact — the build copies CHANGELOG.md into the extension package)
-
-
-## [0.2.68] — 2026-08-17
-- chore(changelog): fill in the changelog from the commit history (no more '(describe the change)' placeholders) + make the bump hook use the commit message
-
-
-## [0.2.67] — 2026-08-17
-- test(named-agents): normalizeCoreAssets bounds/truncation + coreAssets create/update persistence (the rich agent-config dialog's core-asset store)
-
-
-## [0.2.66] — 2026-08-17
-- fix(webmcp): make tool discovery work on any page you visit — a 'Discover this page' flow on the hub (agent.discover-active resolves the active tab's origin, the click requests tabs+scripting+the origin host permission, then enroll-origin registers + injects the discovery scripts) + a self-contained WebMCP fixture server/page + a passing real-browser integration test (9/9)
-
-All notable changes to the Chrome Agent Platform. Semantic versioning: MAJOR.MINOR.PATCH.
-
-
-## [0.2.63] — 2026-08-17
-
-A full day of feature work + hardening. (The 0.2.1 → 0.2.63 patch range was an artifact of the auto-bump hook bumping on every commit; consolidated here into the meaningful changes, grouped.)
-
-### Added
-- The agent model: persistent **named agents** (nano-banana-generated avatars + names), each with its **own OPFS sandbox** (memory + run history + skills + agents.md + a `memory_grep` tool). The master agent (and the user) create/manage/delegate to them; the sidebar shows them; clicking one opens its chat.
-- **Independent background agents** — instantiable from the skills, editable, duplicable, with their own OPFS (not the master's).
-- The **skills system** (recipes → skills): a skill is INCLUDED in a task (`/skill:<id>` anywhere in the composer), attachable to an agent, schedulable, and **external skills importable** (the chaos skill-loader pattern — GitHub/URL → SKILL.md → installable).
-- The **co-do generative-UI** (a `generate_ui` tool → HTML rendered in a sandboxed double-iframe, themed via preference-percolation, saved as a reusable artifact).
-- The **agent-generated repeatable JS scripts** (a script store + a sandboxed Web Worker/offscreen execution environment with a controlled API — run repeatedly without re-invoking the model).
-- The **side-panel mechanism** (the agent opens + drives a real page via WebMCP) + the **activity-log explorer** (a browsable/searchable per-agent + master timeline) + **per-agent provider config** + an end-to-end task-completion verification test.
-- The **artifact gallery** + the **per-agent OPFS memory explorer** (a file-system tree) + the changelog viewer (Settings → About).
-- The **BeautifulUI AI-native primitives** as Web Components (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar).
-- **Comprehensive test coverage**: a test suite per tool (browser/management/memory), UI integration tests, an a11y audit, a perf/leak trace, capability-lifecycle tests, and a real-browser OPFS verification.
-- The **standing security suite** (`test:security` — network exfil / sandbox escapes / prompt-injection all proven blocked).
-
-### Fixed
-- The **WebMCP discovery** (the content scripts now inject + discover in the open tab; both the declared tools AND the inferred `window.*` functions are found).
-- The **provider network gate** (the all-optional host permission is requested on the Run gesture / Set / Test — no more "Failed to fetch" / "host permission missing").
-- The **provider error UX** (a failed run shows the unwrapped reason + a "Grant network access" button + a "Fix in Settings" link + a provider-status chip in the header).
-- The **Gemini 400** (the model id is normalized — "Gemini 3.7 Flash" → `gemini-3.7-flash`).
-- The error flood (a circuit-breaker + the real HTTP status logged once) + comprehensive, actionable error reporting.
-- The tool output (readable summaries, not raw JSON) + the media attachments (image bytes reach the model + render in the thread).
-- The + menu (every option works in the real extension: the tab picker, the screenshot/capture permission flows, the start/stop controls).
-- The error console buttons (copy/copy-all/clear no longer close the panel) + the shield permissions (removable).
-- The task-list X (hover + delete) + the subtle timestamps + the inline run-status (at the bottom of the conversation).
-- The model lists (data-driven from the llm-prices table) + the pricing (cost tracking + spending limits).
-- The settings switches (one shared `<switch-toggle>` — the hand-rolled collision) + the hooks matching permissions.
-- The mic (the permission requested before recognition; the utterance space-join).
-
-### Security
-- The generative-UI sandbox escape (pre-CSP, self-navigation, meta-refresh) closed.
-- The named-agent avatar credential leak (a non-Gemini key never reaches Google) fixed.
-- The hook recursion terminated + the scoped runs made side-effect-free + the deny-list race closed.
-
-
-## [0.2.0] — 2026-08-16
-### Added
-- The component design system (15+ Web Components) + the component gallery on GitHub Pages.
-- The master hub management tool suite (16 tools) + artifacts system + master skill + pluggable skills.
-- The unified conversational surface (<agent-conversation> with rich message rendering: styled code blocks, structured tool cards, thinking traces).
-- Distinct task threads (auto-named, fullscreen continue, per-thread persistence) + the task sidebar.
-- The hooks system (the full chrome.* on* event catalog) + the owner-only authoritative deny-list.
-- The 27 prompt-in-a-box recipes + background agents (the Sorting Hat) with the base-select picker.
-- The error console + the security shield (co-do-inspired transparency).
-- Provider "Test connection" buttons (all 7 providers).
-- The impeccable design system (paper + petrol-teal, PRODUCT.md + DESIGN.md).
-
-### Security
-- All-optional permissions (manifest permissions = []) + no debugger permission.
-- The apiKey-leak fix (redactSecrets — credentials never reach the model prompt/journal).
-- 27 rounds of independent security/correctness review (sol).
-
-
-## [0.1.0] — 2026-08-15
-- Initial scaffold + the multi-agent hub.
+- Added the System Prompt Editor in Settings to customize agent instructions.
