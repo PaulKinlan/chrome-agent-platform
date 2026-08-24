@@ -468,6 +468,49 @@ export function isExactRetainedTouchCreateTuple(fd, dirflags, oflags, rightsBase
   );
 }
 
+/** R10 (CAP-FB-20260823-R10-SQLITE-ALIAS-PROFILE-01): the sqlite DB-open
+ * profiles. Two frozen whole-tuple opens (read + write) on the fd3 `.` preopen
+ * with the `workspace/<name>` path aliased to `scratch/<name>`; the enormous
+ * requested base/inheriting are masked to the scratch class (read 0x200026 /
+ * write 0x600066) and the inheriting projected to 0. FD_SYNC is NOT granted
+ * here (R11). */
+export const SQLITE_DB_OPEN_PROFILE = Object.freeze({
+  fd: 3,
+  dirflags: 0,
+  fdflags: 0,
+  inheriting: 0xffffffffffffn,
+  readOflags: 0,
+  readBase: 0xffffffbffeben,
+  readProjection: PATH_CLASS_RIGHTS.inputs.rights, // 0x200026
+  writeOflags: WASI_OFLAGS.CREAT,
+  writeBase: 0xffffffffffffn,
+  writeProjection: PATH_CLASS_RIGHTS.scratch.rights, // 0x600066
+});
+
+/** Whole-tuple boolean recognizers (no per-field oracle); a near-miss falls
+ * through to the generic FILE branch byte-for-byte. */
+export function isExactSqliteDbReadOpenTuple(fd, dirflags, oflags, rightsBase, rightsInheriting, fdflags) {
+  return (
+    fd === SQLITE_DB_OPEN_PROFILE.fd &&
+    dirflags === SQLITE_DB_OPEN_PROFILE.dirflags &&
+    oflags === SQLITE_DB_OPEN_PROFILE.readOflags &&
+    rightsBase === SQLITE_DB_OPEN_PROFILE.readBase &&
+    rightsInheriting === SQLITE_DB_OPEN_PROFILE.inheriting &&
+    fdflags === SQLITE_DB_OPEN_PROFILE.fdflags
+  );
+}
+
+export function isExactSqliteDbWriteOpenTuple(fd, dirflags, oflags, rightsBase, rightsInheriting, fdflags) {
+  return (
+    fd === SQLITE_DB_OPEN_PROFILE.fd &&
+    dirflags === SQLITE_DB_OPEN_PROFILE.dirflags &&
+    oflags === SQLITE_DB_OPEN_PROFILE.writeOflags &&
+    rightsBase === SQLITE_DB_OPEN_PROFILE.writeBase &&
+    rightsInheriting === SQLITE_DB_OPEN_PROFILE.inheriting &&
+    fdflags === SQLITE_DB_OPEN_PROFILE.fdflags
+  );
+}
+
 export const WASI_READDIR_LIMITS = Object.freeze({
   maxEntries: 4096,
   maxNameBytes: 255,
@@ -866,6 +909,45 @@ export function createWasiPreview1Runtime({
       path: text,
       root: parts[0],
       policy: PATH_CLASS_RIGHTS[parts[0]],
+    });
+  }
+
+  // R10: the sqlite workspace→scratch alias decoder. The exact leading
+  // `workspace/` prefix is rewritten to `scratch/` BEFORE the class check; any
+  // other root (inputs/output/absolute/backslash/NUL) fails closed. The
+  // dir-sync `workspace` open (no slash) → EPERM, the tolerated-nonfatal path.
+  function decodeSqliteDbPath(pointer, length) {
+    const bytes = readBytes(pointer, length);
+    if (
+      bytes.byteLength === 0 ||
+      bytes.byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_BYTES
+    ) fault(WASI_ERRNO.ENAMETOOLONG);
+    let text;
+    try {
+      text = decoder.decode(bytes);
+    } catch {
+      fault(WASI_ERRNO.EINVAL);
+    }
+    if (
+      text.includes("\0") || text.includes("\\") || text.startsWith("/") ||
+      text.endsWith("/") || !text.startsWith("workspace/")
+    ) fault(WASI_ERRNO.EPERM);
+    const aliased = `scratch/${text.slice("workspace/".length)}`;
+    const parts = aliased.split("/");
+    for (const part of parts) {
+      const encoded = encoder.encode(part);
+      if (!part || part === "." || part === "..") fault(WASI_ERRNO.EPERM);
+      if (encoded.byteLength > WASI_HOST_HARD_LIMITS.MAX_PATH_SEGMENT_BYTES) {
+        fault(WASI_ERRNO.ENAMETOOLONG);
+      }
+      for (const byte of encoded) {
+        if (byte < 0x20 || byte === 0x7f) fault(WASI_ERRNO.EINVAL);
+      }
+    }
+    return Object.freeze({
+      path: aliased,
+      root: "scratch",
+      policy: PATH_CLASS_RIGHTS.scratch,
     });
   }
 
@@ -1332,6 +1414,66 @@ export function createWasiPreview1Runtime({
           }
           throw error;
         }
+      }
+      // R10 (CAP-FB-20260823-R10-SQLITE-ALIAS-PROFILE-01): the sqlite DB-open
+      // profiles. A full scalar match + the workspace/<name> path applies the
+      // workspace→scratch alias + the mask-to-policy projection (read 0x200026 /
+      // write 0x600066, inheriting 0). A near-miss falls through byte-for-byte.
+      if (
+        isExactSqliteDbReadOpenTuple(fdValue, dirflags, oflags, rightsBase, rightsInheriting, fdflags) ||
+        isExactSqliteDbWriteOpenTuple(fdValue, dirflags, oflags, rightsBase, rightsInheriting, fdflags)
+      ) {
+        const writeProfile = oflags === SQLITE_DB_OPEN_PROFILE.writeOflags;
+        const resolved = decodeSqliteDbPath(pathPtr, pathLength);
+        span(openedFdPtr, 4);
+        const fd = allocateFd();
+        const projectedBase = writeProfile
+          ? SQLITE_DB_OPEN_PROFILE.writeProjection
+          : SQLITE_DB_OPEN_PROFILE.readProjection;
+        let handle;
+        try {
+          handle = syncResult(workspace.open(
+            resolved.path,
+            Object.freeze({
+              read: true,
+              write: writeProfile,
+              create: writeProfile,
+              exclusive: false,
+              truncate: false,
+              append: false,
+            }),
+          ));
+          if (!validHandle(handle)) fault(WASI_ERRNO.EIO);
+          const stat = validateStat(syncResult(handle.stat()));
+          if (stat.type !== "file") fault(WASI_ERRNO.EISDIR);
+          putFd({
+            fd,
+            kind: FD_KIND.FILE,
+            filetype: WASI_FILETYPE.REGULAR_FILE,
+            flags: 0,
+            rights: projectedBase,
+            rightsInheriting: 0n,
+            offset: 0n,
+            path: resolved.path,
+            handle,
+          });
+          writeU32(openedFdPtr, fd);
+        } catch (error) {
+          const record = fds.get(fd);
+          let closeOk = true;
+          try {
+            if (handle && typeof handle.close === "function") {
+              syncResult(handle.close());
+            }
+          } catch {
+            closeOk = false;
+          }
+          if (closeOk && (record === undefined || record.handle === handle)) {
+            recycleDynamicFd(fd, record);
+          }
+          throw error;
+        }
+        return WASI_ERRNO.SUCCESS;
       }
       if (rightsInheriting !== 0n) fault(WASI_ERRNO.ENOTCAPABLE);
       const resolved = decodePath(pathPtr, pathLength);

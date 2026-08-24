@@ -24,12 +24,15 @@ import {
 import {
   createWasiPreview1Runtime,
   isExactRetainedTouchCreateTuple,
+  isExactSqliteDbReadOpenTuple,
+  isExactSqliteDbWriteOpenTuple,
   planFdReaddir,
   planFdFilestatSetSize,
   planFileOpenDirflags,
   planPathFilestatLookup,
   planPathFilestatSetTimes,
   RETAINED_TOUCH_CREATE_PROFILE,
+  SQLITE_DB_OPEN_PROFILE,
   REBUILT_TOOL_COUNT,
   REBUILT_WASI_IMPORTS,
   revalidateAuditedMemory,
@@ -2023,4 +2026,63 @@ Deno.test("R7 near-miss: fd3 / TRUNC / EXCL fall through to the generic FILE bra
   // CREAT|EXCL (oflags 5) — a near-miss → the generic branch
   assertEquals(h.wasi.path_open(4, 1, pathPtr, len, WASI_OFLAGS.CREAT | WASI_OFLAGS.EXCL, RETAINED_TOUCH_CREATE_PROFILE.requestedBase, RETAINED_TOUCH_CREATE_PROFILE.requestedInheriting, WASI_FDFLAGS.APPEND, openedPtr), WASI_ERRNO.ENOTCAPABLE);
   assertEquals(h.workspace.files.has("scratch/touched"), false, "no scratch file was created by the near-misses");
+});
+
+// ── R10 sqlite DB-open profiles (CAP-FB-20260823-R10-SQLITE-ALIAS-PROFILE-01) ─
+Deno.test("R10 recognizers: exact read/write tuples true; every one-field near-miss false", () => {
+  const P = SQLITE_DB_OPEN_PROFILE;
+  assert(isExactSqliteDbReadOpenTuple(3, 0, 0, P.readBase, P.inheriting, 0), "read tuple matches");
+  assert(isExactSqliteDbWriteOpenTuple(3, 0, WASI_OFLAGS.CREAT, P.writeBase, P.inheriting, 0), "write tuple matches");
+  // one-field near-misses (read)
+  assert(!isExactSqliteDbReadOpenTuple(4, 0, 0, P.readBase, P.inheriting, 0), "fd4");
+  assert(!isExactSqliteDbReadOpenTuple(3, 1, 0, P.readBase, P.inheriting, 0), "dirflags1");
+  assert(!isExactSqliteDbReadOpenTuple(3, 0, WASI_OFLAGS.CREAT, P.readBase, P.inheriting, 0), "read+CREAT");
+  assert(!isExactSqliteDbReadOpenTuple(3, 0, 0, P.writeBase, P.inheriting, 0), "base=write");
+  assert(!isExactSqliteDbReadOpenTuple(3, 0, 0, P.readBase, 0n, 0), "inh0");
+  assert(!isExactSqliteDbReadOpenTuple(3, 0, 0, P.readBase, P.inheriting, WASI_FDFLAGS.APPEND), "fdflags APPEND");
+  // one-field near-misses (write)
+  assert(!isExactSqliteDbWriteOpenTuple(3, 0, 0, P.writeBase, P.inheriting, 0), "write+oflags0");
+  assert(!isExactSqliteDbWriteOpenTuple(3, 0, WASI_OFLAGS.CREAT, P.readBase, P.inheriting, 0), "write+readBase");
+});
+
+Deno.test("R10 syscall: read/write projections are masked scratch rights with inheriting 0 and the workspace→scratch alias", () => {
+  const h = harness();
+  h.workspace.files.set("scratch/test.db", { type: "file", bytes: enc.encode("sqlite") });
+  // read open: workspace/test.db → scratch/test.db, projected 0x200026.
+  const rp = 2000;
+  const rlen = putPath(h.memory, rp, "workspace/test.db");
+  const rErrno = h.wasi.path_open(3, 0, rp, rlen, 0, SQLITE_DB_OPEN_PROFILE.readBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3000);
+  assertEquals(rErrno, WASI_ERRNO.SUCCESS);
+  const rfd = h.memory.u32(3000);
+  assertEquals(h.wasi.fd_fdstat_get(rfd, 3200), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(3200 + 8), SQLITE_DB_OPEN_PROFILE.readProjection, "read projection 0x200026");
+  assertEquals(h.memory.u64(3200 + 16), 0n, "read inheriting 0");
+  assertEquals(h.wasi.fd_close(rfd), WASI_ERRNO.SUCCESS);
+  // write open: workspace/fresh.db → scratch/fresh.db, projected 0x600066 (create).
+  const wp = 2100;
+  const wlen = putPath(h.memory, wp, "workspace/fresh.db");
+  const wErrno = h.wasi.path_open(3, 0, wp, wlen, WASI_OFLAGS.CREAT, SQLITE_DB_OPEN_PROFILE.writeBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, 3100);
+  assertEquals(wErrno, WASI_ERRNO.SUCCESS);
+  const wfd = h.memory.u32(3100);
+  assertEquals(h.wasi.fd_fdstat_get(wfd, 3264), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(3264 + 8), SQLITE_DB_OPEN_PROFILE.writeProjection, "write projection 0x600066");
+  assertEquals(h.memory.u64(3264 + 16), 0n, "write inheriting 0");
+  assertEquals(h.workspace.files.has("scratch/fresh.db"), true, "the aliased scratch DB was created");
+  assertEquals(h.wasi.fd_close(wfd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R10 near-miss: fd4/non-workspace path/oflags±bit fall through to the generic branch; no alias applies", () => {
+  const h = harness();
+  h.workspace.files.set("scratch/test.db", { type: "file", bytes: enc.encode("sqlite") });
+  const openedPtr = 3000;
+  // fd4 (the /job preopen) — not the fd3 `.` tuple → the generic branch
+  const p1 = 2000; const l1 = putPath(h.memory, p1, "workspace/test.db");
+  assertEquals(h.wasi.path_open(4, 0, p1, l1, 0, SQLITE_DB_OPEN_PROFILE.readBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, openedPtr), WASI_ERRNO.ENOTCAPABLE);
+  // non-workspace path (a scalar match but the path is not workspace/…) → EPERM
+  const p2 = 2000; const l2 = putPath(h.memory, p2, "inputs/test.db");
+  assertEquals(h.wasi.path_open(3, 0, p2, l2, 0, SQLITE_DB_OPEN_PROFILE.readBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, openedPtr), WASI_ERRNO.EPERM);
+  // the dir-sync "workspace" open (no slash) → EPERM (tolerated-nonfatal)
+  const p3 = 2000; const l3 = putPath(h.memory, p3, "workspace");
+  assertEquals(h.wasi.path_open(3, 0, p3, l3, 0, SQLITE_DB_OPEN_PROFILE.readBase, SQLITE_DB_OPEN_PROFILE.inheriting, 0, openedPtr), WASI_ERRNO.EPERM);
+  assertEquals(h.workspace.files.has("scratch/test.db"), true, "the existing scratch DB is untouched");
 });
