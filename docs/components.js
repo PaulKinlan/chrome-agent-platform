@@ -2519,8 +2519,46 @@ export function buildToolCardDom({ name, status, args, result, detail, duration,
   };
 
   addBlock("inputs", args);
-  if (result != null && result !== "") addBlock("result", result);
-  if (detail != null && detail !== "") addBlock("detail", detail);
+
+  const resultParsed = result != null && result !== "" ? safeParse(result) : null;
+  const detailParsed = detail != null && detail !== "" ? safeParse(detail) : null;
+
+  if (resultParsed && resultParsed.kind === "json") {
+    // result itself is structured JSON -> render as "result" tree block
+    const tree = buildTree(resultParsed.value);
+    if (tree.rows.length >= 1) {
+      body.appendChild(buildToolTreeBlock("result", resultParsed.value, tree.rows, tree.maxNodes, expandedState));
+    } else {
+      const div = document.createElement("div");
+      div.className = "tool-plain tool-plain-result";
+      div.textContent = String(resultParsed.value ?? result ?? "");
+      body.appendChild(div);
+    }
+    if (detail != null && detail !== "" && detail !== result) {
+      addBlock("detail", detail);
+    }
+  } else if (detailParsed && detailParsed.kind === "json") {
+    // detail is structured JSON and result is a readable summary text
+    if (result != null && result !== "") {
+      const div = document.createElement("div");
+      div.className = "tool-plain tool-plain-summary";
+      div.textContent = String(resultParsed?.value ?? result ?? "");
+      body.appendChild(div);
+    }
+    const tree = buildTree(detailParsed.value);
+    if (tree.rows.length >= 1) {
+      body.appendChild(buildToolTreeBlock("result", detailParsed.value, tree.rows, tree.maxNodes, expandedState));
+    } else {
+      const div = document.createElement("div");
+      div.className = "tool-plain tool-plain-result";
+      div.textContent = String(detailParsed.value ?? detail ?? "");
+      body.appendChild(div);
+    }
+  } else {
+    // Neither is JSON -> honest plain text fallback
+    if (result != null && result !== "") addBlock("result", result);
+    if (detail != null && detail !== "" && detail !== result) addBlock("detail", detail);
+  }
   card.appendChild(body);
   return card;
 }
@@ -2671,35 +2709,38 @@ class MessageBubble extends Component {
       const result = this.getAttribute("tool-result");
       const detail = this.getAttribute("tool-detail");
       // The generative-UI tools (generate_ui / create_asset with type html)
-      // render their HTML LIVE in the sandboxed double-iframe, inline.
+      // or ANY tool outputting an HTML document render their HTML LIVE in the
+      // sandboxed double-iframe, inline.
       let genHtml = null, genName = null;
+      const checkCandidate = (cand) => {
+        if (cand == null) return;
+        try {
+          const parsed = typeof cand === "string" ? JSON.parse(cand) : cand;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            if (typeof parsed.name === "string" && !genName) genName = parsed.name;
+            if (typeof parsed.html === "string") genHtml = parsed.html;
+            else if (parsed.type === "html" && typeof parsed.content === "string") genHtml = parsed.content;
+            else if (parsed.asset && typeof parsed.asset === "object") {
+              if (typeof parsed.asset.name === "string" && !genName) genName = parsed.asset.name;
+              if (typeof parsed.asset.content === "string") genHtml = parsed.asset.content;
+            } else if (typeof parsed.content === "string" && isHtmlDocument(parsed.content)) {
+              genHtml = parsed.content;
+            } else if (typeof parsed.result === "string" && isHtmlDocument(parsed.result)) {
+              genHtml = parsed.result;
+            }
+          }
+        } catch { /* may be raw HTML */ }
+        if (genHtml == null && isHtmlDocument(cand)) genHtml = cand;
+      };
+
       if (name === "generate_ui" || name === "create_asset" || name === "update_asset") {
-        if (args != null) {
-          try {
-            const parsed = typeof args === "string" ? JSON.parse(args) : args;
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              if (typeof parsed.name === "string") genName = parsed.name;
-              if (typeof parsed.html === "string") genHtml = parsed.html;
-              else if (parsed.type === "html" && typeof parsed.content === "string") genHtml = parsed.content;
-              else if (typeof parsed.content === "string" && isHtmlDocument(parsed.content)) genHtml = parsed.content;
-            }
-          } catch { /* args may be raw HTML */ }
-          if (genHtml == null && isHtmlDocument(args)) genHtml = args;
-        }
-        if (genHtml == null && result != null) {
-          try {
-            const parsedRes = typeof result === "string" ? JSON.parse(result) : result;
-            if (parsedRes && typeof parsedRes === "object" && !Array.isArray(parsedRes)) {
-              if (typeof parsedRes.html === "string") genHtml = parsedRes.html;
-              else if (parsedRes.type === "html" && typeof parsedRes.content === "string") genHtml = parsedRes.content;
-              else if (parsedRes.asset && typeof parsedRes.asset === "object") {
-                if (typeof parsedRes.asset.name === "string" && !genName) genName = parsedRes.asset.name;
-                if (typeof parsedRes.asset.content === "string") genHtml = parsedRes.asset.content;
-              }
-            }
-          } catch { /* result may be raw HTML */ }
-          if (genHtml == null && isHtmlDocument(result)) genHtml = result;
-        }
+        if (args != null) checkCandidate(args);
+        if (genHtml == null && result != null) checkCandidate(result);
+        if (genHtml == null && detail != null) checkCandidate(detail);
+      } else {
+        if (result != null) checkCandidate(result);
+        if (genHtml == null && detail != null) checkCandidate(detail);
+        if (genHtml == null && args != null) checkCandidate(args);
       }
       if (genHtml != null && (isHtmlDocument(genHtml) || name === "generate_ui")) {
         const rawPayload = [
