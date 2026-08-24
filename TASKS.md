@@ -597,14 +597,14 @@ On resume after a coordinator or worker loss:
   visible but compact); and when the dialog scroll reaches the bottom it must
   NOT pass through to the page behind (block scroll chaining)
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@dc32bcb105d388ae8fd1a439b0a1c2ac03ad66c0` (0.2.215)
 - Acceptance: create-agent dialog shows the full focused input without
   clipping; Create/Cancel are in a fixed footer outside the scrollable body;
   the skills section collapses/compresses to keep the footer visible; dialog
