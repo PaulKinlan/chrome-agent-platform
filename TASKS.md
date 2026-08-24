@@ -4045,14 +4045,14 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 
 - Feedback: 2026-08-24 — product owner: "When you delete an agent from the agent dialog, it should take you to the base ntp page; right now it keeps you in a dead 'task / agent view'." Follow-up to the owner-facing agent deletion landed at 0.2.243 (CAP-FB-20260824-AGENT-DELETION-OWNER-01).
 - Updated: 2026-08-24 22:05 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `627a32f`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@deb06a5242f4b6bdc9c7f439bac12e249b695571` (0.2.247)
 - Acceptance: after a successful agent deletion (named/background/site) from any surface (NTP agent dialog/edit modal, side panel, Settings), the UI navigates the owner back to the base NTP / agents list — never leaving them in a task/agent view whose agent no longer exists. The deleted agent is gone from all lists. If the owner was viewing the deleted agent's task/conversation, that view is closed/redirected to the base. Deny/cancel (no deletion) leaves the current view unchanged.
 - Review: pending independent review
 - Gates: delete-from-agent-view returns to base NTP; deleted agent absent from lists; deny/cancel stays put; no dead-view state after delete
@@ -4060,6 +4060,8 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - Next: after each successful delete, navigate to the base NTP/agents view
 - Recover: `git grep -n "delete-agent\|agent-delete\|deleteNamedAgent\|openView" -- extension/ntp extension/sidepanel extension/options`
 - History:
+  - 2026-08-24 22:18 UTC — LANDED at 0.2.247. Root cause: the NTP delete success path called showMainHub() which was defined NOWHERE (ReferenceError stranded the owner on the dead agent view). Fix: pushState("#") + hideThreadView({fromNavigation:true,focusAfter:composer}) → base hub, composer focused, agent lists re-render; sidepanel closeAgentDetail + options in-place update; deny/cancel keeps the view. Review PASS (k3 c7ecad3c), 1531/1531.
+
   - 2026-08-24 22:05 UTC — captured from product-owner feedback on the 0.2.243 agent-deletion landing.
 
 ## [CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01] Agent role/description is truncated to 200 chars on save — detailed roles are destroyed
