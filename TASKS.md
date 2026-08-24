@@ -4026,7 +4026,7 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 
 - Feedback: 2026-08-24 — product owner console error: `Uncaught TypeError: Cannot read properties of undefined (reading 'startTime') at et.reportAllChanges (<anonymous>:2:19429) ... n.timeout ... requestIdleCallback ...`. A minified web-vitals-style performance reporter (reportAllChanges + requestIdleCallback + entry.startTime) crashes when a performance entry is undefined. Not found in extension/ source via grep (reportAllChanges/web-vitals/.startTime absent) — it is injected/bundled somewhere (built dist, a content script, or the usage/performance-recording path). Needs source-tracing then a defensive fix.
 - Updated: 2026-08-24 21:12 UTC
-- Status: OPEN
+- Status: DONE
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
@@ -4041,6 +4041,8 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - Next: trace the minified reporter to its origin (build output / content script / usage path) and add the undefined-entry guard
 - Recover: `git grep -rn "reportAllChanges\|startTime\|PerformanceObserver" -- extension dist` and inspect the built service-worker/offscreen bundles
 - History:
+  - 2026-08-24 23:34 UTC — CLOSED as THIRD-PARTY (not CAP). Pro conclusively identified the emitter: the owner's installed Claude for Chrome extension (fcoeoabgfenejglbffodgkkbkcdhcgfn v1.0.81) bundles the web-vitals library + OpenTelemetry; the exact crash is web-vitals INP longest-interaction attribution reading entries[0].startTime on an EMPTY entries array = known upstream defect GoogleChrome/web-vitals#758. Its content scripts inject into arbitrary pages (incl. file://) → the `<anonymous>:2:19429` frames. Proof of absence from CAP: 0 hits in extension/ source, full git history, freshly built dist bundles, node_modules, demos/docs; plus a live-browser CDP scan of every target (116 scripts parsed) found no needle. Nothing in CAP to fix; no CAP boundary can guard a third-party extension's page-main-world injection. Optional follow-up (separate task if desired): harden CAP pages' own diagnostics against third-party content-script noise.
+
   - 2026-08-24 21:12 UTC — captured from product-owner console stack trace; source not located by initial extension/-source grep (minified/injected), tracing is the first step.
 
 ## [CAP-FB-20260824-AGENT-DELETION-NAVIGATE-01] Deleting an agent must return the owner to the base NTP (not a dead agent view)
