@@ -629,7 +629,7 @@ On resume after a coordinator or worker loss:
   verbose and obtuse; include the actual Unix tool name in both the name and
   the description so they are understandable by people AND by agents
 - Updated: 2026-08-23 22:40 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -637,7 +637,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `e1139dc`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@1576d3548cc3c1ac374c9b4447624f8f72851f6a` (0.2.210)
 - Acceptance: every bundled tool's displayName and description LEAD with the
   actual Unix tool name (e.g. "truncate", "gzip", "md5sum", "toml2json")
   followed by a tight plain-language function; names are concise, not verbose
