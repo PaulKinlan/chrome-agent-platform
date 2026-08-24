@@ -543,14 +543,14 @@ On resume after a coordinator or worker loss:
   should look editable; the edit button looks messy (the agents one is more
   justified, tasks less so)
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P2
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@8155c66abb1cd2cd9985aca4fb3c19f644e96763` (0.2.214)
 - Acceptance: task title is click-to-edit inline with a clear hover affordance
   (editable cursor/outline); the separate edit button is removed from the
   task view; escape cancels, enter/blur commits; agent edit affordance
@@ -569,14 +569,14 @@ On resume after a coordinator or worker loss:
   the "Chrome Agent Platform" heading disappears and the task/agent lists get
   pushed up — the lists should stay in the same location, not shift
 - Updated: 2026-08-23 22:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `4e2b573`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@8155c66abb1cd2cd9985aca4fb3c19f644e96763` (0.2.214)
 - Acceptance: collapsing/expanding the side panel keeps the task/agent lists
   at a stable position; the header collapses gracefully without pushing
   content up; layout transition is smooth and does not jump
