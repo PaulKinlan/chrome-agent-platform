@@ -519,51 +519,158 @@ export function pairToolJournal(entries) {
   return out;
 }
 
-/** The REOPEN projection for a persisted task thread (CAP-FB-20260824-THREAD-REOPEN-RENDER-01):
- * the pure transform behind ntp.js's renderThreadProjection. EVERY persisted
- * non-tool row (user + assistant + error + system) is kept with its role/
- * content/ts, and the tool rows replay as ONE terminal card per call via the
- * pairToolJournal pairing — the merged list is ts-ordered. A reopened task
- * must show the owner's request bubbles AND the assistant's replies exactly
- * as persisted; dropping a non-tool role here hides it from the owner. Pure —
- * unit-tested against the real <agent-conversation> setMessages. */
+/** The REOPEN projection for a persisted task thread (CAP-FB-20260824-THREAD-REOPEN-RENDER-01,
+ * with pre-0.2.237 load-time repair): the pure transform behind ntp.js's
+ * renderThreadProjection. EVERY persisted non-tool row (user + assistant +
+ * error + system) is kept with its role/content/ts, and tool rows replay as
+ * ONE terminal card per call via pairToolJournal.
+ *
+ * Load-time ordering repair: in pre-0.2.237 stored threads, an execution's
+ * post-run tool rows could be appended after its terminal assistant/error row.
+ * This projection groups turns and places tool cards BEFORE their turn's
+ * terminal row, so the terminal renders LAST. Applying this to an already-
+ * correct (post-fix) thread is IDEMPOTENT. Pure — unit-tested against the
+ * real <agent-conversation> setMessages. */
 export function projectThreadMessages(thread) {
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-  const toolRows = pairToolJournal(
-    messages
-      .filter((m) => m.role === "tool")
-      .map((m) => ({
-        type: m.toolStatus === "running" ? "tool-call" : "tool-result",
-        callId: m.toolCallId ?? null,
-        run: null,
-        tool: m.toolName ?? "tool",
-        args: m.toolArgs ?? null,
-        result: m.toolResult ?? null,
-        ok: m.toolOk ?? null,
-        ts: typeof m.ts === "number" ? m.ts : null,
-      })),
+  if (!messages.length) return [];
+
+  // Pair raw tool rows into unified tool cards (one card per callId)
+  const rawTools = messages.filter((m) => m && m.role === "tool");
+  const pairedTools = pairToolJournal(
+    rawTools.map((m) => ({
+      type: m.toolStatus === "running" ? "tool-call" : "tool-result",
+      callId: m.toolCallId ?? null,
+      run: null,
+      tool: m.toolName ?? "tool",
+      args: m.toolArgs ?? null,
+      result: m.toolResult ?? null,
+      ok: m.toolOk ?? null,
+      ts: typeof m.ts === "number" ? m.ts : null,
+      executionId: m.executionId ?? null,
+    })),
   );
-  const toolCards = toolRows.map((t) => ({
-    role: "tool",
-    name: t.tool,
-    status: t.status,
-    args: t.args ?? null,
-    result: t.result ?? null,
-    ts: t.ts ?? null,
-  }));
-  return [
-    ...messages
-      .filter((m) => m.role !== "tool")
-      .map((m) => ({
-        role: m.role,
+
+  const toolCards = pairedTools.map((t) => {
+    const orig = rawTools.find((m) =>
+      (t.callId && m.toolCallId === t.callId) ||
+      (m.toolName === t.tool && (m.toolResult === t.result || m.toolArgs === t.args))
+    );
+    return {
+      role: "tool",
+      name: t.tool,
+      status: t.status,
+      args: t.args ?? null,
+      result: t.result ?? null,
+      ts: t.ts ?? null,
+      executionId: t.executionId ?? orig?.executionId ?? null,
+      callId: t.callId,
+    };
+  });
+
+  const emittedTools = new Set();
+  const turns = [];
+  let currentTurn = { user: null, systems: [], tools: [], terminal: null, execId: null };
+
+  const flushTurn = () => {
+    if (currentTurn.user || currentTurn.systems.length || currentTurn.tools.length || currentTurn.terminal) {
+      turns.push(currentTurn);
+    }
+    currentTurn = { user: null, systems: [], tools: [], terminal: null, execId: null };
+  };
+
+  for (const m of messages) {
+    if (!m || typeof m !== "object") continue;
+    const role = m.role;
+
+    if (role === "user") {
+      if (currentTurn.user || currentTurn.terminal || currentTurn.tools.length) {
+        flushTurn();
+      }
+      currentTurn.user = {
+        role: "user",
+        content: m.content,
+        ts: m.ts ?? null,
+        attachments: Array.isArray(m.attachments) ? m.attachments : (m.attachments ? [m.attachments] : null),
+        executionId: m.executionId ?? null,
+      };
+      if (m.executionId) currentTurn.execId = m.executionId;
+    } else if (role === "system" || role === "thinking") {
+      currentTurn.systems.push({
+        role,
+        content: m.content,
+        ts: m.ts ?? null,
+      });
+    } else if (role === "assistant" || role === "error" || role === "agent") {
+      if (currentTurn.terminal && m.executionId && currentTurn.execId && m.executionId !== currentTurn.execId) {
+        flushTurn();
+      }
+      currentTurn.terminal = {
+        role,
         content: m.content,
         ts: m.ts ?? null,
         reason: m.reason ?? null,
         action: m.action ?? null,
-        attachments: Array.isArray(m.attachments) ? m.attachments : (m.attachments ? [m.attachments] : null),
-      })),
-    ...toolCards,
-  ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+        executionId: m.executionId ?? null,
+      };
+      if (m.executionId) currentTurn.execId = m.executionId;
+    } else if (role === "tool") {
+      const callId = m.toolCallId;
+      const idx = toolCards.findIndex((tc, i) =>
+        !emittedTools.has(i) && (
+          (callId && tc.callId === callId) ||
+          (tc.name === m.toolName && tc.executionId === m.executionId) ||
+          (tc.name === m.toolName)
+        )
+      );
+      if (idx >= 0 && !emittedTools.has(idx)) {
+        currentTurn.tools.push(toolCards[idx]);
+        emittedTools.add(idx);
+        if (toolCards[idx].executionId && !currentTurn.execId) {
+          currentTurn.execId = toolCards[idx].executionId;
+        }
+      }
+    }
+  }
+  flushTurn();
+
+  for (let i = 0; i < toolCards.length; i++) {
+    if (emittedTools.has(i)) continue;
+    const tc = toolCards[i];
+    if (tc.executionId) {
+      const matchTurn = turns.find((t) => t.execId === tc.executionId);
+      if (matchTurn) {
+        matchTurn.tools.push(tc);
+        emittedTools.add(i);
+      }
+    }
+  }
+
+  const remainingTools = [];
+  for (let i = 0; i < toolCards.length; i++) {
+    if (!emittedTools.has(i)) {
+      remainingTools.push(toolCards[i]);
+      emittedTools.add(i);
+    }
+  }
+
+  const output = [];
+  for (const turn of turns) {
+    if (turn.systems.length) output.push(...turn.systems);
+    if (turn.user) output.push(turn.user);
+    if (turn.tools.length) {
+      turn.tools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      output.push(...turn.tools);
+    }
+    if (turn.terminal) output.push(turn.terminal);
+  }
+
+  if (remainingTools.length) {
+    remainingTools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    output.push(...remainingTools);
+  }
+
+  return output;
 }
 
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null }) {
