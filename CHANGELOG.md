@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.221] — 2026-08-24
+- feat(wasi): R7 touch create-profile whole-tuple recognizer — scratch CREAT → FD_WRITE/APPEND (CAP-FB-20260823-R7-TOUCH-CREATE-01)
+
 ## [0.2.220] — 2026-08-24
 - feat(fs-grants): add owner bounded directory listing and digest-pinned file reading (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 3)
 

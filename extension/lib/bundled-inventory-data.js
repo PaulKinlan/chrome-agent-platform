@@ -116,7 +116,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.truncate",
    "version": "1.0.0",
-   "digest": "5b4fd88a0fbab30c43673bcbf1e1d726695dc4972d4af02064a2bc2666b48541"
+   "digest": "958af384205d23f212a2740c933dd9416fb3244a4cb1614b149c47c3ffe68a89"
   },
   {
    "pkg": "cap.bundled.uniq",
@@ -412,8 +412,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.truncate-1.0.0.manifest.json",
-   "sha256": "5b4fd88a0fbab30c43673bcbf1e1d726695dc4972d4af02064a2bc2666b48541",
-   "size": 1784
+   "sha256": "958af384205d23f212a2740c933dd9416fb3244a4cb1614b149c47c3ffe68a89",
+   "size": 1792
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.uniq-1.0.0.manifest.json",

@@ -6771,6 +6771,8 @@ class ToolLibrary extends Component {
         return 'Example: leave args empty for the immutable "/job" default → "1\\t/job/inputs\\n1\\t/job\\n" (read-only deterministic inputs/f.bin seed).';
       case "tree":
         return 'Example: leave args empty for the immutable "/job/inputs" default → a sorted Unicode tree with f.bin and sub/g.txt (read-only nested seed).';
+      case "truncate":
+        return 'Resizes the spec-owned /job/scratch/touched fixture: -s accepts integer bytes or one K/M/G/T suffix (optional +/-, 0..10 MiB) and -c skips the create. Empty stdout — the size change is read back after the run.';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6804,6 +6806,13 @@ class ToolLibrary extends Component {
         const args = mode === "decompress" ? ["-d"] : [];
         const stdin = String(stdinInput?.value ?? "");
         this._emit("tool-preview-request", { toolId, args, stdin, sourceEvent });
+      } else if (toolId === "truncate") {
+        const size = String(this._root.querySelector(".preview-truncate-size")?.value ?? "0").trim() || "0";
+        const noCreate = this._root.querySelector(".preview-truncate-no-create")?.checked === true;
+        const args = noCreate
+          ? ["-c", "-s", size, "/job/scratch/touched"]
+          : ["-s", size, "/job/scratch/touched"];
+        this._emit("tool-preview-request", { toolId, args, stdin: "", sourceEvent });
       } else if (this._isTwoDocument(toolId)) {
         const docA = String(this._root.querySelector(".preview-doc-a")?.value ?? "");
         const docB = String(this._root.querySelector(".preview-doc-b")?.value ?? "");
@@ -6827,22 +6836,26 @@ class ToolLibrary extends Component {
       const argsLabel = this._root.querySelector(".preview-args-label");
       const gzipControls = this._root.querySelector(".preview-gzip-controls");
       const gzipModeSelect = this._root.querySelector(".preview-gzip-mode");
+      const truncateControls = this._root.querySelector(".preview-truncate-controls");
       const stdinLabelText = this._root.querySelector(".preview-stdin-label-text");
       const twoDocMode = this._isTwoDocument(toolId);
       const gzipMode = toolId === "gzip";
+      const truncateMode = toolId === "truncate";
       if (help) help.textContent = this._previewHelp(toolId, String(gzipModeSelect?.value ?? "compress"));
       if (twoDoc) twoDoc.hidden = !twoDocMode;
       if (gzipControls) gzipControls.hidden = !gzipMode;
+      if (truncateControls) truncateControls.hidden = !truncateMode;
       // Two-document mode hides both generic controls. gzip keeps stdin but
-      // replaces free-form argv with its exact native mode select.
-      if (stdinLabel) stdinLabel.hidden = twoDocMode;
+      // replaces free-form argv with its exact native mode select. truncate
+      // replaces both with its spec-owned fixture controls.
+      if (stdinLabel) stdinLabel.hidden = twoDocMode || truncateMode;
       if (stdinInput) {
-        stdinInput.hidden = twoDocMode;
+        stdinInput.hidden = twoDocMode || truncateMode;
         stdinInput.placeholder = gzipMode
           ? (gzipModeSelect?.value === "decompress" ? "H4sI…" : "Enter bounded UTF-8 text")
           : "a,b\n1,2\n3,4";
       }
-      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode;
+      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode || truncateMode;
       if (stdinLabelText) stdinLabelText.textContent = gzipMode
         ? (gzipModeSelect?.value === "decompress" ? "Canonical base64 gzip input" : "UTF-8 text input")
         : "Stdin (bounded)";
@@ -6924,6 +6937,11 @@ class ToolLibrary extends Component {
         font:inherit; font-size:13px; padding:6px 8px; background:var(--panel, #fff); color:var(--text, #24211f); }
       .preview-help { margin:8px 0 0; font-size:12px; color:var(--muted, #625d57); overflow-wrap:anywhere; }
       .preview-gzip-controls { margin-block-start:8px; }
+      .preview-truncate-controls { margin-block-start:8px; }
+      .preview-truncate-note { display:block; margin:4px 0 0; font-size:11px; color:var(--muted, #625d57); }
+      .preview-truncate-no-create-label { display:flex; align-items:center; gap:6px; margin:8px 0 0;
+        font-size:13px; color:var(--text, #24211f); }
+      .preview-truncate-no-create-label input { width:auto; margin:0; }
       .preview-two-doc { margin-top:10px; }
       .preview-doc-label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
       .preview-doc { display:block; width:100%; box-sizing:border-box; margin-top:4px;
@@ -6988,6 +7006,7 @@ class ToolLibrary extends Component {
             <option value="du">du — measure disk usage across directory folders</option>
             <option value="tree">tree — display directory file structures as visual trees</option>
             <option value="gzip">gzip — compress or decompress data streams</option>
+            <option value="truncate">truncate — resize a file to a target size (shrink or extend)</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
@@ -6996,6 +7015,14 @@ class ToolLibrary extends Component {
             <option value="compress">Compress text</option>
             <option value="decompress">Decompress base64</option>
           </select>
+        </label>
+        <label class="preview-truncate-controls" hidden>Size (-s)
+          <input class="preview-truncate-size" type="text" autocomplete="off"
+            placeholder="0" maxlength="16" />
+          <span class="preview-truncate-note">integer bytes or one K/M/G/T suffix, optional +/− (0..10 MiB)</span>
+          <label class="preview-truncate-no-create-label">
+            <input class="preview-truncate-no-create" type="checkbox" /> -c (no-create)
+          </label>
         </label>
         <label class="preview-args-label">Arguments
           <input class="preview-args" type="text" autocomplete="off"

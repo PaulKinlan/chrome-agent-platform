@@ -111,6 +111,8 @@ export const PREVIEW_SPECS = Object.freeze(
             ]) })
             : row.toolId === "stat" || row.toolId === "du"
             ? Object.freeze({ files: Object.freeze([Object.freeze({ path: "inputs/f.bin", bytes: Object.freeze([104, 105]) })]) })
+            : row.toolId === "truncate"
+            ? Object.freeze({ files: Object.freeze([Object.freeze({ path: "scratch/touched", bytes: Object.freeze([]) })]) })
             : Object.freeze({ files: Object.freeze([]) }),
           // Recursive readers alone have immutable safe default operands. They
           // apply only when the owner leaves generic Arguments empty and are
@@ -119,6 +121,8 @@ export const PREVIEW_SPECS = Object.freeze(
             ? { defaultArgs: Object.freeze(["/job"]) }
             : row.toolId === "tree"
             ? { defaultArgs: Object.freeze(["/job/inputs"]) }
+            : row.toolId === "truncate"
+            ? { defaultArgs: Object.freeze(["-s", "0", "/job/scratch/touched"]) }
             : {}),
           argBounds: row.toolId === "diff" || row.toolId === "patch"
             ? TWO_DOCUMENT_BOUNDS

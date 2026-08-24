@@ -829,7 +829,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "file",
   "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. Flag: -s.",
   "caveats": [
-   "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed. Requires future reviewed execution adapter to restrict writes to mutable path classes and enforce traversal and quota fail-closed rules. Not currently executable/admitted."
+   "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed",
+   "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.",
+   "file.read/write is confined to the spec-owned scratch/touched fixture (0..10 MiB); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
    "compute",
@@ -852,9 +854,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.truncate-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.csvtool",

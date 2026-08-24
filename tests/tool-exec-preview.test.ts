@@ -250,9 +250,9 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
   assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "hello" }).toolId, "gzip");
-  // gzip is the sole 23rd tool and remains appended after tree in the UI.
+  // gzip + truncate are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -363,7 +363,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 23 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 24 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -477,10 +477,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 23-tool static allowlist admits gzip only (other 3 unchanged)", () => {
+Deno.test("preview: the EXACT 24-tool static allowlist admits truncate too (other 2 unchanged)", () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -488,8 +488,8 @@ Deno.test("preview: the EXACT 23-tool static allowlist admits gzip only (other 3
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 3, "touch, truncate and sqlite remain disabled");
-  assertEquals(notAdmitted.map((row) => row.toolId).sort(), ["sqlite3_query_bounded", "touch", "truncate"]);
+  assertEquals(notAdmitted.length, 2, "touch and sqlite remain disabled");
+  assertEquals(notAdmitted.map((row) => row.toolId).sort(), ["sqlite3_query_bounded", "touch"]);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);
     assertEquals(JSON.stringify(spec.workspaceSeed), JSON.stringify({ files: [{ path: "inputs/f.bin", bytes: [104, 105] }] }));
@@ -511,10 +511,19 @@ Deno.test("preview: the EXACT 23-tool static allowlist admits gzip only (other 3
   assertEquals(JSON.stringify(treeSpec.defaultArgs), JSON.stringify(["/job/inputs"]), "tree safe default is immutable-spec-controlled");
   assert(Object.isFrozen(treeSpec.defaultArgs), "tree default args are frozen");
   assertEquals(JSON.stringify(treeSpec.acceptedExitCodes), JSON.stringify([0]), "tree accepted exits are exactly [0]");
-  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => !["stat", "du", "tree"].includes(id))) {
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => !["stat", "du", "tree", "truncate"].includes(id))) {
     assertEquals(JSON.stringify(previewSpecFor(toolId).workspaceSeed), JSON.stringify({ files: [] }), `${toolId}: empty immutable seed`);
     assertEquals("defaultArgs" in previewSpecFor(toolId), false, `${toolId}: predecessor receives no new default-arg behavior`);
   }
+  // truncate: the spec-owned scratch/touched empty fixture + the -s default.
+  const truncateSpec = previewSpecFor("truncate");
+  assertEquals(JSON.stringify(truncateSpec.workspaceSeed), JSON.stringify({ files: [{ path: "scratch/touched", bytes: [] }] }), "truncate spec-owned empty fixture");
+  assert(Object.isFrozen(truncateSpec.workspaceSeed) && Object.isFrozen(truncateSpec.workspaceSeed.files) &&
+    Object.isFrozen(truncateSpec.workspaceSeed.files[0]) && Object.isFrozen(truncateSpec.workspaceSeed.files[0].bytes),
+  "truncate trusted seed is deeply frozen");
+  assertEquals(JSON.stringify(truncateSpec.defaultArgs), JSON.stringify(["-s", "0", "/job/scratch/touched"]), "truncate default is the spec-owned fixture resize");
+  assert(Object.isFrozen(truncateSpec.defaultArgs), "truncate default args are frozen");
+  assertEquals(JSON.stringify(truncateSpec.acceptedExitCodes), JSON.stringify([0]), "truncate accepted exits are exactly [0]");
   const tree = BUNDLED_TOOL_PACKAGE_ROWS.find((row) => row.toolId === "tree");
   assertEquals(tree.admitted, true, "tree is admitted only to Settings preview");
   assertEquals(tree.settingsPreview, true);

@@ -201,7 +201,7 @@ Deno.test("gzip retained Worker: malformed header/truncation/deflate/CRC failure
   }
 });
 
-Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED22 with exact 23/3 posture", async () => {
+Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED22 with exact 24/2 posture", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 22, "R6: path_filestat_set_times admitted (the §4 census 21→22)");
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
   const census = new Map();
@@ -214,12 +214,12 @@ Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED22 wit
   }
   assertEquals(census.size, 26);
   const enabled = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
-  assertEquals(enabled.length, 23);
+  assertEquals(enabled.length, 24);
   for (const row of enabled) assertEquals(census.get(row.toolId), [], `${row.toolId}: admitted imports`);
   const disabled = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(disabled.map((row) => row.toolId).sort(), ["sqlite3_query_bounded", "touch", "truncate"]);
-  assertEquals(census.get("touch"), [], "R6: path_filestat_set_times is now SUPPORTED, so touch's missing list is EMPTY — the ADMISSION stays disabled (§8: no admission flip)");
-  assertEquals(census.get("truncate"), [], "R5: fd_filestat_set_size is now SUPPORTED, so truncate's missing list is EMPTY — the ADMISSION stays disabled (§8: no admission flip); §7's 'still lists among its missing until R11' is inoperable against this dynamic census");
+  assertEquals(disabled.map((row) => row.toolId).sort(), ["sqlite3_query_bounded", "touch"]);
+  assertEquals(census.get("touch"), [], "R6: path_filestat_set_times is now SUPPORTED, so touch's missing list is EMPTY — the ADMISSION stays disabled until R9 (§8: no admission flip here)");
+  assertEquals(census.get("truncate"), [], "R5: fd_filestat_set_size is now SUPPORTED, so truncate's missing list is EMPTY — the R8 admission flips the descriptor only (no new import)");
   assertEquals(census.get("sqlite3_query_bounded"), [
     "fd_sync", "path_create_directory",
     "path_readlink", "path_remove_directory", "path_unlink_file", "poll_oneoff",
