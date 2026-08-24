@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.225] — 2026-08-24
+- feat(chrome-tools): add Chrome API Tranche 2 tools (alarms, bookmarks, notifications, idle, contextMenus) (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01)
+
 ## [0.2.224] — 2026-08-24
 - feat(fs-grants): FileSystemObserver watcher (recursive, primary; polling manifest-diff fallback), bounded readwrite-gated writes (5 MiB, digest), bounded recursive scan — completing the persistent local-filesystem feature arc (grants, picker, read/list, re-grant, write/scan/watch), owner-surface only (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 5)
 

@@ -50,6 +50,11 @@ const BROWSER_READ_TOOLS = new Set([
   "list_windows",
   "get_action_state",
   "list_commands",
+  // Tranche-2 Chrome API coverage: alarms, bookmarks, idle, contextMenus reads
+  "list_alarms",
+  "list_bookmarks",
+  "query_idle_state",
+  "list_context_menus",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -115,6 +120,12 @@ const BUILT_IN_TOOLS = new Set([
   // Tranche-1 Chrome API coverage (reads are classified above; ALL are built-ins):
   "list_windows", "get_action_state", "list_commands",
   "create_window", "focus_window", "close_window", "move_window", "set_action_state",
+  // Tranche-2 Chrome API coverage:
+  "create_alarm", "list_alarms", "clear_alarm",
+  "create_bookmark", "list_bookmarks", "remove_bookmark",
+  "notify", "clear_notification",
+  "query_idle_state",
+  "create_context_menu", "list_context_menus", "remove_context_menu",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

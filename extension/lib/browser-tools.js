@@ -209,6 +209,15 @@ async function hasTabsPermission() {
   }
 }
 
+async function hasPermission(perm) {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: [perm] });
+  } catch {
+    return false;
+  }
+}
+
 /** Window-level mutation under the SAME grant discipline as close_tab
  * (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): the window's tab origins
  * are re-read INSIDE the grant lock (a navigation/move since any earlier read
@@ -1185,6 +1194,263 @@ export function browserToolset(readOnly = false) {
         };
       },
     }),
+    // ── Tranche-2 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+    // alarms, bookmarks, notifications, idle, contextMenus (declared optional permissions).
+    create_alarm: tool({
+      description:
+        "Create a scheduled alarm by name with a delay or period in minutes. Requires alarms permission.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(64),
+        delayInMinutes: z.number().min(0.1).max(100000).optional(),
+        periodInMinutes: z.number().min(1).max(100000).optional(),
+        when: z.number().int().min(0).optional(),
+      }).refine((v) => v.delayInMinutes !== undefined || v.periodInMinutes !== undefined || v.when !== undefined, "at least one scheduling field is required"),
+      execute: async ({ name, delayInMinutes, periodInMinutes, when }) => {
+        if (!(await hasPermission("alarms"))) {
+          return { error: "alarms permission not granted — enable Alarms in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — alarm not created" };
+        }
+        const info = {};
+        if (delayInMinutes !== undefined) info.delayInMinutes = delayInMinutes;
+        if (periodInMinutes !== undefined) info.periodInMinutes = periodInMinutes;
+        if (when !== undefined) info.when = when;
+        await chrome.alarms.create(name, info);
+        return { ok: true, name, ...info };
+      },
+    }),
+    list_alarms: tool({
+      description:
+        "List all scheduled extension alarms (name, scheduledTime, periodInMinutes). Requires alarms permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("alarms"))) {
+          return { error: "alarms permission not granted — enable Alarms in Settings" };
+        }
+        const alarms = await chrome.alarms.getAll();
+        return {
+          alarms: (Array.isArray(alarms) ? alarms : []).slice(0, 64).map((a) => ({
+            name: a.name,
+            scheduledTime: a.scheduledTime,
+            periodInMinutes: a.periodInMinutes ?? null,
+          })),
+        };
+      },
+    }),
+    clear_alarm: tool({
+      description:
+        "Clear a scheduled alarm by name. Requires alarms permission.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(64),
+      }),
+      execute: async ({ name }) => {
+        if (!(await hasPermission("alarms"))) {
+          return { error: "alarms permission not granted — enable Alarms in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — alarm not cleared" };
+        }
+        const cleared = await chrome.alarms.clear(name);
+        return { ok: true, name, cleared: cleared === true };
+      },
+    }),
+    create_bookmark: tool({
+      description:
+        "Create a new bookmark or bookmark folder. Requires bookmarks permission.",
+      inputSchema: z.object({
+        title: z.string().min(1).max(256),
+        url: z.string().url().max(2048).optional(),
+        parentId: z.string().max(64).optional(),
+      }),
+      execute: async ({ title, url, parentId }) => {
+        if (!(await hasPermission("bookmarks"))) {
+          return { error: "bookmarks permission not granted — enable Bookmarks in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — bookmark not created" };
+        }
+        const details = { title };
+        if (url !== undefined) details.url = url;
+        if (parentId !== undefined) details.parentId = parentId;
+        const bm = await chrome.bookmarks.create(details);
+        return { ok: true, id: bm.id, title: bm.title, url: bm.url ?? null, parentId: bm.parentId ?? null };
+      },
+    }),
+    list_bookmarks: tool({
+      description:
+        "Search or list browser bookmarks (id, title, url, parentId). Requires bookmarks permission.",
+      inputSchema: z.object({
+        query: z.string().max(128).optional(),
+        parentId: z.string().max(64).optional(),
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ query, parentId, maxResults = 50 }) => {
+        if (!(await hasPermission("bookmarks"))) {
+          return { error: "bookmarks permission not granted — enable Bookmarks in Settings" };
+        }
+        let items = [];
+        if (query) {
+          items = await chrome.bookmarks.search(query);
+        } else if (parentId) {
+          items = await chrome.bookmarks.getChildren(parentId);
+        } else {
+          items = await chrome.bookmarks.getRecent(maxResults);
+        }
+        return {
+          bookmarks: (Array.isArray(items) ? items : []).slice(0, maxResults).map((b) => ({
+            id: b.id,
+            title: b.title,
+            url: b.url ?? null,
+            parentId: b.parentId ?? null,
+            dateAdded: b.dateAdded ?? null,
+          })),
+        };
+      },
+    }),
+    remove_bookmark: tool({
+      description:
+        "Remove a bookmark or bookmark folder by id. Requires bookmarks permission.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+      }),
+      execute: async ({ id }) => {
+        if (!(await hasPermission("bookmarks"))) {
+          return { error: "bookmarks permission not granted — enable Bookmarks in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — bookmark not removed" };
+        }
+        await chrome.bookmarks.remove(id);
+        return { ok: true, id, removed: true };
+      },
+    }),
+    notify: tool({
+      description:
+        "Display a system notification to the user (title, message). Requires notifications permission.",
+      inputSchema: z.object({
+        title: z.string().min(1).max(128),
+        message: z.string().min(1).max(512),
+        iconUrl: z.string().max(2048).optional(),
+        priority: z.number().int().min(0).max(2).optional(),
+      }),
+      execute: async ({ title, message, iconUrl, priority }) => {
+        if (!(await hasPermission("notifications"))) {
+          return { error: "notifications permission not granted — enable Notifications in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — notification not sent" };
+        }
+        const defaultIcon = typeof chrome !== "undefined" && chrome.runtime?.getURL
+          ? chrome.runtime.getURL("icons/icon-128.png")
+          : "";
+        const notificationId = await chrome.notifications.create({
+          type: "basic",
+          iconUrl: iconUrl || defaultIcon,
+          title,
+          message,
+          priority: priority ?? 0,
+        });
+        return { ok: true, notificationId };
+      },
+    }),
+    clear_notification: tool({
+      description:
+        "Clear an active system notification by id. Requires notifications permission.",
+      inputSchema: z.object({
+        notificationId: z.string().min(1).max(128),
+      }),
+      execute: async ({ notificationId }) => {
+        if (!(await hasPermission("notifications"))) {
+          return { error: "notifications permission not granted — enable Notifications in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — notification not cleared" };
+        }
+        const cleared = await chrome.notifications.clear(notificationId);
+        return { ok: true, notificationId, cleared: cleared === true };
+      },
+    }),
+    query_idle_state: tool({
+      description:
+        "Query the system idle state ('active', 'idle', or 'locked') given a detection interval. Requires idle permission.",
+      inputSchema: z.object({
+        detectionIntervalInSeconds: z.number().int().min(15).max(7200).optional(),
+      }),
+      execute: async ({ detectionIntervalInSeconds = 60 }) => {
+        if (!(await hasPermission("idle"))) {
+          return { error: "idle permission not granted — enable Idle in Settings" };
+        }
+        const state = await chrome.idle.queryState(detectionIntervalInSeconds);
+        return { ok: true, state, detectionIntervalInSeconds };
+      },
+    }),
+    create_context_menu: tool({
+      description:
+        "Create an extension context menu item. Requires contextMenus permission.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        title: z.string().min(1).max(128),
+        contexts: z.array(z.enum(["all", "page", "frame", "selection", "link", "editable", "image", "video", "audio", "launcher", "browser_action", "page_action", "action"])).max(8).optional(),
+        parentId: z.string().max(64).optional(),
+      }),
+      execute: async ({ id, title, contexts, parentId }) => {
+        if (!(await hasPermission("contextMenus"))) {
+          return { error: "contextMenus permission not granted — enable Context menus in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — context menu not created" };
+        }
+        const props = { id, title, contexts: contexts || ["all"] };
+        if (parentId !== undefined) props.parentId = parentId;
+        await chrome.contextMenus.create(props);
+        return { ok: true, id, title };
+      },
+    }),
+    list_context_menus: tool({
+      description:
+        "Check context menu support state. Requires contextMenus permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("contextMenus"))) {
+          return { error: "contextMenus permission not granted — enable Context menus in Settings" };
+        }
+        return { ok: true, supported: true };
+      },
+    }),
+    remove_context_menu: tool({
+      description:
+        "Remove an extension context menu item by id. Requires contextMenus permission.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+      }),
+      execute: async ({ id }) => {
+        if (!(await hasPermission("contextMenus"))) {
+          return { error: "contextMenus permission not granted — enable Context menus in Settings" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — context menu not removed" };
+        }
+        await chrome.contextMenus.remove(id);
+        return { ok: true, id, removed: true };
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -1199,6 +1465,10 @@ export function browserToolset(readOnly = false) {
       list_windows: all.list_windows,
       get_action_state: all.get_action_state,
       list_commands: all.list_commands,
+      list_alarms: all.list_alarms,
+      list_bookmarks: all.list_bookmarks,
+      query_idle_state: all.query_idle_state,
+      list_context_menus: all.list_context_menus,
     };
   }
   return all;

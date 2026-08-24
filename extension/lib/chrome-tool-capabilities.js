@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 17,
+  browserTools: 29,
   managementTools: 29,
-  totalTools: 46,
+  totalTools: 58,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -33,6 +33,18 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "set_action_state",
   "get_action_state",
   "list_commands",
+  "create_alarm",
+  "list_alarms",
+  "clear_alarm",
+  "create_bookmark",
+  "list_bookmarks",
+  "remove_bookmark",
+  "notify",
+  "clear_notification",
+  "query_idle_state",
+  "create_context_menu",
+  "list_context_menus",
+  "remove_context_menu",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -135,6 +147,21 @@ const rows = [
   record("set_action_state", "chrome-api", ["chrome.action.set"], [], "none", "mutating", false, "mutating", "browser.action"),
   record("get_action_state", "chrome-api", ["chrome.action.get"], [], "none", "read-only", false, "read", "browser.action"),
   record("list_commands", "chrome-api", ["chrome.commands.list"], [], "none", "read-only", false, "read", "browser.commands"),
+
+  // Tranche-2 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // alarms, bookmarks, notifications, idle, contextMenus (declared optional permissions).
+  record("create_alarm", "chrome-api", ["chrome.alarms.create"], ["alarms"], "none", "mutating", false, "mutating", "browser.alarms"),
+  record("list_alarms", "chrome-api", ["chrome.alarms.list"], ["alarms"], "none", "read-only", false, "read", "browser.alarms"),
+  record("clear_alarm", "chrome-api", ["chrome.alarms.clear"], ["alarms"], "none", "mutating", false, "mutating", "browser.alarms"),
+  record("create_bookmark", "chrome-api", ["chrome.bookmarks.create"], ["bookmarks"], "none", "mutating", false, "mutating", "browser.bookmarks"),
+  record("list_bookmarks", "chrome-api", ["chrome.bookmarks.list"], ["bookmarks"], "none", "read-only", false, "read", "browser.bookmarks"),
+  record("remove_bookmark", "chrome-api", ["chrome.bookmarks.remove"], ["bookmarks"], "none", "mutating", false, "mutating", "browser.bookmarks"),
+  record("notify", "chrome-api", ["chrome.notifications.create"], ["notifications"], "none", "mutating", false, "mutating", "browser.notifications"),
+  record("clear_notification", "chrome-api", ["chrome.notifications.clear"], ["notifications"], "none", "mutating", false, "mutating", "browser.notifications"),
+  record("query_idle_state", "chrome-api", ["chrome.idle.query"], ["idle"], "none", "read-only", false, "read", "browser.idle"),
+  record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
+  record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", false, "read", "browser.context-menus"),
+  record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),
