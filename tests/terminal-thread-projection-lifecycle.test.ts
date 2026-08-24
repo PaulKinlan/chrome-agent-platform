@@ -141,5 +141,5 @@ Deno.test("terminal thread projection: authoritative replacement leaves exactly 
 
   const source = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   assertStringIncludes(source, "terminalThreadProjectionLifecycle.onRunSnapshot(snapshot)");
-  assertStringIncludes(source, "threadConversation.setMessages?.(rendered)");
+  assertStringIncludes(source, "threadConversation.setMessages?.(projectThreadMessages(thread))");
 });

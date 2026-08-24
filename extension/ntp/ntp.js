@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, renderRunTranscript } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult } from "../lib/tool-summary.js";
 import { safeJsonStringify } from "../shared/tool-tree.js";
@@ -1029,46 +1029,13 @@ let threadProjectionGeneration = 0;
 function renderThreadProjection(thread, owner = runSurfaceOwner.current()) {
   threadTitle.textContent = thread?.name || "Task";
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-  // The thread's TOOL rows (persisted by the SW with callId + ok) replay as
-  // ONE TERMINAL card per call via the same pairing the journal surfaces use —
-  // a reopened or terminally reconciled thread replaces the projection and
-  // therefore restores each durable result exactly once.
-  const toolRows = pairToolJournal(
-    messages
-      .filter((m) => m.role === "tool")
-      .map((m) => ({
-        type: m.toolStatus === "running" ? "tool-call" : "tool-result",
-        callId: m.toolCallId ?? null,
-        run: null,
-        tool: m.toolName ?? "tool",
-        args: m.toolArgs ?? null,
-        result: m.toolResult ?? null,
-        ok: m.toolOk ?? null,
-        ts: typeof m.ts === "number" ? m.ts : null,
-      })),
-  );
-  const toolCards = toolRows.map((t) => ({
-    role: "tool",
-    name: t.tool,
-    status: t.status,
-    args: t.args ?? null,
-    result: t.result ?? null,
-    ts: t.ts ?? null,
-  }));
-  const rendered = [
-    ...messages
-      .filter((m) => m.role !== "tool")
-      .map((m) => ({
-        role: m.role,
-        content: m.content,
-        ts: m.ts ?? null,
-        reason: m.reason ?? null,
-        action: m.action ?? null,
-        attachments: Array.isArray(m.attachments) ? m.attachments : (m.attachments ? [m.attachments] : null),
-      })),
-    ...toolCards,
-  ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-  threadConversation.setMessages?.(rendered);
+  // The projection transform is the PURE, unit-tested projectThreadMessages
+  // (shared/conversation.js): every persisted user/assistant row renders, and
+  // the tool rows replay as ONE TERMINAL card per call via the same pairing
+  // the journal surfaces use — a reopened or terminally reconciled thread
+  // replaces the projection and therefore restores each durable result
+  // exactly once.
+  threadConversation.setMessages?.(projectThreadMessages(thread));
   if (typeof thread?.id === "string" && thread.id && owner != null) {
     recordAuthoritativeThreadProjection(threadConversation, {
       threadId: thread.id,

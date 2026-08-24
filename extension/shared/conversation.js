@@ -519,6 +519,53 @@ export function pairToolJournal(entries) {
   return out;
 }
 
+/** The REOPEN projection for a persisted task thread (CAP-FB-20260824-THREAD-REOPEN-RENDER-01):
+ * the pure transform behind ntp.js's renderThreadProjection. EVERY persisted
+ * non-tool row (user + assistant + error + system) is kept with its role/
+ * content/ts, and the tool rows replay as ONE terminal card per call via the
+ * pairToolJournal pairing — the merged list is ts-ordered. A reopened task
+ * must show the owner's request bubbles AND the assistant's replies exactly
+ * as persisted; dropping a non-tool role here hides it from the owner. Pure —
+ * unit-tested against the real <agent-conversation> setMessages. */
+export function projectThreadMessages(thread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  const toolRows = pairToolJournal(
+    messages
+      .filter((m) => m.role === "tool")
+      .map((m) => ({
+        type: m.toolStatus === "running" ? "tool-call" : "tool-result",
+        callId: m.toolCallId ?? null,
+        run: null,
+        tool: m.toolName ?? "tool",
+        args: m.toolArgs ?? null,
+        result: m.toolResult ?? null,
+        ok: m.toolOk ?? null,
+        ts: typeof m.ts === "number" ? m.ts : null,
+      })),
+  );
+  const toolCards = toolRows.map((t) => ({
+    role: "tool",
+    name: t.tool,
+    status: t.status,
+    args: t.args ?? null,
+    result: t.result ?? null,
+    ts: t.ts ?? null,
+  }));
+  return [
+    ...messages
+      .filter((m) => m.role !== "tool")
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        ts: m.ts ?? null,
+        reason: m.reason ?? null,
+        action: m.action ?? null,
+        attachments: Array.isArray(m.attachments) ? m.attachments : (m.attachments ? [m.attachments] : null),
+      })),
+    ...toolCards,
+  ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+}
+
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
