@@ -37,7 +37,7 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   assertMatch(block, /leave args empty for the immutable "\/job" default/, "du help names its safe immutable default");
   assertMatch(block, /read-only deterministic inputs\/f\.bin seed/, "du help names its bounded deterministic seed");
   assertNotMatch(block, /type="file"|showOpenFilePicker|upload/i, "gzip/du/stat add no picker/upload authority");
-  assertMatch(block, /gzip — bounded zlib\/minigzip RFC 1952 wrapper/, "gzip label is truthful and does not claim full/canonical gzip");
+  assertMatch(block, /gzip — compress or decompress data streams/, "gzip selector label matches the Unix-name-first naming");
   assertMatch(block, /class="preview-gzip-mode"/, "gzip-only native mode select exists");
   assertMatch(block, /option value="compress">Compress text/, "compress text mode exists");
   assertMatch(block, /option value="decompress">Decompress base64/, "decompress base64 mode exists");
