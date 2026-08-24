@@ -1,7 +1,9 @@
 # Changelog
 
-## [0.2.251] — 2026-08-24
-- feat(tools): enrich bundled tool descriptions with the six agent-useful elements (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01)
+## [0.2.251] — 2026-08-25
+- Rewrote all 26 built-in tool descriptions in clear, complete language (what each does, when to use it, inputs/outputs, key flags, limits, and a worked example) so agents can pick and call the right tool.
+
+
 
 ## [0.2.250] — 2026-08-24
 - Fixed Site Agent tool calls (like the bistro booking) failing with an unexplained "invalid arguments" error. The tool's full set of allowed values is now accepted, and any genuinely wrong argument is clearly explained so it can be corrected automatically.
