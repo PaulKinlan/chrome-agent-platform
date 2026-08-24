@@ -2445,6 +2445,11 @@ On resume after a coordinator or worker loss:
     /tmp and absolute build-host paths from all shipped bytes (owner
     directive); repair commits restored the gitignored d3/sqlite3 dist
     binaries and the dist marker.
+  - 2026-08-24 17:45 UTC — R12 sqlite3_query_bounded admission LANDED as
+    0.2.228 (origin/main@5161c6963e0ea6e2321dffb375041f7ae588cd24): the 26th
+    enabled tool — 26/0 posture, ALL 26 bundled Wasm tools enabled. Browser
+    gate PASS (sqlite preview runs SELECT 1 in a real browser). SQLite WASI
+    train COMPLETE.
   - 2026-08-24 16:00 UTC — the full sqlite WASI runtime LANDED as 0.2.227
     (origin/main@4c6cca287d87d20fa12a69a128a84403bb3cdbb8): the S2 scratch
     directory foundation + R3 lookup-follow + R4 FILE-follow + R5 resize +
