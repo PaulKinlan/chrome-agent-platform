@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.249] — 2026-08-24
+- Raised the agent limits significantly: descriptions up to 32,000 characters, plus higher caps for names, skills, and attached files. Over-limit input now shows a clear message instead of being silently cut off.
+
+## [0.2.248] — 2026-08-24
+- Fixed tasks that mention an agent with @ disappearing from your task list. The task now stays in your list and the agent's answer comes back into the same task.
+
+## [0.2.247] — 2026-08-24
+- Fixed deleting an agent leaving you stuck on a dead view. It now returns you to the main page.
+
+
 ## [0.2.246] — 2026-08-24
 - Reconstructed and modernized the release changelog with clear, user-focused descriptions.
 
