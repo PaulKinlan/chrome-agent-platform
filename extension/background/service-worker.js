@@ -1403,6 +1403,7 @@ async function invokeSiteTool(
     const tabs = await chrome.tabs.query({}).catch(() => []);
     const plan = planWebmcpInvocationTab({ canonical, binding, tabs: Array.isArray(tabs) ? tabs : [] });
     if (plan.kind === "reuse") {
+      let targetTabId = plan.tabId;
       // Deliberate gate re-bind under the enrollment lock so the resolved tab's
       // bridge re-binds via the existing enrollment.status → tools.upsert flow.
       await withEnrollmentLock(async () => {
@@ -1410,17 +1411,34 @@ async function invokeSiteTool(
         const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
         const cur = map[canonical] ?? null;
         // NEVER displace a live binding (the round-30 fence): only a dead/
-        // missing or dead-origin binding is replaced.
-        const dead = !cur || cur.tabId == null || (await chrome.tabs.get(cur.tabId).catch(() => null)) == null;
-        if (dead || cur.tabId !== plan.tabId) {
+        // missing, off-origin, or incomplete binding is replaced. A gap-born
+        // live+complete binding on this origin is preserved.
+        const curTab = (cur && cur.tabId != null)
+          ? await chrome.tabs.get(cur.tabId).catch(() => null)
+          : null;
+        let curOrigin = null;
+        try {
+          curOrigin = curTab?.url ? canonicalOrigin(new URL(curTab.url).origin) : null;
+        } catch {
+          curOrigin = null;
+        }
+        const isCurAliveAndComplete = Boolean(
+          cur && cur.tabId != null &&
+          typeof cur.documentId === "string" && cur.documentId.length > 0 &&
+          Number.isInteger(cur.seq) && cur.seq >= 0 &&
+          curTab?.id && curOrigin === canonical
+        );
+        if (isCurAliveAndComplete) {
+          targetTabId = cur.tabId;
+        } else {
           map[canonical] = rebindSnapshotGate(cur, plan.tabId);
           await kvSet({ [SNAPSHOT_GATE_KEY]: map });
         }
       });
       // The resolved tab's bridge may already be running — poke it to re-sync.
-      try { await chrome.tabs.sendMessage(plan.tabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
-      try { await chrome.tabs.update(plan.tabId, { active: true }).catch(() => {}); } catch {}
-      resolvedBinding = await waitForSnapshotBinding(canonical, plan.tabId);
+      try { await chrome.tabs.sendMessage(targetTabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
+      try { await chrome.tabs.update(targetTabId, { active: true }).catch(() => {}); } catch {}
+      resolvedBinding = await waitForSnapshotBinding(canonical, targetTabId);
       if (!resolvedBinding) {
         return {
           error: `the existing tab for ${canonical} did not become ready in time — the page's bridge never re-bound`,

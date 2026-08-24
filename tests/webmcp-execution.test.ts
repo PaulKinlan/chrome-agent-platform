@@ -110,7 +110,7 @@ Deno.test("SW wiring: the invocation planner + rebind + readiness are wired into
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assert(sw.includes("planWebmcpInvocationTab({"), "the planner is consulted");
   assert(sw.includes("rebindSnapshotGate(cur, plan.tabId)"), "the deliberate re-bind transition");
-  assert(sw.includes("waitForSnapshotBinding(canonical, plan.tabId)"), "the bounded readiness wait (reuse)");
+  assert(sw.includes("waitForSnapshotBinding(canonical, targetTabId)"), "the bounded readiness wait (reuse)");
   assert(sw.includes("waitForSnapshotBinding(canonical, created.id)"), "the bounded readiness wait (open)");
   assert(sw.includes("tool ${name} is not present on the freshly bound page"), "descriptor re-verification on the fresh path");
   // the fences are byte-identical:
@@ -255,8 +255,52 @@ Deno.test("delegated WebMCP: invokeSiteTool source contract requires tab opening
   // Invariant 3: opening new tab activates and focuses it
   assert(sw.includes('chrome.tabs.create({ url: canonical, active: true })'), "open tab creates focused tab");
   // Invariant 4: reusing tab activates and focuses it
-  assert(sw.includes('chrome.tabs.update(plan.tabId, { active: true })'), "reuse tab activates existing tab");
+  assert(sw.includes('chrome.tabs.update(targetTabId, { active: true })'), "reuse tab activates target tab");
   // Invariant 5: descriptor re-verified on freshly bound page before dispatch
   assert(sw.includes('tool ${name} is not present on the freshly bound page'), "descriptor re-verification");
+  // Invariant 6: round-30 fence preserves gap-born live+complete bindings
+  assert(sw.includes('isCurAliveAndComplete'), "completeness and origin aware live fence");
+});
+
+Deno.test("round-30 in-lock fence: gap-born live+complete binding is NOT displaced; dead/off-origin/incomplete IS rebound", async () => {
+  // A test helper simulating the in-lock predicate
+  const checkRebind = (cur, curTab, canonical) => {
+    let curOrigin = null;
+    try {
+      curOrigin = curTab?.url ? new URL(curTab.url).origin : null;
+    } catch {
+      curOrigin = null;
+    }
+    const isCurAliveAndComplete = Boolean(
+      cur && cur.tabId != null &&
+      typeof cur.documentId === "string" && cur.documentId.length > 0 &&
+      Number.isInteger(cur.seq) && cur.seq >= 0 &&
+      curTab?.id && curOrigin === canonical
+    );
+    return isCurAliveAndComplete;
+  };
+
+  const canonical = "https://googlechromelabs.github.io";
+
+  // Case 1: Gap-born live & complete tab on same origin -> PRESERVED (not displaced)
+  const gapBorn = { tabId: 42, documentId: "doc-gap", seq: 1, epoch: 1 };
+  const gapTab = { id: 42, url: "https://googlechromelabs.github.io/bistro" };
+  assertEquals(checkRebind(gapBorn, gapTab, canonical), true, "gap-born live+complete binding must be preserved");
+
+  // Case 2: Dead tab -> REBOUND (dead: true)
+  const deadBinding = { tabId: 99, documentId: "doc-old", seq: 1, epoch: 1 };
+  assertEquals(checkRebind(deadBinding, null, canonical), false, "dead tab must be marked for rebind");
+
+  // Case 3: Off-origin navigated tab -> REBOUND
+  const offOriginTab = { id: 42, url: "https://evil.example.com/phish" };
+  assertEquals(checkRebind(gapBorn, offOriginTab, canonical), false, "off-origin tab must be marked for rebind");
+
+  // Case 4: Incomplete binding (empty documentId) -> REBOUND
+  const incompleteBinding = { tabId: 42, documentId: "", seq: 1, epoch: 1 };
+  assertEquals(checkRebind(incompleteBinding, gapTab, canonical), false, "incomplete binding (no doc) must be marked for rebind");
+
+  // Case 5: Invalid seq -> REBOUND
+  const invalidSeqBinding = { tabId: 42, documentId: "doc-gap", seq: -1, epoch: 1 };
+  assertEquals(checkRebind(invalidSeqBinding, gapTab, canonical), false, "invalid seq must be marked for rebind");
 });
 
