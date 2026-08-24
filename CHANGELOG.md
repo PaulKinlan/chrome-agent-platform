@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.220] — 2026-08-24
+- feat(fs-grants): add owner bounded directory listing and digest-pinned file reading (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 3)
+
 ## [0.2.219] — 2026-08-24
 - feat(fs-grants): add owner folder and file pickers with mode selection (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 2)
 

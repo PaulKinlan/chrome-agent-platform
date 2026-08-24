@@ -56,6 +56,8 @@ import {
   deleteFsGrant,
   queryFsGrantStatus,
   serializeFsGrantSummary,
+  listFsGrantEntries,
+  readFsGrantFile,
 } from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
@@ -3066,6 +3068,30 @@ const handlers = mergeRouteMaps(
     }
     const result = await deleteFsGrant(grantId);
     return { ok: true, ...result };
+  },
+
+  async "fs-grant.list-entries"({ grantId, relativePath, limit }, context) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+      securityEvent(
+        "blocked-action",
+        `fs-grant list-entries denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.list-entries is restricted to extension surfaces" };
+    }
+    const result = await listFsGrantEntries(grantId, { relativePath, limit });
+    return result;
+  },
+
+  async "fs-grant.read-file"({ grantId, relativePath, asText, maxBytes }, context) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+      securityEvent(
+        "blocked-action",
+        `fs-grant read-file denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.read-file is restricted to extension surfaces" };
+    }
+    const result = await readFsGrantFile(grantId, { relativePath, asText, maxBytes });
+    return result;
   },
 
   // ── named agents (the persistent named agents) ────────────────────────────

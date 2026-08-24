@@ -1,4 +1,4 @@
-// lib/fs-grants.js — Persistent Local File System Access Grants Store & Picker Wiring.
+// lib/fs-grants.js — Persistent Local File System Access Grants Store, Picker Wiring & Bounded Reader.
 // (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01).
 //
 // Invariants:
@@ -6,11 +6,19 @@
 //     structured-cloned FileSystemDirectoryHandle / FileSystemFileHandle records.
 //   - Tranche 2: Adds window-only, user-gesture-only owner pickers ("Add folder", "Add file")
 //     with explicit mode selection ("read" | "readwrite") and truthful feature detection.
+//   - Tranche 3: Adds owner-initiated bounded listing (enumerate granted directory entries,
+//     bounded depth/count) and bounded file reading (digest-pinned content fetch via handle).
+//     Zero write capabilities; local files are NOT artifacts (OPFS remains the only promotion path).
 //   - Zero broadening: each grant binds strictly to the chosen directory/file subtree
 //     and its requested mode.
 //   - Honest permission state: uses handle.queryPermission({ mode }) to reflect
-//     "granted" | "prompt" | "denied".
+//     "granted" | "prompt" | "denied". Fails closed before every read/list when status != "granted".
 //   - Revocation: deleting the record is the revocation authority.
+
+export const MAX_FS_LIST_ENTRIES = 500;
+export const MAX_FS_PATH_DEPTH = 16;
+export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
+export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
@@ -18,6 +26,32 @@ const STORE_NAME = "grants";
 
 // In-memory fallback map for non-IndexedDB unit test environments
 const memoryGrantsStore = new Map();
+
+export function cleanRelativePath(pathStr) {
+  if (typeof pathStr !== "string" || !pathStr.trim()) return [];
+  const normalized = pathStr.replace(/\\/g, "/");
+  const rawSegments = normalized.split("/");
+  const clean = [];
+  for (const seg of rawSegments) {
+    const s = seg.trim();
+    if (!s || s === ".") continue;
+    if (s === "..") {
+      throw new Error("invalid_path_traversal: path traversal '..' is prohibited");
+    }
+    clean.push(s);
+  }
+  return clean;
+}
+
+export async function computeSha256(buffer) {
+  if (typeof crypto !== "undefined" && crypto.subtle?.digest) {
+    const hashBuf = await crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return "0000000000000000000000000000000000000000000000000000000000000000";
+}
 
 function scopeKey(scope) {
   if (!scope || typeof scope !== "object") return "global";
@@ -194,7 +228,7 @@ export async function queryFsGrantStatus(grant) {
   if (!grant?.handle) return "prompt";
   if (typeof grant.handle.queryPermission === "function") {
     try {
-      const status = await grant.handle.queryPermission({ mode: grant.mode || "read" });
+      const status = await grant.handle.queryPermission({ mode: "read" });
       return status; // "granted" | "prompt" | "denied"
     } catch {
       return "prompt";
@@ -220,6 +254,223 @@ export function serializeFsGrantSummary(grant, liveStatus = null) {
     lastUsedAt: grant.lastUsedAt,
     status: liveStatus || "unknown",
   });
+}
+
+/**
+ * Bounded listing of directory entries within a granted handle.
+ * @param {string} grantId
+ * @param {{ relativePath?: string, limit?: number }} [options]
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
+export async function listFsGrantEntries(
+  grantId,
+  { relativePath = "", limit = MAX_FS_LIST_ENTRIES } = {},
+  { customIdb = null } = {},
+) {
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  const status = await queryFsGrantStatus(grant);
+  if (status !== "granted") {
+    return { ok: false, error: "fs_permission_lapsed", status, grantId };
+  }
+
+  let segments = [];
+  try {
+    segments = cleanRelativePath(relativePath);
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+
+  if (segments.length > MAX_FS_PATH_DEPTH) {
+    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
+  }
+
+  if (grant.kind === "file") {
+    if (segments.length > 0 && segments.join("/") !== grant.name) {
+      return { ok: false, error: "file_grant_cannot_have_subpath" };
+    }
+    const file = typeof grant.handle?.getFile === "function" ? await grant.handle.getFile().catch(() => null) : grant.handle;
+    const size = typeof file?.size === "number" ? file.size : 0;
+    const lastModified = typeof file?.lastModified === "number" ? file.lastModified : 0;
+    return {
+      ok: true,
+      grantId,
+      kind: "file",
+      path: "",
+      name: grant.name,
+      entries: [{ name: grant.name, kind: "file", size, lastModified }],
+      truncated: false,
+      total: 1,
+    };
+  }
+
+  // Directory traversal
+  let dirHandle = grant.handle;
+  for (const seg of segments) {
+    if (!dirHandle || typeof dirHandle.getDirectoryHandle !== "function") {
+      return { ok: false, error: "invalid_directory_handle" };
+    }
+    try {
+      dirHandle = await dirHandle.getDirectoryHandle(seg);
+    } catch {
+      return { ok: false, error: "directory_not_found", path: seg };
+    }
+  }
+
+  const entries = [];
+  let total = 0;
+  let truncated = false;
+  const effectiveLimit = Math.min(Math.max(1, limit || MAX_FS_LIST_ENTRIES), MAX_FS_LIST_ENTRIES);
+
+  try {
+    const iter = typeof dirHandle.values === "function"
+      ? dirHandle.values()
+      : typeof dirHandle.entries === "function"
+      ? dirHandle.entries()
+      : [];
+
+    for await (const entry of iter) {
+      total++;
+      if (entries.length < effectiveLimit) {
+        const itemHandle = Array.isArray(entry) ? entry[1] : entry;
+        entries.push({
+          name: itemHandle.name,
+          kind: itemHandle.kind || (itemHandle.getFile ? "file" : "directory"),
+        });
+      } else {
+        truncated = true;
+      }
+    }
+  } catch (err) {
+    return { ok: false, error: `enumeration_failed: ${err?.message || err}` };
+  }
+
+  return {
+    ok: true,
+    grantId,
+    kind: "directory",
+    path: segments.join("/"),
+    entries,
+    truncated,
+    total,
+  };
+}
+
+/**
+ * Bounded file reading within a granted handle (digest-pinned).
+ * @param {string} grantId
+ * @param {{ relativePath?: string, asText?: boolean, maxBytes?: number }} [options]
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
+export async function readFsGrantFile(
+  grantId,
+  { relativePath = "", asText = true, maxBytes = MAX_FS_READ_BYTES } = {},
+  { customIdb = null } = {},
+) {
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  const status = await queryFsGrantStatus(grant);
+  if (status !== "granted") {
+    return { ok: false, error: "fs_permission_lapsed", status, grantId };
+  }
+
+  let segments = [];
+  try {
+    segments = cleanRelativePath(relativePath);
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+
+  if (segments.length > MAX_FS_PATH_DEPTH) {
+    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
+  }
+
+  let fileHandle = null;
+  if (grant.kind === "file") {
+    if (segments.length > 0 && segments.join("/") !== grant.name) {
+      return { ok: false, error: "invalid_file_path" };
+    }
+    fileHandle = grant.handle;
+  } else {
+    if (segments.length === 0) {
+      return { ok: false, error: "directory_path_is_not_file" };
+    }
+    let dirHandle = grant.handle;
+    for (let i = 0; i < segments.length - 1; i++) {
+      if (!dirHandle || typeof dirHandle.getDirectoryHandle !== "function") {
+        return { ok: false, error: "invalid_directory_handle" };
+      }
+      try {
+        dirHandle = await dirHandle.getDirectoryHandle(segments[i]);
+      } catch {
+        return { ok: false, error: "directory_not_found", path: segments[i] };
+      }
+    }
+    const fileName = segments[segments.length - 1];
+    if (!dirHandle || typeof dirHandle.getFileHandle !== "function") {
+      return { ok: false, error: "invalid_directory_handle" };
+    }
+    try {
+      fileHandle = await dirHandle.getFileHandle(fileName);
+    } catch {
+      return { ok: false, error: "file_not_found", name: fileName };
+    }
+  }
+
+  let file = null;
+  try {
+    file = typeof fileHandle.getFile === "function" ? await fileHandle.getFile() : fileHandle;
+  } catch (err) {
+    return { ok: false, error: `get_file_failed: ${err?.message || err}` };
+  }
+
+  const effectiveMaxBytes = Math.min(Math.max(1, maxBytes || MAX_FS_READ_BYTES), MAX_FS_READ_BYTES);
+  const fileSize = typeof file?.size === "number" ? file.size : 0;
+  if (fileSize > effectiveMaxBytes) {
+    return {
+      ok: false,
+      error: "fs_file_too_large",
+      size: fileSize,
+      maxBytes: effectiveMaxBytes,
+    };
+  }
+
+  let arrayBuffer = null;
+  try {
+    arrayBuffer = typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : new ArrayBuffer(0);
+  } catch (err) {
+    return { ok: false, error: `read_bytes_failed: ${err?.message || err}` };
+  }
+
+  const bytes = new Uint8Array(arrayBuffer);
+  const sha256 = await computeSha256(arrayBuffer);
+
+  let textContent = null;
+  if (asText) {
+    if (bytes.byteLength > MAX_FS_TEXT_DECODE_BYTES) {
+      textContent = `[Binary or text content exceeds decode limit (${MAX_FS_TEXT_DECODE_BYTES / (1024 * 1024)} MiB)]`;
+    } else {
+      try {
+        textContent = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      } catch {
+        textContent = null;
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    grantId,
+    path: segments.join("/"),
+    name: file.name || fileHandle.name,
+    size: fileSize,
+    lastModified: typeof file.lastModified === "number" ? file.lastModified : 0,
+    sha256,
+    content: textContent,
+    truncated: false,
+  };
 }
 
 /**

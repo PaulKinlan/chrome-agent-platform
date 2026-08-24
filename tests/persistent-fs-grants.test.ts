@@ -11,6 +11,12 @@ import {
   queryFsGrantStatus,
   serializeFsGrantSummary,
   wireLocalFolderPickers,
+  listFsGrantEntries,
+  readFsGrantFile,
+  cleanRelativePath,
+  MAX_FS_LIST_ENTRIES,
+  MAX_FS_READ_BYTES,
+  MAX_FS_TEXT_DECODE_BYTES,
 } from "../extension/lib/fs-grants.js";
 import {
   SETTINGS_SECTIONS,
@@ -405,12 +411,146 @@ Deno.test("service-worker.js: fs-grant routes require owner-options or extension
     sw.includes('async "fs-grant.remove"'),
     "service worker must register fs-grant.remove route",
   );
+  assert(
+    sw.includes('async "fs-grant.list-entries"'),
+    "service worker must register fs-grant.list-entries route",
+  );
+  assert(
+    sw.includes('async "fs-grant.read-file"'),
+    "service worker must register fs-grant.read-file route",
+  );
 
   // Checks for principal gating (owner-options or extension)
   assert(
     sw.includes('context?.principal !== "owner-options" && context?.principal !== "extension"'),
     "service worker must gate fs-grant routes against non-extension / non-owner callers",
   );
+});
+
+Deno.test("cleanRelativePath: normalizes paths and rejects traversal attacks (..)", () => {
+  assertEquals(cleanRelativePath(""), []);
+  assertEquals(cleanRelativePath("foo/bar/baz"), ["foo", "bar", "baz"]);
+  assertEquals(cleanRelativePath("foo/./bar//baz/"), ["foo", "bar", "baz"]);
+  assertEquals(cleanRelativePath("foo\\bar\\baz"), ["foo", "bar", "baz"]);
+
+  let traversalThrown = false;
+  try {
+    cleanRelativePath("../secret.txt");
+  } catch (err: any) {
+    traversalThrown = true;
+    assert(err.message.includes("invalid_path_traversal"));
+  }
+  assertEquals(traversalThrown, true, "leading .. traversal must throw");
+
+  let innerTraversalThrown = false;
+  try {
+    cleanRelativePath("docs/../../etc/passwd");
+  } catch (err: any) {
+    innerTraversalThrown = true;
+    assert(err.message.includes("invalid_path_traversal"));
+  }
+  assertEquals(innerTraversalThrown, true, "inner .. traversal must throw");
+});
+
+Deno.test("listFsGrantEntries: enumerates directory entries with bounds and truncation", async () => {
+  const mockFiles = [
+    { name: "README.md", kind: "file" },
+    { name: "package.json", kind: "file" },
+    { name: "src", kind: "directory" },
+  ];
+
+  const mockDirHandle = {
+    kind: "directory",
+    name: "my-project",
+    queryPermission: async () => "granted",
+    values: async function* () {
+      for (const f of mockFiles) yield f;
+    },
+  };
+
+  await saveFsGrant(
+    { grantId: "fsg_list_test", handle: mockDirHandle, name: "my-project" },
+  );
+
+  const res = await listFsGrantEntries("fsg_list_test", { limit: 2 });
+  assertEquals(res.ok, true);
+  assertEquals(res.entries?.length, 2);
+  assertEquals(res.truncated, true);
+  assertEquals(res.total, 3);
+  assertEquals(res.entries?.[0].name, "README.md");
+});
+
+Deno.test("listFsGrantEntries: fails closed when permission has lapsed (prompt)", async () => {
+  const mockDirHandle = {
+    kind: "directory",
+    name: "lapsed-project",
+    queryPermission: async () => "prompt",
+  };
+
+  await saveFsGrant(
+    { grantId: "fsg_lapsed_list", handle: mockDirHandle, name: "lapsed-project" },
+  );
+
+  const res = await listFsGrantEntries("fsg_lapsed_list", {});
+  assertEquals(res.ok, false);
+  assertEquals(res.error, "fs_permission_lapsed");
+  assertEquals(res.status, "prompt");
+});
+
+Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes bound", async () => {
+  const fileContent = "Hello from local persistent filesystem!";
+  const fileBytes = new TextEncoder().encode(fileContent);
+
+  const mockFileHandle = {
+    kind: "file",
+    name: "greeting.txt",
+    queryPermission: async () => "granted",
+    getFile: async () => ({
+      name: "greeting.txt",
+      size: fileBytes.byteLength,
+      lastModified: 1700000000000,
+      arrayBuffer: async () => fileBytes.buffer,
+    }),
+  };
+
+  await saveFsGrant(
+    { grantId: "fsg_read_test", handle: mockFileHandle, name: "greeting.txt", kind: "file" },
+  );
+
+  const res = await readFsGrantFile("fsg_read_test", { asText: true });
+  assertEquals(res.ok, true);
+  assertEquals(res.name, "greeting.txt");
+  assertEquals(res.size, fileBytes.byteLength);
+  assertEquals(res.content, fileContent);
+  assert(typeof res.sha256 === "string" && res.sha256.length === 64, "must include 64-char SHA-256 hex digest");
+
+  // Test size cap refusal
+  const cappedRes = await readFsGrantFile("fsg_read_test", { maxBytes: 10 });
+  assertEquals(cappedRes.ok, false);
+  assertEquals(cappedRes.error, "fs_file_too_large");
+});
+
+Deno.test("readFsGrantFile: fails closed on traversal attack and lapsed permission", async () => {
+  const mockFileHandle = {
+    kind: "file",
+    name: "doc.txt",
+    queryPermission: async () => "prompt",
+    getFile: async () => ({ name: "doc.txt", size: 5, arrayBuffer: async () => new ArrayBuffer(5) }),
+  };
+
+  await saveFsGrant(
+    { grantId: "fsg_lapsed_read", handle: mockFileHandle, name: "doc.txt", kind: "file" },
+  );
+
+  const res1 = await readFsGrantFile("fsg_lapsed_read", {});
+  assertEquals(res1.ok, false);
+  assertEquals(res1.error, "fs_permission_lapsed");
+
+  // Traversal attack
+  mockFileHandle.queryPermission = async () => "granted";
+  const res2 = await readFsGrantFile("fsg_lapsed_read", { relativePath: "../outside.txt" });
+  assertEquals(res2.ok, false);
+  assert(res2.error?.includes("invalid_path_traversal"));
 });
 
 Deno.test("options.js: wires renderLocalFolders and renders empty state or grant cards", async () => {

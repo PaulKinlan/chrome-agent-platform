@@ -569,6 +569,120 @@ export async function renderLocalFolders() {
 
     info.append(titleRow, meta);
 
+    const cardControls = document.createElement("div");
+    cardControls.style.display = "flex";
+    cardControls.style.alignItems = "center";
+    cardControls.style.gap = "8px";
+
+    const browseBtn = document.createElement("button");
+    browseBtn.type = "button";
+    browseBtn.className = "btn small";
+    browseBtn.textContent = "Browse";
+    browseBtn.disabled = grant.status !== "granted";
+    if (grant.status !== "granted") {
+      browseBtn.title = "Re-grant access before browsing contents";
+    }
+
+    let drawer = null;
+    browseBtn.addEventListener("click", async () => {
+      if (drawer) {
+        drawer.remove();
+        drawer = null;
+        browseBtn.textContent = "Browse";
+        return;
+      }
+      browseBtn.textContent = "Close";
+      drawer = document.createElement("div");
+      drawer.className = "grant-browser-drawer";
+      drawer.style.marginTop = "10px";
+      drawer.style.padding = "10px 12px";
+      drawer.style.borderRadius = "8px";
+      drawer.style.background = "var(--bg-subtle,#f8f7f5)";
+      drawer.style.border = "1px solid var(--border,#e3e0d9)";
+      drawer.style.fontSize = "12px";
+      drawer.style.width = "100%";
+
+      drawer.innerHTML = `<span class="muted">Loading contents…</span>`;
+      cardWrapper.append(drawer);
+
+      const listRes = await chrome.runtime.sendMessage({
+        type: "fs-grant.list-entries",
+        grantId: grant.grantId,
+      }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
+
+      if (!listRes?.ok) {
+        drawer.innerHTML = `<span class="muted" style="color:var(--danger,#d93025)">Failed to read entries: ${escapeHtml(listRes?.error || "unknown")}</span>`;
+        return;
+      }
+
+      const entries = Array.isArray(listRes.entries) ? listRes.entries : [];
+      if (entries.length === 0) {
+        drawer.innerHTML = `<span class="muted">This directory is empty.</span>`;
+        return;
+      }
+
+      drawer.replaceChildren();
+      const countHeader = document.createElement("div");
+      countHeader.className = "muted";
+      countHeader.style.marginBottom = "6px";
+      countHeader.textContent = `${entries.length}${listRes.truncated ? " (truncated at limit)" : ""} item${entries.length === 1 ? "" : "s"}:`;
+      drawer.append(countHeader);
+
+      const entriesList = document.createElement("div");
+      entriesList.style.display = "flex";
+      entriesList.style.flexDirection = "column";
+      entriesList.style.gap = "4px";
+
+      for (const entry of entries) {
+        const itemRow = document.createElement("div");
+        itemRow.style.display = "flex";
+        itemRow.style.alignItems = "center";
+        itemRow.style.justifyContent = "space-between";
+        itemRow.style.padding = "3px 6px";
+        itemRow.style.borderRadius = "4px";
+        itemRow.style.background = "var(--panel,#ffffff)";
+
+        const left = document.createElement("span");
+        left.textContent = `${entry.kind === "directory" ? "📁 " : "📄 "}${entry.name}`;
+
+        const right = document.createElement("div");
+        right.style.display = "flex";
+        right.style.alignItems = "center";
+        right.style.gap = "6px";
+
+        if (entry.kind === "file") {
+          const viewBtn = document.createElement("button");
+          viewBtn.type = "button";
+          viewBtn.className = "btn small";
+          viewBtn.style.padding = "1px 6px";
+          viewBtn.style.fontSize = "11px";
+          viewBtn.textContent = "View";
+          viewBtn.addEventListener("click", async () => {
+            const readRes = await chrome.runtime.sendMessage({
+              type: "fs-grant.read-file",
+              grantId: grant.grantId,
+              relativePath: entry.name,
+              asText: true,
+            }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
+
+            if (readRes?.ok) {
+              const preview = prompt(
+                `File: ${readRes.name} (${readRes.size} bytes, SHA-256: ${readRes.sha256.slice(0, 12)}…)\nContent preview:`,
+                (readRes.content || "").slice(0, 500),
+              );
+            } else {
+              saveFlash(`Read failed: ${readRes?.error || "unknown"}`);
+            }
+          });
+          right.append(viewBtn);
+        }
+
+        itemRow.append(left, right);
+        entriesList.append(itemRow);
+      }
+      drawer.append(entriesList);
+    });
+
     const revokeBtn = document.createElement("button");
     revokeBtn.type = "button";
     revokeBtn.className = "btn small danger";
@@ -594,8 +708,16 @@ export async function renderLocalFolders() {
       renderLocalFolders();
     });
 
-    card.append(info, revokeBtn);
-    list.append(card);
+    cardControls.append(browseBtn, revokeBtn);
+    card.append(info, cardControls);
+
+    const cardWrapper = document.createElement("div");
+    cardWrapper.style.display = "flex";
+    cardWrapper.style.flexDirection = "column";
+    cardWrapper.style.width = "100%";
+    cardWrapper.append(card);
+
+    list.append(cardWrapper);
   }
 
   host.append(list);
