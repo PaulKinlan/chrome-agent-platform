@@ -24,6 +24,7 @@ import {
 import {
   createWasiPreview1Runtime,
   planFdReaddir,
+  planFdFilestatSetSize,
   planFileOpenDirflags,
   planPathFilestatLookup,
   REBUILT_TOOL_COUNT,
@@ -75,6 +76,13 @@ class TestMemory {
 }
 
 class MemoryWorkspace {
+  scratchTotalBytes() {
+    let total = 0;
+    for (const [path, row] of this.files) {
+      if (path.startsWith("scratch/")) total += row.bytes.byteLength;
+    }
+    return total;
+  }
   constructor({ partialRead = Infinity, partialWrite = Infinity } = {}) {
     this.files = new Map([
       ["inputs/in.txt", { type: "file", bytes: enc.encode("abcdef") }],
@@ -156,6 +164,17 @@ class MemoryWorkspace {
         }
         row.bytes.set(bytes.slice(0, count), offset);
         return count;
+      },
+      setSize: (size) => {
+        if (closed) throw new Error("closed");
+        if (size === row.bytes.byteLength) return;
+        if (size > row.bytes.byteLength) {
+          const out = new Uint8Array(size);
+          out.set(row.bytes);
+          row.bytes = out;
+        } else {
+          row.bytes = row.bytes.slice(0, size);
+        }
       },
       stat: () => {
         if (closed) throw new Error("closed");
@@ -1716,4 +1735,124 @@ Deno.test("R4 source pins: the subsumed ||-form is ABSENT; the planner is refere
   const openIdx = body.indexOf("workspace.open(");
   assert(planIdx > 0 && fdflagsIdx > planIdx && pathIdx > fdflagsIdx && openIdx > pathIdx,
     "order: dirflags plan → fdflags → oflags/rights → decodePath → workspace.open (byte-preserved)");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// R5 (CAP-FB-20260823-R5-FILESTAT-SET-SIZE-01): fd_filestat_set_size bounded
+// resize — scratch-only, the r2 aggregate-projected 10 MiB ceiling, all-or-
+// nothing bytes. Additive KATs; the census pin lives in gzip-preview.test.ts.
+
+Deno.test("R5 planner: every arm in the C-1/C-2 order; no-partial on failure", () => {
+  const base = {
+    kind: FD_KIND.FILE,
+    path: "scratch/work.txt",
+    rights: WASI_RIGHTS.FD_FILESTAT_SET_SIZE,
+    sizeValue: 8n,
+    currentFileBytes: 5,
+    currentScratchBytes: 5,
+    maxAggregateBytes: 10 * 1024 * 1024,
+  };
+  assertEquals(planFdFilestatSetSize(base), { errno: WASI_ERRNO.SUCCESS, size: 8n });
+  assertEquals(planFdFilestatSetSize({ ...base, kind: FD_KIND.DIR }).errno, WASI_ERRNO.EISDIR, "DIR → EISDIR");
+  assertEquals(planFdFilestatSetSize({ ...base, kind: FD_KIND.STDOUT }).errno, WASI_ERRNO.EBADF, "stdio → EBADF");
+  assertEquals(planFdFilestatSetSize({ ...base, kind: FD_KIND.PREOPEN }).errno, WASI_ERRNO.EBADF, "PREOPEN → EBADF");
+  assertEquals(planFdFilestatSetSize({ ...base, sizeValue: -1n }).errno, WASI_ERRNO.EINVAL, "negative → EINVAL");
+  assertEquals(planFdFilestatSetSize({ ...base, sizeValue: 5 }).errno, WASI_ERRNO.EINVAL, "non-BigInt → EINVAL");
+  assertEquals(planFdFilestatSetSize({ ...base, sizeValue: 0x10000000000000000n }).errno, WASI_ERRNO.EINVAL, ">U64_MAX → EINVAL");
+  assertEquals(planFdFilestatSetSize({ ...base, rights: 0n }).errno, WASI_ERRNO.ENOTCAPABLE, "right missing");
+  assertEquals(planFdFilestatSetSize({ ...base, path: "output/new.txt" }).errno, WASI_ERRNO.ENOTCAPABLE, "C-2: output class re-checked");
+  assertEquals(planFdFilestatSetSize({ ...base, path: "inputs/in.txt" }).errno, WASI_ERRNO.ENOTCAPABLE, "inputs class");
+  // aggregate projection: 10 MiB aggregate with two files — the second grow
+  // past the shared bound faults EFBIG even though the per-file size is ≤ 10 MiB
+  assertEquals(
+    planFdFilestatSetSize({ ...base, sizeValue: 10n * 1024n * 1024n, currentFileBytes: 0, currentScratchBytes: 6n * 1024n * 1024n }).errno,
+    WASI_ERRNO.EFBIG,
+    "second-file grow past the shared aggregate",
+  );
+  assertEquals(
+    planFdFilestatSetSize({ ...base, sizeValue: 10n * 1024n * 1024n + 1n, currentFileBytes: 0, currentScratchBytes: 0 }).errno,
+    WASI_ERRNO.EFBIG,
+    "the off-by-one ceiling arm",
+  );
+  assertEquals(
+    planFdFilestatSetSize({ ...base, sizeValue: 10n * 1024n * 1024n, currentFileBytes: 0, currentScratchBytes: 0 }).errno,
+    WASI_ERRNO.SUCCESS,
+    "exactly at the ceiling succeeds",
+  );
+});
+
+Deno.test("R5 syscall: grow/shrink/equal exact bytes; readback via fd_filestat_get; fileBytes NOT incremented", () => {
+  const h = harness();
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE | WASI_RIGHTS.FD_SEEK |
+    WASI_RIGHTS.FD_FILESTAT_GET | WASI_RIGHTS.FD_FILESTAT_SET_SIZE;
+  const file = openPath(h, "scratch/work.txt", rights); // seeded 5 bytes "12345"
+  assertEquals(file.errno, WASI_ERRNO.SUCCESS);
+  const before = h.runtime.snapshot().counters;
+  // grow to 8: prefix preserved, zero-filled tail
+  assertEquals(h.wasi.fd_filestat_set_size(file.fd, 8n), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_seek(file.fd, 0n, 0, 2300), WASI_ERRNO.SUCCESS);
+  // readback the bytes through fd_read
+  h.memory.setU32(2000, 1200); h.memory.setU32(2004, 8); // iovec {ptr:1200,len:8}
+  assertEquals(h.wasi.fd_read(file.fd, 2000, 1, 2100), WASI_ERRNO.SUCCESS);
+  assertEquals(String.fromCharCode(...h.memory.bytes.slice(1200, 1208)), "12345\0\0\0", "grow: prefix + zero tail");
+  // fd_filestat_get readback reports the new size
+  assertEquals(h.wasi.fd_filestat_get(file.fd, 2200), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(2200 + 32), 8n, "readback size 8");
+  // shrink to 2
+  assertEquals(h.wasi.fd_filestat_set_size(file.fd, 2n), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_seek(file.fd, 0n, 0, 2300), WASI_ERRNO.SUCCESS);
+  h.memory.setU32(2000, 1200); h.memory.setU32(2004, 8);
+  assertEquals(h.wasi.fd_read(file.fd, 2000, 1, 2100), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u32(2100), 2, "shrink reads back exactly 2 bytes");
+  // equal → no-op success
+  assertEquals(h.wasi.fd_filestat_set_size(file.fd, 2n), WASI_ERRNO.SUCCESS);
+  // counters: +1 hostCalls per admitted resize; pathCalls/fileBytes unchanged (P-3)
+  const after = h.runtime.snapshot().counters;
+  assertEquals(after.pathCalls - before.pathCalls, 0, "the resize + seeks + reads add ZERO path calls (an fd syscall, not a path call)");
+  assertEquals(after.fileBytes - before.fileBytes, 2 + 8, "only the two fd_reads count file bytes — the resize adds ZERO");
+  assertEquals(h.wasi.fd_close(file.fd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R5 syscall mutants: kind/right/class/ceiling; rollback leaves bytes+aggregate untouched", () => {
+  const h = harness();
+  const rights = WASI_RIGHTS.FD_READ | WASI_RIGHTS.FD_WRITE | WASI_RIGHTS.FD_FILESTAT_SET_SIZE;
+  const file = openPath(h, "scratch/work.txt", rights);
+  assertEquals(file.errno, WASI_ERRNO.SUCCESS);
+  // (this test never reads/seeks — the short rights set suffices)
+  const bytesBefore = [...h.workspace.files.get("scratch/work.txt").bytes];
+  const aggBefore = h.workspace.scratchTotalBytes();
+  // unknown fd → EBADF
+  assertEquals(h.wasi.fd_filestat_set_size(999, 1n), WASI_ERRNO.EBADF);
+  // stdio → EBADF, DIR → EISDIR
+  assertEquals(h.wasi.fd_filestat_set_size(1, 1n), WASI_ERRNO.EBADF);
+  const dir = openDir(h, "scratch");
+  assertEquals(dir.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_filestat_set_size(dir.fd, 1n), WASI_ERRNO.EISDIR);
+  // inputs FILE fd lacks the right → ENOTCAPABLE
+  const input = openPath(h, "inputs/in.txt", WASI_RIGHTS.FD_READ);
+  assertEquals(input.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_filestat_set_size(input.fd, 1n), WASI_ERRNO.ENOTCAPABLE, "no FD_FILESTAT_SET_SIZE right");
+  // output FILE fd HOLDS the right but the class gate re-checks (C-2) → ENOTCAPABLE
+  const output = openPath(h, "output/existing.txt", WASI_RIGHTS.FD_WRITE | WASI_RIGHTS.FD_FILESTAT_SET_SIZE);
+  assertEquals(output.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_filestat_set_size(output.fd, 1n), WASI_ERRNO.ENOTCAPABLE, "output class stays resize-denied");
+  // EINVAL: negative / non-BigInt / >U64_MAX
+  assertEquals(h.wasi.fd_filestat_set_size(file.fd, -1n), WASI_ERRNO.EINVAL);
+  assertEquals(h.wasi.fd_filestat_set_size(file.fd, 5), WASI_ERRNO.EINVAL);
+  // EFBIG: over the aggregate (the double's ceiling is the planner's 10 MiB)
+  assertEquals(h.wasi.fd_filestat_set_size(file.fd, 11n * 1024n * 1024n), WASI_ERRNO.EFBIG);
+  // rollback: every failure left BOTH the bytes AND the aggregate untouched
+  assertEquals([...h.workspace.files.get("scratch/work.txt").bytes], bytesBefore, "bytes untouched");
+  assertEquals(h.workspace.scratchTotalBytes(), aggBefore, "aggregate untouched");
+  for (const fd of [file.fd, dir.fd, input.fd, output.fd]) {
+    assertEquals(h.wasi.fd_close(fd), WASI_ERRNO.SUCCESS);
+  }
+});
+
+Deno.test("R5 census + boundary: SUPPORTED is exactly +1 (fd_filestat_set_size); planner referenced only by the syscall", async () => {
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("fd_filestat_set_size"), true);
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 21, "the §7 census 20→21, deliberate");
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
+  const references = source.split("planFdFilestatSetSize").length - 1;
+  assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
 });

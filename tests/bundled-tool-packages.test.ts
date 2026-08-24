@@ -385,7 +385,7 @@ Deno.test("sqlite manifest: canonical bytes, composite licence, exact notice/SBO
   assert(!JSON.stringify(sbom).includes("Evaluation-Only") && !JSON.stringify(sbom).includes("pending-owner"), "stale evaluation/pending wording must be gone");
 });
 
-Deno.test("sqlite binary: exact 24 imports and the exact EIGHT-function CAP runtime gap (fd_fdstat_set_flags now supported)", async () => {
+Deno.test("sqlite binary: exact 24 imports and the SEVEN-function computed gap under the frozen EIGHT-function census (R5: fd_filestat_set_size supported)", async () => {
   const wasm = await Deno.readFile(root(`extension/wasm/cas/${SQLITE_WASM_SHA}.wasm`));
   const audit = auditWasmBinary(wasm, JSON.parse(await Deno.readTextFile(root(SQLITE_MANIFEST_REL))).executables[0], {});
   const names = audit.imports.map((i) => i.name).sort();
@@ -394,9 +394,19 @@ Deno.test("sqlite binary: exact 24 imports and the exact EIGHT-function CAP runt
   assertEquals(audit.measured.memoryInitial, 64);
   assertEquals(audit.measured.memoryMax, 512);
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
-  assertEquals(SQLITE_IMPORTS_24.filter((n) => !supported.has(n)).sort(), [...SQLITE_GAP_8].sort());
-  // the runtime must NOT have grown the remaining eight in this commit
-  for (const gap of SQLITE_GAP_8) assert(!supported.has(gap), `runtime unexpectedly implements ${gap}`);
+  // §7 (the linkage-only note): SQLITE_GAP_8 stays the FROZEN eight-function census
+  // until R11, but the computed gap is now SEVEN — fd_filestat_set_size is
+  // deliberately SUPPORTED at R5 while the sqlite linkage stays disabled.
+  assertEquals(
+    SQLITE_IMPORTS_24.filter((n) => !supported.has(n)).sort(),
+    SQLITE_GAP_8.filter((n) => n !== "fd_filestat_set_size").sort(),
+    "computed gap = frozen census minus fd_filestat_set_size",
+  );
+  // the runtime must NOT have grown the remaining seven in this commit
+  for (const gap of SQLITE_GAP_8.filter((n) => n !== "fd_filestat_set_size")) {
+    assert(!supported.has(gap), `runtime unexpectedly implements ${gap}`);
+  }
+  assert(supported.has("fd_filestat_set_size"), "R5: fd_filestat_set_size IS supported (deliberate)");
 });
 
 Deno.test("sqlite descriptor: false/false/true posture with runtime-imports-unimplemented; no route anywhere", async () => {

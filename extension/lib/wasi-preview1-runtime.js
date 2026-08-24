@@ -46,6 +46,7 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "fd_fdstat_get",
   "fd_fdstat_set_flags",
   "fd_filestat_get",
+  "fd_filestat_set_size",
   "fd_prestat_dir_name",
   "fd_prestat_get",
   "fd_read",
@@ -58,6 +59,8 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "proc_exit",
   "random_get",
 ]);
+
+import { SCRATCH_FILE_LIMITS } from "./wasm-sync-workspace.js";
 
 const SUPPORTED_IMPORT_SET = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -324,6 +327,45 @@ export function planFileOpenDirflags(normalizedDirflags) {
     return WASI_ERRNO.SUCCESS;
   }
   return WASI_ERRNO.ENOTSUP;
+}
+
+/** R5 (CAP-FB-20260823-R5-FILESTAT-SET-SIZE-01): the fd_filestat_set_size
+ * planner — the C-1/C-2 reconciled order with the r2 aggregate-projected
+ * ceiling: kind → value (EINVAL) → right → scratch-class gate (the C-2 fix:
+ * the output class also holds the resize bit, so the class is re-checked
+ * here, never trusted to the rights table) → the projected scratch aggregate
+ * (EFBIG, computed BEFORE any allocation/mutation — all BigInt, the P-4 pin).
+ * Never widened: output stays ENOTCAPABLE here (the FND-4 bit is not
+ * exercised); a failure leaves the bytes AND the aggregate untouched. */
+export function planFdFilestatSetSize({
+  kind,
+  path,
+  rights,
+  sizeValue,
+  currentFileBytes,
+  currentScratchBytes,
+  maxAggregateBytes,
+}) {
+  if (kind === FD_KIND.DIR) return { errno: WASI_ERRNO.EISDIR };
+  if (kind !== FD_KIND.FILE) return { errno: WASI_ERRNO.EBADF };
+  let size;
+  try {
+    size = asU64(sizeValue); // the value coercion precedes the right (fd_fdstat_set_flags precedent)
+  } catch {
+    return { errno: WASI_ERRNO.EINVAL };
+  }
+  if (
+    (rights & WASI_RIGHTS.FD_FILESTAT_SET_SIZE) !==
+    WASI_RIGHTS.FD_FILESTAT_SET_SIZE
+  ) {
+    return { errno: WASI_ERRNO.ENOTCAPABLE };
+  }
+  if (typeof path !== "string" || !path.startsWith("scratch/")) {
+    return { errno: WASI_ERRNO.ENOTCAPABLE };
+  }
+  const projected = BigInt(currentScratchBytes) - BigInt(currentFileBytes) + size;
+  if (projected > BigInt(maxAggregateBytes)) return { errno: WASI_ERRNO.EFBIG };
+  return { errno: WASI_ERRNO.SUCCESS, size };
 }
 
 export const WASI_READDIR_LIMITS = Object.freeze({
@@ -928,6 +970,31 @@ export function createWasiPreview1Runtime({
       }
       span(statPtr, 64);
       writeFilestat(statPtr, statHandle(record));
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    fd_filestat_set_size: (fdValue, sizeValue) => {
+      const record = fdFor(fdValue); // EBADF wins before everything
+      const plan = planFdFilestatSetSize({
+        kind: record.kind,
+        path: record.path,
+        rights: record.rights,
+        sizeValue,
+        currentFileBytes:
+          record.kind === FD_KIND.FILE ? record.handle.stat().size : 0,
+        currentScratchBytes: workspace.scratchTotalBytes(),
+        maxAggregateBytes: SCRATCH_FILE_LIMITS.maxTotalBytes,
+      });
+      if (plan.errno !== WASI_ERRNO.SUCCESS) fault(plan.errno);
+      // Only an admitted resize crosses the host boundary (hostCalls+1;
+      // pathCalls/fileBytes/stdout/stderr unchanged — the P-3 pin).
+      const gate = beginCall();
+      if (gate !== WASI_ERRNO.SUCCESS) return gate;
+      try {
+        record.handle.setSize(Number(plan.size)); // ≤ 10 MiB ⇒ Number-safe
+      } catch (error) {
+        return mapAdapterError(error);
+      }
       return WASI_ERRNO.SUCCESS;
     },
 

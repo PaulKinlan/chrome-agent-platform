@@ -445,6 +445,33 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
         entry.mtime = mtime;
         return bytes.byteLength;
       },
+      setSize(size) {
+        if (provisionalHolder.value) throw failClosed("EINVAL");
+        if (!Number.isSafeInteger(size) || size < 0) throw failClosed("EINVAL");
+        if (size > SYNC_WORKSPACE_BOUNDS.maxFileBytes) {
+          const e = new Error("EFBIG");
+          e.code = "EFBIG";
+          throw e;
+        }
+        // r2 aggregate-projected ceiling (defense-in-depth behind the runtime
+        // planner): computed BEFORE any allocation/mutation; the single
+        // entry.bytes assignment below IS the atomic accounting update (the
+        // aggregate derives live from the file rows — no counter to drift).
+        if (entry.className === "scratch" &&
+            projectedTotalAfterResize(p, size) > SCRATCH_FILE_LIMITS.maxTotalBytes) {
+          const e = new Error("EFBIG");
+          e.code = "EFBIG";
+          throw e;
+        }
+        if (size === entry.bytes.byteLength) return; // equal → no-op
+        if (size > entry.bytes.byteLength) {
+          const out = new Uint8Array(size); // zero-filled tail, no read of new bytes
+          out.set(entry.bytes, 0);
+          entry.bytes = out;
+        } else {
+          entry.bytes = entry.bytes.slice(0, size);
+        }
+      },
       stat() {
         return { type: "file", size: entry.bytes.byteLength, mtime: entry.mtime };
       },
@@ -714,6 +741,9 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     root,
     stat,
     readdir,
+    // R5: read-only scratch aggregate query for the fd_filestat_set_size
+    // planner projection (a query, never an authority — like stat).
+    scratchTotalBytes: () => totalBytes("scratch"),
     open,
     createScratchFile,
     createDirectory,

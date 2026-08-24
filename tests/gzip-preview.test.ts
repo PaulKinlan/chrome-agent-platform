@@ -201,8 +201,8 @@ Deno.test("gzip retained Worker: malformed header/truncation/deflate/CRC failure
   }
 });
 
-Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED20 with exact 23/3 posture", async () => {
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 20);
+Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED21 with exact 23/3 posture", async () => {
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 21, "R5: fd_filestat_set_size admitted (the §7 census 20→21)");
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
   const census = new Map();
   for (const row of BUNDLED_TOOL_PACKAGE_ROWS) {
@@ -219,11 +219,11 @@ Deno.test("gzip admission census: all 26 exact CAS parse against SUPPORTED20 wit
   const disabled = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
   assertEquals(disabled.map((row) => row.toolId).sort(), ["sqlite3_query_bounded", "touch", "truncate"]);
   assertEquals(census.get("touch"), ["path_filestat_set_times"]);
-  assertEquals(census.get("truncate"), ["fd_filestat_set_size"]);
+  assertEquals(census.get("truncate"), [], "R5: fd_filestat_set_size is now SUPPORTED, so truncate's missing list is EMPTY — the ADMISSION stays disabled (§8: no admission flip); §7's 'still lists among its missing until R11' is inoperable against this dynamic census");
   assertEquals(census.get("sqlite3_query_bounded"), [
-    "fd_filestat_set_size", "fd_sync", "path_create_directory", "path_filestat_set_times",
+    "fd_sync", "path_create_directory", "path_filestat_set_times",
     "path_readlink", "path_remove_directory", "path_unlink_file", "poll_oneoff",
-  ]);
+  ], "R5: sqlite's computed missing list drops fd_filestat_set_size (7 remain); the linkage stays disabled");
 });
 
 Deno.test("gzip service boundary: trusted expected encoding admits one arm and rejects hostile/mismatched arms", () => {
