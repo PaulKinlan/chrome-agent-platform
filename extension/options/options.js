@@ -1512,7 +1512,7 @@ async function renderPermissions() {
     // grant never leaves a silently-required invisible dependency behind
     // (the ARTIFACT-DELETE finding).
     const gates = document.createElement("span");
-    gates.className = "perm-gates muted";
+    gates.className = "perm-gates";
     gates.textContent = cap.gates ?? `Gates: ${cap.label.toLowerCase()}.`;
 
     row.append(name, state, hint, gates);
@@ -2245,6 +2245,63 @@ export const navigationController = createNavigationController({
     return handleSettingsHashNavigation(hash || `#${sectionId}`, isTraverse);
   },
 });
+
+// ── Section anchor links (CAP-FB-20260823-SECTION-ANCHOR-LINKS-01) ─────────
+// Every panel h2 gets a hover-revealed anchor; clicking the anchor or the
+// heading copies the deep link (#section) to the clipboard with a visible
+// confirmation. The link itself navigates + scrolls via handleSettingsHashNavigation.
+function sectionLinkUrl(sectionId) {
+  return `${location.origin}${location.pathname}#${sectionId}`;
+}
+
+function flashCopied(anchorEl, url) {
+  const original = anchorEl.getAttribute("aria-label") ?? "Copy section link";
+  anchorEl.classList.add("copied");
+  anchorEl.textContent = "✓";
+  anchorEl.setAttribute("aria-label", `Copied ${url}`);
+  clearTimeout(anchorEl._copyTimer);
+  anchorEl._copyTimer = setTimeout(() => {
+    anchorEl.classList.remove("copied");
+    anchorEl.textContent = "#";
+    anchorEl.setAttribute("aria-label", original);
+  }, 1500);
+}
+
+async function copySectionLink(sectionId, anchorEl) {
+  const url = sectionLinkUrl(sectionId);
+  try {
+    await navigator.clipboard.writeText(url);
+    flashCopied(anchorEl, url);
+  } catch {
+    // Clipboard unavailable (non-secure context / denied) — reveal the link so
+    // the owner can copy manually (never a silent no-op).
+    anchorEl.classList.add("copied");
+    anchorEl.textContent = url;
+    anchorEl.setAttribute("aria-label", `Section link: ${url}`);
+  }
+}
+
+function wireSectionAnchors() {
+  for (const section of document.querySelectorAll("section.panel[id]")) {
+    const h2 = section.querySelector(":scope > h2");
+    if (!h2) continue;
+    const anchor = document.createElement("button");
+    anchor.type = "button";
+    anchor.className = "section-anchor";
+    anchor.textContent = "#";
+    anchor.setAttribute("aria-label", `Copy link to ${h2.textContent.trim()}`);
+    anchor.title = "Copy section link";
+    anchor.addEventListener("click", () => copySectionLink(section.id, anchor));
+    h2.append(anchor);
+    // The heading click also copies (the anchor has its own handler; skip it to
+    // avoid a double copy).
+    h2.addEventListener("click", (e) => {
+      if (e.target === anchor) return;
+      copySectionLink(section.id, anchor);
+    });
+  }
+}
+wireSectionAnchors();
 
 document.querySelectorAll(".nav-item").forEach((a) => {
   a.addEventListener("click", (e) => {

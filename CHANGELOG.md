@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.212] — 2026-08-24
+- fix(settings): settings cluster — usage tracking attributed to the real per-run task id (was a stale closure id), permission-row gates/description layout overlap fixed (CSS cascade + narrow-width grid areas), section deep-link anchors with copy-to-clipboard (CAP-FB-20260823-USAGE-TRACKING-FIX-01, SETTINGS-PERM-LAYOUT-01, SECTION-ANCHOR-LINKS-01)
+
 ## [0.2.211] — 2026-08-24
 - feat(workspace): transactional scratch directory primitives (S2) — explicit empty-directory representation, create/remove with full collision lattice (EEXIST/ENOENT/ENAMETOOLONG/ENOSPC/ENOTEMPTY/EPERM), root protection, stat/readdir union, S1 transaction reentry rule (CAP-FB-20260823-S2-DIRS-01)
 

@@ -88,6 +88,30 @@ nav {
   margin: 0 0 8px;
   font-size: var(--text-lg);
 }
+/* Section anchor (CAP-FB-20260823-SECTION-ANCHOR-LINKS-01): hover-revealed,
+   keyboard-reachable (# copy button beside every panel heading). */
+.panel h2 .section-anchor {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8em;
+  cursor: pointer;
+  margin-inline-start: 0.5rem;
+  padding: 0 0.3rem;
+  border-radius: 0.3rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.panel h2:hover .section-anchor,
+.panel h2 .section-anchor:focus-visible {
+  opacity: 1;
+}
+.panel h2 .section-anchor.copied {
+  color: var(--success);
+  opacity: 1;
+}
 .panel h3 {
   font-size: 14px;
   margin: 16px 0 6px;
@@ -760,7 +784,7 @@ input:focus, select:focus, textarea:focus {
   border-radius: var(--radius-md);
   background: var(--panel);
 }
-.perm-row .perm-gates { grid-area: gates; font-size: var(--text-xs, 12px); }
+.perm-row .perm-gates { grid-area: gates; font-size: var(--text-xs, 12px); color: var(--muted); }
 .perm-name {
   grid-area: name;
   font-weight: 600;
@@ -1033,6 +1057,7 @@ input:focus, select:focus, textarea:focus {
       "name"
       "state"
       "hint"
+      "gates"
       "btn";
     align-items: start;
   }

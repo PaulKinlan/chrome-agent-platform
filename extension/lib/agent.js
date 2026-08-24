@@ -619,7 +619,7 @@ export function createAgent({
         const attempt = attemptQueue.shift() ?? { id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: attemptOrdinal };
         await recordUsage({
           agentId: id,
-          taskId,
+          taskId: activeRun?.identity?.taskId ?? taskId,
           provider: model.providerName,
           model: model.modelId,
           inputTokens: record.inputTokens ?? 0,
