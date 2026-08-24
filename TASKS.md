@@ -401,14 +401,14 @@ On resume after a coordinator or worker loss:
   reset all" nuclear option that wipes everything back to a true first-run
   state — needed so the first-run experience can be tested frequently
 - Updated: 2026-08-23 23:00 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `1f18fcf`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@243c60945e7bc738653f5d23ded4cabfa3cf95fc` (0.2.217)
 - Acceptance: a clearly-labelled, owner-only "Reset all / Delete all" action in
   Settings wipes ALL extension state (agents, tasks, artifacts, memory,
   scheduled jobs, permission grants, OPFS models + evidence caches, settings,
