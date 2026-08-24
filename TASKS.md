@@ -203,14 +203,14 @@ On resume after a coordinator or worker loss:
   COLLAPSED by default (the name summary is enough); and expanding should open
   ONE call, not all of them
 - Updated: 2026-08-24 14:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `84bd49c`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@dca9973603a4a765ab57a46ead4f1bdbe5286ccf` (0.2.234, per-card <details> collapsed by default + per-card toggle)
 - Acceptance: tool-call cards in the task/thread view render collapsed showing
   the tool name summary; clicking one expands ONLY that call; no
   expand-all-on-single-click behavior; state survives re-render
