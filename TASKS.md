@@ -194,8 +194,8 @@ On resume after a coordinator or worker loss:
     same root class as the earlier durable-task-restore fix (which attached
     the projection) — that fix restored the LIVE view but may read only the
     first run's journal.
-
-
+- History:
+  - 2026-08-24 19:35 UTC — LANDED follow-up cure at `origin/main@41d7f56cdca9a55909f0cc72c9def855a37dfb1d` (0.2.237): owner-reported residual data-loss — final assistant turn missing on restore + oldest rows evicted. Two defects fixed: (A) the SW post-run tool replay now splices tool rows BEFORE the committed terminal row for the same executionId, so the thread ends on the terminal assistant/error row, never a tool row; (B) stored toolResult bounded to 16KiB and trimMessages rewritten (protectedTailStart) to protect the final turn's terminal + its triggering user row, evicting only the older prefix — this kills the memory_get thread:<id> self-embedding feedback loop that blew the 200KiB budget. Both KATs fail on the broken base, pass on the fix; review PASS (Gemini f0215373).
 
 ## [CAP-FB-20260824-TOOLCALLS-COLLAPSED-01] Task view: tool calls collapsed by default; open-one opens one
 
