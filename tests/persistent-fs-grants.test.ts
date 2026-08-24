@@ -10,6 +10,7 @@ import {
   deleteFsGrant,
   queryFsGrantStatus,
   serializeFsGrantSummary,
+  wireLocalFolderPickers,
 } from "../extension/lib/fs-grants.js";
 import {
   SETTINGS_SECTIONS,
@@ -178,16 +179,216 @@ Deno.test("pure: Settings sections and navigation include local-folders", () => 
   assertEquals(normalizeSettingsSectionId("local-folders"), "local-folders");
 });
 
-Deno.test("options.html: contains local-folders nav item and panel", async () => {
+Deno.test("options.html: contains local-folders nav item and panel with Tranche 2 picker toolbar", async () => {
   const html = await Deno.readTextFile(
     new URL("../extension/options/options.html", import.meta.url),
   );
   assert(html.includes('data-section="local-folders"'), "options.html must contain local-folders nav link");
   assert(html.includes('id="local-folders"'), "options.html must contain local-folders section panel");
   assert(html.includes('id="local-folders-list"'), "options.html must contain local-folders-list container");
+  assert(html.includes('id="fs-add-directory-btn"'), "options.html must contain Add folder button");
+  assert(html.includes('id="fs-add-file-btn"'), "options.html must contain Add file button");
+  assert(html.includes('id="fs-pick-mode"'), "options.html must contain Access Mode selector");
+  assert(html.includes('id="fs-picker-unsupported-notice"'), "options.html must contain unsupported environment notice");
 });
 
-Deno.test("service-worker.js: fs-grant routes require owner-options or extensionSender authority", async () => {
+Deno.test("wireLocalFolderPickers: feature-detects unavailable picker APIs truthfully", () => {
+  const dirBtn = { disabled: false };
+  const fileBtn = { disabled: false };
+  const notice = { style: { display: "none" } };
+
+  const fakeWin: any = {
+    document: {
+      getElementById: (id: string) => {
+        if (id === "fs-add-directory-btn") return dirBtn;
+        if (id === "fs-add-file-btn") return fileBtn;
+        if (id === "fs-picker-unsupported-notice") return notice;
+        return null;
+      },
+    },
+    // showDirectoryPicker and showOpenFilePicker are absent
+  };
+
+  wireLocalFolderPickers({ win: fakeWin });
+
+  assertEquals(notice.style.display, "inline-flex", "notice must be displayed when pickers unavailable");
+  assertEquals(dirBtn.disabled, true, "directory button must be disabled");
+  assertEquals(fileBtn.disabled, true, "file button must be disabled");
+});
+
+Deno.test("wireLocalFolderPickers: handles directory picking with chosen mode and saves grant", async () => {
+  const fakeIdb = new IDBFactory();
+  let clickHandler: any = null;
+
+  const dirBtn: any = {
+    disabled: false,
+    addEventListener: (event: string, fn: any) => {
+      if (event === "click") clickHandler = fn;
+    },
+  };
+  const fileBtn: any = { disabled: false, addEventListener: () => {} };
+  const modeSelect: any = { value: "readwrite" };
+  const notice: any = { style: { display: "none" } };
+
+  const mockHandle = {
+    kind: "directory",
+    name: "workspace-repo",
+  };
+
+  const fakeWin: any = {
+    allowUntrustedEventsForTesting: true,
+    document: {
+      getElementById: (id: string) => {
+        if (id === "fs-add-directory-btn") return dirBtn;
+        if (id === "fs-add-file-btn") return fileBtn;
+        if (id === "fs-pick-mode") return modeSelect;
+        if (id === "fs-picker-unsupported-notice") return notice;
+        return null;
+      },
+    },
+    showDirectoryPicker: async ({ mode }: { mode: string }) => {
+      assertEquals(mode, "readwrite", "picker must receive selected access mode");
+      return mockHandle;
+    },
+  };
+
+  let savedCalled = false;
+  wireLocalFolderPickers({
+    win: fakeWin,
+    onSaved: () => {
+      savedCalled = true;
+    },
+  });
+
+  assertEquals(notice.style.display, "none");
+  assertEquals(dirBtn.disabled, false);
+  assert(clickHandler, "click handler must be attached");
+
+  // Trigger click
+  await clickHandler({ isTrusted: true });
+  assertEquals(savedCalled, true, "onSaved callback must be invoked after picking");
+});
+
+Deno.test("wireLocalFolderPickers: cleanly ignores AbortError on user cancel", async () => {
+  let clickHandler: any = null;
+  const dirBtn: any = {
+    disabled: false,
+    addEventListener: (event: string, fn: any) => {
+      if (event === "click") clickHandler = fn;
+    },
+  };
+  const fakeWin: any = {
+    allowUntrustedEventsForTesting: true,
+    document: {
+      getElementById: (id: string) => {
+        if (id === "fs-add-directory-btn") return dirBtn;
+        return null;
+      },
+    },
+    showDirectoryPicker: async () => {
+      const err = new Error("User cancelled");
+      err.name = "AbortError";
+      throw err;
+    },
+  };
+
+  wireLocalFolderPickers({ win: fakeWin });
+  assert(clickHandler);
+
+  // Should not throw
+  await clickHandler({ isTrusted: true });
+});
+
+Deno.test("wireLocalFolderPickers: handles file picking with chosen mode and saves file grant", async () => {
+  let clickHandler: any = null;
+
+  const dirBtn: any = { disabled: false, addEventListener: () => {} };
+  const fileBtn: any = {
+    disabled: false,
+    addEventListener: (event: string, fn: any) => {
+      if (event === "click") clickHandler = fn;
+    },
+  };
+  const modeSelect: any = { value: "read" };
+  const notice: any = { style: { display: "none" } };
+
+  const mockFileHandle = {
+    kind: "file",
+    name: "dataset.csv",
+  };
+
+  const fakeWin: any = {
+    allowUntrustedEventsForTesting: true,
+    document: {
+      getElementById: (id: string) => {
+        if (id === "fs-add-directory-btn") return dirBtn;
+        if (id === "fs-add-file-btn") return fileBtn;
+        if (id === "fs-pick-mode") return modeSelect;
+        if (id === "fs-picker-unsupported-notice") return notice;
+        return null;
+      },
+    },
+    showOpenFilePicker: async ({ multiple }: { multiple: boolean }) => {
+      assertEquals(multiple, false);
+      return [mockFileHandle];
+    },
+  };
+
+  let savedGrant: any = null;
+  wireLocalFolderPickers({
+    win: fakeWin,
+    onSaved: (g) => {
+      savedGrant = g;
+    },
+  });
+
+  assert(clickHandler);
+  await clickHandler({ isTrusted: true });
+
+  assert(savedGrant, "file grant must be saved");
+  assertEquals(savedGrant.name, "dataset.csv");
+  assertEquals(savedGrant.kind, "file");
+  assertEquals(savedGrant.mode, "read");
+});
+
+Deno.test("wireLocalFolderPickers: untrusted click event is rejected without user activation", async () => {
+  let clickHandler: any = null;
+
+  const dirBtn: any = {
+    disabled: false,
+    addEventListener: (event: string, fn: any) => {
+      if (event === "click") clickHandler = fn;
+    },
+  };
+
+  const fakeWin: any = {
+    allowUntrustedEventsForTesting: false,
+    document: {
+      getElementById: (id: string) => {
+        if (id === "fs-add-directory-btn") return dirBtn;
+        return null;
+      },
+    },
+    showDirectoryPicker: async () => {
+      throw new Error("Should never be called for untrusted click");
+    },
+  };
+
+  let flashMsg = "";
+  wireLocalFolderPickers({
+    win: fakeWin,
+    onFlash: (m) => {
+      flashMsg = m;
+    },
+  });
+
+  assert(clickHandler);
+  await clickHandler({ isTrusted: false });
+
+  assertEquals(flashMsg, "Folder picker requires a genuine user click.");
+});
+
+Deno.test("service-worker.js: fs-grant routes require owner-options or extension authority", async () => {
   const sw = await Deno.readTextFile(
     new URL("../extension/background/service-worker.js", import.meta.url),
   );
@@ -205,9 +406,9 @@ Deno.test("service-worker.js: fs-grant routes require owner-options or extension
     "service worker must register fs-grant.remove route",
   );
 
-  // Checks for principal / extensionSender gating
+  // Checks for principal gating (owner-options or extension)
   assert(
-    sw.includes('context?.principal !== "owner-options" && !context?.extensionSender'),
+    sw.includes('context?.principal !== "owner-options" && context?.principal !== "extension"'),
     "service worker must gate fs-grant routes against non-extension / non-owner callers",
   );
 });

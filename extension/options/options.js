@@ -47,6 +47,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog } from "../shared/components.js";
+import { saveFsGrant, wireLocalFolderPickers } from "../lib/fs-grants.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -475,6 +476,11 @@ async function renderLocalModels() {
 
 // ── local folders (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ────────────────
 export async function renderLocalFolders() {
+  wireLocalFolderPickers({
+    win: window,
+    onFlash: saveFlash,
+    onRender: () => renderLocalFolders(),
+  });
   const host = $("#local-folders-list");
   if (!host) return;
   host.replaceChildren();

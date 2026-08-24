@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.219] — 2026-08-24
+- feat(fs-grants): add owner folder and file pickers with mode selection (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 2)
+
 ## [0.2.218] — 2026-08-24
 - feat(fs-grants): add persistent file system grants IndexedDB store and Settings pane (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 1)
 

@@ -84,6 +84,30 @@
       <section id="local-folders" class="panel">
         <h2>Local folders & files</h2>
         <p class="muted">Manage persistent access to local directories and files granted to agents or tasks. Access is restricted to the specific folder or file subtree and can be revoked at any time.</p>
+        
+        <div class="local-folders-toolbar">
+          <div class="toolbar-controls">
+            <label class="field fs-mode-field">
+              <span class="field-label">Access Mode</span>
+              <select id="fs-pick-mode" class="input-select">
+                <option value="read" selected>Read-only</option>
+                <option value="readwrite">Read/Write</option>
+              </select>
+            </label>
+            <button type="button" class="btn primary" id="fs-add-directory-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Add folder
+            </button>
+            <button type="button" class="btn" id="fs-add-file-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              Add file
+            </button>
+          </div>
+          <div id="fs-picker-unsupported-notice" class="chip avail-disabled" style="display:none;">
+            File System Access API is unavailable in this browser environment
+          </div>
+        </div>
+
         <div id="local-folders-list" class="local-folders-list"></div>
       </section>
 

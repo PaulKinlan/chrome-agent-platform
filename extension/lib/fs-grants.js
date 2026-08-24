@@ -1,14 +1,15 @@
-// lib/fs-grants.js — Persistent Local File System Access Grants Store (IndexedDB).
+// lib/fs-grants.js — Persistent Local File System Access Grants Store & Picker Wiring.
 // (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01).
 //
 // Invariants:
 //   - Tranche 1: Manages persistence, query, enumeration, and revocation of
 //     structured-cloned FileSystemDirectoryHandle / FileSystemFileHandle records.
+//   - Tranche 2: Adds window-only, user-gesture-only owner pickers ("Add folder", "Add file")
+//     with explicit mode selection ("read" | "readwrite") and truthful feature detection.
 //   - Zero broadening: each grant binds strictly to the chosen directory/file subtree
-//     and its requested mode ("read" | "readwrite").
+//     and its requested mode.
 //   - Honest permission state: uses handle.queryPermission({ mode }) to reflect
-//     "granted" | "prompt" | "denied". A browser restart sets status to "prompt"
-//     until the owner re-authorizes via a user gesture in a page.
+//     "granted" | "prompt" | "denied".
 //   - Revocation: deleting the record is the revocation authority.
 
 const DB_NAME = "cap_fs_grants";
@@ -25,7 +26,7 @@ function scopeKey(scope) {
   return "global";
 }
 
-function openDatabase(customIdb = null) {
+async function openDatabase(customIdb = null) {
   const idb = customIdb || (typeof indexedDB !== "undefined" ? indexedDB : null);
   if (!idb) return null;
 
@@ -219,4 +220,100 @@ export function serializeFsGrantSummary(grant, liveStatus = null) {
     lastUsedAt: grant.lastUsedAt,
     status: liveStatus || "unknown",
   });
+}
+
+/**
+ * Wire the Settings "Local folders" picker buttons ("Add folder", "Add file") to the File System Access API.
+ * @param {{
+ *   win?: any,
+ *   onSaved?: (grant: any) => void,
+ *   onFlash?: (msg: string) => void,
+ *   onRender?: () => void,
+ * }} [options]
+ */
+export function wireLocalFolderPickers({
+  win = (typeof window !== "undefined" ? window : null),
+  onSaved = () => {},
+  onFlash = () => {},
+  onRender = () => {},
+} = {}) {
+  if (!win) return;
+  const doc = win.document;
+  if (!doc) return;
+
+  const dirBtn = doc.getElementById("fs-add-directory-btn");
+  const fileBtn = doc.getElementById("fs-add-file-btn");
+  const modeSelect = doc.getElementById("fs-pick-mode");
+  const notice = doc.getElementById("fs-picker-unsupported-notice");
+
+  const hasDirPicker = typeof win.showDirectoryPicker === "function";
+  const hasFilePicker = typeof win.showOpenFilePicker === "function";
+
+  if (!hasDirPicker && !hasFilePicker) {
+    if (notice) notice.style.display = "inline-flex";
+    if (dirBtn) dirBtn.disabled = true;
+    if (fileBtn) fileBtn.disabled = true;
+    return;
+  }
+
+  if (notice) notice.style.display = "none";
+  if (dirBtn) dirBtn.disabled = !hasDirPicker;
+  if (fileBtn) fileBtn.disabled = !hasFilePicker;
+
+  if (dirBtn && !dirBtn._pickerWired) {
+    dirBtn._pickerWired = true;
+    dirBtn.addEventListener("click", async (event) => {
+      if (!event?.isTrusted && !win.allowUntrustedEventsForTesting) {
+        onFlash("Folder picker requires a genuine user click.");
+        return;
+      }
+      const mode = modeSelect?.value === "readwrite" ? "readwrite" : "read";
+      try {
+        const handle = await win.showDirectoryPicker({ mode });
+        if (!handle) return;
+        const saved = await saveFsGrant({
+          handle,
+          name: handle.name,
+          kind: "directory",
+          mode,
+          scope: null,
+        });
+        onFlash(`Added access to folder "${handle.name}" (${mode === "readwrite" ? "read/write" : "read-only"}).`);
+        onSaved(saved);
+        onRender();
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        onFlash(`Failed to add folder: ${err?.message || err}`);
+      }
+    });
+  }
+
+  if (fileBtn && !fileBtn._pickerWired) {
+    fileBtn._pickerWired = true;
+    fileBtn.addEventListener("click", async (event) => {
+      if (!event?.isTrusted && !win.allowUntrustedEventsForTesting) {
+        onFlash("File picker requires a genuine user click.");
+        return;
+      }
+      const mode = modeSelect?.value === "readwrite" ? "readwrite" : "read";
+      try {
+        const handles = await win.showOpenFilePicker({ multiple: false });
+        const handle = Array.isArray(handles) ? handles[0] : handles;
+        if (!handle) return;
+        const saved = await saveFsGrant({
+          handle,
+          name: handle.name,
+          kind: "file",
+          mode,
+          scope: null,
+        });
+        onFlash(`Added access to file "${handle.name}" (${mode === "readwrite" ? "read/write" : "read-only"}).`);
+        onSaved(saved);
+        onRender();
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        onFlash(`Failed to add file: ${err?.message || err}`);
+      }
+    });
+  }
 }

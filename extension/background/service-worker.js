@@ -3029,7 +3029,7 @@ const handlers = mergeRouteMaps(
 
   // ── Persistent File System Access Grants (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ──
   async "fs-grant.list"(m, context) {
-    if (context?.principal !== "owner-options" && !context?.extensionSender) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
       securityEvent(
         "blocked-action",
         `fs-grant list denied for principal ${context?.principal ?? "unknown"}`,
@@ -3047,7 +3047,7 @@ const handlers = mergeRouteMaps(
   },
 
   async "fs-grant.get"({ grantId }, context) {
-    if (context?.principal !== "owner-options" && !context?.extensionSender) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
       return { ok: false, error: "fs-grant.get is restricted to extension surfaces" };
     }
     const grant = await getFsGrant(grantId);
@@ -3057,7 +3057,7 @@ const handlers = mergeRouteMaps(
   },
 
   async "fs-grant.remove"({ grantId }, context) {
-    if (context?.principal !== "owner-options" && !context?.extensionSender) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
       securityEvent(
         "blocked-action",
         `fs-grant remove denied for principal ${context?.principal ?? "unknown"}`,
