@@ -21,12 +21,18 @@ const AGENTS_KEY = "cap:namedAgents";
 
 // Bounds (Constitution §4 + §2): names/roles are short, and an agent registry
 // is bounded so a hostile prompt cannot grow it without limit.
-const MAX_AGENTS = 50;
-const MAX_NAME_LEN = 48;
-const MAX_ROLE_LEN = 200;
-const MAX_SKILLS = 32;
+// Bounds family (CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01, owner direction):
+// generous enough that a real owner never hits them, still FINITE so a hostile
+// prompt can't grow the chrome.storage-backed registry unboundedly
+// (Constitution §4). Over-cap ROLE/NAME input is REJECTED with a clear error
+// — never silently clipped (the 200-char silent slice destroyed detailed
+// roles, the P0 this family raise fixes).
+const MAX_AGENTS = 200;
+const MAX_NAME_LEN = 120;
+const MAX_ROLE_LEN = 32000;
+const MAX_SKILLS = 128;
 const MAX_CORE_ASSETS = 8;
-const MAX_CORE_ASSET_BYTES = 4000;
+const MAX_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
 
 /** Normalize the core assets (files the owner attaches as the agent's core
  * context — a text file's content, or an image's data URL). Bounded so a
@@ -161,7 +167,10 @@ export async function createNamedAgent(
   const cleanName = String(name ?? "").trim();
   if (!cleanName) return { ok: false, error: "an agent needs a name" };
   if (cleanName.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
-  const roleText = String(role ?? "").trim().slice(0, MAX_ROLE_LEN);
+  const roleText = String(role ?? "").trim();
+  if (roleText.length > MAX_ROLE_LEN) {
+    return { ok: false, error: `role too long (${roleText.length} > ${MAX_ROLE_LEN}) — shorten the role; it was NOT saved` };
+  }
   const skillList = Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : [];
   const assetList = normalizeCoreAssets(coreAssets);
   return await withAgentsLock(async () => {
@@ -218,7 +227,13 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
       if (n.length > MAX_NAME_LEN) return { ok: false, error: `name too long (${MAX_NAME_LEN})` };
       next.name = n;
     }
-    if (patch.role !== undefined) next.role = String(patch.role).trim().slice(0, MAX_ROLE_LEN);
+    if (patch.role !== undefined) {
+      const roleText = String(patch.role).trim();
+      if (roleText.length > MAX_ROLE_LEN) {
+        return { ok: false, error: `role too long (${roleText.length} > ${MAX_ROLE_LEN}) — shorten the role; the agent was NOT changed` };
+      }
+      next.role = roleText;
+    }
     if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
     if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
     if (patch.coreAssets !== undefined) next.coreAssets = normalizeCoreAssets(patch.coreAssets);

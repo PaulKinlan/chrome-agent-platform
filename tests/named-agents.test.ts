@@ -270,13 +270,13 @@ Deno.test("named agents: normalizeCoreAssets bounds + trims huge assets", () => 
   // entries are dropped; the count is bounded.
   const assets = normalizeCoreAssets([
     { name: "guide.md", type: "text/markdown", content: "# Guide\nSome instructions" },
-    { name: "big.txt", type: "text/plain", content: "x".repeat(6000) },
+    { name: "big.txt", type: "text/plain", content: "x".repeat(200_000) }, // over the RAISED 128 KiB cap (CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01: 4000→131072)
     null,
     "garbage",
   ]);
   assertEquals(assets.length, 2, "only valid assets survive");
   assertEquals(assets[0].content, "# Guide\nSome instructions", "normal content untouched");
-  assert(assets[1].content.length <= 4001, "oversized content is truncated");
+  assert(assets[1].content.length <= 131_073, "oversized content is truncated at the raised cap");
   assert(assets[1].content.endsWith("…"), "truncation is marked");
   // Bounded to MAX_CORE_ASSETS (8).
   const many = normalizeCoreAssets(Array.from({ length: 20 }, (_, i) => ({ name: `a${i}`, content: "x" })));
@@ -293,4 +293,71 @@ Deno.test("named agents: create + update persist coreAssets", async () => {
   const fetched = await getNamedAgent(created.agent.id);
   assertEquals(fetched.coreAssets[0].content, "hello", "the core asset persists on get");
   await deleteNamedAgent(created.agent.id);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// CAP-FB-20260824-AGENT-ROLE-TRUNCATION-01 (+ owner scope expansion): the
+// bounds family is generous, finite, and HONEST — roles round-trip verbatim
+// up to 32000 chars; over-cap input is REJECTED with a clear error, never
+// silently clipped (the 200-char slice destroyed detailed roles).
+
+Deno.test("role bounds: a ~30KB detailed role round-trips create → save → reopen VERBATIM", async () => {
+  const role = "You are the Sorting Hat.\n" + "Detailed duty with unicode — héllo ✓ 42.\n".repeat(750) + "end."; // ≈30.7KB, trim-safe
+  assert(role.length > 30_000 && role.length <= 32_000, `fixture is ~30KB (${role.length})`);
+  const created = await createNamedAgent({ name: "Sorting Hat", role });
+  assertEquals(created.ok, true);
+  assertEquals(created.agent.role, role, "stored VERBATIM at create — zero truncation");
+  const reopened = await getNamedAgent(created.agent.id);
+  assertEquals(reopened.role, role, "round-trips byte-for-byte through the registry");
+  const listed = (await listNamedAgents()).find((a) => a.id === created.agent.id);
+  assertEquals(listed.role, role, "the list surface returns the full role");
+  // edit/patch preserves the full role verbatim
+  const role2 = role + "\nOne more duty. end";
+  const updated = await updateNamedAgent(created.agent.id, { role: role2 });
+  assertEquals(updated.ok, true);
+  assertEquals((await getNamedAgent(created.agent.id)).role, role2, "edit preserves the full role");
+});
+
+Deno.test("role bounds: over-cap input is REJECTED honestly at create AND update — never silently clipped", async () => {
+  const tooLong = "x".repeat(32_001);
+  const created = await createNamedAgent({ name: "Over Cap", role: tooLong });
+  assertEquals(created.ok, false, "over-cap create rejected");
+  assert(created.error.includes("role too long") && created.error.includes("32000"), `clear notice: ${created.error}`);
+  assertEquals(await getNamedAgent("over-cap"), null, "nothing persisted on rejection");
+  const ok = await createNamedAgent({ name: "Cap Target", role: "short" });
+  assertEquals(ok.ok, true);
+  const updated = await updateNamedAgent(ok.agent.id, { role: tooLong });
+  assertEquals(updated.ok, false, "over-cap update rejected");
+  assert(updated.error.includes("NOT changed"), "the update notice says nothing was saved");
+  assertEquals((await getNamedAgent(ok.agent.id)).role, "short", "the prior role survives a rejected patch");
+  // EXACTLY at the cap succeeds (the boundary is inclusive)
+  const atCap = "y".repeat(32_000);
+  const createdAtCap = await createNamedAgent({ name: "At Cap", role: atCap });
+  assertEquals(createdAtCap.ok, true, "32000 chars exactly is admitted");
+  assertEquals(createdAtCap.agent.role.length, 32_000);
+});
+
+Deno.test("bounds family at the new caps: name 120, skills 128, core asset 128 KiB, agents 200", async () => {
+  // name: 120 admitted, 121 rejected honestly
+  const named = await createNamedAgent({ name: "n".repeat(120), role: "r" });
+  assertEquals(named.ok, true, "120-char name admitted");
+  const tooNamed = await createNamedAgent({ name: "n".repeat(121), role: "r" });
+  assertEquals(tooNamed.ok, false, "121-char name rejected");
+  assert(tooNamed.error.includes("name too long"), "clear name notice");
+  // skills: 128 kept (list bound; entries visible on reopen)
+  const skills = Array.from({ length: 128 }, (_, i) => `skill-${i}`);
+  const skilled = await createNamedAgent({ name: "Skilled", role: "r", skills });
+  assertEquals(skilled.ok, true);
+  assertEquals(skilled.agent.skills.length, 128, "128 skills kept");
+  // core asset: 128 KiB verbatim via the pure normalizer
+  const big = "a".repeat(131_072);
+  const [asset] = normalizeCoreAssets([{ name: "big.txt", type: "text/plain", content: big }]);
+  assertEquals(asset.content.length, 131_072, "128 KiB core asset kept verbatim");
+  const over = "a".repeat(131_073);
+  const [clipped] = normalizeCoreAssets([{ name: "over.txt", type: "text/plain", content: over }]);
+  assert(clipped.content.endsWith("…"), "over-cap asset is MARKED with the ellipsis (visible, not silent)");
+  assertEquals(clipped.content.length, 131_072 + 1, "bounded at the cap + the marker");
+  // registry cap raised to 200 (the error string carries the live bound)
+  const mapProbe = await createNamedAgent({ name: "probe", role: "r" });
+  assertEquals(mapProbe.ok, true);
 });
