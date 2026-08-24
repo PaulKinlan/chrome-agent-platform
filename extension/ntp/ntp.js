@@ -45,6 +45,7 @@ import { actionableRunsForSurface, latestRunForSurface } from "../lib/run-scope.
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
+  formatWebmcpHubStatus,
   siteAgentSetupMessage,
 } from "../shared/site-agent-copy.js";
 // The visible find-tools action consumes the centralized authority at runtime
@@ -352,33 +353,76 @@ async function renderSiteAgents() {
 }
 
 // ── WebMCP discovery hub status ──────────────────────────────────────────
-// A one-line honest status under the Site Agents section: when discovery last
-// ran, for which origin, how many tools it found, and the script state — so the
-// discovery pipeline is never opaque from the hub. PRESERVED on the current
-// main (the copy-cleanup candidate removed it; the WebMCP semantics stay).
+// A structured, honest status CARD under the Site Agents section (never a
+// run-on " · " string): the origin, the SW-attested script lifecycle state
+// (refreshing is distinct from injected), and the page-reported tool counts
+// with timestamps as <time> elements. PRESERVED on the current main (the
+// copy-cleanup candidate removed it; the WebMCP semantics stay).
 async function renderWebmcpHubStatus() {
   const el = document.getElementById("webmcp-hub-status");
   if (!el) return;
   const status = await send("webmcp.status").catch(() => null);
   const s = status?.status;
+  el.replaceChildren();
   if (!s) {
     el.textContent = "Discovery has not run yet.";
     return;
   }
-  // The record separates the SW-ATTESTED script lifecycle from the
-  // PAGE-REPORTED tool counts — label them honestly.
-  const parts = [`WebMCP discovery: ${s.origin}`];
-  if (s.scriptStatus && s.scriptStatus !== "none") {
-    const when = s.scriptStatusAt ? new Date(s.scriptStatusAt).toLocaleTimeString() : null;
-    parts.push(`scripts ${s.scriptStatus}${when ? ` · ${when}` : ""}`);
+  const vm = formatWebmcpHubStatus(s);
+  if (!vm) {
+    el.textContent = "Discovery has not run yet.";
+    return;
   }
-  if (s.lastReport) {
-    const r = s.lastReport;
-    parts.push(
-      `page report: ${r.toolCount ?? 0} tools (${r.declaredCount ?? 0} declared / ${r.inferredCount ?? 0} inferred) · ${new Date(r.at).toLocaleTimeString()}`,
-    );
+  const addTime = (parent, at) => {
+    if (at === null) return;
+    const time = document.createElement("time");
+    time.dateTime = new Date(at).toISOString();
+    time.textContent = new Date(at).toLocaleTimeString();
+    time.className = "webmcp-card-time muted";
+    parent.append(" ", time);
+  };
+  // Title row: the origin + the lifecycle state badge.
+  const title = document.createElement("div");
+  title.className = "webmcp-card-title";
+  const titleText = document.createElement("span");
+  titleText.textContent = `WebMCP discovery: ${vm.origin}`;
+  const badge = document.createElement("span");
+  badge.className = `webmcp-card-badge webmcp-card-badge-${vm.state}`;
+  badge.textContent = vm.stateLabel;
+  title.append(titleText, " ", badge);
+  el.append(title);
+  const rows = document.createElement("dl");
+  rows.className = "webmcp-card-rows";
+  // Row 1: the SW-attested script lifecycle + when it last changed.
+  const scriptRow = document.createElement("div");
+  const scriptDt = document.createElement("dt");
+  scriptDt.textContent = "Scripts";
+  const scriptDd = document.createElement("dd");
+  scriptDd.textContent = vm.stateLabel;
+  addTime(scriptDd, vm.scriptAt);
+  scriptRow.append(scriptDt, ": ", scriptDd);
+  rows.append(scriptRow);
+  // Row 2: the page-reported tool counts + when the report arrived. A report
+  // that PREDATES the latest script event is marked stale — it never merges
+  // with the refreshing/active badge above.
+  if (vm.report) {
+    const reportRow = document.createElement("div");
+    const reportDt = document.createElement("dt");
+    reportDt.textContent = "Page report";
+    const reportDd = document.createElement("dd");
+    reportDd.textContent =
+      `${vm.report.toolCount} tools (${vm.report.declaredCount} declared / ${vm.report.inferredCount} inferred)`;
+    addTime(reportDd, vm.report.at);
+    if (vm.reportStale) {
+      const stale = document.createElement("span");
+      stale.className = "webmcp-card-badge webmcp-card-badge-stale";
+      stale.textContent = "stale";
+      reportDd.append(" ", stale);
+    }
+    reportRow.append(reportDt, ": ", reportDd);
+    rows.append(reportRow);
   }
-  el.textContent = parts.join(" · ");
+  el.append(rows);
 }
 
 // ── Find site tools (explicit tab picker) ────────────────────────────────

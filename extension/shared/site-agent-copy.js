@@ -89,3 +89,59 @@ export function siteAgentToolsMessage(state) {
       return "Site Agent tools aren't available right now. Try again.";
   }
 }
+
+/** Structured view-model for the hub's WebMCP discovery status card
+ * (CAP-FB-20260824-SITE-AGENTS-STATUS-01). Pure: maps the SW status record to
+ * labeled rows so the renderer NEVER flattens them into a run-on " · " string.
+ * `state` classifies the SW-ATTESTED script lifecycle: an in-flight refresh
+ * ("refreshing": registered/injection-partial) is DISTINCT from a live
+ * injection ("active": injected), a failure ("failed"), and the not-run
+ * states ("none"). `reportStale` is an INDEPENDENT marker: the page-reported
+ * counts PREDATE the latest script lifecycle event (the page may have changed
+ * since) — the two signals are rendered distinctly, never merged. */
+export function formatWebmcpHubStatus(s) {
+  if (!s || typeof s !== "object") return null;
+  const origin = typeof s.origin === "string" && s.origin.trim() ? s.origin.trim() : "this site";
+  const scriptStatus = typeof s.scriptStatus === "string" ? s.scriptStatus : "none";
+  const state =
+    scriptStatus === "registered" || scriptStatus === "injection-partial"
+      ? "refreshing"
+      : scriptStatus === "injected"
+        ? "active"
+        : scriptStatus === "injection-failed" || scriptStatus === "injection-error"
+          ? "failed"
+          : "none";
+  const stateLabel = {
+    refreshing: "Scripts refreshing…",
+    active: "Scripts injected",
+    failed: "Script problem",
+    none:
+      scriptStatus === "no-open-tabs"
+        ? "No open tabs"
+        : scriptStatus === "no-scripting-permission"
+          ? "No scripting permission"
+          : "Scripts not run",
+  }[state];
+  const scriptAt =
+    Number.isFinite(s.scriptStatusAt) && s.scriptStatusAt > 0 ? s.scriptStatusAt : null;
+  const r = s.lastReport && typeof s.lastReport === "object" ? s.lastReport : null;
+  const report = r
+    ? {
+        toolCount: Number.isFinite(r.toolCount) ? r.toolCount : 0,
+        declaredCount: Number.isFinite(r.declaredCount) ? r.declaredCount : 0,
+        inferredCount: Number.isFinite(r.inferredCount) ? r.inferredCount : 0,
+        at: Number.isFinite(r.at) && r.at > 0 ? r.at : null,
+      }
+    : null;
+  const reportStale =
+    report !== null && report.at !== null && scriptAt !== null && report.at < scriptAt;
+  return Object.freeze({
+    origin,
+    state,
+    stateLabel,
+    scriptStatus,
+    scriptAt,
+    report: report ? Object.freeze(report) : null,
+    reportStale,
+  });
+}

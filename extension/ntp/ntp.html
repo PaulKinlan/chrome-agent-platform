@@ -490,6 +490,16 @@
        A shared class rule, never a one-off #id override; the sibling
        capability-row hosts already supply 12px 14px, so 14px matches them. */
     .hub-row { padding-inline: 14px; }
+    /* The WebMCP discovery status card: structured rows, never a run-on line. */
+    #webmcp-hub-status .webmcp-card-rows { margin: 2px 0 0; display: grid; gap: 2px; }
+    #webmcp-hub-status .webmcp-card-rows dt { display: inline; font-weight: 600; }
+    #webmcp-hub-status .webmcp-card-rows dd { display: inline; margin: 0; }
+    #webmcp-hub-status .webmcp-card-time { font-size: 0.92em; }
+    #webmcp-hub-status .webmcp-card-badge {
+      font-size: 0.85em; padding: 0 6px; border-radius: 8px;
+      border: 1px solid currentColor; opacity: 0.85;
+    }
+    #webmcp-hub-status .webmcp-card-badge-failed { color: var(--danger, #c5221f); }
     .empty {
       padding: 14px;
       color: var(--muted);
