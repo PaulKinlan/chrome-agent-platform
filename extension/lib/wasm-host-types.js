@@ -83,7 +83,12 @@ export const WASI_RIGHTS = Object.freeze({
   FD_FILESTAT_GET: 1n << 21n,
   FD_FILESTAT_SET_SIZE: 1n << 22n,
   FD_FILESTAT_SET_TIMES: 1n << 23n,
-  POLL_FD_READWRITE: 1n << 26n,
+  PATH_SYMLINK: 1n << 24n,
+  PATH_REMOVE_DIRECTORY: 1n << 25n,
+  PATH_UNLINK_FILE: 1n << 26n,
+  POLL_FD_READWRITE: 1n << 27n,
+  SOCK_SHUTDOWN: 1n << 28n,
+  SOCK_ACCEPT: 1n << 29n,
 });
 
 export const WASI_HOST_HARD_LIMITS = Object.freeze({

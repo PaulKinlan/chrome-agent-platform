@@ -1,6 +1,9 @@
 # Changelog
 
 ## [0.2.222] — 2026-08-24
+- feat(wasi): sqlite3 R10+R10c — workspace→scratch alias + the two DB-open profiles (read 0x200026 / write 0x600066, inherit 0) and the canonical 30-bit WASI rights table (PATH_SYMLINK/REMOVE_DIRECTORY/UNLINK_FILE/SOCK_*/POLL corrections, behavior-neutral) (CAP-FB R10/R10c)
+
+## [0.2.222] — 2026-08-24
 - feat(bundled): R8 truncate Settings admission — descriptor/UI flip 23→24 (CAP-FB-20260823-R8-TRUNCATE-ADMISSION-01)
 
 ## [0.2.221] — 2026-08-24
