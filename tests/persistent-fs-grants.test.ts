@@ -11,6 +11,7 @@ import {
   queryFsGrantStatus,
   serializeFsGrantSummary,
   wireLocalFolderPickers,
+  regrantFsGrantAccess,
   listFsGrantEntries,
   readFsGrantFile,
   cleanRelativePath,
@@ -427,7 +428,7 @@ Deno.test("service-worker.js: fs-grant routes require owner-options or extension
   );
 });
 
-Deno.test("cleanRelativePath: normalizes paths and rejects traversal attacks (..)", () => {
+Deno.test("cleanRelativePath: normalizes paths and rejects traversal attacks (..) and leading slash", () => {
   assertEquals(cleanRelativePath(""), []);
   assertEquals(cleanRelativePath("foo/bar/baz"), ["foo", "bar", "baz"]);
   assertEquals(cleanRelativePath("foo/./bar//baz/"), ["foo", "bar", "baz"]);
@@ -450,6 +451,84 @@ Deno.test("cleanRelativePath: normalizes paths and rejects traversal attacks (..
     assert(err.message.includes("invalid_path_traversal"));
   }
   assertEquals(innerTraversalThrown, true, "inner .. traversal must throw");
+
+  let absoluteThrown = false;
+  try {
+    cleanRelativePath("/etc/passwd");
+  } catch (err: any) {
+    absoluteThrown = true;
+    assert(err.message.includes("invalid_path_absolute"));
+  }
+  assertEquals(absoluteThrown, true, "leading / absolute path must throw");
+});
+
+Deno.test("regrantFsGrantAccess: prompt -> requestPermission -> granted updates store timestamp", async () => {
+  let requestedMode = "";
+  const mockHandle = {
+    kind: "directory",
+    name: "resumed-folder",
+    queryPermission: async () => "prompt",
+    requestPermission: async ({ mode }: { mode: string }) => {
+      requestedMode = mode;
+      return "granted";
+    },
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_regrant_ok",
+    handle: mockHandle,
+    name: "resumed-folder",
+    mode: "readwrite",
+    createdAt: 1000,
+    lastUsedAt: 1000,
+  });
+
+  const res = await regrantFsGrantAccess("fsg_regrant_ok", { isTrusted: true });
+  assertEquals(res.ok, true);
+  assertEquals(res.status, "granted");
+  assertEquals(requestedMode, "readwrite", "requestPermission must receive grant access mode");
+
+  const updated = await getFsGrant("fsg_regrant_ok");
+  assert(updated);
+  assert(updated.lastUsedAt > 1000, "lastUsedAt must be updated upon successful re-grant");
+});
+
+Deno.test("regrantFsGrantAccess: prompt -> requestPermission -> denied returns denied status", async () => {
+  const mockHandle = {
+    kind: "directory",
+    name: "denied-folder",
+    queryPermission: async () => "prompt",
+    requestPermission: async () => "denied",
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_regrant_denied",
+    handle: mockHandle,
+    name: "denied-folder",
+  });
+
+  const res = await regrantFsGrantAccess("fsg_regrant_denied", { isTrusted: true });
+  assertEquals(res.ok, true);
+  assertEquals(res.status, "denied");
+});
+
+Deno.test("regrantFsGrantAccess: requires owner gesture (untrusted click rejected)", async () => {
+  const mockHandle = {
+    kind: "directory",
+    name: "gesture-test",
+    requestPermission: async () => "granted",
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_gesture_test",
+    handle: mockHandle,
+    name: "gesture-test",
+  });
+
+  const fakeWin: any = { allowUntrustedEventsForTesting: false };
+  const res = await regrantFsGrantAccess("fsg_gesture_test", { win: fakeWin, isTrusted: false });
+  assertEquals(res.ok, false);
+  assertEquals(res.error, "owner_gesture_required");
 });
 
 Deno.test("listFsGrantEntries: enumerates directory entries with bounds and truncation", async () => {
@@ -553,7 +632,7 @@ Deno.test("readFsGrantFile: fails closed on traversal attack and lapsed permissi
   assert(res2.error?.includes("invalid_path_traversal"));
 });
 
-Deno.test("options.js: wires renderLocalFolders and renders empty state or grant cards", async () => {
+Deno.test("options.js: wires renderLocalFolders and renders empty state or grant cards with re-grant and file viewer", async () => {
   const optionsJs = await Deno.readTextFile(
     new URL("../extension/options/options.js", import.meta.url),
   );
@@ -577,5 +656,22 @@ Deno.test("options.js: wires renderLocalFolders and renders empty state or grant
   assert(
     optionsJs.includes('type: "fs-grant.remove"'),
     "options.js must send fs-grant.remove when revoking",
+  );
+  assert(
+    optionsJs.includes("Re-grant access"),
+    "options.js must render Re-grant access button for prompt grants",
+  );
+  assert(
+    optionsJs.includes("regrantFsGrantAccess"),
+    "options.js must invoke regrantFsGrantAccess",
+  );
+  assert(
+    optionsJs.includes("fs-file-viewer"),
+    "options.js must render non-blocking inline file viewer",
+  );
+  assertEquals(
+    optionsJs.includes("prompt("),
+    false,
+    "options.js must NOT use window.prompt for file viewing (N-2 modernization)",
   );
 });

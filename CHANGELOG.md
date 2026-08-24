@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.224] — 2026-08-24
+- feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
+
+## [0.2.225] — 2026-08-24
+- feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
+
+## [0.2.224] — 2026-08-24
+- feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
+
+## [0.2.223] — 2026-08-24
+- feat(fs-grants): honest resume re-grant flow (owner-gesture requestPermission, prompt→granted round-trip, no retry loops) + non-blocking file viewer with full SHA-256 + leading-/ path rejection (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
+
 ## [0.2.222] — 2026-08-24
 - feat(wasi): sqlite3 R10+R10c — workspace→scratch alias + the two DB-open profiles (read 0x200026 / write 0x600066, inherit 0) and the canonical 30-bit WASI rights table (PATH_SYMLINK/REMOVE_DIRECTORY/UNLINK_FILE/SOCK_*/POLL corrections, behavior-neutral) (CAP-FB R10/R10c)
 

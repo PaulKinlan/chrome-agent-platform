@@ -1,4 +1,4 @@
-// lib/fs-grants.js — Persistent Local File System Access Grants Store, Picker Wiring & Bounded Reader.
+// lib/fs-grants.js — Persistent Local File System Access Grants Store, Picker Wiring, Bounded Reader & Re-grant Flow.
 // (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01).
 //
 // Invariants:
@@ -8,7 +8,9 @@
 //     with explicit mode selection ("read" | "readwrite") and truthful feature detection.
 //   - Tranche 3: Adds owner-initiated bounded listing (enumerate granted directory entries,
 //     bounded depth/count) and bounded file reading (digest-pinned content fetch via handle).
-//     Zero write capabilities; local files are NOT artifacts (OPFS remains the only promotion path).
+//   - Tranche 4: Implements the honest resume / re-grant model — owner-gesture requestPermission()
+//     on the stored handle in page context when queryPermission returns "prompt", flipping status
+//     back to "granted"; "denied" shows honest fail state; absolute paths (/ or \) rejected.
 //   - Zero broadening: each grant binds strictly to the chosen directory/file subtree
 //     and its requested mode.
 //   - Honest permission state: uses handle.queryPermission({ mode }) to reflect
@@ -29,7 +31,11 @@ const memoryGrantsStore = new Map();
 
 export function cleanRelativePath(pathStr) {
   if (typeof pathStr !== "string" || !pathStr.trim()) return [];
-  const normalized = pathStr.replace(/\\/g, "/");
+  const raw = pathStr.trim();
+  if (raw.startsWith("/") || raw.startsWith("\\")) {
+    throw new Error("invalid_path_absolute: absolute paths are prohibited");
+  }
+  const normalized = raw.replace(/\\/g, "/");
   const rawSegments = normalized.split("/");
   const clean = [];
   for (const seg of rawSegments) {
@@ -228,7 +234,7 @@ export async function queryFsGrantStatus(grant) {
   if (!grant?.handle) return "prompt";
   if (typeof grant.handle.queryPermission === "function") {
     try {
-      const status = await grant.handle.queryPermission({ mode: "read" });
+      const status = await grant.handle.queryPermission({ mode: grant.mode || "read" });
       return status; // "granted" | "prompt" | "denied"
     } catch {
       return "prompt";
@@ -254,6 +260,54 @@ export function serializeFsGrantSummary(grant, liveStatus = null) {
     lastUsedAt: grant.lastUsedAt,
     status: liveStatus || "unknown",
   });
+}
+
+/**
+ * Re-grant access for a stored grant whose permission state is "prompt" (e.g. after a browser restart).
+ * MUST be called from an owner gesture in a visible page context.
+ * @param {string} grantId
+ * @param {{
+ *   win?: any,
+ *   isTrusted?: boolean,
+ *   customIdb?: any
+ * }} [options]
+ */
+export async function regrantFsGrantAccess(
+  grantId,
+  { win = (typeof window !== "undefined" ? window : null), isTrusted = true, customIdb = null } = {},
+) {
+  if (!isTrusted && !win?.allowUntrustedEventsForTesting) {
+    return { ok: false, error: "owner_gesture_required", message: "Re-grant requires a genuine user click." };
+  }
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  if (!grant.handle || typeof grant.handle.requestPermission !== "function") {
+    return { ok: false, error: "handle_cannot_request_permission" };
+  }
+
+  try {
+    const status = await grant.handle.requestPermission({ mode: grant.mode || "read" });
+    if (status === "granted") {
+      await saveFsGrant(
+        {
+          ...grant,
+          lastUsedAt: Date.now(),
+        },
+        { customIdb },
+      );
+    }
+    return {
+      ok: true,
+      grantId,
+      status, // "granted" | "prompt" | "denied"
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `regrant_failed: ${err?.message || err}`,
+    };
+  }
 }
 
 /**

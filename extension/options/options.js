@@ -47,7 +47,7 @@ import { createNavigationController } from "../lib/navigation-controller.js";
 // design-system components as the hub + the docs showcase (one component,
 // everywhere — no hand-rolled duplicates).
 import { confirmActionDialog } from "../shared/components.js";
-import { saveFsGrant, wireLocalFolderPickers } from "../lib/fs-grants.js";
+import { saveFsGrant, wireLocalFolderPickers, regrantFsGrantAccess } from "../lib/fs-grants.js";
 
 // ── Provider presets (the user picks one; OpenAI-compatible endpoints) ──
 // NOTE: the "demo" + "prompt-api" providers are deliberately NOT in this
@@ -574,6 +574,34 @@ export async function renderLocalFolders() {
     cardControls.style.alignItems = "center";
     cardControls.style.gap = "8px";
 
+    if (grant.status === "prompt") {
+      const regrantBtn = document.createElement("button");
+      regrantBtn.type = "button";
+      regrantBtn.className = "btn small primary";
+      regrantBtn.textContent = "Re-grant access";
+      regrantBtn.addEventListener("click", async (event) => {
+        if (!event.isTrusted && !window.allowUntrustedEventsForTesting) {
+          saveFlash("Re-grant requires a genuine user click.");
+          return;
+        }
+        regrantBtn.disabled = true;
+        regrantBtn.textContent = "Requesting…";
+        const result = await regrantFsGrantAccess(grant.grantId, {
+          win: window,
+          isTrusted: event.isTrusted,
+        });
+        if (result?.ok && result?.status === "granted") {
+          saveFlash(`Re-granted access to "${grant.name}".`);
+        } else if (result?.status === "denied") {
+          saveFlash(`Access denied for "${grant.name}". You can revoke it if no longer needed.`);
+        } else {
+          saveFlash(`Re-grant not completed: ${result?.error || result?.status || "cancelled"}.`);
+        }
+        renderLocalFolders();
+      });
+      cardControls.append(regrantBtn);
+    }
+
     const browseBtn = document.createElement("button");
     browseBtn.type = "button";
     browseBtn.className = "btn small";
@@ -634,6 +662,11 @@ export async function renderLocalFolders() {
       entriesList.style.gap = "4px";
 
       for (const entry of entries) {
+        const itemRowWrapper = document.createElement("div");
+        itemRowWrapper.style.display = "flex";
+        itemRowWrapper.style.flexDirection = "column";
+        itemRowWrapper.style.width = "100%";
+
         const itemRow = document.createElement("div");
         itemRow.style.display = "flex";
         itemRow.style.alignItems = "center";
@@ -657,7 +690,29 @@ export async function renderLocalFolders() {
           viewBtn.style.padding = "1px 6px";
           viewBtn.style.fontSize = "11px";
           viewBtn.textContent = "View";
+
+          let fileViewer = null;
           viewBtn.addEventListener("click", async () => {
+            if (fileViewer) {
+              fileViewer.remove();
+              fileViewer = null;
+              viewBtn.textContent = "View";
+              return;
+            }
+            viewBtn.textContent = "Close";
+            fileViewer = document.createElement("div");
+            fileViewer.className = "fs-file-viewer";
+            fileViewer.style.marginTop = "6px";
+            fileViewer.style.padding = "8px 10px";
+            fileViewer.style.borderRadius = "6px";
+            fileViewer.style.background = "var(--bg,#ffffff)";
+            fileViewer.style.border = "1px solid var(--border,#e3e0d9)";
+            fileViewer.style.fontSize = "11.5px";
+            fileViewer.style.fontFamily = "monospace";
+            fileViewer.style.width = "100%";
+            fileViewer.innerHTML = `<span class="muted">Reading file…</span>`;
+            itemRowWrapper.append(fileViewer);
+
             const readRes = await chrome.runtime.sendMessage({
               type: "fs-grant.read-file",
               grantId: grant.grantId,
@@ -665,24 +720,36 @@ export async function renderLocalFolders() {
               asText: true,
             }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
 
-            if (readRes?.ok) {
-              saveFlash(`File: ${readRes.name} — ${readRes.size} bytes, SHA-256: ${readRes.sha256.slice(0, 12)}… — preview in the content area`);
-              const previewPre = document.createElement("pre");
-              previewPre.className = "fs-file-preview";
-              previewPre.textContent = readRes.content || "";
-              previewPre.style.maxHeight = "300px";
-              previewPre.style.overflow = "auto";
-              const holder = $("#local-folders .pane-body") ?? $("#local-folders");
-              if (holder) holder.append(previewPre);
-            } else {
-              saveFlash(`Read failed: ${readRes?.error || "unknown"}`);
+            if (!readRes?.ok) {
+              fileViewer.innerHTML = `<span class="muted" style="color:var(--danger,#d93025)">Read failed: ${escapeHtml(readRes?.error || "unknown")}</span>`;
+              return;
             }
+
+            fileViewer.replaceChildren();
+            const header = document.createElement("div");
+            header.style.marginBottom = "4px";
+            header.style.color = "var(--text-muted,#666)";
+            header.textContent = `${readRes.name} (${readRes.size} bytes, SHA-256: ${readRes.sha256})`;
+
+            const pre = document.createElement("pre");
+            pre.style.margin = "0";
+            pre.style.padding = "6px 8px";
+            pre.style.background = "var(--bg-subtle,#f4f2ed)";
+            pre.style.borderRadius = "4px";
+            pre.style.overflowX = "auto";
+            pre.style.maxHeight = "240px";
+            pre.style.whiteSpace = "pre-wrap";
+            pre.style.wordBreak = "break-word";
+            pre.textContent = readRes.content ?? "[Binary content]";
+
+            fileViewer.append(header, pre);
           });
           right.append(viewBtn);
         }
 
         itemRow.append(left, right);
-        entriesList.append(itemRow);
+        itemRowWrapper.append(itemRow);
+        entriesList.append(itemRowWrapper);
       }
       drawer.append(entriesList);
     });
