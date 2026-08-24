@@ -18,6 +18,9 @@
         <a href="#local-models" class="nav-item" data-section="local-models">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
         Local models</a>
+        <a href="#local-folders" class="nav-item" data-section="local-folders">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Local folders</a>
         <a href="#tool-library" class="nav-item" data-section="tool-library">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Tool library</a>
@@ -76,6 +79,12 @@
         <h2>Local models</h2>
         <p class="muted">Official Google Gemma 4 QAT q4_0 artifacts, pinned to publisher revisions. Preflight reads exactly one byte per file with no credentials; it does not download a model.</p>
         <local-model-catalog id="local-model-catalog"></local-model-catalog>
+      </section>
+
+      <section id="local-folders" class="panel">
+        <h2>Local folders & files</h2>
+        <p class="muted">Manage persistent access to local directories and files granted to agents or tasks. Access is restricted to the specific folder or file subtree and can be revoked at any time.</p>
+        <div id="local-folders-list" class="local-folders-list"></div>
       </section>
 
       <section id="tool-library" class="panel">

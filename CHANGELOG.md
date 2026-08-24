@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.218] — 2026-08-24
+- feat(fs-grants): add persistent file system grants IndexedDB store and Settings pane (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 1)
+
 ## [0.2.217] — 2026-08-24
 - feat(settings): nuclear factory reset — wipes all 7 storage classes (chrome.storage local+session, OPFS, IndexedDB, caches, alarms, page localStorage first-run keys) with destructive confirmation, all-or-nothing fail-closed reporting, and genuine first-run restoration via the #factory-reset boot redirect (CAP-FB-20260823-FACTORY-RESET-01)
 

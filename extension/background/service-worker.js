@@ -49,6 +49,14 @@ import {
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
+import {
+  saveFsGrant,
+  getFsGrant,
+  listFsGrants,
+  deleteFsGrant,
+  queryFsGrantStatus,
+  serializeFsGrantSummary,
+} from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -3017,6 +3025,47 @@ const handlers = mergeRouteMaps(
     // Generate a title for a task (the model when available, else truncated).
     const name = await generateThreadName(m.task);
     return { ok: true, name };
+  },
+
+  // ── Persistent File System Access Grants (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ──
+  async "fs-grant.list"(m, context) {
+    if (context?.principal !== "owner-options" && !context?.extensionSender) {
+      securityEvent(
+        "blocked-action",
+        `fs-grant list denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.list is restricted to extension surfaces" };
+    }
+    const rawGrants = await listFsGrants({ scope: m?.scope });
+    const summaries = await Promise.all(
+      rawGrants.map(async (g) => {
+        const status = await queryFsGrantStatus(g);
+        return serializeFsGrantSummary(g, status);
+      }),
+    );
+    return { ok: true, grants: summaries };
+  },
+
+  async "fs-grant.get"({ grantId }, context) {
+    if (context?.principal !== "owner-options" && !context?.extensionSender) {
+      return { ok: false, error: "fs-grant.get is restricted to extension surfaces" };
+    }
+    const grant = await getFsGrant(grantId);
+    if (!grant) return { ok: false, error: "grant_not_found" };
+    const status = await queryFsGrantStatus(grant);
+    return { ok: true, grant: serializeFsGrantSummary(grant, status) };
+  },
+
+  async "fs-grant.remove"({ grantId }, context) {
+    if (context?.principal !== "owner-options" && !context?.extensionSender) {
+      securityEvent(
+        "blocked-action",
+        `fs-grant remove denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.remove is restricted to extension surfaces" };
+    }
+    const result = await deleteFsGrant(grantId);
+    return { ok: true, ...result };
   },
 
   // ── named agents (the persistent named agents) ────────────────────────────

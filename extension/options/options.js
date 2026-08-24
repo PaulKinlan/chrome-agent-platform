@@ -473,6 +473,128 @@ async function renderLocalModels() {
   });
 }
 
+// ── local folders (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ────────────────
+export async function renderLocalFolders() {
+  const host = $("#local-folders-list");
+  if (!host) return;
+  host.replaceChildren();
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "fs-grant.list" });
+  } catch (e) {
+    res = { ok: false, error: String(e?.message ?? e) };
+  }
+
+  const grants = Array.isArray(res?.grants) ? res.grants : [];
+  if (grants.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty muted";
+    empty.style.padding = "12px 14px";
+    empty.style.fontSize = "13px";
+    empty.textContent = "No local folder or file access has been granted. When you attach local directories to tasks or agents, they will be listed here.";
+    host.append(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "folder-grants-list";
+  list.style.display = "flex";
+  list.style.flexDirection = "column";
+  list.style.gap = "8px";
+
+  for (const grant of grants) {
+    const card = document.createElement("div");
+    card.className = "folder-grant-card";
+    card.style.display = "flex";
+    card.style.alignItems = "center";
+    card.style.justifyContent = "space-between";
+    card.style.padding = "10px 14px";
+    card.style.border = "1px solid var(--border,#e3e0d9)";
+    card.style.borderRadius = "10px";
+    card.style.background = "var(--panel,#ffffff)";
+    card.style.gap = "12px";
+
+    const info = document.createElement("div");
+    info.style.display = "flex";
+    info.style.flexDirection = "column";
+    info.style.gap = "4px";
+    info.style.minWidth = "0";
+
+    const titleRow = document.createElement("div");
+    titleRow.style.display = "flex";
+    titleRow.style.alignItems = "center";
+    titleRow.style.gap = "8px";
+
+    const title = document.createElement("strong");
+    title.textContent = grant.name || "Local folder";
+    title.style.fontSize = "13.5px";
+
+    const kindChip = document.createElement("span");
+    kindChip.className = "chip";
+    kindChip.style.fontSize = "11px";
+    kindChip.style.padding = "1px 7px";
+    kindChip.style.borderRadius = "999px";
+    kindChip.style.border = "1px solid var(--border,#e3e0d9)";
+    kindChip.textContent = grant.kind === "file" ? "file" : "directory";
+
+    const modeChip = document.createElement("span");
+    modeChip.className = "chip";
+    modeChip.style.fontSize = "11px";
+    modeChip.style.padding = "1px 7px";
+    modeChip.style.borderRadius = "999px";
+    modeChip.style.border = "1px solid var(--border,#e3e0d9)";
+    modeChip.textContent = grant.mode === "readwrite" ? "read/write" : "read-only";
+
+    const statusBadge = document.createElement("span");
+    statusBadge.className = `chip avail-${grant.status === "granted" ? "ready" : grant.status === "prompt" ? "owner-action-required" : "disabled"}`;
+    statusBadge.style.fontSize = "11px";
+    statusBadge.style.padding = "1px 7px";
+    statusBadge.style.borderRadius = "999px";
+    statusBadge.textContent = grant.status === "granted" ? "active" : grant.status === "prompt" ? "needs re-grant" : grant.status;
+
+    titleRow.append(title, kindChip, modeChip, statusBadge);
+
+    const meta = document.createElement("div");
+    meta.className = "meta muted";
+    meta.style.fontSize = "12px";
+    const scopeDesc = grant.scope?.taskId ? `Task: ${grant.scope.taskId}` : grant.scope?.agentId ? `Agent: ${grant.scope.agentId}` : "Global scope";
+    meta.textContent = `${scopeDesc} · ID: ${grant.grantId}`;
+
+    info.append(titleRow, meta);
+
+    const revokeBtn = document.createElement("button");
+    revokeBtn.type = "button";
+    revokeBtn.className = "btn small danger";
+    revokeBtn.textContent = "Revoke";
+    revokeBtn.addEventListener("click", async () => {
+      const confirmed = await confirmActionDialog({
+        title: "Revoke folder access?",
+        body: `Revoke persistent access to "${grant.name}"? The agent will no longer be able to access this local path.`,
+        confirmLabel: "Revoke access",
+        destructive: true,
+      });
+      if (!confirmed) return;
+      revokeBtn.disabled = true;
+      const removeRes = await chrome.runtime.sendMessage({
+        type: "fs-grant.remove",
+        grantId: grant.grantId,
+      }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }));
+      if (removeRes?.ok) {
+        saveFlash(`Revoked access to "${grant.name}".`);
+      } else {
+        saveFlash(`Revocation failed: ${removeRes?.error ?? "unknown error"}.`);
+      }
+      renderLocalFolders();
+    });
+
+    card.append(info, revokeBtn);
+    list.append(card);
+  }
+
+  host.append(list);
+}
+
 // ── Providers ──
 // The model field is the SHARED <model-picker> combobox (searchable, driven by
 // the same modelsForVendor catalogue everywhere) so the main Providers section
@@ -2265,6 +2387,7 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
     }
   });
 
+  if (sectionId === "local-folders") renderLocalFolders();
   if (sectionId === "approvals") renderApprovals();
   if (sectionId === "usage") renderUsage();
 
@@ -2382,6 +2505,7 @@ chrome.permissions?.onRemoved?.addListener((change) => {
 await refreshStoragePermission();
 await renderProviders();
 await renderLocalModels();
+await renderLocalFolders();
 await renderToolLibrary();
 await renderAgents();
 await renderBackgroundAgents();
