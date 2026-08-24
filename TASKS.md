@@ -820,7 +820,7 @@ On resume after a coordinator or worker loss:
   test asset, but creates MANY instead of one — either a logic error, or the
   file that was opened is not found again to be edited/updated
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P0
 - Owner: unassigned
@@ -828,7 +828,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@aee46cc799ad4c44474217f1c79c83aef976e828` (0.2.213)
 - Acceptance: first run creates exactly one test asset; subsequent steps find
   and update that same asset (idempotent keyed lookup); interrupted/repeated
   first runs never duplicate it; the asset remains discoverable and editable
@@ -880,7 +880,7 @@ On resume after a coordinator or worker loss:
   "grill me" agent that learns about the owner's tasks, or a critique agent
   the owner can send tasks or pages to review
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -888,7 +888,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@aee46cc799ad4c44474217f1c79c83aef976e828` (0.2.213)
 - Acceptance: onboarding offers one or more genuinely useful example agents
   with truthful capability descriptions; creating one is a single explicit
   owner action; schedule/permissions are least-privilege and owner-visible;
