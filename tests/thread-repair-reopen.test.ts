@@ -105,3 +105,49 @@ Deno.test("reopen repair: error terminal rows are also positioned as turn termin
   assertEquals(projected[1].name, "db_query");
   assertEquals(projected[2].content, "DB timeout");
 });
+
+Deno.test("reopen repair (B1-a): same-execution assistant-then-error keeps BOTH rows in ts order", () => {
+  const threadWithBoth = {
+    id: "t-both-terminals",
+    messages: [
+      { role: "user", content: "Complex task", ts: 1000, executionId: "e1" },
+      { role: "assistant", content: "Partial answer before network dropped", ts: 2000, executionId: "e1" },
+      { role: "error", content: "Network connection lost", ts: 2100, executionId: "e1" },
+      { role: "tool", toolName: "fetch_data", toolStatus: "error", toolCallId: "c1", toolResult: "err", toolOk: false, ts: 3000, executionId: "e1" },
+    ],
+  };
+
+  const projected = projectThreadMessages(threadWithBoth);
+  const roles = projected.map((m) => m.role);
+  const contents = projected.map((m) => m.content);
+
+  // Both assistant and error must survive and render in order
+  assertEquals(roles, ["user", "tool", "assistant", "error"]);
+  assertEquals(contents[0], "Complex task");
+  assertEquals(projected[1].name, "fetch_data");
+  assertEquals(contents[2], "Partial answer before network dropped");
+  assertEquals(contents[3], "Network connection lost");
+});
+
+Deno.test("reopen repair (B1-b): legacy no-executionId turn with two assistant rows keeps BOTH in order", () => {
+  const legacyMultiAssistant = {
+    id: "t-legacy-multi-assistant",
+    messages: [
+      { role: "user", content: "Tell me a story", ts: 1000 },
+      { role: "assistant", content: "Part one of the story.", ts: 2000 },
+      { role: "assistant", content: "Part two of the story.", ts: 2500 },
+      { role: "tool", toolName: "story_generator", toolStatus: "success", toolCallId: "c1", toolResult: "ok", toolOk: true, ts: 3000 },
+    ],
+  };
+
+  const projected = projectThreadMessages(legacyMultiAssistant);
+  const roles = projected.map((m) => m.role);
+  const contents = projected.map((m) => m.content);
+
+  // Both assistant rows must survive and render in order
+  assertEquals(roles, ["user", "tool", "assistant", "assistant"]);
+  assertEquals(contents[0], "Tell me a story");
+  assertEquals(projected[1].name, "story_generator");
+  assertEquals(contents[2], "Part one of the story.");
+  assertEquals(contents[3], "Part two of the story.");
+});

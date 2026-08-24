@@ -570,13 +570,13 @@ export function projectThreadMessages(thread) {
 
   const emittedTools = new Set();
   const turns = [];
-  let currentTurn = { user: null, systems: [], tools: [], terminal: null, execId: null };
+  let currentTurn = { user: null, systems: [], tools: [], terminals: [], execId: null };
 
   const flushTurn = () => {
-    if (currentTurn.user || currentTurn.systems.length || currentTurn.tools.length || currentTurn.terminal) {
+    if (currentTurn.user || currentTurn.systems.length || currentTurn.tools.length || currentTurn.terminals.length) {
       turns.push(currentTurn);
     }
-    currentTurn = { user: null, systems: [], tools: [], terminal: null, execId: null };
+    currentTurn = { user: null, systems: [], tools: [], terminals: [], execId: null };
   };
 
   for (const m of messages) {
@@ -584,7 +584,7 @@ export function projectThreadMessages(thread) {
     const role = m.role;
 
     if (role === "user") {
-      if (currentTurn.user || currentTurn.terminal || currentTurn.tools.length) {
+      if (currentTurn.user || currentTurn.terminals.length || currentTurn.tools.length) {
         flushTurn();
       }
       currentTurn.user = {
@@ -602,24 +602,24 @@ export function projectThreadMessages(thread) {
         ts: m.ts ?? null,
       });
     } else if (role === "assistant" || role === "error" || role === "agent") {
-      if (currentTurn.terminal && m.executionId && currentTurn.execId && m.executionId !== currentTurn.execId) {
+      if (currentTurn.terminals.length && m.executionId && currentTurn.execId && m.executionId !== currentTurn.execId) {
         flushTurn();
       }
-      currentTurn.terminal = {
+      currentTurn.terminals.push({
         role,
         content: m.content,
         ts: m.ts ?? null,
         reason: m.reason ?? null,
         action: m.action ?? null,
         executionId: m.executionId ?? null,
-      };
-      if (m.executionId) currentTurn.execId = m.executionId;
+      });
+      if (m.executionId && !currentTurn.execId) currentTurn.execId = m.executionId;
     } else if (role === "tool") {
       const callId = m.toolCallId;
       const idx = toolCards.findIndex((tc, i) =>
         !emittedTools.has(i) && (
           (callId && tc.callId === callId) ||
-          (tc.name === m.toolName && tc.executionId === m.executionId) ||
+          (m.executionId && tc.executionId === m.executionId && tc.name === m.toolName) ||
           (tc.name === m.toolName)
         )
       );
@@ -662,7 +662,10 @@ export function projectThreadMessages(thread) {
       turn.tools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
       output.push(...turn.tools);
     }
-    if (turn.terminal) output.push(turn.terminal);
+    if (turn.terminals.length) {
+      turn.terminals.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      output.push(...turn.terminals);
+    }
   }
 
   if (remainingTools.length) {
