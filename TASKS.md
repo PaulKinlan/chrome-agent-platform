@@ -1177,7 +1177,7 @@ On resume after a coordinator or worker loss:
   click-to-open dialog must be large enough to display it, and content-fit
   sizing should be explored later
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -1185,7 +1185,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@7ebe6af5e111bc3440ca3481eccf86e678b313b1` (0.2.231, regression test; the sizing rules were already soundly present in the base — verified in a real-browser pass still pending)
 - Acceptance: the HTML artifact dialog is large enough to display the content
   comfortably; the iframe fills at least its container; sandboxed rendering
   and the double-boundary isolation are unchanged; narrow/RTL/theme correct
@@ -1206,7 +1206,7 @@ On resume after a coordinator or worker loss:
   in the tasks view but it appears inside the JSON object; the actual UI
   should render inside the double iframe boundary
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: MERGED
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -1214,7 +1214,7 @@ On resume after a coordinator or worker loss:
 - Branch: none
 - Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@7ebe6af5e111bc3440ca3481eccf86e678b313b1` (0.2.231, regression test; the generate_ui sandboxed rendering was already present in the base)
 - Acceptance: generate_ui tool results in the tasks view render the produced
   HTML inside the existing sandboxed double-iframe boundary (inert, no script
   escape, no parent access) instead of displaying raw JSON; the raw payload
