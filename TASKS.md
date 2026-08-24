@@ -160,14 +160,14 @@ On resume after a coordinator or worker loss:
   when the thread was initiated) and not the subsequent messages/runs that
   happened while directly in the task view
 - Updated: 2026-08-24 15:05 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `800acbc`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@9578cbbf6015942187824f02f2a39817f802cd03` (0.2.229)
 - Acceptance: leaving the task view and returning shows the COMPLETE
   conversation — every message, tool call, and result from all runs of that
   thread, not just the first; live continuation appends to the retained
@@ -184,6 +184,12 @@ On resume after a coordinator or worker loss:
   and why subsequent runs are missing from the retained history
 - Recover: `git grep -n "renderAgentHistory\|journal\|run-log\|openThread" -- extension/ntp/ntp.js extension/shared/conversation.js`
 - History:
+  - 2026-08-24 17:55 UTC — LANDED as 0.2.229 after three review rounds. The
+    fix's demonstrated scope is honest: it fixes the intermediate-tool-append
+    PREVIEW WIPE and the projection ATTACHMENT LOSS (both with fail-on-base
+    KATs). The original "loses all but the first run" symptom was NOT
+    reproduced on the broken base — the base already mapped the full message
+    list, so that overclaim was dropped.
   - 2026-08-24 15:05 UTC — captured from product-owner feedback; possibly the
     same root class as the earlier durable-task-restore fix (which attached
     the projection) — that fix restored the LIVE view but may read only the
