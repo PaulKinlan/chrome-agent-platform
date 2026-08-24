@@ -6620,10 +6620,17 @@ class LocalModelCatalog extends Component {
       article.querySelector(".cancel-download")?.addEventListener("click", () => this._emit("model-cancel", { modelId }));
       article.querySelector(".select")?.addEventListener("click", () => this._emit("model-select", { modelId }));
       article.querySelector(".verify")?.addEventListener("click", () => this._emit("model-verify", { modelId }));
-      article.querySelector(".delete")?.addEventListener("click", () => {
+      article.querySelector(".delete")?.addEventListener("click", async () => {
         const model = this._models.find((m) => m.id === modelId);
         const name = model?.name ?? modelId;
-        if (globalThis.confirm?.(`Delete ${name} from local OPFS storage? This will release its storage quota.`) !== false) {
+        const ok = await confirmActionDialog({
+          title: "Delete downloaded model",
+          body: `Delete ${name} from local OPFS storage? This will release its storage quota.`,
+          confirmText: "Delete",
+          cancelText: "Cancel",
+          destructive: true,
+        });
+        if (ok) {
           this._emit("model-delete", { modelId });
         }
       });

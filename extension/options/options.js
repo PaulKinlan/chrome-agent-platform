@@ -666,10 +666,14 @@ export async function renderLocalFolders() {
             }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
 
             if (readRes?.ok) {
-              const preview = prompt(
-                `File: ${readRes.name} (${readRes.size} bytes, SHA-256: ${readRes.sha256.slice(0, 12)}…)\nContent preview:`,
-                (readRes.content || "").slice(0, 500),
-              );
+              saveFlash(`File: ${readRes.name} — ${readRes.size} bytes, SHA-256: ${readRes.sha256.slice(0, 12)}… — preview in the content area`);
+              const previewPre = document.createElement("pre");
+              previewPre.className = "fs-file-preview";
+              previewPre.textContent = readRes.content || "";
+              previewPre.style.maxHeight = "300px";
+              previewPre.style.overflow = "auto";
+              const holder = $("#local-folders .pane-body") ?? $("#local-folders");
+              if (holder) holder.append(previewPre);
             } else {
               saveFlash(`Read failed: ${readRes?.error || "unknown"}`);
             }
