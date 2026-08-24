@@ -1003,11 +1003,25 @@ function renderThreadProjection(thread, owner = runSurfaceOwner.current()) {
         ts: typeof m.ts === "number" ? m.ts : null,
       })),
   );
-  const toolCards = toolRows.map((t) => ({ role: "tool", name: t.tool, status: t.status, args: t.args ?? null, result: t.result ?? null, ts: t.ts ?? null }));
+  const toolCards = toolRows.map((t) => ({
+    role: "tool",
+    name: t.tool,
+    status: t.status,
+    args: t.args ?? null,
+    result: t.result ?? null,
+    ts: t.ts ?? null,
+  }));
   const rendered = [
     ...messages
       .filter((m) => m.role !== "tool")
-      .map((m) => ({ role: m.role, content: m.content, ts: m.ts ?? null, reason: m.reason ?? null, action: m.action ?? null })),
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        ts: m.ts ?? null,
+        reason: m.reason ?? null,
+        action: m.action ?? null,
+        attachments: Array.isArray(m.attachments) ? m.attachments : (m.attachments ? [m.attachments] : null),
+      })),
     ...toolCards,
   ].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
   threadConversation.setMessages?.(rendered);

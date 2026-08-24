@@ -269,7 +269,8 @@ export async function appendThreadMessage(id, message) {
   const index = (await mem.get(INDEX_KEY)) ?? [];
   const row = index.find((r) => r.id === id);
   if (row) {
-    row.preview = previewOf(thread.messages[thread.messages.length - 1]?.content ?? "");
+    const lastText = [...thread.messages].reverse().find((m) => m.role === "user" || m.role === "assistant" || m.role === "error")?.content ?? "";
+    row.preview = previewOf(lastText);
     row.updatedAt = thread.updatedAt;
     row.status = thread.status;
     row.count = thread.messages.length;

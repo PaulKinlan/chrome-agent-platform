@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.229] — 2026-08-24
+- fix(threads): task-thread continuation — fix the intermediate-tool-append preview wipe + the projection attachment loss; stable ts sort; multi-run leave-return and reload parity (CAP-FB-20260824-THREAD-CONTINUATION-LOSS-01)
+
 ## [0.2.228] — 2026-08-24
 - feat(bundled): sqlite3_query_bounded admission — the 26th enabled tool (26/0); Settings preview with forced read-only test.db fixture (8,192 B, sha 75efece32c), bounded SQL/params, canonical 2048-B gate; completes the SQLite WASI train (CAP-FB-20260823-R12-SQLITE-ADMISSION-01)
 
