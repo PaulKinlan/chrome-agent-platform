@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **48 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 75 nonterminal and 40 terminal status entries
-> below are the complete 115-entry state.
+> Branch status counts: **49 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 76 nonterminal and 40 terminal status entries
+> below are the complete 116-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,44 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260824-THREAD-CONTINUATION-LOSS-01] Task view loses conversation after leaving and returning — only the first run persists
+
+- Feedback: 2026-08-24 — product owner: a lot of the conversation in the task
+  view is LOST on leave-and-return — it seems to store only the FIRST run (from
+  when the thread was initiated) and not the subsequent messages/runs that
+  happened while directly in the task view
+- Updated: 2026-08-24 15:05 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `800acbc`
+- Candidate: —
+- Shipping: —
+- Acceptance: leaving the task view and returning shows the COMPLETE
+  conversation — every message, tool call, and result from all runs of that
+  thread, not just the first; live continuation appends to the retained
+  history; reload preserves the same completeness; no silent truncation of
+  retained turns
+- Review: pending independent retention/lifecycle review
+- Gates: multi-run leave-and-return KAT (run 1 → leave → run 2 in another
+  surface → return → BOTH runs visible); live-append during return; reload
+  parity; no truncation
+- Blockers: likely the journal/replay retention only captures the initial run
+  or the projection re-renders from a stale snapshot — composes with the
+  durable-task-restore and visibility lanes
+- Next: trace what openThread projects (the journal replay vs the live store)
+  and why subsequent runs are missing from the retained history
+- Recover: `git grep -n "renderAgentHistory\|journal\|run-log\|openThread" -- extension/ntp/ntp.js extension/shared/conversation.js`
+- History:
+  - 2026-08-24 15:05 UTC — captured from product-owner feedback; possibly the
+    same root class as the earlier durable-task-restore fix (which attached
+    the projection) — that fix restored the LIVE view but may read only the
+    first run's journal.
+
+
 
 ## [CAP-FB-20260824-TOOLCALLS-COLLAPSED-01] Task view: tool calls collapsed by default; open-one opens one
 
