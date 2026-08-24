@@ -24,6 +24,7 @@ there. The reviewer agents check against it.
 5. Push only after re-review clears.
 
 ## Hard rules
+- **TASKS.md is the source of truth for task state — update it after EVERY completion.** Whenever a task lands, is reviewed, changes state, or a bug is captured, update its TASKS.md entry in the SAME commit cycle (status, Shipping `origin/main@<sha>`, a dated History line). A completion that does not update TASKS.md is not complete. Mark landed work MERGED with the exact public commit; never leave landed work marked OPEN/IN_REVIEW.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser
   (CDP) with screenshots as evidence.
 - Real libraries, not patterns (agent-do is imported, not reimplemented).

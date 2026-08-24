@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.230] — 2026-08-24
+- docs(agents): TASKS.md update-after-every-completion is a core rule (owner directive)
+
 ## [0.2.229] — 2026-08-24
 - fix(threads): task-thread continuation — fix the intermediate-tool-append preview wipe + the projection attachment loss; stable ts sort; multi-run leave-return and reload parity (CAP-FB-20260824-THREAD-CONTINUATION-LOSS-01)
 
