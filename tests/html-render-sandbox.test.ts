@@ -3,22 +3,40 @@
 // (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01 & CAP-FB-20260823-GENERATE-UI-RENDER-01).
 // @ts-nocheck
 
+import { assert, assertEquals } from "jsr:@std/assert@1";
+
 const registry = new Map();
 
 class HTMLElementStub {
-  attachShadow(_init) { return new ShadowRootStub(); }
-  getAttribute(_n) { return null; }
-  hasAttribute(_n) { return false; }
-  setAttribute(_n, _v) {}
-  removeAttribute(_n) {}
+  constructor() {
+    this._attrs = new Map();
+    this._listeners = new Map();
+    this._children = [];
+  }
+  attachShadow(_init) {
+    this.shadowRoot = new ShadowRootStub();
+    return this.shadowRoot;
+  }
+  getAttribute(n) { return this._attrs.get(n) ?? null; }
+  hasAttribute(n) { return this._attrs.has(n); }
+  setAttribute(n, v) { this._attrs.set(n, String(v)); }
+  removeAttribute(n) { this._attrs.delete(n); }
   dispatchEvent(_e) { return true; }
-  addEventListener() {}
+  addEventListener(t, fn) {
+    if (!this._listeners.has(t)) this._listeners.set(t, []);
+    this._listeners.get(t).push(fn);
+  }
   querySelector() { return null; }
   querySelectorAll() { return []; }
+  appendChild(n) { this._children.push(n); return n; }
 }
+
 class ShadowRootStub {
-  get innerHTML() { return ""; }
-  set innerHTML(_v) {}
+  constructor() {
+    this._html = "";
+  }
+  get innerHTML() { return this._html; }
+  set innerHTML(v) { this._html = String(v); }
   querySelector() { return null; }
   querySelectorAll() { return []; }
   appendChild() {}
@@ -47,18 +65,6 @@ const {
   navigationGuardScript,
   isHtmlDocument,
 } = await import("../extension/shared/components.js");
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message || "Assertion failed");
-  }
-}
-
-function assertEquals(actual, expected, message) {
-  if (actual !== expected) {
-    throw new Error(`${message || "Assertion failed"}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
 
 Deno.test("HTML artifact iframe: double-boundary sandbox attributes and CSP remain strictly enforced", () => {
   const sampleHtml = "<h1>Interactive Dashboard</h1><script>console.log('test');</script>";
@@ -135,4 +141,33 @@ Deno.test("generate_ui tool rendering: extracts HTML from JSON args/results and 
   const res3 = JSON.stringify({ ok: true, id: "asset-123", asset: { name: "Stock Tracker", content: "<div class='stock'><h3>AAPL $220</h3></div>" } });
   const parsed3 = JSON.parse(res3);
   assert(parsed3.ok && typeof parsed3.asset?.content === "string", "parsed3 has asset content");
+});
+
+Deno.test("MessageBubble component: renders generate_ui tool card as live sandboxed UI with raw payload disclosure", () => {
+  const MessageBubbleClass = registry.get("message-bubble");
+  assert(MessageBubbleClass, "message-bubble custom element must be registered");
+
+  const bubble = new MessageBubbleClass();
+  bubble.setAttribute("role", "tool");
+  bubble.setAttribute("tool-name", "generate_ui");
+  bubble.setAttribute(
+    "tool-args",
+    JSON.stringify({ name: "Sales Dashboard", html: "<div class='dash'><h1>Revenue $50,000</h1></div>" }),
+  );
+  bubble.setAttribute(
+    "tool-result",
+    JSON.stringify({ ok: true, id: "asset_456", name: "Sales Dashboard" }),
+  );
+
+  // Trigger component render
+  bubble._render();
+
+  const shadowHtml = bubble.shadowRoot?.innerHTML || "";
+  assert(shadowHtml.includes('class="genui"'), "must render .genui container");
+  assert(shadowHtml.includes("Sales Dashboard"), "must display generated UI title");
+  assert(shadowHtml.includes('class="html-frame"'), "must embed .html-frame");
+  assert(shadowHtml.includes('sandbox="allow-scripts"'), "must enforce sandbox='allow-scripts'");
+  assert(shadowHtml.includes('class="genui-raw"'), "must render collapsible .genui-raw details");
+  assert(shadowHtml.includes("<summary>Raw payload</summary>"), "must provide 'Raw payload' disclosure");
+  assert(shadowHtml.includes("Sales Dashboard"), "raw payload must include tool arguments");
 });

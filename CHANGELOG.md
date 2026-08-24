@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.231] — 2026-08-24
+- fix(ui): fix artifact iframe sizing and render generate_ui output as sandboxed UI (CAP-FB-20260823-ARTIFACT-HTML-IFRAME-SIZE-01 & CAP-FB-20260823-GENERATE-UI-RENDER-01)
+
 ## [0.2.230] — 2026-08-24
 - docs(agents): TASKS.md update-after-every-completion is a core rule (owner directive)
 
