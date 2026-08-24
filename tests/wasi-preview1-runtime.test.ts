@@ -23,11 +23,13 @@ import {
 } from "../extension/lib/wasm-host-types.js";
 import {
   createWasiPreview1Runtime,
+  isExactRetainedTouchCreateTuple,
   planFdReaddir,
   planFdFilestatSetSize,
   planFileOpenDirflags,
   planPathFilestatLookup,
   planPathFilestatSetTimes,
+  RETAINED_TOUCH_CREATE_PROFILE,
   REBUILT_TOOL_COUNT,
   REBUILT_WASI_IMPORTS,
   revalidateAuditedMemory,
@@ -114,6 +116,30 @@ class MemoryWorkspace {
     if (!row) throw Object.assign(new Error("missing"), { code: "ENOENT" });
     if (atimNs !== undefined) row.atimNs = atimNs;
     if (mtimNs !== undefined) row.mtimNs = mtimNs;
+  }
+  createScratchFile(path) {
+    if (!path.startsWith("scratch/")) throw Object.assign(new Error("perm"), { code: "EPERM" });
+    if (this.files.has(path)) throw Object.assign(new Error("exists"), { code: "EEXIST" });
+    const row = { type: "file", bytes: new Uint8Array(), atimNs: 0n, mtimNs: 0n };
+    this.files.set(path, row);
+    let committed = false;
+    return {
+      handle: {
+        stat: () => ({ type: "file", size: row.bytes.byteLength }),
+        read: (offset, length) => row.bytes.slice(offset, offset + length),
+        write: (offset, bytes) => {
+          const end = offset + bytes.byteLength;
+          if (end > row.bytes.byteLength) {
+            const grown = new Uint8Array(end); grown.set(row.bytes); row.bytes = grown;
+          }
+          row.bytes.set(bytes, offset);
+          return bytes.byteLength;
+        },
+        close: () => { committed = true; },
+      },
+      commit: () => { committed = true; return true; },
+      rollback: () => { if (!committed) this.files.delete(path); return true; },
+    };
   }
   readdir(path) {
     const prefix = path === "." ? "" : `${path}/`;
@@ -1738,7 +1764,9 @@ Deno.test("R4 source pins: the subsumed ||-form is ABSENT; the planner is refere
   assertEquals(references, 2, "planner referenced only at its definition + the FILE-branch call site");
   // order: the dirflags plan precedes fdflags/oflags/rights/memory/adapter
   const bodyStart = source.indexOf("// Existing FILE-open branch below stays byte-for-byte equivalent.");
-  const body = source.slice(bodyStart, bodyStart + 3000);
+  // R7 added the touch-CREAT recognizer branch inside the FILE branch, so the
+  // window extends past it to reach the generic workspace.open.
+  const body = source.slice(bodyStart, bodyStart + 6000);
   const planIdx = body.indexOf("planFileOpenDirflags(dirflags)");
   const fdflagsIdx = body.indexOf("WASI_FDFLAGS.APPEND");
   const pathIdx = body.indexOf("decodePath(pathPtr, pathLength)");
@@ -1943,4 +1971,56 @@ Deno.test("R6 census + boundary: SUPPORTED +1 (path_filestat_set_times); planner
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planPathFilestatSetTimes").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
+});
+
+// ── R7 touch-CREAT profile (CAP-FB-20260823-R7-TOUCH-CREATE-01) ──────────
+Deno.test("R7 recognizer: exact whole-tuple true; every one-field near-miss false", () => {
+  const t = RETAINED_TOUCH_CREATE_PROFILE;
+  assert(isExactRetainedTouchCreateTuple(4, 1, 1, 0x0fffbffdn, 0x0fffffffn, 1), "the exact tuple matches");
+  // one-field near-misses
+  assert(!isExactRetainedTouchCreateTuple(3, 1, 1, t.requestedBase, t.requestedInheriting, 1), "fd3");
+  assert(!isExactRetainedTouchCreateTuple(4, 0, 1, t.requestedBase, t.requestedInheriting, 1), "dirflags0");
+  assert(!isExactRetainedTouchCreateTuple(4, 1, 0, t.requestedBase, t.requestedInheriting, 1), "oflags0");
+  assert(!isExactRetainedTouchCreateTuple(4, 1, 9, t.requestedBase, t.requestedInheriting, 1), "CREAT|TRUNC");
+  assert(!isExactRetainedTouchCreateTuple(4, 1, 5, t.requestedBase, t.requestedInheriting, 1), "CREAT|EXCL");
+  assert(!isExactRetainedTouchCreateTuple(4, 1, 1, 0n, t.requestedInheriting, 1), "base0");
+  assert(!isExactRetainedTouchCreateTuple(4, 1, 1, t.requestedBase, 0n, 1), "inheriting0");
+  assert(!isExactRetainedTouchCreateTuple(4, 1, 1, t.requestedBase, t.requestedInheriting, 0), "fdflags0");
+});
+
+Deno.test("R7 syscall: the exact touch-CREAT profile projects FD_WRITE/APPEND/inherit0 and creates the scratch file", () => {
+  const h = harness();
+  const pathPtr = 2000;
+  const len = putPath(h.memory, pathPtr, "scratch/touched");
+  const openedPtr = 3000;
+  const errno = h.wasi.path_open(4, 1, pathPtr, len, WASI_OFLAGS.CREAT, RETAINED_TOUCH_CREATE_PROFILE.requestedBase, RETAINED_TOUCH_CREATE_PROFILE.requestedInheriting, WASI_FDFLAGS.APPEND, openedPtr);
+  assertEquals(errno, WASI_ERRNO.SUCCESS);
+  const fd = h.memory.u32(openedPtr);
+  assert(fd >= 5, "a dynamic fd");
+  // the descriptor projection (fd_fdstat_get)
+  assertEquals(h.wasi.fd_fdstat_get(fd, 3200), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.bytes[3200], WASI_FILETYPE.REGULAR_FILE);
+  assertEquals(h.memory.u32(3200 + 2) & 0xffff, WASI_FDFLAGS.APPEND, "flags APPEND");
+  assertEquals(h.memory.u64(3200 + 8), WASI_RIGHTS.FD_WRITE, "FD_WRITE only");
+  assertEquals(h.memory.u64(3200 + 16), 0n, "inheriting 0");
+  // the file exists (size 0), but the FD_WRITE-only projection denies the
+  // FD_FILESTAT_GET right — the guest must not stat a touch-CREAT fd.
+  assertEquals(h.wasi.fd_filestat_get(fd, 3264), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.workspace.files.has("scratch/touched"), true, "the scratch file was created");
+  assertEquals(h.workspace.files.get("scratch/touched").bytes.byteLength, 0, "size 0");
+  assertEquals(h.wasi.fd_close(fd), WASI_ERRNO.SUCCESS);
+});
+
+Deno.test("R7 near-miss: fd3 / TRUNC / EXCL fall through to the generic FILE branch (no create)", () => {
+  const h = harness();
+  const pathPtr = 2000;
+  const len = putPath(h.memory, pathPtr, "scratch/touched");
+  const openedPtr = 3000;
+  // fd3 (the `.` preopen) — not the profile → the generic branch (no create)
+  assertEquals(h.wasi.path_open(3, 1, pathPtr, len, WASI_OFLAGS.CREAT, RETAINED_TOUCH_CREATE_PROFILE.requestedBase, RETAINED_TOUCH_CREATE_PROFILE.requestedInheriting, WASI_FDFLAGS.APPEND, openedPtr), WASI_ERRNO.ENOTCAPABLE);
+  // CREAT|TRUNC (oflags 9) — a near-miss → the generic branch
+  assertEquals(h.wasi.path_open(4, 1, pathPtr, len, WASI_OFLAGS.CREAT | WASI_OFLAGS.TRUNC, RETAINED_TOUCH_CREATE_PROFILE.requestedBase, RETAINED_TOUCH_CREATE_PROFILE.requestedInheriting, WASI_FDFLAGS.APPEND, openedPtr), WASI_ERRNO.ENOTCAPABLE);
+  // CREAT|EXCL (oflags 5) — a near-miss → the generic branch
+  assertEquals(h.wasi.path_open(4, 1, pathPtr, len, WASI_OFLAGS.CREAT | WASI_OFLAGS.EXCL, RETAINED_TOUCH_CREATE_PROFILE.requestedBase, RETAINED_TOUCH_CREATE_PROFILE.requestedInheriting, WASI_FDFLAGS.APPEND, openedPtr), WASI_ERRNO.ENOTCAPABLE);
+  assertEquals(h.workspace.files.has("scratch/touched"), false, "no scratch file was created by the near-misses");
 });

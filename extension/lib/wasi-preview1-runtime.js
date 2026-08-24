@@ -440,6 +440,34 @@ export function planPathFilestatSetTimes({
   return { errno: WASI_ERRNO.SUCCESS, atimNs, mtimNs };
 }
 
+/** R7 (CAP-FB-20260823-R7-TOUCH-CREATE-01): the exact retained-touch CREAT
+ * profile — wasi-libc fopen("ab"), so the broad requested base/inheriting are
+ * compared as RAW scalars and never granted; the projection is FD_WRITE only,
+ * inheriting 0, APPEND. No TRUNC/EXCL/DIRECTORY family. */
+export const RETAINED_TOUCH_CREATE_PROFILE = Object.freeze({
+  fd: 4,
+  dirflags: WASI_LOOKUPFLAGS.SYMLINK_FOLLOW,
+  oflags: WASI_OFLAGS.CREAT,
+  requestedBase: 0x0fffbffdn,
+  requestedInheriting: 0x0fffffffn,
+  fdflags: WASI_FDFLAGS.APPEND,
+  grantedBase: WASI_RIGHTS.FD_WRITE,
+  grantedInheriting: 0n,
+});
+
+/** The whole-tuple boolean recognizer (no per-field errno/grant/oracle); false
+ * always falls through to the predecessor generic FILE branch. */
+export function isExactRetainedTouchCreateTuple(fd, dirflags, oflags, rightsBase, rightsInheriting, fdflags) {
+  return (
+    fd === RETAINED_TOUCH_CREATE_PROFILE.fd &&
+    dirflags === RETAINED_TOUCH_CREATE_PROFILE.dirflags &&
+    oflags === RETAINED_TOUCH_CREATE_PROFILE.oflags &&
+    rightsBase === RETAINED_TOUCH_CREATE_PROFILE.requestedBase &&
+    rightsInheriting === RETAINED_TOUCH_CREATE_PROFILE.requestedInheriting &&
+    fdflags === RETAINED_TOUCH_CREATE_PROFILE.fdflags
+  );
+}
+
 export const WASI_READDIR_LIMITS = Object.freeze({
   maxEntries: 4096,
   maxNameBytes: 255,
@@ -1251,6 +1279,60 @@ export function createWasiPreview1Runtime({
       }
       const rightsBase = asU64(rightsBaseValue);
       const rightsInheriting = asU64(rightsInheritingValue);
+      // R7 (CAP-FB-20260823-R7-TOUCH-CREATE-01): the exact retained-touch CREAT
+      // profile — a whole-tuple match (fd4, dirflags1, oflags1 CREAT, the broad
+      // requested base/inheriting, fdflags1 APPEND) projects to a missing-only
+      // scratch create with FD_WRITE only. A near-miss falls through to the
+      // generic FILE branch below byte-for-byte.
+      if (
+        isExactRetainedTouchCreateTuple(
+          fdValue, dirflags, oflags, rightsBase, rightsInheriting, fdflags,
+        )
+      ) {
+        const resolved = decodePath(pathPtr, pathLength); // the strict decoder
+        if (resolved.root !== "scratch") fault(WASI_ERRNO.ENOTCAPABLE);
+        span(openedFdPtr, 4);
+        const fd = allocateFd();
+        let tx;
+        try {
+          tx = syncResult(workspace.createScratchFile(resolved.path));
+        } catch (error) {
+          recycleDynamicFd(fd, fds.get(fd));
+          throw error;
+        }
+        const handle = tx?.handle;
+        let cleanup = true;
+        try {
+          if (!handle || typeof handle.stat !== "function") {
+            fault(WASI_ERRNO.EIO);
+          }
+          const hstat = handle.stat();
+          if (hstat.type !== "file" || hstat.size !== 0) {
+            fault(WASI_ERRNO.EIO);
+          }
+          putFd({
+            fd,
+            kind: FD_KIND.FILE,
+            filetype: WASI_FILETYPE.REGULAR_FILE,
+            flags: RETAINED_TOUCH_CREATE_PROFILE.fdflags,
+            rights: RETAINED_TOUCH_CREATE_PROFILE.grantedBase,
+            rightsInheriting: RETAINED_TOUCH_CREATE_PROFILE.grantedInheriting,
+            offset: 0n,
+            path: resolved.path,
+            handle,
+          });
+          writeU32(openedFdPtr, fd);
+          cleanup = false; // committed — do not roll back
+          tx.commit();
+          return WASI_ERRNO.SUCCESS;
+        } catch (error) {
+          if (cleanup) {
+            recycleDynamicFd(fd, fds.get(fd));
+            try { tx?.rollback?.(); } catch { /* the placeholder remains */ }
+          }
+          throw error;
+        }
+      }
       if (rightsInheriting !== 0n) fault(WASI_ERRNO.ENOTCAPABLE);
       const resolved = decodePath(pathPtr, pathLength);
       if ((rightsBase & ~resolved.policy.rights) !== 0n) {
