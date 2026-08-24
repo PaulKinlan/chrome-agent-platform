@@ -1910,7 +1910,10 @@ deleteAgentBtn?.addEventListener("click", async () => {
 
   if (out?.ok !== false) {
     setStatus(`Deleted ${agentName}.`, true);
-    showMainHub();
+    if (typeof window !== "undefined" && window.history?.pushState) {
+      window.history.pushState(null, "", "#");
+    }
+    hideThreadView({ fromNavigation: true, focusAfter: composer });
     await Promise.all([renderNamedAgents(), renderSiteAgents(), renderBackgroundAgents()]);
   } else {
     setStatus(`Could not delete ${agentName}: ${out?.error ?? "failed"}.`, false);
