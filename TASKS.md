@@ -2445,6 +2445,12 @@ On resume after a coordinator or worker loss:
     /tmp and absolute build-host paths from all shipped bytes (owner
     directive); repair commits restored the gitignored d3/sqlite3 dist
     binaries and the dist marker.
+  - 2026-08-24 16:00 UTC — the full sqlite WASI runtime LANDED as 0.2.227
+    (origin/main@4c6cca287d87d20fa12a69a128a84403bb3cdbb8): the S2 scratch
+    directory foundation + R3 lookup-follow + R4 FILE-follow + R5 resize +
+    R6 timestamps + R10 alias/open profiles + R10c rights constants + R11
+    six imports (fd_sync, mkdir, rmdir, unlink, readlink stub, poll stub);
+    SUPPORTED 20→28; sqlite3 admission (R12) is the last step to 26/26.
   - 2026-08-24 13:20 UTC — the R3-R6 runtime train LANDED as 0.2.216
     (origin/main@8c91093ecb802659522f89c063933e6a979be2f0): lookup-follow,
     FILE dirflags, bounded resize, explicit timestamps; SUPPORTED 20→22;
