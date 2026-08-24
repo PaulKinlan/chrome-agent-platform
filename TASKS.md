@@ -184,6 +184,8 @@ On resume after a coordinator or worker loss:
   and why subsequent runs are missing from the retained history
 - Recover: `git grep -n "renderAgentHistory\|journal\|run-log\|openThread" -- extension/ntp/ntp.js extension/shared/conversation.js`
 - History:
+  - 2026-08-24 21:56 UTC — LANDED reopen load-time repair at `origin/main@3ad22862d8280d3aec2beb045314793e346f8de1` (0.2.245): pre-fix stored threads now re-render correctly on open — projectThreadMessages partitions turns, places each execution's tool cards before its terminal row (terminal renders last, never ending on a tool row), terminals[] per turn so multiple terminal rows (assistant-partial+error same exec; legacy two-assistant turns) are never dropped; pure projection (no OPFS rewrite), idempotent on post-fix threads. Review PASS r2 (k3 c804999d) after r1 REVISE closed the row-loss blocker; 1507/1507.
+
   - 2026-08-24 17:55 UTC — LANDED as 0.2.229 after three review rounds. The
     fix's demonstrated scope is honest: it fixes the intermediate-tool-append
     PREVIEW WIPE and the projection ATTACHMENT LOSS (both with fail-on-base
