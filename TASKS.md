@@ -4040,3 +4040,24 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - Recover: `git grep -rn "reportAllChanges\|startTime\|PerformanceObserver" -- extension dist` and inspect the built service-worker/offscreen bundles
 - History:
   - 2026-08-24 21:12 UTC — captured from product-owner console stack trace; source not located by initial extension/-source grep (minified/injected), tracing is the first step.
+
+## [CAP-FB-20260824-AGENT-DELETION-NAVIGATE-01] Deleting an agent must return the owner to the base NTP (not a dead agent view)
+
+- Feedback: 2026-08-24 — product owner: "When you delete an agent from the agent dialog, it should take you to the base ntp page; right now it keeps you in a dead 'task / agent view'." Follow-up to the owner-facing agent deletion landed at 0.2.243 (CAP-FB-20260824-AGENT-DELETION-OWNER-01).
+- Updated: 2026-08-24 22:05 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `627a32f`
+- Candidate: —
+- Shipping: —
+- Acceptance: after a successful agent deletion (named/background/site) from any surface (NTP agent dialog/edit modal, side panel, Settings), the UI navigates the owner back to the base NTP / agents list — never leaving them in a task/agent view whose agent no longer exists. The deleted agent is gone from all lists. If the owner was viewing the deleted agent's task/conversation, that view is closed/redirected to the base. Deny/cancel (no deletion) leaves the current view unchanged.
+- Review: pending independent review
+- Gates: delete-from-agent-view returns to base NTP; deleted agent absent from lists; deny/cancel stays put; no dead-view state after delete
+- Blockers: compose with the 0.2.243 agent-deletion surfaces (NTP #delete-agent, sidepanel #agent-delete, options .delete-named-agent) + the NTP view navigation (openView / view state)
+- Next: after each successful delete, navigate to the base NTP/agents view
+- Recover: `git grep -n "delete-agent\|agent-delete\|deleteNamedAgent\|openView" -- extension/ntp extension/sidepanel extension/options`
+- History:
+  - 2026-08-24 22:05 UTC — captured from product-owner feedback on the 0.2.243 agent-deletion landing.
