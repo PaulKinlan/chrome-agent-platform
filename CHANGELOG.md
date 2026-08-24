@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.217] — 2026-08-24
+- feat(settings): nuclear factory reset — wipes all 7 storage classes (chrome.storage local+session, OPFS, IndexedDB, caches, alarms, page localStorage first-run keys) with destructive confirmation, all-or-nothing fail-closed reporting, and genuine first-run restoration via the #factory-reset boot redirect (CAP-FB-20260823-FACTORY-RESET-01)
+
 ## [0.2.216] — 2026-08-24
 - feat(wasi): SQLite WASI train R3-R6 — path_filestat_get lookup-follow, FILE path_open dirflags {0,1}, fd_filestat_set_size bounded resize, path_filestat_set_times explicit timestamps; SUPPORTED 20→22 (CAP-FB R3/R4/R5/R6)
 

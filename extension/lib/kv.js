@@ -177,6 +177,20 @@ export async function kvRemove(keys) {
   });
 }
 
+/** Mirror chrome.storage.local.clear() and clear in-memory session map. */
+export async function kvClear() {
+  return withStorageModeLock(async () => {
+    session.clear();
+    if (await storageAvailable()) {
+      try {
+        await chrome.storage.local.clear();
+      } catch (e) {
+        throw new StorageBackendError("clear", e);
+      }
+    }
+  });
+}
+
 let migrationInFlight = null;
 
 /** Await any in-flight session→storage migration so a concurrent KV operation

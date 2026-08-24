@@ -48,6 +48,7 @@ import {
 } from "../lib/tool-exec-preview.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
+import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
 import {
@@ -3416,6 +3417,32 @@ const handlers = mergeRouteMaps(
       out.push(await agentInfo(o));
     }
     return { agents: out };
+  },
+
+  // ── Factory reset / Nuclear wipe (CAP-FB-20260823-FACTORY-RESET-01) ─────
+  async "system.factoryReset"(_m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `factory reset denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "factory reset is restricted to the Settings surface" };
+    }
+    try {
+      const result = await executeFactoryReset();
+      await invalidateOrchestrator();
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, error: `factory_reset_failed: ${err?.message || err}` };
+    }
+  },
+
+  async "system.factoryResetEnumerate"(_m, context) {
+    if (context?.principal !== "owner-options") {
+      return { ok: false, error: "factory reset inspection is restricted to the Settings surface" };
+    }
+    const targets = await enumerateStorageTargets();
+    return { ok: true, targets };
   },
 
   // `agent.registry` — the ONE redacted, grouped, live agent registry the shared

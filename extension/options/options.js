@@ -1964,6 +1964,53 @@ async function renderData() {
   }
 }
 
+// ── Factory reset / Delete all data (CAP-FB-20260823-FACTORY-RESET-01) ──
+const factoryResetBtn = $("#factory-reset-btn");
+const factoryResetStatus = $("#factory-reset-status");
+
+factoryResetBtn?.addEventListener("click", async () => {
+  const confirmed = await confirmActionDialog({
+    title: "Reset all extension data?",
+    body:
+      "This is a permanent, destructive action. All tasks, agents, memory, artifacts, downloaded local models, and settings will be completely deleted and the first-run onboarding will be restored.\n\nAre you sure you want to delete everything?",
+    confirmLabel: "Delete everything",
+    destructive: true,
+  });
+  if (!confirmed) return;
+
+  if (factoryResetStatus) {
+    factoryResetStatus.hidden = false;
+    factoryResetStatus.textContent = "Wiping all data and restoring first-run state…";
+  }
+  factoryResetBtn.disabled = true;
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "system.factoryReset" });
+    if (res?.ok) {
+      if (factoryResetStatus) {
+        factoryResetStatus.textContent = "All data wiped successfully. Reloading…";
+      }
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch {}
+      setTimeout(() => {
+        if (typeof window !== "undefined") {
+          window.location.href = chrome.runtime.getURL("ntp/ntp.html#factory-reset");
+        }
+      }, 500);
+    } else {
+      throw new Error(res?.error || "Factory reset failed");
+    }
+  } catch (err) {
+    if (factoryResetStatus) {
+      factoryResetStatus.hidden = false;
+      factoryResetStatus.textContent = `Reset failed: ${err?.message || err}`;
+    }
+    factoryResetBtn.disabled = false;
+  }
+});
+
 // ── Advanced — system prompts (the layered prompt architecture) ──────────
 // The scope selector picks WHICH agent's system prompt is shown: the hub
 // (also the default for background/hook/scheduled runs), the Site Agents

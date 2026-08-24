@@ -183,6 +183,26 @@ let returningFromFirstRunSettings = false;
 const FIRST_RUN_DISMISSED_KEY = "cap:first-run-guide-dismissed";
 const FIRST_RUN_BROWSER_CHOICE_KEY = "cap:first-run-browser-choice";
 
+// ---- factory reset boot handler (CAP-FB-20260823-FACTORY-RESET-01) ----
+// When arriving after a factory reset (#factory-reset), clear all page-local
+// first-run preferences (localStorage/sessionStorage) and strip the hash so a
+// pristine onboarding guide renders immediately.
+function handleFactoryResetBoot() {
+  if (typeof location !== "undefined" && (location.hash === "#factory-reset" || location.hash === "#reset")) {
+    try {
+      localStorage.removeItem(FIRST_RUN_DISMISSED_KEY);
+      localStorage.removeItem(FIRST_RUN_BROWSER_CHOICE_KEY);
+      sessionStorage.removeItem(FIRST_RUN_BROWSER_CHOICE_KEY);
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch {}
+    try {
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch {}
+  }
+}
+handleFactoryResetBoot();
+
 function firstRunDismissed() {
   try { return localStorage.getItem(FIRST_RUN_DISMISSED_KEY) === "1"; }
   catch { return false; }
