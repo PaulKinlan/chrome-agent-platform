@@ -1097,6 +1097,76 @@ export function acceptToolSnapshot(prev, report) {
   return { accept: true, gate: { ...gate, seq } };
 }
 
+/** The page-identity seam: whether a tab matches the invocation target.
+ * `targetIdentity` is { origin } today (origin equality); the page-scoped
+ * identity lane refines it to { origin, path } without touching the SW flow. */
+export function matchesPageIdentity(tab, targetIdentity) {
+  const t = tab && typeof tab === "object" ? tab : null;
+  const target = targetIdentity && typeof targetIdentity === "object" ? targetIdentity : null;
+  if (!t || !target) return false;
+  if (typeof target.origin !== "string" || !target.origin) return false;
+  const tabUrl = typeof t.url === "string" ? t.url : "";
+  if (!tabUrl) return false;
+  let tabOrigin;
+  try {
+    const u = new URL(tabUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    tabOrigin = u.origin;
+  } catch {
+    return false;
+  }
+  if (tabOrigin !== target.origin) return false;
+  if (typeof target.path === "string" && target.path) {
+    try {
+      const p = new URL(tabUrl).pathname || "/";
+      return p === target.path;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Pure planner for the invocation tab (CAP-FB-20260824-WEBMCP-EXECUTION-01):
+ * the bound tab's binding is resolved if its tab is alive and on the origin;
+ * otherwise the planner prefers the active same-identity tab, then the lowest
+ * tabId, deterministically. Never invents a candidate. */
+export function planWebmcpInvocationTab({ canonical, binding, tabs }) {
+  if (typeof canonical !== "string" || !canonical) return { kind: "open", url: canonical };
+  const list = Array.isArray(tabs) ? tabs : [];
+  const target = { origin: canonical };
+  // The BOUND tab: alive and still on the origin → the current path.
+  if (binding && typeof binding === "object" && typeof binding.tabId === "number") {
+    const bound = list.find((t) => t?.id === binding.tabId);
+    if (bound && matchesPageIdentity(bound, target)) {
+      return {
+        kind: "bound",
+        tabId: binding.tabId,
+        documentId: typeof binding.documentId === "string" ? binding.documentId : "",
+      };
+    }
+  }
+  // Reuse an existing matching tab: the ACTIVE one first, else the lowest id.
+  const matching = list.filter((t) => t && typeof t.id === "number" && matchesPageIdentity(t, target));
+  if (matching.length) {
+    const active = matching.find((t) => t?.active === true);
+    const pick = active ?? matching.slice().sort((a, b) => a.id - b.id)[0];
+    return { kind: "reuse", tabId: pick.id };
+  }
+  return { kind: "open", url: canonical };
+}
+
+/** The deliberate re-bind transition (mirrors seedSnapshotGate): replaces a
+ * DEAD binding so the resolved tab's bridge re-binds through the existing
+ * enrollment.status → tools.upsert flow. `maxEpoch` is preserved (never
+ * reissue a stale epoch). NEVER displaces a live binding (the caller proves
+ * dead/absent first — the round-30 fence). Pure. */
+export function rebindSnapshotGate(prev, tabId) {
+  if (!validTabId(tabId)) return prev ?? emptySnapshotGate();
+  const maxEpoch = Number.isInteger(prev?.maxEpoch) ? prev.maxEpoch : -1;
+  return { tabId, documentId: null, epoch: -1, maxEpoch, seq: -1 };
+}
+
 /** Parse an omnibox-entered string into an intent.
  *  - "recipe:<id>"  → { kind: "recipe", id }
  *  - "thread:<id>"  → { kind: "thread", id }

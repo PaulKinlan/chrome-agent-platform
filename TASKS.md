@@ -229,13 +229,13 @@ On resume after a coordinator or worker loss:
   there) or open a new one and then, via the content script, call the functions
   declared via WebMCP
 - Updated: 2026-08-24 14:50 UTC
-- Status: OPEN
+- Status: IN_REVIEW
 - Priority: P0
 - Owner: unassigned
-- Workspace: none
-- Branch: none
+- Workspace: `/home/paulkinlan/worktrees/cap-webmcp-execution-4c6cca2`
+- Branch: detached
 - Base: `84bd49c`
-- Candidate: —
+- Candidate: GLM implementation (K3's frozen design)
 - Shipping: —
 - Acceptance: calling a declared WebMCP tool reuses an existing tab for the
   registered origin/page when present (matching the page identity), or opens
@@ -249,6 +249,19 @@ On resume after a coordinator or worker loss:
 - Next: trace the current stale-page error path and the tab resolution logic
 - Recover: `git grep -n "stale\|pageStale\|discover-active" -- extension/lib extension/background`
 - History:
+  - 2026-08-24 16:45 UTC — implemented K3's frozen design (DESIGN-K3.md):
+    planWebmcpInvocationTab (bound-alive → byte-identical current path;
+    dead binding → active-then-lowest-id reuse of a same-identity tab →
+    else open canonical URL; the matchesPageIdentity seam is origin-level
+    today, page-level-refinable via my page-identity lane) +
+    rebindSnapshotGate (maxEpoch preserved, live binding never displaced)
+    + a bounded 15s readiness wait (honest timeout) + descriptor
+    re-verification against the freshly accepted directory (the impossible
+    dead-documentId generation match replaced; fail closed). All other
+    fences byte-identical. KATs: planner (bound/active/lowest-id/wrong-
+    origin/no-binding/open-fallback) + the rebind lifecycle (dead→replaced
+    →fresh epoch→accept-new, stale-rejected) + the round-30 second-tab
+    fence unchanged + the SW wiring pins. 7 new + 82 regression = 89/89.
   - 2026-08-24 14:50 UTC — captured from product-owner feedback.
 
 ## [CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01] WebMCP registration is origin-level; must support page-level tools

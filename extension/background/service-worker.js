@@ -392,6 +392,8 @@ import {
   safeProviderError,
   sanitizeToolName as safeToolName,
   seedSnapshotGate,
+  rebindSnapshotGate,
+  planWebmcpInvocationTab,
   syncSnapshotDocument,
   schemaToZod as buildSchema,
   summarizeInjection,
@@ -1392,16 +1394,86 @@ async function invokeSiteTool(
   ) {
     return { error: `the approved document changed before ${name} could run` };
   }
+  let resolvedBinding = binding;
+  // CAP-FB-20260824-WEBMCP-EXECUTION-01: when the bound tab/document is dead
+  // (closed or navigated cross-origin), PLAN the invocation tab instead of
+  // failing with the stale-page family: prefer the active same-identity tab,
+  // else the lowest tabId, else open the canonical URL. The planner is pure
+  // (lib/pure.js) — the page-identity seam lives in matchesPageIdentity.
   if (
     !binding || binding.tabId == null ||
     typeof binding.documentId !== "string" || binding.documentId.length === 0 ||
     !Number.isInteger(binding.seq) || binding.seq < 0
   ) {
+    // No binding at all — never a snapshot accepted for this origin.
     return {
       error: `no current approved tab/document snapshot is bound for ${canonical} — re-discover the page`,
     };
   }
-  const tab = await chrome.tabs.get(binding.tabId).catch(() => null);
+  const boundTab = await chrome.tabs.get(binding.tabId).catch(() => null);
+  let boundTabOrigin = null;
+  try {
+    boundTabOrigin = boundTab?.url ? canonicalOrigin(new URL(boundTab.url).origin) : null;
+  } catch {
+    boundTabOrigin = null;
+  }
+  if (!boundTab?.id || boundTabOrigin !== canonical) {
+    // The bound tab is dead or navigated off-origin. Plan + resolve.
+    const tabs = await chrome.tabs.query({}).catch(() => []);
+    const plan = planWebmcpInvocationTab({ canonical, binding, tabs: Array.isArray(tabs) ? tabs : [] });
+    if (plan.kind === "reuse") {
+      // Deliberate gate re-bind under the enrollment lock so the resolved tab's
+      // bridge re-binds via the existing enrollment.status → tools.upsert flow.
+      await withEnrollmentLock(async () => {
+        const gate = await kvGet(SNAPSHOT_GATE_KEY);
+        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const cur = map[canonical] ?? null;
+        // NEVER displace a live binding (the round-30 fence): only a dead/
+        // missing or dead-origin binding is replaced.
+        const dead = !cur || cur.tabId == null || (await chrome.tabs.get(cur.tabId).catch(() => null)) == null;
+        if (dead) {
+          map[canonical] = rebindSnapshotGate(cur, plan.tabId);
+          await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        }
+      });
+      // The resolved tab's bridge may already be running — poke it to re-sync.
+      try { await chrome.tabs.sendMessage(plan.tabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
+      resolvedBinding = await waitForSnapshotBinding(canonical, plan.tabId);
+      if (!resolvedBinding) {
+        return {
+          error: `the existing tab for ${canonical} did not become ready in time — the page's bridge never re-bound`,
+        };
+      }
+    } else if (plan.kind === "open") {
+      let created = null;
+      try {
+        created = await chrome.tabs.create({ url: canonical, active: false });
+      } catch (e) {
+        return { error: `could not open ${canonical}: ${e?.message ?? e}` };
+      }
+      if (!created?.id) return { error: `could not open ${canonical}` };
+      resolvedBinding = await waitForSnapshotBinding(canonical, created.id);
+      if (!resolvedBinding) {
+        return {
+          error: `the new tab for ${canonical} did not become ready in time — the page's bridge never bound`,
+        };
+      }
+    }
+    // Descriptor RE-VERIFICATION on the fresh path: the run's
+    // expectedSourceGeneration embeds the DEAD documentId, so the generation
+    // match can never hold — instead require the SAME descriptor (name + source)
+    // to still exist in the freshly accepted directory (fail closed otherwise).
+    const freshDir = await listTools(canonical);
+    const stillThere = freshDir.find(
+      (t) => t.name === name && t.source === descriptor.source,
+    );
+    if (!stillThere) {
+      return { error: `tool ${name} is not present on the freshly bound page for ${canonical}` };
+    }
+  }
+  const tab = resolvedBinding?.tabId != null
+    ? await chrome.tabs.get(resolvedBinding.tabId).catch(() => null)
+    : null;
   let tabOrigin = null;
   try {
     tabOrigin = tab?.url ? canonicalOrigin(new URL(tab.url).origin) : null;
@@ -1443,7 +1515,7 @@ async function invokeSiteTool(
       args,
       gen, // enrollment-scoped identity — the content script enforces it (round-20)
       source: descriptor.source, // descriptor identity — declared/inferred dispatch
-    }, { documentId: binding.documentId });
+    }, { documentId: resolvedBinding.documentId });
     // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
     // call (a single locked snapshot, not two unlocked reads).
     const after = await enrollmentSnapshot(canonical);
@@ -1469,6 +1541,28 @@ async function invokeSiteTool(
   } catch (e) {
     return { error: `invoke failed: ${e.message}` };
   }
+}
+
+/** Bounded readiness wait (CAP-FB-20260824-WEBMCP-EXECUTION-01): poll the
+ * snapshot gate until the resolved tab's binding exists (tabId + a non-empty
+ * documentId) AND the directory has accepted the resolved document's snapshot
+ * (the page's bridge re-announced). Honest timeout — never a hung invocation. */
+async function waitForSnapshotBinding(canonical, tabId, { budgetMs = 15_000, intervalMs = 250 } = {}) {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (runAborted()) return null;
+    const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+    const binding = gateMap[canonical] ?? null;
+    if (
+      binding && binding.tabId === tabId &&
+      typeof binding.documentId === "string" && binding.documentId.length > 0
+    ) {
+      // A fresh tools.upsert was accepted for this document (seq advanced).
+      if (Number.isInteger(binding.seq) && binding.seq >= 0) return binding;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return null;
 }
 
 /** Build a bounded, honest context string from attachments (never an object). */
