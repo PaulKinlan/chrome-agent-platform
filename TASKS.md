@@ -1028,7 +1028,7 @@ On resume after a coordinator or worker loss:
   agents opens Settings but does not navigate or scroll to the Background
   agents section
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -1050,6 +1050,8 @@ On resume after a coordinator or worker loss:
 - Recover: `git grep -n "configure\|background agents\|options.html#" -- extension`
 - History:
   - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+- History:
+  - 2026-08-24 19:1x UTC — CLOSED as already-fixed (owner: "close bugs if fixed"). Verified present in current main: ntp.js bg-configure → openView("options/options.html#background-agents"); options.js handleSettingsHashNavigation scrolls+focuses the section; pure.js normalizeSettingsSectionId maps the alias. The report was from a stale build; no new code needed.
 
 ## [CAP-FB-20260823-FIRST-RUN-EXAMPLE-AGENT-01] First run should create a compelling example agent
 
@@ -1089,7 +1091,7 @@ On resume after a coordinator or worker loss:
   whether they want the tool to control the browser — it is most of the
   point and the power of the tool
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: unassigned
@@ -1113,13 +1115,15 @@ On resume after a coordinator or worker loss:
 - Recover: `git grep -n "onboarding\|permissions.request" -- extension`
 - History:
   - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+- History:
+  - 2026-08-24 19:1x UTC — CLOSED as already-fixed (owner: "close bugs if fixed"). Verified present in current main: FirstRunGuide consent card with "Allow browser control"/"Continue without browser control" genuine-gesture buttons, reduced-capability mode on decline + Settings revisit, first-run-onboarding.js requestBrowserControlFromOwnerClick (isGenuineOwnerClick, tabs only, no <all_urls>). Report was from a stale build; no new code needed.
 
 ## [CAP-FB-20260823-SIDEPANEL-BACKGROUND-AGENTS-01] Background agents must be visible in the side-panel agent list
 
 - Feedback: 2026-08-23 — product owner: background agents need to be visible
   in the side-panel agent list, or at least made clearly discoverable
 - Updated: 2026-08-23 20:35 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: unassigned
@@ -1140,6 +1144,8 @@ On resume after a coordinator or worker loss:
 - Recover: `git grep -n "agent-list\|sidepanel" -- extension`
 - History:
   - 2026-08-23 20:35 UTC — captured from direct product-owner feedback.
+- History:
+  - 2026-08-24 19:1x UTC — CLOSED as already-fixed (owner: "close bugs if fixed"). Verified present in current main: sidepanel.js KIND_LABELS {background:"Background agent"}, background-agent history + openAgentByRef("background:<id>") + the detail-pane "Background agent" label. Background agents are visible in the side-panel list. Report was from a stale build; no new code needed.
 
 ## [CAP-FB-20260823-AGENT-ICON-ON-CREATE-01] Generate the agent icon at creation, not on click
 
