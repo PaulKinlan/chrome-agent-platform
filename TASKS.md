@@ -265,6 +265,8 @@ On resume after a coordinator or worker loss:
     →fresh epoch→accept-new, stale-rejected) + the round-30 second-tab
     fence unchanged + the SW wiring pins. 7 new + 82 regression = 89/89.
   - 2026-08-24 14:50 UTC — captured from product-owner feedback.
+- History:
+  - 2026-08-24 20:50 UTC — LANDED delegated-invocation cure at `origin/main@f312a832745a99a43e48b90da007b648ccee37f2` (0.2.238): the delegated @mention path reported "stale tab" and never opened the window because availabilityByTool was gated on an already-open tab (so search_tools returned no valid selectionRef). Fix: availability="ready" when enrolled+approved (ungated); invokeSiteTool checks isBoundAlive and delegates to planWebmcpInvocationTab; open path does chrome.tabs.create({url:canonical,active:true}) + waitForSnapshotBinding + descriptor re-verify + documentId-addressed invoke; reuse path focuses. Round-30 race closed via origin+completeness isCurAliveAndComplete predicate (gap-born live+complete binding never displaced; dead/off-origin/incomplete rebound) — review PASS r2 (Pro b8e3c009). Outstanding per Functional Verification Mandate: a browser-driven delegated-@mention booking journey (coordinator Chrome gate); non-blocking follow-ups: predicate→lib/pure.js extraction, N5 __proto__ schema-key fail-open.
 
 ## [CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01] WebMCP registration is origin-level; must support page-level tools
 
