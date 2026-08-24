@@ -54,6 +54,9 @@ export class CanonicalPayloadError extends Error {
 // principals with a non-empty browser-supplied documentId.
 export const OWNER_DIRECT_ACTIONS = new Set([
   "asset.delete",
+  "agent.delete",
+  "named-agent.delete",
+  "recipe.delete",
 ]);
 
 export function isOwnerDirectApproval(context, action) {

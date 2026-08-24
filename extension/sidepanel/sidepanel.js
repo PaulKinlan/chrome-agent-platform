@@ -20,7 +20,7 @@ import {
 } from "../shared/conversation.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
-import "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 
 const urlInput = document.getElementById("url");
 const statusEl = document.getElementById("status");
@@ -266,6 +266,39 @@ function closeAgentDetail() {
 }
 
 document.getElementById("agent-back").addEventListener("click", closeAgentDetail);
+
+const agentDeleteBtn = document.getElementById("agent-delete");
+agentDeleteBtn?.addEventListener("click", async () => {
+  if (!openAgent) return;
+  const { kind, id, name } = openAgent;
+  const agentName = name || id;
+  let preview = "This will permanently remove the agent and its custom configuration.\n\nNote: Any created artifacts will be retained.";
+  if (kind === "site") {
+    preview = "This will disenroll the site, unregister its tools, and revoke its permissions.\n\nNote: Any created artifacts will be retained.";
+  } else if (kind === "background") {
+    preview = "This will cancel the scheduled task and remove its recurring alarm.";
+  }
+  const confirmed = await confirmActionDialog({
+    title: `Delete “${agentName}”?`,
+    body: `Are you sure you want to delete ${agentName}?\n\n${preview}`,
+    confirmLabel: "Delete agent",
+    destructive: true,
+  });
+  if (!confirmed) return;
+  let out;
+  if (kind === "named") {
+    out = await send("named-agent.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  } else if (kind === "site") {
+    out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  } else if (kind === "background") {
+    out = await send("task.cancel", { name: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  }
+  if (out?.ok !== false) {
+    closeAgentDetail();
+    picker?.refresh?.();
+    await renderTasks();
+  }
+});
 picker.addEventListener("agent-select", (e) => {
   const a = e.detail?.agent;
   if (a) openAgentDetail({ ...a, ref: e.detail.ref });

@@ -1236,6 +1236,7 @@ function agentProviderRowHtml(a, cur, globalCfg) {
     <div class="ag-actions">
       <button class="btn small set-agent-provider" type="button" ${internalDisabled}>Save</button>
       ${!selection.hiddenInternal && cur.provider && cur.hasApiKey ? `<button class="btn small ghost clear-agent-key" type="button" aria-label="Clear the stored API key for ${escapeAttr(a.name)}">Clear key</button>` : ""}
+      <button class="btn small ghost delete-named-agent" type="button" style="color:var(--danger,#b3261e);border-color:var(--border);" aria-label="Delete ${escapeAttr(a.name)}">Delete</button>
     </div>
   `;
 }
@@ -1405,6 +1406,24 @@ async function renderAgentProviders() {
         trigger.focus();
         saveFlash(`Key not cleared: ${r.error ?? "unknown error"}`);
       }
+    });
+    row.querySelector(".delete-named-agent")?.addEventListener("click", async () => {
+      const confirmed = await confirmActionDialog({
+        title: `Delete “${a.name}”?`,
+        body: `Are you sure you want to delete ${a.name}? This will remove the agent and its custom configuration.\n\nNote: Any created artifacts will be retained.`,
+        confirmLabel: "Delete agent",
+        destructive: true,
+      });
+      if (!confirmed) return;
+      const res = await chrome.runtime
+        .sendMessage({ type: "named-agent.delete", id: a.id })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok !== false) {
+        saveFlash(`Deleted ${a.name}.`);
+      } else {
+        saveFlash(`Could not delete ${a.name}: ${res?.error ?? "failed"}.`);
+      }
+      await renderAgentProviders();
     });
     setAgentProvider.addEventListener("click", async (event) => {
       const trigger = event.currentTarget;

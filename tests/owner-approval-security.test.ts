@@ -47,8 +47,11 @@ Deno.test("owner-direct approval: a browser-attested owner UI document's asset.d
   assertEquals(isOwnerDirectApproval({ principal: "owner-options", documentId: 7 }, "asset.delete"), false);
   // Only asset.delete is owner-direct: every other destructive action keeps
   // the Settings approval flow even from a UI document.
-  for (const other of ["asset.update", "script.delete", "script.update", "agent.delete", "capability.revoke", "hooks.subscribe"]) {
+  for (const other of ["asset.update", "script.delete", "script.update", "capability.revoke", "hooks.subscribe"]) {
     assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, other), false, other);
+  }
+  for (const direct of ["asset.delete", "agent.delete", "named-agent.delete", "recipe.delete"]) {
+    assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, direct), true, direct);
   }
   // Malformed inputs fail closed without throwing.
   assertEquals(isOwnerDirectApproval(null, "asset.delete"), false);
@@ -57,7 +60,7 @@ Deno.test("owner-direct approval: a browser-attested owner UI document's asset.d
 });
 
 Deno.test("owner-direct scope is exactly the audited action set (no silent widening)", () => {
-  assertEquals([...OWNER_DIRECT_ACTIONS], ["asset.delete"]);
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "named-agent.delete", "recipe.delete"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

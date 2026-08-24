@@ -16,6 +16,7 @@ import {
   wireHtmlFrameContent,
   wireHtmlFramePreference,
   currentFramePreference,
+  confirmActionDialog,
 } from "../shared/components.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
@@ -903,6 +904,7 @@ const threadTitle = document.getElementById("thread-title");
 const threadConversation = document.getElementById("thread-conversation");
 const threadComposer = document.getElementById("thread-composer");
 const editAgentBtn = document.getElementById("edit-agent");
+const deleteAgentBtn = document.getElementById("delete-agent");
 // Current conversation identity is declared before the run-registry subscription
 // so even an immediate snapshot is projected into the correct surface.
 let activeViewRoute = VIEW_ROUTE.HUB;
@@ -1075,6 +1077,7 @@ async function openThread(id) {
   // Tasks use direct click-to-edit on the title with an editable hover affordance;
   // the separate Edit button is removed from the task view (CAP-FB-20260823-TASK-INLINE-EDIT-01).
   editAgentBtn.hidden = true;
+  if (deleteAgentBtn) deleteAgentBtn.hidden = true;
   threadTitle.classList.add("editable-task");
   threadTitle.setAttribute("tabindex", "-1");
   threadTitle.setAttribute("role", "button");
@@ -1129,6 +1132,10 @@ async function openBackgroundAgentChat(id, name) {
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
   editAgentBtn.hidden = true;
+  if (deleteAgentBtn) {
+    deleteAgentBtn.hidden = false;
+    deleteAgentBtn.setAttribute("aria-label", "Delete background agent");
+  }
   threadTitle.classList.remove("editable-task");
   threadTitle.removeAttribute("role");
   threadTitle.removeAttribute("title");
@@ -1187,6 +1194,10 @@ async function openAgentSurface({ kind, id, name }) {
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
+  if (deleteAgentBtn) {
+    deleteAgentBtn.hidden = !kind;
+    if (kind) deleteAgentBtn.setAttribute("aria-label", "Delete " + (name || id));
+  }
   threadTitle.classList.remove("editable-task");
   threadTitle.removeAttribute("role");
   threadTitle.removeAttribute("title");
@@ -1358,6 +1369,7 @@ async function openAgentConfig() {
     initialSkills: agent.skills ?? [],
     initialCoreAssets: agent.coreAssets ?? [],
     canRegenerateAvatar: true,
+    canDelete: true,
     savedLabel: "Save",
     onSave: async (v) => {
       const r = await send("named-agent.update", {
@@ -1627,8 +1639,19 @@ async function buildAgentConfigDialog(opts) {
   footer.style.zIndex = "10";
 
   const regenBtn = opts.canRegenerateAvatar ? configButton("Regenerate avatar", "secondary") : null;
+  const deleteBtn = opts.canDelete ? configButton("Delete agent", "secondary") : null;
+  if (deleteBtn) {
+    deleteBtn.style.color = "var(--danger,#b3261e)";
+    deleteBtn.style.borderColor = "var(--danger,#b3261e)";
+    deleteBtn.style.marginRight = "auto";
+    deleteBtn.addEventListener("click", () => {
+      dialog.close();
+      deleteAgentBtn?.click();
+    });
+  }
   const cancelBtn = configButton("Cancel", "secondary");
   const saveBtn = configButton(opts.savedLabel ?? "Save", "primary");
+  if (deleteBtn) footer.append(deleteBtn);
   if (regenBtn) footer.append(regenBtn);
   footer.append(cancelBtn, saveBtn);
 
@@ -1839,6 +1862,59 @@ document.getElementById("thread-back")?.addEventListener("click", hideThreadView
 editAgentBtn?.addEventListener("click", () => {
   if (currentAgentKind === "named") openAgentConfig();
   else if (currentThreadId) startTitleEdit();
+});
+
+deleteAgentBtn?.addEventListener("click", async () => {
+  if (!currentAgentKind || !currentAgentId) return;
+  const kind = currentAgentKind;
+  const id = currentAgentId;
+  let agentName = id;
+  let previewDetails = "";
+
+  if (kind === "named") {
+    const res = await send("named-agent.get", { id }).catch(() => null);
+    const agent = res?.agent;
+    agentName = agent?.name || id;
+    const skillsCount = agent?.skills?.length ?? 0;
+    const assetsCount = agent?.coreAssets?.length ?? 0;
+    previewDetails = `This will permanently remove the agent registry entry, its memory store, system prompt override, and custom provider configuration.\n\n` +
+      `• Skills configured: ${skillsCount}\n` +
+      `• Core assets: ${assetsCount}\n\n` +
+      `Note: Any artifacts created by this agent will be retained.`;
+  } else if (kind === "site" || kind === "origin") {
+    const res = await send("list-tools", { origin: id }).catch(() => ({ tools: [] }));
+    const toolsCount = res?.tools?.length ?? 0;
+    previewDetails = `This will disenroll the site, unregister its ${toolsCount} tools, revoke dynamic scripts, and remove host permissions.\n\n` +
+      `Note: Any artifacts created by this agent will be retained.`;
+  } else if (kind === "background") {
+    previewDetails = `This will cancel the scheduled task and remove its recurring alarm.`;
+  }
+
+  const confirmed = await confirmActionDialog({
+    title: `Delete “${agentName}”?`,
+    body: `Are you sure you want to delete ${agentName}?\n\n${previewDetails}`,
+    confirmLabel: "Delete agent",
+    destructive: true,
+  });
+
+  if (!confirmed) return;
+
+  let out;
+  if (kind === "named") {
+    out = await send("named-agent.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  } else if (kind === "site" || kind === "origin") {
+    out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  } else if (kind === "background") {
+    out = await send("task.cancel", { name: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  }
+
+  if (out?.ok !== false) {
+    setStatus(`Deleted ${agentName}.`, true);
+    showMainHub();
+    await Promise.all([renderNamedAgents(), renderSiteAgents(), renderBackgroundAgents()]);
+  } else {
+    setStatus(`Could not delete ${agentName}: ${out?.error ?? "failed"}.`, false);
+  }
 });
 
 // ── edit the thread title (item 47): click the title → rename in place.

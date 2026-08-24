@@ -47,6 +47,11 @@
   .ad-who { min-width:0; display:flex; flex-direction:column; }
   .ad-name { font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .ad-kind { font-size:11px; color:var(--muted); }
+  .ad-delete { margin-left:auto; display:inline-flex; align-items:center; min-height:32px; border:1px solid var(--border);
+    background:transparent; color:var(--danger,#b3261e); font:inherit; font-size:12px; font-weight:600; cursor:pointer;
+    padding:0 10px; border-radius:8px; }
+  .ad-delete:hover { background:var(--panel-2,#efede8); }
+  .ad-delete:focus-visible { outline:2px solid var(--danger,#b3261e); outline-offset:2px; }
   #agent-history { flex:1; overflow-y:auto; padding:12px 14px; }
   .ad-composer { padding:10px 14px; border-top:1px solid var(--border); }
 </style>
@@ -85,6 +90,7 @@
           <span class="ad-name" id="agent-detail-name">Agent</span>
           <span class="ad-kind" id="agent-detail-kind"></span>
         </div>
+        <button type="button" class="ad-delete" id="agent-delete" aria-label="Delete agent" title="Delete agent">Delete</button>
       </div>
       <div class="status" id="agent-detail-status" hidden></div>
       <agent-conversation id="agent-history" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
