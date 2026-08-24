@@ -1062,6 +1062,17 @@ async function readSiteLazySources(origin, runGenCell) {
     grantDigest,
     availabilityByTool,
     authorizationGuard,
+    // Validation failures surface to the diagnostics ring with their NAMED
+    // reason (schema-compile-failed / parse-rejected) — the opaque
+    // lazy-arguments-invalid left the owner (and the model) guessing.
+    onValidationDenied: (info) => {
+      pushDiagnostic(
+        "warn",
+        `WebMCP tool arguments rejected: ${info.reason}${info.detail ? ` — ${info.detail}` : ""} (${info.name} on ${info.origin})`,
+        "webmcp",
+        "arguments",
+      );
+    },
   }, ({ name, source, args }) =>
     invokeSiteTool(
       origin,

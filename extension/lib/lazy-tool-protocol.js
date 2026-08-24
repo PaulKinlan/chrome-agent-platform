@@ -35,6 +35,7 @@ import {
   hasLoneSurrogates,
   redactSecretText,
   safeProviderError,
+  compileSchemaToZod,
   schemaToZod,
   SECRET_KEY_RE,
   truncateUtf8,
@@ -79,6 +80,23 @@ function isAborted(signal) {
 
 function fixedError(code) {
   return Object.freeze({ ok: false, error: code });
+}
+
+/** The lazy-arguments-invalid error, enriched with a NAMED reason + bounded,
+ * secret-redacted detail so the MODEL can see exactly which field failed and
+ * repair its arguments (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01) — the opaque
+ * code alone left the model guessing (it invented "ensure the tab is open and
+ * has permissions" for a pure args mismatch). */
+function validationError(reason, detail) {
+  const out = {
+    ok: false,
+    error: "lazy-arguments-invalid",
+    reason: String(reason ?? "parse-rejected"),
+  };
+  if (typeof detail === "string" && detail) {
+    out.detail = truncateUtf8(redactSecretText(detail), 600);
+  }
+  return Object.freeze(out);
 }
 
 function safeKey(key) {
@@ -324,21 +342,21 @@ async function validateRecordArguments(record, args) {
   try {
     result = await validate(args);
   } catch {
-    return fixedError("lazy-arguments-invalid");
+    return validationError("validator-threw", "the tool's argument validator threw");
   }
   if (ownData(result, "ok") !== true) {
-    return fixedError("lazy-arguments-invalid");
+    return validationError(ownData(result, "reason"), ownData(result, "detail"));
   }
   const data = ownData(result, "data");
   if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return fixedError("lazy-arguments-invalid");
+    return validationError("bad-data", "the validator returned a non-object payload");
   }
   try {
     // A trusted validator may apply defaults/transforms. Bound and accessor-check
     // that derived object too before it reaches the existing dispatcher.
     return Object.freeze({ ok: true, data: sanitizeLazyToolArguments(data) });
   } catch {
-    return fixedError("lazy-arguments-invalid");
+    return validationError("bad-data", "the validator's payload failed sanitization");
   }
 }
 
@@ -511,7 +529,7 @@ export class LazyToolProtocol {
     try {
       args = sanitizeLazyToolArguments(ownData(request, "arguments"));
     } catch {
-      return fixedError("lazy-arguments-invalid");
+      return validationError("bad-data", "the arguments payload failed sanitization");
     }
     const firstRecord = first.byStableId.get(firstResolved.descriptor.stableId);
     const firstAuthority = await authorizeRecord(
@@ -955,16 +973,34 @@ export function executableWebMcpToolRecords(tools, context, dispatch) {
       ownData(candidate, "name") === name &&
       ownData(candidate, "source") === expectedSource
     );
+    const schema = ownData(sourceTool, "inputSchema") ?? {};
+    // Fail-open compile (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01): unknown /
+    // unsupported / optional keywords ($schema, format, pattern, oneOf, ...)
+    // are dropped with a record, never bricking the tool; DoS-bounds violations
+    // still fail closed as a named schema-compile-failed. Parse rejections
+    // carry the per-field zod issues so the model can repair its arguments.
+    const compiled = compileSchemaToZod(z, schema);
+    const onValidationDenied = ownData(context, "onValidationDenied");
     let validator;
-    try {
-      const schema = ownData(sourceTool, "inputSchema") ?? {};
-      const zodSchema = schemaToZod(z, schema);
+    const deny = (reason, detail) => {
+      try {
+        onValidationDenied?.({ name, origin: ownData(context, "origin") ?? "", reason, detail });
+      } catch { /* diagnostics must never break validation */ }
+    };
+    if (compiled.fatal) {
+      deny("schema-compile-failed", compiled.fatal);
+      validator = async () => ({ ok: false, reason: "schema-compile-failed", detail: compiled.fatal });
+    } else {
       validator = async (args) => {
-        const parsed = zodSchema.safeParse(args);
-        return parsed.success ? { ok: true, data: parsed.data } : { ok: false };
+        const parsed = compiled.zodSchema.safeParse(args);
+        if (parsed.success) return { ok: true, data: parsed.data };
+        const issues = (parsed.error?.issues ?? []).slice(0, 8).map((issue) =>
+          `${Array.isArray(issue?.path) && issue.path.length ? issue.path.join(".") : "(root)"}: ${String(issue?.message ?? "invalid")}`
+        );
+        const detail = truncateUtf8(redactSecretText(issues.join("; ")), 600);
+        deny("parse-rejected", detail);
+        return { ok: false, reason: "parse-rejected", detail };
       };
-    } catch {
-      validator = async () => ({ ok: false });
     }
     const authorizationGuard = ownData(context, "authorizationGuard");
     return Object.freeze({

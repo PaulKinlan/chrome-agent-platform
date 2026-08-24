@@ -55,17 +55,20 @@ Deno.test("schemaToZod honors additionalProperties:false (extra property rejecte
   assertEquals(s.safeParse({ name: "x", admin: true }).success, false);
 });
 
-Deno.test("schemaToZod honors min/max length; pattern fails closed", () => {
+Deno.test("schemaToZod honors min/max length; pattern is dropped fail-open (never a regex-DoS vector)", () => {
   const s = schemaToZod(z, { type: "string", minLength: 2, maxLength: 4 });
   assertEquals(s.safeParse("ab").success, true);
   assertEquals(s.safeParse("a").success, false);
   assertEquals(s.safeParse("abcde").success, false);
 
-  // Pattern/regex is NOT supported (regex-DoS vector) — a descriptor carrying
-  // `pattern` fails closed and rejects every value.
+  // Pattern/regex is NOT enforced (regex-DoS vector) — under the fail-open
+  // policy (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01) the keyword is DROPPED
+  // (recorded), never compiled and never bricking the tool: the string type
+  // itself stays strict, the pattern simply does not constrain.
   const p = schemaToZod(z, { type: "string", pattern: "^[a-z]+$" });
-  assertEquals(p.safeParse("abc").success, false);
-  assertEquals(p.safeParse("ABC1").success, false);
+  assertEquals(p.safeParse("abc").success, true);
+  assertEquals(p.safeParse("ABC1").success, true);
+  assertEquals(p.safeParse(42).success, false); // the TYPE is still enforced
 });
 
 Deno.test("schemaToZod honors number/integer minimum/maximum", () => {
@@ -90,10 +93,16 @@ Deno.test("schemaToZod honors required properties", () => {
 });
 
 Deno.test("schemaToZod fails closed on unsupported/malformed schemas", () => {
-  // null schema -> z.never() (rejects everything), NOT a permissive record
+  // null/undefined schema nodes -> z.never() (they are not schemas at all),
+  // NOT a permissive record.
   assertEquals(schemaToZod(z, null).safeParse({ anything: 1 }).success, false);
-  assertEquals(schemaToZod(z, { type: "weird" }).safeParse("x").success, false);
   assertEquals(schemaToZod(z, undefined).safeParse({}).success, false);
+  // An unknown TYPE value is dropped fail-open (the node becomes untyped and
+  // unconstrained) — a page typo must not brick its own tool.
+  assertEquals(schemaToZod(z, { type: "weird" }).safeParse("x").success, true);
+  // An EMPTY schema means "no constraints" (JSON Schema semantics) — a tool
+  // that declares no inputSchema accepts any arguments object.
+  assertEquals(schemaToZod(z, {}).safeParse({ anything: 1 }).success, true);
 });
 
 Deno.test("schemaToZod bounds: too-deep schema fails closed", () => {
@@ -118,30 +127,35 @@ Deno.test("schemaToZod rejects enum/const values that mismatch the declared type
   assertEquals(c.safeParse(42).success, false);
 });
 
-Deno.test("schemaToZod rejects oneOf (exactly-one is not a union)", () => {
+Deno.test("schemaToZod downgrades oneOf to a union (fail-open; exactly-one is not enforced)", () => {
   const s = schemaToZod(z, { oneOf: [{ type: "string" }, { type: "number" }] });
-  assertEquals(s.safeParse("x").success, false);
-  assertEquals(s.safeParse(1).success, false);
+  assertEquals(s.safeParse("x").success, true);
+  assertEquals(s.safeParse(1).success, true);
+  assertEquals(s.safeParse(true).success, false); // no matching branch
 });
 
-Deno.test("schemaToZod rejects a schema-valued additionalProperties", () => {
+Deno.test("schemaToZod compiles a schema-valued additionalProperties as a catchall", () => {
   const s = schemaToZod(z, {
     type: "object",
     properties: { name: { type: "string" } },
     additionalProperties: { type: "string" },
   });
-  assertEquals(s.safeParse({ name: "x", extra: "y" }).success, false);
+  // Extra properties must satisfy the catchall schema — faithful, not rejected.
+  assertEquals(s.safeParse({ name: "x", extra: "y" }).success, true);
   assertEquals(s.safeParse({ name: "x", extra: 42 }).success, false);
 });
 
-Deno.test("schemaToZod rejects unsupported keywords (exclusiveMinimum etc.)", () => {
-  // exclusiveMinimum is NOT in the supported allowlist — fail closed, not ignored.
+Deno.test("schemaToZod drops unsupported keywords fail-open (exclusiveMinimum etc.)", () => {
+  // exclusiveMinimum is NOT enforced — dropped with a record, never bricking
+  // the tool; the declared type stays strict.
   const s = schemaToZod(z, { type: "number", exclusiveMinimum: 5 });
-  assertEquals(s.safeParse(10).success, false);
-  assertEquals(s.safeParse(0).success, false);
-  // multipleOf is likewise unsupported.
+  assertEquals(s.safeParse(10).success, true);
+  assertEquals(s.safeParse(0).success, true);
+  assertEquals(s.safeParse("not-a-number").success, false);
+  // multipleOf is likewise dropped.
   const m = schemaToZod(z, { type: "integer", multipleOf: 3 });
-  assertEquals(m.safeParse(9).success, false);
+  assertEquals(m.safeParse(9).success, true);
+  assertEquals(m.safeParse(4).success, true);
 });
 
 // ---- tool name: collision-resistant ----
@@ -248,34 +262,38 @@ Deno.test("PAGE_ALLOWED_ROUTES is an allowlist (admin routes are NOT in it)", ()
   assert(!PAGE_ALLOWED_ROUTES.has("tools.approve"));
 });
 
-Deno.test("schemaToZod rejects a keyword on the wrong type (per-type allowlist)", () => {
-  // minLength is string-only; on a number it must fail closed, not be ignored.
+Deno.test("schemaToZod drops a keyword on the wrong type (fail-open, type stays strict)", () => {
+  // minLength is string-only; on a number it is dropped, not enforced.
   const n = schemaToZod(z, { type: "number", minLength: 99 });
-  assertEquals(n.safeParse(1).success, false);
-  // minimum is number-only; on a string it fails closed.
+  assertEquals(n.safeParse(1).success, true);
+  assertEquals(n.safeParse("not-a-number").success, false);
+  // minimum is number-only; on a string it is dropped.
   const s = schemaToZod(z, { type: "string", minimum: 5 });
-  assertEquals(s.safeParse("ok").success, false);
+  assertEquals(s.safeParse("ok").success, true);
+  assertEquals(s.safeParse(42).success, false);
 });
 
-Deno.test("schemaToZod rejects malformed keyword shapes", () => {
-  // required must be an array of strings.
+Deno.test("schemaToZod drops malformed keyword shapes fail-open (the rest of the schema stays strict)", () => {
+  // required must be an array of strings — a malformed one is dropped.
   const r = schemaToZod(z, {
     type: "object",
     properties: { x: { type: "string" } },
     required: "x",
   });
-  assertEquals(r.safeParse({ x: "ok" }).success, false);
-  // anyOf must be an array.
+  assertEquals(r.safeParse({ x: "ok" }).success, true);
+  assertEquals(r.safeParse({ x: 42 }).success, false); // the property stays strict
+  // anyOf must be an array — dropped.
   const a = schemaToZod(z, { type: "string", anyOf: "bad" });
-  assertEquals(a.safeParse("ok").success, false);
-  // enum must be an array.
+  assertEquals(a.safeParse("ok").success, true);
+  // enum must be an array — dropped.
   const e = schemaToZod(z, { type: "string", enum: "bad" });
-  assertEquals(e.safeParse("ok").success, false);
+  assertEquals(e.safeParse("ok").success, true);
 });
 
-Deno.test("schemaToZod rejects an empty enum", () => {
+Deno.test("schemaToZod drops an empty enum fail-open (the type stays strict)", () => {
   const s = schemaToZod(z, { type: "string", enum: [] });
-  assertEquals(s.safeParse("anything").success, false);
+  assertEquals(s.safeParse("anything").success, true);
+  assertEquals(s.safeParse(42).success, false);
 });
 
 Deno.test("schemaToZod composes anyOf with the declared type", () => {
@@ -293,12 +311,6 @@ const malformedCases = [
   ["const ignores minLength", { type: "string", minLength: 2, const: "x" }, "x"],
   ["enum ignores minLength", { type: "string", minLength: 2, enum: ["x"] }, "x"],
   ["anyOf ignores minLength", { type: "string", minLength: 5, anyOf: [{ type: "string" }] }, "x"],
-  ["null type ignores minLength", { type: "null", minLength: 2 }, null],
-  ["properties:null is malformed", { type: "object", properties: null }, { x: 1 }],
-  ["malformed optional property (properties:{x:null})", { type: "object", properties: { x: null } }, {}],
-  ["malformed anyOf branch (null branch)", { anyOf: [null, { type: "string" }] }, "ok"],
-  ["negative minLength", { type: "string", minLength: -1 }, "x"],
-  ["fractional maxItems", { type: "array", maxItems: 1.5 }, [1, 2]],
 ];
 
 for (const [label, schema, value] of malformedCases) {
@@ -307,6 +319,36 @@ for (const [label, schema, value] of malformedCases) {
     assertEquals(s.safeParse(value).success, false, `${label} accepted a value it must reject`);
   });
 }
+
+// ---- round-13 policy change (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01):
+// malformed-but-benign keyword SHAPES are dropped fail-open (recorded), so a
+// page bug in one keyword never bricks the whole tool. The remaining fields
+// stay strictly validated.
+const failOpenCases = [
+  ["null type ignores minLength (wrong-type keyword dropped)", { type: "null", minLength: 2 }, null],
+  ["properties:null is dropped", { type: "object", properties: null }, { x: 1 }],
+  ["malformed optional property (properties:{x:null}) is dropped", { type: "object", properties: { x: null } }, {}],
+  ["malformed anyOf branch (null branch) is dropped, survivors still enforce", { anyOf: [null, { type: "string" }] }, "ok"],
+  ["negative minLength is dropped", { type: "string", minLength: -1 }, "x"],
+  ["fractional maxItems is dropped", { type: "array", maxItems: 1.5 }, [1, 2]],
+];
+
+for (const [label, schema, value] of failOpenCases) {
+  Deno.test(`schemaToZod fail-open: ${label}`, () => {
+    const s = schemaToZod(z, schema);
+    assertEquals(s.safeParse(value).success, true, `${label} must no longer brick the tool`);
+  });
+}
+
+Deno.test("schemaToZod fail-open still rejects genuinely wrong values under a dropped-keyword schema", () => {
+  // The surviving constraint still enforces: a null anyOf branch is dropped,
+  // the string branch still rejects non-strings.
+  const s = schemaToZod(z, { anyOf: [null, { type: "string" }] });
+  assertEquals(s.safeParse(42).success, false);
+  // A dropped minLength does not weaken the TYPE.
+  const t = schemaToZod(z, { type: "string", minLength: -1 });
+  assertEquals(t.safeParse(42).success, false);
+});
 
 // ---- round-8 regressions: const/enum/anyOf must COMPOSE with every sibling ----
 Deno.test("schemaToZod: unknown required keys are malformed (fail closed)", () => {

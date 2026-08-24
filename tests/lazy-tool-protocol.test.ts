@@ -308,7 +308,7 @@ Deno.test("lazy protocol: Zod validation is applied before the existing dispatch
       { selectionRef: ref, arguments: { value: 42 } },
       context,
     ),
-    { ok: false, error: "lazy-arguments-invalid" },
+    { ok: false, error: "lazy-arguments-invalid", reason: "parse-rejected" },
   );
   assertEquals(calls, 0);
 });
@@ -377,7 +377,7 @@ Deno.test("lazy protocol: validator replacement at an async boundary fails befor
     selectionRef: ref,
     arguments: { value: "x" },
   }, context);
-  assertEquals(result, { ok: false, error: "lazy-arguments-invalid" });
+  assertEquals(result, { ok: false, error: "lazy-arguments-invalid", reason: "parse-rejected" });
   assertEquals(calls, 0);
 });
 

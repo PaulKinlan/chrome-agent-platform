@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.250] — 2026-08-24
+- Fixed Site Agent tool calls (like the bistro booking) failing with an unexplained "invalid arguments" error. The tool's full set of allowed values is now accepted, and any genuinely wrong argument is clearly explained so it can be corrected automatically.
+
+
 ## [0.2.249] — 2026-08-24
 - Raised the agent limits significantly: descriptions up to 32,000 characters, plus higher caps for names, skills, and attached files. Over-limit input now shows a clear message instead of being silently cut off.
 

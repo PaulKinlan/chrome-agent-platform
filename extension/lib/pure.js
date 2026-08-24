@@ -3,17 +3,23 @@
 
 /** Bounds for the schema converter (fail-closed against hostile descriptors). */
 export const SCHEMA_BOUNDS = {
-  maxDepth: 4,
-  maxProperties: 50,
+  maxDepth: 8,
+  maxProperties: 200,
   maxArrayItems: 100,
   maxStringLength: 10000,
   maxUnionBranches: 5,
+  maxEnumValues: 256,
   maxLiteralDepth: 8,
 };
 
 /**
- * The exact JSON-Schema keywords this converter supports. Anything else is
- * REJECTED (fail closed) — never silently ignored or loosened.
+ * The JSON-Schema keywords this converter ENFORCES. Recognised-but-unsupported
+ * keywords ($schema, $id, $ref, $defs, $comment, format, pattern, not,
+ * exclusiveMinimum/Maximum, multipleOf, uniqueItems, if/then/else, ...) and
+ * unknown keywords are DROPPED with a record (fail-open — a page that declares
+ * more than we enforce must not have its tool bricked), while every ENFORCED
+ * keyword stays strict (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01). oneOf is
+ * downgraded to anyOf (union); allOf composes as an intersection.
  */
 const SUPPORTED_KEYWORDS = new Set([
   "type",
@@ -32,8 +38,20 @@ const SUPPORTED_KEYWORDS = new Set([
   "properties",
   "required",
   "additionalProperties", // object
-  "anyOf", // union (exactly-one oneOf is NOT supported)
+  "anyOf", // union
+  "allOf", // intersection
 ]);
+
+/** Constraint keywords valid per declared type (wrong-type use is DROPPED). */
+const TYPE_CONSTRAINT_KEYWORDS = {
+  string: ["minLength", "maxLength"],
+  number: ["minimum", "maximum"],
+  integer: ["minimum", "maximum"],
+  array: ["items", "minItems", "maxItems"],
+  object: ["properties", "required", "additionalProperties"],
+  boolean: [],
+  null: [],
+};
 
 function valueMatchesType(value, type) {
   switch (type) {
@@ -108,119 +126,145 @@ function literalWithinBounds(value, depth = 0) {
 }
 
 /**
- * Validate the COMPLETE schema AST first — every keyword value shape, every
- * per-type keyword rule, every nested subschema — and only then compile.
- * Returns true if the tree is a supported, well-formed schema; false otherwise.
- * This prevents fail-open cases where a malformed child silently became
- * optional z.never() or a lone union branch.
+ * Sanitize ONE schema node (shallow): keep only well-formed ENFORCED keywords,
+ * drop everything else with a record (fail-open). oneOf folds into anyOf
+ * (union semantics — exactly-one is not enforced). Returns null when the node
+ * itself is unusable (a non-object child is dropped by its parent); sets
+ * report.fatal (and returns null) only for DoS-bounds violations (depth,
+ * property/branch counts, oversized literals) which must fail the WHOLE
+ * compile closed (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01).
  */
-function validateSchemaAST(schema, depth) {
-  if (depth > SCHEMA_BOUNDS.maxDepth) return false;
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
-
-  // Strict keyword allowlist — anything outside it is REJECTED.
-  for (const key of Object.keys(schema)) {
-    if (!SUPPORTED_KEYWORDS.has(key)) return false;
-  }
-  // oneOf (exactly-one) + pattern (regex DoS) are not supported — reject.
-  if (schema.oneOf !== undefined || schema.pattern !== undefined) return false;
-  // additionalProperties must be a boolean (false → strict). Schema-valued → reject.
-  if (
-    schema.additionalProperties !== undefined &&
-    typeof schema.additionalProperties !== "boolean"
-  ) return false;
-
-  // ---- keyword value SHAPES (malformed shape → reject) ----
-  if (schema.required !== undefined) {
-    if (
-      !Array.isArray(schema.required) ||
-      schema.required.some((k) => typeof k !== "string")
-    ) return false;
-    // Every required name must be DECLARED in properties (a required key with
-    // no properties, or a required key absent from properties, is malformed).
-    if (schema.properties === undefined || schema.properties === null) return false;
-    const propKeys = Object.keys(schema.properties);
-    for (const k of schema.required) {
-      if (!propKeys.includes(k)) return false;
-    }
-  }
-  if (schema.enum !== undefined) {
-    if (!Array.isArray(schema.enum)) return false;
-    if (schema.enum.length === 0 || schema.enum.length > SCHEMA_BOUNDS.maxUnionBranches) return false;
-  }
-  if (schema.anyOf !== undefined) {
-    if (!Array.isArray(schema.anyOf)) return false;
-    if (schema.anyOf.length === 0 || schema.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) return false;
-  }
-  // items / properties must be plain objects (NOT null, NOT arrays).
-  if (schema.items !== undefined) {
-    if (schema.items === null || typeof schema.items !== "object" || Array.isArray(schema.items)) return false;
-  }
-  if (schema.properties !== undefined) {
-    if (schema.properties === null || typeof schema.properties !== "object" || Array.isArray(schema.properties)) return false;
-    const keys = Object.keys(schema.properties);
-    if (keys.length > SCHEMA_BOUNDS.maxProperties) return false;
-  }
-  // numeric bounds: finite numbers for min/max; NON-NEGATIVE INTEGERS for
-  // length/item counts (negative or fractional bounds are malformed).
-  for (const k of ["minimum", "maximum"]) {
-    if (schema[k] !== undefined && (typeof schema[k] !== "number" || !Number.isFinite(schema[k]))) return false;
-  }
-  for (const k of ["minLength", "maxLength", "minItems", "maxItems"]) {
-    if (schema[k] !== undefined && (typeof schema[k] !== "number" || !Number.isInteger(schema[k]) || schema[k] < 0)) return false;
+function sanitizeSchemaNode(schema, depth, report) {
+  const drop = (key) => {
+    if (report && report.dropped.length < 32) report.dropped.push(key);
+  };
+  const fatal = (reason) => {
+    if (report && !report.fatal) report.fatal = reason;
+    return null;
+  };
+  if (depth > SCHEMA_BOUNDS.maxDepth) return fatal("schema-depth-exceeded");
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    // A non-object ROOT is unusable (fail closed); a non-object CHILD is
+    // dropped by its parent without failing the whole schema.
+    return depth === 0 ? fatal("schema-root-not-an-object") : null;
   }
 
-  // ---- per-type keyword allowlist (a keyword on the wrong type → reject) ----
+  const clean = {};
+  // type: a valid declared type is kept; an unknown type value is DROPPED
+  // (the node becomes untyped and composes by runtime kind).
   const t = schema.type;
-  if (t !== undefined && !["string", "number", "integer", "boolean", "array", "object", "null"].includes(t)) return false;
-  const nonString = (s) => schema[s] !== undefined;
-  if (t === "string") {
-    if (nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
-  } else if (t === "number" || t === "integer") {
-    if (nonString("minLength") || nonString("maxLength") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
-  } else if (t === "boolean") {
-    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
-  } else if (t === "null") {
-    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
-  } else if (t === "array") {
-    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("properties") || nonString("required") || nonString("additionalProperties")) return false;
-  } else if (t === "object") {
-    if (nonString("minLength") || nonString("maxLength") || nonString("minimum") || nonString("maximum") || nonString("items") || nonString("minItems") || nonString("maxItems")) return false;
-  }
+  const typeValid = t === undefined ||
+    ["string", "number", "integer", "boolean", "array", "object", "null"].includes(t);
+  if (t !== undefined && typeValid) clean.type = t;
+  else if (t !== undefined) drop("type");
+  // Wrong-type constraint keywords are dropped ONLY when a valid type is
+  // declared; untyped nodes keep every constraint (runtime-kind composition).
+  const allowedForType = clean.type !== undefined
+    ? new Set(TYPE_CONSTRAINT_KEYWORDS[clean.type])
+    : null;
+  const wrongType = (key) =>
+    allowedForType !== null &&
+    Object.values(TYPE_CONSTRAINT_KEYWORDS).flat().includes(key) &&
+    !allowedForType.has(key);
 
-  // const must match the declared type (if declared) — a const value of the
-  // wrong type makes the schema unsatisfiable.
-  if (t !== undefined && schema.const !== undefined && !valueMatchesType(schema.const, t)) {
-    return false;
-  }
-  // const AND enum together are only satisfiable if const is IN enum.
-  if (schema.const !== undefined && schema.enum !== undefined) {
-    if (!schema.enum.some((v) => deepEqual(v, schema.const))) return false;
-  }
-  // const/enum literals must respect the SCHEMA_BOUNDS caps (a huge literal
-  // must not bypass the size limits by returning before buildBaseZod).
-  if (schema.const !== undefined && !literalWithinBounds(schema.const)) return false;
-  if (
-    schema.enum !== undefined &&
-    !schema.enum.every((v) => literalWithinBounds(v))
-  ) return false;
-  // enum values that mismatch the declared type are EXCLUDED at compile time
-  // (JSON Schema: a value that doesn't match the type simply never matches).
-
-  // ---- recursive validation of nested subschemas ----
-  if (schema.items !== undefined && !validateSchemaAST(schema.items, depth + 1)) return false;
-  if (schema.properties !== undefined) {
-    for (const key of Object.keys(schema.properties)) {
-      if (!validateSchemaAST(schema.properties[key], depth + 1)) return false;
+  for (const key of Object.keys(schema)) {
+    if (key === "type") continue;
+    const value = schema[key];
+    if (!SUPPORTED_KEYWORDS.has(key) && key !== "oneOf") {
+      // Recognised-but-unsupported ($schema, $ref, format, pattern, not, ...) or
+      // unknown: fail-open drop — never brick the tool over an annotation.
+      drop(key);
+      continue;
+    }
+    if (wrongType(key)) {
+      drop(key);
+      continue;
+    }
+    switch (key) {
+      case "description":
+      case "default":
+      case "title":
+        clean[key] = value; // annotations — never constrain
+        break;
+      case "const":
+        if (!literalWithinBounds(value)) { drop("const(literal-exceeds-bounds)"); break; }
+        clean.const = value;
+        break;
+      case "enum":
+        if (!Array.isArray(value)) { drop("enum"); break; }
+        if (value.length === 0) { drop("enum"); break; } // unsatisfiable → fail-open
+        // Enum VALUES are set members checked by deep equality (O(n) over small,
+        // individually-bounded literals) — NOT z.union branches — so the branch
+        // cap does not apply; a generous value cap guards the descriptor.
+        if (value.length > SCHEMA_BOUNDS.maxEnumValues) { drop("enum(exceeds-bounds)"); break; }
+        if (!value.every((v) => literalWithinBounds(v))) { drop("enum(literal-exceeds-bounds)"); break; }
+        clean.enum = value;
+        break;
+      case "minLength":
+      case "maxLength":
+      case "minItems":
+      case "maxItems":
+        if (typeof value === "number" && Number.isInteger(value) && value >= 0) clean[key] = value;
+        else drop(key);
+        break;
+      case "minimum":
+      case "maximum":
+        if (typeof value === "number" && Number.isFinite(value)) clean[key] = value;
+        else drop(key);
+        break;
+      case "items":
+        // A plain-object subschema is kept; the draft-07 TUPLE form (an array)
+        // is dropped (fail-open to unconstrained items).
+        if (value !== null && typeof value === "object" && !Array.isArray(value)) clean.items = value;
+        else drop(Array.isArray(value) ? "items(tuple-form)" : "items");
+        break;
+      case "properties": {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) { drop("properties"); break; }
+        if (Object.keys(value).length > SCHEMA_BOUNDS.maxProperties) { drop("properties(exceeds-bounds)"); break; }
+        clean.properties = value;
+        break;
+      }
+      case "required":
+        // Well-formed string arrays are kept VERBATIM — a required name absent
+        // from properties is still enforced as a PRESENCE constraint (the
+        // builder adds an any-defined entry), never a whole-schema rejection.
+        if (Array.isArray(value) && value.every((k) => typeof k === "string")) clean.required = value;
+        else drop("required");
+        break;
+      case "additionalProperties":
+        // false → strict; true → passthrough; a schema-valued form is kept and
+        // compiled as a catchall; anything else is dropped.
+        if (typeof value === "boolean") clean.additionalProperties = value;
+        else if (value !== null && typeof value === "object" && !Array.isArray(value)) clean.additionalProperties = value;
+        else drop("additionalProperties");
+        break;
+      case "anyOf":
+        if (!Array.isArray(value)) { drop("anyOf"); break; }
+        if (value.length === 0) { drop("anyOf"); break; }
+        if (value.length > SCHEMA_BOUNDS.maxUnionBranches) { drop("anyOf(exceeds-bounds)"); break; }
+        clean.anyOf = value;
+        break;
+      case "oneOf":
+        // exactly-one is not enforced: oneOf DOWNGRADES to anyOf (union
+        // semantics) — fail-open, recorded.
+        if (!Array.isArray(value)) { drop("oneOf"); break; }
+        if (value.length === 0) { drop("oneOf"); break; }
+        if (value.length > SCHEMA_BOUNDS.maxUnionBranches) { drop("oneOf(exceeds-bounds)"); break; }
+        clean.anyOf = [...(clean.anyOf ?? []), ...value];
+        if (clean.anyOf.length > SCHEMA_BOUNDS.maxUnionBranches) { delete clean.anyOf; drop("oneOf(as-union)"); break; }
+        drop("oneOf(as-union)");
+        break;
+      case "allOf":
+        if (!Array.isArray(value)) { drop("allOf"); break; }
+        if (value.length === 0) { drop("allOf"); break; }
+        if (value.length > SCHEMA_BOUNDS.maxUnionBranches) { drop("allOf(exceeds-bounds)"); break; }
+        clean.allOf = value;
+        break;
+      default:
+        drop(key);
     }
   }
-  if (schema.anyOf !== undefined) {
-    for (const branch of schema.anyOf) {
-      if (!validateSchemaAST(branch, depth + 1)) return false;
-    }
-  }
-
-  return true;
+  return clean;
 }
 
 /**
@@ -251,7 +295,8 @@ function valueSatisfiesSchema(schema, value, depth) {
   if (Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) return false;
     if (schema.maxItems !== undefined && value.length > schema.maxItems) return false;
-    if (schema.items !== undefined) {
+    // A non-object items subschema (dropped by the sanitizer) is NO constraint.
+    if (schema.items !== undefined && schema.items !== null && typeof schema.items === "object") {
       for (const item of value) {
         if (!valueSatisfiesSchema(schema.items, item, depth + 1)) return false;
       }
@@ -261,9 +306,10 @@ function valueSatisfiesSchema(schema, value, depth) {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const required = Array.isArray(schema.required) ? schema.required : [];
     for (const k of required) if (!(k in value)) return false;
-    if (schema.properties) {
+    if (schema.properties && typeof schema.properties === "object") {
       for (const [k, sub] of Object.entries(schema.properties)) {
-        if (k in value && !valueSatisfiesSchema(sub, value[k], depth + 1)) return false;
+        // A non-object property subschema is no constraint (sanitizer-dropped).
+        if (sub !== null && typeof sub === "object" && k in value && !valueSatisfiesSchema(sub, value[k], depth + 1)) return false;
       }
     }
     if (schema.additionalProperties === false) {
@@ -275,16 +321,11 @@ function valueSatisfiesSchema(schema, value, depth) {
   // const / enum membership (compose with each other + siblings).
   if (schema.const !== undefined && !deepEqual(value, schema.const)) return false;
   if (schema.enum !== undefined && !schema.enum.some((e) => deepEqual(value, e))) return false;
-  if (schema.anyOf !== undefined && !schema.anyOf.some((b) => valueSatisfiesSchema(b, value, depth + 1))) return false;
+  if (schema.anyOf !== undefined && !schema.anyOf.some((b) =>
+    b !== null && typeof b === "object" && valueSatisfiesSchema(b, value, depth + 1)
+  )) return false;
   return true;
 }
-
-/**
- * Convert a JSON-schema descriptor into a bounded zod schema — FAIL CLOSED.
- * The whole tree is validated first (validateSchemaAST); an unsupported or
- * malformed schema becomes z.never() (rejects everything), never a permissive
- * fallback. All supported sibling constraints are composed, never dropped.
- */
 
 /**
  * Whether an untyped schema carries any value-constraining sibling keyword
@@ -322,54 +363,113 @@ function literalSchema(z, value) {
   return z.literal(value);
 }
 
-export function schemaToZod(z, schema, depth = 0) {
-  // Phase 1: validate the complete AST. Any malformed/unsupported shape fails
-  // closed for the WHOLE schema (not just a branch that could become optional).
-  if (!validateSchemaAST(schema, depth)) return z.never();
+/**
+ * Convert a JSON-schema descriptor into a bounded zod schema. POLICY
+ * (CAP-FB-20260824-WEBMCP-ARGSVALIDATION-01): enforce every supported keyword
+ * strictly; DROP unknown/unsupported/malformed-but-benign keywords with a
+ * record (fail-open) instead of bricking the whole tool; fail CLOSED
+ * (z.never()) only on DoS bounds (depth, counts, oversized literals) and
+ * genuinely unsatisfiable const/enum compositions. An EMPTY schema ({}) means
+ * "no constraints" (JSON Schema semantics) and compiles to z.unknown().
+ */
+export function schemaToZod(z, schema, depth = 0, report = undefined) {
+  const rep = report ?? { dropped: [], fatal: null };
+  const clean = sanitizeSchemaNode(schema, depth, rep);
+  if (clean === null || rep.fatal) return z.never();
+  const built = buildFromClean(z, clean, depth, rep);
+  // A bounds violation deep in the tree fails the WHOLE compile closed.
+  return rep.fatal ? z.never() : built;
+}
 
+/**
+ * Compile with a diagnostics report: { zodSchema, dropped, fatal }. fatal is a
+ * named reason when the schema could not be compiled at all (zodSchema is
+ * z.never()); dropped lists the keywords ignored under the fail-open policy.
+ */
+export function compileSchemaToZod(z, schema) {
+  const report = { dropped: [], fatal: null };
+  const zodSchema = schemaToZod(z, schema, 0, report);
+  return Object.freeze({
+    zodSchema,
+    dropped: Object.freeze(report.dropped.slice(0, 32)),
+    fatal: report.fatal,
+  });
+}
+
+/** Compose the zod schema from a SANITIZED node (children are sanitized as the
+ * recursion descends; a broken child is dropped, a fatal child → z.never()). */
+function buildFromClean(z, clean, depth, report) {
   // ---- const / enum compose their FULL sibling set (type + bounds + anyOf
   // + each other). A literal candidate must satisfy EVERY present constraint;
   // if none survive, the schema is unsatisfiable and fails closed. ----
-  if (schema.const !== undefined) {
-    if (!valueSatisfiesSchema(schema, schema.const, depth)) return z.never();
-    return literalSchema(z, schema.const);
+  if (clean.const !== undefined) {
+    if (!valueSatisfiesSchema(clean, clean.const, depth)) return z.never();
+    return literalSchema(z, clean.const);
   }
-  if (schema.enum !== undefined) {
-    const valid = schema.enum.filter((v) => valueSatisfiesSchema(schema, v, depth));
+  if (clean.enum !== undefined) {
+    // Compose the FULL sibling set: only enum values satisfying every sibling
+    // constraint survive; an empty survivor set is unsatisfiable → fail closed.
+    const valid = clean.enum.filter((v) => valueSatisfiesSchema(clean, v, depth));
     if (valid.length === 0) return z.never();
-    return z.union(valid.slice(0, SCHEMA_BOUNDS.maxUnionBranches).map((v) => literalSchema(z, v)));
+    // Membership by deep equality (bounded values), not a z.union of literals —
+    // real tools declare 6+ member enums (the bistro's guests/seating).
+    return z.any().refine((value) => valid.some((v) => deepEqual(value, v)), {
+      message: `expected one of ${valid.slice(0, 8).map((v) => JSON.stringify(v)).join(", ")}${valid.length > 8 ? ", …" : ""}`,
+    });
   }
 
-  // Build the base WITHOUT anyOf (type + bounds + object/array shape).
-  const baseWithoutAnyOf = { ...schema };
+  // Build the base WITHOUT anyOf/allOf (type + bounds + object/array shape).
+  const baseWithoutAnyOf = { ...clean };
   delete baseWithoutAnyOf.anyOf;
+  delete baseWithoutAnyOf.allOf;
 
   // An UNTYPED schema composes its siblings by RUNTIME kind (minLength applies
   // only to strings, properties only to objects — JSON Schema semantics), not
-  // by inferring a single declared type. A bare untyped union (no siblings)
-  // falls back to z.unknown() so the union alone constrains; an unconstrained
-  // untyped schema (no type, no siblings, no anyOf) is meaningless → z.never().
+  // by inferring a single declared type. An untyped schema with NO siblings and
+  // NO unions (the empty {} — or everything dropped) means "no constraints":
+  // z.unknown() (JSON Schema semantics — previously fail-closed z.never(),
+  // which bricked every tool that declared no inputSchema).
   const base = (() => {
-    if (schema.type !== undefined) return buildBaseZod(z, schema);
+    if (clean.type !== undefined) return buildBaseZod(z, clean, depth, report);
     if (hasConstrainingSibling(baseWithoutAnyOf)) {
       return z.any().refine((value) =>
         valueSatisfiesSchema(baseWithoutAnyOf, value, depth), {
         message: "value must satisfy all schema constraints",
       });
     }
-    return schema.anyOf !== undefined ? z.unknown() : z.never();
+    return z.unknown();
   })();
+  if (report.fatal) return z.never(); // a deep child tripped a DoS bound
 
-  if (schema.anyOf !== undefined) {
-    const branches = schema.anyOf.map((b) => schemaToZod(z, b, depth + 1));
+  let out = base;
+  if (clean.anyOf !== undefined) {
+    const branches = [];
+    for (const b of clean.anyOf) {
+      const bc = sanitizeSchemaNode(b, depth + 1, report);
+      if (report.fatal) return z.never();
+      if (bc === null) continue; // a broken branch is dropped, never fatal
+      branches.push(buildFromClean(z, bc, depth + 1, report));
+      if (report.fatal) return z.never();
+    }
     // Compose the declared type/bounds with anyOf — JSON Schema requires BOTH.
-    return z.intersection(base, z.union(branches));
+    // No surviving branch → the union keyword is dropped (fail-open base).
+    if (branches.length === 1) out = z.intersection(base, branches[0]);
+    else if (branches.length > 1) out = z.intersection(base, z.union(branches));
   }
-  return base;
+  if (clean.allOf !== undefined) {
+    for (const b of clean.allOf) {
+      const bc = sanitizeSchemaNode(b, depth + 1, report);
+      if (report.fatal) return z.never();
+      if (bc === null) continue;
+      out = z.intersection(out, buildFromClean(z, bc, depth + 1, report));
+      if (report.fatal) return z.never();
+    }
+  }
+  return out;
 }
 
-/** Build the zod schema for a schema's own type + bounds (no anyOf/const/enum). */
-function buildBaseZod(z, schema) {
+/** Build the zod schema for a schema's own type + bounds (no anyOf/allOf/const/enum). */
+function buildBaseZod(z, schema, depth, report) {
   const t = schema.type;
   if (t === "string") {
     let s = z.string();
@@ -393,7 +493,15 @@ function buildBaseZod(z, schema) {
   if (t === "boolean") return z.boolean();
   if (t === "null") return z.null();
   if (t === "array") {
-    const inner = schemaToZod(z, schema.items, 1);
+    // A dropped/absent items schema means unconstrained items (fail-open),
+    // never the old z.never() that rejected every element.
+    let inner = z.unknown();
+    if (schema.items !== undefined) {
+      const ic = sanitizeSchemaNode(schema.items, depth + 1, report);
+      if (report.fatal) return z.never();
+      if (ic !== null) inner = buildFromClean(z, ic, depth + 1, report);
+      if (report.fatal) return z.never();
+    }
     let arr = z.array(inner);
     if (schema.minItems !== undefined) arr = arr.min(schema.minItems);
     const pageMax = schema.maxItems !== undefined ? schema.maxItems : SCHEMA_BOUNDS.maxArrayItems;
@@ -403,18 +511,45 @@ function buildBaseZod(z, schema) {
   if (t === "object") {
     const props = schema.properties || {};
     const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+    // defineProperty, never shape[key] = ...: a page-supplied "__proto__" key
+    // must land as an OWN property (and be validated), not silently mutate the
+    // shape object's prototype and skip validation.
     const shape = {};
+    const define = (key, zodValue) =>
+      Object.defineProperty(shape, key, { value: zodValue, enumerable: true, writable: true, configurable: true });
     for (const [key, sub] of Object.entries(props)) {
-      const subZod = schemaToZod(z, sub, 1);
-      shape[key] = required.has(key) ? subZod : subZod.optional();
+      const sc = sanitizeSchemaNode(sub, depth + 1, report);
+      if (report.fatal) return z.never();
+      if (sc === null) continue; // a broken property schema is dropped (fail-open)
+      const subZod = buildFromClean(z, sc, depth + 1, report);
+      if (report.fatal) return z.never();
+      define(key, required.has(key) ? subZod : subZod.optional());
+    }
+    // A required name with NO declared property is still a PRESENCE constraint
+    // (any defined value qualifies) — enforced, never a whole-schema rejection.
+    for (const key of required) {
+      if (!Object.prototype.hasOwnProperty.call(shape, key)) {
+        define(key, z.any().refine((v) => v !== undefined, { message: "required" }));
+      }
     }
     const obj = z.object(shape);
-    return schema.additionalProperties === false ? obj.strict() : obj.passthrough();
+    if (schema.additionalProperties === false) return obj.strict();
+    if (
+      schema.additionalProperties !== undefined &&
+      typeof schema.additionalProperties === "object"
+    ) {
+      // Schema-valued additionalProperties → a catchall (extras must satisfy it).
+      const ac = sanitizeSchemaNode(schema.additionalProperties, depth + 1, report);
+      if (report.fatal) return z.never();
+      if (ac !== null) {
+        const catchall = buildFromClean(z, ac, depth + 1, report);
+        if (report.fatal) return z.never();
+        return obj.catchall(catchall);
+      }
+    }
+    return obj.passthrough();
   }
-  // No type declared and no constraining sibling: an unconstrained untyped
-  // schema is fail-closed z.never(). (Untyped schemas WITH siblings are handled
-  // in schemaToZod via valueSatisfiesSchema; those WITHOUT siblings but WITH
-  // anyOf use z.unknown() there.)
+  // Unreachable (sanitize keeps only valid types); fail-closed by construction.
   return z.never();
 }
 
