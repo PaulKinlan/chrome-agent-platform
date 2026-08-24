@@ -892,6 +892,10 @@ function hideThreadViewInner() {
     statusOwner = 0;
     setStatus("ready"); // reset an orphaned "running…" (a parked run never resets itself)
   }
+  threadTitle.classList.remove("editable-task");
+  threadTitle.removeAttribute("role");
+  threadTitle.removeAttribute("title");
+  threadTitle.removeAttribute("aria-label");
   threadView.hidden = true;
   currentThreadId = null;
   currentAgentId = null;
@@ -1023,12 +1027,13 @@ async function openThread(id) {
   // Hide the previous run's banner at the ownership hand-off, not after the
   // asynchronous thread read. The old run continues and journals in the SW.
   renderRunStatus({ state: "idle" });
-  // A TASK shows an Edit button (the same visual as the agent's) that renames
-  // the title in place — before, the button was hidden via the `hidden` attr
-  // but leaked because `.back { display:inline-flex }` beat `[hidden]`, so it
-  // appeared for tasks and did nothing (openAgentConfig only handles agents).
-  editAgentBtn.hidden = false;
-  editAgentBtn.setAttribute("aria-label", "Edit task");
+  // Tasks use direct click-to-edit on the title with an editable hover affordance;
+  // the separate Edit button is removed from the task view (CAP-FB-20260823-TASK-INLINE-EDIT-01).
+  editAgentBtn.hidden = true;
+  threadTitle.classList.add("editable-task");
+  threadTitle.setAttribute("tabindex", "-1");
+  threadTitle.setAttribute("role", "button");
+  threadTitle.setAttribute("title", "Click to rename task");
   syncComposerScope();
   // A thread.get can transiently fail when the MV3 service worker is mid-
   // restart (the message wakes it, but the first attempt can race the boot).
@@ -1079,6 +1084,10 @@ async function openBackgroundAgentChat(id, name) {
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
   editAgentBtn.hidden = true;
+  threadTitle.classList.remove("editable-task");
+  threadTitle.removeAttribute("role");
+  threadTitle.removeAttribute("title");
+  threadTitle.removeAttribute("aria-label");
   syncComposerScope();
   const hRes = await send("background-agent.history", { id }).catch(() => ({ entries: [] }));
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== "background") return;
@@ -1133,6 +1142,10 @@ async function openAgentSurface({ kind, id, name }) {
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
+  threadTitle.classList.remove("editable-task");
+  threadTitle.removeAttribute("role");
+  threadTitle.removeAttribute("title");
+  threadTitle.removeAttribute("aria-label");
   syncComposerScope();
   const entries = await loadAgentHistoryEntries(kind, id);
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
@@ -1720,9 +1733,9 @@ editAgentBtn?.addEventListener("click", () => {
   else if (currentThreadId) startTitleEdit();
 });
 
-// ── edit the thread title (item 47): click the title OR the Edit button →
-//    rename in place. The Edit button (the same visual as the agent's) does the
-//    SAME rename for a TASK; for a NAMED agent it opens the agent config. ─────
+// ── edit the thread title (item 47): click the title → rename in place.
+//    (CAP-FB-20260823-TASK-INLINE-EDIT-01). The Edit button remains solely for
+//    NAMED agents to open the agent config dialog.
 function startTitleEdit() {
   if (!currentThreadId) return;
   if (threadTitle.querySelector("input")) return; // already editing
@@ -1732,7 +1745,15 @@ function startTitleEdit() {
   input.className = "title-edit";
   input.value = original;
   input.setAttribute("aria-label", "Rename task");
-  const restore = (text) => threadTitle.replaceChildren(document.createTextNode(text));
+  const restore = (text) => {
+    threadTitle.replaceChildren(document.createTextNode(text));
+    if (currentThreadId) {
+      threadTitle.classList.add("editable-task");
+      threadTitle.setAttribute("tabindex", "-1");
+      threadTitle.setAttribute("role", "button");
+      threadTitle.setAttribute("title", "Click to rename task");
+    }
+  };
   const commit = async () => {
     const name = input.value.trim();
     if (name && name !== original) {
@@ -1754,6 +1775,12 @@ function startTitleEdit() {
   input.select();
 }
 threadTitle.addEventListener("click", () => { if (currentThreadId) startTitleEdit(); });
+threadTitle.addEventListener("keydown", (e) => {
+  if (currentThreadId && !threadTitle.querySelector("input") && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    startTitleEdit();
+  }
+});
 
 renderSiteAgents();
 renderWebmcpHubStatus();

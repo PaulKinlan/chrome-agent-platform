@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.214] — 2026-08-24
+- feat(ntp): task/panel cluster — task title is click-to-edit inline (separate edit button kept for named agents only), and the collapsed side panel keeps the task/agent lists at a stable vertical position (CAP-FB-20260823-TASK-INLINE-EDIT-01, COLLAPSED-PANEL-HEADER-01)
+
 ## [0.2.213] — 2026-08-24
 - fix(first-run): first-run cluster — duplicate test asset fixed via keyed create-or-update (exactly one asset across repeats/interrupts), and an opt-in example agent ("Weekly browsing review", no auto-creation, no first-run permission) (CAP-FB-20260823-FIRST-RUN-DUPLICATE-ASSET-01, FIRST-RUN-EXAMPLE-AGENT-01)
 

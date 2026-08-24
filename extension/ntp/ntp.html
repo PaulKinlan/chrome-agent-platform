@@ -53,8 +53,8 @@
     }
     /* collapsed → a narrow icon rail */
     .side.collapsed { inline-size: 60px; flex-basis: 60px; padding-inline: 10px; }
-    .brand-row { display: flex; align-items: center; gap: 6px; }
-    .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+    .brand-row { display: flex; align-items: center; gap: 6px; block-size: 40px; min-block-size: 40px; flex: 0 0 40px; margin-block-end: 4px; }
+    .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     /* The collapse/expand control is an edge NUB protruding from the sidebar's
        right boundary — attached to the panel, discoverable, min 44×44 hit
        target (the visible tab is smaller). It is a SIBLING of #side (not a
@@ -131,12 +131,13 @@
       scrollbar-gutter: stable both-edges;
     }
     /* hide the text labels when collapsed (icon rail) */
-    .side.collapsed .brand, .side.collapsed .side-label,
+    .side.collapsed .brand { opacity: 0; visibility: hidden; display: block; pointer-events: none; }
+    .side.collapsed .side-label,
     .side.collapsed .thread-item .t-name, .side.collapsed .thread-item .t-preview,
     .side.collapsed .thread-item .t-meta,
     .side.collapsed .thread-empty,
     .side.collapsed .foot-btn .btn-label { display: none; }
-    .side.collapsed .side-section { flex-basis: 0; padding-block-start: 4px; }
+    .side.collapsed .side-section { flex-basis: 0; padding-block-start: 6px; }
     .side.collapsed .side-list { scrollbar-gutter: auto; }
     .side.collapsed .side-list::-webkit-scrollbar { inline-size: 0; block-size: 0; }
     .side.collapsed .thread-item { padding: 8px; align-items: center; justify-content: center; min-block-size: 34px; }
@@ -157,7 +158,8 @@
     .brand {
       font-weight: 700;
       font-size: 16px;
-      padding: 4px 8px 16px;
+      padding: 0 8px;
+      transition: opacity .18s ease, visibility .18s ease;
     }
     .brand span { color: var(--accent); }
     .side-label {
@@ -550,7 +552,39 @@
        selector beats the UA `[hidden]` rule), so the Edit button leaked into
        views where it should be absent. Re-assert it. */
     .view-head .back[hidden] { display: none; }
-    .view-title { font-weight: 650; }
+    #thread-title {
+      cursor: default;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm, 6px);
+      transition: background .15s ease, outline .15s ease;
+      display: inline-flex;
+      align-items: center;
+      min-inline-size: 60px;
+    }
+    #thread-title.editable-task {
+      cursor: text;
+    }
+    #thread-title.editable-task:hover {
+      background: var(--panel-2, #efede8);
+      outline: 1px dashed var(--border, #ddd8d2);
+    }
+    #thread-title.editable-task:focus-visible {
+      outline: 2px solid var(--accent, #0e6e63);
+      outline-offset: 1px;
+    }
+    #thread-title input.title-edit {
+      font: inherit;
+      font-weight: 650;
+      font-size: 16px;
+      color: var(--text, #1d1b18);
+      background: var(--panel, #fff);
+      border: 1px solid var(--accent, #0e6e63);
+      border-radius: var(--radius-sm, 6px);
+      padding: 1px 5px;
+      outline: none;
+      width: 100%;
+      max-width: 380px;
+    }
     .view-overlay iframe {
       flex: 1;
       border: 0;
