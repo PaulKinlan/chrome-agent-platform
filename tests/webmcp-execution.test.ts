@@ -253,7 +253,7 @@ Deno.test("delegated WebMCP: invokeSiteTool source contract requires tab opening
   // Invariant 2: invokeSiteTool checks alive bound tab before deciding to plan vs execute directly
   assert(sw.includes('const isBoundAlive = Boolean('), "isBoundAlive check in invokeSiteTool");
   // Invariant 3: opening new tab activates and focuses it
-  assert(sw.includes('chrome.tabs.create({ url: canonical, active: true })'), "open tab creates focused tab");
+  assert(sw.includes('chrome.tabs.create({ url: openTargetUrl, active: true })') || sw.includes('chrome.tabs.create({ url: canonical, active: true })'), "open tab creates focused tab");
   // Invariant 4: reusing tab activates and focuses it
   assert(sw.includes('chrome.tabs.update(targetTabId, { active: true })'), "reuse tab activates target tab");
   // Invariant 5: descriptor re-verified on freshly bound page before dispatch

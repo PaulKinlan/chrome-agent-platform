@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.252] — 2026-08-25
+- Site Agents can now tell apart different pages on the same website, so each page's own tools stay available and the right page is opened when a tool needs it.
+
+
 ## [0.2.251] — 2026-08-25
 - Rewrote all 26 built-in tool descriptions in clear, complete language (what each does, when to use it, inputs/outputs, key flags, limits, and a worked example) so agents can pick and call the right tool.
 

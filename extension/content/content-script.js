@@ -229,7 +229,10 @@ function onWindowMessage(event) {
     // that removed all its tools gets them removed from the directory too.
     // The epoch is the SW-assigned navigation identity of THIS document; the
     // gate rejects a report whose (tab, document, epoch) is not current.
-    chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools, epoch: bridgeEpoch, seq: ++collectSeq }).then((res) => {
+    // Includes pageUrl + title for page-scoped site identity (CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01).
+    const pageUrl = location.href;
+    const pageTitle = document.title;
+    chrome.runtime.sendMessage({ type: "tools.upsert", origin, tools, pageUrl, title: pageTitle, epoch: bridgeEpoch, seq: ++collectSeq }).then((res) => {
       log("registration", JSON.stringify({ origin, ok: res?.ok === true, accepted: res?.accepted ?? null }));
     }).catch((e) => {
       log("registration", JSON.stringify({ origin, ok: false, error: String(e?.message ?? e) }));

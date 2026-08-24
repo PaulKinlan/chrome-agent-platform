@@ -1262,15 +1262,21 @@ export function matchesPageIdentity(tab, targetIdentity) {
   return true;
 }
 
-/** Pure planner for the invocation tab (CAP-FB-20260824-WEBMCP-EXECUTION-01):
- * the bound tab's binding is resolved if its tab is alive and on the origin;
+/** Pure planner for the invocation tab (CAP-FB-20260824-WEBMCP-EXECUTION-01 /
+ * CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01): the bound tab's binding is resolved
+ * if its tab is alive and matches the target identity (origin + optional path);
  * otherwise the planner prefers the active same-identity tab, then the lowest
- * tabId, deterministically. Never invents a candidate. */
-export function planWebmcpInvocationTab({ canonical, binding, tabs }) {
+ * tabId, deterministically. When opening a new tab for a page-scoped tool, the
+ * exact page URL is used. Never invents a candidate. */
+export function planWebmcpInvocationTab({ canonical, path = null, pageUrl = null, binding, tabs }) {
   if (typeof canonical !== "string" || !canonical) return { kind: "open", url: canonical };
   const list = Array.isArray(tabs) ? tabs : [];
-  const target = { origin: canonical };
-  // The BOUND tab: alive and still on the origin → the current path.
+  let targetPath = path;
+  if (!targetPath && pageUrl) {
+    try { targetPath = new URL(pageUrl).pathname || "/"; } catch { targetPath = null; }
+  }
+  const target = targetPath ? { origin: canonical, path: targetPath } : { origin: canonical };
+  // The BOUND tab: alive and still on the origin/page → the current path.
   if (binding && typeof binding === "object" && typeof binding.tabId === "number") {
     const bound = list.find((t) => t?.id === binding.tabId);
     if (bound && matchesPageIdentity(bound, target)) {
@@ -1288,7 +1294,8 @@ export function planWebmcpInvocationTab({ canonical, binding, tabs }) {
     const pick = active ?? matching.slice().sort((a, b) => a.id - b.id)[0];
     return { kind: "reuse", tabId: pick.id };
   }
-  return { kind: "open", url: canonical };
+  const openUrl = pageUrl || (targetPath && targetPath !== "/" ? `${canonical}${targetPath.startsWith("/") ? targetPath : `/${targetPath}`}` : canonical);
+  return { kind: "open", url: openUrl };
 }
 
 /** The deliberate re-bind transition (mirrors seedSnapshotGate): replaces a

@@ -122,13 +122,22 @@ import {
   enrollmentGeneration,
   enrollmentSnapshot,
   enrollOrigin,
+  getCurrentSiteIdentity,
   isApproved,
   isEnrolled,
   listTools,
   pendingApprovals,
+  replacePageTools,
   replaceTools,
   withEnrollmentLock,
 } from "../lib/tools.js";
+import {
+  attestReportedPageUrl,
+  boundedPageTitle,
+  canonicalPageUrl,
+  canonicalPath,
+  formatSiteAgentName,
+} from "../lib/site-identity.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
 import {
   createNamedAgent,
@@ -1451,7 +1460,13 @@ async function invokeSiteTool(
   } else {
     // The bound tab is dead, missing, or navigated off-origin. Plan + resolve.
     const tabs = await chrome.tabs.query({}).catch(() => []);
-    const plan = planWebmcpInvocationTab({ canonical, binding, tabs: Array.isArray(tabs) ? tabs : [] });
+    const plan = planWebmcpInvocationTab({
+      canonical,
+      path: descriptor.path ?? null,
+      pageUrl: descriptor.pageUrl ?? null,
+      binding,
+      tabs: Array.isArray(tabs) ? tabs : [],
+    });
     if (plan.kind === "reuse") {
       let targetTabId = plan.tabId;
       // Deliberate gate re-bind under the enrollment lock so the resolved tab's
@@ -1496,12 +1511,13 @@ async function invokeSiteTool(
       }
     } else if (plan.kind === "open") {
       let created = null;
+      const openTargetUrl = plan.url || canonical;
       try {
-        created = await chrome.tabs.create({ url: canonical, active: true });
+        created = await chrome.tabs.create({ url: openTargetUrl, active: true });
       } catch (e) {
-        return { error: `could not open ${canonical}: ${e?.message ?? e}` };
+        return { error: `could not open ${openTargetUrl}: ${e?.message ?? e}` };
       }
-      if (!created?.id) return { error: `could not open ${canonical}` };
+      if (!created?.id) return { error: `could not open ${openTargetUrl}` };
       resolvedBinding = await waitForSnapshotBinding(canonical, created.id);
       if (!resolvedBinding) {
         return {
@@ -2171,15 +2187,25 @@ async function agentInfo(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { origin, enrolled: false };
   const store = siteMemory(canonical);
-  const [cfg, tools, memKeys, snap] = await Promise.all([
+  const [cfg, tools, memKeys, snap, identity] = await Promise.all([
     store.get("agentConfig").catch(() => null),
     listTools(canonical).catch(() => []),
     store.keys().catch(() => []),
     enrollmentSnapshot(canonical),
+    getCurrentSiteIdentity(canonical).catch(() => null),
   ]);
+  const formattedName = cfg?.name ?? formatSiteAgentName({
+    origin: canonical,
+    pageUrl: identity?.pageUrl ?? null,
+    path: identity?.path ?? null,
+    title: identity?.title ?? null,
+  });
   return {
     origin: canonical,
-    name: cfg?.name ?? canonical,
+    name: formattedName,
+    pageUrl: identity?.pageUrl ?? null,
+    path: identity?.path ?? null,
+    title: identity?.title ?? null,
     enrolled: snap.enrolled,
     gen: snap.gen,
     tools: tools.map((t) => t.name),
@@ -3778,12 +3804,13 @@ const handlers = mergeRouteMaps(
     for (const o of origins) {
       const info = await agentInfo(o).catch(() => null);
       if (!info?.enrolled) continue; // only the ENROLLED Site Agents are callable
+      const ref = info.path && info.path !== "/" ? `site:${info.origin}${info.path}` : `site:${info.origin}`;
       site.push({
-        ref: `site:${info.origin}`,
+        ref,
         id: info.origin,
         kind: "site",
-        name: info.name && info.name !== info.origin ? info.name : `@${String(info.origin).replace(/^https?:\/\//, "").replace(/\/.*/, "")}`,
-        summary: `${info.toolCount ?? 0} tools · Site Agent`,
+        name: info.name && info.name !== info.origin ? info.name : formatSiteAgentName({ origin: info.origin, path: info.path }),
+        summary: `${info.toolCount ?? 0} tools · Site Agent${info.title ? ` · ${info.title}` : ""}`,
         avatar: null,
         skills: (Array.isArray(info.tools) ? info.tools : []).slice(0, 8),
         status: "enrolled",
@@ -3891,7 +3918,7 @@ const handlers = mergeRouteMaps(
     if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
     return { ok: true, result: res?.result };
   },
-  async "tools.upsert"({ origin, tools, seq, epoch, __sender }) {
+  async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     // Serialize the isEnrolled check + the OPFS write under the SAME origin
@@ -3927,7 +3954,34 @@ const handlers = mergeRouteMaps(
         if (!decision.accept) {
           return { ok: false, error: "stale or malformed snapshot — rejected", stale: true };
         }
-        const accepted = await replaceTools(canonical, tools);
+        // BROWSER-ATTESTED URL AUTHORITY (CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01):
+        // Query the browser for the current tab URL. The browser-attested tab URL
+        // (senderTab.url) is the primary authority. attestReportedPageUrl verifies
+        // that the page-reported pageUrl matches the browser-attested tab URL on
+        // canonical origin. If pageUrl is mismatched or cross-origin, the
+        // browser-attested tab URL wins (preventing same-origin path spoofing).
+        const senderTab = __sender?.tabId != null ? await chrome.tabs.get(__sender.tabId).catch(() => null) : null;
+        const tabUrl = senderTab?.url ?? null;
+        let attestedPageUrl = null;
+        if (pageUrl && tabUrl) {
+          const attestation = attestReportedPageUrl(pageUrl, tabUrl, canonical);
+          attestedPageUrl = attestation.ok ? attestation.canonicalUrl : canonicalPageUrl(tabUrl, canonical);
+        } else if (tabUrl) {
+          attestedPageUrl = canonicalPageUrl(tabUrl, canonical);
+        } else if (pageUrl) {
+          attestedPageUrl = canonicalPageUrl(pageUrl, canonical);
+        }
+        if (!attestedPageUrl) attestedPageUrl = canonical;
+
+        const pageTitle = boundedPageTitle(title ?? senderTab?.title ?? "");
+        const replaced = await replacePageTools(canonical, tools, {
+          pageUrl: attestedPageUrl,
+          title: pageTitle,
+          tabId: __sender?.tabId ?? null,
+          documentId: __sender?.documentId ?? null,
+          navigationEpoch: decision.gate.epoch,
+        });
+        const accepted = replaced.tools;
         map[canonical] = decision.gate;
         await kvSet({ [SNAPSHOT_GATE_KEY]: map });
         // Page-reported status from the SANITIZED accepted descriptors,
@@ -3935,7 +3989,8 @@ const handlers = mergeRouteMaps(
         await recordWebmcpPageReport(canonical, accepted);
         // New tools/sites must reach the running orchestrator — rebuild it.
         invalidateAgent();
-        return { ok: true, accepted: accepted.length };
+        broadcastRegistryChanged();
+        return { ok: true, accepted: accepted.length, siteIdentity: replaced.identity?.id ?? null };
       });
     });
   },

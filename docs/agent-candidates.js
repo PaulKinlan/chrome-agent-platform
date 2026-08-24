@@ -41,8 +41,13 @@ export function buildAgentCandidates(
     out.push({ id: `agent:${a.id}`, label: a.name, description: a.description || "background agent", kind: "background" });
   }
   for (const a of site.filter((x) => x.enrolled)) {
-    if (!matches(a.origin) && !matches(a.name || "")) continue;
-    out.push({ id: `agent:${a.origin}`, label: `@${shortOrigin(a.origin)}`, description: `${a.toolCount ?? 0} tools · Site Agent`, kind: "agent" });
+    if (!matches(a.origin) && !matches(a.name || "") && !matches(a.pageUrl || "") && !matches(a.path || "")) continue;
+    const host = shortOrigin(a.origin);
+    const p = a.path ?? (a.pageUrl ? (() => { try { return new URL(a.pageUrl).pathname; } catch { return "/"; } })() : "/");
+    const label = a.name && a.name !== a.origin && a.name !== `@${host}`
+      ? a.name
+      : (p && p !== "/" ? `@${host}${p}` : `@${host}`);
+    out.push({ id: `agent:${a.origin}`, label, description: `${a.toolCount ?? 0} tools · Site Agent`, kind: "agent" });
   }
   return out;
 }

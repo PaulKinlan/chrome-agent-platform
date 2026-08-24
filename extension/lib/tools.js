@@ -3,8 +3,16 @@
 
 import { canonicalOrigin, listOrigins, siteMemory } from "./memory.js";
 import { kvGet, kvSet } from "./kv.js";
+import {
+  buildSiteIdentity,
+  canonicalPageUrl,
+  canonicalPath,
+  historicalSiteIdentity,
+  SITE_HISTORY_MAX,
+} from "./site-identity.js";
 
 const DIR_KEY = "toolDirectory";
+export const SITE_IDENTITIES_KEY = "site_identities";
 const ENROLL_KEY = "cap:enrollment";
 const GEN_KEY = "cap:enrollmentGen";
 
@@ -56,15 +64,25 @@ export const TOOL_BOUNDS = {
 
 /**
  * The canonical tool-descriptor shape. declared/inferred/linked marks the source.
+ * Supports page/path scoping (CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01).
  */
 export function describeTool(t) {
-  return {
+  const pageUrl = typeof t?.pageUrl === "string" && t.pageUrl
+    ? canonicalPageUrl(t.pageUrl, t.origin)
+    : (typeof t?.page === "string" ? canonicalPageUrl(t.page, t.origin) : undefined);
+  const path = pageUrl
+    ? canonicalPath(pageUrl)
+    : (typeof t?.path === "string" ? t.path : undefined);
+  const out = {
     origin: t.origin,
     name: t.name,
     description: t.description ?? "",
     inputSchema: t.inputSchema ?? { type: "object", properties: {} },
     source: t.source, // "declared" | "inferred" | "linked"
   };
+  if (pageUrl) out.pageUrl = pageUrl;
+  if (path) out.path = path;
+  return out;
 }
 
 /** Bound a single descriptor; returns null when it violates the bounds. */
@@ -88,6 +106,8 @@ function boundTool(t) {
     description,
     inputSchema: schema,
     source: t.source,
+    pageUrl: t.pageUrl ?? t.page,
+    path: t.path,
   });
 }
 
@@ -120,19 +140,13 @@ export async function upsertTools(origin, tools) {
   return next;
 }
 
-/** A COMPLETE discovery snapshot REPLACES the origin's discovered tool set
- * (declared + inferred). A tool that disappeared from the page is REMOVED from
- * the directory — a removed page tool must not linger listed/approvable
- * forever — and an EMPTY snapshot is a valid "this page now exposes nothing"
- * replacement that clears the discovered set. Only the page-discovery sources
- * are accepted (a snapshot never writes linked/other-source entries). Returns
- * the bounded, accepted directory. */
-export async function replaceTools(origin, tools) {
-  const store = siteMemory(origin);
+function boundedSnapshot(tools, origin = null, pageUrl = null) {
   const seen = new Set();
   const accepted = [];
   for (const t of Array.isArray(tools) ? tools : []) {
-    const bounded = boundTool(t);
+    const orig = origin ?? t?.origin;
+    const pUrl = pageUrl ?? t?.pageUrl ?? t?.page;
+    const bounded = boundTool({ ...t, origin: orig, pageUrl: pUrl });
     if (!bounded) continue; // reject (not silently accept) out-of-bounds descriptors
     if (bounded.source !== "declared" && bounded.source !== "inferred") continue;
     if (seen.has(bounded.name)) continue; // first descriptor for a name wins
@@ -141,7 +155,7 @@ export async function replaceTools(origin, tools) {
     if (accepted.length >= TOOL_BOUNDS.maxToolsPerOrigin) break;
   }
   let total = 0;
-  const next = accepted.filter((t) => {
+  return accepted.filter((t) => {
     let b;
     try {
       b = JSON.stringify(t).length;
@@ -151,8 +165,124 @@ export async function replaceTools(origin, tools) {
     total += b;
     return total <= TOOL_BOUNDS.maxTotalBytes;
   });
-  await store.setTrusted(DIR_KEY, next);
+}
+
+/** A COMPLETE discovery snapshot REPLACES the origin's discovered tool set
+ * (declared + inferred). A tool that disappeared from the page is REMOVED from
+ * the directory — a removed page tool must not linger listed/approvable
+ * forever — and an EMPTY snapshot is a valid "this page now exposes nothing"
+ * replacement that clears the discovered set. Only the page-discovery sources
+ * are accepted (a snapshot never writes linked/other-source entries). Returns
+ * the bounded, accepted directory. */
+export async function replaceTools(origin, tools, pageUrl = null) {
+  const next = boundedSnapshot(tools, origin, pageUrl);
+  await siteMemory(origin).setTrusted(DIR_KEY, next);
   return next;
+}
+
+function emptyIdentityStore() {
+  return { version: 2, current: null, history: [] };
+}
+
+async function readIdentityStore(origin) {
+  const raw = await siteMemory(origin).get(SITE_IDENTITIES_KEY).catch(() => null);
+  if (!raw || raw.version !== 2) return emptyIdentityStore();
+  return {
+    version: 2,
+    current: raw.current && typeof raw.current === "object" ? raw.current : null,
+    history: Array.isArray(raw.history)
+      ? raw.history.map(historicalSiteIdentity).filter(Boolean).slice(0, SITE_HISTORY_MAX)
+      : [],
+  };
+}
+
+/** Replace the reporting page's slice in the tool directory and commit the
+ * matching page/document/toolset identity (CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01).
+ * Tools belonging to other same-origin pages and legacy origin-only tools are
+ * preserved, while the reporting page's previous slice is replaced wholesale
+ * (an empty snapshot clears only the reporting page's slice). */
+export async function replacePageTools(origin, tools, page = null) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return { tools: [], identity: null };
+  const pageUrl = page?.pageUrl ? canonicalPageUrl(page.pageUrl, canonical) : null;
+  const path = pageUrl ? canonicalPath(pageUrl) : (page?.path ?? "/");
+  const store = siteMemory(canonical);
+
+  // 1. Process the incoming tools for this page slice
+  const decorated = (Array.isArray(tools) ? tools : []).map((t) => ({
+    ...t,
+    origin: canonical,
+    pageUrl: pageUrl ?? undefined,
+    path: path ?? undefined,
+  }));
+  const newPageTools = boundedSnapshot(decorated, canonical, pageUrl);
+
+  // 2. Read existing directory and retain slices from OTHER pages
+  const existingDir = (await store.get(DIR_KEY)) ?? [];
+  const isTargetSlice = (t) => {
+    if (pageUrl && t?.pageUrl) return t.pageUrl === pageUrl;
+    if (path && path !== "/" && t?.path) return t.path === path;
+    if (!pageUrl || path === "/") {
+      // The reporting page is the root / origin-only scope:
+      return !t?.pageUrl || t?.path === "/" || !t?.path;
+    }
+    return false;
+  };
+  const otherSlices = existingDir.filter((t) => !isTargetSlice(t));
+
+  // 3. Merge: other page slices + new page slice
+  const merged = [...otherSlices, ...newPageTools];
+
+  // 4. Bound total directory size and tool counts
+  const seen = new Set();
+  const deduped = [];
+  for (const t of merged) {
+    if (!t || seen.has(t.name)) continue;
+    seen.add(t.name);
+    deduped.push(t);
+    if (deduped.length >= TOOL_BOUNDS.maxToolsPerOrigin) break;
+  }
+  let total = 0;
+  const next = deduped.filter((t) => {
+    let b;
+    try {
+      b = JSON.stringify(t).length;
+    } catch {
+      b = TOOL_BOUNDS.maxTotalBytes + 1;
+    }
+    total += b;
+    return total <= TOOL_BOUNDS.maxTotalBytes;
+  });
+
+  // 5. Update site_identities
+  const identity = page ? await buildSiteIdentity({ ...page, origin: canonical, tools: newPageTools }) : null;
+  if (identity) {
+    const identities = await readIdentityStore(canonical);
+    const previous = identities.current && identities.current.state === "known" && identities.current.id !== identity.id
+      ? historicalSiteIdentity(identities.current)
+      : null;
+    const history = [previous, ...identities.history]
+      .filter((item) => item?.id && item.id !== identity.id)
+      .filter((item, index, arr) => arr.findIndex((x) => x.id === item.id) === index)
+      .slice(0, SITE_HISTORY_MAX);
+    await store.setTrusted(SITE_IDENTITIES_KEY, { version: 2, current: identity, history });
+  }
+
+  // 6. Commit merged directory
+  await store.setTrusted(DIR_KEY, next);
+  return { tools: next, identity, pageTools: newPageTools };
+}
+
+export async function getCurrentSiteIdentity(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return null;
+  return (await readIdentityStore(canonical)).current;
+}
+
+export async function listSiteIdentityHistory(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return [];
+  return (await readIdentityStore(canonical)).history;
 }
 
 export async function listTools(origin) {
