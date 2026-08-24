@@ -1899,12 +1899,22 @@ async function renderUsage() {
   // page-local usage.js kv* (the round-16 split-authority finding).
   const u = await chrome.runtime.sendMessage({ type: "usage.get" });
   const sum = $("#usage-summary");
-  const tok = u.totals.inputTokens + u.totals.outputTokens;
+  // Defensive: usage.get may return an error envelope or a shape missing
+  // totals (e.g. storage permission not yet granted, SW cold-start race) —
+  // render the empty state instead of crashing the Settings page.
+  const totals = u?.ok === false || !u?.totals ? null : u.totals;
+  const safe = {
+    calls: Number(totals?.calls ?? 0),
+    inputTokens: Number(totals?.inputTokens ?? 0),
+    outputTokens: Number(totals?.outputTokens ?? 0),
+    estimatedCost: Number(totals?.estimatedCost ?? 0),
+  };
+  const tok = safe.inputTokens + safe.outputTokens;
   sum.replaceChildren();
   for (const [n, l] of [
-    [String(u.totals.calls), "calls"],
+    [String(safe.calls), "calls"],
     [tok.toLocaleString(), "tokens"],
-    ["$" + u.totals.estimatedCost.toFixed(4), "est. cost"],
+    ["$" + safe.estimatedCost.toFixed(4), "est. cost"],
   ]) {
     const s = document.createElement("div");
     s.className = "usage-stat";
@@ -1958,18 +1968,23 @@ async function renderUsage() {
     detail.appendChild(table);
   };
 
-  const fmtTok = (m) => String(m.inputTokens + m.outputTokens);
-  const fmtCost = (m) => "$" + m.estimatedCost.toFixed(4);
-  const sortCost = (a, b) => b.estimatedCost - a.estimatedCost;
+  const fmtTok = (m) => String((m.inputTokens ?? 0) + (m.outputTokens ?? 0));
+  const fmtCost = (m) => "$" + Number(m.estimatedCost ?? 0).toFixed(4);
+  const sortCost = (a, b) => (b.estimatedCost ?? 0) - (a.estimatedCost ?? 0);
+
+  const byProvider = Array.isArray(u?.byProvider) ? u.byProvider : [];
+  const byModel = Array.isArray(u?.byModel) ? u.byModel : [];
+  const byAgent = Array.isArray(u?.byAgent) ? u.byAgent : [];
+  const byDay = Array.isArray(u?.byDay) ? u.byDay : [];
 
   mk("By provider", ["Provider", "Calls", "Tokens", "Cost"],
-    u.byProvider.slice().sort(sortCost).map((p) => [p.provider, String(p.calls), fmtTok(p), fmtCost(p)]));
+    byProvider.slice().sort(sortCost).map((p) => [p.provider, String(p.calls), fmtTok(p), fmtCost(p)]));
   mk("By model", ["Provider", "Model", "Calls", "Tokens", "Cost"],
-    u.byModel.slice().sort(sortCost).map((m) => [m.provider, m.model, String(m.calls), fmtTok(m), fmtCost(m)]));
+    byModel.slice().sort(sortCost).map((m) => [m.provider, m.model, String(m.calls), fmtTok(m), fmtCost(m)]));
   mk("By agent", ["Agent", "Model", "Calls", "Tokens", "Cost"],
-    u.byAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
+    byAgent.slice().sort(sortCost).map((a) => [a.agentId, `${a.provider}/${a.model}`, String(a.calls), fmtTok(a), fmtCost(a)]));
   mk("By day", ["Day", "Calls", "Tokens", "Cost"],
-    u.byDay.slice().sort((a, b) => a.day.localeCompare(b.day)).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
+    byDay.slice().sort((a, b) => String(a.day).localeCompare(String(b.day))).map((d) => [d.day, String(d.calls), fmtTok(d), fmtCost(d)]));
 }
 
 // ── Data / memory ──
