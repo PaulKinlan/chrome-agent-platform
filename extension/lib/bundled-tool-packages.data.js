@@ -793,7 +793,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "file",
   "description": "touch - create new empty files or update file timestamps. Use to create, touch, or update files in scratch space. Flags: -t, -c.",
   "caveats": [
-   "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed. Requires future reviewed execution adapter to restrict writes to approved mutable path classes (scratch/output, never immutable inputs), and enforce symlink, cross-job, and over-quota rejection fail closed. Not currently executable/admitted."
+   "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed",
+   "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.",
+   "file.read/write is confined to the spec-owned scratch/touched fixture (bounded epoch timestamps); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
    "compute",
@@ -816,9 +818,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.touch-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "no-execution-host"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  },
  {
   "packageId": "cap.bundled.truncate",

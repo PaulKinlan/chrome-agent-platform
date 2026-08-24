@@ -25,13 +25,13 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate"];
+  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch"];
   for (const toolId of selectorOrder) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
   const toolSelectMarkup = block.slice(block.indexOf('class="preview-tool"'), block.indexOf("</select>", block.indexOf('class="preview-tool"')));
   const actualSelectorOrder = [...toolSelectMarkup.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
-  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and truncate is appended after gzip as tool 24");
+  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and touch is appended after truncate as tool 25");
   assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
   assertMatch(block, /args "\/job\/inputs\/f\.bin"/, "stat help gives the exact immutable-seed guest path");
   assertMatch(block, /leave args empty for the immutable "\/job" default/, "du help names its safe immutable default");
@@ -42,12 +42,17 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   assertMatch(block, /option value="compress">Compress text/, "compress text mode exists");
   assertMatch(block, /option value="decompress">Decompress base64/, "decompress base64 mode exists");
   assertMatch(block, /mode === "decompress" \? \["-d"\] : \[\]/, "gzip argv is derived from the exact mode only");
-  assertMatch(block, /argsLabel\.hidden = twoDocMode \|\| gzipMode \|\| truncateMode/, "free-form arguments hide for gzip, truncate and two-document tools");
+  assertMatch(block, /argsLabel\.hidden = twoDocMode \|\| gzipMode \|\| truncateMode \|\| touchMode/, "free-form arguments hide for gzip, truncate, touch and two-document tools");
   assertMatch(block, /gzipControls\.hidden = !gzipMode/, "gzip mode control is restored/hidden on tool switches");
   assertMatch(block, /truncateControls\.hidden = !truncateMode/, "truncate controls are restored/hidden on tool switches");
+  assertMatch(block, /touchControls\.hidden = !touchMode/, "touch controls are restored/hidden on tool switches");
   assertMatch(block, /class="preview-truncate-size"/, "truncate-only bounded size control exists");
   assertMatch(block, /class="preview-truncate-no-create"/, "truncate-only no-create checkbox exists");
   assertMatch(block, /\["-s", size, "\/job\/scratch\/touched"\]/, "truncate argv is the spec-owned fixture resize only");
+  assertMatch(block, /class="preview-touch-epoch"/, "touch-only bounded epoch control exists");
+  assertMatch(block, /class="preview-touch-side"/, "touch-only atime/mtime side select exists");
+  assertMatch(block, /class="preview-touch-no-create"/, "touch-only no-create checkbox exists");
+  assertMatch(block, /"-t", epoch/, "touch argv is the spec-owned fixture set-times only");
   assertMatch(block, /this\.previewResult = null/, "tool/mode switches clear stale output");
   // the two-document mode hides BOTH the normal Arguments and Stdin controls
   assertMatch(block, /const argsLabel = this\._root\.querySelector\("\.preview-args-label"\)/, "the args label is queried for the toggle");

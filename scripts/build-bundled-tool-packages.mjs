@@ -235,11 +235,11 @@ const LICENSE_WRITES = {
 const probe = new WasmPackageAuthority();
 const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // The technically-admitted Settings-preview allowlist (the static tranches):
-// the 24 tools in SETTINGS_PREVIEW_LANES expose bounded Settings-only previews
+// the 25 tools in SETTINGS_PREVIEW_LANES expose bounded Settings-only previews
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
@@ -419,6 +419,7 @@ for (const pkg of packages) {
     "Requires future reviewed execution adapter to enforce path classes; not currently executable/admitted.",
     "Requires future reviewed execution adapter to enforce bounded path classes and reject symlink following; not currently executable/admitted.",
     "Requires future reviewed execution adapter to restrict writes to mutable path classes and enforce traversal and quota fail-closed rules. Not currently executable/admitted.",
+    "Requires future reviewed execution adapter to restrict writes to approved mutable path classes (scratch/output, never immutable inputs), and enforce symlink, cross-job, and over-quota rejection fail closed. Not currently executable/admitted.",
   ];
   const GENERIC_ADMITTED_CAVEAT =
     "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority.";
@@ -432,6 +433,8 @@ for (const pkg of packages) {
     "Settings-only bounded text/canonical-base64 preview (explicit owner click); lossless binary output is canonical base64; no provider, page, filesystem or OPFS authority.";
   const TRUNCATE_ADMITTED_CAVEAT =
     "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.";
+  const TOUCH_ADMITTED_CAVEAT =
+    "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.";
   const FILE_READ_DECLARED_CAVEAT = pkg.toolId === "stat"
     ? "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
     : pkg.toolId === "du"
@@ -440,6 +443,8 @@ for (const pkg of packages) {
     ? "file.read is confined to bounded recursive enumeration of the immutable nested per-job inputs seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
     : pkg.toolId === "truncate"
     ? "file.read/write is confined to the spec-owned scratch/touched fixture (0..10 MiB); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
+    : pkg.toolId === "touch"
+    ? "file.read/write is confined to the spec-owned scratch/touched fixture (bounded epoch timestamps); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
     : "file.read remains declared in the manifest; the route projects NO files into the fresh empty per-job workspace, so a file operand cannot read owner data and fails closed (path normalization prevents escape/cross-job).";
   const cleanedCaveats = (Array.isArray(meta.caveats) ? meta.caveats : []).map((caveat) => {
     let out = String(caveat);
@@ -456,6 +461,7 @@ for (const pkg of packages) {
       : pkg.toolId === "tree" ? TREE_ADMITTED_CAVEAT
       : pkg.toolId === "gzip" ? GZIP_ADMITTED_CAVEAT
       : pkg.toolId === "truncate" ? TRUNCATE_ADMITTED_CAVEAT
+      : pkg.toolId === "touch" ? TOUCH_ADMITTED_CAVEAT
       : GENERIC_ADMITTED_CAVEAT,
     ...(capabilities.includes("file.read") ? [FILE_READ_DECLARED_CAVEAT] : []),
   ];

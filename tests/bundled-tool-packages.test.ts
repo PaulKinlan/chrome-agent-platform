@@ -155,14 +155,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admit exactly the 24-tool gzip-appended Settings allowlist", () => {
+Deno.test("posture: descriptors admit exactly the 25-tool gzip-appended Settings allowlist", () => {
   assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(previewRows.map((r) => r.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
-  ), "exactly the 24-tool allowlist");
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+  ), "exactly the 25-tool allowlist");
   for (const row of previewRows) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
@@ -205,6 +205,10 @@ Deno.test("posture: descriptors admit exactly the 24-tool gzip-appended Settings
       assert(caveats.includes("scratch/touched"), "truncate fixture confinement caveat");
       assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "truncate no-authority caveat");
       assert(caveats.includes("post-run stat readback"), "truncate readback proof caveat");
+    } else if (row.toolId === "touch") {
+      assert(caveats.includes("scratch/touched"), "touch fixture confinement caveat");
+      assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "touch no-authority caveat");
+      assert(caveats.includes("post-run stat readback"), "touch readback proof caveat");
     } else {
       assert(!caveats.includes("projects NO files into the fresh empty per-job workspace"), `${row.toolId}: no file caveat without file.read`);
       assert(caveats.includes("Settings-only bounded stdin preview"), `${row.toolId}: generic Settings-only caveat present`);

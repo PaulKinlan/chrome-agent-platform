@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.222] — 2026-08-24
+- feat(bundled): R8 truncate Settings admission — descriptor/UI flip 23→24 (CAP-FB-20260823-R8-TRUNCATE-ADMISSION-01)
+
 ## [0.2.221] — 2026-08-24
 - feat(wasi): R7 touch create-profile whole-tuple recognizer — scratch CREAT → FD_WRITE/APPEND (CAP-FB-20260823-R7-TOUCH-CREATE-01)
 

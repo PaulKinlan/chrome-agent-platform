@@ -6773,6 +6773,8 @@ class ToolLibrary extends Component {
         return 'Example: leave args empty for the immutable "/job/inputs" default → a sorted Unicode tree with f.bin and sub/g.txt (read-only nested seed).';
       case "truncate":
         return 'Resizes the spec-owned /job/scratch/touched fixture: -s accepts integer bytes or one K/M/G/T suffix (optional +/-, 0..10 MiB) and -c skips the create. Empty stdout — the size change is read back after the run.';
+      case "touch":
+        return 'Sets the timestamp on the spec-owned /job/scratch/touched fixture: -t is a decimal Unix epoch (0..4102444800 s, 1970–2100); -a/-m select atime/mtime (default both); -c skips the create. Empty stdout — the timestamp change is read back after the run.';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6813,6 +6815,17 @@ class ToolLibrary extends Component {
           ? ["-c", "-s", size, "/job/scratch/touched"]
           : ["-s", size, "/job/scratch/touched"];
         this._emit("tool-preview-request", { toolId, args, stdin: "", sourceEvent });
+      } else if (toolId === "touch") {
+        const epoch = String(this._root.querySelector(".preview-touch-epoch")?.value ?? "0").trim() || "0";
+        const side = String(this._root.querySelector(".preview-touch-side")?.value ?? "both");
+        const noCreate = this._root.querySelector(".preview-touch-no-create")?.checked === true;
+        const args = [
+          "-t", epoch,
+          ...(side === "atime" ? ["-a"] : side === "mtime" ? ["-m"] : []),
+          ...(noCreate ? ["-c"] : []),
+          "/job/scratch/touched",
+        ];
+        this._emit("tool-preview-request", { toolId, args, stdin: "", sourceEvent });
       } else if (this._isTwoDocument(toolId)) {
         const docA = String(this._root.querySelector(".preview-doc-a")?.value ?? "");
         const docB = String(this._root.querySelector(".preview-doc-b")?.value ?? "");
@@ -6837,25 +6850,28 @@ class ToolLibrary extends Component {
       const gzipControls = this._root.querySelector(".preview-gzip-controls");
       const gzipModeSelect = this._root.querySelector(".preview-gzip-mode");
       const truncateControls = this._root.querySelector(".preview-truncate-controls");
+      const touchControls = this._root.querySelector(".preview-touch-controls");
       const stdinLabelText = this._root.querySelector(".preview-stdin-label-text");
       const twoDocMode = this._isTwoDocument(toolId);
       const gzipMode = toolId === "gzip";
       const truncateMode = toolId === "truncate";
+      const touchMode = toolId === "touch";
       if (help) help.textContent = this._previewHelp(toolId, String(gzipModeSelect?.value ?? "compress"));
       if (twoDoc) twoDoc.hidden = !twoDocMode;
       if (gzipControls) gzipControls.hidden = !gzipMode;
       if (truncateControls) truncateControls.hidden = !truncateMode;
+      if (touchControls) touchControls.hidden = !touchMode;
       // Two-document mode hides both generic controls. gzip keeps stdin but
-      // replaces free-form argv with its exact native mode select. truncate
-      // replaces both with its spec-owned fixture controls.
-      if (stdinLabel) stdinLabel.hidden = twoDocMode || truncateMode;
+      // replaces free-form argv with its exact native mode select. truncate/
+      // touch replace both with their spec-owned fixture controls.
+      if (stdinLabel) stdinLabel.hidden = twoDocMode || truncateMode || touchMode;
       if (stdinInput) {
-        stdinInput.hidden = twoDocMode || truncateMode;
+        stdinInput.hidden = twoDocMode || truncateMode || touchMode;
         stdinInput.placeholder = gzipMode
           ? (gzipModeSelect?.value === "decompress" ? "H4sI…" : "Enter bounded UTF-8 text")
           : "a,b\n1,2\n3,4";
       }
-      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode || truncateMode;
+      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode || truncateMode || touchMode;
       if (stdinLabelText) stdinLabelText.textContent = gzipMode
         ? (gzipModeSelect?.value === "decompress" ? "Canonical base64 gzip input" : "UTF-8 text input")
         : "Stdin (bounded)";
@@ -6942,6 +6958,11 @@ class ToolLibrary extends Component {
       .preview-truncate-no-create-label { display:flex; align-items:center; gap:6px; margin:8px 0 0;
         font-size:13px; color:var(--text, #24211f); }
       .preview-truncate-no-create-label input { width:auto; margin:0; }
+      .preview-touch-controls { margin-block-start:8px; }
+      .preview-touch-note { display:block; margin:4px 0 0; font-size:11px; color:var(--muted, #625d57); }
+      .preview-touch-no-create-label { display:flex; align-items:center; gap:6px; margin:8px 0 0;
+        font-size:13px; color:var(--text, #24211f); }
+      .preview-touch-no-create-label input { width:auto; margin:0; }
       .preview-two-doc { margin-top:10px; }
       .preview-doc-label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
       .preview-doc { display:block; width:100%; box-sizing:border-box; margin-top:4px;
@@ -7007,6 +7028,7 @@ class ToolLibrary extends Component {
             <option value="tree">tree — display directory file structures as visual trees</option>
             <option value="gzip">gzip — compress or decompress data streams</option>
             <option value="truncate">truncate — resize a file to a target size (shrink or extend)</option>
+            <option value="touch">touch — create empty files or update file timestamps</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
@@ -7022,6 +7044,19 @@ class ToolLibrary extends Component {
           <span class="preview-truncate-note">integer bytes or one K/M/G/T suffix, optional +/− (0..10 MiB)</span>
           <label class="preview-truncate-no-create-label">
             <input class="preview-truncate-no-create" type="checkbox" /> -c (no-create)
+          </label>
+        </label>
+        <label class="preview-touch-controls" hidden>Timestamp (-t)
+          <input class="preview-touch-epoch" type="text" autocomplete="off"
+            placeholder="0" maxlength="16" />
+          <span class="preview-touch-note">decimal Unix epoch seconds (0..4102444800, 1970–2100)</span>
+          <select class="preview-touch-side" autocomplete="off">
+            <option value="both">Both atime + mtime</option>
+            <option value="atime">Atime only (-a)</option>
+            <option value="mtime">Mtime only (-m)</option>
+          </select>
+          <label class="preview-touch-no-create-label">
+            <input class="preview-touch-no-create" type="checkbox" /> -c (no-create)
           </label>
         </label>
         <label class="preview-args-label">Arguments
