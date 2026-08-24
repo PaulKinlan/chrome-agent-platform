@@ -249,6 +249,8 @@ On resume after a coordinator or worker loss:
 - Next: trace the current stale-page error path and the tab resolution logic
 - Recover: `git grep -n "stale\|pageStale\|discover-active" -- extension/lib extension/background`
 - History:
+  - 2026-08-24 21:56 UTC — LANDED delegated-invocation consent cure at `origin/main@030e299710cc42cc08a862aa94cd96e5f8f5da87` (0.2.244). EXACT root cause: the 0.2.238 inline authorizationGuard called ownData(descriptorInput,"grantDigest") but ownData is a module-local lib helper never imported into service-worker.js → every guard evaluation threw ReferenceError → mapped to {ok:false} → opaque lazy-authority-stale-or-denied on EVERY delegated invocation (invisible to node --check; masked by stubbed tests). Fix: extracted extension/lib/webmcp-authority.js (evaluateWebmcpAuthority + createWebmcpAuthorizationGuard); all 6 fences preserved; every denial now NAMED (not-enrolled/tool-not-in-directory/not-approved/run-generation-missing/run-generation-stale/permission-digest-drift) and pushed to the diagnostics ring. Review PASS (Gemini 4bd3e98e), 1505/1505. Outstanding per Functional Verification Mandate: browser-driven delegated-booking journey.
+
   - 2026-08-24 19:06 UTC — OWNER: sideloaded extension (NOT Chrome Web Store), so WebMCP may use host_permission freely — the CWS-distribution constraint is closed as obsolete. Owner will verify in the browser that the 0.2.232 re-bind fix removes the stale-page symptom.
 
   - 2026-08-24 16:45 UTC — implemented K3's frozen design (DESIGN-K3.md):
