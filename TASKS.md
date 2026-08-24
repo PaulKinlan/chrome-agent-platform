@@ -236,7 +236,7 @@ On resume after a coordinator or worker loss:
 - Branch: detached
 - Base: `84bd49c`
 - Candidate: GLM implementation (K3's frozen design)
-- Shipping: —
+- Shipping: `origin/main@71dc21f6d9f05d63624691ed4878beb12cd46964` (0.2.232, tab-planning + gate re-bind for dead approved tabs)
 - Acceptance: calling a declared WebMCP tool reuses an existing tab for the
   registered origin/page when present (matching the page identity), or opens
   one, waits for the content script + WebMCP readiness, and invokes the
@@ -300,14 +300,14 @@ On resume after a coordinator or worker loss:
   1 tools (1 declared / 0 inferred) · 2:34:39 PM" — it looks really messy; if
   there is a Site Agents section it should be clear and readable
 - Updated: 2026-08-24 14:50 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `84bd49c`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@8b071b6188deb66d6e01ac35af58251fc04df37d` (0.2.233, structured status card)
 - Acceptance: the Site Agents section presents discovery state cleanly —
   readable site/agent card with the tool count and freshness in a tidy layout
   (no raw timestamp-soup run-on line); stale/refreshing states visually
