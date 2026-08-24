@@ -261,10 +261,27 @@ export async function disenrollOriginLocked(origin) {
 }
 
 /**
- * First-run approval: a tool on an origin requires one-time user approval
- * before the agent may call it. Approved state is stored per (origin, tool).
+ * First-run approval — CAP-FB-20260824-WEBMCP-AUTOAPPROVE-01: ENROLLMENT IS
+ * THE CONSENT. The owner's Settings gesture that enrolls a site agent
+ * approves that origin's WebMCP tools as a class — declared AND inferred,
+ * including tools declared or updated AFTER the enrollment (there is no
+ * per-tool approval UI, so a per-tool gate was an unsatisfiable dead-end:
+ * every enrolled tool failed closed as "owner-action-required" forever).
+ *
+ * Approval only decides WHETHER an enrolled site's tools may run at all;
+ * WHAT may run is still fenced by the invocation path (enrollment
+ * generation revocation, documentId-addressed sendMessage, run-gen echo,
+ * descriptor re-verification, the round-30 binding fence, fail-closed on
+ * disenroll) — none of that is weakened here.
+ *
+ * The per-tool approval record remains only as an explicit grant on a
+ * NON-enrolled origin (legacy/route compat). Revocation rides the disenroll
+ * tombstone + generation bump: isApproved derives from the LIVE enrollment
+ * snapshot, so a tombstoned origin fails closed at the very next check.
  */
 export async function isApproved(origin, toolName) {
+  const { enrolled } = await enrollmentSnapshot(origin);
+  if (enrolled) return true;
   const approved = (await siteMemory(origin).get("approvals")) ?? {};
   return Boolean(approved[toolName]);
 }
@@ -279,6 +296,10 @@ export async function approveTool(origin, toolName, decision = true) {
 }
 
 export async function pendingApprovals(origin) {
+  // Enrollment approves the site's tools as a class — nothing pends for an
+  // enrolled origin (the auto-approve finding: a pending list that cannot be
+  // satisfied through any UI is a dead-end, not a gate).
+  if (await isEnrolled(origin)) return [];
   const tools = await listTools(origin);
   const approved = (await siteMemory(origin).get("approvals")) ?? {};
   return tools.filter((t) => !approved[t.name]);
