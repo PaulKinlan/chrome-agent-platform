@@ -3992,3 +3992,45 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 
 - Physically bundled as immutable package 26 (`cap.bundled.sqlite3.query.bounded`); inventory-admission tested; CAS `ba468c6e…`, licence `blessing AND Apache-2.0`.
 - Execution remains BLOCKED: 8 of 24 WASI imports unimplemented in the CAP runtime (`runtime-imports-unimplemented`); no route/grant/catalog entry; `admitted:false`, `canonicalNameClaim:false`.
+
+## [CAP-FB-20260824-AGENT-DELETION-OWNER-01] Owner-facing agent deletion (there is no way to delete an agent)
+
+- Feedback: 2026-08-24 — product owner: "there is no way to delete an agent. I asked for this ages ago." The owner needs a discoverable, working way to delete an agent from the UI. A full lifecycle design already exists (see CAP-FB-20260819-AGENT-DELETION-LIFECYCLE-01 and docs/agent-deletion-lifecycle-design.md) but was never implemented; this task is the scoped owner-facing implementation.
+- Updated: 2026-08-24 21:12 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `9b146ce`
+- Candidate: —
+- Shipping: —
+- Acceptance: from the agent surface (NTP agents view + side panel), the owner can delete a named/background/site agent via an explicit, accessible action; a confirmation names the exact agent and previews what will be removed; on confirm it transactionally removes the agent registry entry + its schedules/alarms, permission/host grants, memory sandbox, threads, and index rows; deny/cancel mutate nothing; the deleted agent disappears from all lists and can no longer run; artifacts are NOT silently cascade-deleted (retain/orphan them per the researched design default); active runs are safely settled/cancelled first.
+- Review: pending independent owner-authority + transaction + concurrency review
+- Gates: delete each agent kind (named/background/site); confirmation preview; deny/cancel no-op; cleanup invariants (schedules/permissions/memory/threads/registry); active-run race; reload persistence; AX/keyboard path
+- Blockers: compose with the existing agent.delete / delete_named_agent management routes + named-agents.js + enrollment disenroll; reuse the AGENT-DELETION-LIFECYCLE-01 design
+- Next: implement the owner-facing delete action + confirmation + transactional cleanup
+- Recover: `git grep -n "agent.delete\|deleteNamedAgent\|disenrollOrigin" -- extension/lib extension/background`
+- History:
+  - 2026-08-24 21:12 UTC — captured from product-owner feedback; elevates the researched-but-unimplemented AGENT-DELETION-LIFECYCLE-01 design into a scoped owner-facing implementation.
+
+## [CAP-FB-20260824-PERF-STARTTIME-CRASH-01] Uncaught TypeError reading 'startTime' in reportAllChanges (perf reporter crash)
+
+- Feedback: 2026-08-24 — product owner console error: `Uncaught TypeError: Cannot read properties of undefined (reading 'startTime') at et.reportAllChanges (<anonymous>:2:19429) ... n.timeout ... requestIdleCallback ...`. A minified web-vitals-style performance reporter (reportAllChanges + requestIdleCallback + entry.startTime) crashes when a performance entry is undefined. Not found in extension/ source via grep (reportAllChanges/web-vitals/.startTime absent) — it is injected/bundled somewhere (built dist, a content script, or the usage/performance-recording path). Needs source-tracing then a defensive fix.
+- Updated: 2026-08-24 21:12 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `9b146ce`
+- Candidate: —
+- Shipping: —
+- Acceptance: the source of the reportAllChanges/startTime reporter is identified (trace the injected/bundled script — check the built dist output, content scripts, and any usage/performance/INP observer); the crash is fixed by guarding the entry before reading startTime (skip/ignore undefined entries rather than throw); no uncaught TypeError in the console under the reproducing sequence; if the reporter is third-party/injected, it is pinned + patched or the undefined-entry case is handled at the boundary.
+- Review: pending independent review
+- Gates: reproduce the crash (identify the emitting script); fix/guard; no uncaught error on reload + interaction; no perf-monitoring regression
+- Blockers: must first locate the emitting script (not in extension/ source grep)
+- Next: trace the minified reporter to its origin (build output / content script / usage path) and add the undefined-entry guard
+- Recover: `git grep -rn "reportAllChanges\|startTime\|PerformanceObserver" -- extension dist` and inspect the built service-worker/offscreen bundles
+- History:
+  - 2026-08-24 21:12 UTC — captured from product-owner console stack trace; source not located by initial extension/-source grep (minified/injected), tracing is the first step.
