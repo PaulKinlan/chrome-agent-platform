@@ -248,14 +248,14 @@ On resume after a coordinator or worker loss:
   add file" affordance in a task; plus hooks for watching filesystem changes
   and reacting to them. Owner wants a plan first, then implementation
 - Updated: 2026-08-23 23:10 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `63d177d`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@a33aeeb3aa77cf464db0f87e632e011f47264e05` (0.2.224, all 5 tranches)
 - Acceptance: Phase 1 (plan): a design covering the File System Access API
   surface (showDirectoryPicker/getFileHandle), handle persistence across
   sessions (structured-clone handles to IndexedDB), permission re-request
