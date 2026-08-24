@@ -44,6 +44,52 @@ export const INFLIGHT_HEARTBEAT_MS = 30 * 1000;
 // commit side effects (the round-26 blocker).
 export const CANCEL_TERMINATION_TIMEOUT_MS = 5000;
 
+/**
+ * Structured diagnostic record formatter for scheduler and alarm lifecycle events.
+ * Emits clean, bounded, secret-free structured JSON logs (CAP-FB-20260824-SCHED-DIAGNOSTICS-01).
+ */
+export function formatSchedulerDiagnostic({
+  event,
+  alarmName,
+  taskId = null,
+  executionId = null,
+  path = "scheduler",
+  storeState = "unknown",
+  reason = "",
+  actionTaken = "none",
+  details = null,
+}) {
+  return {
+    tag: "[scheduler:diagnostic]",
+    event: String(event ?? "unknown"),
+    alarmName: String(alarmName ?? ""),
+    taskId: taskId ? String(taskId) : String(alarmName ?? ""),
+    executionId: executionId ? String(executionId) : null,
+    path: String(path ?? "scheduler"),
+    storeState: String(storeState ?? "unknown"),
+    expectedPayloadShape: "{ task?: string, periodInMinutes?: number, scriptId?: string, attachments?: array }",
+    reason: String(reason ?? ""),
+    actionTaken: String(actionTaken ?? "none"),
+    ...(details && typeof details === "object" ? { details } : {}),
+    ts: Date.now(),
+  };
+}
+
+export function logSchedulerDiagnostic(diag, level = "error") {
+  const record = formatSchedulerDiagnostic(diag);
+  const jsonStr = JSON.stringify(record);
+  try {
+    if (level === "warn") {
+      console.warn(`${record.tag} ${jsonStr}`);
+    } else {
+      console.error(`${record.tag} ${jsonStr}`);
+    }
+  } catch {
+    /* never throw from diagnostic logger */
+  }
+  return record;
+}
+
 // In-memory map of LIVE runs in THIS worker boot: name -> { token, controller }.
 // This is the authoritative same-boot fence — a run present here is alive and
 // can NEVER be overlapped by a later alarm firing. The persisted lock fences
@@ -126,6 +172,14 @@ export async function scheduleTask(
     await assertRunOwned();
     const replacing = activeAlarms.some((alarm) => alarm?.name === name);
     if (!replacing && activeAlarms.length >= MAX_ACTIVE_ALARMS) {
+      logSchedulerDiagnostic({
+        event: "schedule_capacity_exceeded",
+        alarmName: name,
+        path: "scheduler:scheduleTask",
+        storeState: "capacity_exceeded",
+        reason: `Chrome allows at most ${MAX_ACTIVE_ALARMS} active alarms per extension`,
+        actionTaken: "schedule_refused",
+      }, "error");
       throw new Error(
         `Chrome allows at most ${MAX_ACTIVE_ALARMS} active alarms per extension — cancel an existing scheduled task before adding another`,
       );
@@ -719,10 +773,14 @@ export async function reconcileScheduledTasks() {
         resumed.push(name);
       } catch (err) {
         failed.push(name);
-        console.error(
-          `reconcile: failed to recreate alarm "${name}":`,
-          err?.message ?? err,
-        );
+        logSchedulerDiagnostic({
+          event: "reconcile_alarm_failed",
+          alarmName: name,
+          path: "scheduler:reconcileScheduledTasks",
+          storeState: "reconcile_failed",
+          reason: err?.message ?? String(err),
+          actionTaken: "recorded_failure",
+        }, "error");
       }
     }
   }

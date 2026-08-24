@@ -1198,7 +1198,7 @@ export function browserToolset(readOnly = false) {
     // alarms, bookmarks, notifications, idle, contextMenus (declared optional permissions).
     create_alarm: tool({
       description:
-        "Create a scheduled alarm by name with a delay or period in minutes. Requires alarms permission.",
+        "Create a raw scheduled alarm by name with a delay or period in minutes (low-level alarm trigger; for scheduling autonomous agent tasks or scripts, use schedule_task instead). Requires alarms permission.",
       inputSchema: z.object({
         name: z.string().min(1).max(64),
         delayInMinutes: z.number().min(0.1).max(100000).optional(),

@@ -356,6 +356,7 @@ import {
   disarmScheduledAlarms,
   heartbeatInflight,
   listScheduledTasks,
+  logSchedulerDiagnostic,
   reconcileScheduledTasks,
   recoverOnBoot,
   markScheduledDone,
@@ -505,7 +506,14 @@ async function handleAlarm(alarm) {
   // In-flight lock: a slow run must not overlap the next alarm (periodic).
   const lock = await tryAcquireInflight(alarm.name);
   if (!lock.acquired) {
-    console.warn("scheduled task already in flight", alarm.name, lock.reason);
+    logSchedulerDiagnostic({
+      event: "task_already_in_flight",
+      alarmName: alarm.name,
+      path: "service-worker:handleAlarm",
+      storeState: "in_flight",
+      reason: `Scheduled task is already in flight: ${lock.reason}`,
+      actionTaken: "skipped_overlap",
+    }, "warn");
     return;
   }
   const { token } = lock;
@@ -546,7 +554,17 @@ async function handleAlarm(alarm) {
     const store = await kvGet(TASK_KEY);
     const task = store[TASK_KEY]?.[alarm.name];
     if (!task) {
-      console.error("scheduled task payload missing", alarm.name);
+      logSchedulerDiagnostic({
+        event: "alarm_payload_missing",
+        alarmName: alarm.name,
+        path: "service-worker:handleAlarm",
+        storeState: "absent",
+        reason: "Alarm fired but no matching task payload found in cap:scheduledTasks. Alarm was likely created directly via create_alarm without schedule_task.",
+        actionTaken: "cleared_orphaned_alarm",
+      }, "error");
+      try {
+        await chrome.alarms?.clear?.(alarm.name);
+      } catch { /* best effort cleanup */ }
       return;
     }
     // A QUARANTINED task (a schedule that failed with UNKNOWN alarm state — its
@@ -560,7 +578,16 @@ async function handleAlarm(alarm) {
     // armed) must likewise NEVER run — it is cancel-pending and only the owner's
     // cancel route resolves it (the round-24 fail-closed cancel blocker).
     if (task.quarantined || task.cancelling) {
-      console.warn("scheduled task is quarantined/cancelling — not running", alarm.name);
+      logSchedulerDiagnostic({
+        event: "task_quarantined_or_cancelling",
+        alarmName: alarm.name,
+        path: "service-worker:handleAlarm",
+        storeState: task.quarantined ? "quarantined" : "cancelling",
+        reason: task.quarantined
+          ? "Task is quarantined due to prior alarm creation ambiguity"
+          : "Task is pending cancellation",
+        actionTaken: "skipped_execution",
+      }, "warn");
       return;
     }
     // A key-quota failure disarms and marks the task once. If Chrome delivers a
@@ -640,7 +667,14 @@ async function handleAlarm(alarm) {
       // limit, a network failure) ONCE, not per tick.
       logGateOnce(formatError(e, { provider: cfg?.id ?? cfg?.name ?? "", model: cfg?.model ?? "" }));
     } else {
-      console.error("scheduled task failed", alarm.name, formatError(e));
+      logSchedulerDiagnostic({
+      event: "scheduled_task_failed",
+      alarmName: alarm.name,
+      path: "service-worker:handleAlarm",
+      storeState: "failed",
+      reason: formatError(e),
+      actionTaken: "logged_failure",
+    }, "error");
     }
     // Keep the one-shot payload so a retry/restart can resume it.
   } finally {
