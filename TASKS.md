@@ -229,7 +229,7 @@ On resume after a coordinator or worker loss:
   there) or open a new one and then, via the content script, call the functions
   declared via WebMCP
 - Updated: 2026-08-24 14:50 UTC
-- Status: IN_REVIEW
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: `/home/paulkinlan/worktrees/cap-webmcp-execution-4c6cca2`
@@ -242,13 +242,15 @@ On resume after a coordinator or worker loss:
   one, waits for the content script + WebMCP readiness, and invokes the
   declared function through the page; stale-page errors are replaced by
   correct tab resolution; the call result returns truthfully
-- Review: pending independent execution/tab-lifecycle review
+- Review: PASS (Gemini, /tmp/cap-webmcp-execution-review/GEMINI.md sha 785df9d7); owner verifying in the browser that the stale-page symptom is gone
 - Gates: existing-tab reuse; open-then-call; readiness wait; stale recovery;
   declared/inferred tool invocation round-trip
 - Blockers: composes with page-scoped identity (CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01)
 - Next: trace the current stale-page error path and the tab resolution logic
 - Recover: `git grep -n "stale\|pageStale\|discover-active" -- extension/lib extension/background`
 - History:
+  - 2026-08-24 19:06 UTC — OWNER: sideloaded extension (NOT Chrome Web Store), so WebMCP may use host_permission freely — the CWS-distribution constraint is closed as obsolete. Owner will verify in the browser that the 0.2.232 re-bind fix removes the stale-page symptom.
+
   - 2026-08-24 16:45 UTC — implemented K3's frozen design (DESIGN-K3.md):
     planWebmcpInvocationTab (bound-alive → byte-identical current path;
     dead binding → active-then-lowest-id reuse of a same-identity tab →
