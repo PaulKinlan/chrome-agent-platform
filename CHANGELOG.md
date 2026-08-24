@@ -1,19 +1,31 @@
 # Changelog
 
+## [0.2.246] — 2026-08-24
+- Reconstructed and modernized the release changelog with clear, user-focused descriptions.
+
+## [0.2.245] — 2026-08-24
+- Older tasks now reopen with your messages and the final reply shown correctly.
+
+## [0.2.244] — 2026-08-24
+- Fixed a bug where Site Agent tool calls (like making a booking) always failed with an authorization error; they now run, and any block is clearly explained.
+
+## [0.2.243] — 2026-08-24
+- Added the ability to delete an agent from the hub, side panel, and Settings, with a confirmation preview of what will be removed.
+
 ## [0.2.242] — 2026-08-24
 - Fixed scheduled background tasks so alarms don't get lost or fire repeatedly when missing task details, and added clear diagnostic logs.
 
 ## [0.2.241] — 2026-08-24
-- Fixed an issue where reopening a task thread would hide earlier messages or show replies out of order.
+- Reopening a task thread now shows all your previous messages and assistant replies in order.
 
 ## [0.2.240] — 2026-08-24
 - Tool call results now display as formatted, interactive JSON trees, while HTML outputs render directly in a live visual preview.
 
 ## [0.2.239] — 2026-08-24
-- Added full owner-controlled agent deletion from the hub, side panel, and settings, with a safety confirmation preview.
+- Enrolled Site Agents' declared tools are now ready to use without extra approval steps.
 
 ## [0.2.238] — 2026-08-24
-- Enrolled Site Agents automatically have their declared tools ready to use without requiring extra manual approval steps.
+- Site-agent tool calls now open or reuse the site's tab automatically instead of failing when the page wasn't already open.
 
 ## [0.2.237] — 2026-08-24
 - Fixed a bug where a task's final answer and your earlier messages could disappear when you reopened the task.
@@ -31,7 +43,7 @@
 - Cleaned up the Site Agents status card on the new tab page to clearly show discovered tools and connection health.
 
 ## [0.2.232] — 2026-08-24
-- Fixed Site Agent tool invocation to automatically open or reconnect to the website tab when you run a task.
+- Fixed Site Agent tool execution to automatically plan and connect to the website tab when you run a task.
 
 ## [0.2.231] — 2026-08-24
 - Fixed artifact preview iframe sizing and ensured generated HTML interfaces render smoothly in a secure frame.
