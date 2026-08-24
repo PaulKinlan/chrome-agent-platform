@@ -1,6 +1,9 @@
 # Changelog
 
 ## [0.2.224] — 2026-08-24
+- feat(fs-grants): FileSystemObserver watcher (recursive, primary; polling manifest-diff fallback), bounded readwrite-gated writes (5 MiB, digest), bounded recursive scan — completing the persistent local-filesystem feature arc (grants, picker, read/list, re-grant, write/scan/watch), owner-surface only (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 5)
+
+## [0.2.224] — 2026-08-24
 - feat(fs-grants): add honest resume re-grant flow and non-blocking file viewer (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01 Tranche 4)
 
 ## [0.2.225] — 2026-08-24

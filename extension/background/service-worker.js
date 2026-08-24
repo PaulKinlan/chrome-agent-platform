@@ -58,6 +58,8 @@ import {
   serializeFsGrantSummary,
   listFsGrantEntries,
   readFsGrantFile,
+  writeFsGrantFile,
+  scanFsGrantManifest,
 } from "../lib/fs-grants.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { buildMultimodalTask } from "../lib/attachments.js";
@@ -3091,6 +3093,30 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "fs-grant.read-file is restricted to extension surfaces" };
     }
     const result = await readFsGrantFile(grantId, { relativePath, asText, maxBytes });
+    return result;
+  },
+
+  async "fs-grant.write-file"({ grantId, relativePath, content, asBinary }, context) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+      securityEvent(
+        "blocked-action",
+        `fs-grant write-file denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.write-file is restricted to extension surfaces" };
+    }
+    const result = await writeFsGrantFile(grantId, { relativePath, content, asBinary });
+    return result;
+  },
+
+  async "fs-grant.scan"({ grantId, maxEntries, maxDepth }, context) {
+    if (context?.principal !== "owner-options" && context?.principal !== "extension") {
+      securityEvent(
+        "blocked-action",
+        `fs-grant scan denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "fs-grant.scan is restricted to extension surfaces" };
+    }
+    const result = await scanFsGrantManifest(grantId, { maxEntries, maxDepth });
     return result;
   },
 

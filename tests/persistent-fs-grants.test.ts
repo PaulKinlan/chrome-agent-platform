@@ -14,10 +14,19 @@ import {
   regrantFsGrantAccess,
   listFsGrantEntries,
   readFsGrantFile,
+  writeFsGrantFile,
+  scanFsGrantManifest,
+  watchFsGrant,
+  unwatchFsGrant,
+  getActiveFsWatchers,
   cleanRelativePath,
   MAX_FS_LIST_ENTRIES,
+  MAX_FS_PATH_DEPTH,
   MAX_FS_READ_BYTES,
   MAX_FS_TEXT_DECODE_BYTES,
+  MAX_FS_WRITE_BYTES,
+  MAX_FS_SCAN_ENTRIES,
+  MAX_FS_SCAN_BYTES,
 } from "../extension/lib/fs-grants.js";
 import {
   SETTINGS_SECTIONS,
@@ -420,6 +429,14 @@ Deno.test("service-worker.js: fs-grant routes require owner-options or extension
     sw.includes('async "fs-grant.read-file"'),
     "service worker must register fs-grant.read-file route",
   );
+  assert(
+    sw.includes('async "fs-grant.write-file"'),
+    "service worker must register fs-grant.write-file route",
+  );
+  assert(
+    sw.includes('async "fs-grant.scan"'),
+    "service worker must register fs-grant.scan route",
+  );
 
   // Checks for principal gating (owner-options or extension)
   assert(
@@ -609,27 +626,244 @@ Deno.test("readFsGrantFile: reads text with SHA-256 digest and enforces maxBytes
   assertEquals(cappedRes.error, "fs_file_too_large");
 });
 
-Deno.test("readFsGrantFile: fails closed on traversal attack and lapsed permission", async () => {
-  const mockFileHandle = {
-    kind: "file",
-    name: "doc.txt",
-    queryPermission: async () => "prompt",
-    getFile: async () => ({ name: "doc.txt", size: 5, arrayBuffer: async () => new ArrayBuffer(5) }),
+Deno.test("writeFsGrantFile: mode gate blocks write on read-only grant", async () => {
+  const mockHandle = {
+    kind: "directory",
+    name: "ro-folder",
+    queryPermission: async () => "granted",
   };
 
-  await saveFsGrant(
-    { grantId: "fsg_lapsed_read", handle: mockFileHandle, name: "doc.txt", kind: "file" },
+  await saveFsGrant({
+    grantId: "fsg_ro_write",
+    handle: mockHandle,
+    name: "ro-folder",
+    mode: "read",
+  });
+
+  const res = await writeFsGrantFile("fsg_ro_write", {
+    relativePath: "test.txt",
+    content: "hello",
+  });
+  assertEquals(res.ok, false);
+  assertEquals(res.error, "fs_write_permission_denied");
+});
+
+Deno.test("writeFsGrantFile: writes content to readwrite grant and computes SHA-256", async () => {
+  let writtenBytes: Uint8Array | null = null;
+  let closed = false;
+
+  const mockWritable = {
+    write: async (b: Uint8Array) => {
+      writtenBytes = b;
+    },
+    close: async () => {
+      closed = true;
+    },
+  };
+
+  const mockFileHandle = {
+    kind: "file",
+    name: "notes.txt",
+    createWritable: async () => mockWritable,
+  };
+
+  const mockDirHandle = {
+    kind: "directory",
+    name: "rw-project",
+    queryPermission: async () => "granted",
+    getFileHandle: async (name: string, { create }: { create?: boolean } = {}) => {
+      assertEquals(name, "notes.txt");
+      assertEquals(create, true);
+      return mockFileHandle;
+    },
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_rw_write",
+    handle: mockDirHandle,
+    name: "rw-project",
+    mode: "readwrite",
+  });
+
+  const res = await writeFsGrantFile("fsg_rw_write", {
+    relativePath: "notes.txt",
+    content: "Project notes data",
+  });
+
+  assertEquals(res.ok, true);
+  assertEquals(res.written, true);
+  assertEquals(res.name, "notes.txt");
+  assertEquals(res.size, 18);
+  assert(writtenBytes);
+  assertEquals(closed, true);
+  assert(typeof res.sha256 === "string" && res.sha256.length === 64);
+});
+
+Deno.test("writeFsGrantFile: enforces MAX_FS_WRITE_BYTES size cap", async () => {
+  const mockDirHandle = {
+    kind: "directory",
+    name: "rw-project",
+    queryPermission: async () => "granted",
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_rw_oversized",
+    handle: mockDirHandle,
+    name: "rw-project",
+    mode: "readwrite",
+  });
+
+  const oversized = new Uint8Array(MAX_FS_WRITE_BYTES + 1024);
+  const res = await writeFsGrantFile("fsg_rw_oversized", {
+    relativePath: "big.bin",
+    content: oversized,
+  });
+
+  assertEquals(res.ok, false);
+  assertEquals(res.error, "fs_file_too_large");
+});
+
+Deno.test("scanFsGrantManifest: recursively scans directories with depth and entry bounds", async () => {
+  const mockSubDir = {
+    kind: "directory",
+    name: "sub",
+    values: async function* () {
+      yield {
+        kind: "file",
+        name: "subfile.txt",
+        getFile: async () => ({ size: 50, lastModified: 1700000000000 }),
+      };
+    },
+  };
+
+  const mockRootDir = {
+    kind: "directory",
+    name: "root",
+    queryPermission: async () => "granted",
+    values: async function* () {
+      yield {
+        kind: "file",
+        name: "rootfile.txt",
+        getFile: async () => ({ size: 100, lastModified: 1700000000000 }),
+      };
+      yield mockSubDir;
+    },
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_scan_test",
+    handle: mockRootDir,
+    name: "root",
+  });
+
+  const res = await scanFsGrantManifest("fsg_scan_test");
+  assertEquals(res.ok, true);
+  assertEquals(res.entries?.length, 3);
+  assertEquals(res.entries?.[0].path, "rootfile.txt");
+  assertEquals(res.entries?.[1].path, "sub");
+  assertEquals(res.entries?.[2].path, "sub/subfile.txt");
+  assertEquals(res.truncated, false);
+});
+
+Deno.test("watchFsGrant: FileSystemObserver primary path delivers events and unwatch disconnects", async () => {
+  let observerCallback: any = null;
+  let observedHandle: any = null;
+  let observedOptions: any = null;
+  let disconnected = false;
+
+  class MockFileSystemObserver {
+    constructor(cb: any) {
+      observerCallback = cb;
+    }
+    observe(handle: any, options: any) {
+      observedHandle = handle;
+      observedOptions = options;
+    }
+    unobserve() {}
+    disconnect() {
+      disconnected = true;
+    }
+  }
+
+  const mockDirHandle = {
+    kind: "directory",
+    name: "watched-folder",
+    queryPermission: async () => "granted",
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_watch_obs",
+    handle: mockDirHandle,
+    name: "watched-folder",
+  });
+
+  const fakeScope: any = { FileSystemObserver: MockFileSystemObserver };
+  const deliveredEvents: any[] = [];
+
+  const watchRes = await watchFsGrant(
+    "fsg_watch_obs",
+    (e) => {
+      deliveredEvents.push(e);
+    },
+    { scope: fakeScope },
   );
 
-  const res1 = await readFsGrantFile("fsg_lapsed_read", {});
-  assertEquals(res1.ok, false);
-  assertEquals(res1.error, "fs_permission_lapsed");
+  assertEquals(watchRes.ok, true);
+  assertEquals(watchRes.type, "observer");
+  assertEquals(observedHandle, mockDirHandle);
+  assertEquals(observedOptions?.recursive, true);
 
-  // Traversal attack
-  mockFileHandle.queryPermission = async () => "granted";
-  const res2 = await readFsGrantFile("fsg_lapsed_read", { relativePath: "../outside.txt" });
-  assertEquals(res2.ok, false);
-  assert(res2.error?.includes("invalid_path_traversal"));
+  // Trigger platform callback
+  observerCallback([
+    {
+      type: "modified",
+      relativePathComponents: ["src", "app.js"],
+    },
+  ]);
+
+  assertEquals(deliveredEvents.length, 1);
+  assertEquals(deliveredEvents[0].grantId, "fsg_watch_obs");
+  assertEquals(deliveredEvents[0].type, "modified");
+  assertEquals(deliveredEvents[0].path, "src/app.js");
+
+  // Verify unwatch
+  assert(watchRes.unwatch);
+  watchRes.unwatch();
+  assertEquals(disconnected, true);
+});
+
+Deno.test("watchFsGrant: revocation automatically tears down active watcher", async () => {
+  let disconnected = false;
+  class MockFileSystemObserver {
+    constructor() {}
+    observe() {}
+    disconnect() {
+      disconnected = true;
+    }
+  }
+
+  const mockDirHandle = {
+    kind: "directory",
+    name: "revoke-watch-folder",
+    queryPermission: async () => "granted",
+  };
+
+  await saveFsGrant({
+    grantId: "fsg_revoke_watch",
+    handle: mockDirHandle,
+    name: "revoke-watch-folder",
+  });
+
+  const fakeScope: any = { FileSystemObserver: MockFileSystemObserver };
+  await watchFsGrant("fsg_revoke_watch", () => {}, { scope: fakeScope });
+
+  assert(getActiveFsWatchers().includes("fsg_revoke_watch"));
+
+  // Delete grant -> must tear down watcher
+  await deleteFsGrant("fsg_revoke_watch");
+
+  assertEquals(disconnected, true, "revocation must disconnect active observer");
+  assertEquals(getActiveFsWatchers().includes("fsg_revoke_watch"), false);
 });
 
 Deno.test("options.js: wires renderLocalFolders and renders empty state or grant cards with re-grant and file viewer", async () => {

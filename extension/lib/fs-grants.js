@@ -1,4 +1,4 @@
-// lib/fs-grants.js — Persistent Local File System Access Grants Store, Picker Wiring, Bounded Reader & Re-grant Flow.
+// lib/fs-grants.js — Persistent Local File System Access Grants Store, Picker Wiring, Bounded Reader, Re-grant & Watcher.
 // (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01).
 //
 // Invariants:
@@ -11,16 +11,22 @@
 //   - Tranche 4: Implements the honest resume / re-grant model — owner-gesture requestPermission()
 //     on the stored handle in page context when queryPermission returns "prompt", flipping status
 //     back to "granted"; "denied" shows honest fail state; absolute paths (/ or \) rejected.
+//   - Tranche 5: Adds primary FileSystemObserver watcher (unobserve/disconnect on revoke;
+//     coalesced change signals; polling fallback where unsupported); bounded owner write (readwrite
+//     grants only; size cap 5 MiB); bounded recursive manifest scan (depth cap 16, count cap 10k).
 //   - Zero broadening: each grant binds strictly to the chosen directory/file subtree
 //     and its requested mode.
 //   - Honest permission state: uses handle.queryPermission({ mode }) to reflect
-//     "granted" | "prompt" | "denied". Fails closed before every read/list when status != "granted".
-//   - Revocation: deleting the record is the revocation authority.
+//     "granted" | "prompt" | "denied". Fails closed before every read/write/list when status != "granted".
+//   - Revocation: deleting the record is the revocation authority and terminates active watchers.
 
 export const MAX_FS_LIST_ENTRIES = 500;
 export const MAX_FS_PATH_DEPTH = 16;
 export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
 export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB
+export const MAX_FS_WRITE_BYTES = 5 * 1024 * 1024; // 5 MiB
+export const MAX_FS_SCAN_ENTRIES = 10000;
+export const MAX_FS_SCAN_BYTES = 1024 * 1024; // 1 MiB
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
@@ -28,6 +34,7 @@ const STORE_NAME = "grants";
 
 // In-memory fallback map for non-IndexedDB unit test environments
 const memoryGrantsStore = new Map();
+const activeWatchers = new Map();
 
 export function cleanRelativePath(pathStr) {
   if (typeof pathStr !== "string" || !pathStr.trim()) return [];
@@ -204,11 +211,13 @@ export async function listFsGrants({ scope = null } = {}, { customIdb = null } =
 
 /**
  * Delete / revoke a stored grant record by ID.
+ * Automatically tears down any active watcher on this grant.
  * @param {string} grantId
  * @param {{ customIdb?: any }} [options]
  */
 export async function deleteFsGrant(grantId, { customIdb = null } = {}) {
   if (!grantId) return { ok: false, error: "grant_id_required" };
+  unwatchFsGrant(grantId);
   const db = await openDatabase(customIdb).catch(() => null);
   if (db) {
     await new Promise((resolve, reject) => {
@@ -525,6 +534,373 @@ export async function readFsGrantFile(
     content: textContent,
     truncated: false,
   };
+}
+
+/**
+ * Bounded file writing within a granted handle (readwrite mode required).
+ * @param {string} grantId
+ * @param {{ relativePath?: string, content?: string|Uint8Array|ArrayBuffer, asBinary?: boolean }} options
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
+export async function writeFsGrantFile(
+  grantId,
+  { relativePath = "", content = "", asBinary = false } = {},
+  { customIdb = null } = {},
+) {
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  if (grant.mode !== "readwrite") {
+    return {
+      ok: false,
+      error: "fs_write_permission_denied",
+      message: "Grant mode is read-only. Write operations require a read/write grant.",
+    };
+  }
+
+  const status = await queryFsGrantStatus(grant);
+  if (status !== "granted") {
+    return { ok: false, error: "fs_permission_lapsed", status, grantId };
+  }
+
+  let segments = [];
+  try {
+    segments = cleanRelativePath(relativePath);
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+
+  if (segments.length === 0) {
+    return { ok: false, error: "invalid_file_path", message: "A file name is required" };
+  }
+
+  if (segments.length > MAX_FS_PATH_DEPTH) {
+    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
+  }
+
+  let bytes = null;
+  if (content instanceof Uint8Array) {
+    bytes = content;
+  } else if (typeof content === "string") {
+    bytes = new TextEncoder().encode(content);
+  } else if (content instanceof ArrayBuffer) {
+    bytes = new Uint8Array(content);
+  } else {
+    bytes = new Uint8Array(0);
+  }
+
+  if (bytes.byteLength > MAX_FS_WRITE_BYTES) {
+    return {
+      ok: false,
+      error: "fs_file_too_large",
+      size: bytes.byteLength,
+      maxBytes: MAX_FS_WRITE_BYTES,
+    };
+  }
+
+  let fileHandle = null;
+  if (grant.kind === "file") {
+    if (segments.length > 1 || (segments.length === 1 && segments[0] !== grant.name)) {
+      return { ok: false, error: "invalid_file_path" };
+    }
+    fileHandle = grant.handle;
+  } else {
+    let dirHandle = grant.handle;
+    for (let i = 0; i < segments.length - 1; i++) {
+      if (!dirHandle || typeof dirHandle.getDirectoryHandle !== "function") {
+        return { ok: false, error: "invalid_directory_handle" };
+      }
+      try {
+        dirHandle = await dirHandle.getDirectoryHandle(segments[i], { create: true });
+      } catch (err) {
+        return { ok: false, error: `create_directory_failed: ${err?.message || err}` };
+      }
+    }
+    const fileName = segments[segments.length - 1];
+    if (!dirHandle || typeof dirHandle.getFileHandle !== "function") {
+      return { ok: false, error: "invalid_directory_handle" };
+    }
+    try {
+      fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+    } catch (err) {
+      return { ok: false, error: `create_file_failed: ${err?.message || err}` };
+    }
+  }
+
+  try {
+    if (typeof fileHandle.createWritable !== "function") {
+      return { ok: false, error: "create_writable_unsupported" };
+    }
+    const writable = await fileHandle.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+  } catch (err) {
+    return { ok: false, error: `write_failed: ${err?.message || err}` };
+  }
+
+  const sha256 = await computeSha256(bytes.buffer);
+
+  return {
+    ok: true,
+    grantId,
+    path: segments.join("/"),
+    name: fileHandle.name,
+    size: bytes.byteLength,
+    sha256,
+    written: true,
+  };
+}
+
+/**
+ * Recursive bounded manifest scan of a granted directory.
+ * @param {string} grantId
+ * @param {{ maxEntries?: number, maxDepth?: number }} [options]
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
+export async function scanFsGrantManifest(
+  grantId,
+  { maxEntries = MAX_FS_SCAN_ENTRIES, maxDepth = MAX_FS_PATH_DEPTH } = {},
+  { customIdb = null } = {},
+) {
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  const status = await queryFsGrantStatus(grant);
+  if (status !== "granted") {
+    return { ok: false, error: "fs_permission_lapsed", status, grantId };
+  }
+
+  const entries = [];
+  let truncated = false;
+  let totalCount = 0;
+  let estimatedBytes = 0;
+
+  async function walk(dirHandle, currentPath, depth) {
+    if (depth > maxDepth || entries.length >= maxEntries || estimatedBytes >= MAX_FS_SCAN_BYTES) {
+      truncated = true;
+      return;
+    }
+
+    const iter = typeof dirHandle.values === "function"
+      ? dirHandle.values()
+      : typeof dirHandle.entries === "function"
+      ? dirHandle.entries()
+      : [];
+
+    for await (const entry of iter) {
+      totalCount++;
+      const item = Array.isArray(entry) ? entry[1] : entry;
+      const relPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+      const kind = item.kind || (item.getFile ? "file" : "directory");
+
+      let size = 0;
+      let lastModified = 0;
+      if (kind === "file" && typeof item.getFile === "function") {
+        try {
+          const f = await item.getFile();
+          size = f.size || 0;
+          lastModified = f.lastModified || 0;
+        } catch { /* ignore */ }
+      }
+
+      const record = { path: relPath, name: item.name, kind, size, lastModified };
+      const rowSize = JSON.stringify(record).length;
+
+      if (entries.length < maxEntries && estimatedBytes + rowSize < MAX_FS_SCAN_BYTES) {
+        entries.push(record);
+        estimatedBytes += rowSize;
+      } else {
+        truncated = true;
+      }
+
+      if (kind === "directory" && !truncated) {
+        await walk(item, relPath, depth + 1);
+      }
+    }
+  }
+
+  if (grant.kind === "file") {
+    const file = typeof grant.handle?.getFile === "function" ? await grant.handle.getFile().catch(() => null) : grant.handle;
+    return {
+      ok: true,
+      grantId,
+      kind: "file",
+      entries: [{
+        path: grant.name,
+        name: grant.name,
+        kind: "file",
+        size: file?.size || 0,
+        lastModified: file?.lastModified || 0,
+      }],
+      totalCount: 1,
+      truncated: false,
+    };
+  }
+
+  await walk(grant.handle, "", 1);
+
+  return {
+    ok: true,
+    grantId,
+    kind: "directory",
+    entries,
+    totalCount,
+    truncated,
+  };
+}
+
+/**
+ * Watch a granted directory for change events.
+ * Uses FileSystemObserver when supported; falls back to polling manifest diff.
+ * @param {string} grantId
+ * @param {(event: { grantId: string, type: string, path: string, timestamp: number }) => void} callback
+ * @param {{
+ *   pollIntervalMs?: number,
+ *   scope?: any,
+ *   customIdb?: any
+ * }} [options]
+ */
+export async function watchFsGrant(
+  grantId,
+  callback,
+  {
+    pollIntervalMs = 5000,
+    scope = (typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : globalThis),
+    customIdb = null,
+  } = {},
+) {
+  const grant = await getFsGrant(grantId, { customIdb });
+  if (!grant) return { ok: false, error: "grant_not_found" };
+
+  const status = await queryFsGrantStatus(grant);
+  if (status !== "granted") {
+    return { ok: false, error: "fs_permission_lapsed", status, grantId };
+  }
+
+  // Teardown any existing watcher on this grant
+  unwatchFsGrant(grantId);
+
+  const hasObserver = typeof scope?.FileSystemObserver === "function";
+
+  if (hasObserver) {
+    try {
+      const observer = new scope.FileSystemObserver((records) => {
+        for (const record of records) {
+          const path = Array.isArray(record?.relativePathComponents)
+            ? record.relativePathComponents.join("/")
+            : "";
+          callback({
+            grantId,
+            type: record?.type || "changed",
+            path,
+            timestamp: Date.now(),
+          });
+        }
+      });
+      observer.observe(grant.handle, { recursive: true });
+
+      const entry = {
+        grantId,
+        type: "observer",
+        observer,
+        unwatch: () => {
+          try {
+            if (typeof observer.unobserve === "function") observer.unobserve(grant.handle);
+            if (typeof observer.disconnect === "function") observer.disconnect();
+          } catch { /* ignore */ }
+          activeWatchers.delete(grantId);
+        },
+      };
+      activeWatchers.set(grantId, entry);
+
+      return {
+        ok: true,
+        grantId,
+        type: "observer",
+        unwatch: entry.unwatch,
+      };
+    } catch (err) {
+      console.warn("FileSystemObserver.observe failed, falling back to polling", err);
+    }
+  }
+
+  // Fallback path: polling manifest diff
+  let prevManifest = new Map();
+  try {
+    const scan = await scanFsGrantManifest(grantId, {}, { customIdb });
+    if (scan.ok && Array.isArray(scan.entries)) {
+      for (const e of scan.entries) {
+        prevManifest.set(e.path, `${e.size}:${e.lastModified}`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  const timer = setInterval(async () => {
+    try {
+      const scan = await scanFsGrantManifest(grantId, {}, { customIdb });
+      if (!scan.ok || !Array.isArray(scan.entries)) return;
+      const nextManifest = new Map();
+      let changed = false;
+      let firstChangedPath = "";
+
+      for (const e of scan.entries) {
+        const sig = `${e.size}:${e.lastModified}`;
+        nextManifest.set(e.path, sig);
+        if (!prevManifest.has(e.path) || prevManifest.get(e.path) !== sig) {
+          changed = true;
+          if (!firstChangedPath) firstChangedPath = e.path;
+        }
+      }
+      for (const p of prevManifest.keys()) {
+        if (!nextManifest.has(p)) {
+          changed = true;
+          if (!firstChangedPath) firstChangedPath = p;
+        }
+      }
+
+      if (changed) {
+        prevManifest = nextManifest;
+        callback({
+          grantId,
+          type: "changed",
+          path: firstChangedPath || "",
+          timestamp: Date.now(),
+        });
+      }
+    } catch { /* ignore poll errors */ }
+  }, Math.max(1000, pollIntervalMs));
+
+  const entry = {
+    grantId,
+    type: "polling",
+    timer,
+    unwatch: () => {
+      clearInterval(timer);
+      activeWatchers.delete(grantId);
+    },
+  };
+  activeWatchers.set(grantId, entry);
+
+  return {
+    ok: true,
+    grantId,
+    type: "polling",
+    unwatch: entry.unwatch,
+  };
+}
+
+export function unwatchFsGrant(grantId) {
+  const watcher = activeWatchers.get(grantId);
+  if (watcher) {
+    watcher.unwatch();
+    activeWatchers.delete(grantId);
+    return true;
+  }
+  return false;
+}
+
+export function getActiveFsWatchers() {
+  return [...activeWatchers.keys()];
 }
 
 /**
