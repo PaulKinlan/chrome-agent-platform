@@ -3997,14 +3997,14 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 
 - Feedback: 2026-08-24 — product owner: "there is no way to delete an agent. I asked for this ages ago." The owner needs a discoverable, working way to delete an agent from the UI. A full lifecycle design already exists (see CAP-FB-20260819-AGENT-DELETION-LIFECYCLE-01 and docs/agent-deletion-lifecycle-design.md) but was never implemented; this task is the scoped owner-facing implementation.
 - Updated: 2026-08-24 21:12 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `9b146ce`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@53737edb5627ac9b535ff1d3b9fa686cf9b056b4` (0.2.243)
 - Acceptance: from the agent surface (NTP agents view + side panel), the owner can delete a named/background/site agent via an explicit, accessible action; a confirmation names the exact agent and previews what will be removed; on confirm it transactionally removes the agent registry entry + its schedules/alarms, permission/host grants, memory sandbox, threads, and index rows; deny/cancel mutate nothing; the deleted agent disappears from all lists and can no longer run; artifacts are NOT silently cascade-deleted (retain/orphan them per the researched design default); active runs are safely settled/cancelled first.
 - Review: pending independent owner-authority + transaction + concurrency review
 - Gates: delete each agent kind (named/background/site); confirmation preview; deny/cancel no-op; cleanup invariants (schedules/permissions/memory/threads/registry); active-run race; reload persistence; AX/keyboard path
@@ -4012,6 +4012,8 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - Next: implement the owner-facing delete action + confirmation + transactional cleanup
 - Recover: `git grep -n "agent.delete\|deleteNamedAgent\|disenrollOrigin" -- extension/lib extension/background`
 - History:
+  - 2026-08-24 21:52 UTC — LANDED at 0.2.243. Owner-facing delete on NTP/sidepanel/options with confirmActionDialog (names exact agent + itemized consequences); transactional cleanup per kind (named: prompt-override-first→registry→memory; site: abortWorker→tombstone→revoke scripts/host perms→memory; background: cancel schedule+clear alarm); artifacts retained not cascade-deleted; deny/cancel mutate nothing; agent.delete/named-agent.delete/recipe.delete added to OWNER_DIRECT_ACTIONS guarded by browser-supplied documentId (model calls keep full approval). Security review PASS (k3 6b70c811), 1500/1500.
+
   - 2026-08-24 21:12 UTC — captured from product-owner feedback; elevates the researched-but-unimplemented AGENT-DELETION-LIFECYCLE-01 design into a scoped owner-facing implementation.
 
 ## [CAP-FB-20260824-PERF-STARTTIME-CRASH-01] Uncaught TypeError reading 'startTime' in reportAllChanges (perf reporter crash)
