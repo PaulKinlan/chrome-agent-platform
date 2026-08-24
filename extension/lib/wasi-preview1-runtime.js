@@ -55,6 +55,7 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "fd_tell",
   "fd_write",
   "path_filestat_get",
+  "path_filestat_set_times",
   "path_open",
   "proc_exit",
   "random_get",
@@ -368,6 +369,77 @@ export function planFdFilestatSetSize({
   return { errno: WASI_ERRNO.SUCCESS, size };
 }
 
+/** R6 (CAP-FB-20260823-R6-SET-TIMES-01): the path_filestat_set_times planner
+ * — the fd4-only preopen split (the A-1), flags {0,1}, the EXPLICIT fstflags
+ * {1 ATIM, 4 MTIM, 5 ATIM|MTIM} only (NOW {2,8,10} → ENOTSUP, no realtime
+ * clock; conflicts {3,12}/unknown → EINVAL), the timestamps (unselected exact
+ * 0, selected 0..4102444800000000000 ns), the scratch/<child> class, and the
+ * existence/type lattice. The path span + the setTimes readback are the
+ * SYSCALL's job. */
+export function planPathFilestatSetTimes({
+  fd,
+  kind,
+  rights,
+  flagsValue,
+  fstflagsValue,
+  atimValue,
+  mtimValue,
+  path,
+  exists,
+  isDirectory,
+}) {
+  if (fd !== 4) return { errno: WASI_ERRNO.ENOTCAPABLE }; // the fd4-only right (A-1)
+  if (kind !== FD_KIND.PREOPEN) return { errno: WASI_ERRNO.EBADF };
+  if (
+    (rights & WASI_RIGHTS.PATH_FILESTAT_SET_TIMES) !==
+    WASI_RIGHTS.PATH_FILESTAT_SET_TIMES
+  ) {
+    return { errno: WASI_ERRNO.ENOTCAPABLE };
+  }
+  let flags, fstflags, atim, mtim;
+  try {
+    flags = asU32(flagsValue);
+    fstflags = asU32(fstflagsValue) & 0xffff;
+    atim = asU64(atimValue);
+    mtim = asU64(mtimValue);
+  } catch {
+    return { errno: WASI_ERRNO.EINVAL };
+  }
+  if (planPathFilestatLookup(flags) !== WASI_ERRNO.SUCCESS) {
+    return { errno: WASI_ERRNO.ENOTSUP };
+  }
+  if (fstflags === 2 || fstflags === 8 || fstflags === 10) {
+    return { errno: WASI_ERRNO.ENOTSUP }; // NOW — no realtime clock
+  }
+  if (fstflags !== 1 && fstflags !== 4 && fstflags !== 5) {
+    return { errno: WASI_ERRNO.EINVAL }; // conflict / unknown / out-of-range
+  }
+  const wantsAtim = (fstflags & 1) === 1;
+  const wantsMtim = (fstflags & 4) === 4;
+  if (!wantsAtim && !wantsMtim) return { errno: WASI_ERRNO.EINVAL };
+  const MAX_NS = 4102444800000000000n;
+  let atimNs = null;
+  let mtimNs = null;
+  if (wantsAtim) {
+    if (atim > MAX_NS) return { errno: WASI_ERRNO.EINVAL };
+    atimNs = atim;
+  } else if (atim !== 0n) {
+    return { errno: WASI_ERRNO.EINVAL }; // the unselected operand must be exact 0
+  }
+  if (wantsMtim) {
+    if (mtim > MAX_NS) return { errno: WASI_ERRNO.EINVAL };
+    mtimNs = mtim;
+  } else if (mtim !== 0n) {
+    return { errno: WASI_ERRNO.EINVAL };
+  }
+  if (typeof path !== "string" || !path.startsWith("scratch/")) {
+    return { errno: WASI_ERRNO.ENOTCAPABLE };
+  }
+  if (!exists) return { errno: WASI_ERRNO.ENOENT };
+  if (isDirectory) return { errno: WASI_ERRNO.EISDIR };
+  return { errno: WASI_ERRNO.SUCCESS, atimNs, mtimNs };
+}
+
 export const WASI_READDIR_LIMITS = Object.freeze({
   maxEntries: 4096,
   maxNameBytes: 255,
@@ -480,6 +552,10 @@ export function createWasiPreview1Runtime({
   const freeFds = [];
   const rootRights = WASI_RIGHTS.PATH_OPEN | WASI_RIGHTS.PATH_CREATE_FILE |
     WASI_RIGHTS.PATH_FILESTAT_GET | WASI_RIGHTS.FD_READDIR;
+  // R6 (A-1): path_filestat_set_times is fd4-only (the /job preopen) — fd3 `.`
+  // keeps rootRights; fd4 adds the set-times bit so the syscall's fd===4 gate
+  // matches the reported surface (fd3 must NOT report the right it cannot use).
+  const fd4Rights = rootRights | WASI_RIGHTS.PATH_FILESTAT_SET_TIMES;
   const inheritedRights = PATH_CLASS_RIGHTS.inputs.rights |
     PATH_CLASS_RIGHTS.scratch.rights | PATH_CLASS_RIGHTS.output.rights;
 
@@ -525,7 +601,7 @@ export function createWasiPreview1Runtime({
       kind: FD_KIND.PREOPEN,
       filetype: WASI_FILETYPE.DIRECTORY,
       flags: 0,
-      rights: rootRights,
+      rights: fd === 4 ? fd4Rights : rootRights,
       rightsInheriting: inheritedRights,
       offset: 0n,
       path: PREOPEN_NAMES[fd],
@@ -721,7 +797,10 @@ export function createWasiPreview1Runtime({
     view.setUint8(16, filetypeFor(stat));
     view.setBigUint64(24, 1n, true);
     view.setBigUint64(32, BigInt(stat.size), true);
-    // atim/mtim/ctim remain zero: the host exposes no wall-clock identity.
+    // R6: atim/mtim report the STORED metadata (default 0n); ctim stays zero —
+    // the host still exposes no wall-clock identity.
+    view.setBigUint64(40, typeof stat.atimNs === "bigint" ? stat.atimNs : 0n, true);
+    view.setBigUint64(48, typeof stat.mtimNs === "bigint" ? stat.mtimNs : 0n, true);
     writeBytes(pointer, bytes);
   }
 
@@ -1041,6 +1120,62 @@ export function createWasiPreview1Runtime({
       span(statPtr, 64);
       const stat = validateStat(syncResult(workspace.stat(resolved.path)));
       writeFilestat(statPtr, stat);
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    path_filestat_set_times: (
+      fdValue, flagsValue, pathPtrValue, pathLenValue, atimValue, mtimValue, fstflagsValue,
+    ) => {
+      const base = fdFor(fdValue); // step 2 (EBADF)
+      // Step 3 — the fd4-only preopen split (the A-1): the right precedes the
+      // guest path memory.
+      if (fdValue !== 4) fault(WASI_ERRNO.ENOTCAPABLE);
+      if (base.kind !== FD_KIND.PREOPEN) fault(WASI_ERRNO.EBADF);
+      requireRight(base, WASI_RIGHTS.PATH_FILESTAT_SET_TIMES);
+      // Step 7 — the path span (bounds-checked by readBytes).
+      const resolved = resolveDirBasePath(base, pathPtrValue, pathLenValue);
+      // Step 9 — the existence/type (the ENOENT tolerated into the planner).
+      let exists = false;
+      let isDirectory = false;
+      try {
+        const s = workspace.stat(resolved.path);
+        exists = true;
+        isDirectory = s.type === "directory";
+      } catch (error) {
+        if (error?.code !== "ENOENT") return mapAdapterError(error);
+      }
+      // Steps 4-6 + 8 — the scalar validation + the class (the planner).
+      const plan = planPathFilestatSetTimes({
+        fd: fdValue,
+        kind: base.kind,
+        rights: base.rights,
+        flagsValue,
+        fstflagsValue,
+        atimValue,
+        mtimValue,
+        path: resolved.path,
+        exists,
+        isDirectory,
+      });
+      if (plan.errno !== WASI_ERRNO.SUCCESS) fault(plan.errno);
+      const gate = beginCall();
+      if (gate !== WASI_ERRNO.SUCCESS) return gate;
+      try {
+        workspace.setTimes(resolved.path, {
+          atimNs: plan.atimNs ?? undefined,
+          mtimNs: plan.mtimNs ?? undefined,
+        });
+      } catch (error) {
+        return mapAdapterError(error);
+      }
+      // Step 11 — the readback: SUCCESS only after the stored timestamps match.
+      const readback = workspace.stat(resolved.path);
+      if (
+        (plan.atimNs != null && readback.atimNs !== plan.atimNs) ||
+        (plan.mtimNs != null && readback.mtimNs !== plan.mtimNs)
+      ) {
+        return WASI_ERRNO.EIO;
+      }
       return WASI_ERRNO.SUCCESS;
     },
 
@@ -1392,7 +1527,7 @@ export function createWasiPreview1Runtime({
   const wasi = {};
   for (const name of SUPPORTED_WASI_PREVIEW1_IMPORTS) {
     const pathCall = name === "path_open" || name === "path_filestat_get" ||
-      name === "fd_readdir";
+      name === "path_filestat_set_times" || name === "fd_readdir";
     wasi[name] = syscall(implementation[name], { path: pathCall });
   }
   wasi.proc_exit = (codeValue) => {

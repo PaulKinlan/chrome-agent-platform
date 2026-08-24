@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.216] — 2026-08-24
+- feat(wasi): SQLite WASI train R3-R6 — path_filestat_get lookup-follow, FILE path_open dirflags {0,1}, fd_filestat_set_size bounded resize, path_filestat_set_times explicit timestamps; SUPPORTED 20→22 (CAP-FB R3/R4/R5/R6)
+
 ## [0.2.215] — 2026-08-24
 - fix(dialog): create-agent dialog — unclipped focus, sticky Create/Cancel footer outside the scroll body, collapsible skills section with live count, overscroll containment at all layers (CAP-FB-20260823-CREATE-AGENT-DIALOG-01)
 

@@ -27,6 +27,7 @@ import {
   planFdFilestatSetSize,
   planFileOpenDirflags,
   planPathFilestatLookup,
+  planPathFilestatSetTimes,
   REBUILT_TOOL_COUNT,
   REBUILT_WASI_IMPORTS,
   revalidateAuditedMemory,
@@ -104,9 +105,15 @@ class MemoryWorkspace {
     const prefix = path === "." ? "" : `${path}/`;
     const directory = path === "." || this.dirs.has(path) || [...this.files.keys()].some((key) => key.startsWith(prefix));
     if (row && directory) throw Object.assign(new Error("ambiguous"), { code: "ENOTDIR" });
-    if (row) return { type: row.type, size: row.bytes.byteLength };
-    if (directory) return { type: "directory", size: 0 };
+    if (row) return { type: row.type, size: row.bytes.byteLength, atimNs: row.atimNs ?? 0n, mtimNs: row.mtimNs ?? 0n };
+    if (directory) return { type: "directory", size: 0, atimNs: 0n, mtimNs: 0n };
     throw Object.assign(new Error("missing"), { code: "ENOENT" });
+  }
+  setTimes(path, { atimNs, mtimNs } = {}) {
+    const row = this.files.get(path);
+    if (!row) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    if (atimNs !== undefined) row.atimNs = atimNs;
+    if (mtimNs !== undefined) row.mtimNs = mtimNs;
   }
   readdir(path) {
     const prefix = path === "." ? "" : `${path}/`;
@@ -596,7 +603,11 @@ Deno.test("WASI preopen/fd stat KAT: fd3 dot + fd4 /job aliases have identical b
   for (const [fd, pointer] of [[3, 240], [4, 280]]) {
     assertEquals(h.wasi.fd_fdstat_get(fd, pointer), WASI_ERRNO.SUCCESS);
     assertEquals(h.memory.bytes[pointer], WASI_FILETYPE.DIRECTORY);
-    assertEquals(h.memory.u64(pointer + 8), rootRights, `fd${fd} base rights`);
+    // R6 (A-1): fd4 adds PATH_FILESTAT_SET_TIMES; fd3 does NOT (the fd4-only right).
+    const expectedRights = fd === 4
+      ? (rootRights | WASI_RIGHTS.PATH_FILESTAT_SET_TIMES)
+      : rootRights;
+    assertEquals(h.memory.u64(pointer + 8), expectedRights, `fd${fd} base rights`);
     assertEquals(h.memory.u64(pointer + 16), inheritedRights, `fd${fd} inherited rights`);
     assertEquals(h.wasi.fd_filestat_get(fd, pointer + 40), WASI_ERRNO.SUCCESS);
     assertEquals(h.memory.bytes[pointer + 56], WASI_FILETYPE.DIRECTORY);
@@ -1627,9 +1638,8 @@ Deno.test("R3 equivalence matrix: flags0 ≡ flags1 across PREOPEN/DIR bases and
 Deno.test("R3 source boundary: the planner is referenced ONLY by the syscall (no provider/page/permission/route import)", async () => {
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planPathFilestatLookup").length - 1;
-  // EXACTLY the definition + ONE call site inside path_filestat_get — nothing
-  // else in the runtime may reference the planner.
-  assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
+  // The definition + the R3 syscall call site + the R6 planner's flags gate.
+  assertEquals(references, 3, "planner referenced at its definition + the R3 syscall + the R6 planner flags gate");
   // the rights gate PRECEDES the flag normalisation in the syscall body (the
   // precedence the unreachable ENOTCAPABLE arm guards)
   const bodyStart = source.indexOf("path_filestat_get: (fdValue");
@@ -1851,8 +1861,86 @@ Deno.test("R5 syscall mutants: kind/right/class/ceiling; rollback leaves bytes+a
 
 Deno.test("R5 census + boundary: SUPPORTED is exactly +1 (fd_filestat_set_size); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("fd_filestat_set_size"), true);
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 21, "the §7 census 20→21, deliberate");
+  // R6 added path_filestat_set_times (the §4 census 21→22); this test was the
+  // R5 pin (21) — updated to the R6 census.
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 22, "the R6 census 21→22, deliberate");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planFdFilestatSetSize").length - 1;
+  assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
+});
+
+// ── R6 path_filestat_set_times (CAP-FB-20260823-R6-SET-TIMES-01) ──────────
+Deno.test("R6 planner: every arm — fd4/right/flags/fstflags/timestamps/class/existence", () => {
+  const base = { fd: 4, kind: FD_KIND.PREOPEN, rights: WASI_RIGHTS.PATH_FILESTAT_SET_TIMES, flagsValue: 1, fstflagsValue: 5, atimValue: 100000000000n, mtimValue: 200000000000n, path: "scratch/work.txt", exists: true, isDirectory: false };
+  // success
+  assertEquals(planPathFilestatSetTimes(base), { errno: WASI_ERRNO.SUCCESS, atimNs: 100000000000n, mtimNs: 200000000000n });
+  // fd !== 4 → ENOTCAPABLE (the fd4-only right)
+  assertEquals(planPathFilestatSetTimes({ ...base, fd: 3 }).errno, WASI_ERRNO.ENOTCAPABLE);
+  // kind !== PREOPEN → EBADF
+  assertEquals(planPathFilestatSetTimes({ ...base, kind: FD_KIND.FILE }).errno, WASI_ERRNO.EBADF);
+  // right missing → ENOTCAPABLE
+  assertEquals(planPathFilestatSetTimes({ ...base, rights: WASI_RIGHTS.PATH_FILESTAT_GET }).errno, WASI_ERRNO.ENOTCAPABLE);
+  // flags 2 → ENOTSUP
+  assertEquals(planPathFilestatSetTimes({ ...base, flagsValue: 2 }).errno, WASI_ERRNO.ENOTSUP);
+  // NOW fstflags {2,8,10} → ENOTSUP (no realtime)
+  for (const now of [2, 8, 10]) {
+    assertEquals(planPathFilestatSetTimes({ ...base, fstflagsValue: now }).errno, WASI_ERRNO.ENOTSUP, `NOW ${now} → ENOTSUP`);
+  }
+  // conflict {3,12} / unknown / out-of-range → EINVAL
+  for (const bad of [3, 12, 0, 6, 7, 16]) {
+    assertEquals(planPathFilestatSetTimes({ ...base, fstflagsValue: bad }).errno, WASI_ERRNO.EINVAL, `fstflags ${bad} → EINVAL`);
+  }
+  // unselected operand nonzero → EINVAL (fstflags 4 = MTIM only; atim must be 0)
+  assertEquals(planPathFilestatSetTimes({ ...base, fstflagsValue: 4, atimValue: 1n }).errno, WASI_ERRNO.EINVAL);
+  // selected out-of-range → EINVAL
+  assertEquals(planPathFilestatSetTimes({ ...base, atimValue: 4102444800000000001n }).errno, WASI_ERRNO.EINVAL);
+  // non-scratch path → ENOTCAPABLE
+  assertEquals(planPathFilestatSetTimes({ ...base, path: "inputs/in.txt" }).errno, WASI_ERRNO.ENOTCAPABLE);
+  // missing → ENOENT; dir → EISDIR
+  assertEquals(planPathFilestatSetTimes({ ...base, exists: false }).errno, WASI_ERRNO.ENOENT);
+  assertEquals(planPathFilestatSetTimes({ ...base, isDirectory: true }).errno, WASI_ERRNO.EISDIR);
+});
+
+Deno.test("R6 syscall: set-times + fd_filestat_get readback; unselected side preserved", () => {
+  const h = harness();
+  const pathPtr = 2000;
+  const len = putPath(h.memory, pathPtr, "scratch/work.txt");
+  // MTIM only (fstflags 4): atim unselected (0), mtim = 5s.
+  assertEquals(h.wasi.path_filestat_set_times(4, 1, pathPtr, len, 0n, 5000000000n, 4), WASI_ERRNO.SUCCESS);
+  // readback via path_filestat_get
+  assertEquals(h.wasi.path_filestat_get(4, 1, pathPtr, len, 3000), WASI_ERRNO.SUCCESS);
+  assertEquals(h.memory.u64(3000 + 40), 0n, "atim preserved (unselected)");
+  assertEquals(h.memory.u64(3000 + 48), 5000000000n, "mtim written");
+  // the workspace row records it (the source-of-truth readback)
+  assertEquals(h.workspace.files.get("scratch/work.txt").mtimNs, 5000000000n);
+  assertEquals(h.workspace.files.get("scratch/work.txt").atimNs ?? 0n, 0n, "atim untouched");
+});
+
+Deno.test("R6 syscall mutants: fd3/right/flags/NOW/missing/dir fail closed, no mutation", () => {
+  const h = harness();
+  const pathPtr = 2000;
+  const len = putPath(h.memory, pathPtr, "scratch/work.txt");
+  // fd3 (the `.` preopen) → ENOTCAPABLE (the fd4-only right)
+  assertEquals(h.wasi.path_filestat_set_times(3, 1, pathPtr, len, 0n, 1n, 4), WASI_ERRNO.ENOTCAPABLE);
+  // flags 2 → ENOTSUP
+  assertEquals(h.wasi.path_filestat_set_times(4, 2, pathPtr, len, 0n, 1n, 4), WASI_ERRNO.ENOTSUP);
+  // NOW fstflags 2 → ENOTSUP
+  assertEquals(h.wasi.path_filestat_set_times(4, 1, pathPtr, len, 0n, 1n, 2), WASI_ERRNO.ENOTSUP);
+  // missing path → ENOENT
+  const mp = 2000; const ml = putPath(h.memory, mp, "scratch/nope.txt");
+  assertEquals(h.wasi.path_filestat_set_times(4, 1, mp, ml, 0n, 1n, 4), WASI_ERRNO.ENOENT);
+  // a directory → EISDIR
+  h.workspace.dirs.add("scratch/sub");
+  const dp = 2000; const dl = putPath(h.memory, dp, "scratch/sub");
+  assertEquals(h.wasi.path_filestat_set_times(4, 1, dp, dl, 0n, 1n, 4), WASI_ERRNO.EISDIR);
+  // no mutation after the failures
+  assertEquals(h.workspace.files.get("scratch/work.txt").mtimNs ?? 0n, 0n, "the file's mtimNs unchanged");
+});
+
+Deno.test("R6 census + boundary: SUPPORTED +1 (path_filestat_set_times); planner referenced only by the syscall", async () => {
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("path_filestat_set_times"), true);
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 22, "the §4 census 21→22, deliberate");
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
+  const references = source.split("planPathFilestatSetTimes").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
 });

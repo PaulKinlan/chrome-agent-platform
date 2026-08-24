@@ -268,6 +268,8 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
       className: classForPath(file.path),
       bytes: new Uint8Array(file.bytes),
       mtime: 0,
+      atimNs: 0n,
+      mtimNs: 0n,
     });
   }
   const handles = new Map(); // handleId -> { path, handle }
@@ -337,7 +339,7 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     // but the mutable in-memory adapter still fails closed if a later file
     // write ever creates an exact-file/implicit-directory collision.
     if (entry && isDirectory) throw failClosed("ENOTDIR");
-    if (entry) return { type: "file", size: entry.bytes.byteLength, mtime: entry.mtime };
+    if (entry) return { type: "file", size: entry.bytes.byteLength, mtime: entry.mtime, atimNs: entry.atimNs ?? 0n, mtimNs: entry.mtimNs ?? 0n };
     if (isDirectory) return { type: "directory", size: 0, mtime: 0 };
     const error = new Error("ENOENT");
     error.code = "ENOENT";
@@ -737,10 +739,34 @@ export function createSyncWorkspace({ root, now = () => 0, seed = EMPTY_WORKSPAC
     return handle;
   };
 
+  // R6 (CAP-FB-20260823-R6-SET-TIMES-01): the path_filestat_set_times
+  // workspace adapter — updates ONLY the selected timestamp field(s) (atimNs/
+  // mtimNs), preserves the unselected one, mutates nothing else. No wall-clock
+  // source (the NOW form is rejected at the runtime planner; this adapter takes
+  // only explicit ns).
+  const setTimes = (path, { atimNs, mtimNs } = {}) => {
+    const p = boundedPath(path);
+    const entry = files.get(p);
+    if (!entry) {
+      const e = new Error("ENOENT");
+      e.code = "ENOENT";
+      throw e;
+    }
+    if (atimNs !== undefined) {
+      if (typeof atimNs !== "bigint" || atimNs < 0n) throw failClosed("EINVAL");
+      entry.atimNs = atimNs;
+    }
+    if (mtimNs !== undefined) {
+      if (typeof mtimNs !== "bigint" || mtimNs < 0n) throw failClosed("EINVAL");
+      entry.mtimNs = mtimNs;
+    }
+  };
+
   return Object.freeze({
     root,
     stat,
     readdir,
+    setTimes,
     // R5: read-only scratch aggregate query for the fd_filestat_set_size
     // planner projection (a query, never an authority — like stat).
     scratchTotalBytes: () => totalBytes("scratch"),
