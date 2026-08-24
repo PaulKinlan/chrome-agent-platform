@@ -673,107 +673,157 @@ export async function createAssetKeyed(origin, { key, type, name, content, meta 
 export async function updateAsset(origin, id, patch) {
   const store = assetStore(origin);
   if (!id || typeof id !== "string") return { ok: false, error: "update_asset needs an id" };
-  return withAssetLock(origin, async () => {
-    await recoverTx(store); // crash recovery (the durable WAL — FAILS closed)
-    await repairPendingLocked(store, origin);
-    const existing = await store.get(`asset:${id}`); // S0
-    if (!existing) return { ok: false, error: "asset not found" };
-    const nextType = patch.type ?? existing.type;
-    const nextName = patch.name ?? existing.name;
-    const nextContent = patch.content ?? existing.content;
-    const meta = boundAssetMeta({ type: nextType, name: nextName, content: nextContent });
-    if (meta.error) return { ok: false, error: meta.error };
-    const updated = {
-      ...existing, type: meta.type, name: meta.name, content: nextContent,
-      size: meta.size, updatedAt: Date.now(),
-    };
-    const index = await readIndexStrict(store);
-    const i = index.find((e) => e.id === id);
-    if (!i) {
-      try { await store.setTrusted(`asset:${id}`, existing); } catch { /* store failing */ }
-      return { ok: false, error: "asset is not indexed — update refused" };
-    }
-    const idxGen = await store.getVersion(INDEX_KEY);
-    // S1 — WRITE THE DURABLE WAL INTENT (prepared) BEFORE the body mutation.
-    // The intent carries the OLD body + BOTH rows (old + new) + the exact
-    // tokens — a write failure (e.g. the old body + rows exceed the value
-    // cap) REJECTS the update BEFORE any mutation: the compensation capacity
-    // is RESERVED (the reviewer's finding — the old body must never be
-    // lost).
-    const walIntent = {
-      op: "update", id,
-      oldBody: existing, oldBodyGen: await store.getVersion(`asset:${id}`),
-      oldRow: i, newRow: { ...i, type: meta.type, name: meta.name, size: meta.size },
-      idxGen, state: "prepared",
-    };
-    await writeWal(store, walIntent); // throws (over-cap) → the update rejects
-    // S2 — write the new body; the returned version is the EXACT write token.
-    const newBodyGen = await store.setTrusted(`asset:${id}`, updated);
-    i.type = meta.type;
-    i.name = meta.name;
-    i.size = meta.size;
-    // S2 — CAS the index (CHECKED).
-    let casOk;
+  return withAssetLock(origin, async () => updateAssetLocked(store, origin, id, patch));
+}
+
+/** The S0→S3 compensated-update body (shared by updateAsset + the keyed
+ * create-or-update); the caller holds the origin lock. */
+async function updateAssetLocked(store, origin, id, patch) {
+  await recoverTx(store); // crash recovery (the durable WAL — FAILS closed)
+  await repairPendingLocked(store, origin);
+  const existing = await store.get(`asset:${id}`); // S0
+  if (!existing) return { ok: false, error: "asset not found" };
+  const nextType = patch.type ?? existing.type;
+  const nextName = patch.name ?? existing.name;
+  const nextContent = patch.content ?? existing.content;
+  const meta = boundAssetMeta({ type: nextType, name: nextName, content: nextContent });
+  if (meta.error) return { ok: false, error: meta.error };
+  const updated = {
+    ...existing, type: meta.type, name: meta.name, content: nextContent,
+    size: meta.size, updatedAt: Date.now(),
+  };
+  const index = await readIndexStrict(store);
+  const i = index.find((e) => e.id === id);
+  if (!i) {
+    try { await store.setTrusted(`asset:${id}`, existing); } catch { /* store failing */ }
+    return { ok: false, error: "asset is not indexed — update refused" };
+  }
+  const idxGen = await store.getVersion(INDEX_KEY);
+  // S1 — WRITE THE DURABLE WAL INTENT (prepared) BEFORE the body mutation.
+  // The intent carries the OLD body + BOTH rows (old + new) + the exact
+  // tokens — a write failure (e.g. the old body + rows exceed the value
+  // cap) REJECTS the update BEFORE any mutation: the compensation capacity
+  // is RESERVED (the reviewer's finding — the old body must never be
+  // lost).
+  const walIntent = {
+    op: "update", id,
+    oldBody: existing, oldBodyGen: await store.getVersion(`asset:${id}`),
+    oldRow: i, newRow: { ...i, type: meta.type, name: meta.name, size: meta.size },
+    idxGen, state: "prepared",
+  };
+  await writeWal(store, walIntent); // throws (over-cap) → the update rejects
+  // S2 — write the new body; the returned version is the EXACT write token.
+  const newBodyGen = await store.setTrusted(`asset:${id}`, updated);
+  i.type = meta.type;
+  i.name = meta.name;
+  i.size = meta.size;
+  // S2 — CAS the index (CHECKED).
+  let casOk;
+  try {
+    casOk = await store.compareAndRestore(INDEX_KEY, idxGen, index);
+  } catch {
+    // A CAS whose bytes COMMITTED then threw on close is still committed:
+    // strictly reread the index TOKEN + the row CONTENT (the reviewer's
+    // update close-throw finding — no row/body divergence).
+    casOk = false;
     try {
-      casOk = await store.compareAndRestore(INDEX_KEY, idxGen, index);
+      const curIdx = await readIndexStrict(store);
+      const row = curIdx.find((r) => r.id === id);
+      if (row && JSON.stringify(row) === JSON.stringify(index.find((r) => r.id === id))) {
+        casOk = await store.getVersion(INDEX_KEY);
+      }
+    } catch { casOk = false; }
+  }
+  if (casOk === false) {
+    // S3 — restore the prior body guarded by the NEW body's version.
+    let restored;
+    try {
+      restored = await store.compareAndRestore(`asset:${id}`, newBodyGen, existing);
     } catch {
-      // A CAS whose bytes COMMITTED then threw on close is still committed:
-      // strictly reread the index TOKEN + the row CONTENT (the reviewer's
-      // update close-throw finding — no row/body divergence).
-      casOk = false;
-      try {
-        const curIdx = await readIndexStrict(store);
-        const row = curIdx.find((r) => r.id === id);
-        if (row && JSON.stringify(row) === JSON.stringify(index.find((r) => r.id === id))) {
-          casOk = await store.getVersion(INDEX_KEY);
+      restored = false; // a CAS commit-then-close-throw is reread below
+    }
+    if (restored === false) {
+      // The restore may have COMMITTED despite a close throw — reread the
+      // exact CONTENT.
+      const curBody = await store.getStrict(`asset:${id}`).catch(() => null);
+      if (curBody && JSON.stringify(curBody) === JSON.stringify(existing)) restored = true;
+    }
+    if (restored === false) {
+      // Record a DURABLE restore with the NON-NULL versions so the repair
+      // can complete — the mutation already happened, so a failure to record
+      // FAILS CLOSED (the WAL intent stays prepared for the recovery).
+      await recordRepairEntry(store, (repair) => {
+        if (repair.pendingRestores.some((r) => r.id === id)) return false;
+        if (repair.pendingRestores.length >= REPAIR_BOUNDS.maxPendingRestores) {
+          throw new Error("asset repair queue is full — surface the failure");
         }
-      } catch { casOk = false; }
+        repair.pendingRestores.push({ id, row: i, body: existing, bodyVersion: newBodyGen, indexVersion: idxGen });
+        return true;
+      });
     }
-    if (casOk === false) {
-      // S3 — restore the prior body guarded by the NEW body's version.
-      let restored;
-      try {
-        restored = await store.compareAndRestore(`asset:${id}`, newBodyGen, existing);
-      } catch {
-        restored = false; // a CAS commit-then-close-throw is reread below
-      }
-      if (restored === false) {
-        // The restore may have COMMITTED despite a close throw — reread the
-        // exact CONTENT.
-        const curBody = await store.getStrict(`asset:${id}`).catch(() => null);
-        if (curBody && JSON.stringify(curBody) === JSON.stringify(existing)) restored = true;
-      }
-      if (restored === false) {
-        // Record a DURABLE restore with the NON-NULL versions so the repair
-        // can complete — the mutation already happened, so a failure to record
-        // FAILS CLOSED (the WAL intent stays prepared for the recovery).
-        await recordRepairEntry(store, (repair) => {
-          if (repair.pendingRestores.some((r) => r.id === id)) return false;
-          if (repair.pendingRestores.length >= REPAIR_BOUNDS.maxPendingRestores) {
-            throw new Error("asset repair queue is full — surface the failure");
-          }
-          repair.pendingRestores.push({ id, row: i, body: existing, bodyVersion: newBodyGen, indexVersion: idxGen });
-          return true;
-        });
-      }
-      await writeWal(store, { op: "update", id, newBodyGen, row: i, idxGen, state: "compensated" });
-      await clearWal(store).catch(() => {});
-      return { ok: false, error: "concurrent asset write — retry" };
-    }
-    await writeWal(store, { op: "update", id, newBodyGen, row: i, idxGen, postIdxGen: casOk, newIndex: index, state: "committed" });
-    // The LAST-GOOD index mirrors the committed mutation (the reviewer's
-    // finding: only create refreshed it — a later heal must never restore
-    // stale update metadata). If this write fails, the committed WAL stays (it
-    // carries newIndex) and the NEXT operation's recovery persists the mirror —
-    // never a silently-stale lastGood.
-    try {
-      const repair = await readRepair(store);
-      repair.lastGoodIndex = index;
-      await writeRepair(store, repair);
-    } catch { /* the committed WAL completes the mirror via recovery */ return { ok: true, asset: { ...updated, content: undefined } }; }
+    await writeWal(store, { op: "update", id, newBodyGen, row: i, idxGen, state: "compensated" });
     await clearWal(store).catch(() => {});
-    return { ok: true, asset: { ...updated, content: undefined } };
+    return { ok: false, error: "concurrent asset write — retry" };
+  }
+  await writeWal(store, { op: "update", id, newBodyGen, row: i, idxGen, postIdxGen: casOk, newIndex: index, state: "committed" });
+  // The LAST-GOOD index mirrors the committed mutation (the reviewer's
+  // finding: only create refreshed it — a later heal must never restore
+  // stale update metadata). If this write fails, the committed WAL stays (it
+  // carries newIndex) and the NEXT operation's recovery persists the mirror —
+  // never a silently-stale lastGood.
+  try {
+    const repair = await readRepair(store);
+    repair.lastGoodIndex = index;
+    await writeRepair(store, repair);
+  } catch { /* the committed WAL completes the mirror via recovery */ return { ok: true, asset: { ...updated, content: undefined } }; }
+  await clearWal(store).catch(() => {});
+  return { ok: true, asset: { ...updated, content: undefined } };
+}
+
+/** The CREATE-OR-UPDATE keyed path — the model-facing idempotency entry
+ * (CAP-FB-20260823-FIRST-RUN-DUPLICATE-TEST-ASSET-01). A key that already
+ * exists in the origin's index finds that EXACT row and UPDATES it in place
+ * (find-then-update via the keyed lookup — a repeated or interrupted first
+ * run can never duplicate the artifact); a key that does not exist creates
+ * exactly one row carrying the key (pk). The key grammar is caller-checked
+ * (normalizeModelAssetKey at the route) and the `model:` namespace keeps
+ * these rows disjoint from workspace promotion keys (`opfs:promote:`). */
+export async function createOrUpdateAssetKeyed(origin, { key, type, name, content, meta }) {
+  if (typeof key !== "string" || !key || key.length > ASSET_BOUNDS.maxNameLength) {
+    return { ok: false, error: "asset key must be a non-empty bounded string" };
+  }
+  const store = assetStore(origin);
+  const o = canonical(origin);
+  const bounded = boundAssetMeta({ type, name, content });
+  if (bounded.error) return { ok: false, error: bounded.error };
+  return withAssetLock(origin, async () => {
+    await recoverTx(store);
+    await repairPendingLocked(store, origin);
+    const index = await readIndexStrict(store);
+    const prior = index.find((r) => r.pk === key);
+    if (prior) {
+      const v = await store.getVersion(`asset:${prior.id}`).catch(() => 0);
+      if (v == null || v <= 0) {
+        return { ok: false, error: "keyed asset body missing — repair in progress" };
+      }
+      const res = await updateAssetLocked(store, origin, prior.id, { type, name, content });
+      if (res?.ok === true) return { ...res, id: prior.id, updated: true };
+      return res;
+    }
+    const res = await createAssetLocked(store, origin, o, { type, name, content, meta, pk: key });
+    if (res?.ok && res.id == null) res.id = res.asset?.id;
+    if (res?.ok === true) return { ...res, created: true };
+    return res;
   });
+}
+
+/** The bounded model-facing key grammar (checked at the ROUTE). `model:` is
+ * prefixed by the route so these keys can never collide with `opfs:promote:`
+ * promotion keys or any future authority-owned namespace. */
+export function normalizeModelAssetKey(key) {
+  if (typeof key !== "string") return null;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._\-]{0,63}$/.test(key)) return null;
+  return key.trim() === "" ? null : `model:${key}`;
 }
 
 /** S0→S3 — delete (the body is removed by the EXACT-write CAS token; a failure

@@ -162,9 +162,11 @@ import {
 } from "../lib/system-prompts.js";
 import {
   createAsset,
+  createOrUpdateAssetKeyed,
   deleteAsset,
   getAsset,
   listAssets,
+  normalizeModelAssetKey,
   updateAsset,
 } from "../lib/artifacts.js";
 import {
@@ -3816,7 +3818,22 @@ const handlers = mergeRouteMaps(
   // ---- artifacts (asset) management (the hub agent's create_asset / etc.) ----
   // NOTE: the asset TYPE field is named `assetType` here (not `type`) because the
   // message router uses `message.type` for ROUTING — a `type` field would collide.
-  async "asset.create"({ origin, assetType, name, content }) {
+  async "asset.create"({ origin, assetType, name, content, key }) {
+    // KEYED create-or-update (the first-run idempotency fix): the same key
+    // finds and UPDATES the same artifact instead of duplicating it. The
+    // `model:` namespace (normalizeModelAssetKey) keeps these rows disjoint
+    // from workspace promotion keys; the key can only ever match a row the
+    // model itself created with the same key.
+    if (key !== undefined) {
+      const namespacedKey = normalizeModelAssetKey(key);
+      if (!namespacedKey) return { ok: false, error: "invalid asset key" };
+      const res = await createOrUpdateAssetKeyed(origin ?? "master", {
+        key: namespacedKey, type: assetType, name, content,
+      });
+      return res?.ok
+        ? { ok: true, asset: res.asset, id: res.id, keyed: true, created: res.created === true, updated: res.updated === true }
+        : res;
+    }
     const res = await createAsset(origin ?? "master", { type: assetType, name, content });
     return res.ok
       ? { ok: true, asset: res.asset, index: res.index }

@@ -30,6 +30,7 @@ import {
 import { createViewFocusController } from "../lib/view-focus.js";
 import {
   FIRST_RUN_TASK_PROMPT,
+  firstRunExampleAgent,
   loadFirstRunGuideState,
   requestBrowserControlFromOwnerClick,
 } from "../lib/first-run-onboarding.js";
@@ -236,6 +237,18 @@ firstRunGuide?.addEventListener("seed-task", () => {
   composer.value = FIRST_RUN_TASK_PROMPT;
   composer.focus();
   setStatus("Starter task ready — review it, then choose Run task.");
+});
+firstRunGuide?.addEventListener("create-example-agent", async (event) => {
+  const example = firstRunExampleAgent(event.detail?.id);
+  if (!example) return;
+  const res = await send("named-agent.create", {
+    id: example.id, name: example.name, role: example.role,
+  }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  if (res?.ok) {
+    setStatus(`Created the "${example.name}" agent.`);
+  } else {
+    setStatus(`Couldn't create the example agent${res?.error ? `: ${res.error}` : ""}.`, false);
+  }
 });
 firstRunGuide?.addEventListener("dismiss-guide", () => {
   try { localStorage.setItem(FIRST_RUN_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }

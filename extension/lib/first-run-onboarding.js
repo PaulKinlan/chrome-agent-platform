@@ -5,7 +5,24 @@
 // the Settings page; model/service-worker routes cannot mint that authority.
 
 export const FIRST_RUN_TASK_PROMPT =
-  'Create a text artifact named "First task" in the master scope with three concise ways I can use this agent hub.';
+  'Create or update a text artifact named "First task" in the master scope with three concise ways I can use this agent hub. Call create_asset with the idempotency key "first-task" so a repeated run updates the same artifact instead of creating a duplicate.';
+
+/** The swappable first-run example-agent catalogue (CAP-FB-20260823-FIRST-RUN-
+ * EXAMPLE-AGENT-01). Each entry is a named agent the owner can OPT IN to create
+ * during first run (an explicit owner action — never auto-created). The role is
+ * a truthful capability description; `scheduleHint` is prose the owner can act
+ * on later (Settings → Background agents) — no permission is requested here. */
+export const FIRST_RUN_EXAMPLE_AGENTS = Object.freeze([
+  Object.freeze({
+    id: "weekly-browsing-review",
+    name: "Weekly browsing review",
+    role: "A weekly reviewer of the owner's activity in this hub: read the recent browser events, usage, and artifacts, then produce a concise plain-language summary of what happened and what is worth following up. To run it automatically on a schedule, the owner can add it in Settings → Background agents (the alarms permission is requested only there).",
+  }),
+]);
+
+export function firstRunExampleAgent(id) {
+  return FIRST_RUN_EXAMPLE_AGENTS.find((a) => a.id === id) ?? null;
+}
 
 export function credentialNeedsDurableStorage(
   { enteredKey = "", storageGranted = false } = {},

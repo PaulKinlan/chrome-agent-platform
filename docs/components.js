@@ -742,6 +742,10 @@ class FirstRunGuide extends Component {
       .consent-status { font-size:12px; font-weight:600; }
       .consent-status.granted { color:var(--accent,#0e6e63); }
       .consent-status.declined { color:var(--muted,#635e56); }
+      .example-card { margin-top:16px; padding:12px 14px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-sm,8px); background:var(--bg,#f7f6f3); }
+      .example-card strong { display:block; font-size:13px; margin-bottom:4px; }
+      .example-card p { margin:0 0 10px; font-size:12px; color:var(--muted,#635e56); line-height:1.45; }
       .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
       button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 12px;
         border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
@@ -778,6 +782,11 @@ class FirstRunGuide extends Component {
         <button class="open-settings" type="button">${providerReady && storageReady ? "Review provider settings" : "Open provider settings"}</button>
         <button class="primary seed-task" type="button"${canSeed ? "" : " disabled"}>Use starter task</button>
       </div>
+      <div class="example-card" aria-label="Example agent (optional)">
+        <strong>Add an example agent (optional)</strong>
+        <p>Create the <em>Weekly browsing review</em> agent — a named agent whose job is a weekly plain-language summary of your activity (recent browser events, usage, and artifacts). Creating it is a single explicit action; decline and nothing changes. To run it automatically on a schedule, add it later in Settings → Background agents.</p>
+        <div class="consent-actions"><button class="create-example-agent" type="button">Create the Weekly browsing review agent</button></div>
+      </div>
     </section>`);
   }
   _wire() {
@@ -787,6 +796,8 @@ class FirstRunGuide extends Component {
       if (!this.hasAttribute("storage-ready") || !this.hasAttribute("provider-ready")) return;
       this._emit("seed-task", { sourceEvent });
     });
+    this._root.querySelector(".create-example-agent")?.addEventListener("click", (sourceEvent) =>
+      this._emit("create-example-agent", { sourceEvent, id: "weekly-browsing-review" }));
     this._root.querySelector(".dismiss")?.addEventListener("click", (sourceEvent) =>
       this._emit("dismiss-guide", { sourceEvent }));
     this._root.querySelector(".grant-browser")?.addEventListener("click", (sourceEvent) =>

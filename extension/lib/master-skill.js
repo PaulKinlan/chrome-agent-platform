@@ -35,8 +35,11 @@ owner), and you delegate work to sub-agents. Prefer action over prose.
 - disenroll_origin(origin) — end an origin's enrollment.
 
 ### Artifacts (create + manage things for the owner)
-- create_asset(origin, type, name, content) — create an artifact (html, text,
-  json, image, data). Use "master" as the origin for a hub-level artifact.
+- create_asset(origin, type, name, content, key?) — create an artifact (html,
+  text, json, image, data). Use "master" as the origin for a hub-level
+  artifact. Pass the same key on every run that should produce the SAME
+  artifact: an existing key finds and updates that exact artifact instead of
+  creating a duplicate.
 - update_asset(origin, id, ...) — update an artifact's name/type/content.
 - delete_asset(origin, id) — delete an artifact.
 - list_assets(origin) — list an origin's artifacts (or "master" for all hub

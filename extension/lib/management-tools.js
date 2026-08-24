@@ -98,15 +98,16 @@ export function managementToolset({ callRoute }) {
     // ---- artifacts ----
     create_asset: tool({
       description:
-        "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: html|text|json|image|data.",
+        "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: html|text|json|image|data. Pass the SAME key on every run that should produce the SAME artifact: a key that already exists finds and updates that exact artifact instead of creating a duplicate.",
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
         type: z.enum([...ASSET_TYPES]).default("text"),
+        key: z.string().optional().describe("idempotency key (letters, digits, dot, dash, underscore, space; max 64 chars) — pass the same key to create-or-update the SAME artifact instead of duplicating"),
         name: z.string().describe("a short, clear name"),
         content: z.string().describe("the artifact content"),
       }),
-      execute: ({ origin, type, name, content }) =>
-        call("asset.create", { origin, assetType: type, name, content }),
+      execute: ({ origin, type, key, name, content }) =>
+        call("asset.create", { origin, assetType: type, key, name, content }),
     }),
     update_asset: tool({
       description: "Update an artifact's name/type/content.",

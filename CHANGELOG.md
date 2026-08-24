@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.213] — 2026-08-24
+- fix(first-run): first-run cluster — duplicate test asset fixed via keyed create-or-update (exactly one asset across repeats/interrupts), and an opt-in example agent ("Weekly browsing review", no auto-creation, no first-run permission) (CAP-FB-20260823-FIRST-RUN-DUPLICATE-ASSET-01, FIRST-RUN-EXAMPLE-AGENT-01)
+
 ## [0.2.212] — 2026-08-24
 - fix(settings): settings cluster — usage tracking attributed to the real per-run task id (was a stale closure id), permission-row gates/description layout overlap fixed (CSS cascade + narrow-width grid areas), section deep-link anchors with copy-to-clipboard (CAP-FB-20260823-USAGE-TRACKING-FIX-01, SETTINGS-PERM-LAYOUT-01, SECTION-ANCHOR-LINKS-01)
 
