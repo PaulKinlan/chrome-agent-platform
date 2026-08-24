@@ -1725,6 +1725,9 @@ On resume after a coordinator or worker loss:
     downloads only, user-controlled removal, no silent network/model
     actions).
 
+## History
+  - 2026-08-24 18:58 UTC — LANDED onboarding/resolution slice at `origin/main@96c50eb1bf1a15a9658364a8ad58e270e6e49366` (0.2.236): SUPPORTED_LOCAL_MODEL_ROUTES (Gemma Wasm/OPFS, Chrome Prompt API, Ollama, LM Studio), validateLocalEndpoint (localhost-only, host-smuggle-resistant), inspectLocalModelRoute truthful readiness, LM Studio provider, degrade-to-demo-model. Full download/install/inference acceptance still OPEN.
+
 ## [CAP-FB-20260822-WASM-TOOL-PLATFORM-01] Co-do-style browser-native tool operating platform
 
 - Feedback: 2026-08-22 — product owner elevated a Co-do-style Wasm/tool
