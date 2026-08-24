@@ -12,9 +12,9 @@ join key between the two systems.
 > owner-only package authority remain exact. All seven tool-platform and provider
 > releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
 > scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **44 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 71 nonterminal and 40 terminal status entries
-> below are the complete 111-entry state.
+> Branch status counts: **48 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
+> 40 DONE · 0 ABANDONED**. The 75 nonterminal and 40 terminal status entries
+> below are the complete 115-entry state.
 
 ## Safety boundary
 
@@ -152,6 +152,119 @@ On resume after a coordinator or worker loss:
 ---
 
 ## Active
+
+## [CAP-FB-20260824-TOOLCALLS-COLLAPSED-01] Task view: tool calls collapsed by default; open-one opens one
+
+- Feedback: 2026-08-24 — product owner: in the task view, tool calls should be
+  COLLAPSED by default (the name summary is enough); and expanding should open
+  ONE call, not all of them
+- Updated: 2026-08-24 14:50 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `84bd49c`
+- Candidate: —
+- Shipping: —
+- Acceptance: tool-call cards in the task/thread view render collapsed showing
+  the tool name summary; clicking one expands ONLY that call; no
+  expand-all-on-single-click behavior; state survives re-render
+- Review: pending independent UI/AX review
+- Gates: collapsed default KAT; per-card expansion KAT; re-render state pin
+- Blockers: —
+- Next: find the tool-call card renderer and fix default state + per-card toggle
+- Recover: `git grep -n "tool-call\|toolCall\|createToolCard" -- extension/shared extension/ntp`
+- History:
+  - 2026-08-24 14:50 UTC — captured from product-owner feedback.
+
+## [CAP-FB-20260824-WEBMCP-EXECUTION-01] WebMCP tool calling broken: stale page / should reuse tab or open one and call via content script
+
+- Feedback: 2026-08-24 — product owner: WebMCP tool calling doesn't work — it
+  says the page is stale; it should either reuse an EXISTING tab (if one is
+  there) or open a new one and then, via the content script, call the functions
+  declared via WebMCP
+- Updated: 2026-08-24 14:50 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `84bd49c`
+- Candidate: —
+- Shipping: —
+- Acceptance: calling a declared WebMCP tool reuses an existing tab for the
+  registered origin/page when present (matching the page identity), or opens
+  one, waits for the content script + WebMCP readiness, and invokes the
+  declared function through the page; stale-page errors are replaced by
+  correct tab resolution; the call result returns truthfully
+- Review: pending independent execution/tab-lifecycle review
+- Gates: existing-tab reuse; open-then-call; readiness wait; stale recovery;
+  declared/inferred tool invocation round-trip
+- Blockers: composes with page-scoped identity (CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01)
+- Next: trace the current stale-page error path and the tab resolution logic
+- Recover: `git grep -n "stale\|pageStale\|discover-active" -- extension/lib extension/background`
+- History:
+  - 2026-08-24 14:50 UTC — captured from product-owner feedback.
+
+## [CAP-FB-20260824-WEBMCP-PAGE-IDENTITY-01] WebMCP registration is origin-level; must support page-level tools
+
+- Feedback: 2026-08-24 — product owner: the WebMCP registration is per-origin
+  (the agent is named by origin) but WebMCP can declare PAGE-level tools — the
+  identity model must distinguish pages, not just origins
+- Updated: 2026-08-24 14:50 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `84bd49c`
+- Candidate: —
+- Shipping: —
+- Acceptance: WebMCP site-agent identity includes page/path scoping so
+  same-origin pages with different declared tools remain distinct; agent
+  naming surfaces the page where relevant; tool resolution matches the
+  declaring page; no origin-conflation regressions
+- Review: pending independent identity-model review
+- Gates: same-origin two-page fixture with distinct tools; naming; resolution;
+  migration of origin-only records
+- Blockers: builds on CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01
+- Next: design the page-level identity composition over the existing
+  origin-only model
+- Recover: `git grep -n "canonicalOrigin\|siteAgent\|webmcp" -- extension/lib/site-identity.js extension/lib/tools.js`
+- History:
+  - 2026-08-24 14:50 UTC — captured from product-owner feedback; elevates the
+    existing page-scoped-identity task with a concrete product symptom.
+
+## [CAP-FB-20260824-SITE-AGENTS-STATUS-01] Site Agents section: WebMCP discovery status line is messy and unclear
+
+- Feedback: 2026-08-24 — product owner: the agent section in the NTP shows
+  "WebMCP discovery: https://… · scripts injected · 2:34:36 PM · page report:
+  1 tools (1 declared / 0 inferred) · 2:34:39 PM" — it looks really messy; if
+  there is a Site Agents section it should be clear and readable
+- Updated: 2026-08-24 14:50 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `84bd49c`
+- Candidate: —
+- Shipping: —
+- Acceptance: the Site Agents section presents discovery state cleanly —
+  readable site/agent card with the tool count and freshness in a tidy layout
+  (no raw timestamp-soup run-on line); stale/refreshing states visually
+  distinct; composes with page-level identity naming
+- Review: pending independent UX/accessibility review
+- Gates: rendered-state screenshots; AX labels; narrow/RTL; no data loss vs
+  the current fields
+- Blockers: composes with the page-identity naming (above)
+- Next: redesign the status line into a structured card
+- Recover: `git grep -n "WebMCP discovery\|scripts injected\|page report" -- extension`
+- History:
+  - 2026-08-24 14:50 UTC — captured from product-owner feedback.
+
+
 
 ## [CAP-FB-20260823-NAVIGATION-STATE-02] Navigation state machine still broken: forward dead, in-app back produces blank "view" state
 
