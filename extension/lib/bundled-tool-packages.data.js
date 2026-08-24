@@ -946,10 +946,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational database data (JSON <=2 KiB).",
   "caveats": [
-   "Memory tranche has no external persistence; may later be classified read-only for replay only after runtime wiring.",
-   "Workspace tranche is mutating and requires a sole bounded workspace preopen.",
+   "Memory tranche has no external persistence.",
    "Package-level capability union is intentionally conservative.",
-   "No grants are issued and no route consumes this descriptor in this release."
+   "Settings-only bounded read-only SQL preview over the spec-owned scratch/test.db fixture (explicit owner click); readOnly is forced — the guest authorizer denies writes; no provider, page, filesystem or OPFS authority.",
+   "file.read/write is confined to the spec-owned scratch/test.db fixture (readOnly forced — the DB file is never written); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
    "compute",
@@ -974,8 +974,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "manifestRef": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
-  "admitted": false,
-  "disabled": true,
-  "disabledReason": "runtime-imports-unimplemented"
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
  }
 ]);

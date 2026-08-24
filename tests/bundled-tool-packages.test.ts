@@ -155,14 +155,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admit exactly the 25-tool gzip-appended Settings allowlist", () => {
+Deno.test("posture: descriptors admit exactly the 26-tool gzip-appended Settings allowlist", () => {
   assertEquals(BUNDLED_TOOL_PACKAGES.length, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 26);
   assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 26);
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(previewRows.map((r) => r.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
-  ), "exactly the 25-tool allowlist");
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+  ), "exactly the 26-tool allowlist");
   for (const row of previewRows) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
@@ -209,6 +209,10 @@ Deno.test("posture: descriptors admit exactly the 25-tool gzip-appended Settings
       assert(caveats.includes("scratch/touched"), "touch fixture confinement caveat");
       assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "touch no-authority caveat");
       assert(caveats.includes("post-run stat readback"), "touch readback proof caveat");
+    } else if (row.toolId === "sqlite3_query_bounded") {
+      assert(caveats.includes("scratch/test.db"), "sqlite fixture confinement caveat");
+      assert(caveats.includes("readOnly is forced"), "sqlite forced-readOnly caveat");
+      assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "sqlite no-authority caveat");
     } else {
       assert(!caveats.includes("projects NO files into the fresh empty per-job workspace"), `${row.toolId}: no file caveat without file.read`);
       assert(caveats.includes("Settings-only bounded stdin preview"), `${row.toolId}: generic Settings-only caveat present`);
@@ -418,17 +422,18 @@ Deno.test("sqlite binary: exact 24 imports and the EMPTY computed gap (R11: impo
   assert(supported.has("path_filestat_set_times"), "R6: path_filestat_set_times IS supported (deliberate)");
 });
 
-Deno.test("sqlite descriptor: false/false/true posture with runtime-imports-unimplemented; no route anywhere", async () => {
+Deno.test("sqlite descriptor: true/true/false posture after the R12 admission; no provider/selection route anywhere", async () => {
   const row = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "sqlite3_query_bounded");
   assert(row, "descriptor row exists");
   assertEquals(row.canonicalNameClaim, false);
-  assertEquals(row.admitted, false);
-  assertEquals(row.disabled, true);
-  assertEquals(row.disabledReason, "runtime-imports-unimplemented");
+  assertEquals(row.admitted, true);
+  assertEquals(row.settingsPreview, true);
+  assertEquals(row.disabled, false);
+  assertEquals(row.disabledReason, null);
   assertEquals(row.sourceKind, "bundled-package");
   for (const rel of ["extension/background/service-worker.js", "extension/lib/tool-catalog.js", "extension/lib/tool-catalog-shadow.js", "extension/lib/tool-selection.js", "extension/lib/wasm-offscreen-host.js", "extension/lib/wasm-executor.js", "extension/sidepanel/sidepanel.js", "extension/ntp/ntp.js"]) {
     const src = await Deno.readFile(root(rel));
-    assert(!/sqlite3_query_bounded|sqlite3-query-bounded|bundled-tool-packages/.test(src), `${rel} must expose no sqlite/package route`);
+    assert(!/sqlite3_query_bounded|sqlite3-query-bounded/.test(src), `${rel} must expose no sqlite package route`);
   }
 });
 

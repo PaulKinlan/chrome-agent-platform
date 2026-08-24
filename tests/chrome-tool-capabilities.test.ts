@@ -276,7 +276,7 @@ Deno.test("shadow summary: toolsBySource is a bounded read-only per-tool list (n
     ...adaptBuiltinTools({ "memory.read": { kind: "builtin", source: "extension", version: "1", name: "memory.read", description: "Read the hub memory" } }, { version: "0.2.185" }),
     ...adaptBundledTools([
       { toolId: "csvtool", packageId: "cap.bundled.csvtool", version: "1.0.0", description: "Bounded RFC 4180 CSV stream filter", displayName: "csvtool", admitted: true, settingsPreview: true },
-      { toolId: "sqlite3_query_bounded", packageId: "cap.bundled.sqlite3.query.bounded", version: "1.0.0", description: "sqlite candidate", displayName: "sqlite3_query_bounded", admitted: false, settingsPreview: false },
+      { toolId: "disabled-candidate", packageId: "cap.bundled.disabled-candidate", version: "1.0.0", description: "a fictional disabled candidate", displayName: "disabled-candidate", admitted: false, settingsPreview: false },
     ]),
   ];
   const controller = new ShadowToolCatalogController({
@@ -299,7 +299,7 @@ Deno.test("shadow summary: toolsBySource is a bounded read-only per-tool list (n
   assertEquals(csv.version, BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === "csvtool")?.version ?? "1.0.0");
   assertEquals(csv.available, true, "the admitted preview tool is available");
   assert(csv.description.length > 0, "the one-line description is present");
-  const disabledCandidate = bundled.find((row) => row.toolId === "sqlite3_query_bounded");
+  const disabledCandidate = bundled.find((row) => row.toolId === "disabled-candidate");
   assertEquals(disabledCandidate.available, false, "the disabled candidate is unavailable");
   // every row is bounded + has only the summary fields (no secrets/history/
   // digests/capabilities/grant surface)

@@ -244,15 +244,16 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   // every allowlisted tool SURVIVES validation with its exact toolId intact
   // (the SW resolves the spec from the validated toolId — a dropped toolId
   // would make every tool unknown).
-  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "gzip")) {
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "gzip" && id !== "sqlite3_query_bounded")) {
     const validated = validatePreviewInput({ toolId, args: ["-n", "2"], stdin: "a\nb" });
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
   }
   assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "hello" }).toolId, "gzip");
-  // gzip + truncate + touch are the appended tools after tree in the UI.
+  assertEquals(validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true }) }).toolId, "sqlite3_query_bounded");
+  // gzip + truncate + touch + sqlite are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -363,7 +364,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 25 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 26 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
@@ -477,10 +478,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 25-tool static allowlist admits touch too (other 1 unchanged)", () => {
+Deno.test("preview: the EXACT 26-tool static allowlist admits sqlite too (other 0 unchanged)", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["base64", "csvtool", "cut", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -488,8 +489,8 @@ Deno.test("preview: the EXACT 25-tool static allowlist admits touch too (other 1
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 1, "sqlite alone remains disabled");
-  assertEquals(notAdmitted.map((row) => row.toolId).sort(), ["sqlite3_query_bounded"]);
+  assertEquals(notAdmitted.length, 0, "all 26 are enabled");
+  assertEquals(notAdmitted.map((row) => row.toolId).sort(), []);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);
     assertEquals(JSON.stringify(spec.workspaceSeed), JSON.stringify({ files: [{ path: "inputs/f.bin", bytes: [104, 105] }] }));
@@ -511,7 +512,7 @@ Deno.test("preview: the EXACT 25-tool static allowlist admits touch too (other 1
   assertEquals(JSON.stringify(treeSpec.defaultArgs), JSON.stringify(["/job/inputs"]), "tree safe default is immutable-spec-controlled");
   assert(Object.isFrozen(treeSpec.defaultArgs), "tree default args are frozen");
   assertEquals(JSON.stringify(treeSpec.acceptedExitCodes), JSON.stringify([0]), "tree accepted exits are exactly [0]");
-  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => !["stat", "du", "tree", "truncate", "touch"].includes(id))) {
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => !["stat", "du", "tree", "truncate", "touch", "sqlite3_query_bounded"].includes(id))) {
     assertEquals(JSON.stringify(previewSpecFor(toolId).workspaceSeed), JSON.stringify({ files: [] }), `${toolId}: empty immutable seed`);
     assertEquals("defaultArgs" in previewSpecFor(toolId), false, `${toolId}: predecessor receives no new default-arg behavior`);
   }
@@ -533,6 +534,20 @@ Deno.test("preview: the EXACT 25-tool static allowlist admits touch too (other 1
   assertEquals(JSON.stringify(touchSpec.defaultArgs), JSON.stringify(["-t", "0", "/job/scratch/touched"]), "touch default is the spec-owned fixture set-times");
   assert(Object.isFrozen(touchSpec.defaultArgs), "touch default args are frozen");
   assertEquals(JSON.stringify(touchSpec.acceptedExitCodes), JSON.stringify([0]), "touch accepted exits are exactly [0]");
+  // sqlite: the spec-owned 8,192-B test.db fixture (sha 75efece3…), no default args.
+  const sqliteSpec = previewSpecFor("sqlite3_query_bounded");
+  assertEquals(sqliteSpec.workspaceSeed.files.length, 1, "sqlite single-file fixture");
+  assertEquals(sqliteSpec.workspaceSeed.files[0].path, "scratch/test.db", "sqlite fixture path");
+  assertEquals(sqliteSpec.workspaceSeed.files[0].bytes.length, 8192, "sqlite fixture size 8,192 B");
+  const fixtureDigest = await crypto.subtle.digest("SHA-256", new Uint8Array(sqliteSpec.workspaceSeed.files[0].bytes)).then(
+    (d) => [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join(""),
+  );
+  assertEquals(fixtureDigest, "75efece32c426a7a2b2b3eabbf85b0f90e0992e7135e709f0b3a9339e8610e3d", "sqlite fixture sha256 (the re-verified spec pin)");
+  assert(Object.isFrozen(sqliteSpec.workspaceSeed) && Object.isFrozen(sqliteSpec.workspaceSeed.files) &&
+    Object.isFrozen(sqliteSpec.workspaceSeed.files[0]) && Object.isFrozen(sqliteSpec.workspaceSeed.files[0].bytes),
+  "sqlite trusted seed is deeply frozen");
+  assertEquals("defaultArgs" in sqliteSpec, false, "sqlite has no argv path authority (argv0 only)");
+  assertEquals(JSON.stringify(sqliteSpec.acceptedExitCodes), JSON.stringify([0]), "sqlite accepted exits are exactly [0]");
   const tree = BUNDLED_TOOL_PACKAGE_ROWS.find((row) => row.toolId === "tree");
   assertEquals(tree.admitted, true, "tree is admitted only to Settings preview");
   assertEquals(tree.settingsPreview, true);
@@ -561,4 +576,36 @@ Deno.test("preview: the EXACT 25-tool static allowlist admits touch too (other 1
   // The preview limits are honest against the executor's JSON request budget.
   assert(PREVIEW_LIMITS.maxStdinBytes <= 4 * 1024, "stdin stays inside the 64 KiB executor request envelope");
   assert(PREVIEW_LIMITS.wallMs <= 30_000, "wall time stays inside the executor bound");
+});
+
+// ── R12 sqlite admission input discipline (CAP-FB-20260823-R12-SQLITE-ADMISSION-01) ─
+Deno.test("R12 sqlite input: the exact-key {sql,params,database,readOnly} JSON; readOnly forced + fixture-only + bounds", () => {
+  const ok = validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT * FROM items", params: [], database: "test.db", readOnly: true }) });
+  assertEquals(ok.toolId, "sqlite3_query_bounded");
+  assertEquals(ok.stdin, JSON.stringify({ sql: "SELECT * FROM items", params: [], database: "test.db", readOnly: true }), "the canonical JSON survives");
+  // readOnly:false → denied.
+  for (const stdin of [
+    JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: false }),
+    JSON.stringify({ sql: "SELECT 1", params: [], database: "other.db", readOnly: true }),
+    JSON.stringify({ sql: "SELECT 1", params: [], database: "../test.db", readOnly: true }),
+    JSON.stringify({ sql: "SELECT 1", params: [1, 2, 3, 4, 5, 6, 7, 8, 9], database: "test.db", readOnly: true }),
+    JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true, extra: "x" }),
+    JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db" }),
+  ]) {
+    let threw = null;
+    try { validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
+    assert(threw !== null, `expected rejection: ${stdin.slice(0, 60)}`);
+  }
+  // the 2 KiB total: sql 1792 + empty params OK; sql 1792 + params 256 REJECT (over the total).
+  const bigSql = validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1792), params: [], database: "test.db", readOnly: true }) });
+  assertEquals(bigSql.toolId, "sqlite3_query_bounded");
+  let threw = null;
+  try {
+    validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1792), params: ["p".repeat(256)], database: "test.db", readOnly: true }) });
+  } catch (e) { threw = (e as { code?: string }).code ?? null; }
+  assert(threw !== null, "the 2 KiB total rejects the over-budget combo");
+  // sql 1793 → the sql bound.
+  let threw2 = null;
+  try { validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1793), params: [], database: "test.db", readOnly: true }) }); } catch (e) { threw2 = (e as { code?: string }).code ?? null; }
+  assertEquals(threw2, "preview_sqlite_sql");
 });

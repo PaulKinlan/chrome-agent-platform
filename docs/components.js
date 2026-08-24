@@ -6775,6 +6775,8 @@ class ToolLibrary extends Component {
         return 'Resizes the spec-owned /job/scratch/touched fixture: -s accepts integer bytes or one K/M/G/T suffix (optional +/-, 0..10 MiB) and -c skips the create. Empty stdout — the size change is read back after the run.';
       case "touch":
         return 'Sets the timestamp on the spec-owned /job/scratch/touched fixture: -t is a decimal Unix epoch (0..4102444800 s, 1970–2100); -a/-m select atime/mtime (default both); -c skips the create. Empty stdout — the timestamp change is read back after the run.';
+      case "sqlite3_query_bounded":
+        return 'Runs a read-only SQL query over the spec-owned scratch/test.db fixture: type SQL below and optional JSON params (≤8); readOnly is forced. Output is the exact JSON row set (≤64 KiB).';
       default:
         return 'Example: (no args) + stdin "a,b\n1,2\n3,4" → re-emits the CSV rows.';
     }
@@ -6826,6 +6828,13 @@ class ToolLibrary extends Component {
           "/job/scratch/touched",
         ];
         this._emit("tool-preview-request", { toolId, args, stdin: "", sourceEvent });
+      } else if (toolId === "sqlite3_query_bounded") {
+        const sql = String(this._root.querySelector(".preview-sqlite-sql")?.value ?? "");
+        const paramsText = String(this._root.querySelector(".preview-sqlite-params")?.value ?? "").trim() || "[]";
+        let params;
+        try { params = JSON.parse(paramsText); } catch { params = []; }
+        const stdin = JSON.stringify({ sql, params, database: "test.db", readOnly: true });
+        this._emit("tool-preview-request", { toolId, args: [], stdin, sourceEvent });
       } else if (this._isTwoDocument(toolId)) {
         const docA = String(this._root.querySelector(".preview-doc-a")?.value ?? "");
         const docB = String(this._root.querySelector(".preview-doc-b")?.value ?? "");
@@ -6851,27 +6860,30 @@ class ToolLibrary extends Component {
       const gzipModeSelect = this._root.querySelector(".preview-gzip-mode");
       const truncateControls = this._root.querySelector(".preview-truncate-controls");
       const touchControls = this._root.querySelector(".preview-touch-controls");
+      const sqliteControls = this._root.querySelector(".preview-sqlite-controls");
       const stdinLabelText = this._root.querySelector(".preview-stdin-label-text");
       const twoDocMode = this._isTwoDocument(toolId);
       const gzipMode = toolId === "gzip";
       const truncateMode = toolId === "truncate";
       const touchMode = toolId === "touch";
+      const sqliteMode = toolId === "sqlite3_query_bounded";
       if (help) help.textContent = this._previewHelp(toolId, String(gzipModeSelect?.value ?? "compress"));
       if (twoDoc) twoDoc.hidden = !twoDocMode;
       if (gzipControls) gzipControls.hidden = !gzipMode;
       if (truncateControls) truncateControls.hidden = !truncateMode;
       if (touchControls) touchControls.hidden = !touchMode;
+      if (sqliteControls) sqliteControls.hidden = !sqliteMode;
       // Two-document mode hides both generic controls. gzip keeps stdin but
       // replaces free-form argv with its exact native mode select. truncate/
-      // touch replace both with their spec-owned fixture controls.
-      if (stdinLabel) stdinLabel.hidden = twoDocMode || truncateMode || touchMode;
+      // touch/sqlite replace both with their spec-owned fixture controls.
+      if (stdinLabel) stdinLabel.hidden = twoDocMode || truncateMode || touchMode || sqliteMode;
       if (stdinInput) {
-        stdinInput.hidden = twoDocMode || truncateMode || touchMode;
+        stdinInput.hidden = twoDocMode || truncateMode || touchMode || sqliteMode;
         stdinInput.placeholder = gzipMode
           ? (gzipModeSelect?.value === "decompress" ? "H4sI…" : "Enter bounded UTF-8 text")
           : "a,b\n1,2\n3,4";
       }
-      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode || truncateMode || touchMode;
+      if (argsLabel) argsLabel.hidden = twoDocMode || gzipMode || truncateMode || touchMode || sqliteMode;
       if (stdinLabelText) stdinLabelText.textContent = gzipMode
         ? (gzipModeSelect?.value === "decompress" ? "Canonical base64 gzip input" : "UTF-8 text input")
         : "Stdin (bounded)";
@@ -6963,6 +6975,10 @@ class ToolLibrary extends Component {
       .preview-touch-no-create-label { display:flex; align-items:center; gap:6px; margin:8px 0 0;
         font-size:13px; color:var(--text, #24211f); }
       .preview-touch-no-create-label input { width:auto; margin:0; }
+      .preview-sqlite-controls { margin-block-start:8px; }
+      .preview-sqlite-sql-label, .preview-sqlite-params-label { display:block; margin:8px 0 0;
+        font-size:13px; color:var(--muted, #625d57); }
+      .preview-sqlite-note { display:block; margin:4px 0 0; font-size:11px; color:var(--muted, #625d57); }
       .preview-two-doc { margin-top:10px; }
       .preview-doc-label { display:block; margin:8px 0 0; font-size:13px; color:var(--muted, #625d57); }
       .preview-doc { display:block; width:100%; box-sizing:border-box; margin-top:4px;
@@ -7029,6 +7045,7 @@ class ToolLibrary extends Component {
             <option value="gzip">gzip — compress or decompress data streams</option>
             <option value="truncate">truncate — resize a file to a target size (shrink or extend)</option>
             <option value="touch">touch — create empty files or update file timestamps</option>
+            <option value="sqlite3_query_bounded">sqlite3_query_bounded — execute SQL queries to read and filter SQLite database tables</option>
           </select>
         </label>
         <p class="preview-help" aria-live="polite">Example: (no args) + stdin "a,b&#10;1,2&#10;3,4" → re-emits the CSV rows.</p>
@@ -7059,6 +7076,15 @@ class ToolLibrary extends Component {
             <input class="preview-touch-no-create" type="checkbox" /> -c (no-create)
           </label>
         </label>
+        <div class="preview-sqlite-controls" hidden>
+          <label class="preview-sqlite-sql-label" for="preview-sqlite-sql">SQL query</label>
+          <textarea class="preview-sqlite-sql" id="preview-sqlite-sql" rows="4"
+            placeholder="SELECT * FROM items" spellcheck="false"></textarea>
+          <label class="preview-sqlite-params-label" for="preview-sqlite-params">Params (JSON array, ≤8)</label>
+          <input class="preview-sqlite-params" id="preview-sqlite-params" type="text" autocomplete="off"
+            placeholder="[]" maxlength="512" />
+          <span class="preview-sqlite-note">readOnly is forced; the spec-owned scratch/test.db fixture (no user DB)</span>
+        </div>
         <label class="preview-args-label">Arguments
           <input class="preview-args" type="text" autocomplete="off"
             placeholder="(none) — e.g. -n 2" maxlength="128" />

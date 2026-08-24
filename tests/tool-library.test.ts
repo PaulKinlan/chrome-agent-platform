@@ -25,13 +25,13 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   // button (explicit owner click).
   assertMatch(block, /class="preview-run"/, "the single preview Run button exists");
   assertMatch(block, /class="preview-tool"/, "the tool selector exists");
-  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch"];
+  const selectorOrder = ["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded"];
   for (const toolId of selectorOrder) {
     assertMatch(block, new RegExp(`option value="${toolId}"`), `option ${toolId} present`);
   }
   const toolSelectMarkup = block.slice(block.indexOf('class="preview-tool"'), block.indexOf("</select>", block.indexOf('class="preview-tool"')));
   const actualSelectorOrder = [...toolSelectMarkup.matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
-  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and touch is appended after truncate as tool 25");
+  assertEquals(actualSelectorOrder, selectorOrder, "selector order is exact and sqlite is appended after touch as tool 26");
   assertMatch(block, /LEGACY — NOT for security/, "the md5sum label warns legacy/not security");
   assertMatch(block, /args "\/job\/inputs\/f\.bin"/, "stat help gives the exact immutable-seed guest path");
   assertMatch(block, /leave args empty for the immutable "\/job" default/, "du help names its safe immutable default");
@@ -42,7 +42,7 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   assertMatch(block, /option value="compress">Compress text/, "compress text mode exists");
   assertMatch(block, /option value="decompress">Decompress base64/, "decompress base64 mode exists");
   assertMatch(block, /mode === "decompress" \? \["-d"\] : \[\]/, "gzip argv is derived from the exact mode only");
-  assertMatch(block, /argsLabel\.hidden = twoDocMode \|\| gzipMode \|\| truncateMode \|\| touchMode/, "free-form arguments hide for gzip, truncate, touch and two-document tools");
+  assertMatch(block, /argsLabel\.hidden = twoDocMode \|\| gzipMode \|\| truncateMode \|\| touchMode \|\| sqliteMode/, "free-form arguments hide for gzip, truncate, touch, sqlite and two-document tools");
   assertMatch(block, /gzipControls\.hidden = !gzipMode/, "gzip mode control is restored/hidden on tool switches");
   assertMatch(block, /truncateControls\.hidden = !truncateMode/, "truncate controls are restored/hidden on tool switches");
   assertMatch(block, /touchControls\.hidden = !touchMode/, "touch controls are restored/hidden on tool switches");
@@ -53,6 +53,9 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
   assertMatch(block, /class="preview-touch-side"/, "touch-only atime/mtime side select exists");
   assertMatch(block, /class="preview-touch-no-create"/, "touch-only no-create checkbox exists");
   assertMatch(block, /"-t", epoch/, "touch argv is the spec-owned fixture set-times only");
+  assertMatch(block, /class="preview-sqlite-sql"/, "sqlite-only bounded SQL control exists");
+  assertMatch(block, /class="preview-sqlite-params"/, "sqlite-only bounded params control exists");
+  assertMatch(block, /database: "test\.db", readOnly: true/, "sqlite stdin is the forced readOnly fixture query");
   assertMatch(block, /this\.previewResult = null/, "tool/mode switches clear stale output");
   // the two-document mode hides BOTH the normal Arguments and Stdin controls
   assertMatch(block, /const argsLabel = this\._root\.querySelector\("\.preview-args-label"\)/, "the args label is queried for the toggle");

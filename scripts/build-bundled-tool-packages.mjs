@@ -239,7 +239,12 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch"]);
+// The technically-admitted Settings-preview allowlist (the static tranches):
+// the 26 tools in SETTINGS_PREVIEW_LANES expose bounded Settings-only previews
+// (explicit owner click). Every other lane stays admitted:false / disabled:true
+// — no catalog/provider selection authority. New semantic tranches append so
+// the predecessor order stays stable.
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
@@ -338,16 +343,12 @@ const SQLITE_EXPECT = {
     category: "data",
     description: AGENT_DESCRIPTIONS.sqlite3_query_bounded,
     caveats: [
-      "Memory tranche has no external persistence; may later be classified read-only for replay only after runtime wiring.",
-      "Workspace tranche is mutating and requires a sole bounded workspace preopen.",
+      "Memory tranche has no external persistence.",
       "Package-level capability union is intentionally conservative.",
-      "No grants are issued and no route consumes this descriptor in this release.",
     ],
     replayClass: "mutating",
     capabilities: ["compute", "data.read", "data.write", "file.read", "file.write"],
     memoryOverride: { initialPages: 64, maxPages: 512 },
-    disabledReason: "runtime-imports-unimplemented",
-    metaStatus: "disabled-runtime-imports",
     metaNote: "evidence digests in packages/bundled/sqlite3/PROVENANCE.json; owner decision CAP-DECISION-TEMPLATE-20260822-06 D4",
   });
   LICENSE_WRITES["extension/wasm/licenses/SQLite-Blessing-3.46.0.txt"] = blessing;
@@ -435,6 +436,8 @@ for (const pkg of packages) {
     "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.";
   const TOUCH_ADMITTED_CAVEAT =
     "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.";
+  const SQLITE_ADMITTED_CAVEAT =
+    "Settings-only bounded read-only SQL preview over the spec-owned scratch/test.db fixture (explicit owner click); readOnly is forced — the guest authorizer denies writes; no provider, page, filesystem or OPFS authority.";
   const FILE_READ_DECLARED_CAVEAT = pkg.toolId === "stat"
     ? "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
     : pkg.toolId === "du"
@@ -445,6 +448,8 @@ for (const pkg of packages) {
     ? "file.read/write is confined to the spec-owned scratch/touched fixture (0..10 MiB); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
     : pkg.toolId === "touch"
     ? "file.read/write is confined to the spec-owned scratch/touched fixture (bounded epoch timestamps); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
+    : pkg.toolId === "sqlite3_query_bounded"
+    ? "file.read/write is confined to the spec-owned scratch/test.db fixture (readOnly forced — the DB file is never written); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
     : "file.read remains declared in the manifest; the route projects NO files into the fresh empty per-job workspace, so a file operand cannot read owner data and fails closed (path normalization prevents escape/cross-job).";
   const cleanedCaveats = (Array.isArray(meta.caveats) ? meta.caveats : []).map((caveat) => {
     let out = String(caveat);
@@ -462,6 +467,7 @@ for (const pkg of packages) {
       : pkg.toolId === "gzip" ? GZIP_ADMITTED_CAVEAT
       : pkg.toolId === "truncate" ? TRUNCATE_ADMITTED_CAVEAT
       : pkg.toolId === "touch" ? TOUCH_ADMITTED_CAVEAT
+      : pkg.toolId === "sqlite3_query_bounded" ? SQLITE_ADMITTED_CAVEAT
       : GENERIC_ADMITTED_CAVEAT,
     ...(capabilities.includes("file.read") ? [FILE_READ_DECLARED_CAVEAT] : []),
   ];

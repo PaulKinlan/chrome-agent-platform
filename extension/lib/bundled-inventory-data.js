@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.2.227",
+ "release": "0.2.228",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -81,7 +81,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.sqlite3.query.bounded",
    "version": "1.0.0",
-   "digest": "7c3998bb7c7238c64f5d4a33006674301fac9cd09c0dfa4f97f0bd2af5ee8721"
+   "digest": "44e7237898e26186287e87411c666cc086234ba1c4b9c24964ed459e69a2981d"
   },
   {
    "pkg": "cap.bundled.stat",
@@ -377,7 +377,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sqlite3.query.bounded-1.0.0.manifest.json",
-   "sha256": "7c3998bb7c7238c64f5d4a33006674301fac9cd09c0dfa4f97f0bd2af5ee8721",
+   "sha256": "44e7237898e26186287e87411c666cc086234ba1c4b9c24964ed459e69a2981d",
    "size": 2003
   },
   {

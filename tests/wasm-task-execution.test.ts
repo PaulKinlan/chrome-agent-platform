@@ -130,7 +130,6 @@ Deno.test("assertBundledExecutionAuthority: admits installed tools and fails clo
     });
 
     const base64Rec = records.find((r) => r.descriptorInput.toolId === "base64");
-    const sqliteRec = records.find((r) => r.descriptorInput.toolId === "sqlite3_query_bounded");
 
     // Admitted tool succeeds under active valid run fence
     const auth1 = await assertBundledExecutionAuthority({
@@ -143,20 +142,22 @@ Deno.test("assertBundledExecutionAuthority: admits installed tools and fails clo
     assertEquals(auth1.authorized, true);
     assertEquals(auth1.policy, "owner-build-admission");
 
-    // Disabled tool fails closed
-    let sqliteThrew = false;
+    // A non-admitted descriptor fails closed (all 26 bundled tools are now
+    // admitted after the R12 sqlite admission, so a fictional disabled row
+    // stands in for the fail-closed check).
+    let disabledThrew = false;
     try {
       await assertBundledExecutionAuthority({
-        toolId: "sqlite3_query_bounded",
-        descriptorInput: sqliteRec.descriptorInput,
-        validatedArgs: { toolId: "sqlite3_query_bounded", args: [], stdin: "{}" },
+        toolId: "disabled_tool",
+        descriptorInput: { toolId: "disabled_tool", availability: "disabled" },
+        validatedArgs: { toolId: "disabled_tool", args: [], stdin: "{}" },
         context: {},
       });
     } catch (err) {
-      sqliteThrew = true;
-      assert(err.message.includes("tool_sqlite3_query_bounded_not_admitted"), "disabled tool must be rejected");
+      disabledThrew = true;
+      assert(err.message.includes("not_admitted"), "non-admitted tool must be rejected");
     }
-    assertEquals(sqliteThrew, true, "disabled tool must throw in assertBundledExecutionAuthority");
+    assertEquals(disabledThrew, true, "a non-admitted descriptor must throw in assertBundledExecutionAuthority");
 
     // Unadmitted descriptor fails closed
     let unadmittedThrew = false;

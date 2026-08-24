@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.228] — 2026-08-24
+- feat(bundled): sqlite3_query_bounded admission — the 26th enabled tool (26/0); Settings preview with forced read-only test.db fixture (8,192 B, sha 75efece32c), bounded SQL/params, canonical 2048-B gate; completes the SQLite WASI train (CAP-FB-20260823-R12-SQLITE-ADMISSION-01)
+
 ## [0.2.227] — 2026-08-24
 - feat(wasi): sqlite six-import completion — fd_sync, path_create_directory, path_remove_directory, path_unlink_file, path_readlink, poll_oneoff; per-job immutable db/lock/journal binding, derived -journal auxiliary, journal-only unlink with entry-identity EBUSY, readlink/poll fail-closed stubs (CAP-FB-20260823-R11-SQLITE-SIX-IMPORTS-01)
 
