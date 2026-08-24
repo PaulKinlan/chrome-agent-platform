@@ -2287,6 +2287,10 @@ On resume after a coordinator or worker loss:
     /tmp and absolute build-host paths from all shipped bytes (owner
     directive); repair commits restored the gitignored d3/sqlite3 dist
     binaries and the dist marker.
+  - 2026-08-24 13:20 UTC — the R3-R6 runtime train LANDED as 0.2.216
+    (origin/main@8c91093ecb802659522f89c063933e6a979be2f0): lookup-follow,
+    FILE dirflags, bounded resize, explicit timestamps; SUPPORTED 20→22;
+    touch/truncate/sqlite3 admissions remain next per the plan.
   - 2026-08-23 22:00 UTC — build integrity landed as 0.2.191 (45ca99f):
     `npm run build` runs the package generator in verify mode by default
     (fail-closed zero-drift over all 80 generated outputs) with full
