@@ -4068,14 +4068,14 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 
 - Feedback: 2026-08-24 — product owner: creating an agent with a detailed role (a ~2.5KB "Sorting Hat" system prompt), then editing the description, truncates the role to ~200 characters on save. The saved role is just the first ~200 chars + boilerplate, so "the agent then never gets created and saved properly so it never runs as expected." Root cause: MAX_ROLE_LEN = 200 in extension/lib/named-agents.js, applied at create (line ~164) and edit/patch (line ~221).
 - Updated: 2026-08-24 22:10 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P0
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `d102471`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@c0455faa64286aaf30883a05f2b2b52a516dc7d5` (0.2.249)
 - Acceptance: a detailed agent role (several KB) is stored in full (up to a generous bounded limit, e.g. 16KB) on BOTH create and edit; nothing silently truncates a role a reasonable owner would write; the registry stays bounded (MAX_AGENTS + a sane per-role cap) so a hostile prompt can't grow it without limit; the edit dialog's input/textarea has no smaller maxlength that would clip before save; an over-cap role is either rejected with a clear message or bounded with an explicit notice, never silently clipped.
 - Review: pending independent review
 - Gates: detailed role round-trips create→save→reopen verbatim; edit preserves full role; over-cap handling is honest; no other silent truncation (check the edit UI maxlength); registry still bounded
@@ -4083,6 +4083,8 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
 - Next: raise MAX_ROLE_LEN to a generous bound and remove/align any UI maxlength; verify the round-trip
 - Recover: `git grep -n "MAX_ROLE_LEN\|maxlength\|role.*slice" -- extension/lib/named-agents.js extension/ntp extension/sidepanel`
 - History:
+  - 2026-08-24 22:33 UTC — LANDED at 0.2.249 (owner scope: "make them significantly higher"). Bounds raised: ROLE 200→32000, NAME 48→120, SKILLS 32→128, CORE_ASSET_BYTES 4000→131072 (128KiB), AGENTS 50→200. Silent clipping replaced with honest over-cap rejection (create AND update; a rejected patch leaves the prior role intact). A SECOND truncation layer (normalizedNamedPatch in service-worker.js hardcoding role slice(0,200)/skills slice(0,32) on the edit path) was caught in review and closed — MAX_ROLE_LEN/MAX_SKILLS now exported from named-agents.js as a single drift-proof authority; a ~30.6KB role round-trips verbatim through the update route. Review PASS r2 (Gemini 4db388b5), 1531/1531.
+
   - 2026-08-24 22:10 UTC — captured from product-owner feedback with the Sorting Hat example (input ~2.5KB, saved ~200 chars).
 
 ## [CAP-FB-20260824-TASK-AGENT-BOUNDARY-01] @mention task vanished from the list and became the agent's conversation — MERGED
