@@ -313,6 +313,19 @@ export function planPathFilestatLookup(normalizedFlags) {
   return WASI_ERRNO.ENOTSUP;
 }
 
+/** R4 (CAP-FB-20260823-R4-FILE-FOLLOW-01): the FILE-branch path_open dirflags
+ * planner. EXACTLY {0, SYMLINK_FOLLOW} admitted — the two-value form, never
+ * the subsumed `dirflags !== 0 || (dirflags & SYMLINK_FOLLOW)` shape (the P-1
+ * pin: a mirrored ||-form would silently accept any bit; dirflags=2 stays
+ * ENOTSUP). FOLLOW ≡ NO-FOLLOW over the seeded tree: no symlink/link/
+ * readlink/resolver exists, so both values drive the SAME workspace.open. */
+export function planFileOpenDirflags(normalizedDirflags) {
+  if (normalizedDirflags === 0 || normalizedDirflags === WASI_LOOKUPFLAGS.SYMLINK_FOLLOW) {
+    return WASI_ERRNO.SUCCESS;
+  }
+  return WASI_ERRNO.ENOTSUP;
+}
+
 export const WASI_READDIR_LIMITS = Object.freeze({
   maxEntries: 4096,
   maxNameBytes: 255,
@@ -1024,8 +1037,11 @@ export function createWasiPreview1Runtime({
       }
 
       // Existing FILE-open branch below stays byte-for-byte equivalent.
-      if (dirflags !== 0 || (dirflags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)) {
-        fault(WASI_ERRNO.ENOTSUP);
+      // R4: dirflags {0, SYMLINK_FOLLOW} via the exact two-value planner (the
+      // P-1 pin — never the subsumed ||-form; dirflags=2 stays ENOTSUP).
+      const dirflagsPlan = planFileOpenDirflags(dirflags);
+      if (dirflagsPlan !== WASI_ERRNO.SUCCESS) {
+        fault(dirflagsPlan);
       }
       if (fdflags & ~(WASI_FDFLAGS.APPEND)) fault(WASI_ERRNO.ENOTSUP);
       if ((oflags & WASI_OFLAGS.EXCL) && !(oflags & WASI_OFLAGS.CREAT)) {

@@ -24,6 +24,7 @@ import {
 import {
   createWasiPreview1Runtime,
   planFdReaddir,
+  planFileOpenDirflags,
   planPathFilestatLookup,
   REBUILT_TOOL_COUNT,
   REBUILT_WASI_IMPORTS,
@@ -731,8 +732,9 @@ Deno.test("WASI path_open rights: inputs read-only, scratch rw, output write-onl
     WASI_ERRNO.ENOTCAPABLE,
   );
   assertEquals(
-    h.wasi.path_open(3, 1, pathPtr, length, 0, readRights, 0n, 0, 3050),
+    h.wasi.path_open(3, 2, pathPtr, length, 0, readRights, 0n, 0, 3050),
     WASI_ERRNO.ENOTSUP,
+    "R4 authorized edit: dirflags 1→2 — the vector's intent (an unsupported dirflags bit stays ENOTSUP) is preserved now that SYMLINK_FOLLOW is admitted",
   );
   assertEquals(
     h.wasi.path_open(
@@ -1623,4 +1625,95 @@ Deno.test("R3 source boundary: the planner is referenced ONLY by the syscall (no
     const text = await Deno.readTextFile(new URL(`../${other}`, import.meta.url)).catch(() => "");
     assertEquals(text.includes("planPathFilestatLookup"), false, `${other} must not import the planner`);
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// R4 (CAP-FB-20260823-R4-FILE-FOLLOW-01): FILE-branch path_open dirflags
+// {0, SYMLINK_FOLLOW}. Planner KAT, asU32 pinning, precedence mutants, the
+// no-symlink open-equivalence matrix, and the P-1 source pin. Additive only.
+
+Deno.test("R4 planner: {0,1} admitted, every other u32 value ENOTSUP (the P-1 two-value form)", () => {
+  assertEquals(planFileOpenDirflags(0), WASI_ERRNO.SUCCESS);
+  assertEquals(planFileOpenDirflags(1), WASI_ERRNO.SUCCESS, "SYMLINK_FOLLOW");
+  for (const dirflags of [2, 3, 0x7fffffff, 0xffffffff]) {
+    assertEquals(planFileOpenDirflags(dirflags), WASI_ERRNO.ENOTSUP, `dirflags ${dirflags.toString(16)}`);
+  }
+});
+
+Deno.test("R4 asU32 pinning: non-integer/negative-out-of-range/>u32 EINVAL at the syscall", () => {
+  const h = harness();
+  const rights = WASI_RIGHTS.FD_READ;
+  const length = putPath(h.memory, 2000, "inputs/in.txt");
+  assertEquals(h.wasi.path_open(3, -1, 2000, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.ENOTSUP, "-1 wraps to 0xffffffff → planner → ENOTSUP");
+  assertEquals(h.wasi.path_open(3, -0x80000001, 2000, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.EINVAL);
+  assertEquals(h.wasi.path_open(3, 0x100000000, 2000, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.EINVAL);
+  assertEquals(h.wasi.path_open(3, 1.5, 2000, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.EINVAL, "non-integer");
+});
+
+Deno.test("R4 dirflags at the syscall: 0/1 open identically; 2 stays ENOTSUP; precedence holds", () => {
+  const h = harness();
+  const rights = WASI_RIGHTS.FD_READ;
+  const length = putPath(h.memory, 2000, "inputs/in.txt");
+  // the P-1 executable mutant: dirflags=2 must NOT be silently accepted
+  assertEquals(h.wasi.path_open(3, 2, 2000, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.ENOTSUP, "dirflags=2 stays ENOTSUP");
+  // precedence: unknown fd + dirflags2 + poisoned ptrs → EBADF first
+  assertEquals(h.wasi.path_open(999, 2, 0xfffffff0, 4, 0, rights, 0n, 0, 0xfffffff0), WASI_ERRNO.EBADF);
+  // stdio base + dirflags1 → EBADF (kind gate)
+  assertEquals(h.wasi.path_open(2, 1, 2000, length, 0, rights, 0n, 0, 3000), WASI_ERRNO.EBADF);
+  // valid base + dirflags1 + traversal path → EPERM before the adapter
+  const bad = putPath(h.memory, 2000, "../escape.txt");
+  assertEquals(h.wasi.path_open(3, 1, 2000, bad, 0, rights, 0n, 0, 3000), WASI_ERRNO.EPERM);
+  // valid base + dirflags1 + VALID path + poisoned openedFdPtr → EFAULT before
+  // the adapter (re-put the valid path — the traversal write above clobbered ptr 2000)
+  const validLength = putPath(h.memory, 2000, "inputs/in.txt");
+  const openedBefore = h.workspace.opened.length;
+  assertEquals(h.wasi.path_open(3, 1, 2000, validLength, 0, rights, 0n, 0, 0xfffffff0), WASI_ERRNO.EFAULT);
+  assertEquals(h.workspace.opened.length, openedBefore, "no workspace.open on the faulted call");
+});
+
+Deno.test("R4 equivalence: dirflags0 ≡ dirflags1 — the same workspace.open call and the same fd record", () => {
+  const h = harness();
+  const rights = WASI_RIGHTS.FD_READ;
+  const length = putPath(h.memory, 2000, "inputs/in.txt");
+  const before = h.runtime.snapshot().counters;
+  const openedBefore = h.workspace.opened.length;
+  const errno0 = h.wasi.path_open(3, 0, 2000, length, 0, rights, 0n, 0, 3000);
+  const fd0 = h.memory.u32(3000);
+  const errno1 = h.wasi.path_open(4, 1, 2000, length, 0, rights, 0n, 0, 3010);
+  const fd1 = h.memory.u32(3010);
+  assertEquals(errno0, WASI_ERRNO.SUCCESS);
+  assertEquals(errno1, WASI_ERRNO.SUCCESS, "dirflags=SYMLINK_FOLLOW opens");
+  // ONE workspace.open each, with the SAME resolved path + SAME options
+  const calls = h.workspace.opened.slice(openedBefore);
+  assertEquals(calls.length, 2, "one workspace.open per admitted call");
+  assertEquals(calls[0].path, calls[1].path, "identical resolved path");
+  assertEquals(JSON.stringify(calls[0].options), JSON.stringify(calls[1].options), "identical open options");
+  // the fd records are equivalent (rights/fdflags/offset/handle shape)
+  assertEquals(fd0 > 0 && fd1 > 0 && fd0 !== fd1, true, "two distinct FILE fds");
+  const snap = h.runtime.snapshot().counters;
+  assertEquals(snap.hostCalls - before.hostCalls, 2, "+1 hostCalls per admitted call");
+  assertEquals(snap.pathCalls - before.pathCalls, 2, "+1 pathCalls per admitted call");
+  assertEquals(h.wasi.fd_close(fd0), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_close(fd1), WASI_ERRNO.SUCCESS);
+  assertEquals(h.runtime.snapshot().counters.openDynamicFds, 0, "fds returned to the free list");
+});
+
+Deno.test("R4 source pins: the subsumed ||-form is ABSENT; the planner is referenced only by the FILE branch", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
+  assertEquals(
+    source.includes("dirflags !== 0 || (dirflags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)"),
+    false,
+    "the P-1 subsumed ||-form must NOT be present in the FILE branch",
+  );
+  const references = source.split("planFileOpenDirflags").length - 1;
+  assertEquals(references, 2, "planner referenced only at its definition + the FILE-branch call site");
+  // order: the dirflags plan precedes fdflags/oflags/rights/memory/adapter
+  const bodyStart = source.indexOf("// Existing FILE-open branch below stays byte-for-byte equivalent.");
+  const body = source.slice(bodyStart, bodyStart + 3000);
+  const planIdx = body.indexOf("planFileOpenDirflags(dirflags)");
+  const fdflagsIdx = body.indexOf("WASI_FDFLAGS.APPEND");
+  const pathIdx = body.indexOf("decodePath(pathPtr, pathLength)");
+  const openIdx = body.indexOf("workspace.open(");
+  assert(planIdx > 0 && fdflagsIdx > planIdx && pathIdx > fdflagsIdx && openIdx > pathIdx,
+    "order: dirflags plan → fdflags → oflags/rights → decodePath → workspace.open (byte-preserved)");
 });
