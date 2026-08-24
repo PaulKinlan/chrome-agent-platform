@@ -2464,33 +2464,43 @@ function buildToolTreeBlock(label, value, rows, maxNodes, expandedState) {
 }
 
 /** Build the whole tool card as DOM. args/result/detail become structured,
- * bounded trees when they parse; otherwise a readable plain-text fallback. */
-function buildToolCardDom({ name, status, args, result, detail, duration, expandedState }) {
+ * bounded trees when they parse; otherwise a readable plain-text fallback.
+ * The card is a per-card <details> COLLAPSED by default (the name summary +
+ * status chip); clicking the head expands ONLY this card. `cardExpanded` +
+ * `onCardToggle` persist the per-card open state across re-renders. */
+export function buildToolCardDom({ name, status, args, result, detail, duration, expandedState, cardExpanded = false, onCardToggle }) {
   // The card is NOT a live region: re-rendering a 200-row tree would announce
   // the whole card on every attribute update (the a11y finding). The COMPACT
   // status chip is the live region — it carries the compact state text only.
-  const card = document.createElement("div");
+  const card = document.createElement("details");
   card.className = "tool";
+  card.open = cardExpanded === true;
+  if (typeof onCardToggle === "function") {
+    card.addEventListener("toggle", () => onCardToggle(card.open));
+  }
 
-  const head = document.createElement("div");
-  head.className = "tool-head";
+  const summary = document.createElement("summary");
+  summary.className = "tool-head";
   const nameEl = document.createElement("span");
   nameEl.className = "tool-name";
   nameEl.textContent = name || "tool";
-  head.appendChild(nameEl);
+  summary.appendChild(nameEl);
   const statusEl = document.createElement("span");
   statusEl.className = `tool-status ${status}`;
   statusEl.setAttribute("role", "status");
   statusEl.textContent = status === "done" ? "done" : status === "error" ? "error" : "running";
-  head.appendChild(statusEl);
+  summary.appendChild(statusEl);
   const dur = formatToolDurationMs(duration);
   if (dur) {
     const durEl = document.createElement("span");
     durEl.className = "tool-duration";
     durEl.textContent = dur;
-    head.appendChild(durEl);
+    summary.appendChild(durEl);
   }
-  card.appendChild(head);
+  card.appendChild(summary);
+
+  const body = document.createElement("div");
+  body.className = "tool-body";
 
   const addBlock = (label, raw) => {
     if (raw == null || raw === "") return;
@@ -2498,19 +2508,20 @@ function buildToolCardDom({ name, status, args, result, detail, duration, expand
     if (parsed.kind === "json") {
       const tree = buildTree(parsed.value);
       if (tree.rows.length >= 1) {
-        card.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, expandedState));
+        body.appendChild(buildToolTreeBlock(label, parsed.value, tree.rows, tree.maxNodes, expandedState));
         return;
       }
     }
     const div = document.createElement("div");
     div.className = `tool-plain tool-plain-${label}`;
     div.textContent = String(parsed.value ?? raw ?? "");
-    card.appendChild(div);
+    body.appendChild(div);
   };
 
   addBlock("inputs", args);
   if (result != null && result !== "") addBlock("result", result);
   if (detail != null && detail !== "") addBlock("detail", detail);
+  card.appendChild(body);
   return card;
 }
 
@@ -2594,9 +2605,13 @@ class MessageBubble extends Component {
       .think .trace { margin-top:8px; padding:8px 12px; border-left:2px solid var(--border,#e3e0d9); color:var(--muted,#635e56); font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.5; }
       @keyframes sc-think { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } .think .caret { transition: none; } }
-      /* tool card */
+      /* tool card (a per-card <details>: COLLAPSED by default) */
       .tool { display:flex; flex-direction:column; width:100%; max-width:640px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); overflow:hidden; }
+      .tool summary.tool-head { list-style:none; cursor:pointer; user-select:none; }
+      .tool summary.tool-head::-webkit-details-marker { display:none; }
       .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
+      .tool:not([open]) .tool-head { border-bottom:0; }
+      .tool .tool-body { display:flex; flex-direction:column; }
       .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); }
       .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
       .tool .tool-status::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
@@ -2712,6 +2727,8 @@ class MessageBubble extends Component {
           detail,
           duration: this.getAttribute("tool-duration"),
           expandedState: this._ttExpanded,
+          cardExpanded: this._toolCardExpanded === true,
+          onCardToggle: (open) => { this._toolCardExpanded = open === true; },
         });
       }
     } else if (role === "thinking") {
