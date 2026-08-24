@@ -299,6 +299,20 @@ export function planFdstatSetFlags(currentFlags, rights, requested) {
   return WASI_ERRNO.SUCCESS;
 }
 
+/** R3 (CAP-FB-20260823-R3-LOOKUP-FOLLOW-01): the lookup-flags planner for
+ * path_filestat_get. 0 and SYMLINK_FOLLOW are admitted; anything else is
+ * ENOTSUP, never widened (the planFdstatSetFlags precedent). FOLLOW ≡
+ * NO-FOLLOW by structural equivalence: the post-S2 workspace (explicit-dir
+ * Set + the stat/readdir union) has NO link/alias/inode/target/resolver, and
+ * validateStat accepts only file/directory — so both flags resolve the SAME
+ * object through ONE identical workspace.stat argument. */
+export function planPathFilestatLookup(normalizedFlags) {
+  if (normalizedFlags === 0 || normalizedFlags === WASI_LOOKUPFLAGS.SYMLINK_FOLLOW) {
+    return WASI_ERRNO.SUCCESS;
+  }
+  return WASI_ERRNO.ENOTSUP;
+}
+
 export const WASI_READDIR_LIMITS = Object.freeze({
   maxEntries: 4096,
   maxNameBytes: 255,
@@ -936,8 +950,12 @@ export function createWasiPreview1Runtime({
       }
       requireRight(base, WASI_RIGHTS.PATH_FILESTAT_GET);
       const flags = asU32(flagsValue);
-      if (flags !== 0 || (flags & WASI_LOOKUPFLAGS.SYMLINK_FOLLOW)) {
-        fault(WASI_ERRNO.ENOTSUP);
+      // The flag PLAN precedes the guest path/output memory (the base/kind
+      // decision precedes the flags): R3 admits 0/SYMLINK_FOLLOW; anything
+      // else is ENOTSUP, never widened.
+      const lookupPlan = planPathFilestatLookup(flags);
+      if (lookupPlan !== WASI_ERRNO.SUCCESS) {
+        fault(lookupPlan);
       }
       const resolved = resolveDirBasePath(base, pathPtr, pathLength);
       span(statPtr, 64);

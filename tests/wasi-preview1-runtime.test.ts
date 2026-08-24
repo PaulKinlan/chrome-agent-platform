@@ -24,6 +24,7 @@ import {
 import {
   createWasiPreview1Runtime,
   planFdReaddir,
+  planPathFilestatLookup,
   REBUILT_TOOL_COUNT,
   REBUILT_WASI_IMPORTS,
   revalidateAuditedMemory,
@@ -79,15 +80,20 @@ class MemoryWorkspace {
       ["scratch/work.txt", { type: "file", bytes: enc.encode("12345") }],
       ["output/existing.txt", { type: "file", bytes: enc.encode("hidden") }],
     ]);
+    // R3 equivalence rows: S2's explicit-directory Set (exists with NO
+    // descendants, unlike an implicit dir which requires one).
+    this.dirs = new Set();
+    this.stats = []; // stat-argument spy (path per call)
     this.partialRead = partialRead;
     this.partialWrite = partialWrite;
     this.opened = [];
     this.closed = 0;
   }
   stat(path) {
+    this.stats.push(path);
     const row = this.files.get(path);
     const prefix = path === "." ? "" : `${path}/`;
-    const directory = path === "." || [...this.files.keys()].some((key) => key.startsWith(prefix));
+    const directory = path === "." || this.dirs.has(path) || [...this.files.keys()].some((key) => key.startsWith(prefix));
     if (row && directory) throw Object.assign(new Error("ambiguous"), { code: "ENOTDIR" });
     if (row) return { type: row.type, size: row.bytes.byteLength };
     if (directory) return { type: "directory", size: 0 };
@@ -95,7 +101,8 @@ class MemoryWorkspace {
   }
   readdir(path) {
     const prefix = path === "." ? "" : `${path}/`;
-    if (path !== "." && ![...this.files.keys()].some((key) => key.startsWith(prefix))) {
+    const hasChildren = [...this.files.keys()].some((key) => key.startsWith(prefix));
+    if (path !== "." && !this.dirs.has(path) && !hasChildren) {
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
     }
     const names = new Map();
@@ -105,6 +112,14 @@ class MemoryWorkspace {
       const slash = relative.indexOf("/");
       const name = slash < 0 ? relative : relative.slice(0, slash);
       names.set(name, slash < 0 ? "file" : "directory");
+    }
+    // explicit-directory union (S2): child explicit dirs list as directories.
+    for (const dir of this.dirs) {
+      if (prefix && !dir.startsWith(prefix)) continue;
+      const relative = prefix ? dir.slice(prefix.length) : dir;
+      const slash = relative.indexOf("/");
+      if (slash < 0 && relative) names.set(relative, "directory");
+      else if (slash >= 0) names.set(relative.slice(0, slash), "directory");
     }
     return [...names].map(([name, type]) => ({ name, type }));
   }
@@ -609,9 +624,19 @@ Deno.test("WASI path normalization/stat: relative classes work; traversal, NUL, 
     WASI_ERRNO.EINVAL,
   );
   length = putPath(h.memory, 1000, "inputs/in.txt");
+  // R3: SYMLINK_FOLLOW is admitted — and over the no-symlink workspace it is
+  // byte-identical to the adjacent flags=0 vector above (whose 64 stat bytes
+  // still sit at 1100: every vector between faults BEFORE any stat write).
+  const flagsZeroBytes = h.memory.bytes.slice(1100, 1164);
   assertEquals(
-    h.wasi.path_filestat_get(3, 1, 1000, length, 1100),
-    WASI_ERRNO.ENOTSUP,
+    h.wasi.path_filestat_get(3, 1, 1000, length, 1200),
+    WASI_ERRNO.SUCCESS,
+    "R3: flags=SYMLINK_FOLLOW succeeds over the no-symlink workspace",
+  );
+  assertEquals(
+    [...h.memory.bytes.slice(1200, 1264)],
+    [...flagsZeroBytes],
+    "R3 equivalence: flags=1 produces byte-identical filestat to flags=0",
   );
   assertEquals(
     h.wasi.path_filestat_get(2, 0, 1000, length, 1100),
@@ -1197,7 +1222,7 @@ Deno.test("D-minus: exact tuple mutant lattice, fd-kind matrix, alias parity and
   assertEquals(h.wasi.path_filestat_get(fileFd, 0, 2000, exactLength, 500), WASI_ERRNO.EBADF);
   assertEquals(h.wasi.path_filestat_get(2, 0, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EBADF);
   assertEquals(h.wasi.path_filestat_get(999, 1, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EBADF);
-  assertEquals(h.wasi.path_filestat_get(dir.fd, 1, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.ENOTSUP);
+  assertEquals(h.wasi.path_filestat_get(dir.fd, 1, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EFAULT, "R3: the flag plan admits flags=1 FIRST, then the poisoned path read faults (flag-plan precedes memory)");
   assertEquals(h.wasi.path_filestat_get(dir.fd, 0, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EFAULT);
 
   assertEquals(h.wasi.fd_readdir(3, 800, 100, 0n, 700), WASI_ERRNO.SUCCESS);
@@ -1451,4 +1476,151 @@ Deno.test("S1 rollback: three consecutive failed opens each recycle their select
   assertEquals(again.errno, WASI_ERRNO.SUCCESS);
   assertEquals(again.fd, first.fd, "the free list stays lowest-consumed across the repeated failures");
   assertEquals(h.wasi.fd_close(again.fd), WASI_ERRNO.SUCCESS);
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// R3 (CAP-FB-20260823-R3-LOOKUP-FOLLOW-01): path_filestat_get lookup flags
+// {0, SYMLINK_FOLLOW}. The planner KAT, the asU32 errno pinning, the
+// precedence mutants, and the no-symlink equivalence matrix (incl. the
+// post-S2 explicit-directory rows). Additive — no existing vector beyond the
+// two checklist-authorized edits is touched.
+
+Deno.test("R3 planner: {0,1} admitted, every other u32 value ENOTSUP", () => {
+  assertEquals(planPathFilestatLookup(0), WASI_ERRNO.SUCCESS);
+  assertEquals(planPathFilestatLookup(1), WASI_ERRNO.SUCCESS, "SYMLINK_FOLLOW");
+  for (const flags of [2, 3, 0x7fffffff, 0x80000000, 0xffffffff]) {
+    assertEquals(planPathFilestatLookup(flags), WASI_ERRNO.ENOTSUP, `flags ${flags.toString(16)}`);
+  }
+});
+
+Deno.test("R3 asU32 errno semantics: in-range negatives wrap to ENOTSUP, only out-of-range/non-integer EINVAL", () => {
+  const h = harness();
+  const length = putPath(h.memory, 1000, "inputs/in.txt");
+  // -1 wraps via >>>0 to 0xffffffff → planner → ENOTSUP (NOT EINVAL)
+  assertEquals(h.wasi.path_filestat_get(3, -1, 1000, length, 1100), WASI_ERRNO.ENOTSUP);
+  // -0x80000000 wraps to 0x80000000 → ENOTSUP
+  assertEquals(h.wasi.path_filestat_get(3, -0x80000000, 1000, length, 1100), WASI_ERRNO.ENOTSUP);
+  // out-of-range negatives and >u32 fault EINVAL at asU32 (before the planner)
+  assertEquals(h.wasi.path_filestat_get(3, -0x80000001, 1000, length, 1100), WASI_ERRNO.EINVAL);
+  assertEquals(h.wasi.path_filestat_get(3, 0x100000000, 1000, length, 1100), WASI_ERRNO.EINVAL);
+  assertEquals(h.wasi.path_filestat_get(3, 1.5, 1000, length, 1100), WASI_ERRNO.EINVAL, "non-integer");
+});
+
+Deno.test("R3 precedence: EBADF/ENOTCAPABLE precede the flag plan; the flag plan precedes guest memory", () => {
+  const h = harness();
+  const dir = openDir(h, "inputs");
+  assertEquals(dir.errno, WASI_ERRNO.SUCCESS);
+  const length = putPath(h.memory, 1000, "in.txt");
+  // unknown fd + flags2 + poisoned ptrs → EBADF wins before everything
+  assertEquals(h.wasi.path_filestat_get(999, 2, 0xfffffff0, 4, 0xfffffff0), WASI_ERRNO.EBADF);
+  // stdio fd + flags1 → EBADF (kind gate before the flag plan)
+  assertEquals(h.wasi.path_filestat_get(2, 1, 1000, length, 1100), WASI_ERRNO.EBADF);
+  // a FILE fd + flags1 → EBADF (kind gate: PREOPEN/DIR only)
+  const file = openPath(h, "inputs/in.txt", 0x200026n);
+  assertEquals(file.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.path_filestat_get(file.fd, 1, 1000, length, 1100), WASI_ERRNO.EBADF);
+  // DIR revoked-right + flags1 → ENOTCAPABLE before the flag plan
+  const statSpyBefore = h.workspace.stats.length;
+  // NOTE (checklist §6 "DIR revoked-right → ENOTCAPABLE"): a rights-revoked
+  // PREOPEN/DIR record is NOT publicly constructible — preopen rootRights
+  // hard-code PATH_FILESTAT_GET and every DIRECTORY open grants the opendir
+  // profile (which includes the bit). The ENOTCAPABLE arm is therefore
+  // defensive-only; the precedence it guards (rights BEFORE the flag plan) is
+  // pinned by the source-order assertion in the boundary test below, and the
+  // kind-gate precedence (EBADF before flags) is executable above.
+  // valid base + flags2 → ENOTSUP (the planner after rights)
+  assertEquals(h.wasi.path_filestat_get(3, 2, 1000, length, 1100), WASI_ERRNO.ENOTSUP);
+  // valid base + flags1 + bad path ptr → EFAULT (plan precedes the path read)
+  assertEquals(h.wasi.path_filestat_get(3, 1, 0xfffffff0, 4, 1100), WASI_ERRNO.EFAULT);
+  assertEquals(h.workspace.stats.length, statSpyBefore, "no workspace.stat on faulted calls");
+  // valid base + flags1 + VALID path + bad stat ptr → EFAULT before the
+  // adapter (an invalid path would EPERM first — grammar precedes the stat
+  // span by design, so this mutant MUST use a valid path)
+  const validLength = putPath(h.memory, 1000, "inputs/in.txt");
+  assertEquals(h.wasi.path_filestat_get(3, 1, 1000, validLength, 0xfffffff0), WASI_ERRNO.EFAULT);
+  assertEquals(h.workspace.stats.length, statSpyBefore, "the stat span precedes the adapter call");
+  // missing → ENOENT (for BOTH flags)
+  const missing = putPath(h.memory, 1000, "inputs/missing.txt");
+  assertEquals(h.wasi.path_filestat_get(3, 0, 1000, missing, 1100), WASI_ERRNO.ENOENT);
+  assertEquals(h.wasi.path_filestat_get(3, 1, 1000, missing, 1100), WASI_ERRNO.ENOENT);
+});
+
+Deno.test("R3 equivalence matrix: flags0 ≡ flags1 across PREOPEN/DIR bases and every stat class", () => {
+  const h = harness();
+  // an explicit directory with NO descendants (the genuinely new S2 shape:
+  // directory, size 0, exists — an implicit dir requires a descendant)
+  h.workspace.dirs.add("scratch/emptydir");
+  h.workspace.dirs.add("scratch/emptydir/nested");
+
+  const rows = [
+    ["inputs/in.txt", "file"],
+    ["inputs", "implicit dir"],
+    [".", "root"],
+    ["inputs/missing.txt", "missing"],
+    ["scratch/emptydir", "explicit empty dir"],
+    ["scratch/emptydir/nested", "explicit nested empty dir"],
+  ];
+  const dir = openDir(h, "inputs");
+  assertEquals(dir.errno, WASI_ERRNO.SUCCESS);
+
+  for (const [path, label] of rows) {
+    for (const baseFd of [3, 4]) {
+      const length = putPath(h.memory, 1000, path);
+      const before = h.runtime.snapshot().counters;
+      const statCallsBefore = h.workspace.stats.length;
+      const errno0 = h.wasi.path_filestat_get(baseFd, 0, 1000, length, 1100);
+      const bytes0 = h.memory.bytes.slice(1100, 1164);
+      const statsAfter0 = h.workspace.stats.slice(statCallsBefore);
+      const errno1 = h.wasi.path_filestat_get(baseFd, 1, 1000, length, 1200);
+      const bytes1 = h.memory.bytes.slice(1200, 1264);
+      const statsAfter1 = h.workspace.stats.slice(statCallsBefore + statsAfter0.length);
+      assertEquals(errno1, errno0, `${label} fd${baseFd}: errno flags0 ≡ flags1`);
+      if (errno0 === WASI_ERRNO.SUCCESS) {
+        assertEquals([...bytes1], [...bytes0], `${label} fd${baseFd}: exact 64 stat bytes identical`);
+        assertEquals(statsAfter0, [path], `${label} fd${baseFd}: ONE stat call, the exact resolved path`);
+        assertEquals(statsAfter1, [path], `${label} fd${baseFd}: identical stat argument for flags1`);
+      } else {
+        assertEquals(statsAfter0.length, statsAfter1.length, `${label} fd${baseFd}: same stat-call count on failure`);
+      }
+      const after = h.runtime.snapshot().counters;
+      assertEquals(after.hostCalls - before.hostCalls, 2, `${label} fd${baseFd}: +1 hostCalls per admitted call`);
+      assertEquals(after.pathCalls - before.pathCalls, 2, `${label} fd${baseFd}: +1 pathCalls per admitted call`);
+      assertEquals(after.fileBytes - before.fileBytes, 0, `${label} fd${baseFd}: fileBytes unchanged`);
+      assertEquals(after.stdoutBytes - before.stdoutBytes, 0, `${label} fd${baseFd}: stdoutBytes unchanged`);
+      assertEquals(after.stderrBytes - before.stderrBytes, 0, `${label} fd${baseFd}: stderrBytes unchanged`);
+    }
+  }
+  // DIR base equivalence (the DIR fd opened above, path relative to its dir)
+  const length = putPath(h.memory, 1000, "in.txt");
+  const errno0 = h.wasi.path_filestat_get(dir.fd, 0, 1000, length, 1100);
+  const errno1 = h.wasi.path_filestat_get(dir.fd, 1, 1000, length, 1200);
+  assertEquals(errno0, WASI_ERRNO.SUCCESS);
+  assertEquals(errno1, WASI_ERRNO.SUCCESS, "DIR base admits flags=1");
+  assertEquals(
+    [...h.memory.bytes.slice(1200, 1264)],
+    [...h.memory.bytes.slice(1100, 1164)],
+    "DIR base: flags0 ≡ flags1 byte-identical",
+  );
+});
+
+Deno.test("R3 source boundary: the planner is referenced ONLY by the syscall (no provider/page/permission/route import)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
+  const references = source.split("planPathFilestatLookup").length - 1;
+  // EXACTLY the definition + ONE call site inside path_filestat_get — nothing
+  // else in the runtime may reference the planner.
+  assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
+  // the rights gate PRECEDES the flag normalisation in the syscall body (the
+  // precedence the unreachable ENOTCAPABLE arm guards)
+  const bodyStart = source.indexOf("path_filestat_get: (fdValue");
+  const body = source.slice(bodyStart, bodyStart + 1200);
+  const rightsIdx = body.indexOf("requireRight(base, WASI_RIGHTS.PATH_FILESTAT_GET)");
+  const flagsIdx = body.indexOf("asU32(flagsValue)");
+  const planIdx = body.indexOf("planPathFilestatLookup(flags)");
+  const pathIdx = body.indexOf("resolveDirBasePath(base, pathPtr, pathLength)");
+  assert(rightsIdx > 0 && flagsIdx > rightsIdx && planIdx > flagsIdx && pathIdx > planIdx,
+    "order: requireRight → asU32 → planner → path/memory (byte-preserved)");
+  for (const other of ["extension/background/service-worker.js", "extension/lib/provider.js", "extension/lib/capabilities.js"]) {
+    const text = await Deno.readTextFile(new URL(`../${other}`, import.meta.url)).catch(() => "");
+    assertEquals(text.includes("planPathFilestatLookup"), false, `${other} must not import the planner`);
+  }
 });
