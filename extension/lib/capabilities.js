@@ -68,6 +68,27 @@ export const CAPABILITIES = [
     hint: "Open the hub in Chrome's side panel alongside a page.",
     gates: "Gates: opening the hub in Chrome's side panel.",
   },
+  {
+    id: "cookies",
+    permissions: ["cookies"],
+    label: "Cookies",
+    hint: "List/read/set/remove site cookies. Cookie tools ALSO need the exact-origin host permission for the target site (granted per site, never for all sites).",
+    gates: "Gates: listing, reading, setting and removing cookies for sites you grant exact site access to.",
+  },
+  {
+    id: "browsingData",
+    permissions: ["browsingData"],
+    label: "Browsing data",
+    hint: "Wipe explicitly chosen browsing data types (cache, cookies, history, downloads, passwords, …). Browser-wide: every wipe also needs the global browser-control grant.",
+    gates: "Gates: wiping only the data types you enumerate (cache, cookies, history, downloads, passwords and more).",
+  },
+  {
+    id: "contentSettings",
+    permissions: ["contentSettings"],
+    label: "Content settings",
+    hint: "Read/set/clear per-site content rules (JavaScript, images, cookies, location, notifications, popups) for one exact origin at a time — broad patterns are refused.",
+    gates: "Gates: reading and changing per-site content rules (JS, images, cookies, location, notifications, popups) for single origins.",
+  },
 ];
 
 /** Whether a permission (or the equivalent) is currently granted. */

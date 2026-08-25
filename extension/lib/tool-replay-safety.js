@@ -55,6 +55,11 @@ const BROWSER_READ_TOOLS = new Set([
   "list_bookmarks",
   "query_idle_state",
   "list_context_menus",
+  // Tranche-8 Chrome API coverage: cookie/content-setting reads observe only.
+  "list_cookies",
+  "list_cookie_stores",
+  "get_cookie",
+  "get_content_setting",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -126,6 +131,11 @@ const BUILT_IN_TOOLS = new Set([
   "notify", "clear_notification",
   "query_idle_state",
   "create_context_menu", "list_context_menus", "remove_context_menu",
+  // Tranche-8 Chrome API coverage (reads are classified above; ALL are built-ins):
+  "list_cookies", "list_cookie_stores", "get_cookie",
+  "set_cookie", "remove_cookie",
+  "wipe_browsing_data",
+  "get_content_setting", "set_content_setting", "clear_content_settings",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

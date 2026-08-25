@@ -20,7 +20,10 @@
     "downloads",
     "history",
     "idle",
-    "webNavigation"
+    "webNavigation",
+    "cookies",
+    "browsingData",
+    "contentSettings"
   ],
   "optional_host_permissions": [
     "http://*/*",

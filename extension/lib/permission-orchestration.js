@@ -10,6 +10,8 @@ const API_PERMISSIONS = new Set([
   "alarms", "storage", "sidePanel", "tabs", "scripting", "notifications",
   "audioCapture", "videoCapture", "declarativeNetRequest", "bookmarks",
   "contextMenus", "downloads", "history", "idle", "webNavigation",
+  // Tranche-8 site-data control (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01).
+  "cookies", "browsingData", "contentSettings",
 ]);
 const MAX_DECLARATIONS = 32;
 const MAX_PERMISSIONS = 16;
