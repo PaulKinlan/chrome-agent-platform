@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 29,
+  browserTools: 44,
   managementTools: 29,
-  totalTools: 58,
+  totalTools: 73,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -45,6 +45,23 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "create_context_menu",
   "list_context_menus",
   "remove_context_menu",
+  // T13 deep tab control (tab deep ops + action enable/disable + sidePanel
+  // options/behavior) — no NEW manifest permissions.
+  "move_tab",
+  "duplicate_tab",
+  "set_tab_pinned",
+  "reload_tab",
+  "tab_go_back",
+  "tab_go_forward",
+  "get_tab_zoom",
+  "set_tab_zoom",
+  "discard_tab",
+  "highlight_tabs",
+  "enable_action",
+  "disable_action",
+  "get_side_panel_options",
+  "set_side_panel_options",
+  "set_panel_behavior",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -162,6 +179,28 @@ const rows = [
   record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
   record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", false, "read", "browser.context-menus"),
   record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
+
+  // Tranche-13 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // deep tab control + action enable/disable + sidePanel options/behavior.
+  // NO new manifest permissions (already-declared "tabs"/"sidePanel" only).
+  // Tab mutations ride the SAME product browser-control grant as close_tab
+  // (tab-scoped origin re-checked inside the grant lock); the two sidePanel
+  // mutations are browser-level surfaces requiring a GLOBAL grant.
+  record("move_tab", "chrome-api", ["chrome.tabs.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("duplicate_tab", "chrome-api", ["chrome.tabs.duplicate.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("set_tab_pinned", "chrome-api", ["chrome.tabs.set-pinned.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("reload_tab", "chrome-api", ["chrome.tabs.reload.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("tab_go_back", "chrome-api", ["chrome.tabs.go-back.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("tab_go_forward", "chrome-api", ["chrome.tabs.go-forward.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("get_tab_zoom", "chrome-api", ["chrome.tabs.get-zoom"], ["tabs"], "none", "read-only", false, "read", "browser.tabs"),
+  record("set_tab_zoom", "chrome-api", ["chrome.tabs.set-zoom.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("discard_tab", "chrome-api", ["chrome.tabs.discard.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("highlight_tabs", "chrome-api", ["chrome.tabs.highlight.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
+  record("enable_action", "chrome-api", ["chrome.action.enable"], [], "none", "mutating", false, "mutating", "browser.action"),
+  record("disable_action", "chrome-api", ["chrome.action.disable"], [], "none", "mutating", false, "mutating", "browser.action"),
+  record("get_side_panel_options", "chrome-api", ["chrome.side-panel.get-options"], ["sidePanel"], "none", "read-only", false, "read", "browser.side-panel"),
+  record("set_side_panel_options", "chrome-api", ["chrome.side-panel.set-options"], ["sidePanel"], "global", "mutating", false, "mutating", "browser.side-panel"),
+  record("set_panel_behavior", "chrome-api", ["chrome.side-panel.set-behavior"], ["sidePanel"], "global", "mutating", false, "mutating", "browser.side-panel"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

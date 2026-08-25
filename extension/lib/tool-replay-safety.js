@@ -55,6 +55,9 @@ const BROWSER_READ_TOOLS = new Set([
   "list_bookmarks",
   "query_idle_state",
   "list_context_menus",
+  // Tranche-13 Chrome API coverage: tab zoom + sidePanel options reads.
+  "get_tab_zoom",
+  "get_side_panel_options",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -126,6 +129,11 @@ const BUILT_IN_TOOLS = new Set([
   "notify", "clear_notification",
   "query_idle_state",
   "create_context_menu", "list_context_menus", "remove_context_menu",
+  // Tranche-13 Chrome API coverage (reads are classified above; ALL are built-ins):
+  "get_tab_zoom", "get_side_panel_options",
+  "move_tab", "duplicate_tab", "set_tab_pinned", "reload_tab",
+  "tab_go_back", "tab_go_forward", "set_tab_zoom", "discard_tab", "highlight_tabs",
+  "enable_action", "disable_action", "set_side_panel_options", "set_panel_behavior",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",
