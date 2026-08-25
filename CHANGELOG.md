@@ -4,7 +4,7 @@
 - chore(tasks): record bundled-inventory drift fix (0.2.275)
 
 ## [0.2.275] — 2026-08-25
-- fix(build): bump-version keeps bundled inventory release in lockstep with version bumps (CAP-FB-20260825-INVENTORY-DRIFT-01)
+- fix(build): version bumps now keep the bundled tool inventory in lockstep, so npm run build no longer fails after a release
 
 ## [0.2.274] — 2026-08-25
 - fix(build): keep bundled inventory release in lockstep with version bumps
