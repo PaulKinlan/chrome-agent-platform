@@ -1602,24 +1602,35 @@ export function browserToolset(readOnly = false) {
               targets.push(t);
             }
           }
-          // The grant must cover EVERY highlighted tab's origin (a highlight
-          // is every target tab's mutation — the same discipline as
-          // mutateWindowWithGrant). Any uncovered origin fails closed.
-          const origins = [...new Set(
-            targets
-              .map((t) => {
-                try {
-                  return t?.url ? canonicalOrigin(t.url) : null;
-                } catch {
-                  return null;
-                }
-              })
-              .filter((o) => typeof o === "string"),
-          )];
-          const covered = origins.length === 0
+          // The grant must cover EVERY highlighted tab (a highlight is every
+          // target tab's mutation — the same discipline as
+          // mutateWindowWithGrant). Two obligations, BOTH enforced — the
+          // mixed-set fail-open fix (T13 review blocker): every NAMED origin
+          // must be granted, AND any origin-less target (chrome://, about:,
+          // url-less tabs — canonicalOrigin returns null for all of them) is
+          // a browser-level scope requiring the GLOBAL grant. Origin-less
+          // targets are counted (hasOriginless), never filtered out of the
+          // check: an origin grant for a co-present https tab must not
+          // smuggle a chrome:// tab through the mutation.
+          let hasOriginless = false;
+          const origins = new Set();
+          for (const t of targets) {
+            let o = null;
+            try {
+              o = t?.url ? canonicalOrigin(t.url) : null;
+            } catch {
+              o = null;
+            }
+            if (typeof o === "string") origins.add(o);
+            else hasOriginless = true;
+          }
+          const namedCovered = (
+            await Promise.all([...origins].map((o) => isBrowserControlGranted(o)))
+          ).every(Boolean);
+          const originlessCovered = hasOriginless
             ? await isBrowserControlGranted(undefined)
-            : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
-          if (!covered) {
+            : true;
+          if (!namedCovered || !originlessCovered) {
             return {
               error:
                 "browser control not granted for every highlighted tab's origin — ask the user to approve it in Settings",
@@ -1838,6 +1849,25 @@ export function browserToolset(readOnly = false) {
 // must never apply the mutation to a newly-unauthorized tab — the round-20/21
 // close-identity race applied to every deep tab op). The fence is re-checked
 // AFTER the await so an abort mid-mutation never reports success.
+//
+// Origin coverage (aligned with highlight_tabs' corrected coverage semantics
+// after the T13 review's mixed-set blocker): a tab whose URL yields no web
+// origin (chrome://, about:, url-less — canonicalOrigin returns null) is the
+// ORIGIN-LESS class, a browser-level scope authorized ONLY by the GLOBAL
+// grant; under an origins-scoped grant it is denied. (Chosen option per the
+// review: align with the corrected coverage semantics rather than the
+// stricter blanket denial — origin-less single-tab mutations ARE possible,
+// but only under a GLOBAL grant.)
+function t13OriginClass(tab) {
+  let o = null;
+  try {
+    o = tab?.url ? canonicalOrigin(tab.url) : null;
+  } catch {
+    o = null;
+  }
+  return typeof o === "string" ? o : null; // null = the origin-less class
+}
+
 async function t13MutateTabWithGrant(tabId, verb, mutate) {
   if (!(await hasTabsPermission())) {
     return {
@@ -1848,15 +1878,9 @@ async function t13MutateTabWithGrant(tabId, verb, mutate) {
   return await withGrantLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) return { error: `no such tab: ${tabId}` };
-    const origin = tab.url
-      ? (() => {
-          try {
-            return canonicalOrigin(tab.url);
-          } catch {
-            return undefined;
-          }
-        })()
-      : undefined;
+    const origin = t13OriginClass(tab);
+    // null (origin-less) reaches isBrowserControlGranted(undefined-equivalent):
+    // a global grant authorizes it, an origins grant never does.
     if (!(await isBrowserControlGranted(origin))) {
       return {
         error:
@@ -1869,17 +1893,12 @@ async function t13MutateTabWithGrant(tabId, verb, mutate) {
       return { error: `run aborted — tab not ${verb}` };
     }
     // Re-read + compare the tab identity IMMEDIATELY before the mutation.
+    // The comparison is over the ORIGIN CLASS (a string origin or the
+    // origin-less null): an origin-less tab may only be mutated if it is
+    // STILL origin-less, and a web-origin tab only if it is still the SAME
+    // origin — any cross-class or cross-origin navigation fails closed.
     const bound = await chrome.tabs.get(tabId).catch(() => null);
-    const boundOrigin = bound?.url
-      ? (() => {
-          try {
-            return canonicalOrigin(bound.url);
-          } catch {
-            return undefined;
-          }
-        })()
-      : undefined;
-    if (!bound || !boundOrigin || boundOrigin !== origin) {
+    if (!bound || t13OriginClass(bound) !== origin) {
       return { error: `tab navigated before being ${verb} — source identity changed` };
     }
     try {

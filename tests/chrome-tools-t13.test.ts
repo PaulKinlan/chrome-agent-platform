@@ -342,6 +342,80 @@ Deno.test("T13 highlight_tabs: EVERY highlighted origin must be granted; indices
   assertEquals(r.ok, true, "global grant covers the origin-less highlight");
 });
 
+Deno.test("T13 MIXED-SET coverage (review blocker): an origin-less tab is NEVER filtered out of the grant check", async () => {
+  reset();
+  const a = seedTab("https://a.example/x", { index: 0 });
+  const chromeTab = seedTab("chrome://newtab/", { index: 1 }); // canonicalOrigin → null (non-http scheme)
+
+  // The reviewer's probe, direction 1: an origins grant covering ONLY the
+  // https tab must REFUSE the mixed set (pre-fix this returned
+  // {ok:true, highlighted:2} — the origin-less tab was filtered out of the
+  // coverage set and failed open).
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  let r = await tools().highlight_tabs.execute({ tabIds: [a.id, chromeTab.id] });
+  assert(r.error && r.error.includes("every highlighted tab"), `mixed set refused under an origins grant: ${r?.error}`);
+  assertEquals(calls.highlight.length, 0, "no highlight reached Chrome");
+  assertEquals(r.ok, undefined);
+
+  // Direction 2: the SAME mixed set under a GLOBAL grant is ALLOWED (the
+  // global grant covers the origin-less tab; named origins are covered too).
+  await setGlobalBrowserControlGrant();
+  r = await tools().highlight_tabs.execute({ tabIds: [a.id, chromeTab.id] });
+  assertEquals(r.ok, true, "global grant covers the mixed set");
+  assertEquals(r.highlighted, 2);
+  assertEquals(calls.highlight.length, 1);
+
+  // Origin-less-ONLY set under an origins grant is likewise refused (empty
+  // named-origin set + hasOriginless → the global grant is required).
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  r = await tools().highlight_tabs.execute({ tabIds: [chromeTab.id] });
+  assert(r.error, "origin-less-only set refused under an origins grant");
+  assertEquals(calls.highlight.length, 1, "still no new highlight reached Chrome");
+});
+
+Deno.test("T13 aligned single-tab coverage: origin-less tabs mutate ONLY under a global grant; cross-class navigation fails closed", async () => {
+  reset();
+  const chromeTab = seedTab("chrome://settings/");
+
+  // origins grant → the origin-less single tab is denied (never in the list)
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  let r = await tools().reload_tab.execute({ tabId: chromeTab.id });
+  assert(r.error && r.error.includes("browser control not granted"), `origin-less single tab denied under an origins grant: ${r?.error}`);
+  assertEquals(calls.reload.length, 0);
+
+  // global grant → allowed (the aligned coverage semantics chosen per review)
+  await setGlobalBrowserControlGrant();
+  r = await tools().reload_tab.execute({ tabId: chromeTab.id });
+  assertEquals(r.ok, true, "origin-less single tab allowed under a global grant");
+  assertEquals(calls.reload.length, 1);
+
+  // identity: an origin-less tab that navigates to a WEB origin between the
+  // grant check and the mutation fails closed (cross-class navigation)
+  const realGet = globalThis.chrome.tabs.get;
+  let served = 0;
+  globalThis.chrome.tabs.get = async (id) => {
+    const copy = await realGet(id);
+    served++;
+    if (served >= 2) return { ...copy, url: "https://evil.example/x" };
+    return copy;
+  };
+  r = await tools().set_tab_zoom.execute({ tabId: chromeTab.id, zoomFactor: 1.5 });
+  assert(r.error && r.error.includes("source identity changed"), `cross-class navigation fails closed: ${r?.error}`);
+
+  // …while staying within the origin-less class (chrome://settings →
+  // chrome://version) remains inside the globally-granted class
+  served = 0;
+  globalThis.chrome.tabs.get = async (id) => {
+    const copy = await realGet(id);
+    served++;
+    if (served >= 2) return { ...copy, url: "chrome://version/" };
+    return copy;
+  };
+  r = await tools().set_tab_zoom.execute({ tabId: chromeTab.id, zoomFactor: 1.5 });
+  assertEquals(r.ok, true, "origin-less → origin-less stays within the granted class");
+  globalThis.chrome.tabs.get = realGet;
+});
+
 Deno.test("T13 discard: Chrome's refusal (active tab) surfaces as a structured error, never a throw", async () => {
   reset();
   const active = seedTab("https://granted.example/a", { active: true });
