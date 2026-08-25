@@ -55,6 +55,11 @@ const BROWSER_READ_TOOLS = new Set([
   "list_bookmarks",
   "query_idle_state",
   "list_context_menus",
+  // Tranche-7 Chrome API coverage: sessions + history reads
+  "list_recently_closed",
+  "list_synced_devices",
+  "search_history",
+  "get_history_visits",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -126,6 +131,10 @@ const BUILT_IN_TOOLS = new Set([
   "notify", "clear_notification",
   "query_idle_state",
   "create_context_menu", "list_context_menus", "remove_context_menu",
+  // Tranche-7 Chrome API coverage (reads classified above; ALL are built-ins):
+  "list_recently_closed", "restore_closed", "list_synced_devices",
+  "search_history", "get_history_visits", "add_history_url",
+  "delete_history_url", "delete_history_range", "clear_all_history",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",
