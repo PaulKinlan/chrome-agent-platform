@@ -2092,6 +2092,14 @@ async function renderUsage() {
 async function renderMemoryExplorer() {
   const el = $("#memory-explorer");
   if (!el) return;
+  // The tree is rebuilt from scratch on every render, so anything the owner had
+  // expanded snapped shut — including on the refresh that follows Clear, which
+  // is exactly when they are looking at that store. Remember what was open and
+  // restore it, keyed by a stable id rather than DOM position.
+  const wasExpanded = new Set(
+    [...el.querySelectorAll('[data-mem-id][aria-expanded="true"]')]
+      .map((n) => n.getAttribute("data-mem-id")),
+  );
   el.replaceChildren();
   const res = await chrome.runtime
     .sendMessage({ type: "memory.stores" })
@@ -2121,6 +2129,8 @@ async function renderMemoryExplorer() {
     const head = document.createElement("button");
     head.type = "button";
     head.className = "mem-dir-head";
+    const memId = `dir:${kind}:${label}`;
+    head.setAttribute("data-mem-id", memId);
     head.setAttribute("aria-expanded", "false");
     const caret = document.createElement("span");
     caret.className = "mem-caret";
@@ -2145,6 +2155,11 @@ async function renderMemoryExplorer() {
     });
     wrap.append(head, body);
     for (const c of children) body.append(c);
+    if (wasExpanded.has(memId)) {
+      head.setAttribute("aria-expanded", "true");
+      caret.textContent = "▾";
+      body.classList.remove("hidden");
+    }
     return wrap;
   }
 
@@ -2155,6 +2170,8 @@ async function renderMemoryExplorer() {
     const head = document.createElement("button");
     head.type = "button";
     head.className = "mem-dir-head";
+    const memId = `store:${store.key}`;
+    head.setAttribute("data-mem-id", memId);
     head.setAttribute("aria-expanded", "false");
     const caret = document.createElement("span");
     caret.className = "mem-caret";
@@ -2179,6 +2196,16 @@ async function renderMemoryExplorer() {
       }
     });
     wrap.append(head, body);
+    // Restore an expansion the owner had before this rebuild. Keys are lazy, so
+    // re-fetch them here — that is also what makes a cleared store show its new
+    // (empty) contents instead of the list it had a moment ago.
+    if (wasExpanded.has(memId)) {
+      head.setAttribute("aria-expanded", "true");
+      caret.textContent = "▾";
+      body.classList.remove("hidden");
+      loaded = true;
+      fillKeys(store, body).catch(() => { loaded = false; });
+    }
     return wrap;
   }
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.266] — 2026-08-25
+- The memory tree in Settings → Data & memory now stays open where you left it when you clear a store, instead of collapsing.
+
 ## [0.2.265] — 2026-08-25
 - Fixed the Clear button in Settings → Data & memory: clearing a Site Agent's memory now visibly empties it straight away instead of leaving the old key count on screen, and tells you honestly if a clear fails.
 

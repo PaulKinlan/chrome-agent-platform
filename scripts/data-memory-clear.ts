@@ -143,6 +143,41 @@ try {
   const enrolled = await settings.send({ type: "agent.list" });
   check("Data & memory: Clear does not disenroll the site agent", Array.isArray(enrolled) && enrolled.includes(ORIGIN), JSON.stringify(enrolled));
 
+  // Refreshing the explorer rebuilds the whole tree, which used to snap every
+  // expanded node shut — on precisely the refresh that follows Clear, when the
+  // owner is looking at that store. Expansion is keyed by a stable id and
+  // restored. (Individual key/value nodes are NOT restored: their content may
+  // be stale after a clear, and collapsing one is far less disruptive than
+  // losing the tree.)
+  await settings.evaluate(`[...document.querySelectorAll('#memory-explorer [data-mem-id][aria-expanded="false"]')].forEach((b) => b.click()); 0`);
+  await sleep(500);
+  await settings.evaluate(`[...document.querySelectorAll('#memory-explorer [data-mem-id][aria-expanded="false"]')].forEach((b) => b.click()); 0`);
+  await sleep(500);
+  const openBefore = await settings.evaluate(
+    `JSON.stringify([...document.querySelectorAll('#memory-explorer [data-mem-id][aria-expanded="true"]')].map((n) => n.getAttribute('data-mem-id')).sort())`,
+  );
+  check("Data & memory: the explorer tree can be expanded", JSON.parse(String(openBefore)).length > 0, String(openBefore));
+
+  await settings.send({ type: "memory.set", origin: ORIGIN, key: "again", value: 1 });
+  const reclicked = await settings.evaluate(`(() => {
+    const row = [...document.querySelectorAll('#origin-list .origin-row')]
+      .find((r) => r.textContent.includes('clear-fixture.example'));
+    const btn = row?.querySelector('.clear-origin');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`);
+  check("Data & memory: clicked Clear again with the tree expanded", reclicked === true);
+  await sleep(1500);
+  const openAfter = await settings.evaluate(
+    `JSON.stringify([...document.querySelectorAll('#memory-explorer [data-mem-id][aria-expanded="true"]')].map((n) => n.getAttribute('data-mem-id')).sort())`,
+  );
+  check(
+    "Data & memory: Clear keeps the owner's expanded nodes open",
+    String(openAfter) === String(openBefore),
+    `before=${openBefore} after=${openAfter}`,
+  );
+
   const errors = await settings.evaluate(`(window.__capErrors || []).length`);
   check("Data & memory: no page errors during the flow", !errors);
 } finally {

@@ -182,7 +182,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **31 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **30 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -211,7 +211,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
 | P1 | OPEN | [`CAP-FB-20260823-PYODIDE-PYTHON-01`](#cap-fb-20260823-pyodide-python-01-python-in-the-browser-via-pyodide) | Python in the browser via Pyodide |
 | P1 | OPEN | [`CAP-FB-20260825-DATA-EXPORT-IMPORT-01`](#cap-fb-20260825-data-export-import-01-owner-export-and-import-of-all-agent-data) | Owner export and import of all agent data |
-| P1 | IN_REVIEW | [`CAP-FB-20260825-DATA-MEMORY-CLEAR-01`](#cap-fb-20260825-data-memory-clear-01-data--memory-clear-looks-like-it-does-nothing) | Data & memory Clear looks like it does nothing |
 | P1 | OPEN | [`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`](#cap-fb-20260825-headed-acceptance-lane-01-a-headed-browser-acceptance-lane) | A headed-browser acceptance lane |
 | P1 | OPEN | [`CAP-FB-20260825-OWNER-DECISION-QUEUE-01`](#cap-fb-20260825-owner-decision-queue-01-product-decisions-blocking-tracked-work) | Product decisions blocking tracked work |
 | P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
@@ -1329,8 +1328,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-DATA-MEMORY-CLEAR-01] Data & memory Clear looks like it does nothing
 - Feedback: 2026-08-25 — product owner: "The clear button doesn't work in Data & memory (at least for site agents)."
-- Updated: 2026-08-25 18:30 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-25 19:20 UTC
+- Status: DONE
 - Resume: —
 - Priority: P1
 - Owner: claude-opus-5 implementer session
@@ -1340,12 +1339,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Candidate: this commit
 - Shipping: this commit on `origin/main`
 - Acceptance: clicking Clear on a site agent's row in Settings → Data & memory visibly empties that store without a reload — the memory explorer's key count for the origin drops to zero; the store really is empty; the agent stays enrolled, because clearing memory is not a revocation; and the owner is told what actually happened rather than being shown a success message the code never checked
-- Review: pending — a different model/session should confirm the refresh covers every surface that displays store contents, and that the route's new result shape is handled by all callers
-- Gates: `scripts/data-memory-clear.ts` 10/10 on a clean profile, verified to FAIL (`before=4 after=4`) against the unfixed handler; unit 1591/0; Chrome journeys 127/127; security suite PASS; build/gallery/changelog/tasks-schema green
+- Review: author self-review 2026-08-25 (two further defects found and fixed, below); **no independent review** — the product owner asked the author to review directly
+- Gates: `scripts/data-memory-clear.ts` **13/13** on a clean profile, with both regressions verified to FAIL against the unfixed code (`before=4 after=4` for the stale count, `after=[]` for the collapsed tree); unit 1591/0; Chrome journeys 127/127; security suite PASS
 - Blockers: —
-- Next: obtain the independent review, then close
+- Next: an independent pass if one becomes cheap; otherwise closed. `extension/memory/explorer.js` is a separate removal candidate, not a fix for this report
 - Recover: `npm run test:data-clear && git grep -n "renderMemoryExplorer" -- extension/options/options.js`
 - History:
+  - 2026-08-25 19:20 UTC — **author self-review, not independent.** Two further defects found in my own fix, both fixed here. **(1) I introduced a UX regression:** making the explorer refresh meant it rebuilt the whole tree with every node collapsed, so clearing snapped shut whatever the owner had expanded — on precisely the refresh where they are looking at that store. Expansion is now keyed by a stable `data-mem-id` and restored across the rebuild, and a restored store re-fetches its (now empty) keys. Individual key/value nodes are deliberately NOT restored: their content can be stale after a clear, and collapsing one is far less disruptive than losing the tree. **(2) A third Clear button exists** in `extension/memory/explorer.js` with the same ignore-the-result shape. It is NOT reachable — nothing in the extension, tests or scripts links `memory/explorer.html` — so it is not the button in this report and is recorded as a removal candidate rather than fixed in place, which would have meant maintaining a dead surface.
+  - 2026-08-25 19:20 UTC — also checked and found clean: every other `memory.clear` caller tolerates the new result shape (`scripts/opfs-real-browser.ts`, `scripts/chrome-journeys.ts` and the route-modularization test all ignore or destructure it safely).
   - 2026-08-25 18:30 UTC — reproduced exactly as reported and fixed. The data WAS being cleared; the UI just never showed it. The origin-row handler called `renderData()` (which redraws the enrolled-origins list, unchanged by a clear) but not `renderMemoryExplorer()` — and the explorer is the surface that displays keys and counts, so it kept showing the cleared store's old count until a reload. Both Clear handlers now refresh both surfaces.
   - 2026-08-25 18:30 UTC — second defect found while fixing the first: `memory.clear` resolved to `undefined`, so neither handler could tell success from failure and both flashed "Cleared…" unconditionally. The route now returns `{ok:true, origin}` or `{ok:false, error}`, and both handlers report the real outcome. A button that lies about having worked is the same class of bug as one that does nothing.
   - 2026-08-25 18:30 UTC — checked and ruled out a worse possibility: `clear()` does remove the site store's `enrolled` key, but enrollment authority does not live there, so a clear never silently disenrolls a Site Agent. Asserted in the new script so it stays true.
