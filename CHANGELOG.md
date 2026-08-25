@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.265] — 2026-08-25
+- Fixed the Clear button in Settings → Data & memory: clearing a Site Agent's memory now visibly empties it straight away instead of leaving the old key count on screen, and tells you honestly if a clear fails.
+
 ## [0.2.264] — 2026-08-25
 - Fixed Site Agent tool calls opening the website's home page instead of the specific page that registered the tool. The booking now opens the exact page (e.g. the Le Petit Bistro demo page) and runs its tool there; older site records heal automatically.
 

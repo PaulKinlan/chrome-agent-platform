@@ -182,7 +182,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **30 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **31 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -211,6 +211,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
 | P1 | OPEN | [`CAP-FB-20260823-PYODIDE-PYTHON-01`](#cap-fb-20260823-pyodide-python-01-python-in-the-browser-via-pyodide) | Python in the browser via Pyodide |
 | P1 | OPEN | [`CAP-FB-20260825-DATA-EXPORT-IMPORT-01`](#cap-fb-20260825-data-export-import-01-owner-export-and-import-of-all-agent-data) | Owner export and import of all agent data |
+| P1 | IN_REVIEW | [`CAP-FB-20260825-DATA-MEMORY-CLEAR-01`](#cap-fb-20260825-data-memory-clear-01-data--memory-clear-looks-like-it-does-nothing) | Data & memory Clear looks like it does nothing |
 | P1 | OPEN | [`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`](#cap-fb-20260825-headed-acceptance-lane-01-a-headed-browser-acceptance-lane) | A headed-browser acceptance lane |
 | P1 | OPEN | [`CAP-FB-20260825-OWNER-DECISION-QUEUE-01`](#cap-fb-20260825-owner-decision-queue-01-product-decisions-blocking-tracked-work) | Product decisions blocking tracked work |
 | P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
@@ -1325,3 +1326,27 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-25 16:05 UTC — **P0 product bug.** `agent.run` returned `invalid durable-run key: thread-runs:<threadId>` for EVERY task. The 0.2.257 log redesign (`ee970b3`) added a `thread-runs:<threadId>` reverse index written through `durableRunMemory`, but the durable key router only understood `run-registry` and the five `run*:<executionId>` prefixes; a thread id is not an execution id, so `durableStoreForKey` threw, and because every run links its thread on the way in the throw took the run with it. The router now gives `thread-runs:` its own bounded per-thread store mirroring the per-execution layout, `keys()` enumerates them, and thread ids are validated against a bounded safe charset (`thread-runs:../escape` and an empty id are rejected). No migration: the feature never successfully wrote a key. This single bug was killing the five journey checks that ask the agent to actually produce a result.
   - 2026-08-25 16:05 UTC — **stale test, product correct.** The suite aborted at "pending owner approval did not render in exact Settings" and lost the last 30 checks. `ab02213` made `asset.delete`/`agent.delete`/`named-agent.delete`/`recipe.delete` owner-direct, so an owner surface click no longer queues an approval; three journey steps still waited for a row that is now correctly never created. Disenroll now asserts the new behaviour POSITIVELY (a genuine owner click leaves no `agent.delete` approval queued) rather than simply dropping the old assertion, and the deny/worker-restart paths moved to `asset.update`, which is still gated and exercises the identical deny flow — coverage preserved, not removed.
   - 2026-08-25 14:40 UTC — opened with attribution evidence. **Chrome journeys: 96/126**, aborting at `journey failure: pending owner approval did not render in exact Settings`, immediately after `Settings: Disenroll button present for an enrolled agent`; the remaining 30 checks report `(not reached)`. **Unit: `tests/usage-authority.test.ts` PROBE-2** ("a concurrent initializer loser must mirror the WINNING authority, not its own" — `authority holds the migrated legacy row exactly once`) **and PROBE-4** ("after corruption repair, a valid write succeeds") fail. All three were reproduced on pristine `0626e6b` with unrelated local work stashed, and again with it restored, at the identical abort point — so they predate that work and are not caused by it. Filed rather than fixed in passing: the journey abort sits in the approvals/enrollment path and the usage probes in the ledger, both owned by other lanes.
+
+## [CAP-FB-20260825-DATA-MEMORY-CLEAR-01] Data & memory Clear looks like it does nothing
+- Feedback: 2026-08-25 — product owner: "The clear button doesn't work in Data & memory (at least for site agents)."
+- Updated: 2026-08-25 18:30 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P1
+- Owner: claude-opus-5 implementer session
+- Workspace: active (local path private)
+- Branch: detached candidate on `origin/main`
+- Base: `2c25e82`
+- Candidate: this commit
+- Shipping: this commit on `origin/main`
+- Acceptance: clicking Clear on a site agent's row in Settings → Data & memory visibly empties that store without a reload — the memory explorer's key count for the origin drops to zero; the store really is empty; the agent stays enrolled, because clearing memory is not a revocation; and the owner is told what actually happened rather than being shown a success message the code never checked
+- Review: pending — a different model/session should confirm the refresh covers every surface that displays store contents, and that the route's new result shape is handled by all callers
+- Gates: `scripts/data-memory-clear.ts` 10/10 on a clean profile, verified to FAIL (`before=4 after=4`) against the unfixed handler; unit 1591/0; Chrome journeys 127/127; security suite PASS; build/gallery/changelog/tasks-schema green
+- Blockers: —
+- Next: obtain the independent review, then close
+- Recover: `npm run test:data-clear && git grep -n "renderMemoryExplorer" -- extension/options/options.js`
+- History:
+  - 2026-08-25 18:30 UTC — reproduced exactly as reported and fixed. The data WAS being cleared; the UI just never showed it. The origin-row handler called `renderData()` (which redraws the enrolled-origins list, unchanged by a clear) but not `renderMemoryExplorer()` — and the explorer is the surface that displays keys and counts, so it kept showing the cleared store's old count until a reload. Both Clear handlers now refresh both surfaces.
+  - 2026-08-25 18:30 UTC — second defect found while fixing the first: `memory.clear` resolved to `undefined`, so neither handler could tell success from failure and both flashed "Cleared…" unconditionally. The route now returns `{ok:true, origin}` or `{ok:false, error}`, and both handlers report the real outcome. A button that lies about having worked is the same class of bug as one that does nothing.
+  - 2026-08-25 18:30 UTC — checked and ruled out a worse possibility: `clear()` does remove the site store's `enrolled` key, but enrollment authority does not live there, so a clear never silently disenrolls a Site Agent. Asserted in the new script so it stays true.
+  - 2026-08-25 18:30 UTC — coverage lives in a dedicated `scripts/data-memory-clear.ts` on a clean profile rather than inside the 127-check journey suite. Adding it there first was tried and rejected: the fixture had to be created mid-suite, where accumulated global state (a revoked `storage` capability, several enrolled origins) made the explorer assertions unreliable, and the extra enrolled origin made a later step's first-match `.origin-row .disenroll-origin` click remove the wrong agent. A focused script tests the button instead of the suite's history.

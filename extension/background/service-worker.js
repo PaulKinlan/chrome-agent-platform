@@ -4301,7 +4301,15 @@ const handlers = mergeRouteMaps(
     return all.filter((k) => !/^(?:__gen|__tx|__wal|__epoch|__tombs|assets|assetRepair|asset:)/.test(k));
   },
   async "memory.clear"({ origin }) {
-    return await resolveMemory(origin).clear();
+    // `clear()` resolves to undefined, so the old shape gave the caller nothing
+    // to check — Settings reported "Cleared…" whether or not anything happened.
+    // Return an explicit result and let a failure surface.
+    try {
+      await resolveMemory(origin).clear();
+      return { ok: true, origin };
+    } catch (e) {
+      return { ok: false, error: `could not clear memory: ${e?.message ?? e}` };
+    }
   },
   async "memory.origins"() {
     return await listOrigins();

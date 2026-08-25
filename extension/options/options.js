@@ -2202,7 +2202,13 @@ async function renderMemoryExplorer() {
     clearBtn.className = "btn small ghost mem-clear";
     clearBtn.textContent = `Clear ${store.label}'s memory`;
     clearBtn.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ type: "memory.clear", origin: store.key }).catch(() => {});
+      const res = await chrome.runtime
+        .sendMessage({ type: "memory.clear", origin: store.key })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok === false) {
+        saveFlash(res.error || `Couldn't clear ${store.label}'s memory.`);
+        return;
+      }
       saveFlash(`Cleared ${store.label}'s memory.`);
       renderMemoryExplorer();
       renderData();
@@ -2286,9 +2292,19 @@ async function renderData() {
     clear.className = "btn small ghost clear-origin";
     clear.textContent = "Clear";
     clear.addEventListener("click", async () => {
-      await chrome.runtime.sendMessage({ type: "memory.clear", origin });
+      const res = await chrome.runtime
+        .sendMessage({ type: "memory.clear", origin })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (res?.ok === false) {
+        saveFlash(res.error || `Couldn't clear memory for ${origin}.`);
+        return;
+      }
       saveFlash(`Cleared memory for ${origin}.`);
+      // The memory explorer is where the keys and counts are actually shown.
+      // Refreshing only the origin list left it displaying the cleared store's
+      // old key count, so the button looked like it had done nothing.
       renderData();
+      renderMemoryExplorer();
     });
     row.appendChild(clear);
 
