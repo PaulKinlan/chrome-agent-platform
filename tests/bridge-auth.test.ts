@@ -7,15 +7,15 @@
 //  - a wrong key, a tampered body, a replay, an out-of-order seq, and
 //    malformed tags/seqs are all rejected (the round-30 bridge-forgery gate)
 // @ts-nocheck — the content script is a plain script; the test imports it for
-// its globalThis.CairnBridgeAuth side effect.
+// its globalThis.CapBridgeAuth side effect.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 await import("../extension/content/bridge-auth.js");
-const auth = globalThis.CairnBridgeAuth;
+const auth = globalThis.CapBridgeAuth;
 
 Deno.test("bridge-auth: the primitive is installed + frozen", () => {
-  assert(auth, "CairnBridgeAuth installed on globalThis");
+  assert(auth, "CapBridgeAuth installed on globalThis");
   assert(Object.isFrozen(auth), "the API surface is frozen");
   assertEquals(typeof auth.seal, "function");
   assertEquals(typeof auth.open, "function");

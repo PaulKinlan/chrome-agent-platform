@@ -18,7 +18,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 
 // The MAC primitive the production injection loads BEFORE main-world.js.
 await import("../extension/content/bridge-auth.js");
-const bridgeAuth = globalThis.CairnBridgeAuth;
+const bridgeAuth = globalThis.CapBridgeAuth;
 
 const SRC = Deno.readTextFileSync(
   new URL("../extension/content/main-world.js", import.meta.url).pathname,
@@ -71,10 +71,10 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   const documentObj = { modelContext, readyState: "complete" };
   const locationObj = { origin: "https://example.com" };
   // bridge-auth.js is injected BEFORE this file in production — expose it on
-  // the mocked realm (the script reads globalThis.CairnBridgeAuth, and the
+  // the mocked realm (the script reads globalThis.CapBridgeAuth, and the
   // harness shadows globalThis with the mocked window so the bootstrap hook
   // installs per-world, not on the test runner's global).
-  windowObj.CairnBridgeAuth = bridgeAuth;
+  windowObj.CapBridgeAuth = bridgeAuth;
   const evaluate = () => {
     const fn = new Function(
       "window", "document", "location", "setTimeout", "clearTimeout", "crypto", "globalThis",
@@ -94,12 +94,12 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   };
   // Out-of-band arming (the production path: the SW calls the bootstrap hook
   // via chrome.scripting.executeScript func args — never over postMessage).
-  const arm = () => windowObj.__cairnMainWorldBootstrap(NONCE, false);
+  const arm = () => windowObj.__capMainWorldBootstrap(NONCE, false);
   // Sealed isolated→MAIN control messages (the production relay MACs every
   // message; a bare emit() simulates a page-script forgery).
   let downSeq = 0;
-  const send = (msg) => emit({ __cairn_bridge: true, ...bridgeAuth.seal(NONCE, "down", downSeq++, msg) });
-  const sealWith = (key, msg) => ({ __cairn_bridge: true, ...bridgeAuth.seal(key, "down", downSeq++, msg) });
+  const send = (msg) => emit({ __cap_bridge: true, ...bridgeAuth.seal(NONCE, "down", downSeq++, msg) });
+  const sealWith = (key, msg) => ({ __cap_bridge: true, ...bridgeAuth.seal(key, "down", downSeq++, msg) });
   const liveListeners = () => messageListeners.length;
   return { posted, emit, send, sealWith, arm, reevaluate: evaluate, windowObj, liveListeners };
 }
@@ -349,7 +349,7 @@ Deno.test("webmcp bridge auth: a page-forged (unauthenticated or wrongly-keyed) 
   await new Promise((r) => setTimeout(r, 30));
   // A page script forges a bridge message WITHOUT the MAC (the old nonce-echo
   // shape — even echoing a correctly-guessed nonce field no longer helps).
-  world.emit({ __cairn_bridge: true, type: "invoke", nonce: NONCE, requestId: "r-forge", name: "tool", args: {}, source: "inferred" });
+  world.emit({ __cap_bridge: true, type: "invoke", nonce: NONCE, requestId: "r-forge", name: "tool", args: {}, source: "inferred" });
   await new Promise((r) => setTimeout(r, 30));
   assertEquals(calls, 0, "an unMAC'd forged invoke never runs the page function");
   assert(!world.posted.some((m) => m?.type === "result" && m?.requestId === "r-forge"), "no result for a forged invoke");
@@ -358,7 +358,7 @@ Deno.test("webmcp bridge auth: a page-forged (unauthenticated or wrongly-keyed) 
   await new Promise((r) => setTimeout(r, 30));
   assertEquals(calls, 0, "a wrongly-keyed invoke never runs the page function");
   // Forged control messages are dropped too (cancel/resume were unauthenticated).
-  world.emit({ __cairn_bridge: true, type: "cancel" });
+  world.emit({ __cap_bridge: true, type: "cancel" });
   const allowed = await invokeTool(world, { name: "tool", source: "inferred", requestId: "r-real" });
   assertEquals(calls, 1, "the forged cancel never landed — the real invoke still runs");
   assertEquals(allowed[0]?.ok, true);
@@ -380,4 +380,45 @@ Deno.test("webmcp singleton: re-execution tears down the old listener (one resul
   const results = await invokeTool(world, { name: "tool", source: "inferred" });
   assertEquals(calls, 1, "exactly one side effect — the torn-down instance never fires");
   assertEquals(results.length, 1, "exactly one result posted");
+});
+
+Deno.test("webmcp invoke: a genuine DOMException reports its BOUNDED spec name (never the message)", async () => {
+  function gesture() { throw new DOMException("user gesture required — token abc123-secret", "NotAllowedError"); }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [gesture], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const results = await invokeTool(world, { name: "gesture", source: "inferred" });
+  assertEquals(results.length, 1);
+  assertEquals(results[0].ok, false);
+  const err = String(results[0].error);
+  assert(err.includes("DOMException: NotAllowedError"), `bounded name surfaced: ${err}`);
+  assert(!err.includes("abc123-secret"), "the DOMException MESSAGE (attacker text) never crosses");
+  assert(!err.includes("user gesture required"), "the message body stays redacted");
+});
+
+Deno.test("webmcp invoke: a crafted DOMException with an arbitrary name falls back to the bare type", async () => {
+  function crafted() { throw new DOMException("x", "EvilCustomName<script>alert(1)</script>"); }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [crafted], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const results = await invokeTool(world, { name: "crafted", source: "inferred" });
+  const err = String(results[0].error);
+  assertEquals(err, "tool failed (DOMException)", `crafted name contained: ${err}`);
+  assert(!err.includes("EvilCustomName") && !err.includes("<script>"), "no arbitrary name text crosses");
+});
+
+Deno.test("webmcp invoke: a fake DOMException-shaped object does NOT get the bounded-name treatment", async () => {
+  function fake() {
+    // NOT a genuine DOMException — a crafted lookalike. It must never leak a
+    // non-allowlisted name (and never a message).
+    const e = { name: "NotAllowedError", message: "secret-text", constructor: { name: "DOMException" } };
+    throw e;
+  }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [fake], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const results = await invokeTool(world, { name: "fake", source: "inferred" });
+  const err = String(results[0].error);
+  assertEquals(err, "tool failed (DOMException)", `lookalike collapses to the bare type: ${err}`);
+  assert(!err.includes("secret-text"), "lookalike message never crosses");
 });

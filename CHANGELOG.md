@@ -1,19 +1,11 @@
 # Changelog
 
-## [0.2.270] — 2026-08-25
-- chore(release): 0.2.269
-
-## [0.2.268] — 2026-08-25
-- fix(ui): create-agent dialog mic replaces with cumulative transcript (no doubling) + navigation applies immediately (view transitions removed, focus routing preserved)
-
 ## [0.2.272] — 2026-08-25
-- chore(tasks): record cairn-rename + DOMException-name landed (0.2.270)
+- fix(security+ui): restore cairn->cap-* rename (lost to worktree overwrite) + consolidate mic/view-transition; clean version 0.2.271
 
 ## [0.2.271] — 2026-08-25
-- chore(release): 0.2.270
-
-## [0.2.269] — 2026-08-25
 - fix(security): rename all foreign 'cairn' identifiers to cap-* (bridge/auth consistent) + surface bounded DOMException name
+- fix(ui): create-agent dialog mic replaces with cumulative transcript (no doubling) + navigation applies immediately (view transitions removed, focus routing preserved)
 
 ## [0.2.267] — 2026-08-25
 - Site Agents are now discoverable: when you open a page that offers agent tools you get a clear "Add Site Agent" button, and the Site Agents list shows discovered-but-not-yet-added sites (no typing origins). Enrolled sites now reliably work after a browser restart instead of going silent.

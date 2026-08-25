@@ -9,7 +9,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 await import("../extension/content/bridge-auth.js");
-const bridgeAuth = globalThis.CairnBridgeAuth;
+const bridgeAuth = globalThis.CapBridgeAuth;
 const NONCE = "test-bridge-key-0123456789abcdef";
 const BRIDGE_SRC = Deno.readTextFileSync(
   new URL("../extension/content/content-script.js", import.meta.url).pathname,
@@ -33,7 +33,7 @@ function makeBridge(swRoutes = {}) {
   const runtimeListeners = [];
 
   const windowObj = {
-    CairnBridgeAuth: bridgeAuth,
+    CapBridgeAuth: bridgeAuth,
     postMessage(msg) { posted.push(msg); },
     addEventListener(type, fn) {
       if (type === "message") messageListeners.push(fn);
@@ -87,7 +87,7 @@ function makeBridge(swRoutes = {}) {
   let upSeq = 0;
   const emitWindow = (msg, key = NONCE, seq = upSeq++) => {
     const sealed = bridgeAuth.seal(key, "up", seq, msg);
-    for (const l of [...messageListeners]) l({ source: windowObj, data: { __cairn_bridge: true, ...sealed } });
+    for (const l of [...messageListeners]) l({ source: windowObj, data: { __cap_bridge: true, ...sealed } });
   };
   const emitRawWindow = (data) => {
     for (const l of [...messageListeners]) l({ source: windowObj, data });
@@ -143,7 +143,7 @@ Deno.test("webmcp bridge: enrolled response without key/epoch remains unarmed (f
   const res = bridge.emitRuntime({ type: "invoke-tool", name: "x", args: {}, gen: 1, source: "declared" });
   assertEquals(res[0]?.ok, false);
   assert(String(res[0]?.error).includes("not armed"));
-  bridge.emitRawWindow({ __cairn_bridge: true, type: "tools", tools: [] });
+  bridge.emitRawWindow({ __cap_bridge: true, type: "tools", tools: [] });
   await tick(5);
   assertEquals(bridge.sent.filter((m) => m.type === "tools.upsert").length, 0);
 });
@@ -165,7 +165,7 @@ Deno.test("webmcp bridge: never-enrolled and unsynced origins fail closed", asyn
 Deno.test("webmcp bridge: MAC gate rejects bare/wrong/replayed reports; empty snapshots carry epoch + seq", async () => {
   const bridge = makeBridge(enrolledRoutes(1, 11));
   await tick();
-  bridge.emitRawWindow({ __cairn_bridge: true, type: "tools", nonce: NONCE, tools: [{ name: "spoofed" }] });
+  bridge.emitRawWindow({ __cap_bridge: true, type: "tools", nonce: NONCE, tools: [{ name: "spoofed" }] });
   bridge.emitWindow({ type: "tools", tools: [{ name: "wrong" }] }, "wrong-key-0000000000000000");
   await tick(5);
   assertEquals(bridge.sent.filter((m) => m.type === "tools.upsert").length, 0);

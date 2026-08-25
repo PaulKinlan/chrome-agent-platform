@@ -138,12 +138,12 @@
   /** Open an inbound bridge message: verifies the tag against the nonce and
    * requires an ADVANCING sequence (> lastSeq) so replays are rejected.
    * Returns { ok, msg, seq } — `msg` has seq/tag stripped. The channel marker
-   * (`__cairn_bridge`) rides alongside the MAC'd body as public routing
+   * (`__cap_bridge`) rides alongside the MAC'd body as public routing
    * metadata — it is excluded from verification (it authenticates nothing;
    * the tag does). */
   function open(nonce, direction, lastSeq, data) {
     if (!nonce || !data || typeof data !== "object") return { ok: false };
-    const { seq, tag, __cairn_bridge, ...rest } = data;
+    const { seq, tag, __cap_bridge, ...rest } = data;
     if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0 || seq > MAX_SEQ) {
       return { ok: false };
     }
@@ -154,7 +154,7 @@
     return { ok: true, msg: rest, seq };
   }
 
-  globalThis.CairnBridgeAuth = Object.freeze({
+  globalThis.CapBridgeAuth = Object.freeze({
     seal,
     open,
     hmacSha256Hex,
