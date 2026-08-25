@@ -63,6 +63,12 @@ const BROWSER_READ_TOOLS = new Set([
   // Tranche-3/4 Chrome API coverage: tab-group inventory + download history reads
   "list_tab_groups",
   "list_downloads",
+  // Tranche-9 Chrome API coverage: browser-settings inventory reads observe only.
+  "get_privacy_setting",
+  "get_proxy_settings",
+  "get_font_settings",
+  "list_tts_voices",
+  "tts_is_speaking",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -144,6 +150,14 @@ const BUILT_IN_TOOLS = new Set([
   // Tranche-4 Chrome API coverage: downloads (mutations; list_downloads above)
   "download_file", "pause_download", "resume_download", "cancel_download",
   "erase_download", "show_download", "open_download", "remove_download_file",
+  // Tranche-9 Chrome API coverage: browser settings (reads are classified above;
+  // ALL are built-ins; mutations are browser-wide + global-grant-gated).
+  "set_privacy_setting",
+  "set_proxy_settings", "clear_proxy_settings",
+  "set_font_size", "set_default_font", "clear_font_settings",
+  "request_keep_awake", "release_keep_awake",
+  "search_query",
+  "tts_speak", "tts_stop",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

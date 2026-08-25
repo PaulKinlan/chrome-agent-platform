@@ -2294,6 +2294,584 @@ export function browserToolset(readOnly = false) {
         });
       },
     }),
+    // ── T9 browser settings (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01,
+    // Tranche 9) ─────────────────────────────────────────────────────────────
+    // chrome.privacy / proxy / fontSettings / power / search / tts. Reads are
+    // light (permission only). Every mutation is BROWSER-WIDE (no destination
+    // origin) and therefore rides the GLOBAL browser-control grant inside the
+    // grant lock — an origin-scoped grant is refused, assertRunOwned is checked
+    // before AND after each mutation. Optional permissions are requested on
+    // demand via Settings; the SW never calls chrome.permissions.request here.
+    get_privacy_setting: tool({
+      description:
+        "Read one of Chrome's desktop privacy preferences (network/services/websites). Read-only; requires the privacy permission.",
+      inputSchema: z.object({
+        setting: z.enum(PRIVACY_SETTING_NAMES),
+      }),
+      execute: async ({ setting }) => {
+        if (!(await hasPermission("privacy"))) {
+          return { error: "privacy permission not granted — enable Privacy in Settings" };
+        }
+        const chromeSetting = privacyChromeSetting(setting);
+        if (!chromeSetting) return { error: `privacy setting unavailable: ${setting}` };
+        let result;
+        try {
+          result = await chromeSetting.get({});
+        } catch (e) {
+          return { error: `privacy read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        return {
+          setting,
+          value: result?.value ?? null,
+          levelOfControl: String(result?.levelOfControl ?? "").slice(0, 64) || null,
+        };
+      },
+    }),
+    set_privacy_setting: tool({
+      description:
+        "Set one of Chrome's desktop privacy preferences. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the privacy permission.",
+      inputSchema: z.object({
+        setting: z.enum(PRIVACY_SETTING_NAMES),
+        value: z.union([z.boolean(), z.string().min(1).max(64)]),
+      }),
+      execute: async ({ setting, value }) => {
+        if (!(await hasPermission("privacy"))) {
+          return { error: "privacy permission not granted — enable Privacy in Settings" };
+        }
+        // Validate the value against the setting's kind BEFORE any grant/Chrome work.
+        const valueError = privacyValueError(setting, value);
+        if (valueError) return { error: valueError };
+        const chromeSetting = privacyChromeSetting(setting);
+        if (!chromeSetting) return { error: `privacy setting unavailable: ${setting}` };
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a privacy change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — privacy setting not changed" };
+          }
+          try {
+            await chromeSetting.set({ value });
+          } catch (e) {
+            return { error: `privacy set failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — privacy setting changed then aborted" };
+          }
+          return { ok: true, setting, value };
+        });
+      },
+    }),
+    get_proxy_settings: tool({
+      description:
+        "Read the current proxy configuration (mode + PAC script URL + fixed rules). Read-only; requires the proxy permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("proxy"))) {
+          return { error: "proxy permission not granted — enable Proxy in Settings" };
+        }
+        let config;
+        try {
+          config = await chrome.proxy.settings.get({});
+        } catch (e) {
+          return { error: `proxy read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rules = config?.rules;
+        return {
+          mode: String(config?.mode ?? "").slice(0, 32) || null,
+          pacScriptUrl: config?.pacScript?.url ? String(config.pacScript.url).slice(0, 2048) : null,
+          rules: rules
+            ? {
+                singleProxy: rules.singleProxy ?? null,
+                proxyForHttp: rules.proxyForHttp ?? null,
+                proxyForHttps: rules.proxyForHttps ?? null,
+                proxyForFtp: rules.proxyForFtp ?? null,
+                fallbackProxy: rules.fallbackProxy ?? null,
+                bypassList: Array.isArray(rules.bypassList) ? rules.bypassList.slice(0, 64) : [],
+              }
+            : null,
+        };
+      },
+    }),
+    set_proxy_settings: tool({
+      description:
+        "Set the browser proxy configuration (mode + optional PAC script or fixed rules). Browser-wide traffic control: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the proxy permission.",
+      inputSchema: z.object({
+        mode: z.enum(["direct", "auto_detect", "pac_script", "fixed_servers", "system"]),
+        pacScript: z
+          .object({ url: z.string().min(1).max(2048), mandatory: z.boolean().optional() })
+          .optional(),
+        rules: z
+          .object({
+            singleProxy: z.string().min(1).max(253).optional(),
+            proxyForHttp: z.string().min(1).max(253).optional(),
+            proxyForHttps: z.string().min(1).max(253).optional(),
+            proxyForFtp: z.string().min(1).max(253).optional(),
+            fallbackProxy: z.string().min(1).max(253).optional(),
+            bypassList: z.array(z.string().min(1).max(253)).max(64).optional(),
+          })
+          .optional(),
+      }),
+      execute: async ({ mode, pacScript, rules }) => {
+        if (!(await hasPermission("proxy"))) {
+          return { error: "proxy permission not granted — enable Proxy in Settings" };
+        }
+        // Build + validate the value BEFORE any grant work or Chrome call.
+        const value = { mode };
+        if (mode === "pac_script") {
+          if (!pacScript?.url) return { error: "pac_script mode requires pacScript.url" };
+          let u;
+          try {
+            u = new URL(pacScript.url);
+          } catch {
+            return { error: "pacScript.url is not a valid URL" };
+          }
+          // A PAC fetched over a non-http(s) scheme is a traffic-redirect risk —
+          // refuse it outright (fail closed).
+          if (u.protocol !== "http:" && u.protocol !== "https:") {
+            return { error: "pacScript.url must be an http(s) URL (a non-http(s) PAC is refused)" };
+          }
+          value.pacScript = { url: pacScript.url };
+          if (pacScript.mandatory !== undefined) value.pacScript.mandatory = pacScript.mandatory;
+        } else if (mode === "fixed_servers") {
+          if (!rules) return { error: "fixed_servers mode requires rules" };
+          value.rules = {};
+          for (const k of ["singleProxy", "proxyForHttp", "proxyForHttps", "proxyForFtp", "fallbackProxy"]) {
+            if (rules[k] !== undefined) value.rules[k] = rules[k];
+          }
+          if (rules.bypassList !== undefined) value.rules.bypassList = rules.bypassList;
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — proxy changes are browser-wide traffic control and need the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — proxy not changed" };
+          }
+          try {
+            await chrome.proxy.settings.set({ value });
+          } catch (e) {
+            return { error: `proxy set failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — proxy changed then aborted" };
+          }
+          return { ok: true, mode };
+        });
+      },
+    }),
+    clear_proxy_settings: tool({
+      description:
+        "Clear the proxy configuration back to the system default. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the proxy permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("proxy"))) {
+          return { error: "proxy permission not granted — enable Proxy in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — proxy changes are browser-wide traffic control and need the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — proxy not cleared" };
+          }
+          try {
+            await chrome.proxy.settings.clear({});
+          } catch (e) {
+            return { error: `proxy clear failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — proxy cleared then aborted" };
+          }
+          return { ok: true, cleared: true };
+        });
+      },
+    }),
+    get_font_settings: tool({
+      description:
+        "Read the default font size and the default font for each generic family. Read-only; requires the fontSettings permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("fontSettings"))) {
+          return { error: "fontSettings permission not granted — enable Font settings in Settings" };
+        }
+        let size = null;
+        try {
+          const r = await chrome.fontSettings.getDefaultFontSize({});
+          size = r?.pixelSize ?? null;
+        } catch {
+          size = null;
+        }
+        const fonts = {};
+        for (const family of FONT_GENERIC_FAMILIES) {
+          try {
+            const r = await chrome.fontSettings.getFont({ genericFamily: family });
+            fonts[family] = String(r?.fontId ?? "").slice(0, 128) || null;
+          } catch {
+            fonts[family] = null;
+          }
+        }
+        return { defaultFontSizePx: size, defaultFonts: fonts };
+      },
+    }),
+    set_font_size: tool({
+      description:
+        "Set the default font size in pixels. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the fontSettings permission.",
+      inputSchema: z.object({ pixelSize: z.number().int().min(1).max(100) }),
+      execute: async ({ pixelSize }) => {
+        if (!(await hasPermission("fontSettings"))) {
+          return { error: "fontSettings permission not granted — enable Font settings in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — font size not changed" };
+          }
+          try {
+            await chrome.fontSettings.setDefaultFontSize({ pixelSize });
+          } catch (e) {
+            return { error: `font size set failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — font size changed then aborted" };
+          }
+          return { ok: true, pixelSize };
+        });
+      },
+    }),
+    set_default_font: tool({
+      description:
+        "Set the default font for a generic family. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the fontSettings permission.",
+      inputSchema: z.object({
+        genericFamily: z.enum(FONT_GENERIC_FAMILIES),
+        fontId: z.string().min(1).max(128),
+      }),
+      execute: async ({ genericFamily, fontId }) => {
+        if (!(await hasPermission("fontSettings"))) {
+          return { error: "fontSettings permission not granted — enable Font settings in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — font not changed" };
+          }
+          try {
+            await chrome.fontSettings.setFont({ genericFamily, fontId });
+          } catch (e) {
+            return { error: `font set failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — font changed then aborted" };
+          }
+          return { ok: true, genericFamily, fontId };
+        });
+      },
+    }),
+    clear_font_settings: tool({
+      description:
+        "Clear custom font settings (default size + per-family fonts) back to Chrome's defaults. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the fontSettings permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("fontSettings"))) {
+          return { error: "fontSettings permission not granted — enable Font settings in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a font change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — fonts not cleared" };
+          }
+          try {
+            await chrome.fontSettings.clearDefaultFontSize({});
+            for (const family of FONT_GENERIC_FAMILIES) {
+              await chrome.fontSettings.clearFont({ genericFamily: family });
+            }
+          } catch (e) {
+            return { error: `font clear failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — fonts cleared then aborted" };
+          }
+          return { ok: true, cleared: true };
+        });
+      },
+    }),
+    request_keep_awake: tool({
+      description:
+        "Keep the system or the display awake. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the power permission.",
+      inputSchema: z.object({ level: z.enum(["system", "display"]) }),
+      execute: async ({ level }) => {
+        if (!(await hasPermission("power"))) {
+          return { error: "power permission not granted — enable Power in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a power change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — keep-awake not set" };
+          }
+          try {
+            await chrome.power.requestKeepAwake(level);
+          } catch (e) {
+            return { error: `keep-awake failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — keep-awake set then aborted" };
+          }
+          // chrome.power exposes no getter; the honest state is the level we set.
+          return { ok: true, level, keepAwake: level };
+        });
+      },
+    }),
+    release_keep_awake: tool({
+      description:
+        "Release a previously requested keep-awake. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the power permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("power"))) {
+          return { error: "power permission not granted — enable Power in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a power change is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — keep-awake not released" };
+          }
+          try {
+            await chrome.power.release();
+          } catch (e) {
+            return { error: `keep-awake release failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — keep-awake released then aborted" };
+          }
+          return { ok: true, released: true };
+        });
+      },
+    }),
+    search_query: tool({
+      description:
+        "Run a search with the browser's default search engine (chrome.search.query only — it opens the engine's results, never an arbitrary URL). Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the search permission.",
+      inputSchema: z.object({ text: z.string().min(1).max(512) }),
+      execute: async ({ text }) => {
+        if (!(await hasPermission("search"))) {
+          return { error: "search permission not granted — enable Search in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a search is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — search not run" };
+          }
+          try {
+            await chrome.search.query({ text });
+          } catch (e) {
+            return { error: `search failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — search run then aborted" };
+          }
+          return { ok: true, queryLength: text.length };
+        });
+      },
+    }),
+    tts_speak: tool({
+      description:
+        "Speak text aloud with Chrome's text-to-speech. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the tts permission.",
+      inputSchema: z.object({
+        text: z.string().min(1).max(1000),
+        voiceName: z.string().min(1).max(128).optional(),
+        rate: z.number().min(0.1).max(10).optional(),
+        pitch: z.number().min(0).max(2).optional(),
+        volume: z.number().min(0).max(1).optional(),
+      }),
+      execute: async ({ text, voiceName, rate, pitch, volume }) => {
+        if (!(await hasPermission("tts"))) {
+          return { error: "tts permission not granted — enable Text-to-speech in Settings" };
+        }
+        const options = {};
+        if (voiceName !== undefined) options.voiceName = voiceName;
+        if (rate !== undefined) options.rate = rate;
+        if (pitch !== undefined) options.pitch = pitch;
+        if (volume !== undefined) options.volume = volume;
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — speech is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — speech not started" };
+          }
+          try {
+            await chrome.tts.speak(text, options);
+          } catch (e) {
+            return { error: `speech failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — speech started then aborted" };
+          }
+          return { ok: true, spokenCharacters: text.length };
+        });
+      },
+    }),
+    tts_stop: tool({
+      description:
+        "Stop any ongoing text-to-speech. Browser-wide: requires a GLOBAL browser-control grant (an origin-scoped grant is refused) and the tts permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("tts"))) {
+          return { error: "tts permission not granted — enable Text-to-speech in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — speech is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — speech not stopped" };
+          }
+          try {
+            await chrome.tts.stop();
+          } catch (e) {
+            return { error: `speech stop failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — speech stopped then aborted" };
+          }
+          return { ok: true, stopped: true };
+        });
+      },
+    }),
+    list_tts_voices: tool({
+      description:
+        "List the available text-to-speech voices (bounded). Read-only; requires the tts permission.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(64).optional(),
+      }),
+      execute: async ({ maxResults = 32 }) => {
+        if (!(await hasPermission("tts"))) {
+          return { error: "tts permission not granted — enable Text-to-speech in Settings" };
+        }
+        let voices = [];
+        try {
+          voices = await chrome.tts.getVoices();
+        } catch (e) {
+          return { error: `voice list failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(voices) ? voices : [];
+        return {
+          voices: rows.slice(0, maxResults).map((v) => ({
+            voiceName: String(v?.voiceName ?? "").slice(0, 128),
+            lang: String(v?.lang ?? "").slice(0, 32),
+            localService: Boolean(v?.localService),
+            isDefault: Boolean(v?.isDefault),
+          })),
+          returned: Math.min(rows.length, maxResults),
+          total: rows.length,
+          truncated: rows.length > maxResults,
+        };
+      },
+    }),
+    tts_is_speaking: tool({
+      description:
+        "Whether text-to-speech is currently speaking. Read-only; requires the tts permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("tts"))) {
+          return { error: "tts permission not granted — enable Text-to-speech in Settings" };
+        }
+        let speaking = false;
+        try {
+          speaking = await chrome.tts.isSpeaking();
+        } catch {
+          speaking = false;
+        }
+        return { speaking: Boolean(speaking) };
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -2318,6 +2896,12 @@ export function browserToolset(readOnly = false) {
       get_content_setting: all.get_content_setting,
       list_tab_groups: all.list_tab_groups,
       list_downloads: all.list_downloads,
+      // Tranche-9 reads: browser-settings inventory is observe-only.
+      get_privacy_setting: all.get_privacy_setting,
+      get_proxy_settings: all.get_proxy_settings,
+      get_font_settings: all.get_font_settings,
+      list_tts_voices: all.list_tts_voices,
+      tts_is_speaking: all.tts_is_speaking,
     };
   }
   return all;
@@ -2330,4 +2914,79 @@ export async function recordBrowserEvent(kind, payload) {
   const list = stored[key] ?? [];
   list.unshift({ kind, at: new Date().toISOString(), ...payload });
   await kvSet({ [key]: list.slice(0, 200) });
+}
+
+// ── T9 browser settings helpers (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01,
+// Tranche 9: chrome.privacy / proxy / fontSettings / power / search / tts) ──
+// Every SET/mutation here is BROWSER-WIDE — it has NO destination origin. Per the
+// house grant discipline, a mutation whose target set yields an EMPTY origin set
+// may ONLY be authorized by the GLOBAL grant; a per-origin grant can never
+// authorize a browser-wide settings change. Reads are light (permission only).
+// Optional permissions are requested ON DEMAND via the Settings capability flow —
+// the service worker never calls chrome.permissions.request itself.
+
+/** The desktop-available chrome.privacy preferences this toolset can read/set.
+ * `kind` gates the value type BEFORE any Chrome call: "boolean" accepts only
+ * booleans, "enum" accepts only one of the enumerated strings. */
+const PRIVACY_SETTINGS = Object.freeze({
+  "network.webRTCIpHandlingPolicy": Object.freeze({
+    kind: "enum",
+    values: Object.freeze([
+      "default",
+      "default_public_and_private_interfaces",
+      "default_public_interface_only",
+      "default_private_interface_only",
+      "disable_non_proxied_udp",
+    ]),
+  }),
+  "network.networkPredictionEnabled": Object.freeze({ kind: "boolean" }),
+  "services.alternateErrorPagesEnabled": Object.freeze({ kind: "boolean" }),
+  "services.autofillAddressEnabled": Object.freeze({ kind: "boolean" }),
+  "services.autofillCreditCardEnabled": Object.freeze({ kind: "boolean" }),
+  "services.passwordSavingEnabled": Object.freeze({ kind: "boolean" }),
+  "services.safeBrowsingEnabled": Object.freeze({ kind: "boolean" }),
+  "services.safeBrowsingExtendedReportingEnabled": Object.freeze({ kind: "boolean" }),
+  "services.searchSuggestEnabled": Object.freeze({ kind: "boolean" }),
+  "services.spellingServiceEnabled": Object.freeze({ kind: "boolean" }),
+  "services.translationServiceEnabled": Object.freeze({ kind: "boolean" }),
+  "websites.adMeasurementEnabled": Object.freeze({ kind: "boolean" }),
+  "websites.doNotTrackEnabled": Object.freeze({ kind: "boolean" }),
+  "websites.hyperlinkAuditingEnabled": Object.freeze({ kind: "boolean" }),
+  "websites.protectedContentEnabled": Object.freeze({ kind: "boolean" }),
+  "websites.referrersEnabled": Object.freeze({ kind: "boolean" }),
+  "websites.thirdPartyCookiesAllowed": Object.freeze({ kind: "boolean" }),
+});
+
+const PRIVACY_SETTING_NAMES = Object.freeze(Object.keys(PRIVACY_SETTINGS));
+
+/** The generic font families chrome.fontSettings addresses. */
+const FONT_GENERIC_FAMILIES = Object.freeze([
+  "standard", "sansserif", "serif", "fixed", "cursive", "fantasy",
+]);
+
+/** Resolve a `category.name` privacy setting to its live ChromeSetting object,
+ * or null when the shape is absent / not a ChromeSetting (fail closed). */
+function privacyChromeSetting(settingName) {
+  const dot = settingName.indexOf(".");
+  if (dot <= 0) return null;
+  const category = settingName.slice(0, dot);
+  const name = settingName.slice(dot + 1);
+  const scope = chrome.privacy?.[category];
+  const setting = scope?.[name];
+  if (!setting || typeof setting.get !== "function" || typeof setting.set !== "function") return null;
+  return setting;
+}
+
+/** Validate a privacy value against the setting's kind. Returns null when valid,
+ * else a human-readable error (checked BEFORE any grant work or Chrome call). */
+function privacyValueError(settingName, value) {
+  const spec = PRIVACY_SETTINGS[settingName];
+  if (!spec) return "unknown privacy setting";
+  if (spec.kind === "boolean") {
+    return typeof value === "boolean" ? null : `${settingName} takes a boolean value`;
+  }
+  if (typeof value !== "string" || !spec.values.includes(value)) {
+    return `${settingName} takes one of: ${spec.values.join(", ")}`;
+  }
+  return null;
 }

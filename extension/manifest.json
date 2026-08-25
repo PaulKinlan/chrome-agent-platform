@@ -23,7 +23,13 @@
     "webNavigation",
     "cookies",
     "browsingData",
-    "contentSettings"
+    "contentSettings",
+    "privacy",
+    "proxy",
+    "fontSettings",
+    "power",
+    "search",
+    "tts"
   ],
   "optional_host_permissions": [
     "http://*/*",
