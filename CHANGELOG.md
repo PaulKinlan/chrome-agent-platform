@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.282] — 2026-08-25
+- Recently-closed tabs and windows can now be listed and restored, and browsing history can be searched, viewed by visit, added to, and deleted — restores and deletes are grant-gated, wipes need the global grant and explicit confirmation
+
 ## [0.2.281] — 2026-08-25
 - New browser insight + saving tools: memory/CPU/storage/display status, top sites, a read-only view of the extension's granted permissions, your reading list (add/find/update/remove), and save-any-tab as an MHTML archive — capture is consent-gated, race-checked, and size-capped
 
