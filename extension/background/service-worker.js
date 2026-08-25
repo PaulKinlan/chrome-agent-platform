@@ -1296,7 +1296,7 @@ async function injectScriptsIntoOpenTabs(canonical) {
       // isolated relay (its startup enrollment.status pull issues the MAC key,
       // arms the MAIN world, and triggers the discovery collect). In EACH world
       // content/bridge-auth.js runs first — it defines the shared MAC primitive
-      // (globalThis.CapBridgeAuth) both later files depend on.
+      // (globalThis.CairnBridgeAuth) both later files depend on.
       for (const [files, world, key] of [
         [["content/bridge-auth.js", "content/main-world.js"], "MAIN", "main"],
         [["content/bridge-auth.js", "content/content-script.js"], "ISOLATED", "bridge"],
@@ -2538,12 +2538,12 @@ async function issueBridgeNonce(tabId, documentId, diagnostics) {
       world: "MAIN",
       func: (n, d) => {
         const g = globalThis;
-        const hook = g.__capMainWorldBootstrap;
+        const hook = g.__cairnMainWorldBootstrap;
         if (typeof hook === "function") {
           hook(n, d);
           return;
         }
-        g.capMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
+        g.cairnMainWorldPendingBootstrap = { nonce: n, diagnostics: d };
       },
       args: [nonce, diagnostics === true],
     });

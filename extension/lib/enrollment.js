@@ -14,7 +14,7 @@ import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvSet } from "./kv.js";
 
 // content/bridge-auth.js runs FIRST in each world: it defines the shared MAC
-// primitive (globalThis.CapBridgeAuth) that authenticates every MAIN↔isolated
+// primitive (globalThis.CairnBridgeAuth) that authenticates every MAIN↔isolated
 // bridge message (the nonce never transits the broadcast postMessage channel).
 const BRIDGE_AUTH_JS = "content/bridge-auth.js";
 const MAIN_WORLD_JS = "content/main-world.js";

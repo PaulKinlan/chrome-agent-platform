@@ -1539,8 +1539,7 @@ async function buildAgentConfigDialog(opts) {
   mic.addEventListener("transcript", (e) => {
     const text = e?.detail?.text ?? "";
     if (!text) return;
-    const cur = roleField.el.value.trim();
-    roleField.el.value = cur ? `${cur} ${text}` : text;
+    roleField.el.value = text;
   });
   mic.addEventListener("mic-error", (e) => setStatus(e?.detail?.message ?? "mic error", false));
   const refineBtn = configButton("Refine", "secondary");

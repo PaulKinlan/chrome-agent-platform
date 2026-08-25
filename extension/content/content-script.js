@@ -35,7 +35,7 @@
 // make the second injection fail before the teardown guard could run.
 (() => {
 const BRIDGE_VERSION = 3;
-const BRIDGE_GUARD_KEY = "__capIsolatedBridge";
+const BRIDGE_GUARD_KEY = "__cairnIsolatedBridge";
 {
   const prev = globalThis[BRIDGE_GUARD_KEY];
   if (prev && typeof prev === "object" && typeof prev.teardown === "function") {
@@ -43,9 +43,9 @@ const BRIDGE_GUARD_KEY = "__capIsolatedBridge";
   }
 }
 
-const CHANNEL = "__cap_bridge";
+const CHANNEL = "__cairn_bridge";
 const TAG = "[WebMCP:bridge]";
-const auth = globalThis.CapBridgeAuth; // injected before this file
+const auth = globalThis.CairnBridgeAuth; // injected before this file
 
 // The SW-issued bridge MAC key + navigation epoch. Both arrive via the
 // enrollment.status response; the nonce is NEVER posted over the broadcast

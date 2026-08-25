@@ -35,11 +35,7 @@
 // the teardown guard gets a chance to run.
 (() => {
   const MAIN_WORLD_VERSION = 3;
-  const GUARD_KEY = "__capMainWorldBridge";
-  // Capture the NATIVE DOMException at document_start, before any page script
-  // can replace the global (the redaction below relies on a genuine
-  // instanceof check; a page-substituted constructor must not weaken it).
-  const NativeDOMException = globalThis.DOMException;
+  const GUARD_KEY = "__cairnMainWorldBridge";
   {
     const prev = window[GUARD_KEY];
     if (prev && typeof prev === "object" && typeof prev.teardown === "function") {
@@ -47,9 +43,9 @@
     }
   }
 
-  const CHANNEL = "__cap_bridge";
+  const CHANNEL = "__cairn_bridge";
   const TAG = "[WebMCP:main]";
-  const auth = globalThis.CapBridgeAuth; // injected before this file
+  const auth = globalThis.CairnBridgeAuth; // injected before this file
   // The MAC key — set ONLY by the bootstrap hook (closure-captured, never
   // posted, never exposed on any global). null = unarmed: this world stays
   // silent and ignores every inbound message.
@@ -309,36 +305,7 @@
     "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError",
     "EvalError", "URIError", "AggregateError", "DOMException",
   ]);
-  // The spec-defined DOMException names (WebIDL §3.11 + the legacy code
-  // names). A genuine DOMException's `.name` is drawn from THIS bounded set in
-  // practice, but `new DOMException(msg, name)` accepts ANY string — so the
-  // name is only surfaced when it is allowlisted here. The `.message` is
-  // attacker-controlled free text and NEVER crosses the bridge.
-  const SAFE_DOMEXCEPTION_NAMES = new Set([
-    "IndexSizeError", "HierarchyRequestError", "WrongDocumentError",
-    "InvalidCharacterError", "NoModificationAllowedError", "NotFoundError",
-    "NotSupportedError", "InUseAttributeError", "InvalidStateError",
-    "SyntaxError", "InvalidModificationError", "NamespaceError",
-    "InvalidAccessError", "TypeMismatchError", "SecurityError",
-    "NetworkError", "AbortError", "URLMismatchError", "QuotaExceededError",
-    "TimeoutError", "InvalidNodeTypeError", "DataCloneError",
-    "EncodingError", "NotReadableError", "UnknownError", "ConstraintError",
-    "DataError", "TransactionInactiveError", "ReadOnlyError", "VersionError",
-    "OperationError", "NotAllowedError",
-  ]);
   function redactError(e) {
-    // A GENUINE DOMException (native constructor, captured before page code
-    // runs) may report its bounded spec-defined NAME — e.g. "NotAllowedError"
-    // tells the owner WHAT failed without leaking attacker text. A crafted
-    // name (DOMException accepts arbitrary name strings) falls back to the
-    // bare type; the message NEVER surfaces.
-    if (
-      typeof NativeDOMException === "function" &&
-      e instanceof NativeDOMException
-    ) {
-      const n = typeof e?.name === "string" ? e.name : "";
-      return SAFE_DOMEXCEPTION_NAMES.has(n) ? `DOMException: ${n}` : "DOMException";
-    }
     const name = e && typeof e === "object" ? e.constructor?.name : null;
     return SAFE_ERROR_NAMES.has(name) ? name : "Error";
   }
@@ -346,11 +313,11 @@
   // messages and may cross the bridge; page-thrown errors are redacted.
   function internalError(message) {
     const e = new Error(message);
-    e.__capInternal = true;
+    e.__cairnInternal = true;
     return e;
   }
   function resultError(e) {
-    if (e && e.__capInternal === true) return String(e.message).slice(0, 200);
+    if (e && e.__cairnInternal === true) return String(e.message).slice(0, 200);
     return `tool failed (${redactError(e)})`;
   }
 
@@ -453,17 +420,17 @@
   // hook itself stays). A page calling the hook with a guessed value only
   // arms this world with the WRONG key — its messages fail MAC verification
   // at the isolated relay (fail closed, self-impact only).
-  const HOOK_KEY = "__capMainWorldBootstrap";
+  const HOOK_KEY = "__cairnMainWorldBootstrap";
   {
     const existing = globalThis[HOOK_KEY];
-    if (typeof existing === "function" && existing.__capHook === true) {
+    if (typeof existing === "function" && existing.__cairnHook === true) {
       existing.adopt(instance);
     } else {
       let current = instance;
       const hook = function (n, d) {
         if (current && !current.dead) current.bootstrap(n, d);
       };
-      Object.defineProperty(hook, "__capHook", { value: true });
+      Object.defineProperty(hook, "__cairnHook", { value: true });
       hook.adopt = (inst) => {
         current = inst && typeof inst.bootstrap === "function" ? inst : null;
       };
@@ -483,9 +450,9 @@
   // The pending-bootstrap fallback: the SW's bootstrap may land BEFORE this
   // file executed (a document_start race). Consume + clear it immediately.
   try {
-    const pending = globalThis.capMainWorldPendingBootstrap;
+    const pending = globalThis.cairnMainWorldPendingBootstrap;
     if (pending && typeof pending === "object") {
-      delete globalThis.capMainWorldPendingBootstrap;
+      delete globalThis.cairnMainWorldPendingBootstrap;
       instance.bootstrap(pending.nonce, pending.diagnostics);
     }
   } catch { /* fail closed */ }

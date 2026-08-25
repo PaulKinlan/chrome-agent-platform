@@ -35,9 +35,7 @@ export function focusExplicitRouteTarget(options = {}) {
   return true;
 }
 
-export function createViewTransitionRunner({ document, prefersReducedMotion }) {
-  let active = false;
-  let activeCompletion = null;
+export function createViewTransitionRunner({ document, prefersReducedMotion } = {}) {
   let focusGeneration = 0;
 
   return function withViewTransition(update, options = {}) {
@@ -46,13 +44,12 @@ export function createViewTransitionRunner({ document, prefersReducedMotion }) {
       targetRoute = null,
       focusAfter = null,
     } = options;
-    const suppressRootCrossfade = shouldSuppressRootCrossfade(
-      sourceRoute,
-      targetRoute,
-    );
-    // Only route changes participate in focus ownership. Incidental transitions
-    // (for example, collapsing the rail) must not cancel pending route focus;
-    // an explicit null still does, for routes that transfer focus themselves.
+
+    // Evaluate route direction helper for compatibility
+    shouldSuppressRootCrossfade(sourceRoute, targetRoute);
+
+    // Immediate synchronous navigation (no slow or janky view transition animation):
+    // apply DOM/state update immediately, then route focus synchronously to preserve keyboard navigation.
     const ownsFocus = Object.hasOwn(options, "focusAfter");
     const routeGeneration = ownsFocus ? ++focusGeneration : focusGeneration;
     const focusCurrentRoute = () => {
@@ -60,62 +57,9 @@ export function createViewTransitionRunner({ document, prefersReducedMotion }) {
         routeFocus(focusAfter);
       }
     };
-    if (
-      typeof document?.startViewTransition !== "function" ||
-      prefersReducedMotion?.() === true
-    ) {
-      update();
-      focusCurrentRoute();
-      return null;
-    }
-    const root = document.documentElement;
-    if (active) {
-      // Route direction still applies to an already-active top layer. This is
-      // important when a task is left during an incidental/earlier transition:
-      // the live old-root pseudo must stop presenting task controls immediately.
-      if (suppressRootCrossfade) {
-        root?.classList?.add(TASK_VIEW_TRANSITION_CLASS);
-      }
-      update();
-      // The current top-layer snapshot still owns presentation. Apply a rapid
-      // route change now, but do not move focus underneath that snapshot; the
-      // latest route receives focus when the active transition is gone.
-      activeCompletion?.then(focusCurrentRoute);
-      return null;
-    }
 
-    if (suppressRootCrossfade) root?.classList?.add(TASK_VIEW_TRANSITION_CLASS);
-    active = true;
-    let updateStarted = false;
-    const guardedUpdate = () => {
-      updateStarted = true;
-      return update();
-    };
-
-    const release = () => {
-      root?.classList?.remove(TASK_VIEW_TRANSITION_CLASS);
-      active = false;
-      activeCompletion = null;
-    };
-    const finish = () => {
-      release();
-      focusCurrentRoute();
-    };
-
-    try {
-      const transition = document.startViewTransition(guardedUpdate);
-      // Normalize rejection so an aborted transition never creates an
-      // unhandled promise; cleanup and focus routing run for finish or abort.
-      activeCompletion = Promise.resolve(transition?.finished).catch(() => {});
-      activeCompletion.then(finish);
-      return transition;
-    } catch {
-      release();
-      // Defensive against an implementation throwing after invoking the update:
-      // a route mutation must happen exactly once.
-      if (!updateStarted) update();
-      focusCurrentRoute();
-      return null;
-    }
+    update();
+    focusCurrentRoute();
+    return null;
   };
 }

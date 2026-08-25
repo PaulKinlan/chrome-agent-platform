@@ -8,11 +8,6 @@
 import { kvGet, kvRemove, storageAvailable } from "./kv.js";
 
 export const STORAGE_KEY = "cap:usage:v2";
-// IMMUTABLE LEGACY MIGRATION SOURCE (cairn-rename): builds predating the
-// project rename wrote usage rows under this exact key. The string is STORAGE
-// IDENTITY, not branding — renaming it would orphan the already-stored rows
-// the one-time migration below (kvGet(LEGACY_STORAGE_KEY) → migrate →
-// kvRemove) exists to drain. It must remain readable FOREVER; do not rename.
 export const LEGACY_STORAGE_KEY = "cairn:usage";
 const SCHEMA_VERSION = 2;
 const MAX_RECORDS = 5000;
