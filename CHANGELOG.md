@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.273] — 2026-08-25
+- chore(tasks): record mic/view-transition landed (0.2.272)
+
 ## [0.2.272] — 2026-08-25
 - fix(security+ui): restore cairn->cap-* rename (lost to worktree overwrite) + consolidate mic/view-transition; clean version 0.2.271
 

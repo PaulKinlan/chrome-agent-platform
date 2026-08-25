@@ -1375,3 +1375,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   status: done
   landed_version: 0.2.270
   summary: "Renamed ALL ~40 foreign 'cairn' identifiers to cap-* consistently (bridge channel __cap_bridge, CapBridgeAuth, __capInternal/__capHook markers, __capMainWorldBootstrap SW↔main-world handoff) across all 8 files; zero cairn refs remain except the intentional legacy storage key 'cairn:usage' (preserved as immutable migration read-source so pre-rename usage rows aren't orphaned). MAC/auth semantics untouched (pure rename). Also: DOMException now reports its bounded spec NAME (33-name WebIDL allowlist, genuineness via instanceof against native constructor captured at document_start, .message NEVER crosses) — so 'tool failed (DOMException)' now says e.g. 'DOMException: NotAllowedError'. KATs: cairn-rename.test.ts + 3 DOMException tests. 1601/1601."
+- id: CAP-FB-20260825-MIC-VIEWTRANSITION-01
+  severity: P1
+  status: done
+  landed_version: 0.2.272
+  summary: "Create-agent dialog mic now REPLACES the field with the cumulative transcript (matches composer/prompt-bar) instead of appending it — dictating two utterances no longer doubles the text. View transitions removed: navigation now applies update() synchronously (no document.startViewTransition), making navigation instant/not janky, while focus routing (generation-guarded routeFocus + focusExplicitRouteTarget) is preserved so keyboard focus isn't lost. KATs: mic-transcript.test.ts + view-transition.test.ts. NOTE: during integration a worktree-overwrite briefly lost the cairn rename; it was restored from the reviewed commit and both fixes landed together at 0.2.272 (1593/1593)."
