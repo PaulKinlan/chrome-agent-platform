@@ -1052,11 +1052,99 @@ async function renderEnroll() {
   });
 }
 
+// ── Discovered open tabs (proactive one-click enrollment without typing) ──
+async function renderDiscoveredOpenTabs() {
+  const container = $("#discovered-tabs");
+  if (!container) return;
+  const enrolledOrigins = new Set(await chrome.runtime.sendMessage({ type: "agent.list" }).catch(() => []));
+  const listing = await chrome.runtime.sendMessage({ type: "agent.discoverable-tabs" }).catch(() => ({ ok: false }));
+  container.replaceChildren();
+  if (!listing?.ok || !Array.isArray(listing.tabs) || !listing.tabs.length) {
+    container.style.display = "none";
+    return;
+  }
+  const unenrolled = listing.tabs.filter((t) => !enrolledOrigins.has(t.origin));
+  if (!unenrolled.length) {
+    container.style.display = "none";
+    return;
+  }
+  container.style.display = "block";
+  const header = document.createElement("div");
+  header.className = "muted small";
+  header.style.marginBottom = "8px";
+  header.style.fontWeight = "600";
+  header.textContent = "Discovered open pages — click to add as Site Agent:";
+  container.appendChild(header);
+
+  for (const t of unenrolled.slice(0, 5)) {
+    const row = document.createElement("div");
+    row.className = "origin-row";
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.justifyContent = "space-between";
+    row.style.marginBottom = "6px";
+
+    const info = document.createElement("div");
+    info.style.overflow = "hidden";
+    info.style.textOverflow = "ellipsis";
+    info.style.whiteSpace = "nowrap";
+    info.style.marginRight = "8px";
+
+    const titleSpan = document.createElement("span");
+    titleSpan.style.fontWeight = "600";
+    titleSpan.textContent = t.title || t.origin;
+    const urlSpan = document.createElement("span");
+    urlSpan.className = "muted small";
+    urlSpan.style.marginLeft = "8px";
+    urlSpan.textContent = t.origin;
+    info.appendChild(titleSpan);
+    info.appendChild(urlSpan);
+    row.appendChild(info);
+
+    const enrollBtn = document.createElement("button");
+    enrollBtn.type = "button";
+    enrollBtn.className = "btn small primary";
+    enrollBtn.textContent = "Add Site Agent";
+    enrollBtn.setAttribute("aria-label", `Add Site Agent for ${t.origin}`);
+    enrollBtn.addEventListener("click", async () => {
+      let granted = false;
+      try {
+        granted = await chrome.permissions.request({
+          permissions: ["scripting"],
+          origins: [`${t.origin}/*`],
+        });
+      } catch {
+        saveFlash(siteAgentSetupMessage("permission-error", t.origin));
+        return;
+      }
+      if (!granted) {
+        saveFlash(siteAgentSetupMessage("permission-denied", t.origin));
+        return;
+      }
+      const res = await chrome.runtime.sendMessage({
+        type: "agent.enroll-origin",
+        origin: t.origin,
+        ownerGesture: true,
+        tabId: t.id,
+      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      const state = enrollOutcomeState(res, { selectedTab: true });
+      saveFlash(siteAgentSetupMessage(state, t.origin));
+      renderData();
+      renderEnrolledSites();
+      renderWebmcpStatus();
+      renderDiscoveredOpenTabs();
+    });
+    row.appendChild(enrollBtn);
+    container.appendChild(row);
+  }
+}
+
 // ── Enrolled sites (the removal action lives HERE — the agent lifecycle, not the
 //    Data & memory section — item 58) ──
 async function renderEnrolledSites() {
   const el = $("#enrolled-sites");
   if (!el) return;
+  await renderDiscoveredOpenTabs();
   const origins = await chrome.runtime.sendMessage({ type: "agent.list" }).catch(() => []);
   el.replaceChildren();
   for (const origin of (origins ?? [])) {

@@ -240,3 +240,36 @@ export async function removeOriginHostPermission(origin) {
     return false;
   }
 }
+
+/**
+ * Reconcile dynamic content scripts for all enrolled origins on service-worker boot
+ * (CAP-FB-20260825-SITE-DISCOVERABILITY-01). Confirms that every enrolled origin
+ * whose host permission is still granted has its content scripts registered in
+ * chrome.scripting, ensuring discovery and bridge scripts survive worker restarts.
+ */
+export async function reconcileEnrolledOriginScriptsOnBoot() {
+  let hasScripting = false;
+  try {
+    hasScripting = typeof chrome !== "undefined" &&
+      typeof chrome.permissions?.contains === "function" &&
+      !!(await chrome.permissions.contains({ permissions: ["scripting"] }));
+  } catch {
+    hasScripting = false;
+  }
+  if (!hasScripting) {
+    return { ok: false, error: "scripting permission not granted" };
+  }
+
+  const { listOrigins } = await import("./memory.js");
+  const origins = await listOrigins().catch(() => []);
+  const results = [];
+  for (const origin of origins) {
+    const res = await ensureOriginScriptsRegistered(origin).catch((e) => ({
+      ok: false,
+      origin,
+      error: String(e?.message ?? e),
+    }));
+    results.push(res);
+  }
+  return { ok: true, count: origins.length, results };
+}

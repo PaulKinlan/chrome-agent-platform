@@ -315,7 +315,7 @@ const withViewTransition = createViewTransitionRunner({
   prefersReducedMotion,
 });
 
-// ── Site Agents (enrolled origins) ────────────────────────────────────────
+// ── Site Agents (enrolled origins + proactive discovery) ───────────────────
 async function renderSiteAgents() {
   const el = document.getElementById("site-agents");
   if (!el) return;
@@ -327,9 +327,16 @@ async function renderSiteAgents() {
     (a) => (a.toolCount ?? a.tools?.length ?? 0) > 0,
   );
   el.replaceChildren();
-  if (!agents.length) {
-    el.innerHTML = `<div class="empty">No Site Agents yet. Find tools from an open tab to add one.</div>`;
-  } else {
+
+  // Proactive discovery (CAP-FB-20260825-SITE-DISCOVERABILITY-01): check for
+  // open browser tabs that can be enrolled with one click.
+  const enrolledOrigins = new Set((Array.isArray(res.agents) ? res.agents : []).map((a) => a.origin));
+  const discoverable = await send("agent.discoverable-tabs").catch(() => ({ ok: false }));
+  const unenrolledTabs = (discoverable?.ok && Array.isArray(discoverable.tabs))
+    ? discoverable.tabs.filter((t) => !enrolledOrigins.has(t.origin))
+    : [];
+
+  if (agents.length > 0) {
     for (const a of agents.slice(0, 6)) {
       const row = document.createElement("capability-row");
       row.setAttribute("name", `@${shortOrigin(a.origin)}`);
@@ -350,6 +357,39 @@ async function renderSiteAgents() {
       el.append(more);
     }
   }
+
+  // Surface discovered open pages so the user can add them as Site Agents with one click
+  if (unenrolledTabs.length > 0) {
+    const banner = document.createElement("div");
+    banner.className = "proactive-discovery-banner";
+    banner.style.marginTop = agents.length ? "8px" : "0";
+    banner.style.padding = "8px 10px";
+    banner.style.borderRadius = "8px";
+    banner.style.background = "var(--bg-surface-secondary, rgba(0,0,0,0.03))";
+    banner.style.border = "1px solid var(--border-subtle, rgba(0,0,0,0.08))";
+
+    const bannerHead = document.createElement("div");
+    bannerHead.className = "muted small";
+    bannerHead.style.marginBottom = "6px";
+    bannerHead.style.fontWeight = "600";
+    bannerHead.textContent = "Discovered open pages — click to add as Site Agent:";
+    banner.append(bannerHead);
+
+    for (const t of unenrolledTabs.slice(0, 3)) {
+      const row = document.createElement("capability-row");
+      row.setAttribute("name", t.title || t.origin);
+      row.setAttribute("description", `Open page · ${t.origin}`);
+      row.setAttribute("icon", "");
+      row.setAttribute("action", "run");
+      row.setAttribute("action-label", "Add");
+      row.addEventListener("run", () => discoverTab(t));
+      banner.append(row);
+    }
+    el.append(banner);
+  } else if (!agents.length) {
+    el.innerHTML = `<div class="empty">No Site Agents yet. Find tools from an open tab to add one.</div>`;
+  }
+
   refreshAgentCount();
 }
 

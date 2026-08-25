@@ -389,6 +389,7 @@ import {
   ensureOriginScriptsRegistered,
   listPendingCleanup,
   markCleanupPending,
+  reconcileEnrolledOriginScriptsOnBoot,
   unregisterOriginScripts,
   withOriginLock,
 } from "../lib/enrollment.js";
@@ -6181,9 +6182,15 @@ chrome.runtime.onStartup?.addListener(() => {
   recoverOnBoot().catch((e) =>
     console.error("recoverOnBoot:", e?.message ?? e)
   );
+  reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
+    console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
+  );
 });
 recoverOnBoot().catch((e) =>
   console.error("recoverOnBoot:", e?.message ?? e)
+);
+reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
+  console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
 );
 
 // ---- keyboard commands (manifest `commands`) ---------------------------

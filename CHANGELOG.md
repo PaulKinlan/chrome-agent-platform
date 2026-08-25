@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.267] — 2026-08-25
+- Site Agents are now discoverable: when you open a page that offers agent tools you get a clear "Add Site Agent" button, and the Site Agents list shows discovered-but-not-yet-added sites (no typing origins). Enrolled sites now reliably work after a browser restart instead of going silent.
+
+
+
 ## [0.2.266] — 2026-08-25
 - The memory tree in Settings → Data & memory now stays open where you left it when you clear a store, instead of collapsing.
 
