@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.279] — 2026-08-25
+- New browser-control tools: tab groups (create/rename/recolor/collapse, move tabs between groups) and downloads (start, list, pause/resume/cancel, show in folder, open) — all gated behind the browser-control grant
+
 ## [0.2.278] — 2026-08-25
 - New browser-control tools for site data: cookies (per-site, permission asked on demand), a scoped browsing-data wipe you choose the parts of, and per-site content settings (JavaScript/images/cookies/popups/notifications/location)
 
