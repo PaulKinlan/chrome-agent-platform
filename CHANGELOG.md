@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.284] — 2026-08-25
+- Browser settings control: privacy preferences (WebRTC, safe browsing, autofill, do-not-track and more), proxy configuration, fonts, keep-awake, default-engine search, and text-to-speech — every change needs the global browser-control grant
+
 ## [0.2.283] — 2026-08-25
 - Extension manager tools: list your installed extensions with permission warnings, enable/disable or uninstall them (with confirmation, and the extension can never touch itself), plus platform/runtime info reads
 
