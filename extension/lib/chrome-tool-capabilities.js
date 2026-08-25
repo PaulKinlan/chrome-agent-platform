@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 52,
+  browserTools: 64,
   managementTools: 29,
-  totalTools: 81,
+  totalTools: 93,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -68,6 +68,19 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "show_download",
   "open_download",
   "remove_download_file",
+  // Tranche-11 Chrome API coverage: extension/browser management.
+  "list_extensions",
+  "get_extension",
+  "get_extension_permission_warnings",
+  "set_extension_enabled",
+  "uninstall_extension",
+  "get_platform_info",
+  "get_extension_manifest",
+  "get_side_panel_options",
+  "set_side_panel_options",
+  "set_panel_behavior",
+  "enable_action",
+  "disable_action",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -224,6 +237,25 @@ const rows = [
   record("show_download", "chrome-api", ["chrome.downloads.show"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
   record("open_download", "chrome-api", ["chrome.downloads.open"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
   record("remove_download_file", "chrome-api", ["chrome.downloads.remove-file"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+
+  // Tranche-11 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // extension/browser management. chrome.management is a NEW optional
+  // permission (Settings capability row grants it from a genuine owner
+  // gesture); runtime/sidePanel/action need no new permission. ALL mutations
+  // are browser-wide / this-extension-own-surface = GLOBAL browser-control
+  // grant (an origin-scoped grant must never authorize them); reads un-scoped.
+  record("list_extensions", "chrome-api", ["chrome.management.list"], ["management"], "none", "read-only", false, "read", "browser.management"),
+  record("get_extension", "chrome-api", ["chrome.management.get"], ["management"], "none", "read-only", false, "read", "browser.management"),
+  record("get_extension_permission_warnings", "chrome-api", ["chrome.management.permission-warnings"], ["management"], "none", "read-only", false, "read", "browser.management"),
+  record("set_extension_enabled", "chrome-api", ["chrome.management.set-enabled.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
+  record("uninstall_extension", "chrome-api", ["chrome.management.uninstall.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
+  record("get_platform_info", "chrome-api", ["chrome.runtime.platform-info"], [], "none", "read-only", false, "read", "browser.runtime"),
+  record("get_extension_manifest", "chrome-api", ["chrome.runtime.manifest"], [], "none", "read-only", false, "read", "browser.runtime"),
+  record("get_side_panel_options", "chrome-api", ["chrome.side-panel.options.get"], ["sidePanel"], "none", "read-only", false, "read", "browser.side-panel"),
+  record("set_side_panel_options", "chrome-api", ["chrome.side-panel.options.set.global"], ["sidePanel"], "global", "mutating", false, "mutating", "browser.side-panel"),
+  record("set_panel_behavior", "chrome-api", ["chrome.side-panel.behavior.set.global"], ["sidePanel"], "global", "mutating", false, "mutating", "browser.side-panel"),
+  record("enable_action", "chrome-api", ["chrome.action.enable.global"], [], "global", "mutating", false, "mutating", "browser.action"),
+  record("disable_action", "chrome-api", ["chrome.action.disable.global"], [], "global", "mutating", false, "mutating", "browser.action"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

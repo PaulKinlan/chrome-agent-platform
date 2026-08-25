@@ -88,11 +88,25 @@ export const CAPABILITIES = [
     label: "Content settings",
     hint: "Read/set/clear per-site content rules (JavaScript, images, cookies, location, notifications, popups) for one exact origin at a time — broad patterns are refused.",
     gates: "Gates: reading and changing per-site content rules (JS, images, cookies, location, notifications, popups) for single origins.",
+  },
+  {
     id: "downloads",
     permissions: ["downloads"],
     label: "Downloads",
     hint: "Download files (http/https only) and manage the browser's download history. Mutations stay behind the Browser control grant.",
     gates: "Gates: download_file, list_downloads, pause/resume/cancel/erase/show/open/remove downloads.",
+  },
+  // Tranche-11 Chrome API coverage: extension/browser management. The service
+  // worker NEVER requests this itself — the Settings Enable button calls
+  // requestCapability from a real owner gesture. Mutations (enable/disable/
+  // uninstall an extension) ALSO stay behind the GLOBAL browser-control grant,
+  // and this extension can never toggle or uninstall ITSELF.
+  {
+    id: "management",
+    permissions: ["management"],
+    label: "Extension management",
+    hint: "List the installed extensions and enable/disable or uninstall them. Enabling/disabling/uninstalling is browser-wide and ALSO needs the global Browser control grant; this extension can never change or remove itself.",
+    gates: "Gates: list_extensions, get_extension, permission warnings, set_extension_enabled, uninstall_extension.",
   },
 ];
 

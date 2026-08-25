@@ -63,6 +63,13 @@ const BROWSER_READ_TOOLS = new Set([
   // Tranche-3/4 Chrome API coverage: tab-group inventory + download history reads
   "list_tab_groups",
   "list_downloads",
+  // Tranche-11 Chrome API coverage: extension/runtime/side-panel reads observe only.
+  "list_extensions",
+  "get_extension",
+  "get_extension_permission_warnings",
+  "get_platform_info",
+  "get_extension_manifest",
+  "get_side_panel_options",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -144,6 +151,13 @@ const BUILT_IN_TOOLS = new Set([
   // Tranche-4 Chrome API coverage: downloads (mutations; list_downloads above)
   "download_file", "pause_download", "resume_download", "cancel_download",
   "erase_download", "show_download", "open_download", "remove_download_file",
+  // Tranche-11 Chrome API coverage: extension/browser management (reads above;
+  // ALL 12 are built-ins; the 6 mutations are classified mutating by exclusion).
+  "list_extensions", "get_extension", "get_extension_permission_warnings",
+  "set_extension_enabled", "uninstall_extension",
+  "get_platform_info", "get_extension_manifest",
+  "get_side_panel_options", "set_side_panel_options", "set_panel_behavior",
+  "enable_action", "disable_action",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

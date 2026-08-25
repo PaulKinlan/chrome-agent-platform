@@ -896,6 +896,124 @@ function sanitizeDownloadFilename(raw, maxBytes = 256, maxSegments = 8) {
   return cleaned;
 }
 
+// ── Tranche-11 Chrome API coverage helpers (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): ──
+// extension/browser management (chrome.management), own-runtime info
+// (chrome.runtime), side-panel configuration (chrome.sidePanel), and toolbar
+// action enable/disable (chrome.action). Every MUTATION here is browser-wide /
+// this-extension-own-surface — it has NO single destination web origin — so it
+// rides the GLOBAL browser-control grant (isBrowserControlGranted(undefined)),
+// exactly as downloads do. An origin-scoped grant must NEVER authorize them.
+// chrome.management is a NEW optional permission (Settings capability row
+// grants it from a genuine owner gesture; the service worker never requests).
+// runtime/sidePanel/action need no new permission (sidePanel is already
+// declared).
+async function hasManagementPermission() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    return await chrome.permissions.contains({ permissions: ["management"] });
+  } catch {
+    return false;
+  }
+}
+
+/** This extension's own id — used to REFUSE self-toggle / self-uninstall. */
+function selfExtensionId() {
+  try {
+    return typeof chrome !== "undefined" ? chrome.runtime?.id ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/** GLOBAL-grant gate for chrome.management mutations (browser-wide; a
+ * per-origin grant never authorizes them). Mirrors withDownloadsGrant. */
+async function withManagementGrant(verb, mutate) {
+  if (!(await hasManagementPermission())) {
+    return {
+      error:
+        "management permission not granted — enable Extension management in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    if (!(await isBrowserControlGranted(undefined))) {
+      return {
+        error:
+          "browser control not granted for extension management — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — extension not ${verb}` };
+    }
+    const result = await mutate();
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — extension ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** GLOBAL-grant gate for this extension's OWN surface mutations (toolbar
+ * action enable/disable, side-panel config). These are browser-wide settings of
+ * THIS extension — no destination web origin — so they need the GLOBAL grant.
+ * `requiredPerm` is the optional manifest permission the API needs ("sidePanel"
+ * for panel config; none for action enable/disable), requested on demand via
+ * Settings, never here. */
+async function withExtensionOwnSurfaceGrant(requiredPerm, permLabel, verb, mutate) {
+  if (requiredPerm && !(await hasPermission(requiredPerm))) {
+    return {
+      error: `${requiredPerm} permission not granted — enable ${permLabel} in Settings`,
+    };
+  }
+  return await withGrantLock(async () => {
+    if (!(await isBrowserControlGranted(undefined))) {
+      return {
+        error:
+          "browser control not granted for this browser-wide change — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — surface not ${verb}` };
+    }
+    const result = await mutate();
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — surface ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** Confine a side-panel page path to an extension-relative bundled page.
+ * Returns the safe relative path, or null when it is absolute, scheme-like,
+ * traversal-bearing, %-encoded, or escapes the extension's getURL root.
+ * Fail-closed: any doubt refuses. */
+function confinedExtensionPagePath(rawPath) {
+  if (typeof rawPath !== "string" || rawPath.length === 0 || rawPath.length > 512) return null;
+  // Refuse backslash, traversal, absolute paths, URL schemes, and any %-encoding
+  // (so %2e%2e can't smuggle traversal past the literal checks).
+  if (rawPath.includes("\\")) return null;
+  if (rawPath.includes("..")) return null;
+  if (rawPath.startsWith("/")) return null;
+  if (rawPath.includes("%")) return null;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(rawPath)) return null; // scheme-like (http:, data:, …)
+  if (rawPath.includes("://")) return null;
+  try {
+    const root = chrome.runtime.getURL("");
+    const resolved = chrome.runtime.getURL(rawPath);
+    if (typeof resolved !== "string" || !resolved.startsWith(root)) return null;
+    return rawPath;
+  } catch {
+    return null;
+  }
+}
+
 /** The browser-control toolset, passed into the agent. */
 export function browserToolset(readOnly = false) {
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
@@ -2291,6 +2409,291 @@ export function browserToolset(readOnly = false) {
         return await withDownloadsGrant("file-removed", async () => {
           await chrome.downloads.removeFile(downloadId);
           return { ok: true, downloadId, fileRemoved: true };
+        });
+      },
+    }),
+    // ── T11 extension management ─────────────────────────────────────────
+    // chrome.management + chrome.runtime + chrome.sidePanel + chrome.action
+    // (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01, Tranche 11).
+    // chrome.management is a NEW optional permission (Settings capability row
+    // grants it from a genuine owner gesture — the service worker never calls
+    // chrome.permissions.request). runtime/sidePanel/action need no new
+    // permission (sidePanel is already declared). EVERY mutation is
+    // browser-wide / this-extension-own-surface and rides the GLOBAL
+    // browser-control grant (never an origin grant). Self-protection: this
+    // extension can never toggle or uninstall ITSELF.
+
+    // ── chrome.management reads (bounded, honest denial) ──
+    list_extensions: tool({
+      description:
+        "List the installed browser extensions/apps (id, name, version, enabled, type, install source). Bounded. Requires management permission.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(200).optional(),
+      }),
+      execute: async ({ maxResults = 100 }) => {
+        if (!(await hasManagementPermission())) {
+          return { error: "management permission not granted — enable Extension management in Settings" };
+        }
+        let all = [];
+        try {
+          all = await chrome.management.getAll();
+        } catch (e) {
+          return { error: `extension list failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(all) ? all : [];
+        return {
+          extensions: rows.slice(0, maxResults).map((x) => ({
+            id: String(x?.id ?? "").slice(0, 64),
+            name: String(x?.name ?? "").slice(0, 128),
+            version: String(x?.version ?? "").slice(0, 64),
+            enabled: Boolean(x?.enabled),
+            type: String(x?.type ?? "").slice(0, 32),
+            isApp: Boolean(x?.isApp),
+            installType: String(x?.installType ?? "").slice(0, 32),
+            mayDisable: Boolean(x?.mayDisable),
+            mayEnable: Boolean(x?.mayEnable),
+          })),
+          returned: Math.min(rows.length, maxResults),
+          total: rows.length,
+          truncated: rows.length > maxResults,
+        };
+      },
+    }),
+    get_extension: tool({
+      description:
+        "Get one installed extension's details by id (name, version, enabled, type, permissions, homepage). Requires management permission.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+      }),
+      execute: async ({ id }) => {
+        if (!(await hasManagementPermission())) {
+          return { error: "management permission not granted — enable Extension management in Settings" };
+        }
+        let info = null;
+        try {
+          info = await chrome.management.get(id);
+        } catch (e) {
+          return { error: `no such extension: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        if (!info) return { error: "no such extension" };
+        return {
+          id: String(info.id ?? "").slice(0, 64),
+          name: String(info.name ?? "").slice(0, 128),
+          shortName: String(info.shortName ?? "").slice(0, 128),
+          description: String(info.description ?? "").slice(0, 1024),
+          version: String(info.version ?? "").slice(0, 64),
+          enabled: Boolean(info.enabled),
+          type: String(info.type ?? "").slice(0, 32),
+          isApp: Boolean(info.isApp),
+          homepageUrl: String(info.homepageUrl ?? "").slice(0, 2048),
+          optionsUrl: String(info.optionsUrl ?? "").slice(0, 2048),
+          installType: String(info.installType ?? "").slice(0, 32),
+          mayDisable: Boolean(info.mayDisable),
+          mayEnable: Boolean(info.mayEnable),
+          permissions: (Array.isArray(info.permissions) ? info.permissions : []).slice(0, 64).map((p) => String(p).slice(0, 64)),
+          hostPermissions: (Array.isArray(info.hostPermissions) ? info.hostPermissions : []).slice(0, 64).map((p) => String(p).slice(0, 128)),
+        };
+      },
+    }),
+    get_extension_permission_warnings: tool({
+      description:
+        "Get the human-readable permission warnings Chrome shows when installing the given extension id. Requires management permission.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+      }),
+      execute: async ({ id }) => {
+        if (!(await hasManagementPermission())) {
+          return { error: "management permission not granted — enable Extension management in Settings" };
+        }
+        let warnings = [];
+        try {
+          warnings = await chrome.management.getPermissionWarningsById(id);
+        } catch (e) {
+          return { error: `permission warnings failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(warnings) ? warnings : [];
+        return {
+          id,
+          warnings: rows.slice(0, 64).map((w) => String(w).slice(0, 512)),
+          total: rows.length,
+          truncated: rows.length > 64,
+        };
+      },
+    }),
+
+    // ── chrome.management mutations (GLOBAL grant + self-protection) ──
+    set_extension_enabled: tool({
+      description:
+        "Enable or disable an installed extension by id. Destructive, browser-wide. Grant-gated (global browser-control grant). Requires management permission. Refuses to toggle this extension itself.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        enabled: z.boolean(),
+      }),
+      execute: async ({ id, enabled }) => {
+        const self = selfExtensionId();
+        if (self && id === self) {
+          return { error: "refusing to toggle this extension's own enabled state" };
+        }
+        return await withManagementGrant(enabled ? "enabled" : "disabled", async () => {
+          await chrome.management.setEnabled(id, enabled);
+          return { ok: true, id, enabled };
+        });
+      },
+    }),
+    uninstall_extension: tool({
+      description:
+        "Uninstall an installed extension by id. DESTRUCTIVE and irreversible. Requires an explicit confirm:true argument AND the global browser-control grant AND management permission. Refuses to uninstall this extension itself.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        confirm: z.boolean().optional(),
+      }),
+      execute: async ({ id, confirm }) => {
+        if (confirm !== true) {
+          return { error: "uninstall is destructive — pass confirm:true to proceed" };
+        }
+        const self = selfExtensionId();
+        if (self && id === self) {
+          return { error: "refusing to uninstall this extension itself" };
+        }
+        return await withManagementGrant("uninstalled", async () => {
+          // The caller's explicit confirm:true + the global grant are the gates;
+          // no additional native confirm dialog (it would block the SW).
+          await chrome.management.uninstall(id, { showConfirmDialog: false });
+          return { ok: true, id, uninstalled: true };
+        });
+      },
+    }),
+
+    // ── chrome.runtime reads (no permission) ──
+    get_platform_info: tool({
+      description:
+        "Read the browser's platform info (os, cpu architecture). Read-only; no permission needed.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        let info = null;
+        try {
+          info = await chrome.runtime.getPlatformInfo();
+        } catch (e) {
+          return { error: `platform info failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        return {
+          os: String(info?.os ?? "").slice(0, 32),
+          arch: String(info?.arch ?? "").slice(0, 32),
+          nacl_arch: String(info?.nacl_arch ?? "").slice(0, 32),
+        };
+      },
+    }),
+    get_extension_manifest: tool({
+      description:
+        "Read this extension's own manifest (name, version, permissions). Bounded. Read-only; no permission needed.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        let manifest = null;
+        try {
+          manifest = chrome.runtime.getManifest();
+        } catch (e) {
+          return { error: `manifest read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        if (!manifest || typeof manifest !== "object") return { error: "no manifest" };
+        return {
+          name: String(manifest.name ?? "").slice(0, 128),
+          version: String(manifest.version ?? "").slice(0, 64),
+          manifest_version: Number(manifest.manifest_version ?? 0),
+          description: String(manifest.description ?? "").slice(0, 1024),
+          permissions: (Array.isArray(manifest.permissions) ? manifest.permissions : []).slice(0, 64).map((p) => String(p).slice(0, 64)),
+          optional_permissions: (Array.isArray(manifest.optional_permissions) ? manifest.optional_permissions : []).slice(0, 64).map((p) => String(p).slice(0, 64)),
+        };
+      },
+    }),
+
+    // ── chrome.sidePanel additions (sidePanel already declared) ──
+    get_side_panel_options: tool({
+      description:
+        "Read the current side-panel options (path, enabled), optionally for one tab. Requires sidePanel permission.",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1).optional(),
+      }),
+      execute: async ({ tabId }) => {
+        if (!(await hasSidePanelPermission())) {
+          return { error: "sidePanel permission not granted — enable it in Settings (Side panel)" };
+        }
+        let options = null;
+        try {
+          options = await chrome.sidePanel.getOptions(tabId !== undefined ? { tabId } : {});
+        } catch (e) {
+          return { error: `side panel options read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        return {
+          path: String(options?.path ?? "").slice(0, 512),
+          enabled: Boolean(options?.enabled),
+          tabId: tabId ?? null,
+        };
+      },
+    }),
+    set_side_panel_options: tool({
+      description:
+        "Configure the side panel (which bundled extension page it loads, enabled). The path MUST be an extension-relative bundled page (traversal/absolute/scheme/%-encoded paths are refused). Grant-gated (global browser-control grant). Requires sidePanel permission.",
+      inputSchema: z.object({
+        path: z.string().min(1).max(512).optional(),
+        enabled: z.boolean().optional(),
+        tabId: z.number().int().min(1).optional(),
+      }).refine((v) => v.path !== undefined || v.enabled !== undefined, "pass path and/or enabled"),
+      execute: async ({ path, enabled, tabId }) => {
+        let safePath;
+        if (path !== undefined) {
+          safePath = confinedExtensionPagePath(path);
+          if (!safePath) {
+            return { error: "side panel path must be an extension-relative bundled page (no absolute, scheme, traversal, or %-encoded paths)" };
+          }
+        }
+        return await withExtensionOwnSurfaceGrant("sidePanel", "the Side panel", "changed", async () => {
+          const options = {};
+          if (tabId !== undefined) options.tabId = tabId;
+          if (safePath !== undefined) options.path = safePath;
+          if (enabled !== undefined) options.enabled = enabled;
+          await chrome.sidePanel.setOptions(options);
+          return { ok: true, path: safePath, enabled, tabId: tabId ?? null };
+        });
+      },
+    }),
+    set_panel_behavior: tool({
+      description:
+        "Set the side-panel behavior (whether clicking the toolbar action opens the panel). Grant-gated (global browser-control grant). Requires sidePanel permission.",
+      inputSchema: z.object({
+        openPanelOnActionClick: z.boolean(),
+      }),
+      execute: async ({ openPanelOnActionClick }) => {
+        return await withExtensionOwnSurfaceGrant("sidePanel", "the Side panel", "changed", async () => {
+          await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick });
+          return { ok: true, openPanelOnActionClick };
+        });
+      },
+    }),
+
+    // ── chrome.action additions (no new permission) ──
+    enable_action: tool({
+      description:
+        "Enable this extension's toolbar action (icon), optionally for one tab only. Grant-gated (global browser-control grant).",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1).optional(),
+      }),
+      execute: async ({ tabId }) => {
+        return await withExtensionOwnSurfaceGrant(null, null, "changed", async () => {
+          await chrome.action.enable(tabId);
+          return { ok: true, enabled: true, tabId: tabId ?? null };
+        });
+      },
+    }),
+    disable_action: tool({
+      description:
+        "Disable this extension's toolbar action (icon), optionally for one tab only. Grant-gated (global browser-control grant).",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1).optional(),
+      }),
+      execute: async ({ tabId }) => {
+        return await withExtensionOwnSurfaceGrant(null, null, "changed", async () => {
+          await chrome.action.disable(tabId);
+          return { ok: true, enabled: false, tabId: tabId ?? null };
         });
       },
     }),
