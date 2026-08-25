@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.271] — 2026-08-25
+- chore(release): 0.2.270
+
 ## [0.2.269] — 2026-08-25
 - fix(security): rename all foreign 'cairn' identifiers to cap-* (bridge/auth consistent) + surface bounded DOMException name
 
