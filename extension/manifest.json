@@ -37,7 +37,8 @@
     "fontSettings",
     "power",
     "search",
-    "tts"
+    "tts",
+    "webRequest"
   ],
   "optional_host_permissions": [
     "http://*/*",

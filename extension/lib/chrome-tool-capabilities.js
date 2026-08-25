@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 110,
+  browserTools: 118,
   managementTools: 29,
-  totalTools: 139,
+  totalTools: 147,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -126,6 +126,14 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "tts_stop",
   "list_tts_voices",
   "tts_is_speaking",
+  "list_network_rules",
+  "add_network_rule",
+  "update_network_rule",
+  "remove_network_rule",
+  "get_network_rule_matches",
+  "get_navigation_frames",
+  "get_navigation_frame",
+  "get_request_activity",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -373,6 +381,17 @@ const rows = [
   record("tts_stop", "chrome-api", ["chrome.tts.stop.global"], ["tts"], "global", "mutating", false, "mutating", "browser.tts"),
   record("list_tts_voices", "chrome-api", ["chrome.tts.voices.list"], ["tts"], "none", "read-only", false, "read", "browser.tts"),
   record("tts_is_speaking", "chrome-api", ["chrome.tts.speaking.get"], ["tts"], "none", "read-only", false, "read", "browser.tts"),
+  // Tranche-10 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // declarativeNetRequest dynamic rules are BROWSER-WIDE -> global grant;
+  // webNavigation frame reads + webRequest observation are reads.
+  record("list_network_rules", "chrome-api", ["chrome.network-rules.list"], ["declarativeNetRequest"], "none", "read-only", false, "read", "browser.network-rules"),
+  record("add_network_rule", "chrome-api", ["chrome.network-rules.add.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
+  record("update_network_rule", "chrome-api", ["chrome.network-rules.update.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
+  record("remove_network_rule", "chrome-api", ["chrome.network-rules.remove.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
+  record("get_network_rule_matches", "chrome-api", ["chrome.network-rules.match-test"], ["declarativeNetRequest"], "none", "read-only", false, "read", "browser.network-rules"),
+  record("get_navigation_frames", "chrome-api", ["chrome.navigation.frames.list"], ["webNavigation"], "none", "read-only", false, "read", "browser.navigation"),
+  record("get_navigation_frame", "chrome-api", ["chrome.navigation.frame.get"], ["webNavigation"], "none", "read-only", false, "read", "browser.navigation"),
+  record("get_request_activity", "chrome-api", ["chrome.requests.activity.read"], ["webRequest"], "none", "read-only", false, "read", "browser.requests"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

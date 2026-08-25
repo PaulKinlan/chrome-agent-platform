@@ -108,6 +108,27 @@ export const CAPABILITIES = [
     hint: "List the installed extensions and enable/disable or uninstall them. Enabling/disabling/uninstalling is browser-wide and ALSO needs the global Browser control grant; this extension can never change or remove itself.",
     gates: "Gates: list_extensions, get_extension, permission warnings, set_extension_enabled, uninstall_extension.",
   },
+  {
+    id: "declarativeNetRequest",
+    permissions: ["declarativeNetRequest"],
+    label: "Network rules",
+    hint: "Manage the extension's dynamic network rules (block/allow/redirect/upgradeScheme). Rules apply browser-wide: every rule change ALSO needs the global Browser control grant.",
+    gates: "Gates: listing and match-testing rules (read), adding/updating/removing rules (global grant).",
+  },
+  {
+    id: "webNavigation",
+    permissions: ["webNavigation"],
+    label: "Navigation frames",
+    hint: "Read a tab's frame tree and see top-frame navigation start/complete in the recent browser events log.",
+    gates: "Gates: reading frame trees and navigation events.",
+  },
+  {
+    id: "webRequest",
+    permissions: ["webRequest"],
+    label: "Request observation",
+    hint: "Observe (never block or modify) web requests for sites you already granted host access to. Blocking webRequest is not available without enterprise policy.",
+    gates: "Gates: reading observed request activity.",
+  },
 ];
 
 /** Whether a permission (or the equivalent) is currently granted. */
