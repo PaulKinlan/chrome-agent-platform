@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.276",
+  "version": "0.2.277",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -34,7 +34,8 @@
     "package:store": "node scripts/package-extension.mjs --target=store",
     "check:changelog-order": "node scripts/check-changelog.mjs",
     "check:tasks": "node scripts/check-tasks.mjs",
-    "test:data-clear": "deno run -A scripts/data-memory-clear.ts"
+    "test:data-clear": "deno run -A scripts/data-memory-clear.ts",
+    "test:role-preview": "deno run -A scripts/agent-role-preview.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",

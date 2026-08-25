@@ -1486,7 +1486,15 @@ class CapabilityRow extends Component {
       .icon svg { width:18px; height:18px; display:block; }
       .label { min-width:0; display:flex; flex-direction:column; gap:2px; }
       .name { font-weight:600; font-size:var(--text-sm,13px); color:var(--text,#e6edf3); }
-      .desc { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); line-height:1.35; }
+      /* A row is a scannable list line, not a place to print a paragraph. An
+         agent role can be hundreds of characters; unclamped it grew the row to
+         five lines and wrecked the list. Clamp to two lines and keep the FULL
+         text in the DOM — screen readers still get all of it, and the title
+         below reveals it on hover — rather than truncating the string, which
+         would throw the rest away. */
+      .desc { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); line-height:1.35;
+        display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2;
+        overflow:hidden; overflow-wrap:anywhere; }
       .lastrun { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); }
       .run { justify-self:end; font-size:var(--text-xs,12px); color:var(--muted,#8b949e);
         border:1px solid var(--border,#30363d); border-radius:var(--radius-sm,6px);
@@ -1502,7 +1510,7 @@ class CapabilityRow extends Component {
     `, `<div${rowAttrs}>
       <span class="icon" aria-hidden="true">${icon}</span>
       <span class="label"><span class="name">${escapeHtml(name)}</span>
-        <span class="desc">${escapeHtml(description)}</span>${
+        <span class="desc"${description ? ` title="${escapeHtml(description)}"` : ""}>${escapeHtml(description)}</span>${
           lastRun ? `<span class="lastrun">${escapeHtml(lastRun)}</span>` : ""
         }</span>
       <span class="meta">${actionHtml}</span>
