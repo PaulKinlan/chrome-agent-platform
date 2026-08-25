@@ -30,7 +30,8 @@
     "system.display",
     "topSites",
     "readingList",
-    "pageCapture"
+    "pageCapture",
+    "management"
   ],
   "optional_host_permissions": [
     "http://*/*",

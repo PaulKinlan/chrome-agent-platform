@@ -82,6 +82,12 @@ const BROWSER_READ_TOOLS = new Set([
   "list_synced_devices",
   "search_history",
   "get_history_visits",
+  // Tranche-11 Chrome API coverage: extension/runtime/side-panel reads observe only.
+  "list_extensions",
+  "get_extension",
+  "get_extension_permission_warnings",
+  "get_platform_info",
+  "get_extension_manifest",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -177,6 +183,11 @@ const BUILT_IN_TOOLS = new Set([
   "list_recently_closed", "restore_closed", "list_synced_devices",
   "search_history", "get_history_visits", "add_history_url",
   "delete_history_url", "delete_history_range", "clear_all_history",
+  // Tranche-11 Chrome API coverage: extension/browser management (reads above;
+  // ALL 12 are built-ins; the 6 mutations are classified mutating by exclusion).
+  "list_extensions", "get_extension", "get_extension_permission_warnings",
+  "set_extension_enabled", "uninstall_extension",
+  "get_platform_info", "get_extension_manifest",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

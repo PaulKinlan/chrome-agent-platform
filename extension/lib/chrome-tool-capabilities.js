@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 87,
+  browserTools: 94,
   managementTools: 29,
-  totalTools: 116,
+  totalTools: 123,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -68,8 +68,6 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "show_download",
   "open_download",
   "remove_download_file",
-  // T13 deep tab control (tab deep ops + action enable/disable + sidePanel
-  // options/behavior) — no NEW manifest permissions.
   "move_tab",
   "duplicate_tab",
   "set_tab_pinned",
@@ -105,6 +103,13 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "delete_history_url",
   "delete_history_range",
   "clear_all_history",
+  "list_extensions",
+  "get_extension",
+  "get_extension_permission_warnings",
+  "set_extension_enabled",
+  "uninstall_extension",
+  "get_platform_info",
+  "get_extension_manifest",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -316,6 +321,20 @@ const rows = [
   record("delete_history_url", "chrome-api", ["chrome.history.delete.destination-origin"], ["history"], "destination-origin", "mutating", false, "mutating", "browser.history"),
   record("delete_history_range", "chrome-api", ["chrome.history.delete-range"], ["history"], "global", "mutating", false, "mutating", "browser.history"),
   record("clear_all_history", "chrome-api", ["chrome.history.clear-all"], ["history"], "global", "mutating", false, "mutating", "browser.history"),
+
+  // Tranche-11 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // extension/browser management. chrome.management is a NEW optional
+  // permission (Settings capability row grants it from a genuine owner
+  // gesture); runtime/sidePanel/action need no new permission. ALL mutations
+  // are browser-wide / this-extension-own-surface = GLOBAL browser-control
+  // grant (an origin-scoped grant must never authorize them); reads un-scoped.
+  record("list_extensions", "chrome-api", ["chrome.management.list"], ["management"], "none", "read-only", false, "read", "browser.management"),
+  record("get_extension", "chrome-api", ["chrome.management.get"], ["management"], "none", "read-only", false, "read", "browser.management"),
+  record("get_extension_permission_warnings", "chrome-api", ["chrome.management.permission-warnings"], ["management"], "none", "read-only", false, "read", "browser.management"),
+  record("set_extension_enabled", "chrome-api", ["chrome.management.set-enabled.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
+  record("uninstall_extension", "chrome-api", ["chrome.management.uninstall.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
+  record("get_platform_info", "chrome-api", ["chrome.runtime.platform-info"], [], "none", "read-only", false, "read", "browser.runtime"),
+  record("get_extension_manifest", "chrome-api", ["chrome.runtime.manifest"], [], "none", "read-only", false, "read", "browser.runtime"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),
