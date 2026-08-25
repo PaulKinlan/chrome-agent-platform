@@ -497,3 +497,35 @@ Deno.test("stores allow >500 tiny keys per execution until byte limits and keep 
   assert(source.includes("const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024"));
   assert(source.includes("const MAX_BYTES_GLOBAL = 64 * 1024 * 1024"));
 });
+
+Deno.test("durable store routes the thread-runs reverse index instead of throwing", async () => {
+  // Regression for the 0.2.257 log redesign: it introduced a `thread-runs:<threadId>`
+  // key, but the durable key router only understood `run-registry` and the five
+  // `run*:<executionId>` prefixes. Every run links its thread on the way in, so
+  // durableStoreForKey threw `invalid durable-run key: thread-runs:<id>` and
+  // agent.run failed outright — the demo journeys caught it as five dead checks.
+  root.children.clear();
+  const durable = durableRunMemory();
+  const threadId = "t_1787665465268_mb0aqdzj";
+  const key = `thread-runs:${threadId}`;
+  const ids = ["exec:00000000-0000-4000-8000-000000000001"];
+
+  await durable.setTrusted(key, ids);
+  assertEquals(await durable.get(key), ids, "the reverse index must round-trip");
+  assertEquals(await durable.has(key), true);
+  assert((await durable.keys()).includes(key), "keys() must surface thread-runs entries");
+
+  // Two threads must not share a store — one thread's index cannot leak into another.
+  const otherKey = "thread-runs:t_1787665465269_zzzzzzzz";
+  await durable.setTrusted(otherKey, ["exec:00000000-0000-4000-8000-000000000002"]);
+  assertEquals(await durable.get(key), ids, "a second thread must not overwrite the first");
+
+  // The execution namespace still routes as before.
+  await durable.setTrusted("run-registry", ids);
+  assertEquals(await durable.get("run-registry"), ids);
+
+  // Fail closed on a thread id outside the bounded safe charset rather than
+  // letting it reach a directory name.
+  await assertRejects(() => durable.setTrusted("thread-runs:../escape", ["x"]));
+  await assertRejects(() => durable.setTrusted("thread-runs:", ["x"]));
+});

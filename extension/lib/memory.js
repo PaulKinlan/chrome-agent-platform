@@ -224,6 +224,13 @@ const DURABLE_INDEX_KEY = "run-registry";
 const DURABLE_PREFIXES = ["run:", "run-outbox:", "run-log:", "run-resume:", "run-payload:"];
 const EXECUTION_ID_SOURCE = "(?:exec:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|exec_[A-Za-z0-9][A-Za-z0-9_-]{7,194})";
 const DURABLE_KEY_RE = new RegExp(`^(?:run|run-outbox|run-log|run-resume|run-payload):(${EXECUTION_ID_SOURCE})(?::|$)`, "i");
+// The thread → executions reverse index (the log redesign). It is keyed by
+// THREAD id, not execution id, so it needs its own bounded store per thread —
+// the per-execution router below cannot place it, and before this existed every
+// `agent.run` threw `invalid durable-run key: thread-runs:<threadId>` because a
+// run links its thread on the way in.
+const THREAD_RUNS_PREFIX = "thread-runs:";
+const THREAD_ID_RE = /^[A-Za-z0-9_.-]{1,200}$/;
 
 export class MemoryStoreQuotaError extends Error {
   constructor(kind, message) {
@@ -806,9 +813,27 @@ function isLegacyDurableKey(key) {
   return value === DURABLE_INDEX_KEY || DURABLE_PREFIXES.some((prefix) => value.startsWith(prefix));
 }
 
+/** The thread id inside a `thread-runs:<threadId>` key, or null. Fails closed on
+ * anything outside the bounded safe charset rather than letting an odd id reach
+ * a directory name. */
+function durableThreadId(key) {
+  const value = String(key);
+  if (!value.startsWith(THREAD_RUNS_PREFIX)) return null;
+  const threadId = value.slice(THREAD_RUNS_PREFIX.length);
+  return THREAD_ID_RE.test(threadId) ? threadId : null;
+}
+
 function durableStoreForKey(key) {
   if (String(key) === DURABLE_INDEX_KEY) {
     return memoryStoreAt([ROOT, DURABLE_ROOT, "registry"], { isMaster: false, origin: "durable:registry" });
+  }
+  if (String(key).startsWith(THREAD_RUNS_PREFIX)) {
+    const threadId = durableThreadId(key);
+    if (!threadId) throw new Error(`invalid durable thread-runs key: ${String(key)}`);
+    return memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "threads", encodeURIComponent(threadId)],
+      { isMaster: false, origin: `durable-thread:${threadId}` },
+    );
   }
   const executionId = durableExecutionId(key);
   if (!executionId) throw new Error(`invalid durable-run key: ${String(key)}`);
@@ -816,6 +841,23 @@ function durableStoreForKey(key) {
     [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(executionId)],
     { isMaster: false, origin: `durable:${executionId}` },
   );
+}
+
+async function durableThreadStores() {
+  const root = await openDirOptional([ROOT, DURABLE_ROOT, "threads"]);
+  if (!root) return [];
+  const stores = [];
+  for await (const [leaf, handle] of root.entries()) {
+    if (handle.kind !== "directory") continue;
+    let threadId;
+    try { threadId = decodeURIComponent(leaf); } catch { continue; }
+    if (!THREAD_ID_RE.test(threadId)) continue;
+    stores.push(memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "threads", leaf],
+      { isMaster: false, origin: `durable-thread:${threadId}` },
+    ));
+  }
+  return stores;
 }
 
 async function durableExecutionStores() {
@@ -916,6 +958,9 @@ export function durableRunMemory() {
       const registry = durableStoreForKey(DURABLE_INDEX_KEY);
       for (const key of await registry.keys()) keys.add(key);
       for (const store of await durableExecutionStores()) {
+        for (const key of await store.keys()) keys.add(key);
+      }
+      for (const store of await durableThreadStores()) {
         for (const key of await store.keys()) keys.add(key);
       }
       for (const key of await legacy.keys()) if (isLegacyDurableKey(key)) keys.add(key);

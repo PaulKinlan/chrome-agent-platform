@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.260] — 2026-08-25
+- Fixed every task failing to run. Starting a task returned an internal error instead of a result; tasks work again.
+
 ## [0.2.259] — 2026-08-25
 - Fixed two tests that were incorrectly failing, and added a safeguard so the test data stays fresh and won't silently expire in the future.
 
