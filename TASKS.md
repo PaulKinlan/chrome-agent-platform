@@ -1351,3 +1351,22 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   - 2026-08-25 18:30 UTC — second defect found while fixing the first: `memory.clear` resolved to `undefined`, so neither handler could tell success from failure and both flashed "Cleared…" unconditionally. The route now returns `{ok:true, origin}` or `{ok:false, error}`, and both handlers report the real outcome. A button that lies about having worked is the same class of bug as one that does nothing.
   - 2026-08-25 18:30 UTC — checked and ruled out a worse possibility: `clear()` does remove the site store's `enrolled` key, but enrollment authority does not live there, so a clear never silently disenrolls a Site Agent. Asserted in the new script so it stays true.
   - 2026-08-25 18:30 UTC — coverage lives in a dedicated `scripts/data-memory-clear.ts` on a clean profile rather than inside the 127-check journey suite. Adding it there first was tried and rejected: the fixture had to be created mid-suite, where accumulated global state (a revoked `storage` capability, several enrolled origins) made the explorer assertions unreliable, and the extra enrolled origin made a later step's first-match `.origin-row .disenroll-origin` click remove the wrong agent. A focused script tests the button instead of the suite's history.
+
+
+## [CAP-FB-20260825-SITE-DISCOVERABILITY-01] Site-agent discoverability + content-script boot reconciliation
+
+- Feedback: 2026-08-25 — product owner: "I can't work out how site agents get discovered and approved any more... I'm refreshing a site and it doesn't appear and I don't see any console logs."
+- Updated: 2026-08-25 20:3x UTC
+- Status: MERGED
+- Priority: P1
+- Owner: Gemini
+- Workspace: cap-site-discovery-2c25e82
+- Branch: —
+- Base: `2c25e82`
+- Candidate: `e152f7c0`
+- Shipping: `origin/main@2bff0af` (0.2.267)
+- Root cause: (a) chicken-and-egg — discovery required the content script to run, which only ran on ENROLLED origins (ensureOriginScriptsRegistered registers per-origin + host permission, transactional), so an un-enrolled site surfaced nothing; (b) enrolled origins' dynamic content scripts were not reconciled on SW startup/browser boot, so an enrolled site went silent after a restart ("no logs").
+- Fix: proactive discovery — NTP + Settings surface open discoverable pages with one-click "Add Site Agent"/"Enroll" (explicit owner gesture, host-permission request, no typing origins) + discovered-but-not-enrolled listing; reconcileEnrolledOriginScriptsOnBoot() re-registers enrolled origins' scripts on boot. Security model verified hard (Pro e384c626): zero broad injection, host-permission grant stays owner-gesture, transactional enroll/rollback intact.
+- Review: PASS (Pro e384c626), 1595/1595, manifest untouched.
+- History:
+  - 2026-08-25 20:3x UTC — LANDED at 0.2.267. Discovery is now discoverable and enrolled sites survive restart.
