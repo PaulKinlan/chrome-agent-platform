@@ -351,3 +351,52 @@ Deno.test("T4: the Downloads capability row requests exactly [\"downloads\"]", (
   assertEquals(cap.permissions, ["downloads"]);
   assert(!cap.permissions.includes("tabs"), "no extra permission");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// REVISE round (review finding 1): a MIXED set (covered https tab + an
+// origin-less chrome:// tab) must NOT be authorized by a per-origin grant —
+// ANY origin-less tab forces the GLOBAL grant.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("REVISE: mixed tab set [https://a.example, chrome://settings] — origin grant REFUSED, global ALLOWED (group/ungroup/move)", async () => {
+  reset();
+  addTab("https://a.example/x");
+  addTab("chrome://settings/");
+  const t = tools();
+
+  // per-origin grant covering ONLY the https tab
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  let r = await t.group_tabs.execute({ tabIds: [1, 2] });
+  assert(r.error, "mixed set denied under an origins grant (the chrome:// tab must force global)");
+  assertEquals(tabGroups.size, 0, "no group created");
+  r = await t.ungroup_tabs.execute({ tabIds: [1, 2] });
+  assert(r.error, "mixed ungroup denied under an origins grant");
+  r = await t.move_tab_to_group.execute({ tabIds: [1, 2], groupId: 99 });
+  assert(r.error, "mixed move denied under an origins grant");
+
+  // global grant authorizes the SAME mixed set
+  await setGlobalBrowserControlGrant();
+  r = await t.group_tabs.execute({ tabIds: [1, 2] });
+  assertEquals(r.ok, true, "mixed set grouped under the GLOBAL grant");
+  assertEquals(tabGroups.get(r.groupId).tabIds.sort(), [1, 2]);
+});
+
+Deno.test("REVISE: update_tab_group with an origin-less tab in the group — origin grant REFUSED, global ALLOWED", async () => {
+  reset();
+  addTab("https://a.example/x");
+  addTab("chrome://settings/");
+  await setGlobalBrowserControlGrant();
+  const g = await tools().group_tabs.execute({ tabIds: [1, 2] });
+  assertEquals(g.ok, true, "mixed group created under global");
+  assertEquals(tabGroups.get(g.groupId).tabIds.sort(), [1, 2]);
+
+  // an origins grant that covers ONLY the https tab must NOT authorize the update
+  await revokeBrowserControlGrant();
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  const r = await tools().update_tab_group.execute({ groupId: g.groupId, color: "red" });
+  assert(r.error, "the group contains an origin-less tab — an origins grant is REFUSED");
+
+  await setGlobalBrowserControlGrant();
+  const ok = await tools().update_tab_group.execute({ groupId: g.groupId, color: "red" });
+  assertEquals(ok.ok, true, "global grant authorizes the group update");
+  assertEquals(tabGroups.get(g.groupId).color, "red");
+});

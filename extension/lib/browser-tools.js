@@ -289,6 +289,7 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
       tabIds.map((id) => chrome.tabs.get(id).catch(() => null)),
     );
     if (tabs.some((t) => t == null)) return { error: "no such tab" };
+    let hasOriginless = false;
     const origins = [...new Set(
       tabs
         .map((t) => {
@@ -298,9 +299,17 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
             return null;
           }
         })
-        .filter((o) => typeof o === "string"),
+        .filter((o) => {
+          if (typeof o === "string") return true;
+          // A tab with NO canonical origin (chrome://, edge://, devtools, a
+          // fresh new-tab, …) is an origin-less scope: it must NEVER be
+          // authorized by a per-origin grant. Any origin-less tab in the set
+          // forces the GLOBAL grant (review finding, T3/T4 REVISE round).
+          hasOriginless = true;
+          return false;
+        }),
     )];
-    const covered = origins.length === 0
+    const covered = (hasOriginless || origins.length === 0)
       ? await isBrowserControlGranted(undefined)
       : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
     if (!covered) {
@@ -340,6 +349,7 @@ async function withTabGroupGrant(groupId, verb, mutate) {
     const tabs = await Promise.all(
       tabIds.map((id) => chrome.tabs.get(id).catch(() => null)),
     );
+    let hasOriginless = false;
     const origins = [...new Set(
       tabs
         .filter((t) => t != null && typeof t?.url === "string")
@@ -350,9 +360,15 @@ async function withTabGroupGrant(groupId, verb, mutate) {
             return null;
           }
         })
-        .filter((o) => typeof o === "string"),
+        .filter((o) => {
+          if (typeof o === "string") return true;
+          // Same rule as withTabIdsGrant: an origin-less tab in the group
+          // forces the GLOBAL grant (review finding, T3/T4 REVISE round).
+          hasOriginless = true;
+          return false;
+        }),
     )];
-    const covered = origins.length === 0
+    const covered = (hasOriginless || origins.length === 0)
       ? await isBrowserControlGranted(undefined)
       : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
     if (!covered) {
@@ -1599,25 +1615,6 @@ export function browserToolset(readOnly = false) {
           return { error: "contextMenus permission not granted — enable Context menus in Settings" };
         }
         return { ok: true, supported: true };
-      },
-    }),
-    remove_context_menu: tool({
-      description:
-        "Remove an extension context menu item by id. Requires contextMenus permission.",
-      inputSchema: z.object({
-        id: z.string().min(1).max(64),
-      }),
-      execute: async ({ id }) => {
-        if (!(await hasPermission("contextMenus"))) {
-          return { error: "contextMenus permission not granted — enable Context menus in Settings" };
-        }
-        try {
-          await assertRunOwned();
-        } catch {
-          return { error: "run aborted — context menu not removed" };
-        }
-        await chrome.contextMenus.remove(id);
-        return { ok: true, id, removed: true };
       },
     }),
     remove_context_menu: tool({
