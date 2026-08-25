@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.253] — 2026-08-25
+- docs(tasks): open work queue index + eleven untracked tasks
+
 ## [0.2.252] — 2026-08-25
 - Site Agents can now tell apart different pages on the same website, so each page's own tools stay available and the right page is opened when a tool needs it.
 

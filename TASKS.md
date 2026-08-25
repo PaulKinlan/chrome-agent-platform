@@ -5,16 +5,10 @@ feedback, bugs, reviews, and active delivery lanes. It complements, but never
 copies, the private coordination ledger. The stable `CAP-FB-*` ID is the only
 join key between the two systems.
 
-> Snapshot: 2026-08-23 20:00 UTC. Reconciled against exact public
-> `origin/main@aca0759e6a8ebfe82c9dba0650566eeeb15334d0` (`0.2.183`). The
-> 23-enabled/3-disabled Settings posture, all bundled Wasm/CAS bytes, pure WASI
-> host, Store boundary, lossless result envelope, lazy provider cutover, and
-> owner-only package authority remain exact. All seven tool-platform and provider
-> releases (0.2.177 through 0.2.183) are now landed on origin/main; the S1
-> scratch foundation (0.2.184) is in its final security gate.
-> Branch status counts: **49 OPEN · 2 IN_REVIEW · 21 MERGED · 4 BLOCKED ·
-> 40 DONE · 0 ABANDONED**. The 76 nonterminal and 40 terminal status entries
-> below are the active state (completed tasks archived to TASKS-DONE.md).
+> Snapshot: 2026-08-25 09:40 UTC. Reconciled against exact public
+> `origin/main@cde116` after the archive split. This file holds the **active** set only;
+> completed entries live in `TASKS-DONE.md`. Active counts: **32 nonterminal** and **1 terminal not yet archived**.
+> See the Open work queue below; regenerate it rather than hand-editing the counts.
 
 ## Safety boundary
 
@@ -26,7 +20,9 @@ Workspace paths and transport receipts stay in the private coordination ledger.
 
 ## Root documentation map
 
-- `TASKS.md` — canonical delivery/task state and crash recovery.
+- `TASKS.md` — canonical delivery/task state and crash recovery. Active work only.
+- `TASKS-DONE.md` — completed entries archived out of `TASKS.md`, kept intact. IDs are
+  unique across both files; look in both before concluding a task does not exist.
 - `KNOWN-ISSUES.md` — canonical review and system findings.
 - `REVIEW-2026-08-21.md` — the independent architectural review: verified baseline,
   the measured delivery diagnosis, the reproduced defects, and the ordered work queue.
@@ -151,6 +147,54 @@ On resume after a coordinator or worker loss:
    the timestamp in the reconciliation log below.
 
 ---
+
+## Open work queue
+
+Every task in this file that is not in a terminal state, most urgent first. **32 open** (plus 1 terminal entries not yet archived to `TASKS-DONE.md`). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+
+Regenerate after any status change (this exact command reproduces the table below):
+
+```sh
+awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(/^[^]]*\] */,"",t)} /^- Status:/{s=$3} /^- Priority:/{if(s!="DONE"&&s!="MERGED"&&s!="ABANDONED"&&id!~/YYYYMMDD/) printf "%-3s %-10s %s — %s\n",$3,s,id,t}' TASKS.md | sort
+```
+
+| Priority | Status | Task | What it is |
+|---|---|---|---|
+| P0 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
+| P0 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
+| P0 | **BLOCKED** | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
+| P0 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
+| P0 | OPEN | [`CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`](#cap-fb-20260820-semantic-tool-search-01-local-semantic-search-over-the-complete-tool-catalog) | Local semantic search over the complete tool catalog |
+| P0 | IN_REVIEW | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
+| P0 | OPEN | [`CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`](#cap-fb-20260822-builtin-wasm-tools-01-provenance-clean-bundled-wasm-tool-tranche) | Provenance-clean bundled Wasm tool tranche |
+| P0 | OPEN | [`CAP-FB-20260822-SPREADSHEET-TOOLKIT-01`](#cap-fb-20260822-spreadsheet-toolkit-01-bounded-spreadsheet-and-table-workflow-toolkit) | Bounded spreadsheet and table workflow toolkit |
+| P0 | OPEN | [`CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01`](#cap-fb-20260822-tabular-diff-artifacts-01-read-only-tabular-diff-artifact-custody) | Read-only tabular-diff artifact custody |
+| P0 | OPEN | [`CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01`](#cap-fb-20260822-tool-platform-abuse-gates-01-tool-platform-abuse-quota-and-lifecycle-gates) | Tool platform abuse, quota and lifecycle gates |
+| P0 | OPEN | [`CAP-FB-20260822-WASM-TOOL-PLATFORM-01`](#cap-fb-20260822-wasm-tool-platform-01-co-do-style-browser-native-tool-operating-platform) | Co-do-style browser-native tool operating platform |
+| P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
+| P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
+| P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
+| P1 | OPEN | [`CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01`](#cap-fb-20260823-comprehensive-chrome-tools-01-comprehensive-chrome-extension-api-tool-coverage) | Comprehensive Chrome extension API tool coverage |
+| P1 | OPEN | [`CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01`](#cap-fb-20260823-dialog-confirm-modernization-01-replace-all-windowconfirm-with-native-dialog-modals) | Replace all window.confirm with native dialog modals |
+| P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
+| P1 | OPEN | [`CAP-FB-20260823-PYODIDE-PYTHON-01`](#cap-fb-20260823-pyodide-python-01-python-in-the-browser-via-pyodide) | Python in the browser via Pyodide |
+| P1 | OPEN | [`CAP-FB-20260825-DATA-EXPORT-IMPORT-01`](#cap-fb-20260825-data-export-import-01-owner-export-and-import-of-all-agent-data) | Owner export and import of all agent data |
+| P1 | OPEN | [`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`](#cap-fb-20260825-headed-acceptance-lane-01-a-headed-browser-acceptance-lane) | A headed-browser acceptance lane |
+| P1 | OPEN | [`CAP-FB-20260825-OWNER-DECISION-QUEUE-01`](#cap-fb-20260825-owner-decision-queue-01-product-decisions-blocking-tracked-work) | Product decisions blocking tracked work |
+| P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
+| P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
+| P2 | IN_REVIEW | [`CAP-FB-20260823-AGENT-ICON-ON-CREATE-01`](#cap-fb-20260823-agent-icon-on-create-01-generate-the-agent-icon-at-creation-not-on-click) | Generate the agent icon at creation, not on click |
+| P2 | OPEN | [`CAP-FB-20260825-CONCURRENCY-RESIDUALS-01`](#cap-fb-20260825-concurrency-residuals-01-close-the-four-open-concurrency-verifications) | Close the four open concurrency verifications |
+| P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
+| P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
+| P2 | OPEN | [`CAP-FB-20260825-KEYBOARD-COMMANDS-01`](#cap-fb-20260825-keyboard-commands-01-no-keyboard-shortcuts-anywhere) | No keyboard shortcuts anywhere |
+| P2 | OPEN | [`CAP-FB-20260825-TRACKER-INTEGRITY-01`](#cap-fb-20260825-tracker-integrity-01-enforce-the-trackers-own-entry-schema) | Enforce the tracker's own entry schema |
+| P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
+| P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
+| P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
+
+**Held by a product decision, not by engineering:** `CAP-FB-20260822-OWNER-WASM-INSTALL-01` and `CAP-FB-20260822-BUILTIN-WASM-TOOLS-01` wait on open questions Q13 and Q14, and `CAP-FB-20260825-WEBSTORE-RELEASE-01` on Q11. All three are collected in `CAP-FB-20260825-OWNER-DECISION-QUEUE-01` — clearing that entry unblocks the most work for the least effort.
+
 
 ## Active
 
@@ -594,8 +638,48 @@ On resume after a coordinator or worker loss:
     registered runtime route. The candidate is parked; no retry or shipping.
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
+- Feedback: 2026-08-22 — the Wasm tool platform needs a per-execution host with no cross-run state; entry created as a bare heading and never given a body (recovered 2026-08-25)
+- Updated: 2026-08-25 09:40 UTC
+- Status: MERGED
+- Resume: —
+- Priority: P0
+- Owner: unassigned (needs an owner to confirm scope and close)
+- Workspace: none
+- Branch: `origin/main`
+- Base: —
+- Candidate: `462d21d` (pure WASI host contract), `eee2886`/`d2450c0` (Gate 2 source-only offscreen fresh-Worker host), `2be8855` (scanner canonical exemptions bound to the normalized repo tail)
+- Shipping: all four commits are ancestors of `origin/main`
+- Acceptance: each Wasm execution runs in a freshly created Worker with no state reachable from any prior execution; the host contract is pure and does not depend on ambient extension authority; termination is enforced; the shipped-file scanner exempts only exact normalized repo tails
+- Review: the four recorded commits landed under the normal review path; **this entry's own acceptance text was never written**, so no independent reviewer has checked the delivered work against a stated contract
+- Gates: unit suite; `npm run test:security`; the Wasm execution paths exercised by the tool-platform lane. Loaded-MV3 runtime/termination proof is tracked separately as `CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`
+- Blockers: —
+- Next: an owner reconstructs the intended acceptance criteria from `docs/tool-platform-architecture.md` (which references this ID for Gate 1) and the four commits, confirms the delivered work satisfies them, then moves this to `DONE` or opens the residue as a successor
+- Recover: `git log --oneline --grep=WASM-EXECUTION-HOST-01 && grep -n "WASM-EXECUTION-HOST-01" docs/tool-platform-architecture.md`
+- History:
+  - 2026-08-25 09:40 UTC — recovered. This ID existed in the tracker as a heading with **zero fields** from its creation; a repository sweep found no commit in which it had a body. Reconstructed from the four commits that name it and from `docs/tool-platform-architecture.md`. Status is recorded as `MERGED` rather than `DONE` because the work is demonstrably on `origin/main` but was never checked against written acceptance criteria.
+
 
 ## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
+- Feedback: 2026-08-22 — Gate 2 of the fresh-Worker host was recomposed as a separate lane; entry created as a bare heading and never given a body (recovered 2026-08-25)
+- Updated: 2026-08-25 09:40 UTC
+- Status: BLOCKED
+- Resume: OPEN
+- Priority: P0
+- Owner: unassigned (needs an owner to confirm whether this lane is still live)
+- Workspace: none
+- Branch: none
+- Base: —
+- Candidate: —
+- Shipping: —
+- Acceptance: unknown — never written. Either this lane is fully subsumed by the Gate 2 commits recorded under `CAP-FB-20260822-WASM-EXECUTION-HOST-01` (`eee2886`, `d2450c0`), in which case it should be `ABANDONED` as a duplicate, or it carries residue that must be stated before any work resumes
+- Review: none; no candidate exists
+- Gates: none recorded
+- Blockers: no acceptance criteria, no candidate, and no commit anywhere in the repository names this ID — only `-01` appears in commit subjects. The lane cannot be worked until an owner states what, if anything, it covers beyond `-01`
+- Next: decide whether this is a duplicate of `CAP-FB-20260822-WASM-EXECUTION-HOST-01` Gate 2 (then `ABANDONED` with the reason) or a distinct lane (then write its acceptance and move to `OPEN`)
+- Recover: `git log --all --oneline --grep=WASM-EXECUTION-HOST-02 | wc -l   # expect 0`
+- History:
+  - 2026-08-25 09:40 UTC — recovered. Heading existed with **zero fields** since creation, and no commit in any ref names this ID. Recorded `BLOCKED` on the missing acceptance rather than guessed at, because a duplicate P0 that silently looks like open work is worse than an explicit unknown.
+
 
 ## [CAP-FB-20260822-BUILTIN-WASM-TOOLS-01] Provenance-clean bundled Wasm tool tranche
 
@@ -944,3 +1028,235 @@ On resume after a coordinator or worker loss:
 - History:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §3 D8).
+
+## [CAP-FB-20260825-DATA-EXPORT-IMPORT-01] Owner export and import of all agent data
+- Feedback: 2026-08-25 — independent gap review found no way for an owner to export or restore anything they have built; clearing site data or resetting the profile destroys every agent, memory, thread and artifact irrecoverably
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: an owner can export a single portable bundle covering named/background/site agents, their per-agent OPFS memory and run history, threads, artifacts, skills, scheduled tasks and non-secret settings, from a genuine owner gesture in Settings; the bundle is inspectable (documented format, not an opaque blob) and states plainly what it excludes; import restores into a clean profile with the same agent identities, memory contents and artifact references, or reports exactly what could not be restored and why; **provider API keys are never included** — the bundle records which providers were configured, never their secrets; import is transactional and never partially overwrites existing data without an explicit owner choice; export works with zero optional permissions granted or states clearly which grant it needs
+- Review: independent security/privacy review of what the bundle contains (a full memory export is a high-value exfiltration target and must not be model-callable), plus data-integrity, transaction, and loaded-MV3 review
+- Gates: round-trip fixture — build a profile with several agents, memories, threads and artifacts, export, wipe, import, assert identity-level equality; assert no credential material anywhere in the bundle bytes; assert export and import are unreachable from any model toolset; partial-failure and corrupt-bundle handling; large-bundle bounds; service-worker restart mid-export
+- Blockers: must compose with the deletion transaction in `CAP-FB-20260819-AGENT-DELETION-LIFECYCLE-01` and the artifact custody rules in `CAP-FB-20260818-ARTIFACT-TX-01`; the bundle format is a versioned contract and needs to be right the first time
+- Next: inventory every durable store the extension writes (per-agent OPFS tiers, master memory, `chrome.storage` keys, IndexedDB usage ledger, artifact bodies) and write the bundle format contract before any UI
+- Recover: `git grep -n "masterMemory\|memory/agents/\|cap:scheduledTasks\|cap:namedAgents" -- extension/lib`
+- History:
+  - 2026-08-25 09:40 UTC — opened. Verified absent: Settings exposes no export or import control, and `docs/OPEN-QUESTIONS.md` Q4 recorded a sync/export path as a deferred future option that was never scheduled.
+
+## [CAP-FB-20260825-WEBSTORE-RELEASE-01] The path to a published extension
+- Feedback: 2026-08-25 — independent gap review found no tracked work for actually publishing: the extension is still named "Chrome Agent Platform" (a stated placeholder), and existing packaging work covers building a ZIP, not shipping one
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: a decided final name applied consistently across the manifest, every UI surface, the documentation and the repository; a store listing with description, screenshots and category; a privacy policy that accurately describes what the extension stores locally and what it sends to a provider; a written justification for every optional permission and host permission in the manifest, each traceable to the feature that needs it; a store-mode build produced by the existing archive path and validated by `scripts/validate-package-load.ts`; a documented plan for responding to a review rejection
+- Review: independent review of the permission justifications against the actual code (a justification that overstates or understates what a permission is used for is a rejection risk and a trust problem), and of the privacy policy against the real data flows
+- Gates: name consistency grep across manifest, UI strings, docs and README; every `optional_permissions` and `optional_host_permissions` entry mapped to a calling site; store-mode archive builds and loads clean; privacy policy cross-checked against every network call the extension can make
+- Blockers: the final name and distribution channel are undecided — `docs/OPEN-QUESTIONS.md` Q11 (tracked in `CAP-FB-20260825-OWNER-DECISION-QUEUE-01`). The owner-selected Wasm policy question (Q13) determines whether Store mode ships bundled-only; do not resolve it inside this task
+- Next: obtain the name decision, then produce the permission-justification table mapped to calling sites — that table is the long pole and can be built before the name lands
+- Recover: `git grep -n "Chrome Agent Platform" -- extension README.md && grep -n "optional_permissions" -A 20 extension/manifest.json`
+- History:
+  - 2026-08-25 09:40 UTC — opened. `CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01` covers building archives from an exact inventory; it does not cover listing, policy, justifications or the name.
+
+## [CAP-FB-20260825-SITE-AGENT-SHOWCASE-01] Make sites-as-sub-agents demonstrable in under a minute
+- Feedback: 2026-08-25 — independent review, restating §5 of `REVIEW-2026-08-21.md`: sites-as-sub-agents is the genuinely novel claim and the one thing nothing else does, and it is the hardest capability in the product to actually see working
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: from a fresh profile, an owner reaches a working site-agent tool call in under a minute without reading documentation — a reachable entry point, at least one real origin whose WebMCP tools are discovered and invoked, and a visible result; the path states honestly what it granted and to which origin; nothing about the demonstration weakens origin isolation, per-tool first-run approval or the all-optional permission model; the fixture origin in `fixtures/` is usable for this without pretending to be a third-party site
+- Review: independent product, security and first-run review; a demonstration path that quietly broadens access to make itself smooth is a failure, not a success
+- Gates: fresh-profile loaded-MV3 walkthrough timed end to end, with screenshots at each step; assert the exact permissions requested and that none is granted without a gesture; assert per-tool approval still fires; the same path re-run after a service-worker restart
+- Blockers: depends on page identity from `CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01` and the discovery/enrollment vocabulary in `CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`; sequence after those rather than duplicating their decisions
+- Next: define what the sixty-second path actually is — which entry point, which origin, which tool, what the owner sees — and get that agreed before building anything
+- Recover: `ls fixtures && git grep -n "webmcpExpose\|modelContext" -- extension/content fixtures`
+- History:
+  - 2026-08-25 09:40 UTC — opened. Deliberately left untracked on 2026-08-21 as an opportunity needing a product decision; opened now because the surrounding lanes have landed and it is the differentiator with no owner.
+
+## [CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01] A headed-browser acceptance lane
+- Feedback: 2026-08-25 — three separate residuals in `KNOWN-ISSUES.md` all reduce to the same missing capability: there is no headed run, so anything requiring a real operating-system permission prompt cannot be proven
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: a documented, repeatable headed run that covers the three gaps currently recorded as permanently open — (a) a screenshot success path, since headless auto-denies arbitrary-tab capture; (b) one full enrollment lifecycle as a single journey: enroll, discover, invoke, clean up, retry; (c) the two WebMCP operating-system permission prompts from `docs/WEBMCP-ACCEPTANCE.md`. The run states plainly which steps needed a human click and which were automated; its evidence is written to durable storage, never to a RAM-backed filesystem; a headless run continues to pass unchanged and continues to assert fail-closed behaviour
+- Review: independent review that the headed path exercises production code rather than a test-only shortcut — the round-28 WebMCP block was caused by acceptance that bypassed the implementation
+- Gates: the headed run itself, with retained screenshots; the existing headless suites still green and still asserting fail-closed denial; explicit labelling of every manual gesture
+- Blockers: needs a machine with a display. If none is available, that must be recorded as the blocker with a named owner rather than leaving three residuals permanently open in `KNOWN-ISSUES.md`
+- Next: confirm whether a headed environment is available at all; if not, mark this `BLOCKED` with that owner and stop re-litigating the three residuals separately
+- Recover: `grep -n "headed\|HEADED" scripts/webmcp-acceptance.ts && sed -n '1,40p' docs/WEBMCP-ACCEPTANCE.md`
+- History:
+  - 2026-08-25 09:40 UTC — opened to consolidate three residuals that have each been carried as "needs a headed test" without an owner: no headed screenshot success path, no full real-enrollment lifecycle journey, and the WebMCP OS prompt gate.
+
+## [CAP-FB-20260825-OWNER-DECISION-QUEUE-01] Product decisions blocking tracked work
+- Feedback: 2026-08-25 — five questions in `docs/OPEN-QUESTIONS.md` block or shape tracked tasks but appear nowhere in the work queue, so they are invisible when planning
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: product owner
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: each of the five open questions has a recorded decision in `docs/OPEN-QUESTIONS.md`, and every task blocked on it has its `Blockers` updated in the same commit. The five: **Q11** final extension name and distribution channel (blocks `CAP-FB-20260825-WEBSTORE-RELEASE-01`); **Q12** the recommended default provider for the hub, given Gemini Nano is weak at tool-calling (shapes first-run quality); **Q13** whether a Chrome Web Store build may execute owner-selected local Wasm without violating the remotely-hosted-code policy (blocks `CAP-FB-20260822-OWNER-WASM-INSTALL-01`, currently `BLOCKED`); **Q14** the Co-do licence and provenance reconciliation — Apache-2.0 root against MIT package metadata — which must be settled before any Co-do binary is copied (blocks `CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`); **Q16** grouped tabular artifact promotion — an atomic reservable keyed promotion with refcount and orphan collection, or an explicitly lower single-body cap (blocks `CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01`)
+- Review: none — these are owner decisions, not reviewable work. An agent may prepare options and trade-offs; it may not decide.
+- Gates: each decision written down with its rationale, and each dependent task's `Blockers` field updated to match
+- Blockers: requires the product owner. Q13 and Q14 additionally need external input — Chrome Web Store policy wording and the upstream licence position respectively — which an agent can gather and summarise first
+- Next: for each of the five, prepare a one-page options-and-consequences summary so the decision is cheap to make; start with Q13 and Q14, which are the two currently holding P0 lanes `BLOCKED`
+- Recover: `sed -n '/^## Open/,$p' docs/OPEN-QUESTIONS.md`
+- History:
+  - 2026-08-25 09:40 UTC — opened so undecided questions are visible in the work queue rather than only in a separate document. Q15 (semantic index engine) is deliberately excluded: `docs/OPEN-QUESTIONS.md` states it stays inside `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01` and must not be duplicated.
+
+## [CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01] Site-agent delegation is text-only
+- Feedback: 2026-08-25 — carried as a residual under `CAP-FB-20260818-AGENT-ACCESS-01` since 2026-08-18 with no task of its own; re-verified against current source
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: a delegated site-agent run accepts the same attachments a hub run accepts, or states precisely which types it cannot accept and why; the run streams live progress to the delegating surface rather than returning only a final result; the composer stops having to warn that attachments were dropped because they no longer are; delegation keeps its current generation revalidation, preemptive revocation and journal-write fencing unchanged
+- Review: independent review that the progress stream cannot leak one origin's run detail into another's surface, and that attachment handling does not widen what a site worker can read
+- Gates: unit coverage for attachment pass-through and progress fan-out; a loaded-MV3 delegation showing live progress and a delivered attachment; disenrollment mid-run still discards the journal; concurrent delegations to different origins stay isolated
+- Blockers: —
+- Next: confirm the intended scope with the owner — full parity with hub runs, or a stated subset — then extend the `agent.delegate` route signature
+- Recover: `git grep -n 'async "agent.delegate"' -A 3 -- extension/background/service-worker.js`
+- History:
+  - 2026-08-25 09:40 UTC — opened. Verified in current source: the `agent.delegate` route signature accepts `origin`, `task`, `threadId` and resume/execution parameters, and has no attachments parameter. `KNOWN-ISSUES.md` has recorded this as a follow-up since 2026-08-18 without an ID.
+
+## [CAP-FB-20260825-CONCURRENCY-RESIDUALS-01] Close the four open concurrency verifications
+- Feedback: 2026-08-25 — `KNOWN-ISSUES.md` carries four deep concurrency items each phrased as "verify no residual", none of which has an owner, a test, or a task
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: each of the four is closed by a failing-then-passing test rather than by inspection — (a) version-scoped CAS in the memory and journal compensation path, checked for remaining ABA windows; (b) the first sync/invoke generation requirement, checked for any residual generationless path; (c) `runGenCells` per-run isolation, checked for residual shared state; (d) MAIN-world cancellation tombstone eviction under sustained load. Anything that turns out not to be reachable is recorded as such with the reasoning, not silently dropped
+- Review: independent concurrency review; a test that cannot fail against the pre-fix code proves nothing and must be rejected
+- Gates: for each item, a test that fails against a deliberately reverted guard and passes against current source; the full unit suite; `npm run test:security`
+- Blockers: —
+- Next: start with (d) — tombstone eviction under load is the only one of the four with an unbounded-growth failure mode rather than a correctness one
+- Recover: `sed -n '/^### Concurrency edge-cases/,/^### /p' KNOWN-ISSUES.md`
+- History:
+  - 2026-08-25 09:40 UTC — opened. The fundamental cooperative-cancellation limit documented alongside these four is explicitly **not** in scope: an already-started page side effect cannot be unwound, that is a browser constraint, and it is documented in `docs/DESIGN.md` rather than treated as a defect.
+
+## [CAP-FB-20260825-KEYBOARD-COMMANDS-01] No keyboard shortcuts anywhere
+- Feedback: 2026-08-25 — independent gap review found the manifest declares no `commands`, so a power-user tool aimed at people who return to it repeatedly across a day cannot be reached or driven from the keyboard
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: a small, deliberate set of shortcuts — open the hub, start a task, open the side panel, focus the composer — declared in the manifest, remappable through Chrome's own shortcut settings, and discoverable in-product; the set is small enough to be memorable rather than exhaustive; no shortcut fires a destructive or permission-granting action; nothing conflicts with a common browser default
+- Review: independent accessibility and interaction review, including screen-reader discoverability of the shortcut list
+- Gates: loaded-MV3 keyboard-driven journey for each declared command; assert no shortcut reaches a destructive path; assert remapping works through Chrome's settings
+- Blockers: `PRODUCT.md` positions the hub as a command centre for a returning power user; the shortcut set should be chosen against that, not accumulated
+- Next: choose the four or five commands worth a global shortcut and confirm none collides with a common Chrome default
+- Recover: `grep -n "commands" extension/manifest.json || echo "no commands block"`
+- History:
+  - 2026-08-25 09:40 UTC — opened. Verified absent: `extension/manifest.json` contains no `commands` key.
+
+## [CAP-FB-20260825-I18N-FOUNDATION-01] No internationalisation foundation
+- Feedback: 2026-08-25 — independent gap review found no `_locales` directory and no `default_locale`; every user-visible string is hardcoded English across the hub, Settings, side panel, chat and components
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: a `default_locale` and an `_locales/en` message catalogue exist; user-visible strings resolve through the catalogue rather than being hardcoded, including strings inside the shared Web Components; the component gallery renders identically after the migration; adding a second locale requires only a new catalogue and no code change. Shipping additional translations is explicitly **not** in scope — this task is the foundation only
+- Review: independent review that no string escapes the catalogue and that the gallery drift guard still holds
+- Gates: `npm run check:gallery` no drift; `npm run test:components`; the Chrome journey suite green — the journeys assert on visible text, so this migration is exactly the kind of change that breaks them silently; a grep-based inventory of remaining hardcoded user-visible strings with each survivor justified
+- Blockers: this touches nearly every surface at once and will conflict with any concurrent UI lane. Sequence it deliberately — do not start it alongside an open UI task
+- Next: produce the string inventory and decide whether the migration is worth doing before a name and distribution decision, or after
+- Recover: `ls extension/_locales 2>/dev/null || echo absent; grep -n "default_locale" extension/manifest.json || echo absent`
+- History:
+  - 2026-08-25 09:40 UTC — opened as a foundation task, not a translation project. Priority reflects that it blocks nothing today but gets more expensive with every surface added.
+
+## [CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01] Hub agent summary rows predate the shared picker
+- Feedback: 2026-08-25 — carried as a residual under `CAP-FB-20260818-AGENT-ACCESS-01` since 2026-08-18 with no task of its own; re-verified against current source
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P3
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: the hub's Named, Background and Site agent summary rows are expressed through the same shared agent component the rest of the product uses, so the three lists gain live registry updates and consistent behaviour for free; visible behaviour and the surfaces the rows open are unchanged; the component is exercised in the gallery
+- Review: independent visual and behavioural review that nothing regressed — this is a consistency change and must not become a redesign
+- Gates: `npm run check:gallery`; `npm run test:components`; `scripts/sidebar-parity.ts`; loaded-MV3 before/after screenshots of all three lists in expanded, collapsed and RTL layouts
+- Blockers: `AGENTS.md` requires new UI to be a reusable component in the single-source components file and names hand-rolled duplicates as the cause of past bugs — this is the last known instance of that pattern in the hub
+- Next: confirm the shared component covers the three summary presentations before changing anything; if it does not, extend it rather than forking it
+- Recover: `git grep -c "capability-row" -- extension/ntp/ntp.js && git grep -c "agent-picker" -- extension/ntp/ntp.js`
+- History:
+  - 2026-08-25 09:40 UTC — opened. Verified in current source: `extension/ntp/ntp.js` uses `capability-row` five times and `agent-picker` zero times.
+
+## [CAP-FB-20260825-TRACKER-INTEGRITY-01] Enforce the tracker's own entry schema
+- Feedback: 2026-08-25 — a gap sweep found three entries violating the schema this file defines: two headings with no body at all, and one heading carrying three complete field sets with conflicting statuses
+- Updated: 2026-08-25 09:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
+- Candidate: —
+- Shipping: —
+- Acceptance: `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` is resolved — it holds **three** field sets under one heading (`DONE`, `IN_REVIEW`, `DONE`), so its real state is unreadable and any tool or reader gets a different answer depending on which one it takes. The 2026-08-25 archive split read only the first and moved it to `TASKS-DONE.md`, so a field set reading `IN_REVIEW` is now filed as completed work. Either split it into distinct IDs for the distinct pieces of work, or reconcile it to a single authoritative field set with the superseded history moved into `History`. Separately, a check runs in CI and fails when any heading does not carry exactly one of each schema field, when a `Status` or `Priority` value is outside the declared set, or when a `CAP-FB` ID is duplicated or reused across `TASKS.md` and `TASKS-DONE.md`
+- Review: independent review that the FDSTAT resolution does not silently promote or demote any of the three states — the `IN_REVIEW` field set represents real unfinished work and must survive the reconciliation
+- Gates: the schema check run against the current file, demonstrated failing on a deliberately malformed entry and passing on the corrected file; the `Open work queue` index regenerated and matching the checker's output exactly
+- Blockers: —
+- Next: recover `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` from `TASKS-DONE.md`, then decide with the runtime lane owner whether its three field sets are three tasks or one — do not reconcile them by guessing which status is current
+- Recover: `awk '/^## \[CAP-FB/{id=$0} /^- Status:/{print id}' TASKS.md TASKS-DONE.md | uniq -c | awk '$1!=1'`
+- History:
+  - 2026-08-25 09:40 UTC — opened. The two empty headings (`CAP-FB-20260822-WASM-EXECUTION-HOST-01` and `-02`) were recovered in this same commit and are not part of this task; the FDSTAT merged-heading defect and the missing check are.
+
