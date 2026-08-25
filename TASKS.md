@@ -182,7 +182,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **30 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **32 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -214,8 +214,10 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`](#cap-fb-20260825-headed-acceptance-lane-01-a-headed-browser-acceptance-lane) | A headed-browser acceptance lane |
 | P1 | OPEN | [`CAP-FB-20260825-OWNER-DECISION-QUEUE-01`](#cap-fb-20260825-owner-decision-queue-01-product-decisions-blocking-tracked-work) | Product decisions blocking tracked work |
 | P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
+| P1 | OPEN | [`CAP-FB-20260825-UI-INTEGRATION-RED-01`](#cap-fb-20260825-ui-integration-red-01-scriptsui-integrationts-is-red-and-never-finishes) | scripts/ui-integration.ts is red and never finishes |
 | P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
 | P2 | IN_REVIEW | [`CAP-FB-20260823-AGENT-ICON-ON-CREATE-01`](#cap-fb-20260823-agent-icon-on-create-01-generate-the-agent-icon-at-creation-not-on-click) | Generate the agent icon at creation, not on click |
+| P2 | IN_REVIEW | [`CAP-FB-20260825-AGENT-ROLE-PREVIEW-01`](#cap-fb-20260825-agent-role-preview-01-the-hub-agent-list-prints-the-whole-role) | The hub agent list prints the whole role |
 | P2 | OPEN | [`CAP-FB-20260825-CONCURRENCY-RESIDUALS-01`](#cap-fb-20260825-concurrency-residuals-01-close-the-four-open-concurrency-verifications) | Close the four open concurrency verifications |
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
@@ -1388,8 +1390,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Shipping: `origin/main@2bff0af` (0.2.267)
 - Root cause: (a) chicken-and-egg — discovery required the content script to run, which only ran on ENROLLED origins (ensureOriginScriptsRegistered registers per-origin + host permission, transactional), so an un-enrolled site surfaced nothing; (b) enrolled origins' dynamic content scripts were not reconciled on SW startup/browser boot, so an enrolled site went silent after a restart ("no logs").
 - Fix: proactive discovery — NTP + Settings surface open discoverable pages with one-click "Add Site Agent"/"Enroll" (explicit owner gesture, host-permission request, no typing origins) + discovered-but-not-enrolled listing; reconcileEnrolledOriginScriptsOnBoot() re-registers enrolled origins' scripts on boot. Security model verified hard (Pro e384c626): zero broad injection, host-permission grant stays owner-gesture, transactional enroll/rollback intact.
+- Acceptance: an owner can see which open pages are discoverable and enroll one with a single explicit gesture, without typing an origin; discovery no longer requires the origin to be enrolled first; an already-enrolled origin's content scripts are re-registered on service-worker/browser boot so it does not go silent after a restart; no broad injection is introduced and the host-permission grant stays behind an owner gesture with transactional enroll/rollback intact
 - Review: PASS (Pro e384c626), 1595/1595, manifest untouched.
+- Gates: independent security review (Pro `e384c626`) confirming zero broad injection, owner-gesture host-permission grant and intact transactional enroll/rollback; 1595/1595 unit; manifest unchanged
+- Blockers: —
+- Next: — (MERGED at `0.2.267`; move to Archive on the next reconciliation)
+- Recover: `git show 2bff0af --stat && git grep -n "reconcileEnrolledOriginScriptsOnBoot" -- extension`
 - History:
+  - 2026-08-25 22:45 UTC — schema fields completed by an unrelated lane so `npm run check:tasks` passes. This entry used `Root cause:`/`Fix:` in place of the schema's `Acceptance`/`Gates`/`Blockers`/`Next`/`Recover`; the missing fields were filled in FROM the text already present. No status, owner, candidate, shipping ref, review verdict or history event was altered, and no custody was taken.
   - 2026-08-25 20:3x UTC — LANDED at 0.2.267. Discovery is now discoverable and enrolled sites survive restart.
 - id: CAP-FB-20260825-CAIRN-DOMEXC-01
   severity: P1
@@ -1401,8 +1409,55 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   status: done
   landed_version: 0.2.272
   summary: "Create-agent dialog mic now REPLACES the field with the cumulative transcript (matches composer/prompt-bar) instead of appending it — dictating two utterances no longer doubles the text. View transitions removed: navigation now applies update() synchronously (no document.startViewTransition), making navigation instant/not janky, while focus routing (generation-guarded routeFocus + focusExplicitRouteTarget) is preserved so keyboard focus isn't lost. KATs: mic-transcript.test.ts + view-transition.test.ts. NOTE: during integration a worktree-overwrite briefly lost the cairn rename; it was restored from the reviewed commit and both fixes landed together at 0.2.272 (1593/1593)."
+<<<<<<< HEAD
 - id: CAP-FB-20260825-INVENTORY-DRIFT-01
   severity: P0
   status: done
   landed_version: 0.2.275
   summary: "npm run build failed with 'bundled-tool VERIFY FAILED — byte-drift: extension/lib/bundled-inventory-data.js'. Root cause: the inventory embeds a top-level 'release' field derived from package.json, but the machine-local post-commit hook bumps package.json AFTER the inventory is committed, so every version bump drifted the inventory and the build's verify gate failed closed. FIX: (1) regenerated the inventory to the current version (full regen — only bundled-inventory-data.js changed, the 26 Wasm binaries are reproducible/byte-identical); (2) STRUCTURAL: scripts/bump-version.mjs now keeps the inventory's 'release' field in lockstep on every bump (targeted patch, byte-equivalent to regen for a version-only change) AND stages it so the post-commit hook's amend bundles it — this fixes every machine since bump-version.mjs is committed. Also adopted: run 'npm run build' before every commit. 80 generated files byte-identical; full build RC=0."
+=======
+
+## [CAP-FB-20260825-AGENT-ROLE-PREVIEW-01] The hub agent list prints the whole role
+- Feedback: 2026-08-25 — product owner: "The agent list on the ntp page doesn't have a truncated role/description, it contains pretty much all of the description and it looks terrible."
+- Updated: 2026-08-25 22:40 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P2
+- Owner: claude-opus-5 implementer session
+- Workspace: active (local path private)
+- Branch: detached candidate on `origin/main`
+- Base: `7642f76`
+- Candidate: this commit
+- Shipping: this commit on `origin/main`
+- Acceptance: a long agent role in the hub's Named agents list renders as a short, scannable preview rather than a paragraph — at most two lines, the row no taller than ~90px — while the full role remains in the DOM for screen readers and reachable on hover; the fix lives in the shared row component so every list using it behaves the same; the sidebar's existing short preview is unaffected
+- Review: pending — a different model/session should confirm the clamp does not harm any other `capability-row` consumer and that the full text really does stay available to assistive technology
+- Gates: `scripts/agent-role-preview.ts` 7/7 on a clean profile, verified to FAIL against the unclamped component with exactly the reported symptom (`lines: 4`, `rowHeight: 111`); unit 1595/0; Chrome journeys 127/127; gallery drift clean
+- Blockers: —
+- Next: obtain the independent review, then close
+- Recover: `npm run test:role-preview && git grep -n "line-clamp" -- extension/shared/components.js`
+- History:
+  - 2026-08-25 22:40 UTC — reproduced and fixed. `6986082` had truncated the SIDEBAR list and missed the main Named agents panel, which passes the role straight into `capability-row`'s `description`. A 334-character role rendered as five lines and grew the row to 111px; measured before/after 111px → 79px.
+  - 2026-08-25 22:40 UTC — fixed in the shared component rather than at the one call site: `capability-row`'s `.desc` now clamps to two lines. That fixes every consumer at once, which is what the heavy-componentization rule in `AGENTS.md` asks for, and it CLAMPS rather than truncates — the full role stays in the DOM so a screen reader still reads it, and a `title` exposes it on hover. Cutting the string at the call site would have thrown the rest away.
+  - 2026-08-25 22:40 UTC — coverage is a focused `scripts/agent-role-preview.ts`. Adding the checks to `scripts/ui-integration.ts` was tried and abandoned: that suite is already red on main (five failures, identical values with all local work stashed — a demo task does not create a thread, and three overlay checks cascade off it) and does not reach its own end inside 1800s, so checks appended there can never run. Filed separately as `CAP-FB-20260825-UI-INTEGRATION-RED-01`.
+
+## [CAP-FB-20260825-UI-INTEGRATION-RED-01] scripts/ui-integration.ts is red and never finishes
+- Feedback: 2026-08-25 — found while adding coverage for an unrelated UI fix; the suite fails five checks and exceeds its time budget before reaching its own end
+- Updated: 2026-08-25 22:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `7642f76`
+- Candidate: —
+- Shipping: —
+- Acceptance: `deno run -A scripts/ui-integration.ts` completes and prints its `RESULT` line within a stated budget, and every check passes or is removed with a recorded reason. In particular a demo task creates a thread in the sidebar again — the three overlay failures cascade from that one and are not separate defects until proven so
+- Review: independent review of whichever fix lands, since this is one of the two suites that catch owner-visible UI regressions
+- Gates: the suite reaching `RESULT` with zero failures, and the run time recorded so the budget is a fact rather than a guess
+- Blockers: —
+- Next: determine whether "running a demo task creates a thread in the sidebar" is a product regression or a stale harness assumption before touching the overlay checks that depend on it
+- Recover: `deno run -A scripts/ui-integration.ts 2>&1 | grep -E "^FAIL|RESULT"`
+- History:
+  - 2026-08-25 22:40 UTC — opened with attribution evidence. Five failures: the `+` menu bounds check, "running a demo task creates a thread in the sidebar" (`items: 0`), "clicking the sidebar thread opens the thread surface", "overlay-open matrix: the thread overlay is OPEN" (`noThread: true`) and the midnight-theme nub check (`overlayVisible: false`). All five reproduce with identical values on pristine `7642f76` with local work stashed, so they predate that work. The suite also did not print `RESULT` within 1800s on pristine main, so it is over budget as well as red — checks appended near its end are unreachable, which is why an unrelated fix's coverage went into its own script instead.
+>>>>>>> 1c93509 (fix(ui): clamp the agent role preview in the hub list (CAP-FB-20260825-AGENT-ROLE-PREVIEW-01))
