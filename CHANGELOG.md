@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.261] — 2026-08-25
+- Internal: updated the acceptance suite for the owner-direct approval policy. No user-visible change.
+
 ## [0.2.260] — 2026-08-25
 - Fixed every task failing to run. Starting a task returned an internal error instead of a result; tasks work again.
 

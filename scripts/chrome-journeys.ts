@@ -424,6 +424,7 @@ const EXPECTED = [
   "delete-race: listOrigins excludes the deleted origin after racing upsert",
   "Settings: Disenroll button present for an enrolled agent",
   "Settings: clicked Disenroll via a real click",
+  "disenroll: an owner click needs no second approval (owner-direct action)",
   "disenroll: agent removed from list + enrollment tombstoned",
   "scripting Disable: two origins enrolled before the revoke",
   "scripting Disable: capability revoked",
@@ -489,7 +490,7 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
-  const profile = `/tmp/cap-journeys-${Date.now()}`;
+  const profile = `/home/paulkinlan/.cache/cap-review/j2-${Date.now()}`;
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
   const proc = launchChrome(profile);
   let port;
@@ -1466,14 +1467,39 @@ async function main() {
       "Settings: Disenroll button present for an enrolled agent",
       disenrollBtn !== null,
     );
+    // `agent.delete` is an OWNER-DIRECT action (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01):
+    // the owner's own click in a browser-attested extension UI document IS the
+    // approval, so one click removes the Site Agent and nothing waits on a
+    // hidden Settings decision. This step used to click, resolve a pending
+    // approval, then click again; that expectation is stale.
     const disenrollRequested = await clickSel(cdp, optsSession2, ".origin-row .disenroll-origin");
-    await resolveNextApproval(true);
-    const disenrollRetried = await clickSel(cdp, optsSession2, ".origin-row .disenroll-origin");
     check(
       "Settings: clicked Disenroll via a real click",
-      disenrollRequested && disenrollRetried,
+      disenrollRequested,
     );
     await sleep(600);
+    // Assert the owner-direct policy POSITIVELY rather than just dropping the
+    // old assertion: a genuine owner click must leave NO pending approval
+    // behind. A regression that started queueing one would strand the owner
+    // waiting on a decision they already made.
+    // Read the pending list from the OWNER surface, not from NTP: the
+    // management routes are restricted to the exact Settings sender, so asking
+    // from the hub returns a refusal rather than an empty list.
+    const pendingAfterDisenroll = await evalIn(
+      cdp, optsSession2,
+      `chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(
+         v => JSON.stringify({ok: v?.ok === true, actions: (v?.approvals ?? []).map(a => a?.action ?? null)}),
+         e => JSON.stringify({ok:false, err:String(e?.message ?? e)}))`,
+    );
+    let disenrollPending = null;
+    try { disenrollPending = JSON.parse(pendingAfterDisenroll); } catch { /* reported below */ }
+    check(
+      "disenroll: an owner click needs no second approval (owner-direct action)",
+      disenrollPending?.ok === true &&
+        Array.isArray(disenrollPending.actions) &&
+        !disenrollPending.actions.includes("agent.delete"),
+      pendingAfterDisenroll,
+    );
     const afterDisenroll = await msgValue({ type: "agent.list" });
     check(
       "disenroll: agent removed from list + enrollment tombstoned",
@@ -1625,7 +1651,12 @@ async function main() {
     // Exact correlated DENY: one request → one row; neither the raw target,
     // asset id, digest nor approval id is present in the DOM. A genuine Deny
     // click removes that exact tuple and the mutation never runs.
-    const denyRequest = await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    // `asset.delete` became an OWNER-DIRECT action
+    // (CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01), so an owner surface's own
+    // delete no longer queues an approval and cannot exercise the deny path.
+    // `asset.update` is still gated and drives the identical request → single
+    // row → deny → mutation-never-ran flow, so the coverage is unchanged.
+    const denyRequest = await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "deny-must-not-apply" });
     await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
     await sleep(250);
     const denyDom = await evalOpts(`({
@@ -1673,13 +1704,15 @@ async function main() {
     const afterDeniedDelete = await msgValue({ type: "asset.get", origin: "master", id: assetId });
     check(
       "approval: deny leaves the exact asset unchanged",
-      afterDeniedDelete?.ok === true && afterDeniedDelete.asset?.content === "<h1>hello</h1>",
+      afterDeniedDelete?.ok === true &&
+        afterDeniedDelete.asset?.content === "<h1>hello</h1>" &&
+        afterDeniedDelete.asset?.name !== "deny-must-not-apply",
     );
 
     // Stable install-scoped target reference across an actual MV3 worker
     // restart. Pending/granted capabilities are intentionally worker-ephemeral
     // (restart fails closed); the private OPFS HMAC key remains install-scoped.
-    await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
     await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
     await sleep(250);
     const refBeforeRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
@@ -1693,7 +1726,7 @@ async function main() {
       approvalWake = await msgValue({ type: "asset.list", origin: "master" }).catch(() => null);
       if (!approvalWake) await sleep(200);
     }
-    await msgValue({ type: "asset.delete", origin: "master", id: assetId });
+    await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
     await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
     await sleep(250);
     const refAfterRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
@@ -1705,7 +1738,9 @@ async function main() {
     const afterRestartDeny = await msgValue({ type: "asset.get", origin: "master", id: assetId });
     check(
       "approval: post-restart deny leaves the exact asset unchanged",
-      afterRestartDeny?.ok === true && afterRestartDeny.asset?.content === "<h1>hello</h1>",
+      afterRestartDeny?.ok === true &&
+        afterRestartDeny.asset?.content === "<h1>hello</h1>" &&
+        afterRestartDeny.asset?.name !== "restart-must-not-apply",
     );
 
     const assetUpdate = await approvedMsg({
