@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.270] — 2026-08-25
+- chore(release): 0.2.269
+
 ## [0.2.268] — 2026-08-25
 - fix(ui): create-agent dialog mic replaces with cumulative transcript (no doubling) + navigation applies immediately (view transitions removed, focus routing preserved)
 
