@@ -180,7 +180,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **32 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **33 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -201,6 +201,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | OPEN | [`CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01`](#cap-fb-20260822-tool-platform-abuse-gates-01-tool-platform-abuse-quota-and-lifecycle-gates) | Tool platform abuse, quota and lifecycle gates |
 | P0 | IN_REVIEW | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
 | P0 | OPEN | [`CAP-FB-20260822-WASM-TOOL-PLATFORM-01`](#cap-fb-20260822-wasm-tool-platform-01-co-do-style-browser-native-tool-operating-platform) | Co-do-style browser-native tool operating platform |
+| P0 | OPEN | [`CAP-FB-20260825-MAIN-GATES-RED-01`](#cap-fb-20260825-main-gates-red-01-main-is-red-chrome-journeys-abort-and-two-usage-probes-fail) | Main is red: Chrome journeys abort and two usage probes fail |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
@@ -1295,3 +1296,24 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   extension/lib/wasm-offscreen-host.js extension/lib/wasm-sync-workspace.js
   tests/wasm-fixture-builder.mjs tests/wasm-host-gate2.test.ts
   scripts/scan-shipped.mjs build.mjs`
+
+## [CAP-FB-20260825-MAIN-GATES-RED-01] Main is red: Chrome journeys abort and two usage probes fail
+- Feedback: 2026-08-25 — an unrelated lane ran the full gates before landing and found three failures already on `origin/main`; both suites reproduce identically with all local work stashed
+- Updated: 2026-08-25 14:40 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `0626e6b`
+- Candidate: —
+- Shipping: —
+- Acceptance: `deno run -A scripts/chrome-journeys.ts` reaches 126/126 again, and `tests/usage-authority.test.ts` PROBE-2 and PROBE-4 pass. Each failure is traced to the commit that introduced it and fixed there, or explicitly reclassified with evidence if the assertion — not the product — is what is wrong
+- Review: independent review of whichever fix lands, since a broken acceptance suite is the gate the whole fleet relies on
+- Gates: full unit suite; `scripts/chrome-journeys.ts` at 126/126; the two named probes green; and the fix confirmed against the exact commit that introduced each regression
+- Blockers: —
+- Next: bisect the journey abort between the last known-green tip and `0626e6b`, and separately bisect the two usage probes; they are almost certainly different lanes and should not be fixed as one change
+- Recover: `deno run -A scripts/chrome-journeys.ts 2>&1 | tail -5 && deno test -A tests/usage-authority.test.ts 2>&1 | tail -5`
+- History:
+  - 2026-08-25 14:40 UTC — opened with attribution evidence. **Chrome journeys: 96/126**, aborting at `journey failure: pending owner approval did not render in exact Settings`, immediately after `Settings: Disenroll button present for an enrolled agent`; the remaining 30 checks report `(not reached)`. **Unit: `tests/usage-authority.test.ts` PROBE-2** ("a concurrent initializer loser must mirror the WINNING authority, not its own" — `authority holds the migrated legacy row exactly once`) **and PROBE-4** ("after corruption repair, a valid write succeeds") fail. All three were reproduced on pristine `0626e6b` with unrelated local work stashed, and again with it restored, at the identical abort point — so they predate that work and are not caused by it. Filed rather than fixed in passing: the journey abort sits in the approvals/enrollment path and the usage probes in the ledger, both owned by other lanes.

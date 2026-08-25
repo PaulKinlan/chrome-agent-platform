@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.258] — 2026-08-25
+- Added keyboard shortcuts: Alt+Shift+H opens the agent hub, Alt+Shift+K starts a new task with the composer ready, and Alt+Shift+S opens the side panel on the current tab. Settings → About lists them and links to Chrome's page for changing them.
+
 ## [0.2.257] — 2026-08-25
 - Reworked how task and agent logs are stored and shown so nothing is lost or hidden: every tool call and every reply now shows correctly when you reopen a task, and a task can no longer get stuck showing "running" after an interruption.
 
