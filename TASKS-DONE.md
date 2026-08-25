@@ -1564,7 +1564,6 @@
 - Gates: full 1168/1168, build rc 0, Store package/validate OK
 
 ## [CAP-FB-20260822-WASI-FDSTAT-FLAGS-01] Least-authority fd_fdstat_set_flags (linkage-only, Release A)
-
 - Feedback: 2026-08-22 — the markdown binary imports fd_fdstat_set_flags, absent
   from the runtime; the containment audit blocked its admission until a
   least-authority implementation existed
@@ -1588,6 +1587,7 @@
   gap 9→8 (linkage-only callable but unauthorized; SQLite still disabled)
 - Gates: full 1167/1167, build rc 0, Store package/validate OK
 - History:
+  - 2026-08-25 12:30 UTC — two foreign field sets that had been concatenated under this heading were moved to their own entries by `CAP-FB-20260825-TRACKER-INTEGRITY-01`: the `IN_REVIEW` Gate-2 recomposed-source set to `CAP-FB-20260822-WASM-EXECUTION-HOST-02`, and the `DONE` pure-WASI-host set to `CAP-FB-20260822-WASM-EXECUTION-HOST-01`. This entry now carries exactly one field set, describing `fd_fdstat_set_flags` only. Its own fields are unchanged.
   - 2026-08-22 23:44 UTC — Release A implemented + committed 5eb7171.
   - 2026-08-23 00:02 UTC — GPT review REVISE (F1 SQLite provenance 9→8 +
     linkage-only-unauthorized wording; F2 pure behavioral planner KAT +
@@ -1596,110 +1596,6 @@
     (`0.2.173`).
 
 
-- Feedback: 2026-08-22 — the reviewed package host needs hard termination,
-  byte-bounded sync workspaces, an audit-before-instantiate scan and a bounded
-  result envelope before any route can reach it
-- Updated: 2026-08-22 20:30 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P0
-- Owner: recomposed source candidate on this branch
-- Workspace: active (local path private)
-- Branch: `recompose/gate2-6662dfa`
-- Base: `6662dfa2870ef1729b7e3ba68c3393d40f7db474`
-- Candidate: this commit (`086ee3d` PASSed source, renumbered `0.2.159`)
-- Shipping: —
-- Acceptance: the recomposed source tree preserves the PASSed Gate-2 facts —
-  synchronous per-job workspace, audit-before-instantiate, the exact 15-key
-  result envelope with bounded stdout/stderr content, one finish() for
-  timeout/abort, scanner-owned execution-host exemption (fixed canonical path
-  + exact call shape) and the scanner-owned worker-host exemption (the one
-  non-literal fresh-Worker construction); executor/offscreen host remain
-  UNREACHABLE source-only until a separately reviewed route successor lands
-- Gates: final independent review PASS on `086ee3d` (26/26 focused, full
-  1056/1056, build rc 0); recomposed gates re-run on this commit
-
-- History:
-  - 2026-08-22 20:40 UTC — Store package scan after the recomposed push passed
-    ABSOLUTE source paths to the scanner; the canonical exemptions compared only
-    relative paths and flagged the execution-host Wasm + worker-host Worker
-    constructions. Fixed with a scanner-owned canonical path matcher
-    (`isCanonicalScannedPath`) that accepts the exact normalized repo tail
-    (relative or absolute) and rejects lookalikes/suffix tricks; added
-    absolute-positive + lookalike-negative tests for BOTH exemptions. Store
-    package build/package/validate pass on `0.2.160`.
-- Recover: `git show 086ee3d -- extension/lib/wasm-execution-worker.js
-  extension/lib/wasm-executor.js extension/lib/wasm-executor-bounds.js
-  extension/lib/wasm-offscreen-host.js extension/lib/wasm-sync-workspace.js
-  tests/wasm-fixture-builder.mjs tests/wasm-host-gate2.test.ts
-  scripts/scan-shipped.mjs build.mjs`
-
-
-- Feedback: 2026-08-22 — reviewed packages require a least-privilege host with
-  hard termination, quotas and Durable replay integration
-- Updated: 2026-08-22 16:50 UTC
-- Status: DONE
-- Resume: —
-- Priority: P0
-- Owner: integrated on public main
-- Workspace: none
-- Branch: `origin/main`
-- Base: `8be457e716cfa50e9ef024fa5317b72b2859dcdc`
-- Candidate: `462d21d8da9bee640c2c12088dcafba6123e00fc`
-- Shipping: `origin/main@462d21d8da9bee640c2c12088dcafba6123e00fc`
-- Acceptance: exactly two unreachable source libraries define frozen strict WASI
-  errno/flag/right/filetype/path-class/hard-limit/default-quota records and
-  job/context/quota/FD constructors, then expose a synchronous
-  `wasi_snapshot_preview1` table over injected bounded byte-memory and workspace
-  adapters; no OPFS handle is constructed; args, empty environment, fd 0/1/2,
-  fd3 exact `.` preopen plus the same-workspace fd4 `/job` alias (identical
-  rights), read/write/seek/tell/close/fdstat/filestat, path stat/open, random,
-  monotonic clock, realtime `ENOTSUP` and typed `proc_exit` obey
-  wasm32 little-endian pointer/iovec/u64 bounds, preflighted alias/OOB checks,
-  partial IO, cancellation and host/stdin/stdout/stderr/path/dynamic-FD/file-byte/
-  file-size quotas; normalized UTF-8 relative paths reject traversal and symlink
-  following; `inputs/` is read-only, `scratch/` read-write and `output/` write-
-  only; the exact nine-function import UNION measured across 37 non-Emscripten
-  rebuilds is recorded (runtime import SUPPORT is a separate axis: fd_fdstat_set_flags
-  is now supported, shrinking the runtime gap to eight) and foreign module/kind/
-  function imports fail explicitly;
-  shared package tiny/default scanner readback is revalidated and large remains
-  blocked; no service-worker/offscreen/Worker/route/OPFS construction/network/
-  provider/package-byte load/WebAssembly compile-or-instantiate/execution exists
-- Review: host design v2 SHA-256
-  `c7fe9de72c42fada04b1f79d546f2f4b7e518a5e1c50d4c034a13feea9c122e1`
-  independently PASSed review SHA-256
-  `85c436846542c2c483beb771c5ae632132ad6984fd6679eede423c7413b53bfd`;
-  reviewer additions `fd_tell` and `CLOCK_REALTIME` id 0 → `ENOTSUP` included;
-  exact Gate 1 implementation independently PASSed at `462d21d8`, review
-  SHA-256 `97df51dd194ff02496740cbfbfca92243f76b586857decaebe3243ae4ac7845e`
-- Gates: Gate 0 authorized probe retry independently PASSed 10/10, review SHA-256
-  `7b0524498e7e4556018a79b256ca8ab25147d47a6294afa0f58c6b392b5bd895`;
-  reported pure host 16/16 and composed host/package/OPFS 43/43; canonical
-  full no-Chrome 1029/1029 across 14 steps; 110-file production build with zero
-  Wasm binaries; exact 136-entry package/validate; gallery/changelog/tracker/
-  privacy/diff/release/clean; every syscall KAT; strict/frozen
-  types; exact import/memory-tier revalidation; hostile pointer/iovec/alias/u64/
-  UTF-8/NUL/traversal/rights; fd3 preopen; partial IO/seek/tell/stat/close/reuse;
-- Next: Residual: the Gate-2 semantics (wasm-execution-worker/executor/bounds/offscreen-host/sync-workspace + the scanner-owned canonical exemptions) are byte-contained on main at aca0759; the recorded candidate 086ee3d is NOT an ancestor (renumbered to the 0.2.159/0.2.160 landing). Next action: reconcile the Candidate field to the renumbered tip, confirm the supersession, then advance to MERGED.
-  proving no product import, route, Worker, OPFS, network or instantiation
-- Blockers: none for the landed pure Gate 1 source contract. Gate 2 offscreen/
-  fresh-Worker/session fencing/termination, package bytes, routes and browser
-  evidence remain a separate task; no reconstructed tool is admitted/executable
-- Next: preserve this unreachable reviewed contract while Gate 2 proceeds as a
-  separately reviewed and browser-gated successor with no provider cutover
-- Recover:
-  `git show 462d21d8da9bee640c2c12088dcafba6123e00fc -- extension/lib/wasm-host-types.js extension/lib/wasi-preview1-runtime.js tests/wasi-preview1-runtime.test.ts docs/tool-platform-architecture.md TASKS.md`
-- History:
-  - 2026-08-22 09:30 UTC — opened with fresh-Worker-only and unknown-replay
-    defaults; Co-do's main-thread fallback is explicitly not adopted.
-  - 2026-08-22 16:03 UTC — independently reviewed Gate 0 probe passed all 10
-    checks; began only the design-PASSed pure Gate 1 source slice on exact public
-  - 2026-08-23 20:12 UTC — sweep: candidate 086ee3d is not an ancestor of origin/main; the Gate-2 files/semantics are present on main via the renumbered 0.2.159/0.2.160 lineage.
-    `8be457e`, with every product integration and execution primitive absent.
-  - 2026-08-22 16:50 UTC — exact `462d21d8` landed as public `0.2.155` after
-    different-model PASS, 16/16 focused, 43/43 composed, 1029/1029 full,
-    build/package/load proof; the pure modules remain unreachable and Gate 2 is separate.
 
 ## [CAP-FB-20260822-CODE-DIFF-ARTIFACTS-01] Code patch artifact review and apply lifecycle
 
@@ -3180,3 +3076,70 @@ Entries that reached `DONE` or `ABANDONED`, preserved with their complete field 
   - 2026-08-25 — triage flip: superseded by the 0.2.252 page-identity landing.
   - Git reconcile at 2026-08-22 07:30 UTC: the source-prep series passed review but is NOT on origin/main — no landing commit exists.
   - 2026-08-19 18:13 UTC — opened as the prerequisite identity task for proactive per-tab discovery; no origin-only record is relabelled as page-verified.
+
+## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
+- Feedback: 2026-08-22 — reviewed packages require a least-privilege host with
+  hard termination, quotas and Durable replay integration
+- Updated: 2026-08-22 16:50 UTC
+- Status: DONE
+- Resume: —
+- Priority: P0
+- Owner: integrated on public main
+- Workspace: none
+- Branch: `origin/main`
+- Base: `8be457e716cfa50e9ef024fa5317b72b2859dcdc`
+- Candidate: `462d21d8da9bee640c2c12088dcafba6123e00fc`
+- Shipping: `origin/main@462d21d8da9bee640c2c12088dcafba6123e00fc`
+- Acceptance: exactly two unreachable source libraries define frozen strict WASI
+  errno/flag/right/filetype/path-class/hard-limit/default-quota records and
+  job/context/quota/FD constructors, then expose a synchronous
+  `wasi_snapshot_preview1` table over injected bounded byte-memory and workspace
+  adapters; no OPFS handle is constructed; args, empty environment, fd 0/1/2,
+  fd3 exact `.` preopen plus the same-workspace fd4 `/job` alias (identical
+  rights), read/write/seek/tell/close/fdstat/filestat, path stat/open, random,
+  monotonic clock, realtime `ENOTSUP` and typed `proc_exit` obey
+  wasm32 little-endian pointer/iovec/u64 bounds, preflighted alias/OOB checks,
+  partial IO, cancellation and host/stdin/stdout/stderr/path/dynamic-FD/file-byte/
+  file-size quotas; normalized UTF-8 relative paths reject traversal and symlink
+  following; `inputs/` is read-only, `scratch/` read-write and `output/` write-
+  only; the exact nine-function import UNION measured across 37 non-Emscripten
+  rebuilds is recorded (runtime import SUPPORT is a separate axis: fd_fdstat_set_flags
+  is now supported, shrinking the runtime gap to eight) and foreign module/kind/
+  function imports fail explicitly;
+  shared package tiny/default scanner readback is revalidated and large remains
+  blocked; no service-worker/offscreen/Worker/route/OPFS construction/network/
+  provider/package-byte load/WebAssembly compile-or-instantiate/execution exists
+- Review: host design v2 SHA-256
+  `c7fe9de72c42fada04b1f79d546f2f4b7e518a5e1c50d4c034a13feea9c122e1`
+  independently PASSed review SHA-256
+  `85c436846542c2c483beb771c5ae632132ad6984fd6679eede423c7413b53bfd`;
+  reviewer additions `fd_tell` and `CLOCK_REALTIME` id 0 → `ENOTSUP` included;
+  exact Gate 1 implementation independently PASSed at `462d21d8`, review
+  SHA-256 `97df51dd194ff02496740cbfbfca92243f76b586857decaebe3243ae4ac7845e`
+- Gates: Gate 0 authorized probe retry independently PASSed 10/10, review SHA-256
+  `7b0524498e7e4556018a79b256ca8ab25147d47a6294afa0f58c6b392b5bd895`;
+  reported pure host 16/16 and composed host/package/OPFS 43/43; canonical
+  full no-Chrome 1029/1029 across 14 steps; 110-file production build with zero
+  Wasm binaries; exact 136-entry package/validate; gallery/changelog/tracker/
+  privacy/diff/release/clean; every syscall KAT; strict/frozen
+  types; exact import/memory-tier revalidation; hostile pointer/iovec/alias/u64/
+  UTF-8/NUL/traversal/rights; fd3 preopen; partial IO/seek/tell/stat/close/reuse;
+  proving no product import, route, Worker, OPFS, network or instantiation
+- Blockers: none for the landed pure Gate 1 source contract. Gate 2 offscreen/
+  fresh-Worker/session fencing/termination, package bytes, routes and browser
+  evidence remain a separate task; no reconstructed tool is admitted/executable
+- Next: preserve this unreachable reviewed contract while Gate 2 proceeds as a
+  separately reviewed and browser-gated successor with no provider cutover
+- Recover:
+  `git show 462d21d8da9bee640c2c12088dcafba6123e00fc -- extension/lib/wasm-host-types.js extension/lib/wasi-preview1-runtime.js tests/wasi-preview1-runtime.test.ts docs/tool-platform-architecture.md TASKS.md`
+- History:
+  - 2026-08-25 12:30 UTC — recovered by `CAP-FB-20260825-TRACKER-INTEGRITY-01`. This field set had been concatenated under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading, which carried three complete field sets while this entry's own heading carried none. Restored verbatim; no field value was altered by the move.
+  - 2026-08-22 09:30 UTC — opened with fresh-Worker-only and unknown-replay
+    defaults; Co-do's main-thread fallback is explicitly not adopted.
+  - 2026-08-22 16:03 UTC — independently reviewed Gate 0 probe passed all 10
+    checks; began only the design-PASSed pure Gate 1 source slice on exact public
+  - 2026-08-23 20:12 UTC — sweep: candidate 086ee3d is not an ancestor of origin/main; the Gate-2 files/semantics are present on main via the renumbered 0.2.159/0.2.160 lineage.
+    `8be457e`, with every product integration and execution primitive absent.
+  - 2026-08-22 16:50 UTC — exact `462d21d8` landed as public `0.2.155` after
+    different-model PASS, 16/16 focused, 43/43 composed, 1029/1029 full,
+    build/package/load proof; the pure modules remain unreachable and Gate 2 is separate.

@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.2.254",
+  "version": "0.2.255",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -32,7 +32,8 @@
     "check:changelog": "node scripts/sync-changelog.mjs --check",
     "package": "node scripts/package-extension.mjs --target=store",
     "package:store": "node scripts/package-extension.mjs --target=store",
-    "check:changelog-order": "node scripts/check-changelog.mjs"
+    "check:changelog-order": "node scripts/check-changelog.mjs",
+    "check:tasks": "node scripts/check-tasks.mjs"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",

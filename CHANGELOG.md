@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.255] — 2026-08-25
+- docs(tasks): repair the concatenated FDSTAT entry + add the TASKS schema gate (CAP-FB-20260825-TRACKER-INTEGRITY-01)
+
 ## [0.2.254] — 2026-08-25
 - Fixed Site Agent tool calls (like the bistro booking) failing to connect — the site tab is now opened, focused, and confirmed ready before the tool runs, and any genuine connection problem is explained clearly instead of a bare "connection failed".
 

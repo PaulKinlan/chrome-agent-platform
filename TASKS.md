@@ -36,7 +36,15 @@ Workspace paths and transport receipts stay in the private coordination ledger.
 
 ## Entry schema
 
-Every task uses every field below; use `—` rather than deleting a field.
+Every task uses every field below; use `—` rather than deleting a field. The one
+exception is `Resume`, which records the state a `BLOCKED` entry may return to and
+is required only there.
+
+`scripts/check-tasks.mjs` (`npm run check:tasks`) enforces this schema across
+`TASKS.md` and `TASKS-DONE.md`: exactly one of each field per heading, `Status` and
+`Priority` inside the declared sets, and no id duplicated across the two files. It
+carries a baseline of violations that predate it — the gate fails on anything new,
+and `scripts/check-tasks-baseline.json` must only ever shrink.
 
 ```markdown
 
@@ -150,7 +158,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **32 open** (plus 1 terminal entries not yet archived to `TASKS-DONE.md`). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **32 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -162,7 +170,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 |---|---|---|---|
 | P0 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P0 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
-| P0 | **BLOCKED** | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
 | P0 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P0 | OPEN | [`CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`](#cap-fb-20260820-semantic-tool-search-01-local-semantic-search-over-the-complete-tool-catalog) | Local semantic search over the complete tool catalog |
 | P0 | IN_REVIEW | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
@@ -170,6 +177,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | OPEN | [`CAP-FB-20260822-SPREADSHEET-TOOLKIT-01`](#cap-fb-20260822-spreadsheet-toolkit-01-bounded-spreadsheet-and-table-workflow-toolkit) | Bounded spreadsheet and table workflow toolkit |
 | P0 | OPEN | [`CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01`](#cap-fb-20260822-tabular-diff-artifacts-01-read-only-tabular-diff-artifact-custody) | Read-only tabular-diff artifact custody |
 | P0 | OPEN | [`CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01`](#cap-fb-20260822-tool-platform-abuse-gates-01-tool-platform-abuse-quota-and-lifecycle-gates) | Tool platform abuse, quota and lifecycle gates |
+| P0 | IN_REVIEW | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
 | P0 | OPEN | [`CAP-FB-20260822-WASM-TOOL-PLATFORM-01`](#cap-fb-20260822-wasm-tool-platform-01-co-do-style-browser-native-tool-operating-platform) | Co-do-style browser-native tool operating platform |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
@@ -188,7 +196,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
 | P2 | OPEN | [`CAP-FB-20260825-KEYBOARD-COMMANDS-01`](#cap-fb-20260825-keyboard-commands-01-no-keyboard-shortcuts-anywhere) | No keyboard shortcuts anywhere |
-| P2 | OPEN | [`CAP-FB-20260825-TRACKER-INTEGRITY-01`](#cap-fb-20260825-tracker-integrity-01-enforce-the-trackers-own-entry-schema) | Enforce the tracker's own entry schema |
+| P2 | IN_REVIEW | [`CAP-FB-20260825-TRACKER-INTEGRITY-01`](#cap-fb-20260825-tracker-integrity-01-enforce-the-trackers-own-entry-schema) | Enforce the tracker's own entry schema |
 | P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
 | P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
@@ -636,50 +644,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     failures as HARNESS plus minor EVIDENCE defects, not Wasm product failures,
     because the driver self-messaged the service worker and never reached the
     registered runtime route. The candidate is parked; no retry or shipping.
-
-## [CAP-FB-20260822-WASM-EXECUTION-HOST-01] Fresh-Worker Wasm execution host
-- Feedback: 2026-08-22 — the Wasm tool platform needs a per-execution host with no cross-run state; entry created as a bare heading and never given a body (recovered 2026-08-25)
-- Updated: 2026-08-25 09:40 UTC
-- Status: MERGED
-- Resume: —
-- Priority: P0
-- Owner: unassigned (needs an owner to confirm scope and close)
-- Workspace: none
-- Branch: `origin/main`
-- Base: —
-- Candidate: `462d21d` (pure WASI host contract), `eee2886`/`d2450c0` (Gate 2 source-only offscreen fresh-Worker host), `2be8855` (scanner canonical exemptions bound to the normalized repo tail)
-- Shipping: all four commits are ancestors of `origin/main`
-- Acceptance: each Wasm execution runs in a freshly created Worker with no state reachable from any prior execution; the host contract is pure and does not depend on ambient extension authority; termination is enforced; the shipped-file scanner exempts only exact normalized repo tails
-- Review: the four recorded commits landed under the normal review path; **this entry's own acceptance text was never written**, so no independent reviewer has checked the delivered work against a stated contract
-- Gates: unit suite; `npm run test:security`; the Wasm execution paths exercised by the tool-platform lane. Loaded-MV3 runtime/termination proof is tracked separately as `CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`
-- Blockers: —
-- Next: an owner reconstructs the intended acceptance criteria from `docs/tool-platform-architecture.md` (which references this ID for Gate 1) and the four commits, confirms the delivered work satisfies them, then moves this to `DONE` or opens the residue as a successor
-- Recover: `git log --oneline --grep=WASM-EXECUTION-HOST-01 && grep -n "WASM-EXECUTION-HOST-01" docs/tool-platform-architecture.md`
-- History:
-  - 2026-08-25 09:40 UTC — recovered. This ID existed in the tracker as a heading with **zero fields** from its creation; a repository sweep found no commit in which it had a body. Reconstructed from the four commits that name it and from `docs/tool-platform-architecture.md`. Status is recorded as `MERGED` rather than `DONE` because the work is demonstrably on `origin/main` but was never checked against written acceptance criteria.
-
-
-## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
-- Feedback: 2026-08-22 — Gate 2 of the fresh-Worker host was recomposed as a separate lane; entry created as a bare heading and never given a body (recovered 2026-08-25)
-- Updated: 2026-08-25 09:40 UTC
-- Status: BLOCKED
-- Resume: OPEN
-- Priority: P0
-- Owner: unassigned (needs an owner to confirm whether this lane is still live)
-- Workspace: none
-- Branch: none
-- Base: —
-- Candidate: —
-- Shipping: —
-- Acceptance: unknown — never written. Either this lane is fully subsumed by the Gate 2 commits recorded under `CAP-FB-20260822-WASM-EXECUTION-HOST-01` (`eee2886`, `d2450c0`), in which case it should be `ABANDONED` as a duplicate, or it carries residue that must be stated before any work resumes
-- Review: none; no candidate exists
-- Gates: none recorded
-- Blockers: no acceptance criteria, no candidate, and no commit anywhere in the repository names this ID — only `-01` appears in commit subjects. The lane cannot be worked until an owner states what, if anything, it covers beyond `-01`
-- Next: decide whether this is a duplicate of `CAP-FB-20260822-WASM-EXECUTION-HOST-01` Gate 2 (then `ABANDONED` with the reason) or a distinct lane (then write its acceptance and move to `OPEN`)
-- Recover: `git log --all --oneline --grep=WASM-EXECUTION-HOST-02 | wc -l   # expect 0`
-- History:
-  - 2026-08-25 09:40 UTC — recovered. Heading existed with **zero fields** since creation, and no commit in any ref names this ID. Recorded `BLOCKED` on the missing acceptance rather than guessed at, because a duplicate P0 that silently looks like open work is worse than an explicit unknown.
-
 
 ## [CAP-FB-20260822-BUILTIN-WASM-TOOLS-01] Provenance-clean bundled Wasm tool tranche
 
@@ -1242,23 +1206,67 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-TRACKER-INTEGRITY-01] Enforce the tracker's own entry schema
 - Feedback: 2026-08-25 — a gap sweep found three entries violating the schema this file defines: two headings with no body at all, and one heading carrying three complete field sets with conflicting statuses
-- Updated: 2026-08-25 12:30 UTC
-- Status: OPEN
+- Updated: 2026-08-25 12:55 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
 - Owner: claude-opus-5 implementer session
 - Workspace: none
-- Branch: none
+- Branch: `origin/main`
 - Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
-- Candidate: —
+- Candidate: this commit
 - Shipping: —
 - Acceptance: `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` is resolved — it holds **three** field sets under one heading (`DONE`, `IN_REVIEW`, `DONE`), so its real state is unreadable and any tool or reader gets a different answer depending on which one it takes. The 2026-08-25 archive split read only the first and moved it to `TASKS-DONE.md`, so a field set reading `IN_REVIEW` is now filed as completed work. Either split it into distinct IDs for the distinct pieces of work, or reconcile it to a single authoritative field set with the superseded history moved into `History`. Separately, a check runs in CI and fails when any heading does not carry exactly one of each schema field, when a `Status` or `Priority` value is outside the declared set, or when a `CAP-FB` ID is duplicated or reused across `TASKS.md` and `TASKS-DONE.md`
-- Review: independent review that the FDSTAT resolution does not silently promote or demote any of the three states — the `IN_REVIEW` field set represents real unfinished work and must survive the reconciliation
+- Review: pending — a different model/session must review the FDSTAT split (that the three field sets went to the right entries and no field value changed) and the gate script
 - Gates: the schema check run against the current file, demonstrated failing on a deliberately malformed entry and passing on the corrected file; the `Open work queue` index regenerated and matching the checker's output exactly
 - Blockers: —
-- Next: recover the FDSTAT entry from TASKS-DONE.md, reconcile its three field sets with the runtime lane owner, and land the schema check
+- Next: obtain the independent review; then burn down `scripts/check-tasks-baseline.json` from 37 as the owning lanes touch their entries
 - Recover: `awk '/^## \[CAP-FB/{id=$0} /^- Status:/{print id}' TASKS.md TASKS-DONE.md | uniq -c | awk '$1!=1'`
 - History:
+  - 2026-08-25 12:55 UTC — **root cause found and repaired.** The three field sets under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading were not duplicates: they were the missing bodies of the two headings that had none. The `IN_REVIEW` set is verbatim `CAP-FB-20260822-WASM-EXECUTION-HOST-02` (Gate-2 recomposed source, branch `recompose/gate2-6662dfa`, candidate `086ee3d`) and the `DONE` set is verbatim `CAP-FB-20260822-WASM-EXECUTION-HOST-01` (pure WASI host contract, shipped `462d21d`). Each was moved to its own heading with no field value altered, replacing the conservative placeholders written on 2026-08-25 09:40. `-02` is therefore genuinely `IN_REVIEW` with real reviewed work behind it, not the unknown-scope `BLOCKED` recorded earlier. A stray `- Next:` line describing `086ee3d` had also been dropped mid-Gates inside the `-01` text; it moved to `-02` where its candidate lives. FDSTAT now carries exactly one field set, describing `fd_fdstat_set_flags` only, with its own fields unchanged.
+  - 2026-08-25 12:55 UTC — gate landed: `scripts/check-tasks.mjs` / `npm run check:tasks`, proven to fail on both real defects (a body-less heading and the three-field-set entry) and to pass on the repaired files. 37 violations predating the gate are baselined rather than mass-edited, because they sit in entries owned by live lanes; the gate is strict for anything new. `Resume` is now required only on `BLOCKED` entries — it was omitted on 23 entries, which is the fleet having already voted against requiring it everywhere.
   - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; documentation/tooling only, no code-lane collision)
   - 2026-08-25 09:40 UTC — opened. The two empty headings (`CAP-FB-20260822-WASM-EXECUTION-HOST-01` and `-02`) were recovered in this same commit and are not part of this task; the FDSTAT merged-heading defect and the missing check are.
 
+## [CAP-FB-20260822-WASM-EXECUTION-HOST-02] Gate 2 source-only fresh-Worker host (recomposed)
+- Feedback: 2026-08-22 — the reviewed package host needs hard termination,
+  byte-bounded sync workspaces, an audit-before-instantiate scan and a bounded
+  result envelope before any route can reach it
+- Updated: 2026-08-22 20:30 UTC
+- Status: IN_REVIEW
+- Resume: —
+- Priority: P0
+- Owner: recomposed source candidate on this branch
+- Workspace: active (local path private)
+- Branch: `recompose/gate2-6662dfa`
+- Base: `6662dfa2870ef1729b7e3ba68c3393d40f7db474`
+- Candidate: this commit (`086ee3d` PASSed source, renumbered `0.2.159`)
+- Shipping: —
+- Acceptance: the recomposed source tree preserves the PASSed Gate-2 facts —
+  synchronous per-job workspace, audit-before-instantiate, the exact 15-key
+  result envelope with bounded stdout/stderr content, one finish() for
+  timeout/abort, scanner-owned execution-host exemption (fixed canonical path
+  + exact call shape) and the scanner-owned worker-host exemption (the one
+  non-literal fresh-Worker construction); executor/offscreen host remain
+  UNREACHABLE source-only until a separately reviewed route successor lands
+- Review: the recomposed source PASSed independent review as `086ee3d`; that exact object was renumbered to the `0.2.159`/`0.2.160` landing, so the recorded candidate is not an ancestor of main and the review verdict is not yet bound to a reachable commit
+- Gates: final independent review PASS on `086ee3d` (26/26 focused, full
+  1056/1056, build rc 0); recomposed gates re-run on this commit
+
+- History:
+  - 2026-08-25 12:30 UTC — recovered by `CAP-FB-20260825-TRACKER-INTEGRITY-01`. This field set had been concatenated under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading, which carried three complete field sets while this entry's own heading carried none. Restored verbatim; no field value was altered by the move.
+  - 2026-08-22 20:40 UTC — Store package scan after the recomposed push passed
+    ABSOLUTE source paths to the scanner; the canonical exemptions compared only
+    relative paths and flagged the execution-host Wasm + worker-host Worker
+    constructions. Fixed with a scanner-owned canonical path matcher
+    (`isCanonicalScannedPath`) that accepts the exact normalized repo tail
+    (relative or absolute) and rejects lookalikes/suffix tricks; added
+    absolute-positive + lookalike-negative tests for BOTH exemptions. Store
+    package build/package/validate pass on `0.2.160`.
+- Blockers: the recorded candidate `086ee3d` is not an ancestor of `origin/main`; the Gate-2 semantics it carries are byte-contained on main at `aca0759` under the renumbered landing, so the candidate reference must be reconciled before this entry can advance
+- Next: the Gate-2 semantics (wasm-execution-worker/executor/bounds/offscreen-host/sync-workspace + the scanner-owned canonical exemptions) are byte-contained on main at aca0759; the recorded candidate 086ee3d is NOT an ancestor (renumbered to the 0.2.159/0.2.160 landing). Next action: reconcile the Candidate field to the renumbered tip, confirm the supersession, then advance to MERGED.
+- Recover: `git show 086ee3d -- extension/lib/wasm-execution-worker.js
+  extension/lib/wasm-executor.js extension/lib/wasm-executor-bounds.js
+  extension/lib/wasm-offscreen-host.js extension/lib/wasm-sync-workspace.js
+  tests/wasm-fixture-builder.mjs tests/wasm-host-gate2.test.ts
+  scripts/scan-shipped.mjs build.mjs`
