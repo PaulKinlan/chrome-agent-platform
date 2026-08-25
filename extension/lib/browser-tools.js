@@ -9,6 +9,7 @@ import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
+import { normalizeHostPattern } from "./permission-orchestration.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs is passed
@@ -217,6 +218,50 @@ async function hasPermission(perm) {
     return false;
   }
 }
+
+// ── T8 site-data control helpers (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01) ──
+/** Whether the EXACT origin's host permission is granted (cookies need host
+ * access for the target site). Only an exact `<origin>/*` pattern is ever
+ * consulted — broad/<all_urls> host access is never requested or treated as
+ * granted here. */
+async function hasOriginHostPermission(origin) {
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) return false;
+    if (typeof origin !== "string" || !/^https?:\/\//.test(origin)) return false;
+    return await chrome.permissions.contains({ origins: [`${origin}/*`] });
+  } catch {
+    return false;
+  }
+}
+
+/** Validate a contentSettings primaryPattern as ONE exact http(s) origin
+ * (bounded per-site control only). `<all_urls>`, wildcard-subdomain and
+ * multi-origin patterns are rejected — the canonical normalizeHostPattern
+ * authority enforces the exact-origin shape. */
+function t8SingleOriginPattern(value) {
+  if (typeof value !== "string") return { ok: false, error: "primaryPattern must be a string" };
+  const raw = value.trim();
+  if (!raw) return { ok: false, error: "primaryPattern is required" };
+  if (raw === "<all_urls>") {
+    return { ok: false, error: "broad <all_urls> patterns are rejected — pass one exact origin pattern (e.g. https://example.com/*)" };
+  }
+  try {
+    return { ok: true, value: normalizeHostPattern(raw) };
+  } catch {
+    return { ok: false, error: "primaryPattern must be one exact http(s) origin pattern (e.g. https://example.com/*) — wildcards, subdomain wildcards and multi-origin patterns are rejected" };
+  }
+}
+
+/** The contentSettings values each stable resource accepts (the API's enums,
+ * pinned so a bogus setting fails closed before reaching Chrome). */
+const T8_CONTENT_SETTING_VALUES = Object.freeze({
+  cookies: Object.freeze(["allow", "block", "session_only"]),
+  images: Object.freeze(["allow", "block"]),
+  javascript: Object.freeze(["allow", "block"]),
+  location: Object.freeze(["allow", "block", "ask"]),
+  notifications: Object.freeze(["allow", "block", "ask"]),
+  popups: Object.freeze(["allow", "block", "ask"]),
+});
 
 /** Window-level mutation under the SAME grant discipline as close_tab
  * (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): the window's tab origins
@@ -1451,6 +1496,372 @@ export function browserToolset(readOnly = false) {
         return { ok: true, id, removed: true };
       },
     }),
+
+    // ── T8 site-data control ──────────────────────────────────────────────
+    // chrome.cookies / chrome.browsingData / chrome.contentSettings
+    // (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01, Tranche 8). All three
+    // API permissions are OPTIONAL (Settings capability rows grant them from a
+    // genuine owner gesture — the service worker never requests). Cookie tools
+    // ADDITIONALLY require the exact-origin HOST permission for the target
+    // site (host access is granted via enrollment/Settings, never requested
+    // broadly here). Mutations ride the SAME product browser-control grant
+    // as the tabs/windows siblings: site-scoped mutations need the origin in
+    // the grant; the browser-wide browsing-data wipe needs a GLOBAL grant.
+    list_cookies: tool({
+      description:
+        "List cookies for a domain or URL (bounded). Requires cookies permission.",
+      inputSchema: z.object({
+        domain: z.string().min(1).max(253).optional(),
+        url: z.string().url().max(2048).optional(),
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ domain, url, maxResults = 50 }) => {
+        if (!(await hasPermission("cookies"))) {
+          return { error: "cookies permission not granted — enable Cookies in Settings" };
+        }
+        if (!domain && !url) return { error: "pass a domain or a url" };
+        const query = {};
+        if (domain) query.domain = domain;
+        if (url) query.url = url;
+        let all = [];
+        try {
+          all = await chrome.cookies.getAll(query);
+        } catch (e) {
+          return { error: `cookie query failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(all) ? all : [];
+        return {
+          cookies: rows.slice(0, maxResults).map((c) => ({
+            name: c.name,
+            value: c.value,
+            domain: c.domain,
+            path: c.path,
+            secure: c.secure,
+            httpOnly: c.httpOnly,
+            sameSite: c.sameSite ?? null,
+            expirationDate: c.expirationDate ?? null,
+            storeId: c.storeId ?? null,
+          })),
+          returned: Math.min(rows.length, maxResults),
+          total: rows.length,
+          truncated: rows.length > maxResults,
+        };
+      },
+    }),
+    list_cookie_stores: tool({
+      description:
+        "List the browser's cookie stores (id + tab ids). Requires cookies permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("cookies"))) {
+          return { error: "cookies permission not granted — enable Cookies in Settings" };
+        }
+        let stores = [];
+        try {
+          stores = await chrome.cookies.getAllCookieStores();
+        } catch (e) {
+          return { error: `cookie store query failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        return {
+          stores: (Array.isArray(stores) ? stores : []).slice(0, 50).map((s) => ({
+            id: s.id,
+            tabIds: Array.isArray(s.tabIds) ? s.tabIds.slice(0, 50) : [],
+          })),
+        };
+      },
+    }),
+    get_cookie: tool({
+      description:
+        "Read one cookie by URL + name. Requires cookies permission AND the exact-origin host permission for the URL's site.",
+      inputSchema: z.object({
+        url: z.string().url().max(2048),
+        name: z.string().min(1).max(512),
+      }),
+      execute: async ({ url, name }) => {
+        if (!(await hasPermission("cookies"))) {
+          return { error: "cookies permission not granted — enable Cookies in Settings" };
+        }
+        const origin = canonicalOrigin(url);
+        if (!origin) return { error: "only http/https cookie URLs are supported" };
+        if (!(await hasOriginHostPermission(origin))) {
+          return { error: `host permission for ${origin} not granted — grant site access for this exact origin in Settings (broad/all-sites access is never requested)` };
+        }
+        let cookie = null;
+        try {
+          cookie = await chrome.cookies.get({ url, name });
+        } catch (e) {
+          return { error: `cookie read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        if (!cookie) return { ok: true, cookie: null, found: false };
+        return {
+          ok: true,
+          found: true,
+          cookie: {
+            name: cookie.name,
+            value: cookie.value,
+            domain: cookie.domain,
+            path: cookie.path,
+            secure: cookie.secure,
+            httpOnly: cookie.httpOnly,
+            sameSite: cookie.sameSite ?? null,
+            expirationDate: cookie.expirationDate ?? null,
+            storeId: cookie.storeId ?? null,
+          },
+        };
+      },
+    }),
+    set_cookie: tool({
+      description:
+        "Set a cookie for an http/https URL. Requires cookies permission, the exact-origin host permission, and browser-control permission for the site (scoped + expiring).",
+      inputSchema: z.object({
+        url: z.string().url().max(2048),
+        name: z.string().min(1).max(512),
+        value: z.string().max(4096),
+      }),
+      execute: async ({ url, name, value }) => {
+        if (!(await hasPermission("cookies"))) {
+          return { error: "cookies permission not granted — enable Cookies in Settings" };
+        }
+        const origin = canonicalOrigin(url);
+        if (!origin) return { error: "only http/https cookie URLs are supported" };
+        if (!(await hasOriginHostPermission(origin))) {
+          return { error: `host permission for ${origin} not granted — grant site access for this exact origin in Settings (broad/all-sites access is never requested)` };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — cookie not set" };
+          }
+          let cookie = null;
+          try {
+            cookie = await chrome.cookies.set({ url, name, value });
+          } catch (e) {
+            return { error: `cookie write failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          // Re-check the fence AFTER the await (the round-18/19 discipline):
+          // an abort mid-mutation never reports a clean success.
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — cookie set then aborted" };
+          }
+          if (!cookie) return { error: "cookie write rejected by Chrome (url/host mismatch?)" };
+          return { ok: true, name: cookie.name, domain: cookie.domain, origin };
+        });
+      },
+    }),
+    remove_cookie: tool({
+      description:
+        "Remove one cookie by URL + name. Requires cookies permission, the exact-origin host permission, and browser-control permission for the site (scoped + expiring).",
+      inputSchema: z.object({
+        url: z.string().url().max(2048),
+        name: z.string().min(1).max(512),
+      }),
+      execute: async ({ url, name }) => {
+        if (!(await hasPermission("cookies"))) {
+          return { error: "cookies permission not granted — enable Cookies in Settings" };
+        }
+        const origin = canonicalOrigin(url);
+        if (!origin) return { error: "only http/https cookie URLs are supported" };
+        if (!(await hasOriginHostPermission(origin))) {
+          return { error: `host permission for ${origin} not granted — grant site access for this exact origin in Settings (broad/all-sites access is never requested)` };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — cookie not removed" };
+          }
+          try {
+            await chrome.cookies.remove({ url, name });
+          } catch (e) {
+            return { error: `cookie removal failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — cookie removed then aborted" };
+          }
+          return { ok: true, name, origin, removed: true };
+        });
+      },
+    }),
+    wipe_browsing_data: tool({
+      description:
+        "Wipe explicitly enumerated browsing data types (cache/cookies/history/downloads/fileSystems/formData/indexedDB/localStorage/passwords/pluginData/serviceWorkers), optionally since a timestamp. Browser-wide: requires a GLOBAL browser-control grant (scoped origin grants are refused).",
+      inputSchema: z.object({
+        dataTypes: z
+          .array(
+            z.enum([
+              "cache", "cookies", "history", "downloads", "fileSystems",
+              "formData", "indexedDB", "localStorage", "passwords",
+              "pluginData", "serviceWorkers",
+            ]),
+          )
+          .min(1)
+          .max(11),
+        sinceMs: z.number().int().min(0).optional(),
+      }),
+      execute: async ({ dataTypes, sinceMs }) => {
+        if (!(await hasPermission("browsingData"))) {
+          return { error: "browsingData permission not granted — enable Browsing data in Settings" };
+        }
+        // The caller must ENUMERATE what to wipe — an empty list is refused by
+        // the schema and there is NO implicit "everything" path: passing the
+        // full list is the caller's explicit choice, recorded in the result.
+        const unique = [...new Set(dataTypes)];
+        return await withGrantLock(async () => {
+          // Browser-wide scope: ONLY a global grant authorizes a wipe
+          // (undefined origin never matches an origin-scoped grant).
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted globally — a browsing-data wipe is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — browsing data not wiped" };
+          }
+          const removalOptions = {};
+          for (const t of unique) removalOptions[t] = true;
+          const options = {};
+          if (sinceMs !== undefined) options.since = sinceMs;
+          try {
+            await chrome.browsingData.remove(options, removalOptions);
+          } catch (e) {
+            return { error: `browsing-data wipe failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — browsing data wiped then aborted" };
+          }
+          return { ok: true, removed: unique, sinceMs: sinceMs ?? null };
+        });
+      },
+    }),
+    get_content_setting: tool({
+      description:
+        "Read one content setting (cookies/images/javascript/location/notifications/popups) for a single-origin pattern. Requires contentSettings permission.",
+      inputSchema: z.object({
+        resource: z.enum(["cookies", "images", "javascript", "location", "notifications", "popups"]),
+        primaryPattern: z.string().min(1).max(512),
+      }),
+      execute: async ({ resource, primaryPattern }) => {
+        if (!(await hasPermission("contentSettings"))) {
+          return { error: "contentSettings permission not granted — enable Content settings in Settings" };
+        }
+        const pattern = t8SingleOriginPattern(primaryPattern);
+        if (!pattern.ok) return { error: pattern.error };
+        let result = null;
+        try {
+          result = await chrome.contentSettings[resource].get({ primaryPattern: pattern.value });
+        } catch (e) {
+          return { error: `content-setting read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        return { ok: true, resource, primaryPattern: pattern.value, setting: result?.setting ?? null };
+      },
+    }),
+    set_content_setting: tool({
+      description:
+        "Set one content setting for a SINGLE-ORIGIN pattern (broad/wildcard patterns are rejected). Requires contentSettings permission and browser-control permission for that origin (scoped + expiring).",
+      inputSchema: z.object({
+        resource: z.enum(["cookies", "images", "javascript", "location", "notifications", "popups"]),
+        primaryPattern: z.string().min(1).max(512),
+        setting: z.string().min(1).max(32),
+      }),
+      execute: async ({ resource, primaryPattern, setting }) => {
+        if (!(await hasPermission("contentSettings"))) {
+          return { error: "contentSettings permission not granted — enable Content settings in Settings" };
+        }
+        const pattern = t8SingleOriginPattern(primaryPattern);
+        if (!pattern.ok) return { error: pattern.error };
+        const allowed = T8_CONTENT_SETTING_VALUES[resource];
+        if (!allowed.includes(setting)) {
+          return { error: `invalid setting for ${resource} — allowed: ${allowed.join(", ")}` };
+        }
+        const origin = canonicalOrigin(pattern.value);
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — content setting not changed" };
+          }
+          try {
+            await chrome.contentSettings[resource].set({ primaryPattern: pattern.value, setting });
+          } catch (e) {
+            return { error: `content-setting write failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — content setting changed then aborted" };
+          }
+          return { ok: true, resource, primaryPattern: pattern.value, setting };
+        });
+      },
+    }),
+    clear_content_settings: tool({
+      description:
+        "Clear one content setting for a SINGLE-ORIGIN pattern (broad/wildcard patterns are rejected), restoring the default. Requires contentSettings permission and browser-control permission for that origin (scoped + expiring).",
+      inputSchema: z.object({
+        resource: z.enum(["cookies", "images", "javascript", "location", "notifications", "popups"]),
+        primaryPattern: z.string().min(1).max(512),
+      }),
+      execute: async ({ resource, primaryPattern }) => {
+        if (!(await hasPermission("contentSettings"))) {
+          return { error: "contentSettings permission not granted — enable Content settings in Settings" };
+        }
+        const pattern = t8SingleOriginPattern(primaryPattern);
+        if (!pattern.ok) return { error: pattern.error };
+        const origin = canonicalOrigin(pattern.value);
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — content setting not cleared" };
+          }
+          try {
+            await chrome.contentSettings[resource].clear({ primaryPattern: pattern.value });
+          } catch (e) {
+            return { error: `content-setting clear failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — content setting cleared then aborted" };
+          }
+          return { ok: true, resource, primaryPattern: pattern.value, cleared: true };
+        });
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -1469,6 +1880,10 @@ export function browserToolset(readOnly = false) {
       list_bookmarks: all.list_bookmarks,
       query_idle_state: all.query_idle_state,
       list_context_menus: all.list_context_menus,
+      list_cookies: all.list_cookies,
+      list_cookie_stores: all.list_cookie_stores,
+      get_cookie: all.get_cookie,
+      get_content_setting: all.get_content_setting,
     };
   }
   return all;

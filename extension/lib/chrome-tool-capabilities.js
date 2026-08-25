@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 29,
+  browserTools: 38,
   managementTools: 29,
-  totalTools: 58,
+  totalTools: 67,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -45,6 +45,15 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "create_context_menu",
   "list_context_menus",
   "remove_context_menu",
+  "list_cookies",
+  "list_cookie_stores",
+  "get_cookie",
+  "set_cookie",
+  "remove_cookie",
+  "wipe_browsing_data",
+  "get_content_setting",
+  "set_content_setting",
+  "clear_content_settings",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -162,6 +171,20 @@ const rows = [
   record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
   record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", false, "read", "browser.context-menus"),
   record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
+
+  // Tranche-8 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // site-data control — cookies (API permission + exact-origin HOST permission),
+  // browsingData (global-grant wipe of explicitly enumerated types), and
+  // contentSettings (single-origin patterns only; broad/wildcard rejected).
+  record("list_cookies", "chrome-api", ["chrome.cookies.list"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
+  record("list_cookie_stores", "chrome-api", ["chrome.cookies.stores.list"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
+  record("get_cookie", "chrome-api", ["chrome.cookies.get.exact-origin"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
+  record("set_cookie", "chrome-api", ["chrome.cookies.set.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies"),
+  record("remove_cookie", "chrome-api", ["chrome.cookies.remove.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies"),
+  record("wipe_browsing_data", "chrome-api", ["chrome.browsing-data.wipe.global"], ["browsingData"], "global", "mutating", false, "mutating", "browser.browsing-data"),
+  record("get_content_setting", "chrome-api", ["chrome.content-settings.get"], ["contentSettings"], "none", "read-only", false, "read", "browser.content-settings"),
+  record("set_content_setting", "chrome-api", ["chrome.content-settings.set.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
+  record("clear_content_settings", "chrome-api", ["chrome.content-settings.clear.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),
