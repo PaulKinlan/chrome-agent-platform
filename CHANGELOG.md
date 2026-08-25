@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.281] — 2026-08-25
+- New browser insight + saving tools: memory/CPU/storage/display status, top sites, a read-only view of the extension's granted permissions, your reading list (add/find/update/remove), and save-any-tab as an MHTML archive — capture is consent-gated, race-checked, and size-capped
+
 ## [0.2.280] — 2026-08-25
 - Deep tab control: move, duplicate, pin, reload, back/forward, zoom, discard and highlight tabs; enable/disable the toolbar action; side-panel options — all grant-gated with the stricter any-origin-less-tab rule
 
