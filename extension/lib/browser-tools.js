@@ -1655,6 +1655,9 @@ export function browserToolset(readOnly = false) {
         } catch {
           return { error: "run aborted — reading list entry not updated" };
         }
+        if (title === undefined && hasBeenRead === undefined) {
+          return { error: "nothing to update — pass title or hasBeenRead" };
+        }
         const update = { url };
         if (title !== undefined) update.title = title;
         if (hasBeenRead !== undefined) update.hasBeenRead = hasBeenRead;
@@ -1733,8 +1736,25 @@ export function browserToolset(readOnly = false) {
               error: "browser control not granted for this tab's origin — ask the user to approve it in Settings",
             };
           }
-          const blob = await chrome.pageCapture.saveTabAsMHTML({ tabId: target.id });
-          const size = blob?.size ?? 0;
+          // Round-20 navigation race (review B1): re-read the target identity
+          // INSIDE the grant lock, IMMEDIATELY before the capture — a
+          // navigation since the pre-lock resolution must not capture a
+          // newly-unauthorized origin.
+          const pre = await chrome.tabs.get(target.id).catch(() => null);
+          const preOrigin = pre?.url
+            ? (() => { try { return canonicalOrigin(pre.url); } catch { return undefined; } })()
+            : undefined;
+          if (!preOrigin || preOrigin !== origin) {
+            return { error: "tab navigated before capture — page not saved" };
+          }
+          let blob = null;
+          try {
+            blob = await chrome.pageCapture.saveTabAsMHTML({ tabId: target.id });
+          } catch (e) {
+            return { error: `capture failed: ${e?.message ?? e}` };
+          }
+          if (!blob) return { error: "capture returned no data" };
+          const size = blob.size ?? 0;
           if (size > MAX_MHTML_BYTES) {
             return {
               error: `page too large to save inline (${size} bytes > ${MAX_MHTML_BYTES} cap) — not saved`,
@@ -1742,7 +1762,28 @@ export function browserToolset(readOnly = false) {
               capBytes: MAX_MHTML_BYTES,
             };
           }
-          const mhtml = await blob.text();
+          let mhtml;
+          try {
+            mhtml = await blob.text();
+          } catch (e) {
+            return { error: `capture failed: ${e?.message ?? e}` };
+          }
+          // Round-18 (review B2): an abort landing DURING the capture must not
+          // return the bytes — re-check durable ownership before success.
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — page not saved" };
+          }
+          // Post-capture identity re-compare (review B1): the captured document
+          // must still be the consented origin when the bytes are returned.
+          const post = await chrome.tabs.get(target.id).catch(() => null);
+          const postOrigin = post?.url
+            ? (() => { try { return canonicalOrigin(post.url); } catch { return undefined; } })()
+            : undefined;
+          if (!postOrigin || postOrigin !== origin) {
+            return { error: "tab navigated during capture — result discarded" };
+          }
           return { ok: true, tabId: target.id, origin, mhtml, sizeBytes: size, truncated: false };
         });
       },

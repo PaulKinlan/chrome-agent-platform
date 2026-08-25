@@ -9,7 +9,7 @@ import {
   setOriginBrowserControlGrant,
   revokeBrowserControlGrant,
 } from "../extension/lib/browser-tools.js";
-import { clearRunFence } from "../extension/lib/run-fence.js";
+import { clearRunFence, setRunFence } from "../extension/lib/run-fence.js";
 
 const store = new Map();
 const granted = new Set(["storage", "tabs"]);
@@ -119,7 +119,13 @@ Deno.test("T6: readingList CRUD flows with http/https-only validation + honest p
   assert((await tools().query_reading_list.execute({})).error.includes("readingList permission not granted"));
   granted.add("readingList");
   // URL validation: chrome://, file://, javascript:, and garbage are refused BEFORE the API.
-  for (const bad of ["chrome://extensions", "file:///etc/passwd", "javascript:alert(1)", "not a url"]) {
+  // N1 (review): case / whitespace / embedded tab+newline / nested-scheme probes.
+  // The WHATWG parser lowercases schemes and strips tabs/newlines — so padded
+  // or upper-cased http(s) urls are GENUINELY https after parsing (not
+  // bypasses) and must be ACCEPTED; anything parsing to a non-http(s) protocol
+  // (or unparseable) must be REFUSED.
+  for (const bad of ["chrome://extensions", "file:///etc/passwd", "javascript:alert(1)", "not a url",
+    "http:javascript:alert(1)", "view-source:https://a.example/", "data:text/html,x"]) {
     const r = await tools().add_reading_list_entry.execute({ url: bad, title: "x" });
     assert(r.error.includes("http/https"), `refused ${bad}`);
     const u = await tools().update_reading_list_entry.execute({ url: bad, hasBeenRead: true });
@@ -128,6 +134,12 @@ Deno.test("T6: readingList CRUD flows with http/https-only validation + honest p
     assert(d.error.includes("http/https"), `remove refused ${bad}`);
   }
   assertEquals(readingList.size, 0, "no refused url reached the API");
+  // Normalized-but-genuine https urls are accepted (no false rejection).
+  for (const ok of ["HTTPS://upper.example/x", "\thttps://tabbed.example/x\n", "https://a.example/\nstill-https-path"]) {
+    const r = await tools().add_reading_list_entry.execute({ url: ok, title: "x" });
+    assertEquals(r.ok, true, `normalized https accepted: ${JSON.stringify(ok)}`);
+    readingList.clear();
+  }
   // CRUD happy path.
   const add = await tools().add_reading_list_entry.execute({ url: "https://a.example/x", title: "A", hasBeenRead: false });
   assertEquals(add.ok, true);
@@ -190,4 +202,67 @@ Deno.test("T5/T6: registry parity — the 11 new tools are registered with capab
   for (const p of ["system.cpu", "system.memory", "system.storage", "system.display", "topSites", "readingList", "pageCapture"]) {
     assert(manifest.optional_permissions.includes(p), `manifest optional ${p}`);
   }
+});
+
+Deno.test("T6 r2 (review): update_reading_list_entry refuses a no-op update honestly (M3)", async () => {
+  reset();
+  granted.add("readingList");
+  const r = await tools().update_reading_list_entry.execute({ url: "https://a.example/x" });
+  assert(r.error.includes("nothing to update"), "url-only update refused before Chrome raw-throws");
+});
+
+Deno.test("T6 r2 (review): save_page_as_mhtml re-checks tab identity inside the lock (B1) and run ownership post-capture (B2)", async () => {
+  reset();
+  granted.add("pageCapture");
+  grantedOrigins.add("https://example.com/*");
+  await setOriginBrowserControlGrant(["https://example.com"], Date.now() + 5 * 60_000);
+  // B1 pre-capture navigation: tabs.get returns a DIFFERENT url inside the lock.
+  const origGet = chrome.tabs.get;
+  let preCalls = 0;
+  chrome.tabs.get = async () => (++preCalls > 1 // entry resolution = original; in-lock re-read = navigated
+    ? { id: 7, url: "https://evil.example/takeover", title: "Evil", windowId: 1 }
+    : { id: 7, url: "https://example.com/page", title: "Example", windowId: 1 });
+  const raced = await tools().save_page_as_mhtml.execute({ tabId: 7 });
+  chrome.tabs.get = origGet;
+  assert(raced.error.includes("tab navigated before capture"), `pre-capture race refused: ${raced.error}`);
+  assert(!raced.mhtml, "no bytes on refusal");
+  // B1 post-capture navigation: identity changes DURING capture (second get call).
+  let calls = 0;
+  chrome.tabs.get = async () => (++calls > 2 // entry + in-lock pre-capture = original; post-capture = navigated
+    ? { id: 7, url: "https://evil.example/mid", title: "Evil", windowId: 1 }
+    : { id: 7, url: "https://example.com/page", title: "Example", windowId: 1 });
+  const midRace = await tools().save_page_as_mhtml.execute({ tabId: 7 });
+  chrome.tabs.get = origGet;
+  assert(midRace.error.includes("navigated during capture"), `post-capture race refused: ${midRace.error}`);
+  assert(!midRace.mhtml, "bytes discarded on post-capture race");
+  // B2: abort lands during capture — bytes must NOT be returned.
+  const fence = { signal: { aborted: false } };
+  setRunFence(fence);
+  const origText = chrome.pageCapture.saveTabAsMHTML;
+  chrome.pageCapture.saveTabAsMHTML = async () => {
+    fence.signal.aborted = true; // abort lands DURING the capture await
+    return { size: 64, text: async () => "M".repeat(64) };
+  };
+  const aborted = await tools().save_page_as_mhtml.execute({ tabId: 7 });
+  chrome.pageCapture.saveTabAsMHTML = origText;
+  clearRunFence();
+  assert(aborted.error.includes("run aborted"), `post-capture abort refuses: ${aborted.error}`);
+  assert(!aborted.mhtml, "bytes discarded on abort");
+  await revokeBrowserControlGrant();
+});
+
+Deno.test("T6 r2 (review): save_page_as_mhtml capture failures are structured, never raw throws (M1/M2)", async () => {
+  reset();
+  granted.add("pageCapture");
+  grantedOrigins.add("https://example.com/*");
+  await setOriginBrowserControlGrant(["https://example.com"], Date.now() + 5 * 60_000);
+  const orig = chrome.pageCapture.saveTabAsMHTML;
+  chrome.pageCapture.saveTabAsMHTML = async () => { throw new Error("chrome exploded"); };
+  const threw = await tools().save_page_as_mhtml.execute({ tabId: 7 });
+  assert(threw.error.startsWith("capture failed:"), `throw → structured: ${threw.error}`);
+  chrome.pageCapture.saveTabAsMHTML = async () => null;
+  const nul = await tools().save_page_as_mhtml.execute({ tabId: 7 });
+  assert(nul.error.includes("no data"), `null blob guarded: ${nul.error}`);
+  chrome.pageCapture.saveTabAsMHTML = orig;
+  await revokeBrowserControlGrant();
 });
