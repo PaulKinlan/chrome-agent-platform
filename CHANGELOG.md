@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.285] — 2026-08-25
+- Network rules: manage the extension's dynamic request rules (block/allow/redirect/upgrade), inspect navigation frames, and observe recent page/request activity — rule changes are browser-wide and need the global grant
+
 ## [0.2.284] — 2026-08-25
 - Browser settings control: privacy preferences (WebRTC, safe browsing, autofill, do-not-track and more), proxy configuration, fonts, keep-awake, default-engine search, and text-to-speech — every change needs the global browser-control grant
 
