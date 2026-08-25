@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.275] — 2026-08-25
+- fix(build): bump-version keeps bundled inventory release in lockstep with version bumps (CAP-FB-20260825-INVENTORY-DRIFT-01)
+
+## [0.2.274] — 2026-08-25
+- fix(build): keep bundled inventory release in lockstep with version bumps
+
 ## [0.2.273] — 2026-08-25
 - chore(tasks): record mic/view-transition landed (0.2.272)
 

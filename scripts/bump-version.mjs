@@ -15,6 +15,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
@@ -84,6 +85,28 @@ if (existsSync(changelogPath) && finalNote) {
   const entry = `\n## [${next}] — ${date}\n- ${finalNote}\n`;
   const updated = existing.replace(/(#[^\n]*\n)/, `$1${entry}`);
   writeFileSync(changelogPath, updated);
+}
+
+// Keep the bundled-tool inventory's top-level `release` field in lockstep with the
+// version (CAP-FB-20260825-INVENTORY-DRIFT-01). The generator derives `release` from
+// package.json (scripts/build-bundled-tool-packages.mjs) and
+// tests/bundled-tool-packages.test.ts asserts inventory.release === manifest.version.
+// Without this, every post-commit version bump drifts the committed inventory and
+// `npm run build` fails closed on the bundled-tool verify gate. The top-level
+// `"release"` key is unique (per-package manifests use "version", SBOM refs use "rel"),
+// so a targeted patch is byte-equivalent to a full regeneration for a version-only bump.
+const inventoryPath = join(ROOT, "extension", "lib", "bundled-inventory-data.js");
+if (existsSync(inventoryPath)) {
+  const inv = readFileSync(inventoryPath, "utf-8");
+  const updatedInv = inv.replace(/^(\s*)"release": "[^"]*",/m, `$1"release": "${next}",`);
+  if (updatedInv !== inv) {
+    writeFileSync(inventoryPath, updatedInv);
+    // Stage it so the post-commit hook's `git commit --amend` bundles the resynced
+    // inventory (the hook's explicit `git add` list does not include it). Best-effort.
+    try {
+      execSync("git add extension/lib/bundled-inventory-data.js", { cwd: ROOT, stdio: "ignore" });
+    } catch { /* not a git repo / git unavailable — the file is still written */ }
+  }
 }
 
 // Keep the bundled changelog in lockstep + VERIFY (the review's MEDIUM: the
