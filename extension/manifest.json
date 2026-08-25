@@ -23,7 +23,14 @@
     "webNavigation",
     "cookies",
     "browsingData",
-    "contentSettings"
+    "contentSettings",
+    "system.cpu",
+    "system.memory",
+    "system.storage",
+    "system.display",
+    "topSites",
+    "readingList",
+    "pageCapture"
   ],
   "optional_host_permissions": [
     "http://*/*",

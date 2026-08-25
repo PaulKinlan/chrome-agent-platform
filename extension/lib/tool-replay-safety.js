@@ -66,6 +66,17 @@ const BROWSER_READ_TOOLS = new Set([
   // Tranche-13 Chrome API coverage: tab zoom + sidePanel options reads.
   "get_tab_zoom",
   "get_side_panel_options",
+  // Tranche-5/6 Chrome API coverage (CAP-FB-20260825): system/topSites/
+  // permissions inventory + reading-list query + MHTML save are observe-only
+  // (no browser state changes — the capture_screenshot precedent).
+  "get_system_memory",
+  "get_system_cpu",
+  "get_system_storage",
+  "get_system_display",
+  "list_top_sites",
+  "list_granted_permissions",
+  "query_reading_list",
+  "save_page_as_mhtml",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -152,6 +163,11 @@ const BUILT_IN_TOOLS = new Set([
   "move_tab", "duplicate_tab", "set_tab_pinned", "reload_tab",
   "tab_go_back", "tab_go_forward", "set_tab_zoom", "discard_tab", "highlight_tabs",
   "enable_action", "disable_action", "set_side_panel_options", "set_panel_behavior",
+  // Tranche-5/6 (reads classified above; ALL are built-ins):
+  "get_system_memory", "get_system_cpu", "get_system_storage", "get_system_display",
+  "list_top_sites", "list_granted_permissions",
+  "add_reading_list_entry", "query_reading_list", "update_reading_list_entry",
+  "remove_reading_list_entry", "save_page_as_mhtml",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",
