@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.256] — 2026-08-25
+- fix(build): regenerate the bundled inventory after the version bump
+
 ## [0.2.255] — 2026-08-25
 - docs(tasks): repair the concatenated FDSTAT entry + add the TASKS schema gate (CAP-FB-20260825-TRACKER-INTEGRITY-01)
 
