@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.283] — 2026-08-25
+- Extension manager tools: list your installed extensions with permission warnings, enable/disable or uninstall them (with confirmation, and the extension can never touch itself), plus platform/runtime info reads
+
 ## [0.2.282] — 2026-08-25
 - Recently-closed tabs and windows can now be listed and restored, and browsing history can be searched, viewed by visit, added to, and deleted — restores and deletes are grant-gated, wipes need the global grant and explicit confirmation
 
