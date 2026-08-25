@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 29,
+  browserTools: 43,
   managementTools: 29,
-  totalTools: 58,
+  totalTools: 72,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -45,6 +45,20 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "create_context_menu",
   "list_context_menus",
   "remove_context_menu",
+  "list_tab_groups",
+  "group_tabs",
+  "update_tab_group",
+  "ungroup_tabs",
+  "move_tab_to_group",
+  "download_file",
+  "list_downloads",
+  "pause_download",
+  "resume_download",
+  "cancel_download",
+  "erase_download",
+  "show_download",
+  "open_download",
+  "remove_download_file",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -162,6 +176,32 @@ const rows = [
   record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
   record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", false, "read", "browser.context-menus"),
   record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
+
+  // Tranche-3 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // tabGroups — the owner's "sorting hat" unlock. tabGroups itself needs NO
+  // manifest permission; the tab url/title reads for the grant scoping ride the
+  // declared "tabs" permission. Mutations are tab-origin grant-scoped (the same
+  // browser-control grant as the tabs/windows siblings); reads are un-scoped.
+  record("list_tab_groups", "chrome-api", ["chrome.tab-groups.list"], [], "none", "read-only", false, "read", "browser.tab-groups"),
+  record("group_tabs", "chrome-api", ["chrome.tab-groups.group.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("update_tab_group", "chrome-api", ["chrome.tab-groups.update.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("ungroup_tabs", "chrome-api", ["chrome.tab-groups.ungroup.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("move_tab_to_group", "chrome-api", ["chrome.tab-groups.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+
+  // Tranche-4 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // downloads — the "downloads" optional permission is already declared;
+  // mutations are GLOBAL-grant-scoped (downloads are browser-wide; an
+  // origin-scoped grant must never authorize them). open_download is the
+  // owner-OVERRIDDEN Phase-1 exclusion — kept hard grant-gated.
+  record("download_file", "chrome-api", ["chrome.downloads.create.destination-scheme"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("list_downloads", "chrome-api", ["chrome.downloads.list"], ["downloads"], "none", "read-only", false, "read", "browser.downloads"),
+  record("pause_download", "chrome-api", ["chrome.downloads.pause"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("resume_download", "chrome-api", ["chrome.downloads.resume"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("cancel_download", "chrome-api", ["chrome.downloads.cancel"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("erase_download", "chrome-api", ["chrome.downloads.erase"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("show_download", "chrome-api", ["chrome.downloads.show"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("open_download", "chrome-api", ["chrome.downloads.open"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("remove_download_file", "chrome-api", ["chrome.downloads.remove-file"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

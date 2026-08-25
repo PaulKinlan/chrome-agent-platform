@@ -68,6 +68,13 @@ export const CAPABILITIES = [
     hint: "Open the hub in Chrome's side panel alongside a page.",
     gates: "Gates: opening the hub in Chrome's side panel.",
   },
+  {
+    id: "downloads",
+    permissions: ["downloads"],
+    label: "Downloads",
+    hint: "Download files (http/https only) and manage the browser's download history. Mutations stay behind the Browser control grant.",
+    gates: "Gates: download_file, list_downloads, pause/resume/cancel/erase/show/open/remove downloads.",
+  },
 ];
 
 /** Whether a permission (or the equivalent) is currently granted. */
