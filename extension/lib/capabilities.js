@@ -88,6 +88,11 @@ export const CAPABILITIES = [
     label: "Content settings",
     hint: "Read/set/clear per-site content rules (JavaScript, images, cookies, location, notifications, popups) for one exact origin at a time — broad patterns are refused.",
     gates: "Gates: reading and changing per-site content rules (JS, images, cookies, location, notifications, popups) for single origins.",
+    id: "downloads",
+    permissions: ["downloads"],
+    label: "Downloads",
+    hint: "Download files (http/https only) and manage the browser's download history. Mutations stay behind the Browser control grant.",
+    gates: "Gates: download_file, list_downloads, pause/resume/cancel/erase/show/open/remove downloads.",
   },
 ];
 

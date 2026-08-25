@@ -60,6 +60,9 @@ const BROWSER_READ_TOOLS = new Set([
   "list_cookie_stores",
   "get_cookie",
   "get_content_setting",
+  // Tranche-3/4 Chrome API coverage: tab-group inventory + download history reads
+  "list_tab_groups",
+  "list_downloads",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -136,6 +139,11 @@ const BUILT_IN_TOOLS = new Set([
   "set_cookie", "remove_cookie",
   "wipe_browsing_data",
   "get_content_setting", "set_content_setting", "clear_content_settings",
+  // Tranche-3 Chrome API coverage: tabGroups (mutations; the reads are above)
+  "group_tabs", "update_tab_group", "ungroup_tabs", "move_tab_to_group",
+  // Tranche-4 Chrome API coverage: downloads (mutations; list_downloads above)
+  "download_file", "pause_download", "resume_download", "cancel_download",
+  "erase_download", "show_download", "open_download", "remove_download_file",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

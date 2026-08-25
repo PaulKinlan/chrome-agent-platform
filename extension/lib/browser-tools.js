@@ -711,6 +711,191 @@ export async function readPage(tabId) {
   }
 }
 
+/** Tab-origin grant discipline for the T3 tabGroups mutations: the affected
+ * tabs' origins are read INSIDE the grant lock (a navigation since any earlier
+ * read must not smuggle an unauthorized origin past the check); the grant must
+ * cover EVERY tab origin (grouping/moving a tab is that tab's mutation); tabs
+ * with no origin (new-tab/chrome pages) need a GLOBAL grant. Durable ownership
+ * is asserted adjacent to the mutation and re-checked after the await. */
+async function withTabIdsGrant(tabIds, verb, mutate) {
+  if (!(await hasTabsPermission())) {
+    return {
+      error:
+        "tabs permission not granted — enable Browser control in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    const tabs = await Promise.all(
+      tabIds.map((id) => chrome.tabs.get(id).catch(() => null)),
+    );
+    if (tabs.some((t) => t == null)) return { error: "no such tab" };
+    let hasOriginless = false;
+    const origins = [...new Set(
+      tabs
+        .map((t) => {
+          try {
+            return t?.url ? canonicalOrigin(t.url) : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter((o) => {
+          if (typeof o === "string") return true;
+          // A tab with NO canonical origin (chrome://, edge://, devtools, a
+          // fresh new-tab, …) is an origin-less scope: it must NEVER be
+          // authorized by a per-origin grant. Any origin-less tab in the set
+          // forces the GLOBAL grant (review finding, T3/T4 REVISE round).
+          hasOriginless = true;
+          return false;
+        }),
+    )];
+    const covered = (hasOriginless || origins.length === 0)
+      ? await isBrowserControlGranted(undefined)
+      : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
+    if (!covered) {
+      return {
+        error:
+          "browser control not granted for every tab origin here — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tabs not ${verb}` };
+    }
+    const result = await mutate(tabs);
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tabs ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** A tab group's own tabs are read inside the lock for the same origin
+ * discipline (update_tab_group mutates the group = mutates its tabs). */
+async function withTabGroupGrant(groupId, verb, mutate) {
+  if (!(await hasTabsPermission())) {
+    return {
+      error:
+        "tabs permission not granted — enable Browser control in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    const group = await chrome.tabGroups.get(groupId).catch(() => null);
+    if (!group) return { error: "no such tab group" };
+    const tabIds = Array.isArray(group.tabIds) ? group.tabIds : [];
+    const tabs = await Promise.all(
+      tabIds.map((id) => chrome.tabs.get(id).catch(() => null)),
+    );
+    let hasOriginless = false;
+    const origins = [...new Set(
+      tabs
+        .filter((t) => t != null && typeof t?.url === "string")
+        .map((t) => {
+          try {
+            return canonicalOrigin(t.url);
+          } catch {
+            return null;
+          }
+        })
+        .filter((o) => {
+          if (typeof o === "string") return true;
+          // Same rule as withTabIdsGrant: an origin-less tab in the group
+          // forces the GLOBAL grant (review finding, T3/T4 REVISE round).
+          hasOriginless = true;
+          return false;
+        }),
+    )];
+    const covered = (hasOriginless || origins.length === 0)
+      ? await isBrowserControlGranted(undefined)
+      : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
+    if (!covered) {
+      return {
+        error:
+          "browser control not granted for every tab origin in this group — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tab group not ${verb}` };
+    }
+    const result = await mutate(group);
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tab group ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** Downloads are browser-wide (no single destination origin): a mutation needs
+ * the GLOBAL browser-control grant — an origin-scoped grant must never
+ * authorize a downloads mutation. */
+async function withDownloadsGrant(verb, mutate) {
+  if (!(await hasPermission("downloads"))) {
+    return {
+      error:
+        "downloads permission not granted — enable Downloads in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    if (!(await isBrowserControlGranted(undefined))) {
+      return {
+        error:
+          "browser control not granted for downloads — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — download not ${verb}` };
+    }
+    const result = await mutate();
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — download ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** The T4 download-file URL gate: ONLY http/https (never file://, chrome://,
+ * extension://, data:, blob:, etc.). */
+function isDownloadableUrl(rawUrl) {
+  if (typeof rawUrl !== "string" || rawUrl.length > 2048) return false;
+  let u;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  return u.protocol === "http:" || u.protocol === "https:";
+}
+
+/** Sanitize the optional download filename: no traversal (leading "/" and ".."
+ * segments stripped), backslashes folded to "/", NUL/control bytes removed,
+ * bounded length + segment count. Returns null when nothing usable remains. */
+function sanitizeDownloadFilename(raw, maxBytes = 256, maxSegments = 8) {
+  if (typeof raw !== "string") return null;
+  const cleaned = raw
+    .replace(/\\/g, "/")
+    .replace(/\u0000/g, "")
+    .replace(/[\u0001-\u001f\u007f]/g, "")
+    .split("/")
+    .filter((seg) => seg && seg !== "." && seg !== "..")
+    .slice(0, maxSegments)
+    .join("/");
+  if (!cleaned) return null;
+  const bytes = new TextEncoder().encode(cleaned).byteLength;
+  if (bytes > maxBytes) return null;
+  return cleaned;
+}
+
 /** The browser-control toolset, passed into the agent. */
 export function browserToolset(readOnly = false) {
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
@@ -1862,6 +2047,253 @@ export function browserToolset(readOnly = false) {
         });
       },
     }),
+    // ── Tranche-3 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+    // tabGroups — the owner's "sorting hat" unlock. tabGroups needs NO manifest
+    // permission; the "tabs" permission (already declared) covers the tab
+    // url/title reads used for the grant scoping. Mutations are grant-gated
+    // (tab-origin discipline); reads are light.
+    list_tab_groups: tool({
+      description:
+        "List the browser's tab groups (id, title, color, collapsed, windowId), optionally scoped to one window. Read-only; no permission needed.",
+      inputSchema: z.object({
+        windowId: z.number().int().min(1).optional(),
+      }),
+      execute: async ({ windowId }) => {
+        const groups = await chrome.tabGroups.query(windowId ? { windowId } : {});
+        return {
+          tabGroups: (Array.isArray(groups) ? groups : []).slice(0, 64).map((g) => ({
+            id: g.id,
+            title: String(g.title ?? "").slice(0, 128),
+            color: String(g.color ?? "grey").slice(0, 32),
+            collapsed: Boolean(g.collapsed),
+            windowId: g.windowId ?? null,
+          })),
+        };
+      },
+    }),
+    group_tabs: tool({
+      description:
+        "Group the given tabs into a new tab group (optional title/color). Grant-gated: the browser-control grant must cover every tab origin. Requires tabs permission.",
+      inputSchema: z.object({
+        tabIds: z.array(z.number().int().min(1)).min(1).max(16),
+        title: z.string().min(1).max(128).optional(),
+        color: z.enum(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]).optional(),
+      }),
+      execute: async ({ tabIds, title, color }) => {
+        return await withTabIdsGrant(tabIds, "grouped", async () => {
+          const options = { tabIds };
+          if (title !== undefined) options.title = title;
+          if (color !== undefined) options.color = color;
+          const group = await chrome.tabGroups.group(options);
+          return { ok: true, groupId: group.id, tabIds };
+        });
+      },
+    }),
+    update_tab_group: tool({
+      description:
+        "Update a tab group's title, color, or collapsed state. Grant-gated: the grant must cover the group's tab origins. Requires tabs permission.",
+      inputSchema: z.object({
+        groupId: z.number().int().min(1),
+        title: z.string().min(1).max(128).optional(),
+        color: z.enum(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]).optional(),
+        collapsed: z.boolean().optional(),
+      }).refine((v) => v.title !== undefined || v.color !== undefined || v.collapsed !== undefined, "at least one field is required"),
+      execute: async ({ groupId, title, color, collapsed }) => {
+        return await withTabGroupGrant(groupId, "updated", async () => {
+          const props = {};
+          if (title !== undefined) props.title = title;
+          if (color !== undefined) props.color = color;
+          if (collapsed !== undefined) props.collapsed = collapsed;
+          const group = await chrome.tabGroups.update(groupId, props);
+          return {
+            ok: true,
+            groupId,
+            title: group.title ?? null,
+            color: group.color ?? null,
+            collapsed: Boolean(group.collapsed),
+          };
+        });
+      },
+    }),
+    ungroup_tabs: tool({
+      description:
+        "Remove the given tabs from their tab groups (they return to the tab strip ungrouped). Grant-gated: the grant must cover every tab origin. Requires tabs permission.",
+      inputSchema: z.object({
+        tabIds: z.array(z.number().int().min(1)).min(1).max(16),
+      }),
+      execute: async ({ tabIds }) => {
+        return await withTabIdsGrant(tabIds, "ungrouped", async () => {
+          await chrome.tabGroups.ungroup(tabIds);
+          return { ok: true, tabIds };
+        });
+      },
+    }),
+    move_tab_to_group: tool({
+      description:
+        "Move the given tabs into an existing tab group. Grant-gated: the grant must cover every moved tab's origin. Requires tabs permission.",
+      inputSchema: z.object({
+        tabIds: z.array(z.number().int().min(1)).min(1).max(16),
+        groupId: z.number().int().min(1),
+      }),
+      execute: async ({ tabIds, groupId }) => {
+        return await withTabIdsGrant(tabIds, "moved", async () => {
+          const group = await chrome.tabGroups.move(tabIds, groupId);
+          return { ok: true, groupId: group.id, tabIds };
+        });
+      },
+    }),
+    // ── Tranche-4 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+    // downloads — the "downloads" optional permission is already declared; the
+    // Settings Downloads capability row requests it on demand. Mutations are
+    // grant-gated with the GLOBAL browser-control grant (downloads are
+    // browser-wide; an origin-scoped grant must never authorize them).
+    // open_download was a Phase-1 exclusion EXPLICITLY OVERRIDDEN by the owner:
+    // keep it hard grant-gated.
+    download_file: tool({
+      description:
+        "Download a URL. ONLY http/https URLs are accepted (file://, chrome://, extension://, data: and other schemes are refused). The optional filename is sanitized (no traversal) + bounded; saveAs is never auto-true. Requires downloads permission + the browser-control grant.",
+      inputSchema: z.object({
+        url: z.string().max(2048),
+        filename: z.string().max(512).optional(),
+        conflictAction: z.enum(["uniquify", "overwrite", "prompt"]).optional(),
+      }),
+      execute: async ({ url, filename, conflictAction }) => {
+        if (!isDownloadableUrl(url)) {
+          return { error: "refused: only http/https URLs may be downloaded" };
+        }
+        const cleanFilename = filename === undefined ? undefined : sanitizeDownloadFilename(filename);
+        if (filename !== undefined && cleanFilename == null) {
+          return { error: "invalid filename" };
+        }
+        return await withDownloadsGrant("downloaded", async () => {
+          const options = { url, saveAs: false };
+          if (cleanFilename !== undefined) options.filename = cleanFilename;
+          if (conflictAction !== undefined) options.conflictAction = conflictAction;
+          const downloadId = await chrome.downloads.download(options);
+          return { ok: true, downloadId };
+        });
+      },
+    }),
+    list_downloads: tool({
+      description:
+        "Search the browser's download history (bounded query/filters/limit). Requires downloads permission.",
+      inputSchema: z.object({
+        query: z.string().max(128).optional(),
+        state: z.enum(["in_progress", "interrupted", "complete"]).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ query, state, limit = 25 }) => {
+        if (!(await hasPermission("downloads"))) {
+          return { error: "downloads permission not granted — enable Downloads in Settings" };
+        }
+        const searchQuery = { orderBy: ["-startTime"] };
+        if (query !== undefined) searchQuery.query = query;
+        if (state !== undefined) searchQuery.state = state;
+        const items = await chrome.downloads.search(searchQuery);
+        return {
+          downloads: (Array.isArray(items) ? items : []).slice(0, limit).map((d) => ({
+            id: d.id,
+            url: String(d.url ?? "").slice(0, 2048),
+            filename: String(d.filename ?? "").slice(0, 512),
+            state: String(d.state ?? "").slice(0, 32),
+            mime: String(d.mime ?? "").slice(0, 128),
+            bytesReceived: Number(d.bytesReceived ?? 0),
+            totalBytes: Number(d.totalBytes ?? 0),
+          })),
+        };
+      },
+    }),
+    pause_download: tool({
+      description:
+        "Pause an in-progress download by id. Grant-gated (global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        downloadId: z.number().int().min(1),
+      }),
+      execute: async ({ downloadId }) => {
+        return await withDownloadsGrant("paused", async () => {
+          await chrome.downloads.pause(downloadId);
+          return { ok: true, downloadId, paused: true };
+        });
+      },
+    }),
+    resume_download: tool({
+      description:
+        "Resume a paused download by id. Grant-gated (global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        downloadId: z.number().int().min(1),
+      }),
+      execute: async ({ downloadId }) => {
+        return await withDownloadsGrant("resumed", async () => {
+          await chrome.downloads.resume(downloadId);
+          return { ok: true, downloadId, resumed: true };
+        });
+      },
+    }),
+    cancel_download: tool({
+      description:
+        "Cancel an in-progress download by id. Grant-gated (global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        downloadId: z.number().int().min(1),
+      }),
+      execute: async ({ downloadId }) => {
+        return await withDownloadsGrant("cancelled", async () => {
+          await chrome.downloads.cancel(downloadId);
+          return { ok: true, downloadId, cancelled: true };
+        });
+      },
+    }),
+    erase_download: tool({
+      description:
+        "Erase the download records for the given ids from the download shelf (the files themselves may remain on disk). Grant-gated (global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        ids: z.array(z.number().int().min(1)).min(1).max(16),
+      }),
+      execute: async ({ ids }) => {
+        return await withDownloadsGrant("erased", async () => {
+          await chrome.downloads.erase({ id: ids });
+          return { ok: true, ids };
+        });
+      },
+    }),
+    show_download: tool({
+      description:
+        "Show a completed download in the OS file manager. Grant-gated (global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        downloadId: z.number().int().min(1),
+      }),
+      execute: async ({ downloadId }) => {
+        return await withDownloadsGrant("shown", async () => {
+          await chrome.downloads.show(downloadId);
+          return { ok: true, downloadId, shown: true };
+        });
+      },
+    }),
+    open_download: tool({
+      description:
+        "Open a completed download with its default application (owner-OVERRIDDEN Phase-1 exclusion; keep hard grant-gated — global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        downloadId: z.number().int().min(1),
+      }),
+      execute: async ({ downloadId }) => {
+        return await withDownloadsGrant("opened", async () => {
+          await chrome.downloads.open(downloadId);
+          return { ok: true, downloadId, opened: true };
+        });
+      },
+    }),
+    remove_download_file: tool({
+      description:
+        "Delete the downloaded file for the given download id from disk (destructive). Grant-gated (global browser-control grant). Requires downloads permission.",
+      inputSchema: z.object({
+        downloadId: z.number().int().min(1),
+      }),
+      execute: async ({ downloadId }) => {
+        return await withDownloadsGrant("file-removed", async () => {
+          await chrome.downloads.removeFile(downloadId);
+          return { ok: true, downloadId, fileRemoved: true };
+        });
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -1884,6 +2316,8 @@ export function browserToolset(readOnly = false) {
       list_cookie_stores: all.list_cookie_stores,
       get_cookie: all.get_cookie,
       get_content_setting: all.get_content_setting,
+      list_tab_groups: all.list_tab_groups,
+      list_downloads: all.list_downloads,
     };
   }
   return all;
