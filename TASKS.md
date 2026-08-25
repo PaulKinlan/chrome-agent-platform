@@ -293,59 +293,6 @@ On resume after a coordinator or worker loss:
     reusing package authority.
   - 2026-08-23 22:05 UTC — captured from direct product-owner feedback.
 
-## [CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01] Bundled tool descriptions must be agent-useful, not internal jargon
-
-- Feedback: 2026-08-23 — product owner: the bundled Wasm tool descriptions
-  are poor ("Bounded TOML to JSON direct converter (pinned tomlc99)") — a
-  consuming tool/model cannot work out when or how to use them; provenance
-  jargon does not belong in the functional description
-- Updated: 2026-08-23 21:50 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P1
-- Owner: unassigned
-- Workspace: `/home/paulkinlan/worktrees/cap-tool-desc-enrich-45a539b`
-- Branch: detached
-- Base: `a8e3479e` (post-notification tip)
-- Candidate: GLM audit + enrichment (six-element agent-useful descriptions)
-- Shipping: `origin/main@4c421ee9ade0aa3d8d601e277758adda6e01a131` (0.2.251)
-- Acceptance: every bundled tool description is written for a consuming
-  model/owner — plain-language function, when to choose it, input and output
-  shapes, key flags and arguments, bounded limits, and one concrete example;
-  internal provenance pins (library names, source pins) move to
-  provenance/SBOM fields, never the functional description; all descriptions
-  fit the existing descriptor/schema byte bounds without widening them;
-  search aliases and the tool-library surface stay consistent; KATs assert
-  the required content elements and the absence of jargon patterns
-- Review: pending independent truth/schema, search-relevance, accessibility
-  and loaded-MV3 review
-- Gates: per-tool content-element KATs; descriptor schema bounds unchanged;
-  byte-stable regeneration; search queries still resolve; before/after
-  comparison for a sample of tools
-- Blockers: —
-- Next: inventory every current description and draft the agent-useful
-  replacement set within the existing byte bounds
-- Recover: `git grep -n "Bounded\|pinned" -- extension/lib/bundled-tool-packages.data.js packages/bundled`
-- History:
-  - 2026-08-25 00:xx UTC — LANDED at 0.2.251: all 26 bundled tool descriptions enriched with six agent-useful elements (175–255 B, ASCII, no canonicalNameClaim); CAS binaries/SBOM/licences byte-identical (zero drift). Review PASS (Gemini 58643c11), 127/127.
-
-  - 2026-08-23 21:50 UTC — captured from direct product-owner feedback;
-    complements the search-alias coverage fix by improving the human/model
-    readable layer.
-  - 2026-08-25 00:20 UTC — audit + enrichment: the v4 descriptions were
-    concise but lacked the six elements (In/out, key flags, bounds, and a
-    concrete example) the task's acceptance lists. Enriched every
-    description with name-first function + when-to-use + In/out shape +
-    flags + bounds + example, measured ≤256B each (175-255 B). The map is
-    still the single source (AGENT_DESCRIPTIONS in the build script); the
-    regen is byte-stable (bundled-tool-packages.data.js, inventory digests,
-    and the 26 manifests regenerated; CAS/SBOM/licences byte-identical).
-    Focused gates: tool-descriptions 3/3 + bundled-tool-packages 23/23 +
-    tool-library 11/11 + chrome-tool-capabilities 14/14 + tool-exec-preview
-    13/13 + wasm-package-authority 16/16 + scan-shipped 24/24 +
-    lazy-tool-protocol + tool-catalog-shadow = 127/127. KAT now asserts the
-    six elements per tool (displayName≡toolId, prefix, In/out, flags, and
-    Example).
 
 ## [CAP-FB-20260823-AGENT-ICON-ON-CREATE-01] Generate the agent icon at creation, not on click
 
@@ -391,59 +338,6 @@ On resume after a coordinator or worker loss:
     owner-approval-security + dialog-confirm-modernization + tools-management —
     107/107.
 
-## [CAP-FB-20260823-ARTIFACT-DELETE-PERMISSION-01] Artifact deletion should not require a hidden permission
-
-- Feedback: 2026-08-23 — product owner: deleting an artifact while viewing
-  artifacts in the UI demands a permission, which it should not; worse, there
-  is no way to know a permission is required because it is hidden in Settings
-  and never re-surfaced after granting
-- Updated: 2026-08-23 20:08 UTC
-- Status: IN_REVIEW
-- Resume: —
-- Priority: P0
-- Owner: unassigned
-- Workspace: `/home/paulkinlan/worktrees/cap-artifact-delete-6a6c3a1`
-- Branch: detached
-- Base: `6a6c3a1eb538ded942d1c44949c261c4579d40e7`
-- Candidate: GLM implementation (owner-direct `asset.delete` + native dialog + gates rows)
-- Shipping: `origin/main@ab02213ffad0692fe484abd18eff266946440cad` (0.2.194)
-- Acceptance: deleting an artifact from the artifact view succeeds as a direct
-  owner action without any permission grant; if any capability genuinely
-  requires a grant, the need is surfaced at the moment of the action as a
-  native `<dialog>` modal explaining exactly what and why, and the same
-  pattern applies everywhere a permission may be needed; Settings permission
-  rows state which actions they gate; granting once never leaves a silently
-  required but invisible dependency
-- Review: pending independent permission-model, owner-authority, UX truth,
-  accessibility, and loaded-MV3 review
-- Gates: delete-from-view journey with and without any related grant; modal
-  contents/name the capability and the action; deny/cancel mutate nothing;
-  Settings row traceability; AX/keyboard/narrow/RTL/theme checks
-- Blockers: must compose with `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`
-  (owner-only prompts and paused-run resume) and the artifact transaction
-  authority; must not widen any host/site access grant
-- Next: audit every artifact-delete path for permission dependencies and map
-  which are real capability gates versus accidental orchestration artifacts
-- Recover: `git grep -n "artifact.delete\|deleteArtifact\|permissions.request" -- extension`
-- History:
-  - 2026-08-23 20:08 UTC — captured from direct product-owner feedback as P0.
-  - 2026-08-23 20:35 UTC — audit result: the ONLY artifact-delete surfaces are
-    the artifacts gallery (owner UI), the model `delete_asset` management tool,
-    and Settings approval resolution; NO Chrome permission is involved anywhere
-    (artifacts live in OPFS). The "permission" was the owner-approval
-    orchestration gate applied unconditionally — a real gate for model-initiated
-    deletes, an accidental hidden dependency for direct owner clicks.
-    Implementation: `OWNER_DIRECT_ACTIONS`/`isOwnerDirectApproval` (pure,
-    lib/owner-approval.js) lets a browser-attested `extension`/`owner-options`
-    document's `asset.delete` through with an `owner-direct` audit event; model
-    and page principals keep the full approval flow; the gallery's
-    `window.confirm` became a native `<dialog>` naming the artifact (Cancel and
-    Escape mutate nothing); every Settings permission row now states the actions
-    it gates (`gates` field, rendered on the row; storage's row states the OPFS
-    artifact exemption); the Approvals section copy now says agent-initiated
-    operations pause there and direct owner actions never do. Focused gates:
-    owner-approval-security, diagnostics, capability-gates (new),
-    tools-management, sw-route-modularization, artifacts, artifact-tx — 83/83.
 
 ## [CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01] Replace all window.confirm with native dialog modals
 
@@ -522,27 +416,6 @@ On resume after a coordinator or worker loss:
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `BLOCKED` mapped to `BLOCKED` (unchanged semantics).
   - 2026-08-19 18:13 UTC — captured in BLOCKED state because origin-only identity and permission semantics cannot safely support proactive per-tab claims yet.
 
-## [CAP-FB-20260819-PAGE-SCOPED-SITE-IDENTITY-01] Page-scoped Site Agent identity and lifecycle
-- Feedback: 2026-08-19 — origin-only Site Agent identity conflates same-origin subpages that expose different WebMCP tools, titles, and navigation lifecycles
-- Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
-- Resume: —
-- Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: none
-- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
-- Candidate: —
-- Shipping: —
-- Acceptance: Site Agent identity includes a page/document/navigation epoch and canonical toolset identity in addition to origin; same-origin subpages with different tools remain distinct, titles are useful and bounded, reload/navigation invalidates stale authority, and durable history reconnects only when identity continuity is proven
-- Review: pending independent identity-model, migration, privacy, lifecycle, concurrency, and loaded-MV3 review
-- Gates: same-origin multi-page fixtures with different tools; SPA navigation, full navigation, reload, back/forward, duplicate tabs, closed/reopened tabs, toolset mutation, stale-message fencing, bounded title and fingerprint checks, raw AX labels, and persisted-record migration
-- Blockers: the identity must preserve origin isolation and sender authentication from `CAP-FB-20260818-WEBMCP-01` while composing with canonical references from `CAP-FB-20260818-AGENT-ACCESS-01`
-- Next: design the canonical page identity, toolset fingerprint, navigation invalidation, and migration rules before changing storage or UI keys
-- Recover: `git show bbeff7b:TASKS.md && git grep -n "canonicalOrigin\|site:" bbeff7b -- extension`
-- History:
-  - Git reconcile at 2026-08-22 07:30 UTC: the source-prep series passed review but is NOT on origin/main — no landing commit exists.
-  - 2026-08-19 18:13 UTC — opened as the prerequisite identity task for proactive per-tab discovery; no origin-only record is relabelled as page-verified.
 
 ## [CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01] Agent Directory tool explorer and enrollment policy
 - Feedback: 2026-08-19 — Directory feedback requested a page-aware tool explorer and raised, without resolving, the product boundary between enrolling an agent and approving individual tool use
@@ -616,31 +489,6 @@ On resume after a coordinator or worker loss:
   - 2026-08-19 18:40 UTC — public-safe research/design report added as `docs/permission-remediation-design.md` (maps the 12 missing-permission/error sources + Settings surfaces, separates Chrome optional/site state from agent/task policy, and designs the owner-only inbox, the paused-run resume state machine, deny/cancel/revoke/retry, the threat model, and loaded-MV3 fixtures). Auto-resume and one-shot JIT continuation remain explicitly unapproved.
   - 2026-08-19 18:17 UTC — opened as a distinct Settings and run-remediation UX task; the existing orchestration candidate remains linked and is not treated as user-facing acceptance.
 
-## [CAP-FB-20260819-AGENT-DELETION-LIFECYCLE-01] Owner-only agent deletion and lifecycle cleanup
-- Feedback: 2026-08-19 — owners need a discoverable, safe way to delete an agent while the policy for artifacts owned or produced by that agent remains unresolved
-- Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
-- Resume: —
-- Priority: P1
-- Owner: unassigned
-- Workspace: none
-- Branch: `docs/agent-deletion-lifecycle` (research complete; implementation unassigned)
-- Base: `bbeff7b7e0f44e240fc5418c266d1b4707e09ac1`
-- Candidate: —
-- Shipping: —
-- Acceptance: only the owner can reach deletion; confirmation names the exact agent and previews bounded dependency counts and affected resource classes; active runs are safely blocked, cancelled, or settled before a transactional idempotent cleanup revokes schedules, permission and credential references, memory, threads and task links, and registry/index entries; partial failure is recoverable and auditable; deny and cancel mutate nothing; artifacts are never silently cascade-deleted while archive, ownership transfer, orphan/read-only retention, export, and cascade policies remain an explicit researched decision
-- Review: design research complete (docs/agent-deletion-lifecycle-design.md) and corrected after an independent review's five findings; independent re-review pending, then the OPEN artifact-policy decision; subsequent independent owner-authority, transaction, privacy, concurrency, recovery, accessibility, and loaded-MV3 review required
-- Gates: dependency-graph/count preview; exact-agent confirmation and owner-only AX/keyboard path; deny/cancel and least-privilege checks; active-run settle/cancel races; schedule/permission/reference/memory/thread/task/registry cleanup invariants; injected step failures with retry and idempotence; service-worker restart and concurrent delete/update; artifact policy fixtures for every researched option; before/after UI and raw storage evidence
-- Blockers: cleanup must compose with `CAP-FB-20260818-ARTIFACT-TX-01`, approval and remediation authority in `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`, and agent identity/presentation in `CAP-FB-20260819-AGENT-DIRECTORY-01` (the artifact-disposition blocker is RESOLVED — see the History)
-- Next: design the transactional idempotent cleanup with the settled disposition — artifacts are retained as ordinary accessible artifacts, the deleted-agent relationship is removed, and the artifact is labelled unassigned/original-agent-deleted; no cascade deletion
-- Recover: `git show bbeff7b:TASKS.md && git grep -n "agent.delete\|deleteAgent\|scheduled" bbeff7b -- extension`
-- History:
-  - Git reconcile at 2026-08-22 07:50 UTC: the artifact-disposition decision is settled per the recorded product policy — deleted agents' artifacts are RETAINED as ordinary accessible artifacts with the deleted-agent relationship removed and labelled unassigned/original-agent-deleted; no cascade deletion is authorized.
-  - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
-  - 2026-08-19 18:18 UTC — opened as a research-first lifecycle task; artifact disposition uncertainty is recorded as unresolved and no cascade behavior is authorized.
-  - 2026-08-19 19:05 UTC — research completed: full store map, gap analysis, owner-only transactional deletion state machine (durable intent, settle/cancel, idempotent resume, restart/concurrency safety), acceptance criteria, and storage fixtures frozen in docs/agent-deletion-lifecycle-design.md; the artifact disposition policy remains explicitly OPEN and unapproved.
-  - 2026-08-19 19:20 UTC — independent review BLOCK corrected: embedded coreAssets now covered by the dependency preview and every artifact-disposition option (no silent registry-row deletion); a new durable agent-bound execution registry with deletion tombstone/generation and pre/post-write commit revalidation specified; the transaction authority is now an explicit dependency on the unshipped artifact-transaction lane or a self-contained minimal intent/reconcile protocol; exact registry key cap:namedAgents; the artifact disposition policy remains explicitly OPEN and unapproved.
-  - 2026-08-19 19:45 UTC — re-review BLOCK corrected: store map made exact (memory/agents/<slug> per-agent stores, master-memory customRecipes key, cap:scheduledTasks, versioned journal.json files, cap:promptOverrides included; no cap:recipes, no canonical memory.json); failure semantics made fail-closed — any memory/prompt/dependency cleanup failure stops in a durable retryable CLEANUP_FAILED state BEFORE REGISTRY_REMOVED (never best-effort continue to authority-row removal).
 
 ## [CAP-FB-20260822-WASM-TOOL-PLATFORM-01] Co-do-style browser-native tool operating platform
 
