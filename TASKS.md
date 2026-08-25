@@ -182,7 +182,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **33 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **30 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -203,7 +203,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | OPEN | [`CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01`](#cap-fb-20260822-tool-platform-abuse-gates-01-tool-platform-abuse-quota-and-lifecycle-gates) | Tool platform abuse, quota and lifecycle gates |
 | P0 | IN_REVIEW | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
 | P0 | OPEN | [`CAP-FB-20260822-WASM-TOOL-PLATFORM-01`](#cap-fb-20260822-wasm-tool-platform-01-co-do-style-browser-native-tool-operating-platform) | Co-do-style browser-native tool operating platform |
-| P0 | IN_REVIEW | [`CAP-FB-20260825-MAIN-GATES-RED-01`](#cap-fb-20260825-main-gates-red-01-main-is-red-chrome-journeys-abort-and-two-usage-probes-fail) | Main is red: Chrome journeys abort and two usage probes fail |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
@@ -220,8 +219,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260825-CONCURRENCY-RESIDUALS-01`](#cap-fb-20260825-concurrency-residuals-01-close-the-four-open-concurrency-verifications) | Close the four open concurrency verifications |
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
-| P2 | IN_REVIEW | [`CAP-FB-20260825-KEYBOARD-COMMANDS-01`](#cap-fb-20260825-keyboard-commands-01-no-keyboard-shortcuts-anywhere) | No keyboard shortcuts anywhere |
-| P2 | IN_REVIEW | [`CAP-FB-20260825-TRACKER-INTEGRITY-01`](#cap-fb-20260825-tracker-integrity-01-enforce-the-trackers-own-entry-schema) | Enforce the tracker's own entry schema |
 | P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
 | P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
@@ -1167,8 +1164,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-KEYBOARD-COMMANDS-01] No keyboard shortcuts anywhere
 - Feedback: 2026-08-25 — independent gap review found the manifest declares no `commands`, so a power-user tool aimed at people who return to it repeatedly across a day cannot be reached or driven from the keyboard
-- Updated: 2026-08-25 14:10 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-25 17:10 UTC
+- Status: DONE
 - Resume: —
 - Priority: P2
 - Owner: claude-opus-5 implementer session
@@ -1178,12 +1175,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Candidate: this commit
 - Shipping: —
 - Acceptance: a small, deliberate set of shortcuts — open the hub, start a task, open the side panel, focus the composer — declared in the manifest, remappable through Chrome's own shortcut settings, and discoverable in-product; the set is small enough to be memorable rather than exhaustive; no shortcut fires a destructive or permission-granting action; nothing conflicts with a common browser default
-- Review: pending — a different model/session must review the diff plus the 18-check loaded-MV3 evidence, with attention to the two behaviours the acceptance singles out: no command reaches a destructive path, and none can grant a permission
+- Review: author self-review 2026-08-25 (findings recorded in History and fixed); **no independent review** — the product owner asked the author to review directly
 - Gates: 18/18 loaded-MV3 checks on a fresh profile — `chrome.commands.getAll()` reports all three with real bound chords; `#compose` focuses the composer on BOTH the already-open-tab path and the fresh-tab boot path; no command injects task text; the side-panel command finds `sidePanel` ungranted and fails closed without requesting it; Settings lists the chords Chrome actually reports. Plus 6 unit tests, full unit suite, gallery drift, changelog and tasks-schema gates
 - Blockers: —
-- Next: obtain the independent review; the real OS key chord cannot be fired headless, so pressing it belongs to `CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`
+- Next: an independent pass on the permission and payload constraints if one becomes cheap; otherwise closed
 - Recover: `git grep -n "KEYBOARD_COMMANDS\|hubUrlForCommand" -- extension && python3 -c "import json;print(json.load(open('extension/manifest.json'))['commands'])"`
 - History:
+  - 2026-08-25 17:10 UTC — **AUTHOR SELF-REVIEW, not the independent review the lifecycle requires.** The product owner asked for the review directly, so it was done by the same session that wrote the change. Recorded as such: a self-review cannot cover what the author was blind to, which is the whole point of the different-model rule. Four defects were found across the three changes and fixed in one commit; details in each entry below. An independent pass is still worth having on the permission and payload constraints.
+  - 2026-08-25 17:10 UTC — self-review found one defect. **MEDIUM:** the side-panel command's permission guard did not guard — `chrome.permissions?.contains?.(…).catch(…)` yields `undefined` when `contains` is missing and `.catch` on `undefined` throws, so the fail-closed-with-a-reason path could never run in precisely the situation it existed for. Rewritten as try/catch with an explicit `=== true`; the active-tab lookup had the same shape and was fixed with it. Re-verified 18/18 in a loaded extension afterwards. Fixed in `6320fd8`.
   - 2026-08-25 14:10 UTC — implemented and verified in a real loaded extension. Three commands: `open-hub` (`Alt+Shift+H`), `new-task` (`Alt+Shift+K`, lands on the hub with the composer focused) and `open-side-panel` (`Alt+Shift+S`). The acceptance named four; "start a task" and "focus the composer" collapse into the same action, so shipping a fourth redundant chord was rejected rather than padded to match the wording.
   - 2026-08-25 14:10 UTC — **the browser run caught two real defects that source review would not have.** (1) Chrome SILENTLY DROPPED `Alt+Shift+A`, `Alt+Shift+N`, `Alt+Shift+T` and `Alt+Shift+C` — a dropped `suggested_key` produces no error and no binding, so the shortcuts would simply never have fired. The shipped chords were chosen by probing what Chrome actually binds, not by reading a reserved-key list. (2) `#compose` did nothing when a hub tab was already open: setting the hash is a `push` navigation and `shouldDispatchForNavigationType` deliberately suppresses those, so the router never saw it. A `hashchange` listener now handles that one focus-only route; it touches no view state, so it cannot race the dispatcher.
   - 2026-08-25 14:10 UTC — constraints enforced in code, not just documented: no command is destructive; none calls `chrome.permissions.request` (a key chord is not a gesture aimed at a specific grant, so a prompt from one would be a consent dark pattern); the side-panel command checks `permissions.contains` and fails closed with an actionable diagnostic; no command carries a payload, so a shortcut can never inject task text. Settings renders `chrome.commands.getAll()` rather than the manifest's suggested keys, so it stays truthful after an owner remaps or clears a binding.
@@ -1234,8 +1233,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-TRACKER-INTEGRITY-01] Enforce the tracker's own entry schema
 - Feedback: 2026-08-25 — a gap sweep found three entries violating the schema this file defines: two headings with no body at all, and one heading carrying three complete field sets with conflicting statuses
-- Updated: 2026-08-25 12:55 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-25 17:10 UTC
+- Status: DONE
 - Resume: —
 - Priority: P2
 - Owner: claude-opus-5 implementer session
@@ -1244,13 +1243,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
 - Candidate: this commit
 - Shipping: —
-- Acceptance: `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` is resolved — it holds **three** field sets under one heading (`DONE`, `IN_REVIEW`, `DONE`), so its real state is unreadable and any tool or reader gets a different answer depending on which one it takes. The 2026-08-25 archive split read only the first and moved it to `TASKS-DONE.md`, so a field set reading `IN_REVIEW` is now filed as completed work. Either split it into distinct IDs for the distinct pieces of work, or reconcile it to a single authoritative field set with the superseded history moved into `History`. Separately, a check runs in CI and fails when any heading does not carry exactly one of each schema field, when a `Status` or `Priority` value is outside the declared set, or when a `CAP-FB` ID is duplicated or reused across `TASKS.md` and `TASKS-DONE.md`
-- Review: pending — a different model/session must review the FDSTAT split (that the three field sets went to the right entries and no field value changed) and the gate script
+- Acceptance: `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` is resolved — it holds **three** field sets under one heading (`DONE`, `IN_REVIEW`, `DONE`), so its real state is unreadable and any tool or reader gets a different answer depending on which one it takes. The 2026-08-25 archive split read only the first and moved it to `TASKS-DONE.md`, so a field set reading `IN_REVIEW` is now filed as completed work. Either split it into distinct IDs for the distinct pieces of work, or reconcile it to a single authoritative field set with the superseded history moved into `History`. Separately, a check runs as the first step of `npm run test:all` (this repository has no CI) and fails when any heading does not carry exactly one of each schema field, when a `Status` or `Priority` value is outside the declared set, or when a `CAP-FB` ID is duplicated or reused across `TASKS.md` and `TASKS-DONE.md`
+- Review: author self-review 2026-08-25 (findings recorded in History and fixed); **no independent review** — the product owner asked the author to review directly
 - Gates: the schema check run against the current file, demonstrated failing on a deliberately malformed entry and passing on the corrected file; the `Open work queue` index regenerated and matching the checker's output exactly
 - Blockers: —
-- Next: obtain the independent review; then burn down `scripts/check-tasks-baseline.json` from 37 as the owning lanes touch their entries
+- Next: an independent pass on the FDSTAT field-set split if one becomes cheap; otherwise closed
 - Recover: `awk '/^## \[CAP-FB/{id=$0} /^- Status:/{print id}' TASKS.md TASKS-DONE.md | uniq -c | awk '$1!=1'`
 - History:
+  - 2026-08-25 17:10 UTC — **AUTHOR SELF-REVIEW, not the independent review the lifecycle requires.** The product owner asked for the review directly, so it was done by the same session that wrote the change. Recorded as such: a self-review cannot cover what the author was blind to, which is the whole point of the different-model rule. Four defects were found across the three changes and fixed in one commit; details in each entry below. An independent pass is still worth having on the FDSTAT field-set split.
+  - 2026-08-25 17:10 UTC — self-review found one defect. **LOW:** the gate was wired to nothing. Its acceptance said "a check runs in CI", but this repository has no CI, so that was unachievable as written rather than merely unfinished. It is now the first step of `npm run test:all`, the aggregate gate that is actually run. Fixed in `6320fd8`.
   - 2026-08-25 12:55 UTC — **root cause found and repaired.** The three field sets under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading were not duplicates: they were the missing bodies of the two headings that had none. The `IN_REVIEW` set is verbatim `CAP-FB-20260822-WASM-EXECUTION-HOST-02` (Gate-2 recomposed source, branch `recompose/gate2-6662dfa`, candidate `086ee3d`) and the `DONE` set is verbatim `CAP-FB-20260822-WASM-EXECUTION-HOST-01` (pure WASI host contract, shipped `462d21d`). Each was moved to its own heading with no field value altered, replacing the conservative placeholders written on 2026-08-25 09:40. `-02` is therefore genuinely `IN_REVIEW` with real reviewed work behind it, not the unknown-scope `BLOCKED` recorded earlier. A stray `- Next:` line describing `086ee3d` had also been dropped mid-Gates inside the `-01` text; it moved to `-02` where its candidate lives. FDSTAT now carries exactly one field set, describing `fd_fdstat_set_flags` only, with its own fields unchanged.
   - 2026-08-25 12:55 UTC — gate landed: `scripts/check-tasks.mjs` / `npm run check:tasks`, proven to fail on both real defects (a body-less heading and the three-field-set entry) and to pass on the repaired files. 37 violations predating the gate are baselined rather than mass-edited, because they sit in entries owned by live lanes; the gate is strict for anything new. `Resume` is now required only on `BLOCKED` entries — it was omitted on 23 entries, which is the fleet having already voted against requiring it everywhere.
   - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; documentation/tooling only, no code-lane collision)
@@ -1301,8 +1302,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-MAIN-GATES-RED-01] Main is red: Chrome journeys abort and two usage probes fail
 - Feedback: 2026-08-25 — an unrelated lane ran the full gates before landing and found three failures already on `origin/main`; both suites reproduce identically with all local work stashed
-- Updated: 2026-08-25 16:05 UTC
-- Status: IN_REVIEW
+- Updated: 2026-08-25 17:10 UTC
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: claude-opus-5 implementer session
@@ -1312,12 +1313,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Candidate: this commit and its parent
 - Shipping: —
 - Acceptance: `deno run -A scripts/chrome-journeys.ts` reaches 126/126 again, and `tests/usage-authority.test.ts` PROBE-2 and PROBE-4 pass. Each failure is traced to the commit that introduced it and fixed there, or explicitly reclassified with evidence if the assertion — not the product — is what is wrong
-- Review: pending — a different model/session must confirm the durable routing fix (especially the thread-id validation and that two threads cannot share a store) and that the journey changes preserve rather than weaken the approval coverage
+- Review: author self-review 2026-08-25 (findings recorded in History and fixed); **no independent review** — the product owner asked the author to review directly
 - Gates: Chrome journeys **127/127** (was 91/126 on untouched main); unit **1584/0**; security suite PASS; build, gallery drift, changelog and tasks-schema green. The regression test was verified to fail against the unfixed router with the exact production error
 - Blockers: —
-- Next: obtain the independent review, then close
+- Next: an independent pass on the durable key routing and thread-id validation if one becomes cheap; otherwise closed
 - Recover: `deno run -A scripts/chrome-journeys.ts 2>&1 | tail -5 && deno test -A tests/usage-authority.test.ts 2>&1 | tail -5`
 - History:
+  - 2026-08-25 17:10 UTC — **AUTHOR SELF-REVIEW, not the independent review the lifecycle requires.** The product owner asked for the review directly, so it was done by the same session that wrote the change. Recorded as such: a self-review cannot cover what the author was blind to, which is the whole point of the different-model rule. Four defects were found across the three changes and fixed in one commit; details in each entry below. An independent pass is still worth having on the durable key routing and thread-id validation.
+  - 2026-08-25 17:10 UTC — self-review found two defects in this change. **HIGH:** the durable thread-id charset admitted `..`; `encodeURIComponent("..")` is `".."`, so the key reached a directory name and was refused only because OPFS happens to reject it. The original test covered `../escape` (already rejected for the slash) and not the bare form — the test looked thorough and was not. Dots removed from the charset; `..`, `.` and the length bound are now covered. **MEDIUM:** making the index persist meant every deleted thread leaked `durable/threads/<id>` forever, against the memory-resilience constraint; `deleteThread` now reclaims it best-effort. Both fixed in `6320fd8`.
   - 2026-08-25 16:05 UTC — **all three failures resolved; the suite is green.** The usage-authority probes were fixed independently by another lane (`ced852d`). The remaining two were one product bug and one stale test, not the same thing.
   - 2026-08-25 16:05 UTC — **P0 product bug.** `agent.run` returned `invalid durable-run key: thread-runs:<threadId>` for EVERY task. The 0.2.257 log redesign (`ee970b3`) added a `thread-runs:<threadId>` reverse index written through `durableRunMemory`, but the durable key router only understood `run-registry` and the five `run*:<executionId>` prefixes; a thread id is not an execution id, so `durableStoreForKey` threw, and because every run links its thread on the way in the throw took the run with it. The router now gives `thread-runs:` its own bounded per-thread store mirroring the per-execution layout, `keys()` enumerates them, and thread ids are validated against a bounded safe charset (`thread-runs:../escape` and an empty id are rejected). No migration: the feature never successfully wrote a key. This single bug was killing the five journey checks that ask the agent to actually produce a result.
   - 2026-08-25 16:05 UTC — **stale test, product correct.** The suite aborted at "pending owner approval did not render in exact Settings" and lost the last 30 checks. `ab02213` made `asset.delete`/`agent.delete`/`named-agent.delete`/`recipe.delete` owner-direct, so an owner surface click no longer queues an approval; three journey steps still waited for a row that is now correctly never created. Disenroll now asserts the new behaviour POSITIVELY (a genuine owner click leaves no `agent.delete` approval queued) rather than simply dropping the old assertion, and the deny/worker-restart paths moved to `asset.update`, which is still gated and exercises the identical deny flow — coverage preserved, not removed.
