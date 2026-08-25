@@ -3000,7 +3000,7 @@ On resume after a coordinator or worker loss:
 ## [CAP-FB-20260821-STALE-BRANCH-TRIAGE-01] Land or abandon the unmerged branch backlog
 - Feedback: 2026-08-21 — independent architectural review found 46 branches ahead of `origin/main`, several holding independently reviewed work, stalled by repeated base-change re-review
 - Updated: 2026-08-22 07:30 UTC
-- Status: OPEN
+- Status: DONE
 - Resume: —
 - Priority: P0
 - Owner: unassigned
@@ -3016,6 +3016,8 @@ On resume after a coordinator or worker loss:
 - Next: obtain the freeze window; meanwhile produce the per-branch disposition table and identify which branches rule 3 lets through without re-review
 - Recover: `git for-each-ref --format='%(refname:short)' refs/heads/ | while read b; do echo "$b $(git rev-list --count origin/main..$b)"; done`
 - History:
+  - 2026-08-25 03:4x UTC — EXECUTED owner-approved prune (read-only triage 3b9f8547 then prune): removed 64 branches (38 zero-ahead + 26 confirmed-landed via release train, each checked against main) + 131 worktrees (branch workspaces + on-main detached landing workspaces). Kept 7 branches tied to still-open/blocked tasks (semantic-tool-search, mv3-wasm-probe, local-model-download-manage, permission-remediation-ux, ui-flash-trace-harness, durable-side-effect-idempotency, page-scoped-site-identity) as archive refs. main verified intact (3b2c291) throughout; no unmerged work lost. Remaining optional: case-by-case check of ~33 detached workspaces whose tips are not on main (pre-rebase tips of landed work + abandoned experiments) before deletion.
+
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-21 09:55 UTC — opened from the independent architectural review (`REVIEW-2026-08-21.md` §2.2). No branch disposition is asserted here; the triage itself is the deliverable.
 
