@@ -77,6 +77,11 @@ const BROWSER_READ_TOOLS = new Set([
   "list_granted_permissions",
   "query_reading_list",
   "save_page_as_mhtml",
+  // Tranche-7 Chrome API coverage: sessions + history reads
+  "list_recently_closed",
+  "list_synced_devices",
+  "search_history",
+  "get_history_visits",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -168,6 +173,10 @@ const BUILT_IN_TOOLS = new Set([
   "list_top_sites", "list_granted_permissions",
   "add_reading_list_entry", "query_reading_list", "update_reading_list_entry",
   "remove_reading_list_entry", "save_page_as_mhtml",
+  // Tranche-7 Chrome API coverage (reads classified above; ALL are built-ins):
+  "list_recently_closed", "restore_closed", "list_synced_devices",
+  "search_history", "get_history_visits", "add_history_url",
+  "delete_history_url", "delete_history_range", "clear_all_history",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

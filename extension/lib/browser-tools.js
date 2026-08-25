@@ -2993,6 +2993,315 @@ export function browserToolset(readOnly = false) {
         });
       },
     }),
+    // ── T7 sessions + history ──
+    // chrome.sessions needs NO manifest permission (available to every
+    // extension); chrome.history uses the ALREADY-DECLARED "history" optional
+    // permission, checked on demand (the SW never calls permissions.request —
+    // only a genuine owner gesture in Settings may grant). Restoring a closed
+    // session reopens its tab(s), so the MUTATION rides the SAME product
+    // browser-control grant as its tabs/window siblings: the grant must cover
+    // EVERY origin being restored (a window restore is every tab's restore);
+    // an origin-less restore requires a GLOBAL grant. History writes/deletes
+    // mutate the global history store: per-URL ops are destination-origin
+    // scoped, range/all wipes require a GLOBAL grant, and clear_all_history
+    // additionally refuses without an explicit confirm:true.
+    list_recently_closed: tool({
+      description:
+        "List recently closed tabs and windows (sessionId, kind, url, title, lastModified) so they can be restored with restore_closed.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ maxResults = 25 }) => {
+        const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 100 });
+        const items = [];
+        for (const s of Array.isArray(closed) ? closed : []) {
+          if (s?.tab) {
+            items.push({
+              kind: "tab",
+              sessionId: s.tab.sessionId ?? null,
+              url: s.tab.url ?? null,
+              title: String(s.tab.title ?? "").slice(0, 256),
+              lastModified: s.lastModified ?? null,
+            });
+          } else if (s?.window) {
+            const wt = Array.isArray(s.window.tabs) ? s.window.tabs : [];
+            items.push({
+              kind: "window",
+              sessionId: s.window.sessionId ?? null,
+              tabCount: wt.length,
+              url: wt[0]?.url ?? null,
+              title: String(wt[0]?.title ?? "").slice(0, 256),
+              lastModified: s.lastModified ?? null,
+            });
+          }
+        }
+        return { closed: items.slice(0, maxResults), total: items.length };
+      },
+    }),
+    restore_closed: tool({
+      description:
+        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required.",
+      inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
+      execute: async ({ sessionId }) =>
+        await withGrantLock(async () => {
+          // Re-read the closed sessions INSIDE the grant lock (a close/restore
+          // since any earlier read must not smuggle an unauthorized origin past
+          // the check).
+          const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 100 });
+          const item = (Array.isArray(closed) ? closed : []).find(
+            (s) => (s?.tab?.sessionId ?? s?.window?.sessionId) === sessionId,
+          );
+          if (!item) {
+            return { error: "nothing to restore — no recently closed session with that sessionId" };
+          }
+          const toRestore = item.tab ? [item.tab] : (item.window?.tabs ?? []);
+          // A restored entry is ORIGIN-LESS when its URL yields no canonical
+          // origin (null/throw/empty — chrome://, data:, about:, file:,
+          // view-source:, or a missing url). Filtering those nulls out and
+          // granting on only the origin-ful rest would smuggle a privileged
+          // chrome:// page (or data: attacker markup) past a scoped grant (the
+          // B1 mixed-set gap). If ANY entry is origin-less — or the set has no
+          // origins at all — the restore needs a GLOBAL grant; only a set where
+          // EVERY entry has an origin may be satisfied by per-origin grants.
+          const originSet = new Set();
+          let hasOriginLess = false;
+          for (const t of toRestore) {
+            let origin = null;
+            try {
+              origin = t?.url ? canonicalOrigin(t.url) : null;
+            } catch {
+              origin = null;
+            }
+            if (typeof origin === "string" && origin !== "") originSet.add(origin);
+            else hasOriginLess = true;
+          }
+          const covered = hasOriginLess || originSet.size === 0
+            ? await isBrowserControlGranted(undefined)
+            : (await Promise.all([...originSet].map((o) => isBrowserControlGranted(o)))).every(Boolean);
+          if (!covered) {
+            return {
+              error:
+                "browser control not granted for the restored origin(s) — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — session not restored" };
+          }
+          const restored = await chrome.sessions.restore(sessionId);
+          // Re-check the fence AFTER the await: an abort/ownership loss during
+          // restore must not report success.
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — session restored then aborted" };
+          }
+          return { ok: true, sessionId, restored: Boolean(restored), kind: item.tab ? "tab" : "window" };
+        }),
+    }),
+    list_synced_devices: tool({
+      description:
+        "List devices synced to this Chrome profile and their recently closed sessions. Requires Chrome sign-in with sync enabled.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const devices = await chrome.sessions.getDevices();
+        const list = Array.isArray(devices) ? devices : [];
+        if (list.length === 0) {
+          return {
+            devices: [],
+            note: "no synced devices — sign in to Chrome and enable sync to see other devices",
+          };
+        }
+        return {
+          devices: list.slice(0, 16).map((d) => ({
+            deviceName: String(d?.deviceName ?? "").slice(0, 128),
+            sessions: (Array.isArray(d?.sessions) ? d.sessions : []).slice(0, 8).map((s) => ({
+              sessionId: s?.tab?.sessionId ?? s?.window?.sessionId ?? null,
+              kind: s?.tab ? "tab" : "window",
+              url: (s?.tab ?? s?.window?.tabs?.[0])?.url ?? null,
+              lastModified: s?.lastModified ?? null,
+            })),
+          })),
+        };
+      },
+    }),
+    search_history: tool({
+      description:
+        "Search browsing history (url, title, visitCount, lastVisitTime). Requires history permission.",
+      inputSchema: z.object({
+        text: z.string().max(512).optional(),
+        startTime: z.number().int().min(0).optional(),
+        endTime: z.number().int().min(0).optional(),
+        maxResults: z.number().int().min(1).max(200).optional(),
+      }),
+      execute: async ({ text = "", startTime, endTime, maxResults = 50 }) => {
+        if (!(await hasPermission("history"))) {
+          return { error: "history permission not granted — enable History in Settings" };
+        }
+        const query = { text, maxResults: Math.min(maxResults, 200) };
+        if (startTime !== undefined) query.startTime = startTime;
+        if (endTime !== undefined) query.endTime = endTime;
+        const results = await chrome.history.search(query);
+        const list = Array.isArray(results) ? results : [];
+        return {
+          history: list.slice(0, maxResults).map((h) => ({
+            url: h.url ?? null,
+            title: String(h.title ?? "").slice(0, 256),
+            visitCount: h.visitCount ?? 0,
+            lastVisitTime: h.lastVisitTime ?? null,
+          })),
+          total: list.length,
+        };
+      },
+    }),
+    get_history_visits: tool({
+      description:
+        "List the recorded visits for one history URL (visitTime, transition). Requires history permission.",
+      inputSchema: z.object({
+        url: z.string().url().max(2048),
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ url, maxResults = 50 }) => {
+        if (!(await hasPermission("history"))) {
+          return { error: "history permission not granted — enable History in Settings" };
+        }
+        const visits = await chrome.history.getVisits({ url });
+        const list = Array.isArray(visits) ? visits : [];
+        return {
+          visits: list.slice(0, maxResults).map((v) => ({
+            visitTime: v.visitTime ?? null,
+            transition: v.transition ?? null,
+            referringId: v.referringId ?? null,
+          })),
+          total: list.length,
+        };
+      },
+    }),
+    add_history_url: tool({
+      description:
+        "Add a URL to browsing history (http/https only). Requires history permission and browser-control permission for the URL's origin.",
+      inputSchema: z.object({ url: z.string().url().max(2048) }),
+      execute: async ({ url }) => {
+        if (!(await hasPermission("history"))) {
+          return { error: "history permission not granted — enable History in Settings" };
+        }
+        const origin = canonicalOrigin(url);
+        if (!origin) return { error: "only http/https URLs can be added to history" };
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history not added" };
+          }
+          await chrome.history.addUrl({ url });
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history added then aborted" };
+          }
+          return { ok: true, url, origin };
+        });
+      },
+    }),
+    delete_history_url: tool({
+      description:
+        "Delete all history entries for one URL (http/https only). Requires history permission and browser-control permission for the URL's origin.",
+      inputSchema: z.object({ url: z.string().url().max(2048) }),
+      execute: async ({ url }) => {
+        if (!(await hasPermission("history"))) {
+          return { error: "history permission not granted — enable History in Settings" };
+        }
+        const origin = canonicalOrigin(url);
+        if (!origin) return { error: "only http/https URLs can be deleted from history" };
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(origin))) {
+            return {
+              error:
+                "browser control not granted for this origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history not deleted" };
+          }
+          await chrome.history.deleteUrl({ url });
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history deleted then aborted" };
+          }
+          return { ok: true, url, origin };
+        });
+      },
+    }),
+    delete_history_range: tool({
+      description:
+        "Delete browsing history within a bounded time range (epoch ms; both bounds required — no open-ended wipes). Requires history permission and a GLOBAL browser-control grant.",
+      inputSchema: z.object({
+        startTime: z.number().int().min(0),
+        endTime: z.number().int().min(0),
+      }).refine((v) => v.endTime > v.startTime, "endTime must be after startTime"),
+      execute: async ({ startTime, endTime }) => {
+        if (!(await hasPermission("history"))) {
+          return { error: "history permission not granted — enable History in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return { error: "a GLOBAL browser-control grant is required to delete a history range" };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history not deleted" };
+          }
+          await chrome.history.deleteRange({ startTime, endTime });
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history deleted then aborted" };
+          }
+          return { ok: true, startTime, endTime };
+        });
+      },
+    }),
+    clear_all_history: tool({
+      description:
+        "Delete ALL browsing history. Requires history permission, a GLOBAL browser-control grant, and an explicit confirm:true (refuses without it).",
+      inputSchema: z.object({ confirm: z.boolean().optional() }),
+      execute: async ({ confirm }) => {
+        if (confirm !== true) {
+          return { error: "refusing to clear ALL history without an explicit confirm:true" };
+        }
+        if (!(await hasPermission("history"))) {
+          return { error: "history permission not granted — enable History in Settings" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return { error: "a GLOBAL browser-control grant is required to clear all history" };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history not cleared" };
+          }
+          await chrome.history.deleteAll();
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — history cleared then aborted" };
+          }
+          return { ok: true, clearedAll: true };
+        });
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -3018,6 +3327,11 @@ export function browserToolset(readOnly = false) {
       // T13 deep tab control reads (observe-only).
       get_tab_zoom: all.get_tab_zoom,
       get_side_panel_options: all.get_side_panel_options,
+      // T7 sessions + history reads (observe-only).
+      list_recently_closed: all.list_recently_closed,
+      list_synced_devices: all.list_synced_devices,
+      search_history: all.search_history,
+      get_history_visits: all.get_history_visits,
       list_tab_groups: all.list_tab_groups,
       list_downloads: all.list_downloads,
     };
