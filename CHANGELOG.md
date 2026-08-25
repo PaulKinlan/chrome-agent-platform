@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.263] — 2026-08-25
+- Agent roles now show as a short, readable one-line preview in the task list (hover to see the full text) — the full role is still saved without any length limit.
+
+
+
 ## [0.2.262] — 2026-08-25
 - Internal: hardened thread-id validation, reclaimed storage when a task thread is deleted, and fixed the side-panel shortcut's permission check. No user-visible change.
 

@@ -598,7 +598,11 @@ async function renderSidebarAgents(agents) {
     if (a.role) {
       const role = document.createElement("span");
       role.className = "a-role";
-      role.textContent = a.role;
+      // The full role is stored intact (no limit) and shown on hover via
+      // item.title; the visible list line stays short so the list is scannable
+      // (mirrors the side panel's truncated role preview).
+      const full = String(a.role);
+      role.textContent = full.length > 88 ? full.slice(0, 88).trimEnd() + "…" : full;
       label.append(role);
     }
     item.append(avatar, label);
