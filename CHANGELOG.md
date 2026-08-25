@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.272] — 2026-08-25
+- chore(tasks): record cairn-rename + DOMException-name landed (0.2.270)
+
 ## [0.2.271] — 2026-08-25
 - chore(release): 0.2.270
 

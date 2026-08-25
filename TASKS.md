@@ -1370,3 +1370,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Review: PASS (Pro e384c626), 1595/1595, manifest untouched.
 - History:
   - 2026-08-25 20:3x UTC — LANDED at 0.2.267. Discovery is now discoverable and enrolled sites survive restart.
+- id: CAP-FB-20260825-CAIRN-DOMEXC-01
+  severity: P1
+  status: done
+  landed_version: 0.2.270
+  summary: "Renamed ALL ~40 foreign 'cairn' identifiers to cap-* consistently (bridge channel __cap_bridge, CapBridgeAuth, __capInternal/__capHook markers, __capMainWorldBootstrap SW↔main-world handoff) across all 8 files; zero cairn refs remain except the intentional legacy storage key 'cairn:usage' (preserved as immutable migration read-source so pre-rename usage rows aren't orphaned). MAC/auth semantics untouched (pure rename). Also: DOMException now reports its bounded spec NAME (33-name WebIDL allowlist, genuineness via instanceof against native constructor captured at document_start, .message NEVER crosses) — so 'tool failed (DOMException)' now says e.g. 'DOMException: NotAllowedError'. KATs: cairn-rename.test.ts + 3 DOMException tests. 1601/1601."
