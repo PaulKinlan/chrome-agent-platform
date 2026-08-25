@@ -63,6 +63,9 @@ const BROWSER_READ_TOOLS = new Set([
   // Tranche-3/4 Chrome API coverage: tab-group inventory + download history reads
   "list_tab_groups",
   "list_downloads",
+  // Tranche-13 Chrome API coverage: tab zoom + sidePanel options reads.
+  "get_tab_zoom",
+  "get_side_panel_options",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -144,6 +147,11 @@ const BUILT_IN_TOOLS = new Set([
   // Tranche-4 Chrome API coverage: downloads (mutations; list_downloads above)
   "download_file", "pause_download", "resume_download", "cancel_download",
   "erase_download", "show_download", "open_download", "remove_download_file",
+  // Tranche-13 Chrome API coverage (reads are classified above; ALL are built-ins):
+  "get_tab_zoom", "get_side_panel_options",
+  "move_tab", "duplicate_tab", "set_tab_pinned", "reload_tab",
+  "tab_go_back", "tab_go_forward", "set_tab_zoom", "discard_tab", "highlight_tabs",
+  "enable_action", "disable_action", "set_side_panel_options", "set_panel_behavior",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

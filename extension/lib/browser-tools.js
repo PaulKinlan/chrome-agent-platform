@@ -2294,6 +2294,369 @@ export function browserToolset(readOnly = false) {
         });
       },
     }),
+    // ── T13 deep tab control ── (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01)
+    // chrome.tabs deep ops + action enable/disable + sidePanel options/behavior.
+    // Uses ONLY the already-declared "tabs"/"sidePanel" optional permissions —
+    // NO new manifest permissions. Every mutation rides the SAME product
+    // browser-control grant as close_tab (tab-origin scoped, checked INSIDE the
+    // grant lock with an identity re-read adjacent to the mutation); the two
+    // sidePanel mutations are browser-level surfaces requiring a GLOBAL grant.
+    move_tab: tool({
+      description:
+        "Move a tab to a new position and/or window. Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({
+        tabId: z.number().int(),
+        windowId: z.number().int().optional(),
+        index: z.number().int().min(0).max(10000).optional(),
+      }).refine((v) => v.windowId !== undefined || v.index !== undefined, "windowId and/or index is required"),
+      execute: async ({ tabId, windowId, index }) =>
+        t13MutateTabWithGrant(tabId, "moved", async () => {
+          const props = {};
+          if (windowId !== undefined) props.windowId = windowId;
+          if (index !== undefined) props.index = index;
+          const moved = await chrome.tabs.move(tabId, props);
+          return { ok: true, tabId, windowId: moved?.windowId ?? null, index: moved?.index ?? null };
+        }),
+    }),
+    duplicate_tab: tool({
+      description:
+        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({ tabId: z.number().int() }),
+      execute: async ({ tabId }) =>
+        t13MutateTabWithGrant(tabId, "duplicated", async () => {
+          const copy = await chrome.tabs.duplicate(tabId);
+          return { ok: true, tabId, newTabId: copy?.id ?? null };
+        }),
+    }),
+    set_tab_pinned: tool({
+      description:
+        "Pin or unpin a tab. Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({ tabId: z.number().int(), pinned: z.boolean() }),
+      execute: async ({ tabId, pinned }) =>
+        t13MutateTabWithGrant(tabId, pinned ? "pinned" : "unpinned", async () => {
+          await chrome.tabs.update(tabId, { pinned });
+          return { ok: true, tabId, pinned };
+        }),
+    }),
+    reload_tab: tool({
+      description:
+        "Reload a tab, optionally bypassing the cache. Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({ tabId: z.number().int(), bypassCache: z.boolean().optional() }),
+      execute: async ({ tabId, bypassCache }) =>
+        t13MutateTabWithGrant(tabId, "reloaded", async () => {
+          await chrome.tabs.reload(tabId, { bypassCache: Boolean(bypassCache) });
+          return { ok: true, tabId, bypassCache: Boolean(bypassCache) };
+        }),
+    }),
+    tab_go_back: tool({
+      description:
+        "Navigate a tab back one entry in its history. Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({ tabId: z.number().int() }),
+      execute: async ({ tabId }) =>
+        t13MutateTabWithGrant(tabId, "navigated back", async () => {
+          await chrome.tabs.goBack(tabId);
+          return { ok: true, tabId };
+        }),
+    }),
+    tab_go_forward: tool({
+      description:
+        "Navigate a tab forward one entry in its history. Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({ tabId: z.number().int() }),
+      execute: async ({ tabId }) =>
+        t13MutateTabWithGrant(tabId, "navigated forward", async () => {
+          await chrome.tabs.goForward(tabId);
+          return { ok: true, tabId };
+        }),
+    }),
+    get_tab_zoom: tool({
+      description:
+        "Read a tab's current zoom factor (1 = 100%). Requires the tabs permission.",
+      inputSchema: z.object({ tabId: z.number().int() }),
+      execute: async ({ tabId }) => {
+        if (!(await hasTabsPermission())) {
+          return { error: "tabs permission not granted — enable Browser control in Settings" };
+        }
+        try {
+          const zoomFactor = await chrome.tabs.getZoom(tabId);
+          return { ok: true, tabId, zoomFactor };
+        } catch (e) {
+          return { error: `zoom read failed: ${e?.message ?? e}` };
+        }
+      },
+    }),
+    set_tab_zoom: tool({
+      description:
+        "Set a tab's zoom factor (bounded 0.25–8, i.e. 25%–800%). Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({
+        tabId: z.number().int(),
+        zoomFactor: z.number().min(0.25).max(8),
+      }),
+      execute: async ({ tabId, zoomFactor }) =>
+        t13MutateTabWithGrant(tabId, "zoomed", async () => {
+          await chrome.tabs.setZoom(tabId, zoomFactor);
+          return { ok: true, tabId, zoomFactor };
+        }),
+    }),
+    discard_tab: tool({
+      description:
+        "Discard a tab's content to free memory (the tab stays in the strip; Chrome refuses to discard the active tab). Requires browser-control permission (scoped + expiring) for the tab's origin.",
+      inputSchema: z.object({ tabId: z.number().int() }),
+      execute: async ({ tabId }) =>
+        t13MutateTabWithGrant(tabId, "discarded", async () => {
+          try {
+            await chrome.tabs.discard(tabId);
+          } catch (e) {
+            return { error: `tab not discarded: ${e?.message ?? e}` };
+          }
+          return { ok: true, tabId };
+        }),
+    }),
+    highlight_tabs: tool({
+      description:
+        "Highlight (select) a set of tabs in a window, by tab id or by window position index. Requires browser-control permission (scoped + expiring) covering EVERY highlighted tab's origin.",
+      inputSchema: z.object({
+        windowId: z.number().int().optional(),
+        tabIds: z.array(z.number().int()).min(1).max(100).optional(),
+        indices: z.array(z.number().int().min(0).max(1000)).min(1).max(100).optional(),
+      }).refine((v) => (v.tabIds !== undefined) !== (v.indices !== undefined), "exactly one of tabIds or indices is required"),
+      execute: async ({ windowId, tabIds, indices }) => {
+        if (!(await hasTabsPermission())) {
+          return { error: "tabs permission not granted — enable Browser control in Settings" };
+        }
+        return await withGrantLock(async () => {
+          // Resolve the exact target tabs INSIDE the lock; when indices were
+          // given they are read from the window's live tab order (a stale
+          // index must never highlight a different tab than authorized).
+          let targets = [];
+          if (tabIds !== undefined) {
+            for (const id of tabIds) {
+              const t = await chrome.tabs.get(id).catch(() => null);
+              if (!t) return { error: `no such tab: ${id}` };
+              targets.push(t);
+            }
+          } else {
+            const win = await chrome.windows.get(windowId ?? chrome.windows.WINDOW_ID_CURRENT, { populate: true }).catch(() => null);
+            if (!win) return { error: "no such window" };
+            windowId = win.id;
+            const ordered = Array.isArray(win.tabs) ? win.tabs : [];
+            for (const idx of indices) {
+              const t = ordered[idx];
+              if (!t) return { error: `no tab at index ${idx} in window ${win.id}` };
+              targets.push(t);
+            }
+          }
+          // The grant must cover EVERY highlighted tab (a highlight is every
+          // target tab's mutation — the same discipline as
+          // mutateWindowWithGrant). Two obligations, BOTH enforced — the
+          // mixed-set fail-open fix (T13 review blocker): every NAMED origin
+          // must be granted, AND any origin-less target (chrome://, about:,
+          // url-less tabs — canonicalOrigin returns null for all of them) is
+          // a browser-level scope requiring the GLOBAL grant. Origin-less
+          // targets are counted (hasOriginless), never filtered out of the
+          // check: an origin grant for a co-present https tab must not
+          // smuggle a chrome:// tab through the mutation.
+          let hasOriginless = false;
+          const origins = new Set();
+          for (const t of targets) {
+            let o = null;
+            try {
+              o = t?.url ? canonicalOrigin(t.url) : null;
+            } catch {
+              o = null;
+            }
+            if (typeof o === "string") origins.add(o);
+            else hasOriginless = true;
+          }
+          const namedCovered = (
+            await Promise.all([...origins].map((o) => isBrowserControlGranted(o)))
+          ).every(Boolean);
+          const originlessCovered = hasOriginless
+            ? await isBrowserControlGranted(undefined)
+            : true;
+          if (!namedCovered || !originlessCovered) {
+            return {
+              error:
+                "browser control not granted for every highlighted tab's origin — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — tabs not highlighted" };
+          }
+          const highlightProps = { tabs: targets.map((t) => t.id) };
+          if (windowId !== undefined) highlightProps.windowId = windowId;
+          let win;
+          try {
+            win = await chrome.tabs.highlight(highlightProps);
+          } catch (e) {
+            return { error: `highlight failed: ${e?.message ?? e}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — tabs highlighted then aborted" };
+          }
+          return { ok: true, windowId: win?.id ?? windowId ?? null, highlighted: targets.length };
+        });
+      },
+    }),
+    enable_action: tool({
+      description:
+        "Enable this extension's own toolbar action (globally or for one tab). Owner-scoped surface; no browser-control grant needed.",
+      inputSchema: z.object({ tabId: z.number().int().optional() }),
+      execute: async ({ tabId }) => {
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — action not enabled" };
+        }
+        try {
+          if (tabId !== undefined) await chrome.action.enable(tabId);
+          else await chrome.action.enable();
+        } catch (e) {
+          return { error: `action enable failed: ${e?.message ?? e}` };
+        }
+        return { ok: true, tabId: tabId ?? null, enabled: true };
+      },
+    }),
+    disable_action: tool({
+      description:
+        "Disable this extension's own toolbar action (globally or for one tab). Owner-scoped surface; no browser-control grant needed.",
+      inputSchema: z.object({ tabId: z.number().int().optional() }),
+      execute: async ({ tabId }) => {
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — action not disabled" };
+        }
+        try {
+          if (tabId !== undefined) await chrome.action.disable(tabId);
+          else await chrome.action.disable();
+        } catch (e) {
+          return { error: `action disable failed: ${e?.message ?? e}` };
+        }
+        return { ok: true, tabId: tabId ?? null, enabled: false };
+      },
+    }),
+    get_side_panel_options: tool({
+      description:
+        "Read the side panel options (bundled page path + enabled), globally or for one tab. Requires the sidePanel permission.",
+      inputSchema: z.object({ tabId: z.number().int().optional() }),
+      execute: async ({ tabId }) => {
+        if (!(await hasSidePanelPermission())) {
+          return { error: "sidePanel permission not granted — enable it in Settings (Side panel)" };
+        }
+        try {
+          const opts = await chrome.sidePanel.getOptions(tabId !== undefined ? { tabId } : {});
+          return {
+            ok: true,
+            path: typeof opts?.path === "string" ? opts.path.slice(0, 512) : null,
+            enabled: Boolean(opts?.enabled),
+          };
+        } catch (e) {
+          return { error: `side panel options read failed: ${e?.message ?? e}` };
+        }
+      },
+    }),
+    set_side_panel_options: tool({
+      description:
+        "Set the side panel options. The path is confined to a bundled extension page (extension-relative .html, no traversal) — resolving anything else fails closed. Requires a GLOBAL browser-control grant (browser-level surface).",
+      inputSchema: z.object({
+        path: z
+          .string()
+          .regex(/^[A-Za-z0-9_][A-Za-z0-9_/.-]{0,126}\.html$/u)
+          .refine((p) => !p.includes("..") && !p.startsWith("/"), "extension-relative bundled page only"),
+        enabled: z.boolean().optional(),
+        tabId: z.number().int().optional(),
+      }),
+      execute: async ({ path, enabled, tabId }) => {
+        if (!(await hasSidePanelPermission())) {
+          return { error: "sidePanel permission not granted — enable it in Settings (Side panel)" };
+        }
+        // Confinement proof against the runtime root: getURL must resolve the
+        // path INSIDE the extension's own URL root (a hostile path must never
+        // produce an out-of-root panel document). Any resolution failure is a
+        // denial.
+        let resolved = "";
+        let root = "";
+        try {
+          resolved = chrome.runtime.getURL(path);
+          root = chrome.runtime.getURL("");
+        } catch {
+          return { error: "side panel path rejected — not resolvable inside the extension" };
+        }
+        if (
+          typeof resolved !== "string" || typeof root !== "string" ||
+          root.length === 0 || !resolved.startsWith(root)
+        ) {
+          return { error: "side panel path rejected — escapes the extension root" };
+        }
+        return await withGrantLock(async () => {
+          // Browser-level surface (which bundled page the panel loads) — only
+          // a GLOBAL grant authorizes it (undefined origin).
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted (global) — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — side panel options not changed" };
+          }
+          const options = { path };
+          if (enabled !== undefined) options.enabled = enabled;
+          if (tabId !== undefined) options.tabId = tabId;
+          try {
+            await chrome.sidePanel.setOptions(options);
+          } catch (e) {
+            return { error: `side panel options update failed: ${e?.message ?? e}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — side panel options changed then aborted" };
+          }
+          return { ok: true, path, enabled: enabled ?? null, tabId: tabId ?? null };
+        });
+      },
+    }),
+    set_panel_behavior: tool({
+      description:
+        "Set the side panel behavior (whether clicking the toolbar action opens the panel). Requires a GLOBAL browser-control grant (browser-level surface).",
+      inputSchema: z.object({ openPanelOnActionClick: z.boolean() }),
+      execute: async ({ openPanelOnActionClick }) => {
+        if (!(await hasSidePanelPermission())) {
+          return { error: "sidePanel permission not granted — enable it in Settings (Side panel)" };
+        }
+        return await withGrantLock(async () => {
+          if (!(await isBrowserControlGranted(undefined))) {
+            return {
+              error:
+                "browser control not granted (global) — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — panel behavior not changed" };
+          }
+          try {
+            await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick });
+          } catch (e) {
+            return { error: `panel behavior update failed: ${e?.message ?? e}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — panel behavior changed then aborted" };
+          }
+          return { ok: true, openPanelOnActionClick };
+        });
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -2316,11 +2679,90 @@ export function browserToolset(readOnly = false) {
       list_cookie_stores: all.list_cookie_stores,
       get_cookie: all.get_cookie,
       get_content_setting: all.get_content_setting,
+      // T13 deep tab control reads (observe-only).
+      get_tab_zoom: all.get_tab_zoom,
+      get_side_panel_options: all.get_side_panel_options,
       list_tab_groups: all.list_tab_groups,
       list_downloads: all.list_downloads,
     };
   }
   return all;
+}
+
+// ── T13 deep tab control (shared grant helper) ──
+// Single-tab mutations under the SAME grant discipline as close_tab
+// (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): the tab's origin is
+// re-read INSIDE the grant lock, the grant must cover it, durable ownership is
+// asserted adjacent to the mutation, and the tab identity is re-read +
+// compared IMMEDIATELY before mutating (a navigation since the grant check
+// must never apply the mutation to a newly-unauthorized tab — the round-20/21
+// close-identity race applied to every deep tab op). The fence is re-checked
+// AFTER the await so an abort mid-mutation never reports success.
+//
+// Origin coverage (aligned with highlight_tabs' corrected coverage semantics
+// after the T13 review's mixed-set blocker): a tab whose URL yields no web
+// origin (chrome://, about:, url-less — canonicalOrigin returns null) is the
+// ORIGIN-LESS class, a browser-level scope authorized ONLY by the GLOBAL
+// grant; under an origins-scoped grant it is denied. (Chosen option per the
+// review: align with the corrected coverage semantics rather than the
+// stricter blanket denial — origin-less single-tab mutations ARE possible,
+// but only under a GLOBAL grant.)
+function t13OriginClass(tab) {
+  let o = null;
+  try {
+    o = tab?.url ? canonicalOrigin(tab.url) : null;
+  } catch {
+    o = null;
+  }
+  return typeof o === "string" ? o : null; // null = the origin-less class
+}
+
+async function t13MutateTabWithGrant(tabId, verb, mutate) {
+  if (!(await hasTabsPermission())) {
+    return {
+      error:
+        "tabs permission not granted — enable Browser control in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return { error: `no such tab: ${tabId}` };
+    const origin = t13OriginClass(tab);
+    // null (origin-less) reaches isBrowserControlGranted(undefined-equivalent):
+    // a global grant authorizes it, an origins grant never does.
+    if (!(await isBrowserControlGranted(origin))) {
+      return {
+        error:
+          "browser control not granted for this origin — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tab not ${verb}` };
+    }
+    // Re-read + compare the tab identity IMMEDIATELY before the mutation.
+    // The comparison is over the ORIGIN CLASS (a string origin or the
+    // origin-less null): an origin-less tab may only be mutated if it is
+    // STILL origin-less, and a web-origin tab only if it is still the SAME
+    // origin — any cross-class or cross-origin navigation fails closed.
+    const bound = await chrome.tabs.get(tabId).catch(() => null);
+    if (!bound || t13OriginClass(bound) !== origin) {
+      return { error: `tab navigated before being ${verb} — source identity changed` };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tab not ${verb}` };
+    }
+    const result = await mutate();
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — tab ${verb} then aborted` };
+    }
+    return result;
+  });
 }
 
 /** Record a browser event into the rolling event log (kept in chrome.storage). */
