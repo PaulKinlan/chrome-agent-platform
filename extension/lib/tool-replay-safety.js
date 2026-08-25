@@ -88,6 +88,12 @@ const BROWSER_READ_TOOLS = new Set([
   "get_extension_permission_warnings",
   "get_platform_info",
   "get_extension_manifest",
+  // Tranche-9 Chrome API coverage: browser-settings inventory reads observe only.
+  "get_privacy_setting",
+  "get_proxy_settings",
+  "get_font_settings",
+  "list_tts_voices",
+  "tts_is_speaking",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -188,6 +194,14 @@ const BUILT_IN_TOOLS = new Set([
   "list_extensions", "get_extension", "get_extension_permission_warnings",
   "set_extension_enabled", "uninstall_extension",
   "get_platform_info", "get_extension_manifest",
+  // Tranche-9 Chrome API coverage: browser settings (reads are classified above;
+  // ALL are built-ins; mutations are browser-wide + global-grant-gated).
+  "set_privacy_setting",
+  "set_proxy_settings", "clear_proxy_settings",
+  "set_font_size", "set_default_font", "clear_font_settings",
+  "request_keep_awake", "release_keep_awake",
+  "search_query",
+  "tts_speak", "tts_stop",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

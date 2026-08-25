@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 94,
+  browserTools: 110,
   managementTools: 29,
-  totalTools: 123,
+  totalTools: 139,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -110,6 +110,22 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "uninstall_extension",
   "get_platform_info",
   "get_extension_manifest",
+  "get_privacy_setting",
+  "set_privacy_setting",
+  "get_proxy_settings",
+  "set_proxy_settings",
+  "clear_proxy_settings",
+  "get_font_settings",
+  "set_font_size",
+  "set_default_font",
+  "clear_font_settings",
+  "request_keep_awake",
+  "release_keep_awake",
+  "search_query",
+  "tts_speak",
+  "tts_stop",
+  "list_tts_voices",
+  "tts_is_speaking",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -335,6 +351,28 @@ const rows = [
   record("uninstall_extension", "chrome-api", ["chrome.management.uninstall.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
   record("get_platform_info", "chrome-api", ["chrome.runtime.platform-info"], [], "none", "read-only", false, "read", "browser.runtime"),
   record("get_extension_manifest", "chrome-api", ["chrome.runtime.manifest"], [], "none", "read-only", false, "read", "browser.runtime"),
+
+  // Tranche-9 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // browser settings — chrome.privacy / proxy / fontSettings / power / search /
+  // tts. Reads are un-scoped observe-only. Every mutation is BROWSER-WIDE (no
+  // destination origin) and is therefore GLOBAL-grant-scoped: an origin-scoped
+  // grant must never authorize a browser-wide settings change.
+  record("get_privacy_setting", "chrome-api", ["chrome.privacy.get"], ["privacy"], "none", "read-only", false, "read", "browser.privacy"),
+  record("set_privacy_setting", "chrome-api", ["chrome.privacy.set.global"], ["privacy"], "global", "mutating", false, "mutating", "browser.privacy"),
+  record("get_proxy_settings", "chrome-api", ["chrome.proxy.get"], ["proxy"], "none", "read-only", false, "read", "browser.proxy"),
+  record("set_proxy_settings", "chrome-api", ["chrome.proxy.set.global"], ["proxy"], "global", "mutating", false, "mutating", "browser.proxy"),
+  record("clear_proxy_settings", "chrome-api", ["chrome.proxy.clear.global"], ["proxy"], "global", "mutating", false, "mutating", "browser.proxy"),
+  record("get_font_settings", "chrome-api", ["chrome.font-settings.get"], ["fontSettings"], "none", "read-only", false, "read", "browser.font-settings"),
+  record("set_font_size", "chrome-api", ["chrome.font-settings.set-size.global"], ["fontSettings"], "global", "mutating", false, "mutating", "browser.font-settings"),
+  record("set_default_font", "chrome-api", ["chrome.font-settings.set-default.global"], ["fontSettings"], "global", "mutating", false, "mutating", "browser.font-settings"),
+  record("clear_font_settings", "chrome-api", ["chrome.font-settings.clear.global"], ["fontSettings"], "global", "mutating", false, "mutating", "browser.font-settings"),
+  record("request_keep_awake", "chrome-api", ["chrome.power.keep-awake.global"], ["power"], "global", "mutating", false, "mutating", "browser.power"),
+  record("release_keep_awake", "chrome-api", ["chrome.power.release.global"], ["power"], "global", "mutating", false, "mutating", "browser.power"),
+  record("search_query", "chrome-api", ["chrome.search.query.global"], ["search"], "global", "mutating", false, "mutating", "browser.search"),
+  record("tts_speak", "chrome-api", ["chrome.tts.speak.global"], ["tts"], "global", "mutating", false, "mutating", "browser.tts"),
+  record("tts_stop", "chrome-api", ["chrome.tts.stop.global"], ["tts"], "global", "mutating", false, "mutating", "browser.tts"),
+  record("list_tts_voices", "chrome-api", ["chrome.tts.voices.list"], ["tts"], "none", "read-only", false, "read", "browser.tts"),
+  record("tts_is_speaking", "chrome-api", ["chrome.tts.speaking.get"], ["tts"], "none", "read-only", false, "read", "browser.tts"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

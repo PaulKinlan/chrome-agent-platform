@@ -31,7 +31,13 @@
     "topSites",
     "readingList",
     "pageCapture",
-    "management"
+    "management",
+    "privacy",
+    "proxy",
+    "fontSettings",
+    "power",
+    "search",
+    "tts"
   ],
   "optional_host_permissions": [
     "http://*/*",
