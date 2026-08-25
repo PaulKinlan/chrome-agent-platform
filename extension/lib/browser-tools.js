@@ -1498,7 +1498,7 @@ export function browserToolset(readOnly = false) {
     }),
     restore_closed: tool({
       description:
-        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; an origin-less restore requires a global grant.",
+        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required.",
       inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
       execute: async ({ sessionId }) =>
         await withGrantLock(async () => {
@@ -1513,20 +1513,29 @@ export function browserToolset(readOnly = false) {
             return { error: "nothing to restore — no recently closed session with that sessionId" };
           }
           const toRestore = item.tab ? [item.tab] : (item.window?.tabs ?? []);
-          const origins = [...new Set(
-            toRestore
-              .map((t) => {
-                try {
-                  return t?.url ? canonicalOrigin(t.url) : null;
-                } catch {
-                  return null;
-                }
-              })
-              .filter((o) => typeof o === "string"),
-          )];
-          const covered = origins.length === 0
+          // A restored entry is ORIGIN-LESS when its URL yields no canonical
+          // origin (null/throw/empty — chrome://, data:, about:, file:,
+          // view-source:, or a missing url). Filtering those nulls out and
+          // granting on only the origin-ful rest would smuggle a privileged
+          // chrome:// page (or data: attacker markup) past a scoped grant (the
+          // B1 mixed-set gap). If ANY entry is origin-less — or the set has no
+          // origins at all — the restore needs a GLOBAL grant; only a set where
+          // EVERY entry has an origin may be satisfied by per-origin grants.
+          const originSet = new Set();
+          let hasOriginLess = false;
+          for (const t of toRestore) {
+            let origin = null;
+            try {
+              origin = t?.url ? canonicalOrigin(t.url) : null;
+            } catch {
+              origin = null;
+            }
+            if (typeof origin === "string" && origin !== "") originSet.add(origin);
+            else hasOriginLess = true;
+          }
+          const covered = hasOriginLess || originSet.size === 0
             ? await isBrowserControlGranted(undefined)
-            : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
+            : (await Promise.all([...originSet].map((o) => isBrowserControlGranted(o)))).every(Boolean);
           if (!covered) {
             return {
               error:

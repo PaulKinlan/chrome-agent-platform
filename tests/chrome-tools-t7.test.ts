@@ -170,6 +170,40 @@ Deno.test("T7 restore_closed: denied without a grant; scoped to the restored ori
   assert(r.error, "revoked grant denies a subsequent restore");
 });
 
+Deno.test("T7 restore_closed mixed-set gap (B1): ANY origin-less entry (chrome://, data:) forces a GLOBAL grant — a scoped grant is REFUSED", async () => {
+  reset();
+  // WINDOW shape: mixed set [covered https entry, chrome:// privileged entry].
+  recentlyClosed = [{ window: { sessionId: "s-mixed-win", tabs: [{ url: "https://a.example/x" }, { url: "chrome://extensions" }] } }];
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  let r = await tools().restore_closed.execute({ sessionId: "s-mixed-win" });
+  assert(r.error && !r.ok, "mixed window (https + chrome://) REFUSED under a scoped grant covering only the https origin");
+  assertEquals(calls.restore.length, 0, "the chrome:// privileged page did NOT smuggle past the scoped grant");
+  await setGlobalBrowserControlGrant();
+  r = await tools().restore_closed.execute({ sessionId: "s-mixed-win" });
+  assertEquals(r.ok, true, "the same mixed window is ALLOWED under a global grant");
+  assertEquals(calls.restore, ["s-mixed-win"]);
+
+  // TAB shape: a single origin-less tab (data: attacker markup).
+  calls.restore.length = 0;
+  recentlyClosed = [{ tab: { sessionId: "s-mixed-tab", url: "data:text/html,<script>alert(1)</script>" } }];
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  r = await tools().restore_closed.execute({ sessionId: "s-mixed-tab" });
+  assert(r.error && !r.ok, "origin-less tab (data:) REFUSED under a scoped grant");
+  assertEquals(calls.restore.length, 0);
+  await setGlobalBrowserControlGrant();
+  r = await tools().restore_closed.execute({ sessionId: "s-mixed-tab" });
+  assertEquals(r.ok, true, "origin-less tab ALLOWED under a global grant");
+  assertEquals(calls.restore, ["s-mixed-tab"]);
+
+  // TAB shape: a single chrome:// tab under an origins grant must be refused.
+  calls.restore.length = 0;
+  recentlyClosed = [{ tab: { sessionId: "s-chrome-tab", url: "chrome://settings" } }];
+  await setOriginBrowserControlGrant(["https://a.example"]);
+  r = await tools().restore_closed.execute({ sessionId: "s-chrome-tab" });
+  assert(r.error && !r.ok, "single chrome:// tab REFUSED under a scoped grant");
+  assertEquals(calls.restore.length, 0);
+});
+
 Deno.test("T7 history reads require the history permission and fail closed without it", async () => {
   reset();
   seedHistory(["https://a.example/x", "https://b.example/y"]);
