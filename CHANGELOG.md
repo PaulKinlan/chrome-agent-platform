@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.269] — 2026-08-25
+- fix(security): rename all foreign 'cairn' identifiers to cap-* (bridge/auth consistent) + surface bounded DOMException name
+
 ## [0.2.267] — 2026-08-25
 - Site Agents are now discoverable: when you open a page that offers agent tools you get a clear "Add Site Agent" button, and the Site Agents list shows discovered-but-not-yet-added sites (no typing origins). Enrolled sites now reliably work after a browser restart instead of going silent.
 
