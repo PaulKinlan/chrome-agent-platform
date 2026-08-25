@@ -26,7 +26,14 @@ async function resetKv() {
   await kvRemove("cairn:usage").catch(() => {});
   await kvRemove("cap:usage:v2").catch(() => {});
 }
-const mkRow = (id) => ({ id, timestamp: "2026-08-18T12:00:00.000Z", agentId: "hub", taskId: "adhoc", provider: "demo", model: "demo-local", inputTokens: 8, outputTokens: 32, totalTokens: 40, estimatedCost: 0 });
+// CAP-FB-20260825-USAGE-AUTHORITY-PROBE-FAIL-01: the original fixture hardcoded
+// "2026-08-18T12:00:00.000Z" — written 2026-08-19 (af1163b) when it was 1 day
+// old, it AGED PAST the store's deliberate 7-day RETENTION_MS (usage-store.js:16)
+// on 2026-08-25, so sanitizeRow silently dropped every fixture row and PROBE-2/4
+// read []. The STORE is correct (retention is by design); the FIXTURE was
+// time-bombed. mkRow now uses a fresh timestamp (1 minute old) so the probes pin
+// the CAS/mirror invariants, not the calendar.
+const mkRow = (id) => ({ id, timestamp: new Date(Date.now() - 60_000).toISOString(), agentId: "hub", taskId: "adhoc", provider: "demo", model: "demo-local", inputTokens: 8, outputTokens: 32, totalTokens: 40, estimatedCost: 0 });
 
 async function setupAbsent() { await resetKv(); resetFakeIdb(); installFakeIdb(); resetFakeLocks(); installFakeLocks(); clearFaults(); mockChromeAbsent(); }
 
@@ -298,4 +305,18 @@ Deno.test("PROBE-11: a plain {stream} (non-Promise) return records usage without
   const rows = u.rows.filter((r) => r.provider === "probe-plain");
   assert(rows.length >= 1, "the plain-object model records usage (no catch-is-not-a-function)");
   assert(/^[0-9a-f-]{36}$/.test(rows[0].id), "the usage id is a valid UUID");
+});
+
+// ---- CAP-FB-20260825-USAGE-AUTHORITY-PROBE-FAIL-01: pin the retention behavior
+// that time-bombed the original fixture — an over-retention row is DELIBERATELY
+// dropped by sanitizeRow, so fixtures must always use fresh timestamps. This KAT
+// documents the design behavior loudly instead of letting a stale fixture fail
+// with a misleading "CAS is broken" signal.
+Deno.test("PROBE-FIXTURE-GUARD: rows older than the 7-day retention are deliberately dropped on write", async () => {
+  await setupAbsent();
+  const s = await freshStore();
+  const aged = { ...mkRow("aged-row"), timestamp: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString() };
+  await s.usageWrite([aged, mkRow("fresh-row")]);
+  const r = await s.usageRead();
+  assertEquals(r.rows.map((x) => x.id), ["fresh-row"], "the 8-day-old row is dropped by design; the fresh row lands");
 });

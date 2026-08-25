@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.259] — 2026-08-25
+- Fixed two tests that were incorrectly failing, and added a safeguard so the test data stays fresh and won't silently expire in the future.
+
+
+
 ## [0.2.258] — 2026-08-25
 - Added keyboard shortcuts: Alt+Shift+H opens the agent hub, Alt+Shift+K starts a new task with the composer ready, and Alt+Shift+S opens the side panel on the current tab. Settings → About lists them and links to Chrome's page for changing them.
 
@@ -11,7 +16,7 @@
 - fix(build): regenerate the bundled inventory after the version bump
 
 ## [0.2.255] — 2026-08-25
-- docs(tasks): repair the concatenated FDSTAT entry + add the TASKS schema gate (CAP-FB-20260825-TRACKER-INTEGRITY-01)
+- Fixed the task tracker: a garbled entry was repaired, and a new format check keeps the tracker valid.
 
 ## [0.2.254] — 2026-08-25
 - Fixed Site Agent tool calls (like the bistro booking) failing to connect — the site tab is now opened, focused, and confirmed ready before the tool runs, and any genuine connection problem is explained clearly instead of a bare "connection failed".
