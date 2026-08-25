@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.280] — 2026-08-25
+- Deep tab control: move, duplicate, pin, reload, back/forward, zoom, discard and highlight tabs; enable/disable the toolbar action; side-panel options — all grant-gated with the stricter any-origin-less-tab rule
+
 ## [0.2.279] — 2026-08-25
 - New browser-control tools: tab groups (create/rename/recolor/collapse, move tabs between groups) and downloads (start, list, pause/resume/cancel, show in folder, open) — all gated behind the browser-control grant
 
