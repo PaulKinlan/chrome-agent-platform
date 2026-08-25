@@ -6195,7 +6195,13 @@ async function openHubForCommand(command) {
 async function openSidePanelForCommand() {
   // `sidePanel` is optional. Fail CLOSED with a reason the owner can act on;
   // never call chrome.permissions.request from a key chord.
-  const granted = await chrome.permissions?.contains?.({ permissions: ["sidePanel"] }).catch(() => false);
+  // `x?.y?.(…).catch(…)` does NOT guard: when `contains` is missing the call
+  // yields undefined and `.catch` on undefined throws a TypeError, so the
+  // "fail closed with a reason" path below would never run.
+  let granted = false;
+  try {
+    granted = (await chrome.permissions?.contains?.({ permissions: ["sidePanel"] })) === true;
+  } catch { granted = false; }
   if (!granted) {
     pushDiagnostic(
       "warn",
@@ -6205,7 +6211,8 @@ async function openSidePanelForCommand() {
     );
     return { ok: false, error: "sidePanel permission not granted" };
   }
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await chrome.tabs?.query?.({ active: true, currentWindow: true }).catch(() => []) ?? [];
+  const active = Array.isArray(tabs) ? tabs[0] : null;
   if (active?.id == null) return { ok: false, error: "no active tab" };
   try {
     await chrome.sidePanel.setOptions({ tabId: active.id, path: "sidepanel/sidepanel.html", enabled: true });

@@ -230,7 +230,11 @@ const DURABLE_KEY_RE = new RegExp(`^(?:run|run-outbox|run-log|run-resume|run-pay
 // `agent.run` threw `invalid durable-run key: thread-runs:<threadId>` because a
 // run links its thread on the way in.
 const THREAD_RUNS_PREFIX = "thread-runs:";
-const THREAD_ID_RE = /^[A-Za-z0-9_.-]{1,200}$/;
+// No "." in the charset ON PURPOSE. `encodeURIComponent("..")` is ".." — it does
+// not escape dots — so a permissive charset would hand ".." straight to a
+// directory name and depend on OPFS rejecting it. Thread ids are
+// `t_<ms>_<base36>` and never contain a dot, so nothing is lost by refusing it.
+const THREAD_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
 
 export class MemoryStoreQuotaError extends Error {
   constructor(kind, message) {
@@ -841,6 +845,22 @@ function durableStoreForKey(key) {
     [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(executionId)],
     { isMaster: false, origin: `durable:${executionId}` },
   );
+}
+
+/** Remove a thread's durable reverse-index directory. Called when a thread is
+ * deleted: without it every deleted thread leaks its `durable/threads/<id>`
+ * directory forever, which the memory-resilience constraint forbids. Absent or
+ * malformed ids are a no-op — never a throw on a cleanup path. */
+export async function forgetDurableThread(threadId) {
+  if (!THREAD_ID_RE.test(String(threadId ?? ""))) return false;
+  const root = await openDirOptional([ROOT, DURABLE_ROOT, "threads"]);
+  if (!root) return false;
+  try {
+    await root.removeEntry(encodeURIComponent(String(threadId)), { recursive: true });
+    return true;
+  } catch {
+    return false; // already gone
+  }
 }
 
 async function durableThreadStores() {

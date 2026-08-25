@@ -6,8 +6,9 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory } from "../extension/lib/memory.js";
+import { masterMemory, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
+import { createThread, deleteThread } from "../extension/lib/threads.js";
 
 // ---- minimal in-memory OPFS fake ----
 // A directory tree: { kind, children: Map<name, node>, content?: string }
@@ -525,7 +526,42 @@ Deno.test("durable store routes the thread-runs reverse index instead of throwin
   assertEquals(await durable.get("run-registry"), ids);
 
   // Fail closed on a thread id outside the bounded safe charset rather than
-  // letting it reach a directory name.
+  // letting it reach a directory name. `..` matters most: encodeURIComponent
+  // does NOT escape dots, so a charset permitting them would hand ".." straight
+  // to a directory name and rely on OPFS refusing it.
   await assertRejects(() => durable.setTrusted("thread-runs:../escape", ["x"]));
+  await assertRejects(() => durable.setTrusted("thread-runs:..", ["x"]));
+  await assertRejects(() => durable.setTrusted("thread-runs:.", ["x"]));
   await assertRejects(() => durable.setTrusted("thread-runs:", ["x"]));
+  await assertRejects(() => durable.setTrusted(`thread-runs:${"a".repeat(201)}`, ["x"]));
+});
+
+Deno.test("deleting a thread reclaims its durable reverse index", async () => {
+  // Without this the durable/threads/<id> directory outlives every deleted
+  // thread — one leaked directory per delete, which the memory-resilience
+  // constraint forbids.
+  root.children.clear();
+  const durable = durableRunMemory();
+  const created = await createThread("leak check");
+  const threadId = created?.id ?? created;
+  assertEquals(typeof threadId, "string");
+  await durable.setTrusted(`thread-runs:${threadId}`, ["exec:00000000-0000-4000-8000-000000000009"]);
+  assert((await durable.keys()).includes(`thread-runs:${threadId}`));
+
+  assertEquals(await deleteThread(threadId), true);
+  assertEquals(
+    (await durable.keys()).includes(`thread-runs:${threadId}`),
+    false,
+    "the durable reverse index must not survive the thread",
+  );
+  // Cleanup is idempotent and never throws on an absent thread. The return
+  // value is deliberately NOT asserted here: real OPFS raises NotFoundError for
+  // a missing entry while the fake silently no-ops, and the contract that
+  // matters on a cleanup path is "does not throw".
+  await forgetDurableThread(threadId);
+  await forgetDurableThread("t_does_not_exist");
+  // A malformed id is refused before it can reach a directory name.
+  assertEquals(await forgetDurableThread("../escape"), false);
+  assertEquals(await forgetDurableThread(".."), false);
+  assertEquals(await forgetDurableThread(""), false);
 });

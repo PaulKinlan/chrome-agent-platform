@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.262] — 2026-08-25
+- Internal: hardened thread-id validation, reclaimed storage when a task thread is deleted, and fixed the side-panel shortcut's permission check. No user-visible change.
+
 ## [0.2.261] — 2026-08-25
 - Internal: updated the acceptance suite for the owner-direct approval policy. No user-visible change.
 

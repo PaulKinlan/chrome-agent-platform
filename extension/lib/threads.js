@@ -17,7 +17,7 @@
 // through the model toolset). Bounds match the journal: capped count + byte
 // budget per thread so a long conversation cannot grow the store unbounded.
 
-import { masterMemory } from "./memory.js";
+import { masterMemory, forgetDurableThread } from "./memory.js";
 import { sanitizeAttachments } from "./attachments.js";
 import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-model.js";
 
@@ -594,6 +594,11 @@ export async function deleteThread(id) {
     if (next.length !== index.length) {
       await mem.setTrusted(INDEX_KEY, next.slice(0, MAX_THREADS));
     }
+    // Drop the thread's durable reverse index too. Best-effort: losing the
+    // thread record already succeeded, and a failed cleanup must not report the
+    // delete as failed — but skipping it entirely leaks a directory per
+    // deleted thread.
+    await forgetDurableThread(id).catch(() => false);
     return true;
   });
 }
