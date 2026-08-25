@@ -48,6 +48,28 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 
 ```markdown
 
+
+## [CAP-FB-20260825-USAGE-AUTHORITY-PROBE-FAIL-01] usage-authority.test.ts PROBE-2/4 failing on main (usage-store CAS subsystem)
+
+- Feedback: 2026-08-25 — discovered during independent review: `usage-authority.test.ts` PROBE-2 and PROBE-4 FAIL at exact base cde1166 AND at 7aaf8c6 (reproduced in clean worktrees). Pre-existing, NOT attributable to the persistence log-redesign (confirmed by two independent reviewers).
+- Updated: 2026-08-25 12:55 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `7aaf8c6`
+- Candidate: —
+- Shipping: —
+- Acceptance: usage-authority.test.ts PROBE-2/4 pass on main; the usage-store CAS subsystem's failing invariant identified and fixed (or the probe corrected if the expectation drifted); no other usage-authority probes regressed; full suite green.
+- Review: pending independent review
+- Gates: reproduce PROBE-2/4 on clean base; root-cause; fix + KAT; full suite green
+- Blockers: —
+- Next: reproduce PROBE-2/4 with verbose output, identify the failing usage-store CAS invariant
+- Recover: `deno test -A tests/usage-authority.test.ts`
+- History:
+  - 2026-08-25 12:55 UTC — captured from independent review evidence (k3 + Pro both reproduced on clean base).
+
 ## [CAP-FB-YYYYMMDD-SLUG-NN] Title
 - Feedback: YYYY-MM-DD — public-safe source and summary
 - Updated: YYYY-MM-DD HH:MM UTC
