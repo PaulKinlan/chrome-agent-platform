@@ -1178,11 +1178,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-KEYBOARD-COMMANDS-01] No keyboard shortcuts anywhere
 - Feedback: 2026-08-25 — independent gap review found the manifest declares no `commands`, so a power-user tool aimed at people who return to it repeatedly across a day cannot be reached or driven from the keyboard
-- Updated: 2026-08-25 09:40 UTC
+- Updated: 2026-08-25 12:30 UTC
 - Status: OPEN
 - Resume: —
 - Priority: P2
-- Owner: unassigned
+- Owner: claude-opus-5 implementer session
 - Workspace: none
 - Branch: none
 - Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
@@ -1192,9 +1192,10 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Review: independent accessibility and interaction review, including screen-reader discoverability of the shortcut list
 - Gates: loaded-MV3 keyboard-driven journey for each declared command; assert no shortcut reaches a destructive path; assert remapping works through Chrome's settings
 - Blockers: `PRODUCT.md` positions the hub as a command centre for a returning power user; the shortcut set should be chosen against that, not accumulated
-- Next: choose the four or five commands worth a global shortcut and confirm none collides with a common Chrome default
+- Next: implement the command set, then hand the diff to a different model for review before integration
 - Recover: `grep -n "commands" extension/manifest.json || echo "no commands block"`
 - History:
+  - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; no other session is on it per the 00:14 fleet board)
   - 2026-08-25 09:40 UTC — opened. Verified absent: `extension/manifest.json` contains no `commands` key.
 
 ## [CAP-FB-20260825-I18N-FOUNDATION-01] No internationalisation foundation
@@ -1241,11 +1242,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-TRACKER-INTEGRITY-01] Enforce the tracker's own entry schema
 - Feedback: 2026-08-25 — a gap sweep found three entries violating the schema this file defines: two headings with no body at all, and one heading carrying three complete field sets with conflicting statuses
-- Updated: 2026-08-25 09:40 UTC
+- Updated: 2026-08-25 12:30 UTC
 - Status: OPEN
 - Resume: —
 - Priority: P2
-- Owner: unassigned
+- Owner: claude-opus-5 implementer session
 - Workspace: none
 - Branch: none
 - Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
@@ -1255,8 +1256,9 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Review: independent review that the FDSTAT resolution does not silently promote or demote any of the three states — the `IN_REVIEW` field set represents real unfinished work and must survive the reconciliation
 - Gates: the schema check run against the current file, demonstrated failing on a deliberately malformed entry and passing on the corrected file; the `Open work queue` index regenerated and matching the checker's output exactly
 - Blockers: —
-- Next: recover `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` from `TASKS-DONE.md`, then decide with the runtime lane owner whether its three field sets are three tasks or one — do not reconcile them by guessing which status is current
+- Next: recover the FDSTAT entry from TASKS-DONE.md, reconcile its three field sets with the runtime lane owner, and land the schema check
 - Recover: `awk '/^## \[CAP-FB/{id=$0} /^- Status:/{print id}' TASKS.md TASKS-DONE.md | uniq -c | awk '$1!=1'`
 - History:
+  - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; documentation/tooling only, no code-lane collision)
   - 2026-08-25 09:40 UTC — opened. The two empty headings (`CAP-FB-20260822-WASM-EXECUTION-HOST-01` and `-02`) were recovered in this same commit and are not part of this task; the FDSTAT merged-heading defect and the missing check are.
 
