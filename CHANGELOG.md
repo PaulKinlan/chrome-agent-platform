@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.278] — 2026-08-25
+- New browser-control tools for site data: cookies (per-site, permission asked on demand), a scoped browsing-data wipe you choose the parts of, and per-site content settings (JavaScript/images/cookies/popups/notifications/location)
+
 ## [0.2.277] — 2026-08-25
 - The agent list on the new-tab hub now shows a short two-line preview of each agent's role instead of the whole description; the full text is still there on hover.
 
