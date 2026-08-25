@@ -11,6 +11,10 @@ import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 
 const GRANT_KEY = "cap:browserControlGrant";
+/** T6: MHTML snapshots are returned inline — hard-capped so a hostile page
+ * can't flood the run (over-cap pages are REFUSED with the size reported
+ * honestly, never silently truncated into an unusable partial file). */
+const MAX_MHTML_BYTES = 8 * 1024 * 1024;
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs is passed
 
 // A GLOBAL grant mutex serializes the grant CHECK with the destructive Chrome
@@ -1449,6 +1453,298 @@ export function browserToolset(readOnly = false) {
         }
         await chrome.contextMenus.remove(id);
         return { ok: true, id, removed: true };
+      },
+    }),
+
+    // ── T5 system/topSites/permissions ──
+    // Tranche-5 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01
+    // T5, CAP-FB-20260825 implementation): system.* + topSites + permissions
+    // inventory — ALL read-only. No product grant needed; each tool fails
+    // HONEST when its optional permission is not granted (the owner enables it
+    // in Settings — a model run never silently broadens).
+    get_system_memory: tool({
+      description:
+        "Read system memory info (capacity, available). Read-only. Requires system.memory permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("system.memory"))) {
+          return { error: "system.memory permission not granted — enable System info in Settings" };
+        }
+        const info = await chrome.system.memory.getInfo();
+        return {
+          capacityBytes: info?.capacity ?? null,
+          availableCapacityBytes: info?.availableCapacity ?? null,
+        };
+      },
+    }),
+    get_system_cpu: tool({
+      description:
+        "Read system CPU info (model, architecture, processor count, per-processor load). Read-only. Requires system.cpu permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("system.cpu"))) {
+          return { error: "system.cpu permission not granted — enable System info in Settings" };
+        }
+        const info = await chrome.system.cpu.getInfo();
+        const processors = (Array.isArray(info?.processors) ? info.processors : []).slice(0, 64).map((p) => ({
+          user: p?.usage?.user ?? null,
+          kernel: p?.usage?.kernel ?? null,
+          idle: p?.usage?.idle ?? null,
+          total: p?.usage?.total ?? null,
+        }));
+        return {
+          modelName: typeof info?.modelName === "string" ? info.modelName.slice(0, 128) : null,
+          archName: typeof info?.archName === "string" ? info.archName.slice(0, 32) : null,
+          numOfProcessors: info?.numOfProcessors ?? processors.length,
+          processors,
+        };
+      },
+    }),
+    get_system_storage: tool({
+      description:
+        "List attached storage units (id, name, type, capacity). Read-only. Requires system.storage permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("system.storage"))) {
+          return { error: "system.storage permission not granted — enable System info in Settings" };
+        }
+        const units = await chrome.system.storage.getInfo();
+        return {
+          storageUnits: (Array.isArray(units) ? units : []).slice(0, 32).map((u) => ({
+            id: typeof u?.id === "string" ? u.id.slice(0, 128) : null,
+            name: typeof u?.name === "string" ? u.name.slice(0, 128) : null,
+            type: typeof u?.type === "string" ? u.type.slice(0, 32) : null,
+            capacityBytes: u?.capacity ?? null,
+          })),
+        };
+      },
+    }),
+    get_system_display: tool({
+      description:
+        "List attached displays (id, name, primary, resolution, bounds). Read-only. Requires system.display permission.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("system.display"))) {
+          return { error: "system.display permission not granted — enable System info in Settings" };
+        }
+        const displays = await chrome.system.display.getInfo();
+        return {
+          displays: (Array.isArray(displays) ? displays : []).slice(0, 16).map((d) => ({
+            id: typeof d?.id === "string" ? d.id.slice(0, 64) : null,
+            name: typeof d?.name === "string" ? d.name.slice(0, 128) : null,
+            isPrimary: d?.isPrimary === true,
+            isEnabled: d?.isEnabled !== false,
+            resolution: d?.modes?.find?.((m) => m?.isNative) ?? null,
+            bounds: d?.bounds ? { left: d.bounds.left ?? 0, top: d.bounds.top ?? 0, width: d.bounds.width ?? 0, height: d.bounds.height ?? 0 } : null,
+          })),
+        };
+      },
+    }),
+    list_top_sites: tool({
+      description:
+        "List the browser's top sites (url, title). Read-only. Requires topSites permission.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(50).optional(),
+      }),
+      execute: async ({ maxResults = 20 }) => {
+        if (!(await hasPermission("topSites"))) {
+          return { error: "topSites permission not granted — enable Top sites in Settings" };
+        }
+        const sites = await chrome.topSites.get();
+        return {
+          topSites: (Array.isArray(sites) ? sites : []).slice(0, maxResults).map((site) => ({
+            url: typeof site?.url === "string" ? site.url.slice(0, 2048) : null,
+            title: typeof site?.title === "string" ? site.title.slice(0, 256) : null,
+          })),
+        };
+      },
+    }),
+    list_granted_permissions: tool({
+      description:
+        "List the permissions + host origins this extension currently holds (read-only owner inventory — no permission required).",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const all = await chrome.permissions.getAll().catch(() => null);
+        return {
+          permissions: (Array.isArray(all?.permissions) ? all.permissions : []).slice(0, 64),
+          origins: (Array.isArray(all?.origins) ? all.origins : []).slice(0, 64),
+        };
+      },
+    }),
+
+    // ── T6 readingList/pageCapture ──
+    // Tranche-6 (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01 T6): the most
+    // sensitive surfaces. readingList entries are http/https ONLY (no
+    // chrome://, file://, javascript: — validated BEFORE the API call);
+    // mutations assert durable run ownership (house pattern). save_page_as_mhtml
+    // rides EXACTLY capture_screenshot's consent semantics: run-owned → target
+    // origin → exact-host permissionRequirement → grant validated under the
+    // SAME grant lock → capture — with a hard byte cap reported honestly.
+    add_reading_list_entry: tool({
+      description:
+        "Add a url to the browser reading list (http/https only). Requires readingList permission.",
+      inputSchema: z.object({
+        url: z.string().min(1).max(2048),
+        title: z.string().max(256),
+        hasBeenRead: z.boolean().optional(),
+      }),
+      execute: async ({ url, title, hasBeenRead = false }) => {
+        if (!(await hasPermission("readingList"))) {
+          return { error: "readingList permission not granted — enable Reading list in Settings" };
+        }
+        const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
+        if (scheme !== "http:" && scheme !== "https:") {
+          return { error: "reading list entries must be http/https urls — refused" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — reading list entry not added" };
+        }
+        await chrome.readingList.addEntry({ url, title, hasBeenRead });
+        return { ok: true, url, added: true };
+      },
+    }),
+    query_reading_list: tool({
+      description:
+        "Query the browser reading list (url/title/hasBeenRead filters, bounded). Read-only. Requires readingList permission.",
+      inputSchema: z.object({
+        url: z.string().max(2048).optional(),
+        title: z.string().max(256).optional(),
+        hasBeenRead: z.boolean().optional(),
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ url, title, hasBeenRead, maxResults = 50 }) => {
+        if (!(await hasPermission("readingList"))) {
+          return { error: "readingList permission not granted — enable Reading list in Settings" };
+        }
+        const query = {};
+        if (url !== undefined) query.url = url;
+        if (title !== undefined) query.title = title;
+        if (hasBeenRead !== undefined) query.hasBeenRead = hasBeenRead;
+        const items = await chrome.readingList.query(query);
+        return {
+          entries: (Array.isArray(items) ? items : []).slice(0, maxResults).map((e) => ({
+            url: typeof e?.url === "string" ? e.url.slice(0, 2048) : null,
+            title: typeof e?.title === "string" ? e.title.slice(0, 256) : null,
+            hasBeenRead: e?.hasBeenRead === true,
+            creationTime: e?.creationTime ?? null,
+            lastUpdateTime: e?.lastUpdateTime ?? null,
+          })),
+        };
+      },
+    }),
+    update_reading_list_entry: tool({
+      description:
+        "Update a reading list entry by url (http/https only). Requires readingList permission.",
+      inputSchema: z.object({
+        url: z.string().min(1).max(2048),
+        title: z.string().max(256).optional(),
+        hasBeenRead: z.boolean().optional(),
+      }),
+      execute: async ({ url, title, hasBeenRead }) => {
+        if (!(await hasPermission("readingList"))) {
+          return { error: "readingList permission not granted — enable Reading list in Settings" };
+        }
+        const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
+        if (scheme !== "http:" && scheme !== "https:") {
+          return { error: "reading list entries must be http/https urls — refused" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — reading list entry not updated" };
+        }
+        const update = { url };
+        if (title !== undefined) update.title = title;
+        if (hasBeenRead !== undefined) update.hasBeenRead = hasBeenRead;
+        await chrome.readingList.updateEntry(update);
+        return { ok: true, url, updated: true };
+      },
+    }),
+    remove_reading_list_entry: tool({
+      description:
+        "Remove a reading list entry by url (http/https only). Requires readingList permission.",
+      inputSchema: z.object({
+        url: z.string().min(1).max(2048),
+      }),
+      execute: async ({ url }) => {
+        if (!(await hasPermission("readingList"))) {
+          return { error: "readingList permission not granted — enable Reading list in Settings" };
+        }
+        const scheme = (() => { try { return new URL(url).protocol; } catch { return null; } })();
+        if (scheme !== "http:" && scheme !== "https:") {
+          return { error: "reading list entries must be http/https urls — refused" };
+        }
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — reading list entry not removed" };
+        }
+        await chrome.readingList.removeEntry({ url });
+        return { ok: true, url, removed: true };
+      },
+    }),
+    save_page_as_mhtml: tool({
+      description:
+        "Save a tab as MHTML (single-file page snapshot) and return its content inline (bounded; over-cap pages are refused with the size reported, never silently truncated). Requires pageCapture permission + browser-control grant for the tab's origin (scoped + expiring).",
+      inputSchema: z.object({ tabId: z.number().optional() }),
+      execute: async ({ tabId }) => {
+        // EXACTLY capture_screenshot's consent semantics (the round-16..21
+        // fence lessons): durable ownership asserted BEFORE anything else.
+        try {
+          await assertRunOwned();
+        } catch {
+          return { error: "run aborted — page not saved" };
+        }
+        if (!(await hasPermission("pageCapture"))) {
+          return { error: "pageCapture permission not granted — enable Page capture in Settings" };
+        }
+        const target = tabId
+          ? await chrome.tabs.get(tabId).catch(() => null)
+          : ((await chrome.tabs.query({ active: true, currentWindow: true }))[0] ?? null);
+        if (!target?.id) return { error: "no tab" };
+        const origin = target.url
+          ? (() => { try { return canonicalOrigin(target.url); } catch { return undefined; } })()
+          : undefined;
+        if (!origin) {
+          return {
+            error: "cannot read the tab's exact origin — page capture is waiting for an owner-selected site permission",
+            waitingForPermission: true,
+          };
+        }
+        const originPattern = `${origin}/*`;
+        const hasExactHost = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
+        if (!hasExactHost) {
+          return {
+            error: `page capture is waiting for permission to ${originPattern}`,
+            waitingForPermission: true,
+            permissionRequirement: {
+              tool: "save_page_as_mhtml",
+              reason: "Save the selected tab as MHTML",
+              origins: [originPattern],
+            },
+          };
+        }
+        return await withGrantLock(async () => {
+          const grantId = validateGrantFor((await kvGet(GRANT_KEY))[GRANT_KEY], origin);
+          if (!grantId) {
+            return {
+              error: "browser control not granted for this tab's origin — ask the user to approve it in Settings",
+            };
+          }
+          const blob = await chrome.pageCapture.saveTabAsMHTML({ tabId: target.id });
+          const size = blob?.size ?? 0;
+          if (size > MAX_MHTML_BYTES) {
+            return {
+              error: `page too large to save inline (${size} bytes > ${MAX_MHTML_BYTES} cap) — not saved`,
+              sizeBytes: size,
+              capBytes: MAX_MHTML_BYTES,
+            };
+          }
+          const mhtml = await blob.text();
+          return { ok: true, tabId: target.id, origin, mhtml, sizeBytes: size, truncated: false };
+        });
       },
     }),
   };

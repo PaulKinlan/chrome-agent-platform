@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 29,
+  browserTools: 40,
   managementTools: 29,
-  totalTools: 58,
+  totalTools: 69,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -45,6 +45,17 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "create_context_menu",
   "list_context_menus",
   "remove_context_menu",
+  "get_system_memory",
+  "get_system_cpu",
+  "get_system_storage",
+  "get_system_display",
+  "list_top_sites",
+  "list_granted_permissions",
+  "add_reading_list_entry",
+  "query_reading_list",
+  "update_reading_list_entry",
+  "remove_reading_list_entry",
+  "save_page_as_mhtml",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -162,6 +173,26 @@ const rows = [
   record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
   record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", false, "read", "browser.context-menus"),
   record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
+
+  // Tranche-5 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01
+  // T5, CAP-FB-20260825 implementation): system.* + topSites + permissions
+  // inventory — ALL read-only; the optional permission is requested by the
+  // owner in Settings and each tool fails HONEST when denied (no grant gate:
+  // nothing here mutates or touches page data).
+  record("get_system_memory", "chrome-api", ["chrome.system.memory.read"], ["system.memory"], "none", "read-only", false, "read", "browser.system"),
+  record("get_system_cpu", "chrome-api", ["chrome.system.cpu.read"], ["system.cpu"], "none", "read-only", false, "read", "browser.system"),
+  record("get_system_storage", "chrome-api", ["chrome.system.storage.read"], ["system.storage"], "none", "read-only", false, "read", "browser.system"),
+  record("get_system_display", "chrome-api", ["chrome.system.display.read"], ["system.display"], "none", "read-only", false, "read", "browser.system"),
+  record("list_top_sites", "chrome-api", ["chrome.top-sites.read"], ["topSites"], "none", "read-only", false, "read", "browser.top-sites"),
+  record("list_granted_permissions", "chrome-api", ["chrome.permissions.inventory.read"], [], "none", "read-only", false, "read", "browser.permissions"),
+  // Tranche-6: readingList (http/https-only entries; mutations assert durable
+  // run ownership) + pageCapture (EXACTLY capture_screenshot consent: origin
+  // host permission + product grant under the grant lock + hard byte cap).
+  record("add_reading_list_entry", "chrome-api", ["chrome.reading-list.add"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
+  record("query_reading_list", "chrome-api", ["chrome.reading-list.query"], ["readingList"], "none", "read-only", false, "read", "browser.reading-list"),
+  record("update_reading_list_entry", "chrome-api", ["chrome.reading-list.update"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
+  record("remove_reading_list_entry", "chrome-api", ["chrome.reading-list.remove"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
+  record("save_page_as_mhtml", "chrome-api", ["chrome.host.exact-origin", "chrome.page-capture.save.tab-origin"], ["pageCapture", "tabs"], "tab-scoped", "read-only", false, "read", "browser.capture"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

@@ -55,6 +55,17 @@ const BROWSER_READ_TOOLS = new Set([
   "list_bookmarks",
   "query_idle_state",
   "list_context_menus",
+  // Tranche-5/6 Chrome API coverage (CAP-FB-20260825): system/topSites/
+  // permissions inventory + reading-list query + MHTML save are observe-only
+  // (no browser state changes — the capture_screenshot precedent).
+  "get_system_memory",
+  "get_system_cpu",
+  "get_system_storage",
+  "get_system_display",
+  "list_top_sites",
+  "list_granted_permissions",
+  "query_reading_list",
+  "save_page_as_mhtml",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -126,6 +137,11 @@ const BUILT_IN_TOOLS = new Set([
   "notify", "clear_notification",
   "query_idle_state",
   "create_context_menu", "list_context_menus", "remove_context_menu",
+  // Tranche-5/6 (reads classified above; ALL are built-ins):
+  "get_system_memory", "get_system_cpu", "get_system_storage", "get_system_display",
+  "list_top_sites", "list_granted_permissions",
+  "add_reading_list_entry", "query_reading_list", "update_reading_list_entry",
+  "remove_reading_list_entry", "save_page_as_mhtml",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

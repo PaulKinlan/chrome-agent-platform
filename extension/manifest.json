@@ -20,7 +20,14 @@
     "downloads",
     "history",
     "idle",
-    "webNavigation"
+    "webNavigation",
+    "system.cpu",
+    "system.memory",
+    "system.storage",
+    "system.display",
+    "topSites",
+    "readingList",
+    "pageCapture"
   ],
   "optional_host_permissions": [
     "http://*/*",
