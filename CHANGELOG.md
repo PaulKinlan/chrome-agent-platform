@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.264] — 2026-08-25
+- Fixed Site Agent tool calls opening the website's home page instead of the specific page that registered the tool. The booking now opens the exact page (e.g. the Le Petit Bistro demo page) and runs its tool there; older site records heal automatically.
+
+
 ## [0.2.263] — 2026-08-25
 - Agent roles now show as a short, readable one-line preview in the task list (hover to see the full text) — the full role is still saved without any length limit.
 
@@ -21,6 +25,8 @@
 
 ## [0.2.258] — 2026-08-25
 - Added keyboard shortcuts: Alt+Shift+H opens the agent hub, Alt+Shift+K starts a new task with the composer ready, and Alt+Shift+S opens the side panel on the current tab. Settings → About lists them and links to Chrome's page for changing them.
+
+
 
 ## [0.2.257] — 2026-08-25
 - Reworked how task and agent logs are stored and shown so nothing is lost or hidden: every tool call and every reply now shows correctly when you reopen a task, and a task can no longer get stuck showing "running" after an interruption.

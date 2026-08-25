@@ -125,6 +125,7 @@ import {
   getCurrentSiteIdentity,
   isApproved,
   isEnrolled,
+  listSiteIdentityHistory,
   listTools,
   pendingApprovals,
   replacePageTools,
@@ -137,6 +138,7 @@ import {
   canonicalPageUrl,
   canonicalPath,
   formatSiteAgentName,
+  recoverDeclaringPageIdentity,
 } from "../lib/site-identity.js";
 import { allSkills, getSkills, setSkills } from "../lib/skills.js";
 import {
@@ -1415,6 +1417,24 @@ async function invokeSiteTool(
   const descriptor = dir.find((t) => t.name === name);
   if (!descriptor) {
     return { error: `no such tool on ${canonical}: ${name}` };
+  }
+  // LEGACY PAGE RECOVERY (page-open fix): a directory entry written before
+  // page scoping has no pageUrl, so the plan would open the origin ROOT (where
+  // the tool is not registered). The site-identity history (page-identity
+  // feature, 0.2.252+) records which PAGE declared which toolNames — recover
+  // the declaring page from the freshest identity that names this tool. This
+  // heals already-stored legacy state without requiring the owner to reload
+  // the demo page. The directory is not mutated (read-time derivation).
+  if (!descriptor.pageUrl && !descriptor.path) {
+    const identities = [
+      await getCurrentSiteIdentity(canonical).catch(() => null),
+      ...(await listSiteIdentityHistory(canonical).catch(() => [])),
+    ].filter(Boolean);
+    const declaring = recoverDeclaringPageIdentity(identities, name);
+    if (declaring) {
+      descriptor.pageUrl = declaring.pageUrl;
+      descriptor.path = declaring.path;
+    }
   }
   if (descriptor.source !== "declared" && descriptor.source !== "inferred") {
     return { error: `tool ${name} is not page-invocable (source ${descriptor.source})` };

@@ -268,6 +268,29 @@ export function samePage(identity, tab) {
   return Boolean(pageUrl && pageUrl === identity.pageUrl);
 }
 
+/** Recover the DECLARING page for a tool from site identities (page-open fix):
+ * a legacy directory entry (written before page scoping) carries no pageUrl,
+ * so invocation would open the origin ROOT where the tool is not registered.
+ * The identity records know which page declared which toolNames — return the
+ * freshest identity (current first, then history by observedAt) naming the
+ * tool, as { pageUrl, path } or null. Pure. */
+export function recoverDeclaringPageIdentity(identities, toolName) {
+  const list = (Array.isArray(identities) ? identities : [])
+    .filter((i) =>
+      i && typeof i === "object" &&
+      Array.isArray(i.toolNames) && i.toolNames.includes(toolName) &&
+      typeof i.pageUrl === "string" && i.pageUrl
+    )
+    .sort((a, b) => {
+      // "known"/current identity outranks history at equal observedAt.
+      const rank = (x) => (x.state === "known" ? 1 : 0);
+      return (rank(b) - rank(a)) || (Number(b.observedAt ?? 0) - Number(a.observedAt ?? 0));
+    });
+  const declaring = list[0];
+  if (!declaring) return null;
+  return { pageUrl: declaring.pageUrl, path: declaring.path ?? canonicalPath(declaring.pageUrl) };
+}
+
 /** Format a human-readable, page-aware site agent label. */
 export function formatSiteAgentName({ origin, pageUrl = null, path = null, title = null } = {}) {
   const host = String(origin ?? "").replace(/^https?:\/\//, "").replace(/\/.*/, "");

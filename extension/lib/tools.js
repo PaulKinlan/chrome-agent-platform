@@ -228,10 +228,26 @@ export async function replacePageTools(origin, tools, page = null) {
     }
     return false;
   };
-  const otherSlices = existingDir.filter((t) => !isTargetSlice(t));
+  // A page-scoped report SUPERSEDES a same-named LEGACY origin-only entry
+  // (CAP page-open fix): a directory written before page scoping holds entries
+  // with no pageUrl/path; the fresh page report is the more precise truth for
+  // that tool (it carries the declaring page). Without this, the legacy entry
+  // shadows the upgrade FOREVER (name-dedup kept the older row) and invocation
+  // opens the origin ROOT instead of the declaring page — the owner's bistro
+  // bug. Same-named entries from OTHER pages are still superseded below by
+  // freshest-first ordering (the latest complete snapshot is the current
+  // truth for that name); distinct-named tools on other pages are untouched.
+  const newNames = new Set(newPageTools.map((t) => t.name));
+  const isLegacyOriginOnly = (t) => !t?.pageUrl && (!t?.path || t?.path === "/");
+  const otherSlices = existingDir.filter((t) => {
+    if (isTargetSlice(t)) return false;
+    if (pageUrl && newNames.has(t?.name) && isLegacyOriginOnly(t)) return false;
+    return true;
+  });
 
-  // 3. Merge: other page slices + new page slice
-  const merged = [...otherSlices, ...newPageTools];
+  // 3. Merge: the FRESH page slice first (it wins same-name collisions), then
+  // the retained slices from other pages.
+  const merged = [...newPageTools, ...otherSlices];
 
   // 4. Bound total directory size and tool counts
   const seen = new Set();
