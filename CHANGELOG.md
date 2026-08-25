@@ -1,7 +1,9 @@
 # Changelog
 
-## [0.2.253] — 2026-08-25
-- docs(tasks): open work queue index + eleven untracked tasks
+## [0.2.254] — 2026-08-25
+- Fixed Site Agent tool calls (like the bistro booking) failing to connect — the site tab is now opened, focused, and confirmed ready before the tool runs, and any genuine connection problem is explained clearly instead of a bare "connection failed".
+
+
 
 ## [0.2.252] — 2026-08-25
 - Site Agents can now tell apart different pages on the same website, so each page's own tools stay available and the right page is opened when a tool needs it.

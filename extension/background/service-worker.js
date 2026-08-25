@@ -1506,7 +1506,10 @@ async function invokeSiteTool(
       resolvedBinding = await waitForSnapshotBinding(canonical, targetTabId);
       if (!resolvedBinding) {
         return {
+          ok: false,
           error: `the existing tab for ${canonical} did not become ready in time — the page's bridge never re-bound`,
+          reason: "handshake-timeout",
+          detail: `tab ${targetTabId} timed out waiting for WebMCP bridge re-bind`,
         };
       }
     } else if (plan.kind === "open") {
@@ -1515,13 +1518,35 @@ async function invokeSiteTool(
       try {
         created = await chrome.tabs.create({ url: openTargetUrl, active: true });
       } catch (e) {
-        return { error: `could not open ${openTargetUrl}: ${e?.message ?? e}` };
+        return {
+          ok: false,
+          error: `could not open ${openTargetUrl}: ${e?.message ?? e}`,
+          reason: "tab-not-openable",
+          detail: String(e?.message ?? e),
+        };
       }
-      if (!created?.id) return { error: `could not open ${openTargetUrl}` };
+      if (!created?.id) {
+        return {
+          ok: false,
+          error: `could not open ${openTargetUrl}`,
+          reason: "tab-not-openable",
+          detail: "tab creation returned no tab id",
+        };
+      }
+      // Rebind the snapshot gate to the newly created tab under the enrollment lock
+      await withEnrollmentLock(async () => {
+        const gate = await kvGet(SNAPSHOT_GATE_KEY);
+        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        map[canonical] = rebindSnapshotGate(map[canonical] ?? null, created.id);
+        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+      });
       resolvedBinding = await waitForSnapshotBinding(canonical, created.id);
       if (!resolvedBinding) {
         return {
+          ok: false,
           error: `the new tab for ${canonical} did not become ready in time — the page's bridge never bound`,
+          reason: "handshake-timeout",
+          detail: `new tab ${created.id} timed out waiting for WebMCP bridge handshake`,
         };
       }
     }
@@ -1534,7 +1559,12 @@ async function invokeSiteTool(
       (t) => t.name === name && t.source === descriptor.source,
     );
     if (!stillThere) {
-      return { error: `tool ${name} is not present on the freshly bound page for ${canonical}` };
+      return {
+        ok: false,
+        error: `tool ${name} is not present on the freshly bound page for ${canonical}`,
+        reason: "descriptor-unavailable",
+        detail: `tool ${name} disappeared after page re-bind`,
+      };
     }
   }
   const tab = resolvedBinding?.tabId != null
@@ -1548,14 +1578,19 @@ async function invokeSiteTool(
   }
   if (!tab?.id || tabOrigin !== canonical) {
     return {
+      ok: false,
       error: `the approved tab for ${canonical} no longer shows that origin — re-discover the page`,
+      reason: "tab-not-openable",
+      detail: `approved tab ${resolvedBinding?.tabId} is no longer on ${canonical}`,
     };
   }
+  // Focus the destination tab before dispatch
+  try { await chrome.tabs.update(tab.id, { active: true }).catch(() => {}); } catch {}
   // The site invocation is a SIDE-EFFECTING boundary (it drives a page function
   // on the origin) — it must be fenced like every other tool (the round-16 fence
   // coverage finding: site invocation called tabs.sendMessage without a run check).
   if (runAborted()) {
-    return { error: "run aborted — site invocation not sent" };
+    return { ok: false, error: "run aborted — site invocation not sent", reason: "run-aborted" };
   }
   // Re-check the SAME enrollment generation IMMEDIATELY before tabs.sendMessage:
   // the snapshot above was read before the tab query await, so a delete in that
@@ -1567,46 +1602,148 @@ async function invokeSiteTool(
     const recheck = await enrollmentSnapshot(canonical);
     if (!recheck.enrolled || recheck.gen !== gen) {
       return {
+        ok: false,
         error: `origin ${canonical} was disenrolled before the call`,
+        reason: "not-enrolled",
       };
     }
   }
+  let res;
+  let connectionFailed = false;
   try {
     // Target the EXACT document the gate bound (Chrome 106+ documentId
     // addressing): if the tab navigated away from the bound document, the send
     // fails honestly instead of reaching a different document's bridge.
-    const res = await chrome.tabs.sendMessage(tab.id, {
+    res = await chrome.tabs.sendMessage(tab.id, {
       type: "invoke-tool",
       name,
       args,
       gen, // enrollment-scoped identity — the content script enforces it (round-20)
       source: descriptor.source, // descriptor identity — declared/inferred dispatch
     }, { documentId: resolvedBinding.documentId });
-    // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
-    // call (a single locked snapshot, not two unlocked reads).
-    const after = await enrollmentSnapshot(canonical);
-    if (!after.enrolled || after.gen !== gen) {
+  } catch (e) {
+    const isConnErr = String(e?.message ?? "").includes("Receiving end does not exist") ||
+      String(e?.message ?? "").includes("Could not establish connection") ||
+      String(e?.message ?? "").includes("No frame with id") ||
+      String(e?.message ?? "").includes("document");
+    if (isConnErr && isBoundAlive) {
+      connectionFailed = true;
+    } else {
       return {
-        error: `origin ${canonical} was disenrolled during the call — result discarded`,
+        ok: false,
+        error: `invoke failed: ${e?.message ?? e}`,
+        reason: isConnErr ? "bridge-unavailable" : "invoke-failed",
+        detail: String(e?.message ?? e),
       };
     }
-    if (expectedSourceGeneration) {
-      const afterGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
-      const afterBinding = afterGateMap[canonical] ?? {};
-      const afterSourceGeneration = [
-        `enrollment:${after.gen ?? 0}`,
-        `document:${typeof afterBinding.documentId === "string" ? afterBinding.documentId : ""}`,
-        `epoch:${afterBinding.epoch ?? 0}`,
-        `seq:${afterBinding.seq ?? 0}`,
-      ].join(":");
-      if (afterSourceGeneration !== expectedSourceGeneration) {
-        return { error: `the approved document changed during ${name} — result discarded` };
-      }
-    }
-    return res ?? { ok: true };
-  } catch (e) {
-    return { error: `invoke failed: ${e.message}` };
   }
+
+  // Automatic connection recovery: if an existing binding was thought alive but
+  // the bridge was disconnected/discarded, attempt one re-bind/re-announce recovery.
+  if (connectionFailed) {
+    const tabs = await chrome.tabs.query({}).catch(() => []);
+    const plan = planWebmcpInvocationTab({
+      canonical,
+      path: descriptor.path ?? null,
+      pageUrl: descriptor.pageUrl ?? null,
+      binding: null, // force fresh plan
+      tabs: Array.isArray(tabs) ? tabs : [],
+    });
+    let recoverTabId = null;
+    if (plan.kind === "reuse") {
+      recoverTabId = plan.tabId;
+      await withEnrollmentLock(async () => {
+        const gate = await kvGet(SNAPSHOT_GATE_KEY);
+        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        map[canonical] = rebindSnapshotGate(map[canonical] ?? null, recoverTabId);
+        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+      });
+      try { await chrome.tabs.sendMessage(recoverTabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
+      try { await chrome.tabs.update(recoverTabId, { active: true }).catch(() => {}); } catch {}
+    } else if (plan.kind === "open") {
+      const openTargetUrl = plan.url || canonical;
+      const created = await chrome.tabs.create({ url: openTargetUrl, active: true }).catch(() => null);
+      if (!created?.id) {
+        return {
+          ok: false,
+          error: `could not open ${openTargetUrl}`,
+          reason: "tab-not-openable",
+          detail: "tab creation failed during connection recovery",
+        };
+      }
+      recoverTabId = created.id;
+      await withEnrollmentLock(async () => {
+        const gate = await kvGet(SNAPSHOT_GATE_KEY);
+        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        map[canonical] = rebindSnapshotGate(map[canonical] ?? null, recoverTabId);
+        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+      });
+    }
+    const freshBinding = await waitForSnapshotBinding(canonical, recoverTabId);
+    if (!freshBinding) {
+      return {
+        ok: false,
+        error: `the page bridge for ${canonical} could not be connected`,
+        reason: "bridge-unavailable",
+        detail: `recovery tab ${recoverTabId} timed out or failed to connect`,
+      };
+    }
+    const freshDir = await listTools(canonical);
+    const stillThere = freshDir.find((t) => t.name === name && t.source === descriptor.source);
+    if (!stillThere) {
+      return {
+        ok: false,
+        error: `tool ${name} is not present on the freshly bound page for ${canonical}`,
+        reason: "descriptor-unavailable",
+        detail: `tool ${name} disappeared after page re-bind`,
+      };
+    }
+    try {
+      res = await chrome.tabs.sendMessage(recoverTabId, {
+        type: "invoke-tool",
+        name,
+        args,
+        gen,
+        source: descriptor.source,
+      }, { documentId: freshBinding.documentId });
+    } catch (e) {
+      return {
+        ok: false,
+        error: `invoke failed: ${e?.message ?? e}`,
+        reason: "bridge-unavailable",
+        detail: String(e?.message ?? e),
+      };
+    }
+  }
+
+  // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
+  // call (a single locked snapshot, not two unlocked reads).
+  const after = await enrollmentSnapshot(canonical);
+  if (!after.enrolled || after.gen !== gen) {
+    return {
+      ok: false,
+      error: `origin ${canonical} was disenrolled during the call — result discarded`,
+      reason: "not-enrolled",
+    };
+  }
+  if (expectedSourceGeneration) {
+    const afterGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+    const afterBinding = afterGateMap[canonical] ?? {};
+    const afterSourceGeneration = [
+      `enrollment:${after.gen ?? 0}`,
+      `document:${typeof afterBinding.documentId === "string" ? afterBinding.documentId : ""}`,
+      `epoch:${afterBinding.epoch ?? 0}`,
+      `seq:${afterBinding.seq ?? 0}`,
+    ].join(":");
+    if (afterSourceGeneration !== expectedSourceGeneration) {
+      return {
+        ok: false,
+        error: `the approved document changed during ${name} — result discarded`,
+        reason: "document-navigated",
+      };
+    }
+  }
+  return res ?? { ok: true };
 }
 
 /** Bounded readiness wait (CAP-FB-20260824-WEBMCP-EXECUTION-01): poll the

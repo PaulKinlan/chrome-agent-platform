@@ -248,6 +248,15 @@ function onWindowMessage(event) {
 window.addEventListener("message", onWindowMessage);
 
 function onRuntimeMessage(message, _sender, sendResponse) {
+  if (message?.type === "enrollment.poke" || message?.type === "bridge.ping") {
+    // The SW requests a bridge re-sync/poke (e.g. on invocation tab reuse/open).
+    syncEnrollmentAtStartup().then(() => {
+      sendResponse({ ok: true, epoch: bridgeEpoch, gen: currentGen });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: String(err?.message ?? err) });
+    });
+    return true;
+  }
   if (message?.type === "enrollment-sync") {
     // The SW confirms the origin's CURRENT enrollment generation (sent on
     // enroll/re-enroll). MONOTONIC: a stale sync must never clear `disenrolled`
