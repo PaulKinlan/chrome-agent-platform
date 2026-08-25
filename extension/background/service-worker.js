@@ -414,6 +414,8 @@ import {
   schemaToZod as buildSchema,
   summarizeInjection,
   isExactOptionsSender,
+  KEYBOARD_COMMANDS,
+  hubUrlForCommand
 } from "../lib/pure.js";
 import {
   canonicalArray,
@@ -6155,6 +6157,76 @@ chrome.runtime.onStartup?.addListener(() => {
 recoverOnBoot().catch((e) =>
   console.error("recoverOnBoot:", e?.message ?? e)
 );
+
+// ---- keyboard commands (manifest `commands`) ---------------------------
+// Three deliberately memorable shortcuts for a tool the owner returns to many
+// times a day. Deliberate constraints, all enforced below:
+//   - NONE of them is destructive and NONE requests a permission. A key chord
+//     is not an owner gesture aimed at a specific grant, so a shortcut that
+//     could pop a permission prompt would be a consent dark pattern.
+//   - They need ZERO optional permissions to do their primary job. Opening an
+//     extension page never needs `tabs`; the side-panel command is the one that
+//     genuinely needs `sidePanel`, and it fails closed with a readable reason
+//     rather than asking for it.
+//   - No shortcut carries a payload. "New task" focuses the composer; it never
+//     injects task text.
+// Remapping is Chrome's own chrome://extensions/shortcuts (Settings → About
+// links to it). A user who clears a binding simply has no shortcut.
+// KEYBOARD_COMMANDS + hubUrlForCommand live in lib/pure.js so Settings, this
+// worker and the tests share one list.
+async function openHubForCommand(command) {
+  const url = hubUrlForCommand(command, (p) => chrome.runtime.getURL(p));
+  // Reuse an already-open hub when we can see one. tabs.query WITHOUT the
+  // `tabs` permission still returns tabs, just without url/title — so the
+  // reuse path is best-effort and the fallback always works.
+  try {
+    const open = await chrome.tabs?.query?.({ url: `${chrome.runtime.getURL("ntp/ntp.html")}*` });
+    const existing = Array.isArray(open) ? open[0] : null;
+    if (existing?.id != null) {
+      await chrome.tabs.update(existing.id, { active: true, url });
+      if (existing.windowId != null) await chrome.windows?.update?.(existing.windowId, { focused: true }).catch(() => {});
+      return { ok: true, reused: true };
+    }
+  } catch { /* no tabs permission, or no match — fall through to create */ }
+  await chrome.tabs.create({ url, active: true });
+  return { ok: true, reused: false };
+}
+
+async function openSidePanelForCommand() {
+  // `sidePanel` is optional. Fail CLOSED with a reason the owner can act on;
+  // never call chrome.permissions.request from a key chord.
+  const granted = await chrome.permissions?.contains?.({ permissions: ["sidePanel"] }).catch(() => false);
+  if (!granted) {
+    pushDiagnostic(
+      "warn",
+      "Side panel shortcut: the sidePanel permission is not granted — enable it in Settings → Permissions, then try again.",
+      "commands",
+      "permission",
+    );
+    return { ok: false, error: "sidePanel permission not granted" };
+  }
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (active?.id == null) return { ok: false, error: "no active tab" };
+  try {
+    await chrome.sidePanel.setOptions({ tabId: active.id, path: "sidepanel/sidepanel.html", enabled: true });
+    await chrome.sidePanel.open({ tabId: active.id });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `side panel could not open: ${e?.message ?? e}` };
+  }
+}
+
+async function handleKeyboardCommand(command) {
+  if (!KEYBOARD_COMMANDS.includes(command)) return { ok: false, error: `unknown command: ${command}` };
+  if (command === "open-side-panel") return await openSidePanelForCommand();
+  return await openHubForCommand(command);
+}
+
+chrome.commands?.onCommand?.addListener((command) => {
+  handleKeyboardCommand(command).catch((e) => {
+    pushDiagnostic("error", `keyboard command ${command} failed: ${e?.message ?? e}`, "commands", "runtime");
+  });
+});
 
 // ---- omnibox (keyword → start a task) --------------------------------
 // The original plan's fast entry point: type "agent <task>" in the address bar

@@ -2789,6 +2789,54 @@ try {
   if (av && v) av.textContent = "v" + v;
 } catch { /* non-extension (browser test) — leave the placeholder */ }
 
+// ── About / keyboard shortcuts ───────────────────────────────────────────────
+// The bindings are Chrome's, not ours: chrome.commands.getAll() reports what is
+// ACTUALLY bound right now, including a binding the owner cleared or remapped.
+// Rendering our manifest's suggested keys instead would lie whenever they had
+// changed one. Built as DOM nodes, never innerHTML.
+async function renderShortcuts() {
+  const host = $("#shortcut-list");
+  if (!host) return;
+  let commands = [];
+  try {
+    commands = (await chrome.commands?.getAll?.()) ?? [];
+  } catch { /* non-extension context (the gallery/browser test) */ }
+  host.replaceChildren();
+  if (!commands.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "Keyboard shortcuts are unavailable in this context.";
+    host.append(p);
+    return;
+  }
+  for (const cmd of commands) {
+    // `_execute_action` and friends have no description; skip anything unnamed.
+    if (!cmd?.description) continue;
+    const dt = document.createElement("dt");
+    if (cmd.shortcut) {
+      const kbd = document.createElement("kbd");
+      kbd.textContent = cmd.shortcut;
+      dt.append(kbd);
+    } else {
+      const span = document.createElement("span");
+      span.className = "muted unbound";
+      span.textContent = "Not set";
+      dt.append(span);
+    }
+    const dd = document.createElement("dd");
+    dd.textContent = cmd.description;
+    host.append(dt, dd);
+  }
+}
+
+$("#open-shortcut-settings")?.addEventListener("click", () => {
+  // Chrome's own page is the only place a binding can be changed; an extension
+  // cannot set one. Opening it is a plain navigation, not a permission request.
+  chrome.tabs?.create?.({ url: "chrome://extensions/shortcuts" });
+});
+
+renderShortcuts();
+
 // ── About / changelog ────────────────────────────────────────────────────────
 // Render the bundled CHANGELOG.md into the About section. Each `## [version]`
 // becomes a version card with its bullet list (built as DOM nodes, never

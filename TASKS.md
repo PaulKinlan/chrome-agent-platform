@@ -217,7 +217,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260825-CONCURRENCY-RESIDUALS-01`](#cap-fb-20260825-concurrency-residuals-01-close-the-four-open-concurrency-verifications) | Close the four open concurrency verifications |
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
-| P2 | OPEN | [`CAP-FB-20260825-KEYBOARD-COMMANDS-01`](#cap-fb-20260825-keyboard-commands-01-no-keyboard-shortcuts-anywhere) | No keyboard shortcuts anywhere |
+| P2 | IN_REVIEW | [`CAP-FB-20260825-KEYBOARD-COMMANDS-01`](#cap-fb-20260825-keyboard-commands-01-no-keyboard-shortcuts-anywhere) | No keyboard shortcuts anywhere |
 | P2 | IN_REVIEW | [`CAP-FB-20260825-TRACKER-INTEGRITY-01`](#cap-fb-20260825-tracker-integrity-01-enforce-the-trackers-own-entry-schema) | Enforce the tracker's own entry schema |
 | P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
@@ -1164,23 +1164,26 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260825-KEYBOARD-COMMANDS-01] No keyboard shortcuts anywhere
 - Feedback: 2026-08-25 — independent gap review found the manifest declares no `commands`, so a power-user tool aimed at people who return to it repeatedly across a day cannot be reached or driven from the keyboard
-- Updated: 2026-08-25 12:30 UTC
-- Status: OPEN
+- Updated: 2026-08-25 14:10 UTC
+- Status: IN_REVIEW
 - Resume: —
 - Priority: P2
 - Owner: claude-opus-5 implementer session
-- Workspace: none
-- Branch: none
+- Workspace: active (local path private)
+- Branch: detached candidate on `origin/main`
 - Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
-- Candidate: —
+- Candidate: this commit
 - Shipping: —
 - Acceptance: a small, deliberate set of shortcuts — open the hub, start a task, open the side panel, focus the composer — declared in the manifest, remappable through Chrome's own shortcut settings, and discoverable in-product; the set is small enough to be memorable rather than exhaustive; no shortcut fires a destructive or permission-granting action; nothing conflicts with a common browser default
-- Review: independent accessibility and interaction review, including screen-reader discoverability of the shortcut list
-- Gates: loaded-MV3 keyboard-driven journey for each declared command; assert no shortcut reaches a destructive path; assert remapping works through Chrome's settings
-- Blockers: `PRODUCT.md` positions the hub as a command centre for a returning power user; the shortcut set should be chosen against that, not accumulated
-- Next: implement the command set, then hand the diff to a different model for review before integration
-- Recover: `grep -n "commands" extension/manifest.json || echo "no commands block"`
+- Review: pending — a different model/session must review the diff plus the 18-check loaded-MV3 evidence, with attention to the two behaviours the acceptance singles out: no command reaches a destructive path, and none can grant a permission
+- Gates: 18/18 loaded-MV3 checks on a fresh profile — `chrome.commands.getAll()` reports all three with real bound chords; `#compose` focuses the composer on BOTH the already-open-tab path and the fresh-tab boot path; no command injects task text; the side-panel command finds `sidePanel` ungranted and fails closed without requesting it; Settings lists the chords Chrome actually reports. Plus 6 unit tests, full unit suite, gallery drift, changelog and tasks-schema gates
+- Blockers: —
+- Next: obtain the independent review; the real OS key chord cannot be fired headless, so pressing it belongs to `CAP-FB-20260825-HEADED-ACCEPTANCE-LANE-01`
+- Recover: `git grep -n "KEYBOARD_COMMANDS\|hubUrlForCommand" -- extension && python3 -c "import json;print(json.load(open('extension/manifest.json'))['commands'])"`
 - History:
+  - 2026-08-25 14:10 UTC — implemented and verified in a real loaded extension. Three commands: `open-hub` (`Alt+Shift+H`), `new-task` (`Alt+Shift+K`, lands on the hub with the composer focused) and `open-side-panel` (`Alt+Shift+S`). The acceptance named four; "start a task" and "focus the composer" collapse into the same action, so shipping a fourth redundant chord was rejected rather than padded to match the wording.
+  - 2026-08-25 14:10 UTC — **the browser run caught two real defects that source review would not have.** (1) Chrome SILENTLY DROPPED `Alt+Shift+A`, `Alt+Shift+N`, `Alt+Shift+T` and `Alt+Shift+C` — a dropped `suggested_key` produces no error and no binding, so the shortcuts would simply never have fired. The shipped chords were chosen by probing what Chrome actually binds, not by reading a reserved-key list. (2) `#compose` did nothing when a hub tab was already open: setting the hash is a `push` navigation and `shouldDispatchForNavigationType` deliberately suppresses those, so the router never saw it. A `hashchange` listener now handles that one focus-only route; it touches no view state, so it cannot race the dispatcher.
+  - 2026-08-25 14:10 UTC — constraints enforced in code, not just documented: no command is destructive; none calls `chrome.permissions.request` (a key chord is not a gesture aimed at a specific grant, so a prompt from one would be a consent dark pattern); the side-panel command checks `permissions.contains` and fails closed with an actionable diagnostic; no command carries a payload, so a shortcut can never inject task text. Settings renders `chrome.commands.getAll()` rather than the manifest's suggested keys, so it stays truthful after an owner remaps or clears a binding.
   - 2026-08-25 12:30 UTC — ownership: unassigned → claude-opus-5 implementer session (taking the lane; no other session is on it per the 00:14 fleet board)
   - 2026-08-25 09:40 UTC — opened. Verified absent: `extension/manifest.json` contains no `commands` key.
 

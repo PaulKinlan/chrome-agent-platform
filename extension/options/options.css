@@ -1073,3 +1073,25 @@ input:focus, select:focus, textarea:focus {
     align-items: flex-start;
   }
 }
+
+/* Settings → About → Keyboard shortcuts. A definition list because that is what
+   it is: a binding and what it does. Grid so the keys form one column. */
+.shortcut-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  align-items: baseline;
+  margin: 0 0 12px;
+}
+.shortcut-list dt { margin: 0; }
+.shortcut-list dd { margin: 0; color: var(--muted); }
+.shortcut-list kbd {
+  font: 500 12px/1.4 var(--mono, ui-monospace, monospace);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: var(--surface-2, var(--surface));
+  white-space: nowrap;
+}
+.shortcut-list .unbound { font-style: italic; }

@@ -2235,12 +2235,18 @@ async function applyCurrentHashRoute(isTraverse = false) {
     const state = (typeof history !== "undefined" && history.state && typeof history.state === "object")
       ? history.state : null;
     const meta = resolveEntryMeta(parsed, state);
-    if (parsed.route === "hub") {
+    if (parsed.route === "hub" || parsed.route === "compose") {
       if (!viewOverlay?.hidden) {
         closeView({ fromNavigation: true });
       }
       if (!threadView?.hidden) {
         hideThreadView({ fromNavigation: true });
+      }
+      if (parsed.route === "compose") {
+        // The keyboard "new task" command: land on the hub with the caret in
+        // the composer. Focus after the overlay/thread teardown above so it is
+        // not immediately stolen by the surface being closed.
+        document.getElementById("composer")?.focusInput?.();
       }
     } else if (parsed.route === "thread") {
       if (!viewOverlay?.hidden) hideViewInner();
@@ -2305,6 +2311,18 @@ if (typeof window !== "undefined") {
       applyCurrentHashRoute(true).catch(() => {});
     });
   }
+
+  // The keyboard "new task" command when a hub tab is ALREADY open: the service
+  // worker navigates that tab to "#compose", which is a same-document hash
+  // change. The navigate listener above deliberately ignores push/replace (a
+  // self-initiated pushState already rendered its view), so the route
+  // dispatcher never sees it. `hashchange` always fires for a hash change, so
+  // handle the one route that is purely a focus request here. It touches focus
+  // only — no view state — so it cannot conflict with the dispatcher.
+  window.addEventListener("hashchange", () => {
+    if (parseNtpHash(location.hash).route !== "compose") return;
+    document.getElementById("composer")?.focusInput?.();
+  });
 }
 
 document.getElementById("view-back")?.addEventListener("click", closeView);

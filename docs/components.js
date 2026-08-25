@@ -3038,6 +3038,15 @@ let agentComposerUid = 0;
  * Light DOM (shadow() = false) so the extension's CDP journeys can still
  * target #task-input / #run-task. */
 class AgentComposer extends Component {
+  /** Focus the task input. Public so a route (the keyboard "new task" command
+   * lands on "#compose") can put the caret in the composer without reaching
+   * into the shadow root from outside. Safe before connect: no-ops. */
+  focusInput() {
+    const el = this._input ?? this._root?.querySelector("#task-input");
+    el?.focus?.();
+    return !!el;
+  }
+
   static shadow() { return false; }
   static get observedAttributes() { return ["placeholder", "label", "description", "send-label", "agent-id", "agent-kind"]; }
   constructor() {

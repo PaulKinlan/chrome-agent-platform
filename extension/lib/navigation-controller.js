@@ -185,6 +185,7 @@ export function createNavigationController({
  *   - "#agent=<kind>:<id>" -> { route: "agent", kind: "<kind>", id: "<id>" }
  *   - "#view=<path>" -> { route: "view", path: "<path>" }
  *   - "#omnibox=<mode>:<query>" -> { route: "omnibox", mode: "<mode>", query: "<query>" }
+ *   - "#compose" -> { route: "compose" }  (hub, with the task composer focused)
  */
 export function parseNtpHash(hash) {
   if (typeof hash !== "string" || !hash || hash === "#") {
@@ -192,6 +193,11 @@ export function parseNtpHash(hash) {
   }
   const clean = hash.startsWith("#") ? hash.slice(1).trim() : hash.trim();
   if (!clean) return { route: "hub" };
+
+  // The keyboard "new task" command lands here: same surface as the hub, but the
+  // composer takes focus so the owner can type immediately. It carries no
+  // payload — a shortcut must never inject task text.
+  if (clean === "compose") return { route: "compose" };
 
   const mThread = /^thread=(.+)$/.exec(clean);
   if (mThread) return { route: "thread", id: decodeURIComponent(mThread[1]) };
