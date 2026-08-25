@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.276] — 2026-08-25
+- chore(tasks): record bundled-inventory drift fix (0.2.275)
+
 ## [0.2.275] — 2026-08-25
 - fix(build): bump-version keeps bundled inventory release in lockstep with version bumps (CAP-FB-20260825-INVENTORY-DRIFT-01)
 
