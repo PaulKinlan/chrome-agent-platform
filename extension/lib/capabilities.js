@@ -88,11 +88,34 @@ export const CAPABILITIES = [
     label: "Content settings",
     hint: "Read/set/clear per-site content rules (JavaScript, images, cookies, location, notifications, popups) for one exact origin at a time — broad patterns are refused.",
     gates: "Gates: reading and changing per-site content rules (JS, images, cookies, location, notifications, popups) for single origins.",
+  },
+  {
     id: "downloads",
     permissions: ["downloads"],
     label: "Downloads",
     hint: "Download files (http/https only) and manage the browser's download history. Mutations stay behind the Browser control grant.",
     gates: "Gates: download_file, list_downloads, pause/resume/cancel/erase/show/open/remove downloads.",
+  },
+  {
+    id: "declarativeNetRequest",
+    permissions: ["declarativeNetRequest"],
+    label: "Network rules",
+    hint: "Manage the extension's dynamic network rules (block/allow/redirect/upgradeScheme). Rules apply browser-wide: every rule change ALSO needs the global Browser control grant.",
+    gates: "Gates: listing and match-testing rules (read), adding/updating/removing rules (global grant).",
+  },
+  {
+    id: "webNavigation",
+    permissions: ["webNavigation"],
+    label: "Navigation frames",
+    hint: "Read a tab's frame tree and see top-frame navigation start/complete in the recent browser events log.",
+    gates: "Gates: reading frame trees and navigation events.",
+  },
+  {
+    id: "webRequest",
+    permissions: ["webRequest"],
+    label: "Request observation",
+    hint: "Observe (never block or modify) web requests for sites you already granted host access to. Blocking webRequest is not available without enterprise policy.",
+    gates: "Gates: reading observed request activity.",
   },
 ];
 

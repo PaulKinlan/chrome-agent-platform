@@ -896,6 +896,124 @@ function sanitizeDownloadFilename(raw, maxBytes = 256, maxSegments = 8) {
   return cleaned;
 }
 
+// ── T10 network rules helpers (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01) ──
+// chrome.declarativeNetRequest dynamic rules are BROWSER-WIDE (a rule applies
+// to matching requests everywhere): every mutation needs the GLOBAL
+// browser-control grant — an origin grant is never enough. Reads stay light
+// (permission-gated only). MV3 note: this tranche is OBSERVATION + dynamic
+// rules only; blocking webRequest requires enterprise policy and is EXCLUDED.
+
+const DNR_MAX_DYNAMIC_RULES = 100; // bounded house cap; refuse over-cap honestly
+const DNR_RESOURCE_TYPES = [
+  "main_frame", "sub_frame", "stylesheet", "script", "image", "font",
+  "object", "xml_http_request", "ping", "csp_report", "media", "websocket",
+  "other",
+];
+
+/** Network rules are browser-wide: mutations ride the GLOBAL grant only
+ * (same discipline as downloads). Reads never use this. */
+async function withNetworkRulesGrant(verb, mutate) {
+  if (!(await hasPermission("declarativeNetRequest"))) {
+    return {
+      error:
+        "declarativeNetRequest permission not granted — enable Network rules in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    if (!(await isBrowserControlGranted(undefined))) {
+      return {
+        error:
+          "browser control not granted for network rules — ask the user to approve it in Settings (global grant required: rules apply browser-wide)",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — network rule not ${verb}` };
+    }
+    const result = await mutate();
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — network rule ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** Bounded rule-shape validation shared by add/update. Returns
+ * { error } or { rule } (Chrome-shaped). Runs BEFORE any Chrome call:
+ * a regexFilter that fails `new RegExp` construction is refused up front. */
+function buildDnrRule(input, ruleId) {
+  const rule = { id: ruleId, priority: input.priority ?? 1, action: {}, condition: {} };
+  if (input.action === "modifyHeaders") {
+    return {
+      error:
+        "modifyHeaders is not supported by this bounded rule shape (it needs header operation lists) — use block, allow, redirect or upgradeScheme",
+    };
+  }
+  rule.action.type = input.action;
+  if (input.action === "redirect") {
+    let redirectUrl;
+    try {
+      redirectUrl = new URL(input.redirectUrl ?? "");
+    } catch {
+      return { error: "redirect rules need a redirectUrl (http/https only)" };
+    }
+    if (redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:") {
+      return { error: "redirect rules need a redirectUrl (http/https only)" };
+    }
+    rule.action.redirect = { url: redirectUrl.href };
+  }
+  if (!input.urlFilter && !input.regexFilter) {
+    return { error: "pass a urlFilter or a regexFilter (the rule condition)" };
+  }
+  if (input.urlFilter) rule.condition.urlFilter = input.urlFilter;
+  if (input.regexFilter) {
+    try {
+      new RegExp(input.regexFilter); // reject non-constructible patterns BEFORE the API
+    } catch {
+      return { error: "regexFilter is not a constructible regular expression" };
+    }
+    rule.condition.regexFilter = input.regexFilter;
+  }
+  if (input.resourceTypes) rule.condition.resourceTypes = input.resourceTypes;
+  if (input.requestDomains) rule.condition.requestDomains = input.requestDomains;
+  return { rule };
+}
+
+/** Serialize one dynamic rule with honest caps (bounded output). */
+function boundedDnrRule(rule) {
+  return {
+    id: rule?.id ?? null,
+    priority: rule?.priority ?? 1,
+    action: rule?.action?.type ? String(rule.action.type).slice(0, 32) : null,
+    redirectUrl: rule?.action?.redirect?.url
+      ? String(rule.action.redirect.url).slice(0, 2048)
+      : null,
+    urlFilter: rule?.condition?.urlFilter ? String(rule.condition.urlFilter).slice(0, 500) : null,
+    regexFilter: rule?.condition?.regexFilter ? String(rule.condition.regexFilter).slice(0, 500) : null,
+    resourceTypes: Array.isArray(rule?.condition?.resourceTypes)
+      ? rule.condition.resourceTypes.slice(0, 16).map((t) => String(t).slice(0, 32))
+      : [],
+    requestDomains: Array.isArray(rule?.condition?.requestDomains)
+      ? rule.condition.requestDomains.slice(0, 20).map((d) => String(d).slice(0, 253))
+      : [],
+  };
+}
+
+/** Rolling request-activity ring buffer (webRequest observation, MV3
+ * non-blocking). SEPARATE from the navigation/tab event buffer on purpose:
+ * request events are high-frequency (dozens per page load) and would drown
+ * the 200-entry tab/navigation log. Capped at 100 entries. */
+const REQUEST_ACTIVITY_KEY = "cap:requestActivity";
+export async function recordRequestActivity(entry) {
+  const stored = await kvGet(REQUEST_ACTIVITY_KEY);
+  const list = stored[REQUEST_ACTIVITY_KEY] ?? [];
+  list.unshift({ at: new Date().toISOString(), ...entry });
+  await kvSet({ [REQUEST_ACTIVITY_KEY]: list.slice(0, 100) });
+}
+
 /** The browser-control toolset, passed into the agent. */
 export function browserToolset(readOnly = false) {
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
@@ -2292,6 +2410,266 @@ export function browserToolset(readOnly = false) {
           await chrome.downloads.removeFile(downloadId);
           return { ok: true, downloadId, fileRemoved: true };
         });
+      },
+    }),
+    // ── T10 network rules ────────────────────────────────────────────────
+    // chrome.declarativeNetRequest dynamic rules (ALL mutations are
+    // browser-wide → GLOBAL browser-control grant only), chrome.webNavigation
+    // frame reads (+ onBeforeNavigate/onCompleted wired into the
+    // recent_browser_events buffer by the SW), and chrome.webRequest
+    // OBSERVATION only (MV3 non-blocking; blocking webRequest needs
+    // enterprise policy and is EXCLUDED).
+    list_network_rules: tool({
+      description:
+        "List the extension's dynamic network rules (declarativeNetRequest). Read-only; requires the declarativeNetRequest permission (enable Network rules in Settings).",
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!(await hasPermission("declarativeNetRequest"))) {
+          return { error: "declarativeNetRequest permission not granted — enable Network rules in Settings" };
+        }
+        let rules = [];
+        try {
+          rules = await chrome.declarativeNetRequest.getDynamicRules();
+        } catch (e) {
+          return { error: `rule list failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(rules) ? rules : [];
+        return {
+          rules: rows.slice(0, DNR_MAX_DYNAMIC_RULES).map(boundedDnrRule),
+          returned: Math.min(rows.length, DNR_MAX_DYNAMIC_RULES),
+          total: rows.length,
+          truncated: rows.length > DNR_MAX_DYNAMIC_RULES,
+        };
+      },
+    }),
+    add_network_rule: tool({
+      description:
+        "Add a dynamic network rule (block/allow/redirect/upgradeScheme). MUTATING and BROWSER-WIDE: requires the GLOBAL browser-control grant + declarativeNetRequest permission. Bounded shape: urlFilter/regexFilter ≤500 chars, ≤100 dynamic rules.",
+      inputSchema: z.object({
+        id: z.number().int().min(1).max(100000),
+        priority: z.number().int().min(1).max(100000).optional(),
+        action: z.enum(["block", "allow", "redirect", "upgradeScheme", "modifyHeaders"]),
+        urlFilter: z.string().min(1).max(500).optional(),
+        regexFilter: z.string().min(1).max(500).optional(),
+        resourceTypes: z.array(z.enum(DNR_RESOURCE_TYPES)).min(1).max(16).optional(),
+        requestDomains: z.array(z.string().min(1).max(253)).min(1).max(20).optional(),
+        redirectUrl: z.string().min(1).max(2048).optional(),
+      }),
+      execute: async (input) => {
+        return await withNetworkRulesGrant("added", async () => {
+          const built = buildDnrRule(input, input.id);
+          if (built.error) return built;
+          let existing = [];
+          try {
+            existing = await chrome.declarativeNetRequest.getDynamicRules();
+          } catch (e) {
+            return { error: `rule list failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          const rows = Array.isArray(existing) ? existing : [];
+          if (rows.some((r) => r?.id === input.id)) {
+            return { error: `rule id ${input.id} already exists — use update_network_rule or a different id` };
+          }
+          if (rows.length >= DNR_MAX_DYNAMIC_RULES) {
+            return {
+              error: `dynamic rule cap reached (${DNR_MAX_DYNAMIC_RULES}) — remove a rule first`,
+            };
+          }
+          try {
+            await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [built.rule] });
+          } catch (e) {
+            return { error: `rule add failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          return { ok: true, rule: boundedDnrRule(built.rule) };
+        });
+      },
+    }),
+    update_network_rule: tool({
+      description:
+        "Replace an existing dynamic network rule (by ruleId) with a new bounded rule shape. MUTATING and BROWSER-WIDE: requires the GLOBAL browser-control grant + declarativeNetRequest permission.",
+      inputSchema: z.object({
+        ruleId: z.number().int().min(1).max(100000),
+        priority: z.number().int().min(1).max(100000).optional(),
+        action: z.enum(["block", "allow", "redirect", "upgradeScheme", "modifyHeaders"]),
+        urlFilter: z.string().min(1).max(500).optional(),
+        regexFilter: z.string().min(1).max(500).optional(),
+        resourceTypes: z.array(z.enum(DNR_RESOURCE_TYPES)).min(1).max(16).optional(),
+        requestDomains: z.array(z.string().min(1).max(253)).min(1).max(20).optional(),
+        redirectUrl: z.string().min(1).max(2048).optional(),
+      }),
+      execute: async ({ ruleId, ...input }) => {
+        return await withNetworkRulesGrant("updated", async () => {
+          let existing = [];
+          try {
+            existing = await chrome.declarativeNetRequest.getDynamicRules();
+          } catch (e) {
+            return { error: `rule list failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          const rows = Array.isArray(existing) ? existing : [];
+          if (!rows.some((r) => r?.id === ruleId)) {
+            return { error: `no dynamic rule with id ${ruleId}` };
+          }
+          const built = buildDnrRule(input, ruleId);
+          if (built.error) return built;
+          try {
+            await chrome.declarativeNetRequest.updateDynamicRules({
+              removeRuleIds: [ruleId],
+              addRules: [built.rule],
+            });
+          } catch (e) {
+            return { error: `rule update failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          return { ok: true, rule: boundedDnrRule(built.rule) };
+        });
+      },
+    }),
+    remove_network_rule: tool({
+      description:
+        "Remove dynamic network rules by id. MUTATING and BROWSER-WIDE: requires the GLOBAL browser-control grant + declarativeNetRequest permission.",
+      inputSchema: z.object({
+        ruleIds: z.array(z.number().int().min(1).max(100000)).min(1).max(DNR_MAX_DYNAMIC_RULES),
+      }),
+      execute: async ({ ruleIds }) => {
+        return await withNetworkRulesGrant("removed", async () => {
+          try {
+            await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: ruleIds });
+          } catch (e) {
+            return { error: `rule remove failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          return { ok: true, removedIds: ruleIds };
+        });
+      },
+    }),
+    get_network_rule_matches: tool({
+      description:
+        "Test which dynamic network rules would match a hypothetical request (testMatchOutcome). Read-only; requires the declarativeNetRequest permission. URL must be http/https.",
+      inputSchema: z.object({
+        url: z.string().url().max(2048),
+        tabId: z.number().int().min(1).optional(),
+        resourceType: z.enum(DNR_RESOURCE_TYPES).optional(),
+      }),
+      execute: async ({ url, tabId, resourceType }) => {
+        if (!(await hasPermission("declarativeNetRequest"))) {
+          return { error: "declarativeNetRequest permission not granted — enable Network rules in Settings" };
+        }
+        let parsed;
+        try {
+          parsed = new URL(url);
+        } catch {
+          return { error: "only http/https URLs can be tested" };
+        }
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          return { error: "only http/https URLs can be tested" };
+        }
+        const request = { url: parsed.href };
+        if (tabId !== undefined) request.tabId = tabId;
+        if (resourceType !== undefined) request.resourceType = resourceType;
+        let outcome;
+        try {
+          outcome = await chrome.declarativeNetRequest.testMatchOutcome(request);
+        } catch (e) {
+          return { error: `match test failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const matched = Array.isArray(outcome?.matchedRules) ? outcome.matchedRules : [];
+        return {
+          matchedRules: matched.slice(0, DNR_MAX_DYNAMIC_RULES).map((m) => ({
+            ruleId: m?.rule?.id ?? null,
+            rule: boundedDnrRule(m?.rule),
+          })),
+          returned: Math.min(matched.length, DNR_MAX_DYNAMIC_RULES),
+          total: matched.length,
+        };
+      },
+    }),
+    get_navigation_frames: tool({
+      description:
+        "List all frames of a tab (chrome.webNavigation.getAllFrames). Read-only; requires the webNavigation permission (enable Navigation frames in Settings).",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1),
+      }),
+      execute: async ({ tabId }) => {
+        if (!(await hasPermission("webNavigation"))) {
+          return { error: "webNavigation permission not granted — enable Navigation frames in Settings" };
+        }
+        let frames;
+        try {
+          frames = await chrome.webNavigation.getAllFrames({ tabId });
+        } catch (e) {
+          return { error: `frame list failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(frames) ? frames : [];
+        return {
+          frames: rows.slice(0, 100).map((f) => ({
+            frameId: f?.frameId ?? null,
+            parentFrameId: f?.parentFrameId ?? null,
+            url: f?.url ? String(f.url).slice(0, 2048) : null,
+            errorOccurred: Boolean(f?.errorOccurred),
+          })),
+          returned: Math.min(rows.length, 100),
+          total: rows.length,
+        };
+      },
+    }),
+    get_navigation_frame: tool({
+      description:
+        "Get one frame of a tab by frameId (chrome.webNavigation.getFrame). Read-only; requires the webNavigation permission.",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1),
+        frameId: z.number().int().min(0),
+      }),
+      execute: async ({ tabId, frameId }) => {
+        if (!(await hasPermission("webNavigation"))) {
+          return { error: "webNavigation permission not granted — enable Navigation frames in Settings" };
+        }
+        let frame;
+        try {
+          frame = await chrome.webNavigation.getFrame({ tabId, frameId });
+        } catch (e) {
+          return { error: `frame read failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        if (!frame) return { error: "no such frame" };
+        return {
+          frame: {
+            frameId: frame.frameId ?? null,
+            parentFrameId: frame.parentFrameId ?? null,
+            url: frame.url ? String(frame.url).slice(0, 2048) : null,
+            errorOccurred: Boolean(frame.errorOccurred),
+          },
+        };
+      },
+    }),
+    get_request_activity: tool({
+      description:
+        "Read recent observed web request activity (MV3 NON-BLOCKING webRequest observation only — blocking webRequest requires enterprise policy and is excluded). Events arrive only for hosts the owner already granted host access to (never broadened here). Requires the webRequest permission (enable Request observation in Settings).",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(100).optional(),
+        tabId: z.number().int().min(0).optional(),
+        phase: z.enum(["started", "completed"]).optional(),
+      }),
+      execute: async ({ maxResults = 50, tabId, phase }) => {
+        if (!(await hasPermission("webRequest"))) {
+          return { error: "webRequest permission not granted — enable Request observation in Settings" };
+        }
+        const stored = await kvGet(REQUEST_ACTIVITY_KEY);
+        const list = Array.isArray(stored[REQUEST_ACTIVITY_KEY]) ? stored[REQUEST_ACTIVITY_KEY] : [];
+        const filtered = list.filter((e) =>
+          (tabId === undefined || e?.tabId === tabId) &&
+          (phase === undefined || e?.phase === phase));
+        return {
+          requests: filtered.slice(0, maxResults).map((e) => ({
+            at: e?.at ?? null,
+            phase: e?.phase === "completed" ? "completed" : "started",
+            requestId: e?.requestId ?? null,
+            tabId: e?.tabId ?? null,
+            method: e?.method ? String(e.method).slice(0, 16) : null,
+            type: e?.type ? String(e.type).slice(0, 32) : null,
+            statusCode: typeof e?.statusCode === "number" ? e.statusCode : null,
+            url: e?.url ? String(e.url).slice(0, 2048) : null,
+            initiator: e?.initiator ? String(e.initiator).slice(0, 2048) : null,
+          })),
+          returned: Math.min(filtered.length, maxResults),
+          total: filtered.length,
+          note: "observation is scoped to hosts with existing host grants; a new grant takes effect on the next service-worker start",
+        };
       },
     }),
   };

@@ -63,6 +63,13 @@ const BROWSER_READ_TOOLS = new Set([
   // Tranche-3/4 Chrome API coverage: tab-group inventory + download history reads
   "list_tab_groups",
   "list_downloads",
+  // Tranche-10 Chrome API coverage: rule inventory/match-testing, frame reads
+  // and request-activity observation are observe-only.
+  "list_network_rules",
+  "get_network_rule_matches",
+  "get_navigation_frames",
+  "get_navigation_frame",
+  "get_request_activity",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -144,6 +151,11 @@ const BUILT_IN_TOOLS = new Set([
   // Tranche-4 Chrome API coverage: downloads (mutations; list_downloads above)
   "download_file", "pause_download", "resume_download", "cancel_download",
   "erase_download", "show_download", "open_download", "remove_download_file",
+  // Tranche-10 Chrome API coverage: network rules + navigation + request
+  // observation (reads classified above; ALL are built-ins).
+  "list_network_rules", "add_network_rule", "update_network_rule",
+  "remove_network_rule", "get_network_rule_matches",
+  "get_navigation_frames", "get_navigation_frame", "get_request_activity",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

@@ -213,6 +213,7 @@ import {
   getBrowserControlGrantIdentity,
   isBrowserControlGranted,
   recordBrowserEvent,
+  recordRequestActivity,
   revokeBrowserControlGrant,
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
@@ -5921,6 +5922,58 @@ chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
     }).catch(() => {});
   }
 });
+// Tranche-10 (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): top-frame
+// navigation start/complete feed the same recent_browser_events rolling log.
+// Guarded on the OPTIONAL webNavigation permission — a boot without it must
+// stay inert (addListener without the permission throws).
+chrome.permissions?.contains?.({ permissions: ["webNavigation"] })?.then((ok) => {
+  if (!ok) return;
+  chrome.webNavigation?.onBeforeNavigate?.addListener((details) => {
+    if (details?.frameId !== 0) return; // top frame only (bounded log)
+    recordBrowserEvent("navigation-before-navigate", {
+      tabId: details?.tabId,
+      url: details?.url,
+    }).catch(() => {});
+  });
+  chrome.webNavigation?.onCompleted?.addListener((details) => {
+    if (details?.frameId !== 0) return;
+    recordBrowserEvent("navigation-completed", {
+      tabId: details?.tabId,
+      url: details?.url,
+    }).catch(() => {});
+  });
+}).catch(() => {});
+// Tranche-10: webRequest OBSERVATION only (MV3 non-blocking; blocking
+// webRequest requires enterprise policy and is EXCLUDED). No URL filter is
+// passed — Chrome delivers events only for hosts the owner ALREADY granted
+// host access to, so this never broadens access. High-frequency request
+// events go to their OWN bounded ring buffer (cap 100) so they cannot drown
+// the 200-entry tab/navigation log.
+chrome.permissions?.contains?.({ permissions: ["webRequest"] })?.then((ok) => {
+  if (!ok) return;
+  chrome.webRequest?.onBeforeRequest?.addListener((d) => {
+    recordRequestActivity({
+      phase: "started",
+      requestId: d?.requestId,
+      tabId: d?.tabId,
+      method: d?.method,
+      type: d?.type,
+      url: d?.url,
+      initiator: d?.initiator,
+    }).catch(() => {});
+  });
+  chrome.webRequest?.onCompleted?.addListener((d) => {
+    recordRequestActivity({
+      phase: "completed",
+      requestId: d?.requestId,
+      tabId: d?.tabId,
+      statusCode: d?.statusCode,
+      type: d?.type,
+      url: d?.url,
+    }).catch(() => {});
+  });
+}).catch(() => {});
+
 chrome.runtime.onInstalled?.addListener(() => {
   recordBrowserEvent("extension-installed", {}).catch(() => {});
 });

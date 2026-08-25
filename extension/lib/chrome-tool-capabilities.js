@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 52,
+  browserTools: 60,
   managementTools: 29,
-  totalTools: 81,
+  totalTools: 89,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -68,6 +68,16 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "show_download",
   "open_download",
   "remove_download_file",
+  // Tranche-10 Chrome API coverage: network rules + navigation frames +
+  // request observation.
+  "list_network_rules",
+  "add_network_rule",
+  "update_network_rule",
+  "remove_network_rule",
+  "get_network_rule_matches",
+  "get_navigation_frames",
+  "get_navigation_frame",
+  "get_request_activity",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -224,6 +234,17 @@ const rows = [
   record("show_download", "chrome-api", ["chrome.downloads.show"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
   record("open_download", "chrome-api", ["chrome.downloads.open"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
   record("remove_download_file", "chrome-api", ["chrome.downloads.remove-file"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  // Tranche-10 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
+  // declarativeNetRequest dynamic rules are BROWSER-WIDE -> global grant;
+  // webNavigation frame reads + webRequest observation are reads.
+  record("list_network_rules", "chrome-api", ["chrome.network-rules.list"], ["declarativeNetRequest"], "none", "read-only", false, "read", "browser.network-rules"),
+  record("add_network_rule", "chrome-api", ["chrome.network-rules.add.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
+  record("update_network_rule", "chrome-api", ["chrome.network-rules.update.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
+  record("remove_network_rule", "chrome-api", ["chrome.network-rules.remove.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
+  record("get_network_rule_matches", "chrome-api", ["chrome.network-rules.match-test"], ["declarativeNetRequest"], "none", "read-only", false, "read", "browser.network-rules"),
+  record("get_navigation_frames", "chrome-api", ["chrome.navigation.frames.list"], ["webNavigation"], "none", "read-only", false, "read", "browser.navigation"),
+  record("get_navigation_frame", "chrome-api", ["chrome.navigation.frame.get"], ["webNavigation"], "none", "read-only", false, "read", "browser.navigation"),
+  record("get_request_activity", "chrome-api", ["chrome.requests.activity.read"], ["webRequest"], "none", "read-only", false, "read", "browser.requests"),
 
   record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
   record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),

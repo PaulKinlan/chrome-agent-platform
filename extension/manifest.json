@@ -23,7 +23,8 @@
     "webNavigation",
     "cookies",
     "browsingData",
-    "contentSettings"
+    "contentSettings",
+    "webRequest"
   ],
   "optional_host_permissions": [
     "http://*/*",
