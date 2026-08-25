@@ -23,7 +23,9 @@
     "webNavigation",
     "cookies",
     "browsingData",
-    "contentSettings"
+    "contentSettings",
+    "debugger",
+    "userScripts"
   ],
   "optional_host_permissions": [
     "http://*/*",
