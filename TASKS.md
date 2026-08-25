@@ -230,6 +230,27 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 ## [CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01] Comprehensive Chrome extension API tool coverage
 
+- Updated: 2026-08-26 — OWNER OVERRIDE: "add in them all if available on chrome
+  (not Chrome os)". Scope expanded from the 16 named APIs to ALL desktop-Chrome
+  extension APIs. Tranches: T1 windows/action/commands LANDED 0.2.205; T2
+  alarms/bookmarks/notifications/idle/contextMenus LANDED 0.2.225; T3 tabGroups
+  + T4 downloads DISPATCHED (flash lane); T5 system/topSites/permissions + T6
+  readingList/pageCapture DISPATCHED (k3 lane); wave-2 batch 1 DISPATCHED
+  (subagent workers): T7 sessions+history, T8 cookies/browsingData/contentSettings,
+  T13 deep tab control (move/duplicate/pin/reload/back-forward/zoom/discard/highlight
+  + action enable/disable + sidePanel options). Wave-2 batch 2 QUEUED: T9
+  privacy/proxy/fontSettings/power/search/tts, T10 declarativeNetRequest/webNavigation/
+  webRequest-observation, T11 management/runtime/sidePanel, T12 debugger-CDP/
+  userScripts/scripting-registerContentScripts (+desktopCapture best-effort).
+  EXCLUDED with rationale (not desktop-Chrome or dead): Chrome OS-only APIs
+  (wallpaper, fileSystemProvider, fileBrowserHandler, networking.onc/config,
+  vpnProvider, documentScan, printerProvider, loginState), enterprise.* policy APIs,
+  MV2-only browserAction/pageAction, Chrome-App-era serial/usb/bluetooth/socket,
+  identity/gcm (no local utility), processes (removed), speechRecognitionPrivate/
+  metricsPrivate (private APIs). Prior Phase-1 exclusions (downloads.open, history,
+  cookies, declarativeNetRequest, contentSettings) OVERRIDDEN by owner — all now
+  included, grant-gated. Silent-broad-host-access and model-chosen-navigate-URL
+  exclusions REMAIN (security invariants, need explicit per-origin consent flows).
 - Feedback: 2026-08-23 — product owner (early request, still missing): the
   browser tools are NOT a comprehensive set of Chrome extension APIs. The
   tool is supposed to manage the entire browser, so the Chrome extension APIs
