@@ -114,8 +114,12 @@ Deno.test("boundary WIRING (source pins): the composer keeps the hub task; the S
   assert(threadIdAdmission, "the delegate durable admission carries threadId (outbox → thread terminal)");
   assert(sw.includes("resumeRouteArgs: { id, runId: runTag, threadId: threadId ?? null }"), "named/background resume args carry threadId");
   assertEquals((sw.match(/threadId: request.threadId \?\? null/g) ?? []).length, 2, "BOTH resume replay sites restore threadId");
-  // The pre-admission refusal fallback (never stuck running).
-  assert(sw.includes("mention-refusal:") && sw.includes("commitThreadTerminal(threadId,"), "a pre-admission refusal commits an error terminal");
+  // The pre-admission refusal fallback (never stuck running) — generalized by
+  // the log redesign to ALL unadmitted failures (mention or not), routed
+  // through finalizeUnadmittedThreadRun, with loud failure recording.
+  const view = await Deno.readTextFile(new URL("../extension/lib/thread-run-view.js", import.meta.url));
+  assert(sw.includes("finalizeUnadmittedThreadRun({"), "agent.run finalizes unadmitted failures via the helper");
+  assert(view.includes("run-refusal:") && view.includes("commitTerminal(threadId,"), "a pre-admission refusal commits an error terminal");
 
   // (4) chat.js: a mention keeps the thread (the old strand line is gone).
   assert(chat.includes("mention: agent?.ref ? { kind: agent.kind"), "chat routes a mention as a delegation");

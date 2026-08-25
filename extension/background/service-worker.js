@@ -158,9 +158,7 @@ import {
   updateNamedAgent,
   withNamedAgentsLock,
 } from "../lib/named-agents.js";
-import { pairToolJournal } from "../shared/conversation.js";
 import {
-  appendThreadMessage,
   commitThreadTerminal,
   continueThread,
   createThread,
@@ -172,6 +170,10 @@ import {
   nameThreadAsync,
   renameThread,
 } from "../lib/threads.js";
+import {
+  buildThreadRunView,
+  finalizeUnadmittedThreadRun,
+} from "../lib/thread-run-view.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import {
   ATTESTATION_KEY_STORE,
@@ -3211,11 +3213,27 @@ const handlers = mergeRouteMaps(
     let threadId = null;
     let threadHistory = m.history ?? [];
     if (m.threadId) {
-      const cont = await continueThread(m.threadId, m.task, m.attachments).catch(() => ({ thread: null, history: [] }));
-      threadId = cont.thread?.id ?? m.threadId;
-      threadHistory = cont.thread ? cont.history : (m.history ?? []);
+      // LOUD failure (log-redesign): a failed continueThread must NEVER be
+      // swallowed — proceeding would silently drop the owner's "try again"
+      // turn from the thread and run the model with an empty history. Refuse
+      // the run with an explicit, actionable error instead.
+      let cont = null;
+      try {
+        cont = await continueThread(m.threadId, m.task, m.attachments);
+      } catch (e) {
+        cont = null;
+        pushDiagnostic("error", `[thread] continueThread failed for ${m.threadId}: ${String(e?.message ?? e).slice(0, 200)}`);
+      }
+      if (!cont?.thread) {
+        return { ok: false, error: "the task thread could not be persisted — the task was NOT run. Retry; if this persists, export diagnostics.", errorCategory: "storage", errorReason: "thread store write failed", errorAction: "Retry the message." };
+      }
+      threadId = cont.thread.id;
+      threadHistory = cont.history;
     } else {
-      const thread = await createThread(m.task, m.attachments).catch(() => null);
+      const thread = await createThread(m.task, m.attachments).catch((e) => {
+        pushDiagnostic("error", `[thread] createThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
+        return null;
+      });
       threadId = thread?.id ?? null;
       if (threadId) nameThreadAsync(threadId, m.task).catch(() => {});
     }
@@ -3239,11 +3257,9 @@ const handlers = mergeRouteMaps(
       : mention.kind === "background" ? "background-agent.run"
       : null
       : null;
-    // The thread's OWN tool-row persistence: after the run, the run's REAL
-    // tool rows are read from the JOURNAL (the production writer — reliable)
-    // and paired into ONE terminal card per call appended to the thread, so a
-    // reopened thread restores the tool cards (the persisted-history boundary).
-    const threadRunInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // The thread's tool cards are a VIEW over the per-execution durable run
+    // logs (log-redesign): no post-run replay copies rows into the thread
+    // body. See lib/thread-run-view.js + thread.get.
     try {
       if (mention && !mentionRoute) {
         result = { ok: false, error: `cannot delegate to ${mention.name}: unknown agent kind ${mention.kind}` };
@@ -3279,21 +3295,20 @@ const handlers = mergeRouteMaps(
         history: threadHistory,
       });
       }
-      // A delegation that failed BEFORE durable admission (unknown agent,
-      // not-enrolled origin, bad kind) registers no outbox, so nothing else
-      // will commit the thread terminal — commit the error directly so the
-      // task is never stuck "running". When an executionId exists the
-      // delegate's own durable flow owns the terminal (idempotent by
-      // executionId); a cancellation outbox is likewise left untouched.
-      if (mention && threadId && result && !result.ok && !result.executionId) {
-        await commitThreadTerminal(threadId, `mention-refusal:${threadId}:${Date.now().toString(36)}`, {
-          role: "error",
-          content: result.error ?? "delegation failed",
-          category: result.errorCategory ?? "error",
-          reason: result.errorReason ?? undefined,
-          action: result.errorAction ?? undefined,
-        }).catch(() => {});
-      }
+      // A run that failed BEFORE durable admission (unknown agent,
+      // not-enrolled origin, bad kind, provider-gate throw pre-settle, thread
+      // store failure) registers no outbox, so nothing else will EVER commit
+      // the thread terminal — commit the error directly so the task is never
+      // stuck "running" (the owner's stuck-thread evidence). When an
+      // executionId exists the delegate's own durable flow owns the terminal
+      // (idempotent by executionId); a cancellation outbox is likewise left
+      // untouched. Loud: a failed commit is recorded, never swallowed.
+      await finalizeUnadmittedThreadRun({
+        threadId,
+        result,
+        commitTerminal: commitThreadTerminal,
+        recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
+      });
     } catch (e) {
       // A provider/tool exception must NOT leave the thread permanently
       // "running" (the wider-goal review's failure-lifecycle finding: the outer
@@ -3319,46 +3334,11 @@ const handlers = mergeRouteMaps(
         failedTool: lastTool ?? null,
       };
     }
-    // Persist the result into the thread + mark it done/error (best-effort — a
-    // thread write must never turn a successful run into a failure). Runs on
-    // BOTH the success + failure paths, including the throw path above, so a
-    // failed run is never stuck "running".
-    if (threadId) {
-      // The run's REAL tool rows, PAIRED into ONE terminal card per call
-      // (callId + ok persisted — a failed/blocked result restores as error),
-      // appended to the thread once — the reopened thread replays them.
-      // The run's REAL tool rows from the JOURNAL (the production writer),
-      // PAIRED into ONE terminal card per call (callId + ok persisted — a
-      // failed/blocked result restores as error), appended to the thread once.
-      try {
-        const journal = (await masterMemory().get("journal").catch(() => null)) ?? [];
-        const rows = Array.isArray(journal) ? journal : [];
-        const toolRows = rows
-          .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result") && r.executionId === result?.executionId)
-          .slice(-50);
-        if (toolRows.length) {
-          const pairs = pairToolJournal(toolRows);
-          for (const p of pairs) {
-            await appendThreadMessage(threadId, {
-              role: "tool",
-              toolName: p.tool,
-              toolStatus: p.status,
-              toolArgs: p.args ?? null,
-              toolResult: p.result ?? null,
-              toolOk: p.ok ?? null,
-              toolDuration: p.durationMs ?? null,
-              toolCallId: p.callId ?? `replay:${threadRunInstance}:${p.tool}`,
-              // The insert-before-terminal key: the tool row lands BEFORE this
-              // execution's already-committed terminal assistant/error row.
-              executionId: result?.executionId ?? null,
-            }).catch(() => {});
-          }
-        }
-      } catch { /* a thread tool-card write must never fail the run */ }
-      // The terminal assistant/error message and status are committed by the
-      // durable outbox protocol, idempotently by result.executionId. This outer
-      // route only copies non-terminal tool cards.
-    }
+    // The terminal assistant/error message and status are committed by the
+    // durable outbox protocol, idempotently by result.executionId. Tool cards
+    // are NOT persisted into the thread body: they are derived from the
+    // per-execution durable run logs at read time (thread.get →
+    // buildThreadRunView), so no replay can silently drop them.
     result.threadId = threadId;
     if (dropped.length > 0) result.droppedAttachments = dropped;
     return result;
@@ -3373,9 +3353,18 @@ const handlers = mergeRouteMaps(
   },
   async "thread.get"(m) {
     const thread = await getThread(m.id);
-    return thread
-      ? { ok: true, thread }
-      : { ok: false, error: "thread not found" };
+    if (!thread) return { ok: false, error: "thread not found" };
+    // The thread is a VIEW over the single authoritative per-execution durable
+    // run log (log-redesign): derive the tool cards from the durable logs and
+    // reconcile any missing terminal marker — every journaled tool call + every
+    // turn is visible on reopen, and a stuck "running" thread self-heals.
+    const view = await buildThreadRunView(thread, {
+      listThreadExecutions: (id) => durableRuns.listThreadExecutions(id),
+      listLogs: (id) => durableRuns.listLogs(id),
+      commitTerminal: commitThreadTerminal,
+      recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
+    });
+    return { ok: true, thread: view };
   },
   async "thread.delete"(m) {
     const removed = await deleteThread(m?.id);

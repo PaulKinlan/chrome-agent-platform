@@ -519,6 +519,138 @@ export function pairToolJournal(entries) {
   return out;
 }
 
+/** Derive the thread-VIEW tool rows for one execution from its durable run log
+ * (CAP log redesign: the per-execution durable log is the SINGLE authoritative
+ * event log; the thread renders as a view over it instead of relying on a
+ * separately replayed copy that could silently drop rows).
+ *
+ * Input: the executionId + its durable run-log rows (run-log:<id>:* entries —
+ * { type:"tool-call"|"tool-result", callId, tool, args|result, ok, at }).
+ * Output: rows in the thread-body tool shape (role:"tool", toolName, …) so
+ * the EXISTING projectThreadMessages pairing renders them unchanged. Pure. */
+export function toolRowsFromRunLog(executionId, logs) {
+  const rows = (Array.isArray(logs) ? logs : [])
+    .filter((r) => r && (r.type === "tool-call" || r.type === "tool-result"))
+    .map((r) => ({
+      type: r.type,
+      id: r.id ?? null,
+      executionId,
+      run: r.run ?? null,
+      callId: r.callId ?? null,
+      tool: r.tool ?? "tool",
+      args: r.args ?? null,
+      result: r.result ?? null,
+      ok: r.ok ?? null,
+      ts: typeof r.at === "number" ? r.at : null,
+    }));
+  return pairToolJournal(rows).map((p) => ({
+    role: "tool",
+    toolName: p.tool,
+    toolStatus: p.status === "success" ? "done" : p.status === "error" ? "error" : "done",
+    toolArgs: p.args ?? null,
+    toolResult: p.result ?? null,
+    toolOk: p.ok ?? null,
+    toolDuration: p.durationMs ?? null,
+    toolCallId: p.callId ?? null,
+    executionId,
+    ts: p.ts ?? null,
+    derived: true, // a VIEW row — not persisted in the thread body
+  }));
+}
+
+/** Merge a thread's persisted turn markers (user/terminal rows — the small
+ * authoritative state the thread body still owns) with the tool rows derived
+ * from the per-execution durable run logs.
+ *
+ * Placement rule (deterministic): an execution's derived cards render
+ * immediately BEFORE its persisted terminal marker (they share executionId);
+ * an execution with no terminal marker (crash/interruption) renders its cards
+ * at the END followed by an honest read-only system marker describing the
+ * run's durable phase. Executions whose tool rows are already persisted in the
+ * body (legacy pre-redesign replay) are NOT duplicated.
+ *
+ * Returns { messages, missingTerminals } — missingTerminals lists executions
+ * in a terminal phase whose terminal marker is absent from the body, so the
+ * caller can RECONCILE (back-fill) the terminal into the thread body.
+ * Pure — unit-tested in Deno. */
+export function projectThreadWithRunLogs(thread, executions = []) {
+  const body = Array.isArray(thread?.messages) ? thread.messages : [];
+  const execs = (Array.isArray(executions) ? executions : []).filter((e) => e && e.executionId);
+  if (!execs.length) return { messages: body.slice(), missingTerminals: [] };
+
+  // Which executions already have body-persisted tool rows (legacy replay) or
+  // a persisted terminal marker? Legacy rows written before executionId was
+  // persisted on tool rows are matched by their pairing callId instead.
+  const bodyToolExecs = new Set();
+  const bodyToolCallIds = new Set();
+  const terminalExecs = new Set();
+  for (const m of body) {
+    if (!m || typeof m !== "object") continue;
+    if (m.role === "tool") {
+      if (m.executionId) bodyToolExecs.add(m.executionId);
+      if (m.toolCallId) bodyToolCallIds.add(m.toolCallId);
+    }
+    if ((m.role === "assistant" || m.role === "error") && m.executionId) terminalExecs.add(m.executionId);
+  }
+
+  const cardsByExec = new Map();
+  const missingTerminals = [];
+  for (const e of execs) {
+    if (!bodyToolExecs.has(e.executionId)) {
+      // Skip cards the legacy body already carries (callId match) — never
+      // render the same call twice.
+      const cards = toolRowsFromRunLog(e.executionId, e.logs)
+        .filter((card) => !card.toolCallId || !bodyToolCallIds.has(card.toolCallId));
+      cardsByExec.set(e.executionId, cards);
+    }
+    const terminalPhase = e.phase === "terminal" || e.phase === "cancelled";
+    if (terminalPhase && e.terminal && !terminalExecs.has(e.executionId)) {
+      missingTerminals.push({
+        executionId: e.executionId,
+        terminal: e.terminal,
+      });
+    }
+  }
+
+  // Walk the body; before each terminal marker, splice its execution's cards.
+  const out = [];
+  const placed = new Set();
+  for (const m of body) {
+    const execId = m?.executionId;
+    if (
+      execId && (m?.role === "assistant" || m?.role === "error") &&
+      cardsByExec.has(execId) && !placed.has(execId)
+    ) {
+      out.push(...cardsByExec.get(execId));
+      placed.add(execId);
+    }
+    out.push(m);
+  }
+  // Executions without a persisted terminal marker (running / interrupted /
+  // paused): cards + an honest phase marker, chronological, at the end.
+  for (const e of execs) {
+    if (placed.has(e.executionId) || bodyToolExecs.has(e.executionId)) continue;
+    const cards = cardsByExec.get(e.executionId) ?? [];
+    out.push(...cards);
+    placed.add(e.executionId);
+    if (e.phase && e.phase !== "terminal" && e.phase !== "cancelled") {
+      const paused = String(e.phase).startsWith("paused");
+      out.push({
+        role: "system",
+        content: paused
+          ? (e.pause?.requiresOwnerDecision
+            ? "Run paused: the outcome of a side effect is uncertain — it needs the owner's decision in the runs panel."
+            : "Run interrupted (the worker ended) — it resumes automatically.")
+          : "Run in progress…",
+        ts: Date.now(),
+        derived: true,
+        executionId: e.executionId,
+      });
+    }
+  }
+  return { messages: out, missingTerminals };
+}
+
 /** The REOPEN projection for a persisted task thread (CAP-FB-20260824-THREAD-REOPEN-RENDER-01,
  * with pre-0.2.237 load-time repair): the pure transform behind ntp.js's
  * renderThreadProjection. EVERY persisted non-tool row (user + assistant +

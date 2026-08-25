@@ -279,6 +279,10 @@ export async function appendThreadMessage(id, message) {
         toolOk: message.toolOk ?? null,
         toolDuration: message.toolDuration ?? null,
         toolCallId: message.toolCallId ?? null,
+        // Persist the execution identity on the row so a later projection can
+        // attribute legacy body tool rows to their run (dedup with the
+        // log-derived view).
+        ...(message?.executionId ? { executionId: String(message.executionId) } : {}),
       }
       : {}),
   };

@@ -325,6 +325,57 @@ export function createDurableRunRegistry({
     });
   }
 
+  // ── thread → executions reverse index (log-redesign) ────────────────────
+  // The thread is a VIEW over the single authoritative per-execution durable
+  // log. The view needs the thread's execution set at read time; this small
+  // index (executionId strings only, bounded) provides it. Legacy threads
+  // (admitted before the index existed) self-migrate via a one-time registry
+  // scan, which is then persisted — the owner's stuck pre-redesign threads
+  // heal on their next open.
+  const THREAD_RUNS_PREFIX = "thread-runs:";
+  const THREAD_RUNS_MAX = 500;
+
+  async function linkThreadExecution(threadId, executionId) {
+    const key = `${THREAD_RUNS_PREFIX}${threadId}`;
+    const current = (await store.get(key)) ?? [];
+    const list = Array.isArray(current) ? current : [];
+    if (list.includes(executionId)) return;
+    list.push(executionId);
+    await store.setTrusted(key, list.slice(-THREAD_RUNS_MAX));
+  }
+
+  async function listThreadExecutions(threadId) {
+    if (!threadId) return [];
+    return locked(async () => {
+      const key = `${THREAD_RUNS_PREFIX}${threadId}`;
+      let ids = (await store.get(key)) ?? [];
+      ids = Array.isArray(ids) ? ids.filter(validExecutionId) : [];
+      // Self-migration: a thread with no (or partial) index falls back to a
+      // registry scan by record.threadId, then persists the union.
+      const scanned = [];
+      for (const executionId of await indexIds()) {
+        if (ids.includes(executionId)) continue;
+        const record = await readRecord(executionId);
+        if (record?.threadId === threadId) scanned.push(executionId);
+      }
+      if (scanned.length) {
+        const union = [...ids, ...scanned].slice(-THREAD_RUNS_MAX);
+        await store.setTrusted(key, union);
+        ids = union;
+      }
+      // Order chronologically by the run's start (admission order is append
+      // order, but the migration scan appends registry order — sort by the
+      // record's startedAt so the view is stable).
+      const withTime = [];
+      for (const executionId of ids) {
+        const record = await readRecord(executionId);
+        if (record) withTime.push({ executionId, at: record.startedAt ?? 0, record: publicRecord(record) });
+      }
+      withTime.sort((a, b) => a.at - b.at || a.executionId.localeCompare(b.executionId));
+      return withTime;
+    });
+  }
+
   async function persistResumeRequest(executionId, request) {
     if (!request) return null;
     const json = JSON.stringify(request);
@@ -420,6 +471,12 @@ export function createDurableRunRegistry({
         kind: record.kind,
         taskPreview: record.taskPreview,
       });
+      // The THREAD → EXECUTIONS reverse index (log-redesign): the thread view
+      // projects tool rows from the per-execution durable logs at READ time, so
+      // it must be able to enumerate a thread's executions without scanning the
+      // whole registry. Appended here — at admission — so every admitted run is
+      // linked to its thread exactly once (idempotent by executionId).
+      if (record.threadId) await linkThreadExecution(record.threadId, executionId);
       return publicRecord(record);
       } catch (caught) {
         const error = caught?.cause && caught?.registryAdmission ? caught.cause : caught;
@@ -1205,6 +1262,7 @@ export function createDurableRunRegistry({
     failResumeDispatch,
     appendLog,
     listLogs,
+    listThreadExecutions,
     recover,
     list,
     attachPort,

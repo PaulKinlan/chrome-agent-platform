@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.257] — 2026-08-25
+- Reworked how task and agent logs are stored and shown so nothing is lost or hidden: every tool call and every reply now shows correctly when you reopen a task, and a task can no longer get stuck showing "running" after an interruption.
+
+
 ## [0.2.256] — 2026-08-25
 - fix(build): regenerate the bundled inventory after the version bump
 
