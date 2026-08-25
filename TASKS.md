@@ -53,14 +53,14 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 
 - Feedback: 2026-08-25 — discovered during independent review: `usage-authority.test.ts` PROBE-2 and PROBE-4 FAIL at exact base cde1166 AND at 7aaf8c6 (reproduced in clean worktrees). Pre-existing, NOT attributable to the persistence log-redesign (confirmed by two independent reviewers).
 - Updated: 2026-08-25 12:55 UTC
-- Status: OPEN
+- Status: MERGED
 - Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: none
 - Base: `7aaf8c6`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@ced852d` (0.2.259)
 - Acceptance: usage-authority.test.ts PROBE-2/4 pass on main; the usage-store CAS subsystem's failing invariant identified and fixed (or the probe corrected if the expectation drifted); no other usage-authority probes regressed; full suite green.
 - Review: pending independent review
 - Gates: reproduce PROBE-2/4 on clean base; root-cause; fix + KAT; full suite green
@@ -68,6 +68,8 @@ and `scripts/check-tasks-baseline.json` must only ever shrink.
 - Next: reproduce PROBE-2/4 with verbose output, identify the failing usage-store CAS invariant
 - Recover: `deno test -A tests/usage-authority.test.ts`
 - History:
+  - 2026-08-25 13:2x UTC — LANDED at 0.2.259. Root cause: probe expectation DRIFT (store correct, untouched) — the shared mkRow fixture hardcoded timestamp 2026-08-18, which aged past the deliberate RETENTION_MS=7-day retention, so sanitizeRow correctly discarded every fixture row at write time (PROBE-2/4 failed; PROBE-1/5/7 were passing vacuously asserting absence). Fix test-only: mkRow uses fresh timestamps; new PROBE-FIXTURE-GUARD pins the deliberate retention drop (8-day row discarded, fresh row lands) so the class fails loudly next time. Review PASS (Gemini cd381a1b), 1577/1577. Full suite now green.
+
   - 2026-08-25 12:55 UTC — captured from independent review evidence (k3 + Pro both reproduced on clean base).
 
 ## [CAP-FB-YYYYMMDD-SLUG-NN] Title
