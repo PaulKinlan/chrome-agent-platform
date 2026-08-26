@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.306] — 2026-08-26
+- Background agents now live IN the agents list (side panel + hub) with a 'runs in the background' marker, their schedule and a toggle — and you can fully delete a named agent (folder, record, memory and OPFS storage all go)
+
 ## [0.2.305] — 2026-08-26
 - Deleting or disabling a background agent is now instant — it stops waiting on the running task's 5-second termination confirmation. The agent is removed immediately and the in-flight run is aborted in the background (the task payload is marked cancelled first so it can't commit anything)
 
