@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.295] — 2026-08-26
+- Audited every Chrome API call in all 130 tools against the official Chromium schemas and fixed everything that was wrong: tab groups, the MHTML page-save (was calling a non-existent method, so it never worked), keep-awake release, and per-site content settings (a read that always failed + a clear that could have wiped settings browser-wide). Test doubles now mirror the real APIs and reject wrong shapes, so this class of bug can't come back
+
 ## [0.2.294] — 2026-08-26
 - Agent lifecycle now visible in the logs: when logging is verbose you see each agent step, every tool call with its duration and outcome, and the run's total steps/time/tokens — redacted so no prompt or page content ever appears. Off in production, on in the debug build
 
