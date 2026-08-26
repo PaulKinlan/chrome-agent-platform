@@ -90,6 +90,20 @@ export const CAPABILITIES = [
     gates: "Gates: reading and changing per-site content rules (JS, images, cookies, location, notifications, popups) for single origins.",
   },
   {
+    id: "debugger",
+    permissions: ["debugger"],
+    label: "Debugger (CDP)",
+    hint: "Attach Chrome DevTools Protocol debugging to tabs and send allowlisted commands (network conditions, CPU throttling, device emulation, geolocation/user-agent overrides, navigation, page screenshots, performance metrics). Chrome shows the debugging infobar while attached; every mutation ALSO needs the global browser-control grant. Runtime.evaluate is never available.",
+    gates: "Gates: list_debugger_targets, debugger_attach, debugger_detach, debugger_send_command (allowlisted CDP methods only).",
+  },
+  {
+    id: "userScripts",
+    permissions: ["userScripts"],
+    label: "User scripts",
+    hint: "Register user scripts (USER_SCRIPT world) on specific sites. Only single exact-origin matches are accepted (broad patterns are refused) and each site's host access is granted separately in Settings; mutations ALSO need the browser-control grant for every matched origin.",
+    gates: "Gates: register/update/unregister/list_user_scripts. (Dynamic content scripts use the Site Agents capability instead.)",
+  },
+  {
     id: "downloads",
     permissions: ["downloads"],
     label: "Downloads",

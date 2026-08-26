@@ -1080,6 +1080,172 @@ export async function recordRequestActivity(entry) {
   await kvSet({ [REQUEST_ACTIVITY_KEY]: list.slice(0, 100) });
 }
 
+// ── T12 power tools: grant discipline ───────────────────────────────────────
+// chrome.debugger (CDP) is the most powerful surface in the platform: every
+// debugger mutation is MUTATING and needs the GLOBAL browser-control grant
+// (an origin-scoped grant is never enough — a debugger session reaches inside
+// the page beyond one origin's product semantics, and Chrome surfaces the
+// debugging infobar). User scripts and dynamic content scripts inject code
+// into matched origins: every matches pattern must be ONE exact http(s)
+// origin (<all_urls>, wildcard-subdomain and multi-origin patterns refused),
+// and the product grant must cover EVERY matches origin — the corrected house
+// discipline (mirror of withTabIdsGrant): any origin-less scope or an empty
+// origin set forces the GLOBAL grant; only all-origin sets may be satisfied
+// by per-origin grants. Host permissions for matched origins must already be
+// granted via the Settings flow — the service worker never requests them.
+
+async function withDebuggerGrant(verb, mutate) {
+  if (!(await hasPermission("debugger"))) {
+    return {
+      error: "debugger permission not granted — enable Debugger in Settings",
+    };
+  }
+  return await withGrantLock(async () => {
+    // Browser-power scope: ONLY a global grant authorizes CDP control
+    // (undefined origin never matches an origin-scoped grant).
+    if (!(await isBrowserControlGranted(undefined))) {
+      return {
+        error:
+          "browser control not granted globally — debugger control is browser-wide and needs the global grant (an origin-scoped grant is refused)",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — debugger not ${verb}` };
+    }
+    let result;
+    try {
+      result = await mutate();
+    } catch (e) {
+      // Chrome's own message is the honest content (e.g. "Another debugger
+      // is already attached to the tab") — surface it bounded + structured.
+      return { error: `debugger ${verb} failed: ${String(e?.message ?? e).slice(0, 200)}` };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — debugger ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
+/** The bounded CDP method allowlist (T12). Runtime.evaluate is deliberately
+ * EXCLUDED — it is arbitrary in-page JavaScript execution and never
+ * admissible from this surface; the tool names the refusal. Everything not on
+ * this list is refused BEFORE chrome.debugger.sendCommand is reached. */
+const T12_CDP_ALLOWLIST = Object.freeze([
+  "Network.enable",
+  "Network.disable",
+  "Network.emulateNetworkConditions",
+  "Emulation.setDeviceMetricsOverride",
+  "Emulation.clearDeviceMetricsOverride",
+  "Emulation.setCPUThrottlingRate",
+  "Emulation.setGeolocationOverride",
+  "Emulation.setUserAgentOverride",
+  "Page.navigate",
+  "Page.reload",
+  "Page.captureScreenshot",
+  "Performance.enable",
+  "Performance.getMetrics",
+]);
+
+/** Validate a script `matches` list as single exact http(s) origin patterns
+ * (pure; never throws). Returns { patterns, origins } or { error } — reuses
+ * the T8 single-origin validator (<all_urls>, wildcard-subdomain, decorated
+ * and multi-origin patterns are refused). */
+function t12ScriptMatches(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return { error: "matches must be a non-empty array of single-origin patterns" };
+  }
+  const patterns = [];
+  const origins = [];
+  for (const m of matches) {
+    const v = t8SingleOriginPattern(m);
+    if (!v.ok) return { error: `matches rejected: ${v.error}` };
+    if (!patterns.includes(v.value)) {
+      patterns.push(v.value);
+      // t8SingleOriginPattern guarantees a normalized exact-origin pattern,
+      // but fail closed if canonicalOrigin ever disagrees.
+      const origin = canonicalOrigin(v.value);
+      if (typeof origin !== "string" || !origin) {
+        return { error: "matches rejected: a pattern produced no canonical origin" };
+      }
+      if (!origins.includes(origin)) origins.push(origin);
+    }
+  }
+  return { patterns, origins };
+}
+
+/** The corrected house coverage check for script origin sets — mirror of
+ * withTabIdsGrant (T3/T4 REVISE round). Call INSIDE withGrantLock. Any
+ * origin-less entry (null) or an empty set forces the GLOBAL grant; only
+ * all-origin sets may be satisfied by per-origin grants. Origin-less entries
+ * are counted, NEVER filtered out. */
+async function t12OriginsCovered(origins) {
+  let hasOriginless = false;
+  const named = [];
+  for (const o of origins ?? []) {
+    if (typeof o === "string" && o) named.push(o);
+    else hasOriginless = true;
+  }
+  if (hasOriginless || named.length === 0) {
+    return await isBrowserControlGranted(undefined);
+  }
+  return (await Promise.all(named.map((o) => isBrowserControlGranted(o)))).every(Boolean);
+}
+
+/** Register/update discipline for user scripts + dynamic content scripts:
+ * the API permission + the exact-origin HOST permission for every matches
+ * pattern must already be granted (the service worker never calls
+ * permissions.request itself), then grant coverage + durable ownership run
+ * inside the grant lock (check-then-act atomic w.r.t. revoke). */
+async function withScriptRegistrationGrant({ permission, permissionLabel, patterns, origins }, verb, mutate) {
+  if (!(await hasPermission(permission))) {
+    return {
+      error: `${permission} permission not granted — enable ${permissionLabel} in Settings`,
+    };
+  }
+  try {
+    if (typeof chrome === "undefined" || !chrome.permissions) {
+      return { error: `${permission} host access unavailable — enable ${permissionLabel} in Settings` };
+    }
+    if (!(await chrome.permissions.contains({ origins: patterns }))) {
+      return {
+        error: `host permission not granted for every matches origin (${origins.join(", ")}) — grant site access in Settings`,
+      };
+    }
+  } catch {
+    return { error: `host permission check failed — enable ${permissionLabel} in Settings` };
+  }
+  return await withGrantLock(async () => {
+    if (!(await t12OriginsCovered(origins))) {
+      return {
+        error:
+          "browser control not granted for every matches origin here — ask the user to approve it in Settings",
+      };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — script not ${verb}` };
+    }
+    let result;
+    try {
+      result = await mutate();
+    } catch (e) {
+      return { error: `script ${verb} failed: ${String(e?.message ?? e).slice(0, 200)}` };
+    }
+    try {
+      await assertRunOwned();
+    } catch {
+      return { error: `run aborted — script ${verb} then aborted` };
+    }
+    return result;
+  });
+}
+
 /** The browser-control toolset, passed into the agent. */
 export function browserToolset(readOnly = false) {
   // SCOPED (hook) runs are side-effect-free: untrusted browser event data must
@@ -4517,6 +4683,401 @@ export function browserToolset(readOnly = false) {
         };
       },
     }),
+    // ── T12 power tools ───────────────────────────────────────────────────
+    // chrome.debugger (CDP — allowlisted methods only, GLOBAL grant only),
+    // chrome.userScripts (USER_SCRIPT world, single-origin matches) and
+    // chrome.scripting dynamic content scripts (single-origin matches).
+    // desktopCapture is intentionally ABSENT: chooseDesktopMedia requires a
+    // user-gesture-visible requester page and the extension exposes no such
+    // owned channel (documented exclusion — no stub tool).
+    list_debugger_targets: tool({
+      description:
+        "List the browser's attachable debugger targets (tabs: id, windowId, title, url where the tabs permission makes them visible). Read-only; requires the debugger permission. Attaching shows Chrome's debugging infobar.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ maxResults = 50 }) => {
+        if (!(await hasPermission("debugger"))) {
+          return { error: "debugger permission not granted — enable Debugger in Settings" };
+        }
+        let tabs = [];
+        try {
+          tabs = await chrome.tabs.query({});
+        } catch (e) {
+          return { error: `tab query failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(tabs) ? tabs : [];
+        return {
+          targets: rows.slice(0, maxResults).map((t) => ({
+            tabId: t.id,
+            windowId: t.windowId ?? null,
+            title: typeof t.title === "string" ? t.title.slice(0, 128) : null,
+            url: typeof t.url === "string" ? t.url.slice(0, 2048) : null,
+          })),
+          returned: Math.min(rows.length, maxResults),
+          total: rows.length,
+          truncated: rows.length > maxResults,
+        };
+      },
+    }),
+    debugger_attach: tool({
+      description:
+        "Attach the Chrome DevTools Protocol debugger to a tab (protocol 1.3). Requires the GLOBAL browser-control grant (an origin grant is refused). Chrome shows the debugging infobar while attached.",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1),
+        protocolVersion: z.enum(["1.3"]).optional(),
+      }),
+      execute: async ({ tabId, protocolVersion = "1.3" }) => {
+        return await withDebuggerGrant("attached", async () => {
+          await chrome.debugger.attach({ tabId }, protocolVersion);
+          return { ok: true, tabId, protocolVersion };
+        });
+      },
+    }),
+    debugger_detach: tool({
+      description:
+        "Detach the Chrome DevTools Protocol debugger from a tab. Requires the GLOBAL browser-control grant.",
+      inputSchema: z.object({ tabId: z.number().int().min(1) }),
+      execute: async ({ tabId }) => {
+        return await withDebuggerGrant("detached", async () => {
+          await chrome.debugger.detach({ tabId });
+          return { ok: true, tabId };
+        });
+      },
+    }),
+    debugger_send_command: tool({
+      description:
+        "Send ONE allowlisted CDP command to an attached tab: Network.enable/disable/emulateNetworkConditions, Emulation.setDeviceMetricsOverride/clearDeviceMetricsOverride/setCPUThrottlingRate/setGeolocationOverride/setUserAgentOverride, Page.navigate/reload/captureScreenshot, Performance.enable/getMetrics. Runtime.evaluate and every other method are refused. Requires the GLOBAL browser-control grant. argsJson is a JSON object string (<=4 KiB); results are truncated at 8 KiB with an honest flag.",
+      inputSchema: z.object({
+        tabId: z.number().int().min(1),
+        method: z.string().min(1).max(64),
+        argsJson: z.string().max(4096).optional(),
+      }),
+      execute: async ({ tabId, method, argsJson }) => {
+        if (typeof method === "string" && (method === "Runtime.evaluate" || method.startsWith("Runtime."))) {
+          return {
+            error:
+              "Runtime.evaluate (and all Runtime.* methods) refused by design: it executes arbitrary JavaScript inside the page and is never admissible from this surface",
+          };
+        }
+        if (!T12_CDP_ALLOWLIST.includes(method)) {
+          return {
+            error: `CDP method refused: '${String(method).slice(0, 64)}' is not on the allowlist (${T12_CDP_ALLOWLIST.join(", ")})`,
+          };
+        }
+        if (argsJson !== undefined && argsJson.length > 4096) {
+          return { error: "argsJson exceeds the 4 KiB bound" };
+        }
+        let args = {};
+        if (argsJson !== undefined) {
+          try {
+            args = JSON.parse(argsJson);
+          } catch {
+            return { error: "argsJson must be valid JSON" };
+          }
+          if (typeof args !== "object" || args === null || Array.isArray(args)) {
+            return { error: "argsJson must be a JSON object of CDP parameters" };
+          }
+        }
+        return await withDebuggerGrant("command-sent", async () => {
+          const result = await chrome.debugger.sendCommand({ tabId }, method, args);
+          let serialized = "{}";
+          try {
+            serialized = JSON.stringify(result ?? {});
+          } catch {
+            serialized = "{}";
+          }
+          const truncated = serialized.length > 8192;
+          return {
+            ok: true,
+            tabId,
+            method,
+            result: truncated ? serialized.slice(0, 8192) : serialized,
+            resultBytes: serialized.length,
+            truncated,
+          };
+        });
+      },
+    }),
+    register_user_script: tool({
+      description:
+        "Register a USER_SCRIPT-world user script (id + js + matches). matches must be single exact http(s) origin patterns — <all_urls> and wildcard patterns are refused. Requires the userScripts permission, the exact-origin HOST permission for every match (granted in Settings), and the browser-control grant covering every matches origin.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        js: z.string().min(1).max(32768),
+        matches: z.array(z.string().min(1).max(2048)).min(1).max(8),
+        runAt: z.enum(["document_start", "document_end", "document_idle"]).optional(),
+      }),
+      execute: async ({ id, js, matches, runAt }) => {
+        const m = t12ScriptMatches(matches);
+        if (m.error) return m;
+        return await withScriptRegistrationGrant(
+          { permission: "userScripts", permissionLabel: "User scripts", patterns: m.patterns, origins: m.origins },
+          "registered",
+          async () => {
+            const script = { id, js, matches: m.patterns };
+            if (runAt !== undefined) script.runAt = runAt;
+            await chrome.userScripts.register([script]);
+            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+          },
+        );
+      },
+    }),
+    update_user_script: tool({
+      description:
+        "Update a registered user script (full replacement: id + js + matches). Same permission + host + grant discipline as register_user_script.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        js: z.string().min(1).max(32768),
+        matches: z.array(z.string().min(1).max(2048)).min(1).max(8),
+        runAt: z.enum(["document_start", "document_end", "document_idle"]).optional(),
+      }),
+      execute: async ({ id, js, matches, runAt }) => {
+        const m = t12ScriptMatches(matches);
+        if (m.error) return m;
+        return await withScriptRegistrationGrant(
+          { permission: "userScripts", permissionLabel: "User scripts", patterns: m.patterns, origins: m.origins },
+          "updated",
+          async () => {
+            const script = { id, js, matches: m.patterns };
+            if (runAt !== undefined) script.runAt = runAt;
+            await chrome.userScripts.update([script]);
+            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+          },
+        );
+      },
+    }),
+    unregister_user_script: tool({
+      description:
+        "Unregister a user script by id. Grant coverage is checked against the REGISTERED script's matches origins (a script whose matches fail today's validation is an origin-less scope: only the global grant may remove it).",
+      inputSchema: z.object({ id: z.string().min(1).max(64) }),
+      execute: async ({ id }) => {
+        if (!(await hasPermission("userScripts"))) {
+          return { error: "userScripts permission not granted — enable User scripts in Settings" };
+        }
+        let scripts = [];
+        try {
+          scripts = await chrome.userScripts.getScripts({ ids: [id] });
+        } catch (e) {
+          return { error: `user script lookup failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const script = Array.isArray(scripts) ? scripts[0] : null;
+        if (!script) return { error: `no user script with id '${id.slice(0, 64)}'` };
+        const m = t12ScriptMatches(Array.isArray(script.matches) ? script.matches : []);
+        // Fail CLOSED: matches that no longer validate are treated as an
+        // origin-less scope ([null]) — global grant only, never filtered out.
+        const origins = m.error ? [null] : m.origins;
+        const patterns = m.error ? [] : m.patterns;
+        return await withGrantLock(async () => {
+          if (patterns.length > 0) {
+            try {
+              if (!(await chrome.permissions.contains({ origins: patterns }))) {
+                return {
+                  error: `host permission not granted for every matches origin (${origins.join(", ")}) — grant site access in Settings`,
+                };
+              }
+            } catch {
+              return { error: "host permission check failed — enable User scripts in Settings" };
+            }
+          }
+          if (!(await t12OriginsCovered(origins))) {
+            return {
+              error:
+                "browser control not granted for every matches origin here — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — script not unregistered" };
+          }
+          try {
+            await chrome.userScripts.unregister({ ids: [id] });
+          } catch (e) {
+            return { error: `script unregister failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — script unregistered then aborted" };
+          }
+          return { ok: true, id };
+        });
+      },
+    }),
+    list_user_scripts: tool({
+      description:
+        "List registered user scripts (id, matches, runAt, js size + bounded preview). Read-only; requires the userScripts permission.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ maxResults = 50 }) => {
+        if (!(await hasPermission("userScripts"))) {
+          return { error: "userScripts permission not granted — enable User scripts in Settings" };
+        }
+        let scripts = [];
+        try {
+          scripts = await chrome.userScripts.getScripts({});
+        } catch (e) {
+          return { error: `user script query failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(scripts) ? scripts : [];
+        return {
+          userScripts: rows.slice(0, maxResults).map((s) => ({
+            id: String(s?.id ?? "").slice(0, 64),
+            matches: (Array.isArray(s?.matches) ? s.matches : []).slice(0, 8).map((p) => String(p).slice(0, 2048)),
+            runAt: typeof s?.runAt === "string" ? s.runAt.slice(0, 32) : null,
+            jsBytes: typeof s?.js === "string" ? s.js.length : 0,
+            jsPreview: typeof s?.js === "string" ? s.js.slice(0, 256) : "",
+          })),
+          returned: Math.min(rows.length, maxResults),
+          total: rows.length,
+          truncated: rows.length > maxResults,
+        };
+      },
+    }),
+    register_content_script: tool({
+      description:
+        "Register a DYNAMIC content script via chrome.scripting (id + js + matches + runAt, optional world ISOLATED|MAIN). matches must be single exact http(s) origin patterns. Requires the scripting permission, the exact-origin HOST permission for every match, and the browser-control grant covering every matches origin.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        js: z.string().min(1).max(32768),
+        matches: z.array(z.string().min(1).max(2048)).min(1).max(8),
+        runAt: z.enum(["document_start", "document_end", "document_idle"]).optional(),
+        world: z.enum(["ISOLATED", "MAIN"]).optional(),
+      }),
+      execute: async ({ id, js, matches, runAt, world }) => {
+        const m = t12ScriptMatches(matches);
+        if (m.error) return m;
+        return await withScriptRegistrationGrant(
+          { permission: "scripting", permissionLabel: "Site Agents", patterns: m.patterns, origins: m.origins },
+          "registered",
+          async () => {
+            const script = { id, js, matches: m.patterns };
+            if (runAt !== undefined) script.runAt = runAt;
+            if (world !== undefined) script.world = world;
+            await chrome.scripting.registerContentScripts([script]);
+            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+          },
+        );
+      },
+    }),
+    update_content_script: tool({
+      description:
+        "Update a registered dynamic content script (full replacement: id + js + matches). Same permission + host + grant discipline as register_content_script.",
+      inputSchema: z.object({
+        id: z.string().min(1).max(64),
+        js: z.string().min(1).max(32768),
+        matches: z.array(z.string().min(1).max(2048)).min(1).max(8),
+        runAt: z.enum(["document_start", "document_end", "document_idle"]).optional(),
+        world: z.enum(["ISOLATED", "MAIN"]).optional(),
+      }),
+      execute: async ({ id, js, matches, runAt, world }) => {
+        const m = t12ScriptMatches(matches);
+        if (m.error) return m;
+        return await withScriptRegistrationGrant(
+          { permission: "scripting", permissionLabel: "Site Agents", patterns: m.patterns, origins: m.origins },
+          "updated",
+          async () => {
+            const script = { id, js, matches: m.patterns };
+            if (runAt !== undefined) script.runAt = runAt;
+            if (world !== undefined) script.world = world;
+            await chrome.scripting.updateContentScripts([script]);
+            return { ok: true, id, matches: m.patterns, jsBytes: js.length };
+          },
+        );
+      },
+    }),
+    unregister_content_script: tool({
+      description:
+        "Unregister a dynamic content script by id. Grant coverage is checked against the REGISTERED script's matches origins (invalid matches are an origin-less scope: global grant only).",
+      inputSchema: z.object({ id: z.string().min(1).max(64) }),
+      execute: async ({ id }) => {
+        if (!(await hasPermission("scripting"))) {
+          return { error: "scripting permission not granted — enable Site Agents in Settings" };
+        }
+        let scripts = [];
+        try {
+          scripts = await chrome.scripting.getRegisteredContentScripts({ ids: [id] });
+        } catch (e) {
+          return { error: `content script lookup failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const script = Array.isArray(scripts) ? scripts[0] : null;
+        if (!script) return { error: `no content script with id '${id.slice(0, 64)}'` };
+        const m = t12ScriptMatches(Array.isArray(script.matches) ? script.matches : []);
+        // Fail CLOSED: invalid registered matches become an origin-less scope
+        // ([null]) — global grant only, never filtered out.
+        const origins = m.error ? [null] : m.origins;
+        const patterns = m.error ? [] : m.patterns;
+        return await withGrantLock(async () => {
+          if (patterns.length > 0) {
+            try {
+              if (!(await chrome.permissions.contains({ origins: patterns }))) {
+                return {
+                  error: `host permission not granted for every matches origin (${origins.join(", ")}) — grant site access in Settings`,
+                };
+              }
+            } catch {
+              return { error: "host permission check failed — enable Site Agents in Settings" };
+            }
+          }
+          if (!(await t12OriginsCovered(origins))) {
+            return {
+              error:
+                "browser control not granted for every matches origin here — ask the user to approve it in Settings",
+            };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — script not unregistered" };
+          }
+          try {
+            await chrome.scripting.unregisterContentScripts({ ids: [id] });
+          } catch (e) {
+            return { error: `script unregister failed: ${String(e?.message ?? e).slice(0, 200)}` };
+          }
+          try {
+            await assertRunOwned();
+          } catch {
+            return { error: "run aborted — script unregistered then aborted" };
+          }
+          return { ok: true, id };
+        });
+      },
+    }),
+    list_content_scripts: tool({
+      description:
+        "List dynamically registered content scripts (id, matches, runAt, world, js size + bounded preview). Read-only; requires the scripting permission.",
+      inputSchema: z.object({
+        maxResults: z.number().int().min(1).max(100).optional(),
+      }),
+      execute: async ({ maxResults = 50 }) => {
+        if (!(await hasPermission("scripting"))) {
+          return { error: "scripting permission not granted — enable Site Agents in Settings" };
+        }
+        let scripts = [];
+        try {
+          scripts = await chrome.scripting.getRegisteredContentScripts({});
+        } catch (e) {
+          return { error: `content script query failed: ${String(e?.message ?? e).slice(0, 200)}` };
+        }
+        const rows = Array.isArray(scripts) ? scripts : [];
+        return {
+          contentScripts: rows.slice(0, maxResults).map((s) => ({
+            id: String(s?.id ?? "").slice(0, 64),
+            matches: (Array.isArray(s?.matches) ? s.matches : []).slice(0, 8).map((p) => String(p).slice(0, 2048)),
+            runAt: typeof s?.runAt === "string" ? s.runAt.slice(0, 32) : null,
+            world: typeof s?.world === "string" ? s.world.slice(0, 16) : null,
+            jsBytes: Array.isArray(s?.js) ? s.js.reduce((n, j) => n + (typeof j === "string" ? j.length : 0), 0) : 0,
+            jsPreview: Array.isArray(s?.js) && typeof s.js[0] === "string" ? s.js[0].slice(0, 256) : "",
+          })),
+          returned: Math.min(rows.length, maxResults),
+          total: rows.length,
+          truncated: rows.length > maxResults,
+        };
+      },
+    }),
   };
   // SCOPED (hook) runs are side-effect-free: read_page / capture_screenshot /
   // list_tabs / recent_browser_events are the only tools exposed. open_tab /
@@ -4553,6 +5114,10 @@ export function browserToolset(readOnly = false) {
       get_font_settings: all.get_font_settings,
       list_tts_voices: all.list_tts_voices,
       tts_is_speaking: all.tts_is_speaking,
+      // Tranche-12 reads (observe-only).
+      list_debugger_targets: all.list_debugger_targets,
+      list_user_scripts: all.list_user_scripts,
+      list_content_scripts: all.list_content_scripts,
       list_tab_groups: all.list_tab_groups,
       list_downloads: all.list_downloads,
     };

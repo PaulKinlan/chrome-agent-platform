@@ -101,6 +101,10 @@ const BROWSER_READ_TOOLS = new Set([
   "get_navigation_frames",
   "get_navigation_frame",
   "get_request_activity",
+  // Tranche-12 Chrome API coverage: debugger target inventory + script registries
+  "list_debugger_targets",
+  "list_user_scripts",
+  "list_content_scripts",
 ]);
 // Memory reads: observe only.
 const MEMORY_READ_TOOLS = new Set(["memory_get", "memory_grep", "memory_list"]);
@@ -214,6 +218,11 @@ const BUILT_IN_TOOLS = new Set([
   "list_network_rules", "add_network_rule", "update_network_rule",
   "remove_network_rule", "get_network_rule_matches",
   "get_navigation_frames", "get_navigation_frame", "get_request_activity",
+  // Tranche-12 Chrome API coverage: debugger CDP + user/content scripts
+  // (reads are classified above; ALL are built-ins).
+  "list_debugger_targets", "debugger_attach", "debugger_detach", "debugger_send_command",
+  "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
+  "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
   "disenroll_origin", "create_asset", "update_asset", "delete_asset", "list_assets",

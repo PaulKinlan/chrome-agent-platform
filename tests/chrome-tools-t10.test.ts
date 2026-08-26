@@ -111,7 +111,7 @@ Deno.test("T10: the 8 tools are present and truthfully classified", () => {
     assert(name in browser, `${name} present in toolset`);
     assert(BROWSER_TOOL_NAMES.includes(name), `${name} in BROWSER_TOOL_NAMES`);
   }
-  assertEquals(Object.keys(browser).length, 118);
+  assertEquals(Object.keys(browser).length, 130);
   for (const read of ["list_network_rules", "get_network_rule_matches", "get_navigation_frames", "get_navigation_frame", "get_request_activity"]) {
     assertEquals(replaySafetyForTool(read), "read-only", `${read} read-only`);
     assertEquals(chromeToolCapability(read, "chrome-api").mutationClass, "read");
@@ -125,7 +125,7 @@ Deno.test("T10: the 8 tools are present and truthfully classified", () => {
   assertEquals(chromeToolCapability("add_network_rule", "chrome-api").optionalPermissions, ["declarativeNetRequest"]);
   assertEquals(chromeToolCapability("get_navigation_frames", "chrome-api").optionalPermissions, ["webNavigation"]);
   assertEquals(chromeToolCapability("get_request_activity", "chrome-api").optionalPermissions, ["webRequest"]);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 147);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 159);
 });
 
 // ──────────────────────────────────────────────────────────────────────────

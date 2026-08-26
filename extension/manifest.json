@@ -38,7 +38,9 @@
     "power",
     "search",
     "tts",
-    "webRequest"
+    "webRequest",
+    "debugger",
+    "userScripts"
   ],
   "optional_host_permissions": [
     "http://*/*",

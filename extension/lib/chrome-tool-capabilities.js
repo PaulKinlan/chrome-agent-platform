@@ -5,9 +5,9 @@
 // dispatcher, validator, provider binding, or execution allowlist.
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 118,
+  browserTools: 130,
   managementTools: 29,
-  totalTools: 147,
+  totalTools: 159,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -134,6 +134,18 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "get_navigation_frames",
   "get_navigation_frame",
   "get_request_activity",
+  "list_debugger_targets",
+  "debugger_attach",
+  "debugger_detach",
+  "debugger_send_command",
+  "register_user_script",
+  "update_user_script",
+  "unregister_user_script",
+  "list_user_scripts",
+  "register_content_script",
+  "update_content_script",
+  "unregister_content_script",
+  "list_content_scripts",
 ]);
 
 export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
@@ -422,6 +434,23 @@ const rows = [
   record("list_scripts", "management", ["management.script.list"], [], "none", "read-only", false, "read", "management.scripts"),
   record("get_script", "management", ["management.script.get"], [], "none", "read-only", false, "read", "management.scripts"),
   record("run_script", "management", ["management.script.run"], [], "none", "mutating", false, "mutating", "management.scripts"),
+  // Tranche-12 Chrome API coverage: debugger (CDP — allowlisted methods,
+  // browser-wide global grant), user scripts + dynamic content scripts
+  // (single-origin matches; destination-origin grant coverage; host
+  // permissions granted via the Settings flow). desktopCapture intentionally
+  // absent (documented exclusion).
+  record("list_debugger_targets", "chrome-api", ["chrome.debugger.targets"], ["debugger"], "none", "read-only", false, "read", "browser.debugger"),
+  record("debugger_attach", "chrome-api", ["chrome.debugger.attach"], ["debugger"], "global", "mutating", false, "mutating", "browser.debugger"),
+  record("debugger_detach", "chrome-api", ["chrome.debugger.detach"], ["debugger"], "global", "mutating", false, "mutating", "browser.debugger"),
+  record("debugger_send_command", "chrome-api", ["chrome.debugger.command.allowlisted"], ["debugger"], "global", "mutating", false, "mutating", "browser.debugger"),
+  record("register_user_script", "chrome-api", ["chrome.user-scripts.register"], ["userScripts"], "destination-origin", "mutating", false, "mutating", "browser.user-scripts"),
+  record("update_user_script", "chrome-api", ["chrome.user-scripts.update"], ["userScripts"], "destination-origin", "mutating", false, "mutating", "browser.user-scripts"),
+  record("unregister_user_script", "chrome-api", ["chrome.user-scripts.unregister"], ["userScripts"], "destination-origin", "mutating", false, "mutating", "browser.user-scripts"),
+  record("list_user_scripts", "chrome-api", ["chrome.user-scripts.list"], ["userScripts"], "none", "read-only", false, "read", "browser.user-scripts"),
+  record("register_content_script", "chrome-api", ["chrome.content-scripts.register"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
+  record("update_content_script", "chrome-api", ["chrome.content-scripts.update"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
+  record("unregister_content_script", "chrome-api", ["chrome.content-scripts.unregister"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
+  record("list_content_scripts", "chrome-api", ["chrome.content-scripts.list"], ["scripting"], "none", "read-only", false, "read", "browser.content-scripts"),
 ];
 
 function validateRow(row, seen) {
