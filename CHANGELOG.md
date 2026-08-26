@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.300] — 2026-08-26
+- The run-status cards no longer push everything off screen: each run is now one subtle line (short task preview, a plain-English status like 'Paused — outcome uncertain', simple Cancel/Retry/View-logs buttons) and only the 3 most recent runs show, with a quiet '+N earlier runs' note. The full task text and details are still there on hover and in the logs
+
 ## [0.2.299] — 2026-08-26
 - The 'Find tools for a Site Agent' dialog now scrolls when there are a lot of tabs/tools (it was clipping them with no way to scroll). Also fixes every other dialog with long content
 
