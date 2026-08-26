@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.304] — 2026-08-26
+- Back button actually fixed now (real-browser proven): Settings/Assets/Directory/Skills all return to the hub in ONE press with no blank screen — the fix is at the right layer this time
+
 ## [0.2.303] — 2026-08-26
 - Permissions are simple now: when an agent's tool needs a permission, the request appears right there in the conversation — 'This agent wants to group tabs — Allow?' — and one click grants exactly what's needed (nothing broader) and retries the task. No more two-layer confusion or dead-ends pointing at Settings. Deny is sticky, and Settings has a guided two-step revoke
 
