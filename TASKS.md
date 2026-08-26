@@ -400,6 +400,15 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   line, and the top-level-only CSP constraint
 - Recover: `git grep -n "PYODIDE" -- TASKS.md`
 - History:
+  - 2026-08-26 23:23 UTC — OWNER-DECISION PACKET (read-only,
+    /tmp/cap-pyodide-decision/GLM.md a6c2ebaa): all 4 caveats verified against
+    committed source (default-tier 16MiB fits Pyodide core 8.4-12.3MB; bounded
+    MAXIMUM_MEMORY≤2048-page build required; PSF-2.0 needs one reviewed licence
+    line; CSP fine via the non-eval PyProxy entrypoint). OPTIONS: A approve MVS
+    with the 4 resolutions (recommended: +8-12MB OPFS-cached runtime, one
+    python stdin/stdout tool, zero manifest/key changes) / B defer to the
+    26-tool + Rust/Go lanes / C MicroPython-RustPython / D network service.
+    NEXT: owner decision A/B/C/D.
   - 2026-08-23 22:45 UTC — feasibility research verdict FEASIBLE-WITH-CAVEATS
     (Pro, /tmp/cap-pyodide-feasibility/PRO.md 869b8098): core 8–12 MB fits a
     NEW default-tier admission (not tiny); MPL-2.0 in allowlist, CPython
