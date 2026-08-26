@@ -252,26 +252,26 @@ Deno.test("security: hook fan-out is bounded (unknown recipe + template size + c
 // ---- preference percolation (the controlled down-channel) ----
 Deno.test("security: preference percolation accepts a valid parent message", async () => {
   const { buildPreferenceMessage, validatePreferenceMessage, applyPreference } = await import("../extension/lib/preference-bridge.js");
-  const msg = buildPreferenceMessage({ theme: "sunlit", locale: "en-GB" }, "nonce-1");
+  const msg = buildPreferenceMessage({ locale: "en-GB" }, "nonce-1");
   const res = validatePreferenceMessage(msg, { nonce: "nonce-1", sourceIsParent: true });
   assertEquals(res.ok, true);
-  assertEquals(res.preference.theme, "sunlit");
   assertEquals(res.preference.locale, "en-GB");
   const doc = { documentElement: { setAttribute() {} } };
   const applied = applyPreference(res.preference, { document: doc });
-  assertEquals(applied.theme, "sunlit");
+  assertEquals(applied.locale, "en-GB");
 });
 
 Deno.test("security: preference percolation rejects forgery + replay + unknown keys", async () => {
   const { buildPreferenceMessage, validatePreferenceMessage } = await import("../extension/lib/preference-bridge.js");
   // not the parent
-  const a = validatePreferenceMessage(buildPreferenceMessage({ theme: "sunlit" }, "n"), { nonce: "n", sourceIsParent: false });
+  const a = validatePreferenceMessage(buildPreferenceMessage({ locale: "en" }, "n"), { nonce: "n", sourceIsParent: false });
   assertEquals(a.ok, false);
   // wrong nonce (replay / forgery)
-  const b = validatePreferenceMessage(buildPreferenceMessage({ theme: "sunlit" }, "n"), { nonce: "other", sourceIsParent: true });
+  const b = validatePreferenceMessage(buildPreferenceMessage({ locale: "en" }, "n"), { nonce: "other", sourceIsParent: true });
   assertEquals(b.ok, false);
-  // unknown theme
-  const c = validatePreferenceMessage(buildPreferenceMessage({ theme: "hacker" }, "n"), { nonce: "n", sourceIsParent: true });
+  // an unknown/disallowed key (theme was removed; arbitrary keys are rejected)
+  const forgedTheme = { type: "cap:preference", nonce: "n", preference: { theme: "hacker" } };
+  const c = validatePreferenceMessage(forgedTheme, { nonce: "n", sourceIsParent: true });
   assertEquals(c.ok, false);
   // a disallowed key (the untrusted layer must not receive arbitrary settings)
   const forged = { type: "cap:preference", nonce: "n", preference: { apiKey: "x", theme: "sunlit" } };

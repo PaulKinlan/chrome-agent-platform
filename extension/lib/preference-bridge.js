@@ -79,9 +79,6 @@ export function validatePreferenceMessage(data, { nonce = "", sourceIsParent = f
  */
 export function applyPreference(preference, ctx = {}) {
   const doc = ctx.document ?? (typeof document !== "undefined" ? document : null);
-  if (preference?.theme && doc?.documentElement) {
-    doc.documentElement.setAttribute("data-theme", preference.theme);
-  }
   if (preference?.locale && doc?.documentElement) {
     doc.documentElement.setAttribute("lang", preference.locale);
   }
