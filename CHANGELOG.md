@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.302] — 2026-08-26
+- No surface can blank out silently anymore: every data-loading view (providers, usage, agents, activity, tool library) now times out with an honest error + Retry if the service worker can't answer — the class that killed recent activity, artifacts, providers and tools together on a heavy profile
+
 ## [0.2.301] — 2026-08-26
 - Removed the theme switcher (it only worked on the Settings page and was unused) — the extension keeps its single design system, and locale preference plumbing stays
 
