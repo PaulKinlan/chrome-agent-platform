@@ -345,6 +345,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: run the licence/feasibility triage across all eighteen candidates
 - Recover: `git grep -n "EXTENDED-TOOL-FAMILIES" -- TASKS.md`
 - History:
+  - 2026-08-26 23:22 UTC — OWNER DECISION (option a): APPROVED the permissive
+    routes — toybox 0BSD for the awk/sed/date trio, onetrueawk, NetBSD-style
+    sed, and the fend pre-1.4.0 MIT pin. T3 unblocks on those routes. PANDOC
+    REMAINS BLOCKED (GPLv2+ has no permissive route; ~58MB wasm large-tier).
+    lychee = offline-file mode only. zq/zed = frozen provenance, admittable.
+    TIER 1 DISPATCHED: jq admission (NOTICES + retained build + census + spec
+    contract) + the Rust one-lane standup (htmlq first as lane proof, then
+    numbat, bttf, tokei, xan, qsv serially).
   - 2026-08-26 23:15 UTC — LICENCE/FEASIBILITY TRIAGE DONE (read-only research,
     /tmp/cap-extended-tool-families-research/GLM.md da8f7f2c): 18/18 candidates
     inventoried. GPL-family blockers (5 candidates, ONE owner decision unblocks):
