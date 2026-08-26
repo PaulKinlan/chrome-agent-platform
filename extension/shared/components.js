@@ -447,11 +447,24 @@ export function currentFramePreference() {
 const RUNTIME_SEND = (() => {
   try {
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-      return (type, payload = {}) => new Promise((resolve) => {
+      return (type, payload = {}, timeoutMs = 12000) => new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        // A killed/suspended worker leaves the callback NEVER fired — settle
+        // with an honest {ok:false, error} instead of hanging the surface (the
+        // real-profile "everything broken" class).
+        const timer = setTimeout(() => {
+          finish({ ok: false, error: "the agent worker didn't answer — it may be busy (retry)" });
+        }, timeoutMs);
         chrome.runtime.sendMessage({ type, ...payload }, (res) => {
+          clearTimeout(timer);
           if (chrome.runtime.lastError) {
-            resolve({ ok: false, error: chrome.runtime.lastError.message });
-          } else resolve(res ?? { ok: true });
+            finish({ ok: false, error: chrome.runtime.lastError.message });
+          } else finish(res ?? { ok: true });
         });
       });
     }

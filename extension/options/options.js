@@ -133,6 +133,16 @@ const PROVIDERS = [
 
 
 const $ = (sel) => document.querySelector(sel);
+// Bounded SW message: a service worker killed/suspended mid-route leaves the
+// sendMessage promise UNSETTLED (the callback never fires) — the real-profile
+// "everything is broken" class. Settle on timeout so every Settings section
+// renders an honest error/Retry instead of a blank/loading-forever surface.
+function boundedSend(type, payload = {}, timeoutMs = 12000) {
+  return Promise.race([
+    chrome.runtime.sendMessage({ type, ...payload }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
+  ]);
+}
 // Shared key-value access routes through the SERVICE WORKER (the single
 // authority for shared state). When the optional storage permission is absent,
 // kv.js's session fallback is realm-local, so a page writing to its OWN fallback
@@ -141,13 +151,25 @@ const $ = (sel) => document.querySelector(sel);
 // shared store. Pages must NEVER call kv* directly in their own realm.
 const storage = {
   async get(keys) {
-    return await chrome.runtime.sendMessage({ type: "kv.get", keys });
+    try {
+      return await boundedSend("kv.get", { keys });
+    } catch (e) {
+      return { error: `storage read didn't answer — ${String(e?.message ?? e)}` };
+    }
   },
   async set(values) {
-    return await chrome.runtime.sendMessage({ type: "kv.set", values });
+    try {
+      return await boundedSend("kv.set", { values });
+    } catch (e) {
+      return { error: `storage write didn't answer — ${String(e?.message ?? e)}` };
+    }
   },
   async remove(keys) {
-    return await chrome.runtime.sendMessage({ type: "kv.remove", keys });
+    try {
+      return await boundedSend("kv.remove", { keys });
+    } catch (e) {
+      return { error: `storage remove didn't answer — ${String(e?.message ?? e)}` };
+    }
   },
 };
 
@@ -228,7 +250,7 @@ async function providerStatusChanged() {
   // grant that landed on ANOTHER page (conversation "Grant network access")
   // is reflected here immediately.
   try {
-    const status = await chrome.runtime.sendMessage({ type: "provider.status" }).catch(() => null);
+    const status = await boundedSend("provider.status").catch(() => null);
     const chip = document.querySelector("#provider-status-chip, .provider-status");
     if (chip && status) chip.dataset.granted = String(Boolean(status.granted ?? status.ok ?? ""));
   } catch { /* status surface absent — nothing to reconcile */ }
@@ -246,10 +268,7 @@ async function renderToolLibrary() {
   if (!library) return;
   library.state = "loading";
   try {
-    const summary = await chrome.runtime.sendMessage({
-      type: "tool-catalog.shadow",
-      action: "summary",
-    });
+    const summary = await boundedSend("tool-catalog.shadow", { action: "summary" });
     if (!summary || summary.ok !== true) {
       library.error = String(summary?.error ?? "the diagnostics route declined");
       library.state = "error";
@@ -491,7 +510,7 @@ export async function renderLocalFolders() {
 
   let res;
   try {
-    res = await chrome.runtime.sendMessage({ type: "fs-grant.list" });
+    res = await boundedSend("fs-grant.list");
   } catch (e) {
     res = { ok: false, error: String(e?.message ?? e) };
   }
@@ -637,8 +656,7 @@ export async function renderLocalFolders() {
       drawer.innerHTML = `<span class="muted">Loading contents…</span>`;
       cardWrapper.append(drawer);
 
-      const listRes = await chrome.runtime.sendMessage({
-        type: "fs-grant.list-entries",
+      const listRes = await boundedSend("fs-grant.list-entries", {
         grantId: grant.grantId,
       }).catch((e) => ({ ok: false, error: String(e?.message || e) }));
 
@@ -717,8 +735,7 @@ export async function renderLocalFolders() {
             fileViewer.innerHTML = `<span class="muted">Reading file…</span>`;
             itemRowWrapper.append(fileViewer);
 
-            const readRes = await chrome.runtime.sendMessage({
-              type: "fs-grant.read-file",
+            const readRes = await boundedSend("fs-grant.read-file", {
               grantId: grant.grantId,
               relativePath: entry.name,
               asText: true,
@@ -835,7 +852,20 @@ async function renderProviders(restoreFocus = false) {
   // call lib/provider.js's kv* directly in this page realm (the round-16 split-
   // authority finding: with storage absent the page's session Map contradicts the
   // SW's).
-  const cfg = await chrome.runtime.sendMessage({ type: "provider.get" });
+  // BOUNDED: a killed/suspended worker must not leave Providers blank — settle
+  // with an honest error + Retry instead of an unsettled await.
+  let cfg;
+  try {
+    cfg = await boundedSend("provider.get");
+  } catch (e) {
+    const list = $("#provider-list");
+    if (list) {
+      list.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
+        `<button class="btn small" type="button" id="retry-providers">Retry</button>`;
+      list.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
+    }
+    return;
+  }
   // A stored internal provider remains runtime authority, but is not a public
   // card. Explain that state without mutating, auto-selecting, or erasing it.
   renderInternalProviderStatus(
@@ -1050,8 +1080,8 @@ async function renderEnroll() {
 async function renderDiscoveredOpenTabs() {
   const container = $("#discovered-tabs");
   if (!container) return;
-  const enrolledOrigins = new Set(await chrome.runtime.sendMessage({ type: "agent.list" }).catch(() => []));
-  const listing = await chrome.runtime.sendMessage({ type: "agent.discoverable-tabs" }).catch(() => ({ ok: false }));
+  const enrolledOrigins = new Set(await boundedSend("agent.list").catch(() => []));
+  const listing = await boundedSend("agent.discoverable-tabs").catch(() => ({ ok: false }));
   container.replaceChildren();
   if (!listing?.ok || !Array.isArray(listing.tabs) || !listing.tabs.length) {
     container.style.display = "none";
@@ -1139,7 +1169,7 @@ async function renderEnrolledSites() {
   const el = $("#enrolled-sites");
   if (!el) return;
   await renderDiscoveredOpenTabs();
-  const origins = await chrome.runtime.sendMessage({ type: "agent.list" }).catch(() => []);
+  const origins = await boundedSend("agent.list").catch(() => []);
   el.replaceChildren();
   for (const origin of (origins ?? [])) {
     const row = document.createElement("div");
@@ -1197,7 +1227,7 @@ async function renderWebmcpStatus() {
     });
   }
   let diag = { enabled: false };
-  try { diag = await chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }); } catch { /* SW not ready */ }
+  try { diag = await boundedSend("webmcp.diagnostics.get"); } catch { /* SW not ready */ }
   toggle.checked = diag?.enabled === true;
 
   const status = await chrome.runtime
@@ -1400,7 +1430,7 @@ async function renderAgentProviders() {
   list.innerHTML = "";
   let agents = [];
   try {
-    const r = await chrome.runtime.sendMessage({ type: "named-agent.list" });
+    const r = await boundedSend("named-agent.list");
     agents = Array.isArray(r?.agents) ? r.agents : [];
   } catch {
     agents = [];
@@ -1412,7 +1442,7 @@ async function renderAgentProviders() {
     list.appendChild(empty);
     return;
   }
-  const globalCfg = await chrome.runtime.sendMessage({ type: "provider.get" }).catch(() => null);
+  const globalCfg = await boundedSend("provider.get").catch(() => null);
   for (const a of agents) {
     const row = document.createElement("div");
     row.className = "agent-provider-row";
@@ -1760,9 +1790,7 @@ function addBackgroundAgentSelect(disabled, onChange) {
 }
 
 async function renderBackgroundAgents() {
-  const res = await chrome.runtime
-    .sendMessage({ type: "background-agent.list" })
-    .catch(() => ({ agents: [] }));
+  const res = await boundedSend("background-agent.list").catch(() => ({ agents: [] }));
   const agents = Array.isArray(res.agents) ? res.agents : [];
   const enabled = agents.filter((a) => a.enabled);
   const disabled = agents.filter((a) => !a.enabled);
@@ -2046,7 +2074,16 @@ async function renderHooks() {
 async function renderUsage() {
   // Usage is shared state — read it through the SW (single authority), not the
   // page-local usage.js kv* (the round-16 split-authority finding).
-  const u = await chrome.runtime.sendMessage({ type: "usage.get" });
+  // BOUNDED read — a killed worker must not leave the Usage section blank.
+  let u;
+  try {
+    u = await boundedSend("usage.get");
+  } catch (e) {
+    const sum = $("#usage-summary");
+    if (sum) sum.innerHTML = `<div class="muted">Couldn't load usage — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div><button class="btn small" type="button" id="retry-usage">Retry</button>`;
+    sum?.querySelector("#retry-usage")?.addEventListener("click", () => renderUsage());
+    return;
+  }
   const sum = $("#usage-summary");
   // Defensive: usage.get may return an error envelope or a shape missing
   // totals (e.g. storage permission not yet granted, SW cold-start race) —
@@ -2346,7 +2383,13 @@ async function renderData() {
   // Enrolled origins are AUTHORITATIVE shared state — read them through the SW
   // (agent.list), not the page-local memory.js listOrigins (the round-16 split-
   // authority finding).
-  const origins = await chrome.runtime.sendMessage({ type: "agent.list" });
+  // BOUNDED read — a killed worker must not leave the Agents list blank.
+  let origins;
+  try {
+    origins = await boundedSend("agent.list");
+  } catch {
+    origins = [];
+  }
   const list = $("#origin-list");
   list.replaceChildren();
   if (!origins.length) {
@@ -2396,7 +2439,13 @@ async function renderData() {
   // obligation independent of enrollment, so it is surfaced here with a Retry
   // control rather than silently dropped when the tombstone hides the origin
   // (the round-17 non-retryable finding).
-  const pending = await chrome.runtime.sendMessage({ type: "agent.pending-cleanup" });
+  // BOUNDED read — a killed worker must not leave the pending-cleanup list blank.
+  let pending;
+  try {
+    pending = await boundedSend("agent.pending-cleanup");
+  } catch {
+    pending = {};
+  }
   for (const origin of (pending?.origins ?? [])) {
     const row = document.createElement("div");
     row.className = "origin-row pending";
@@ -2506,7 +2555,7 @@ async function renderPrompts() {
   }
   let agents = [];
   try {
-    const r = await chrome.runtime.sendMessage({ type: "named-agent.list" });
+    const r = await boundedSend("named-agent.list");
     agents = Array.isArray(r?.agents) ? r.agents : [];
   } catch { agents = []; }
   for (const a of agents) {
@@ -2664,7 +2713,7 @@ async function renderApprovals() {
   if (!approvalList || approvalRenderBusy) return;
   approvalRenderBusy = true;
   try {
-    const response = await chrome.runtime.sendMessage({ type: "management.pending-approvals" }).catch(() => null);
+    const response = await boundedSend("management.pending-approvals").catch(() => null);
     const approvals = Array.isArray(response?.approvals) ? response.approvals : [];
     approvalList.replaceChildren();
     if (!approvals.length) {

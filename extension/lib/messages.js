@@ -1,15 +1,34 @@
 // lib/messages.js — thin wrapper over chrome.runtime messaging for UI pages.
-
-export function send(type, payload = {}) {
+//
+// `send` is the SINGLE chokepoint for ntp.js + sidepanel.js. It must never leave
+// a caller hanging: a service worker killed/suspended mid-route leaves the
+// sendMessage callback NEVER fired (the port stays open, nothing resolves), which
+// dead-renders every surface that awaits it (the real-profile "everything is
+// broken" class). The bounded timeout settles with an honest {ok:false, error}
+// so callers show an error + Retry instead of a blank/loading-forever surface.
+export function send(type, payload = {}, timeoutMs = 12000) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      finish({ ok: false, error: "the agent worker didn't answer — it may be busy (retry)" });
+    }, timeoutMs);
     try {
       chrome.runtime.sendMessage({ type, ...payload }, (res) => {
+        clearTimeout(timer);
         if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-        } else resolve(res ?? { ok: true });
+          finish({ ok: false, error: chrome.runtime.lastError.message });
+        } else {
+          finish(res ?? { ok: true });
+        }
       });
     } catch (e) {
-      resolve({ ok: false, error: String(e) });
+      clearTimeout(timer);
+      finish({ ok: false, error: String(e) });
     }
   });
 }

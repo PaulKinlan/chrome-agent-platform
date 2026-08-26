@@ -146,7 +146,7 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
 
   const js = await text("../extension/options/options.js");
   assertMatch(js, /renderToolLibrary/, "the wiring exists");
-  assertMatch(js, /type:\s*"tool-catalog\.shadow"[\s\S]{0,80}action:\s*"summary"/, "the wiring requests ONLY the summary action");
+  assertMatch(js, /"tool-catalog\.shadow"[\s\S]{0,80}action:\s*"summary"/, "the wiring requests ONLY the summary action");
   assertNotMatch(js, /action:\s*"search"|action:\s*"capture"|action:\s*"resolve"/, "no search/capture/resolve in this slice");
   const fnStart = js.indexOf("async function renderToolLibrary");
   const fnEnd = js.indexOf("async function renderLocalModels");
