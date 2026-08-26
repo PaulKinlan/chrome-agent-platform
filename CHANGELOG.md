@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.286] — 2026-08-26
+- Power tools: attach Chrome DevTools Protocol debugging to tabs and send allowlisted commands (network conditions, CPU throttling, device emulation, navigation, screenshots, performance metrics) — Runtime.evaluate is never available; register user scripts and dynamic content scripts on specific sites
+
 ## [0.2.285] — 2026-08-25
 - Network rules: manage the extension's dynamic request rules (block/allow/redirect/upgrade), inspect navigation frames, and observe recent page/request activity — rule changes are browser-wide and need the global grant
 
