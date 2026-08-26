@@ -1466,3 +1466,57 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   status: done
   landed_version: 0.2.287
   summary: "Owner (2026-08-26): the extension has NO observability. Significant logging was requested before but isn't there. Clicking a task takes ~10s with zero trace of what's happening. One error seen: 'VM5974:2 Uncaught TypeError: Cannot read properties of undefined (reading startTime)' in et.reportAllChanges — that script is MINIFIED and is NOT our shipped code (our SW + options bundles are already unminified; grep confirms reportAllChanges absent), so it's a page the agent visited — we need logging to separate ours from theirs. REQUIREMENTS: (1) debug build with unminified code + source maps in npm run build; npm run build:production / --target=store stays the minified Store bundle; (2) a real logging layer — structured console logs with namespaces + levels + timing (grep-able like [cap:sw:grant]), console.groupCollapsed for runs; (3) performance.mark/measure around every slow path (task load, navigation, tool dispatch, model round-trips) + summary timing logs so a 10s task load becomes a readable breakdown; (4) use Chrome's native logging/performance features throughout (SW, NTP, side panel, content scripts); (5) a way to dump/ship the trace. Goal: use observability to improve the product. CRITICAL: debug mode must NOT weaken the production security assertions (seam scan, no-new-Function, oracle scan, bundled-tool verify) — logging verbosity is the only thing debug relaxes."
+
+## [CAP-FB-20260826-OWNER-BATCH-01] Owner bug/feature batch (2026-08-26, Telegram)
+
+Owner-described batch of bugs + UX issues. Each entry: analysis + acceptance. Prioritize + delegate.
+
+- id: CAP-FB-20260826-BACK-STACK-01
+  severity: P1
+  status: open
+  summary: "Back-button stack management broken. Settings → Back goes to a BLANK screen; must press Back twice. Happens for multiple surfaces (click assets, click back twice). ALSO: inside Settings there's no easy way to get Home without clicking Back for every settings sub-page. Owner's steer: once inside the settings page, use history.replaceState (don't push every settings sub-view onto history) — but still allow linking to individual parts of the settings page. ANALYSIS: the route/view state machine pushes sub-views onto history (or fails to restore the prior view), producing a blank intermediate state. FIX: settings sub-navigation uses replaceState (one history entry for the whole settings surface) + back from settings returns to the prior home view in one step; deep-linkable settings sections still get their own addressable state. ACCEPTANCE: Settings→(any sub-page)→Back returns to Home in ONE press, no blank screen; assets→Back works in one press; each settings section is still linkable."
+- id: CAP-FB-20260826-NTP-ADD-AGENT-01
+  severity: P2
+  status: open
+  summary: "NTP agents folder '+' button (on the settings panel, not side panel) to add an agent should be scoped to YOUR named agent. Owner likes the empty-state affordance: 'No named agents yet — create one in Tasks / Create an agent / or /agent create / or click button'. ACCEPTANCE: the agents-folder '+' creates a named agent; the empty state shows that affordance text + the create paths."
+- id: CAP-FB-20260826-DISCOVERED-SITE-SPACING-01
+  severity: P2
+  status: open
+  summary: "'Discovered open pages — click to add site' grey dialog box butts straight against the edge of the main agents container (no padding/margin) — looks terrible. FIX: add proper padding/margin around the discovered-sites box inside the agents container."
+- id: CAP-FB-20260826-RECENT-ACTIVITY-FILTER-01
+  severity: P1
+  status: open
+  summary: "Recent activity: the search text box + the 'all agents' button + the filter don't work. ACCEPTANCE: typing in search filters the recent-activity list; 'all agents' + the per-agent filter actually filter."
+- id: CAP-FB-20260826-USAGE-TOKENS-01
+  severity: P0
+  status: open
+  assign: best-agent
+  summary: "Usage calls + token numbers STILL aren't working (owner: works on his other projects incl. the chaos extension). The usage/token attribution isn't surfacing real numbers. This is the owner's explicit top-priority in the batch — assign to the strongest agent. ANALYSIS: the onUsage hook → usage-store path exists (usage.js); the tokens/calls either aren't being recorded from agent-do or aren't being read back into the UI. Compare against the chaos extension's working usage accounting. ACCEPTANCE: per-run + per-agent token/call counts are real, match the provider's actual usage, and render in the UI (and survive reload)."
+- id: CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01
+  severity: P2
+  status: open
+  summary: "Background agents are separate from the agents box — owner wants them UNIFIED: background agents appear IN the agents list (with a 'runs in background' indicator), always accessible from there, and mentionable in the chat text box (@-mention) if not already. ACCEPTANCE: the agents list (side panel + NTP) includes background agents with a background indicator; they can be opened/messaged/@-mentioned like named agents."
+- id: CAP-FB-20260826-DELETE-AGENT-FOLDER-01
+  severity: P2
+  status: open
+  summary: "After deleting all of an agent's data (memory + OPFS), the owner can't delete the named agent's folder/record itself (had 'sorting hat', deleted all data, wants the agent folder gone too). Add the ability to fully delete a named agent (its folder + record), not just its data. ACCEPTANCE: from the agent, the owner can delete the named agent entirely (folder + registry record + memory + OPFS), with confirmation."
+- id: CAP-FB-20260826-TOOL-LIBRARY-COUNT-01
+  severity: P2
+  status: open
+  summary: "Tool library says 'browser tools: 130' but the list clearly doesn't show 130. The bundled-packages count should be double-checked too. ANALYSIS: the count comes from the registry bounds (130) but the rendered list is filtered/truncated or groups differently, so the visible rows << 130. ACCEPTANCE: the tool library shows all 130 browser tools (or honestly labels the grouping), and the bundled-package count is verified against the actual shipped packages."
+- id: CAP-FB-20260826-LOCAL-MODELS-HIDE-01
+  severity: P2
+  status: open
+  summary: "Hide the local-models feature — the download never works (Chrome built-in AI ~10GB storage cap: 'insufficient storage available, 10GB below required payload 10.53GB' even though it claims a 5.72GB install payload). Owner's steer: remove/simplify the local-model download code now; LATER, load models (gguf) from the user's local drive via OPFS using the directory handle + file handle. ACCEPTANCE: the local-models UI is hidden/removed and the dead download code simplified; a follow-up note records the OPFS-file-handle model-loading idea."
+- id: CAP-FB-20260826-APPROVALS-REMOVE-01
+  severity: P2
+  status: open
+  summary: "The 'approval session' section inside the settings panel — is it still used? Owner thinks the whole interface doesn't work: if the agent requests access, going to a weird settings page to approve doesn't work. Approvals should be IN the context of the agent or the task being done, not a settings page. ACCEPTANCE: the orphaned approvals settings section is removed; approval prompts surface in-context (in the agent/task that needs them)."
+- id: CAP-FB-20260826-SYSTEM-PROMPT-01
+  severity: P2
+  status: open
+  summary: "Update the built-in default system prompt to be more accurate to the types of tasks it can do (now that the toolset grew to 130 tools). Also: the agent should ALWAYS search for the tool first — we have a search/list-tools (query_tools) capability; give more examples of search-then-execute, WITHOUT bloating the system prompt context. ACCEPTANCE: the default system prompt reflects the real toolset, instructs search-then-execute with query_tools examples, and stays context-bounded."
+- id: CAP-FB-20260826-HEADER-HOME-01
+  severity: P3
+  status: open
+  summary: "In the settings panel, clicking the 'Chrome agent platform' header should take you back to the homepage. Small UX affordance; pairs with BACK-STACK-01."
