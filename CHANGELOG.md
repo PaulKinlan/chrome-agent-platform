@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.292] — 2026-08-26
+- Scheduled tasks now show up under their agent: a scheduled run is attributed to the agent/thread that scheduled it, so it (and its per-agent log) appears in the Agents task/conversation view instead of running invisibly. Open an agent to see what its scheduled runs did
+
 ## [0.2.291] — 2026-08-26
 - Fixed orphaned scheduled alarms: deleting a task or agent now removes its alarm, and an alarm that fires for a schedule that no longer exists is cleared instead of firing forever (the recipe:auto-group-by-domain ghost). Recurring raw alarms you set with create_alarm are left alone
 
