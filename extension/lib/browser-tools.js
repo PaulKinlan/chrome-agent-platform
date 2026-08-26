@@ -235,6 +235,15 @@ function tabGroupsApi() {
   return typeof chrome !== "undefined" && chrome.tabGroups ? chrome.tabGroups : null;
 }
 
+/** Generic API-namespace availability check. Most MV3 namespaces are always
+ * injected, but some (tabGroups was observed live, others can be gated by
+ * context) are undefined without a permission/context — a tool that touches
+ * `chrome.<api>` directly must check through this so the failure is an honest
+ * structured error, never a raw "Cannot read properties of undefined". */
+function chromeApi(name) {
+  return typeof chrome !== "undefined" && chrome[name] ? chrome[name] : null;
+}
+
 async function hasPermission(perm) {
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) return false;
@@ -1627,7 +1636,9 @@ export function browserToolset(readOnly = false) {
         "List the browser windows (id, focused, type, state, bounds). No tab contents or URLs are returned.",
       inputSchema: z.object({}),
       execute: async () => {
-        const wins = await chrome.windows.getAll({});
+        const api = chromeApi("windows");
+        if (!api) return { error: "windows API not available in this browser context" };
+        const wins = await api.getAll({});
         return {
           windows: wins.slice(0, 64).map((w) => ({
             id: w.id,
@@ -1749,6 +1760,8 @@ export function browserToolset(readOnly = false) {
         iconPath: z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_/.-]{0,62}\.png$/u).refine((p) => !p.includes("..") && !p.startsWith("/"), "extension-relative icon path only").optional(),
       }).refine((v) => Object.values(v).some((x) => x !== undefined), "at least one action field is required"),
       execute: async ({ badgeText, badgeColor, title, iconPath }) => {
+        const api = chromeApi("action");
+        if (!api) return { error: "action API not available in this browser context" };
         try {
           await assertRunOwned();
         } catch {
@@ -1756,10 +1769,10 @@ export function browserToolset(readOnly = false) {
         }
         const applied = [];
         try {
-          if (badgeText !== undefined) { await chrome.action.setBadgeText({ text: badgeText }); applied.push("badgeText"); }
-          if (badgeColor !== undefined) { await chrome.action.setBadgeBackgroundColor({ color: badgeColor }); applied.push("badgeColor"); }
-          if (title !== undefined) { await chrome.action.setTitle({ title }); applied.push("title"); }
-          if (iconPath !== undefined) { await chrome.action.setIcon({ path: iconPath }); applied.push("iconPath"); }
+          if (badgeText !== undefined) { await api.setBadgeText({ text: badgeText }); applied.push("badgeText"); }
+          if (badgeColor !== undefined) { await api.setBadgeBackgroundColor({ color: badgeColor }); applied.push("badgeColor"); }
+          if (title !== undefined) { await api.setTitle({ title }); applied.push("title"); }
+          if (iconPath !== undefined) { await api.setIcon({ path: iconPath }); applied.push("iconPath"); }
         } catch (e) {
           return { error: `action update failed: ${e?.message ?? e}`, applied };
         }
@@ -1771,10 +1784,12 @@ export function browserToolset(readOnly = false) {
         "Read this extension's own toolbar action state (badge text/colour, hover title).",
       inputSchema: z.object({}),
       execute: async () => {
+        const api = chromeApi("action");
+        if (!api) return { error: "action API not available in this browser context" };
         const [badgeText, title, bg] = await Promise.all([
-          chrome.action.getBadgeText({}),
-          chrome.action.getTitle({}),
-          chrome.action.getBadgeBackgroundColor({}),
+          api.getBadgeText({}),
+          api.getTitle({}),
+          api.getBadgeBackgroundColor({}),
         ]);
         const color = Array.isArray(bg) && bg.length >= 3
           ? `#${bg.slice(0, 4).map((n) => Number(n).toString(16).padStart(2, "0")).join("")}`
@@ -1787,7 +1802,9 @@ export function browserToolset(readOnly = false) {
         "List the extension's declared keyboard commands (name, shortcut, description). Read-only.",
       inputSchema: z.object({}),
       execute: async () => {
-        const commands = await chrome.commands.getAll();
+        const api = chromeApi("commands");
+        if (!api) return { error: "commands API not available in this browser context" };
+        const commands = await api.getAll();
         return {
           commands: (Array.isArray(commands) ? commands : []).slice(0, 32).map((c) => ({
             name: String(c?.name ?? "").slice(0, 128),
@@ -3391,7 +3408,9 @@ export function browserToolset(readOnly = false) {
         maxResults: z.number().int().min(1).max(100).optional(),
       }),
       execute: async ({ maxResults = 25 }) => {
-        const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 100 });
+        const api = chromeApi("sessions");
+        if (!api) return { error: "sessions API not available in this browser context" };
+        const closed = await api.getRecentlyClosed({ maxResults: 100 });
         const items = [];
         for (const s of Array.isArray(closed) ? closed : []) {
           if (s?.tab) {
@@ -3423,10 +3442,12 @@ export function browserToolset(readOnly = false) {
       inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
       execute: async ({ sessionId }) =>
         await withGrantLock(async () => {
+          const api = chromeApi("sessions");
+          if (!api) return { error: "sessions API not available in this browser context" };
           // Re-read the closed sessions INSIDE the grant lock (a close/restore
           // since any earlier read must not smuggle an unauthorized origin past
           // the check).
-          const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 100 });
+          const closed = await api.getRecentlyClosed({ maxResults: 100 });
           const item = (Array.isArray(closed) ? closed : []).find(
             (s) => (s?.tab?.sessionId ?? s?.window?.sessionId) === sessionId,
           );
@@ -3484,7 +3505,9 @@ export function browserToolset(readOnly = false) {
         "List devices synced to this Chrome profile and their recently closed sessions. Requires Chrome sign-in with sync enabled.",
       inputSchema: z.object({}),
       execute: async () => {
-        const devices = await chrome.sessions.getDevices();
+        const api = chromeApi("sessions");
+        if (!api) return { error: "sessions API not available in this browser context" };
+        const devices = await api.getDevices();
         const list = Array.isArray(devices) ? devices : [];
         if (list.length === 0) {
           return {
