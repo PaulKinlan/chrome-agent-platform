@@ -4013,6 +4013,109 @@ class ConversationRunStatus extends Component {
 }
 customElements.define("conversation-run-status", ConversationRunStatus);
 
+/* <permission-approval-card reason="…" permissions='["tabs"]' origins='["https://a.com"]'
+ * global="true" state="pending|granted|denied|error" detail="…"> — the IN-CONTEXT
+ * owner approval for a tool's permission/grant denial (owner P0
+ * CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01). It DESCRIBES exactly what a click
+ * approves (plain-English reason + the exact permissions + the exact sites, or
+ * "all sites" only when the tool genuinely needs the global grant) and emits
+ * "approve" / "deny" with the real click event — granting happens in the
+ * conversation's click handler (a genuine owner gesture), never here.
+ * Security: this element grants NOTHING itself; it is a labelled choice. */
+const PERMISSION_APPROVAL_LABELS = Object.freeze({
+  tabs: "Browser control (tabs)",
+  tabGroups: "Tab groups",
+  storage: "Memory & settings",
+  activeTab: "Screenshots",
+  scripting: "Site Agents",
+  downloads: "Downloads",
+  notifications: "Notifications",
+  alarms: "Scheduled tasks",
+  cookies: "Cookies",
+  browsingData: "Browsing data",
+  contentSettings: "Content settings",
+  bookmarks: "Bookmarks",
+  history: "History",
+  sidePanel: "Side panel",
+  management: "Extension management",
+  debugger: "Debugger (CDP)",
+  userScripts: "User scripts",
+  declarativeNetRequest: "Network rules",
+  webNavigation: "Navigation frames",
+  webRequest: "Request observation",
+});
+
+class PermissionApprovalCard extends Component {
+  static get observedAttributes() {
+    return ["reason", "permissions", "origins", "global", "state", "detail"];
+  }
+  _jsonList(name) {
+    const raw = this.getAttribute(name);
+    if (!raw) return [];
+    try {
+      const value = JSON.parse(raw);
+      return Array.isArray(value) ? value.filter((item) => typeof item === "string").slice(0, 50) : [];
+    } catch { return []; }
+  }
+  _render() {
+    const reason = (this.getAttribute("reason") ?? "perform this action").slice(0, 240);
+    const permissions = this._jsonList("permissions");
+    const origins = this._jsonList("origins");
+    const isGlobal = this.getAttribute("global") === "true";
+    const state = ["granted", "denied", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
+    const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
+    const needs = [];
+    for (const permission of permissions) {
+      needs.push(`<li>${escapeHtml(PERMISSION_APPROVAL_LABELS[permission] ?? permission)} permission</li>`);
+    }
+    if (isGlobal) {
+      needs.push(`<li>Browser control of <strong>all sites</strong> (one of the tabs has no single site)</li>`);
+    } else if (origins.length) {
+      const shown = origins.slice(0, 6).map((origin) => `<code>${escapeHtml(origin)}</code>`).join(", ");
+      needs.push(`<li>Browser control of ${origins.length === 1 ? "this site" : "these sites"}: ${shown}${origins.length > 6 ? ` and ${origins.length - 6} more` : ""}</li>`);
+    }
+    const stateText = state === "granted"
+      ? "Approved — continuing…"
+      : state === "denied"
+        ? "Declined. The agent will keep going without it."
+        : state === "error"
+          ? (detail || "The approval could not be completed — try again.")
+          : "";
+    mountTemplate(this, `
+      :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
+      .card { max-width:88%; border-radius:12px; padding:12px 14px; background:var(--panel,#fff); border:1px solid var(--accent,#0e6e63); box-shadow:0 1px 2px rgba(0,0,0,.05); }
+      .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; }
+      .reason { font-size:13.5px; color:var(--ink,#1d1b18); margin:0 0 6px; line-height:1.45; }
+      .needs { margin:0 0 10px; padding-left:18px; font-size:12.5px; color:var(--muted,#635e56); line-height:1.5; }
+      .needs code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.92em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:0 4px; }
+      .controls { display:flex; gap:8px; }
+      .btn { font:inherit; font-size:12.5px; font-weight:650; border-radius:8px; padding:6px 14px; cursor:pointer; min-height:34px; }
+      .allow { background:var(--accent,#0e6e63); color:var(--on-accent,#fff); border:1px solid var(--accent,#0e6e63); }
+      .allow:hover { filter:brightness(1.06); }
+      .deny { background:transparent; color:var(--muted,#635e56); border:1px solid var(--border,#e3e0d9); }
+      .deny:hover { color:var(--ink,#1d1b18); border-color:var(--muted,#635e56); }
+      .btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      .state { font-size:12.5px; font-weight:600; }
+      .state.granted { color:var(--success,#1a7f37); }
+      .state.denied { color:var(--muted,#635e56); }
+      .state.error { color:var(--danger,#b3261e); }
+      :host([state="granted"]) .card, :host([state="denied"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
+    `, `<div class="card" role="group" aria-label="Permission request">
+      <p class="title">Permission request</p>
+      <p class="reason">The agent wants to ${escapeHtml(reason)}.</p>
+      ${needs.length ? `<ul class="needs">${needs.join("")}</ul>` : ""}
+      ${state === "pending"
+        ? `<div class="controls"><button type="button" class="btn allow">Allow</button><button type="button" class="btn deny">Not now</button></div>`
+        : `<p class="state ${state}">${escapeHtml(stateText)}</p>`}
+    </div>`);
+  }
+  _wire() {
+    this._root.querySelector(".allow")?.addEventListener("click", (event) => this._emit("approve", { sourceEvent: event }));
+    this._root.querySelector(".deny")?.addEventListener("click", (event) => this._emit("deny", { sourceEvent: event }));
+  }
+}
+customElements.define("permission-approval-card", PermissionApprovalCard);
+
 /* <thinking-trace label="reasoning" open steps='[{"label","text"}]'> — an
  * expandable reasoning trace (the BeautifulUI "Thinking" primitive). A muted,
  * collapsible <details> of the agent's steps; slotted content or the `steps`
