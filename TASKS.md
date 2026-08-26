@@ -263,7 +263,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   (create/manage), tabGroups, topSites. Example: a "sorting hat" background
   agent needs tabGroups but there's no tabGroups tool. The existing
   management tools are liked; the rest is missing
-- Updated: 2026-08-23 23:05 UTC
 - Status: OPEN
 - Priority: P1
 - Owner: unassigned
@@ -304,7 +303,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     review): 8 tools — windows list/create/focus/close/move, action
     set/get state, commands list — zero new manifest permissions, grant-lock
     origin re-reads (smuggle-class defense), owner-scoped action state,
-    registry parity 46 tools, 1309/1309 suite. LANDED as 0.2.205
+    registry parity 46 tools, 1309/1309 suite. LANDED as 0.2.205 (`origin/main@0d308ce`)
   - 2026-08-24 15:55 UTC — TRANCHE 2 LANDED (0.2.225,
     origin/main@4e4cdee967d6355f0d9b4246000e343d2f29b100): 12 tools — alarms
     create/list/clear, bookmarks create/list/remove, notifications
@@ -312,7 +311,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     permissions already-declared (manifest version-only); 58 total platform
     tools; dangerous-pair verified (context enum only, no onclick/click-URL
     authority).
-    (origin/main@0d308ce14430e4d1c7f24b23e6e0c1686733517d).
   - 2026-08-23 23:05 UTC — captured from product-owner voice feedback;
     revives the early "go through all Chrome extension APIs and create tools"
     request.
@@ -1409,13 +1407,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   status: done
   landed_version: 0.2.272
   summary: "Create-agent dialog mic now REPLACES the field with the cumulative transcript (matches composer/prompt-bar) instead of appending it — dictating two utterances no longer doubles the text. View transitions removed: navigation now applies update() synchronously (no document.startViewTransition), making navigation instant/not janky, while focus routing (generation-guarded routeFocus + focusExplicitRouteTarget) is preserved so keyboard focus isn't lost. KATs: mic-transcript.test.ts + view-transition.test.ts. NOTE: during integration a worktree-overwrite briefly lost the cairn rename; it was restored from the reviewed commit and both fixes landed together at 0.2.272 (1593/1593)."
-<<<<<<< HEAD
 - id: CAP-FB-20260825-INVENTORY-DRIFT-01
   severity: P0
   status: done
   landed_version: 0.2.275
   summary: "npm run build failed with 'bundled-tool VERIFY FAILED — byte-drift: extension/lib/bundled-inventory-data.js'. Root cause: the inventory embeds a top-level 'release' field derived from package.json, but the machine-local post-commit hook bumps package.json AFTER the inventory is committed, so every version bump drifted the inventory and the build's verify gate failed closed. FIX: (1) regenerated the inventory to the current version (full regen — only bundled-inventory-data.js changed, the 26 Wasm binaries are reproducible/byte-identical); (2) STRUCTURAL: scripts/bump-version.mjs now keeps the inventory's 'release' field in lockstep on every bump (targeted patch, byte-equivalent to regen for a version-only change) AND stages it so the post-commit hook's amend bundles it — this fixes every machine since bump-version.mjs is committed. Also adopted: run 'npm run build' before every commit. 80 generated files byte-identical; full build RC=0."
-=======
 
 ## [CAP-FB-20260825-AGENT-ROLE-PREVIEW-01] The hub agent list prints the whole role
 - Feedback: 2026-08-25 — product owner: "The agent list on the ntp page doesn't have a truncated role/description, it contains pretty much all of the description and it looks terrible."
@@ -1460,7 +1456,6 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover: `deno run -A scripts/ui-integration.ts 2>&1 | grep -E "^FAIL|RESULT"`
 - History:
   - 2026-08-25 22:40 UTC — opened with attribution evidence. Five failures: the `+` menu bounds check, "running a demo task creates a thread in the sidebar" (`items: 0`), "clicking the sidebar thread opens the thread surface", "overlay-open matrix: the thread overlay is OPEN" (`noThread: true`) and the midnight-theme nub check (`overlayVisible: false`). All five reproduce with identical values on pristine `7642f76` with local work stashed, so they predate that work. The suite also did not print `RESULT` within 1800s on pristine main, so it is over budget as well as red — checks appended near its end are unreachable, which is why an unrelated fix's coverage went into its own script instead.
->>>>>>> 1c93509 (fix(ui): clamp the agent role preview in the hub list (CAP-FB-20260825-AGENT-ROLE-PREVIEW-01))
 - id: CAP-FB-20260826-OBSERVABILITY-01
   severity: P1
   status: done
@@ -1470,6 +1465,28 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 ## [CAP-FB-20260826-OWNER-BATCH-01] Owner bug/feature batch (2026-08-26, Telegram)
 
 Owner-described batch of bugs + UX issues. Each entry: analysis + acceptance. Prioritize + delegate.
+
+- Feedback: 2026-08-26 — product owner (Telegram): a batch of bugs and UX issues. Each child entry below carries its own analysis + acceptance.
+- Updated: 2026-08-26 23:30 UTC
+- Status: OPEN
+- Resume: —
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `c224d28b`
+- Candidate: —
+- Shipping: —
+- Acceptance: every child is prioritized and delegated with its analysis + acceptance; each child's own acceptance criteria are recorded per child below
+- Review: per-child — each child that becomes a candidate gets an independent review by a different model/session (standing rule); children carry their own review state
+- Gates: per-child gates — each child lands behind its own acceptance and the full-suite-green gate
+- Blockers: —
+- Next: prioritize the P0 children — usage/token accounting, permission-model simplification, and the agent-worker architecture decision — and delegate each with its recorded analysis + acceptance
+- Recover: `grep -n "^- id: CAP-FB-20260826" TASKS.md`
+- History:
+  - 2026-08-26 20:26 UTC — batch captured from product-owner Telegram (ea800309, 12 items)
+  - 2026-08-26 20:58 UTC — permission-system simplification recorded as P0 (c8f06bbe)
+  - 2026-08-26 23:30 UTC — agent-worker shared-worker architecture decision recorded as P0, phased (680c8904)
 
 - id: CAP-FB-20260826-BACK-STACK-01
   severity: P1
