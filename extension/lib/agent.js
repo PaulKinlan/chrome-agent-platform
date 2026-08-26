@@ -25,6 +25,13 @@ import {
 } from "./lazy-tool-protocol.js";
 
 const modelLog = capLog("model");
+/** agent-do lifecycle logger (CAP-FB-20260826-AGENT-DO-LIFECYCLE-LOG-01): the
+ * full run lifecycle is visible in the logs at the VERBOSE level (debug
+ * builds default verbose; store builds default off — the cap-log gate owns
+ * the default). REDACTION: only step indices, durations, tool NAMES,
+ * ok/error, and token counts — NEVER prompts, page content, tool args, or
+ * tool results. */
+const agentDoLog = capLog("agent-do");
 
 // The default system prompt = the versioned worker base (cap.worker.base) +
 // the immutable protected constraints, composed by the SINGLE composition
@@ -581,7 +588,17 @@ export function createAgent({
   // gets a FRESH agent whose system prompt recomposes those full skill bodies
   // BEFORE the protected block — the composition stays the single authority
   // and the protected layer is still structurally last.
-  const makeAgent = (sysPrompt) => agentDoCreateAgent({
+  // Lifecycle bookkeeping for the agent-do logs (bounded: entries are deleted
+  // on completion; at most innerStepLimit steps + in-flight tools alive).
+  // Re-initialized per makeAgent() call so a fresh per-run agent starts clean.
+  let stepSpans = new Map();
+  let toolSpans = new Map();
+  let runStartedAt = null;
+  const makeAgent = (sysPrompt) => {
+    stepSpans = new Map();
+    toolSpans = new Map();
+    runStartedAt = null;
+    return agentDoCreateAgent({
     id,
     name,
     model: boundModel,
@@ -593,15 +610,37 @@ export function createAgent({
     // write + two reads without dropping its run-local selection sequence.
     innerStepLimit: Math.max(2, Math.min(maxIterations, 8)),
     usage: { pricing: MODEL_PRICING },
+    // Lifecycle bookkeeping for the agent-do logs (bounded: entries are deleted
+    // on completion; at most innerStepLimit steps + in-flight tools).
+    ...(() => {
+      stepSpans = new Map();
+      toolSpans = new Map();
+      runStartedAt = null;
+      return {};
+    })(),
     hooks: {
       // LIVE progress hooks — forward the agent-do step/tool lifecycle to the
       // UI as normalized events. onProgress may be async (the SW broadcast is a
       // fire-and-forget postMessage), but the hooks are awaited by agent-do, so
       // they must never throw (a progress-emit failure must not kill the run).
+      // The cap-log lines below are a PURE side-effect (verbose-gated): they
+      // never alter hook return values, the progress flow, or timing.
       onStepStart: async (e) => {
+        // A step is ONE model round-trip — the step span IS the model span
+        // (agent-do exposes no separate onModelCall hook; its DebugConfig
+        // channels carry content + emit into the progress stream, so they are
+        // deliberately NOT used — redaction + preserve constraints).
+        const span = perfSpan(`agent-do:step:${e.step}`, { ns: "agent-do" });
+        stepSpans.set(e.step, span);
+        if (runStartedAt == null) runStartedAt = Date.now();
+        agentDoLog.debug(`step ${e.step}/${e.totalSteps ?? "?"} start`, { tokensSoFar: e.tokensSoFar ?? 0, costSoFar: e.costSoFar ?? 0 });
         try { progressCb?.({ type: "thinking", step: e.step, totalSteps: e.totalSteps, tokensSoFar: e.tokensSoFar, costSoFar: e.costSoFar }); } catch { /* ignore */ }
       },
       onStepComplete: async (e) => {
+        const span = stepSpans.get(e.step);
+        stepSpans.delete(e.step);
+        const dur = span ? span.end("ok") : 0;
+        agentDoLog.debug(`step ${e.step} complete in ${dur.toFixed(1)}ms`, { hasToolCalls: e.hasToolCalls === true });
         try { progressCb?.({ type: "text", text: e.text, step: e.step, hasToolCalls: e.hasToolCalls }); } catch { /* ignore */ }
       },
       onPreToolUse: async (e) => {
@@ -610,6 +649,11 @@ export function createAgent({
         // refusal propagates so the tool execution is REFUSED (the run never
         // mutates before its authority is durable); ordinary broadcast errors
         // remain non-fatal.
+        // Tool-use span + start line BEFORE the progress await (the durable
+        // pre-tool authority): the name ONLY — never args/page content.
+        const toolKey = `${e.step}:${String(e.toolName ?? "unknown").slice(0, 64)}`;
+        toolSpans.set(toolKey, perfSpan(`agent-do:tool:${String(e.toolName ?? "unknown").slice(0, 48)}`, { ns: "agent-do" }));
+        agentDoLog.debug(`tool ${String(e.toolName ?? "unknown").slice(0, 64)} start (step ${e.step})`);
         try {
           await progressCb?.({ type: "tool-call", toolName: e.toolName, toolArgs: e.args, step: e.step });
         } catch (error) {
@@ -618,6 +662,12 @@ export function createAgent({
         }
       },
       onPostToolUse: async (e) => {
+        const toolKey = `${e.step}:${String(e.toolName ?? "unknown").slice(0, 64)}`;
+        const tspan = toolSpans.get(toolKey);
+        toolSpans.delete(toolKey);
+        const toolOk = !isToolResultFailure(e.result);
+        if (tspan) tspan.end(toolOk ? "ok" : "error");
+        agentDoLog.debug(`tool ${String(e.toolName ?? "unknown").slice(0, 64)} ${toolOk ? "ok" : "error"} in ${(e.durationMs ?? 0).toFixed ? e.durationMs.toFixed(1) : "?"}ms (step ${e.step})`);
         try {
           progressCb?.({
             type: "tool-result",
@@ -631,9 +681,12 @@ export function createAgent({
         } catch { /* ignore */ }
       },
       onComplete: async (e) => {
+        const runDur = runStartedAt == null ? 0 : Date.now() - runStartedAt;
+        agentDoLog.debug(`run complete: ${e.totalSteps ?? "?"} steps in ${runDur}ms${e.aborted ? " (aborted)" : ""}`);
         try { progressCb?.({ type: "done", text: e.result, totalSteps: e.totalSteps, aborted: e.aborted }); } catch { /* ignore */ }
       },
       onUsage: async (record) => {
+        agentDoLog.debug(`usage: in ${record.inputTokens ?? 0} out ${record.outputTokens ?? 0} estCost ${record.estimatedCost ?? 0}`);
         // Bind this callback to ITS provider attempt (FIFO) — a delayed callback
         // must not read a later attempt's id/timestamp.
         const attempt = attemptQueue.shift() ?? { id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: attemptOrdinal };
@@ -653,8 +706,8 @@ export function createAgent({
           : null);
       },
     },
-  });
-
+    });
+  };
   // The shared agent (no per-run skills — the common case).
   const agent = makeAgent(systemPrompt);
 
