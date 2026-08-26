@@ -25,5 +25,6 @@ This document records the assignment of service-worker message routes to their o
 | `provider.clear-key` | `extension/background/routes/provider.js` | Clear stored provider API key | `owner-options` |
 | `provider.test` | `extension/background/routes/provider.js` | Test provider connection with stored/provided key | `owner-options` |
 | `provider.models` | `extension/background/routes/provider.js` | List available provider model presets | Extension |
+| `activity.list` | `extension/background/routes/activity.js` | Fault-isolated, bounded aggregation of the master + named + background + site journals into the searchable activity timeline | Extension |
 | `tool-catalog.shadow` | `extension/background/service-worker.js` | Settings-only metadata/search/selection diagnostics; never execution or grants | `owner-options` |
-| *All other routes (119)* | `extension/background/service-worker.js` (inline) | To be modularized in subsequent slices | Context-dependent |
+| *All other routes (118)* | `extension/background/service-worker.js` (inline) | To be modularized in subsequent slices | Context-dependent |

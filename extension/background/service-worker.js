@@ -27,6 +27,7 @@ import {
 } from "../lib/provider-gate.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
+  createActivityRoutes,
   createProviderRoutes,
   kvRoutes,
   mergeRouteMaps,
@@ -2861,7 +2862,23 @@ function dispatchRoute(type, body, context) {
 
 const providerRoutes = createProviderRoutes({ invalidateAgent });
 
+// The activity-log explorer aggregation (extracted from the inline handler so
+// it is fault-isolated + bounded on real profiles — a slow/failing store can
+// never hang the route past the MV3 worker's lifetime).
+const activityRoutes = createActivityRoutes({
+  masterMemory,
+  namedAgentMemory,
+  backgroundAgentMemory,
+  siteMemory,
+  listNamedAgents,
+  listNamedAgentIds,
+  listBackgroundAgentIds,
+  listOrigins,
+  slugifyAgentId,
+});
+
 const handlers = mergeRouteMaps(
+  activityRoutes,
   {
   // The controlled cross-origin fetch for the script-host (and any extension
   // page): the service worker performs the fetch with the extension's host
@@ -3866,70 +3883,6 @@ const handlers = mergeRouteMaps(
       ? journal.slice(-200).reverse()
       : [];
     return { entries, count: entries.length };
-  },
-
-  // ── The activity-log explorer (PLAN.md + Paul's hard constraint: SEE the
-  // agents + what they did). Aggregates the per-store journals — the master,
-  // every NAMED agent (memory/agents/<slug>), every BACKGROUND agent
-  // (memory/background/<slug>), and every enrolled SITE origin — into ONE
-  // searchable/browsable timeline. Each entry is TAGGED with its source so the
-  // "which agent did this" attribution is preserved. `agent` filters to a single
-  // source; `query` is a case-insensitive substring across the readable text;
-  // `since`/`until` bound by time. Read-only (the journals are already bounded).
-  async "activity.list"({ agent, query, since, until, limit = 500 } = {}) {
-    const bound = Math.max(1, Math.min(2000, Number(limit) || 500));
-    const out = [];
-    const push = (store, source, agentLabel) =>
-      store.get("journal").then((journal) => {
-        if (!Array.isArray(journal)) return;
-        for (const e of journal) {
-          out.push({ ...e, source, agentLabel });
-        }
-      });
-    const jobs = [push(masterMemory(), "master", "hub")];
-    // Named agents — resolve their display names from the registry.
-    const named = await listNamedAgents();
-    const namedById = new Map(named.map((a) => [slugifyAgentId(a.id), a]));
-    for (const id of await listNamedAgentIds()) {
-      const reg = namedById.get(id);
-      jobs.push(push(
-        namedAgentMemory(id),
-        `agent:${id}`,
-        reg?.name || reg?.id || id,
-      ));
-    }
-    // Background/scheduled agents (recipes + hook-driven runs).
-    for (const id of await listBackgroundAgentIds()) {
-      jobs.push(push(backgroundAgentMemory(id), `background:${id}`, id));
-    }
-    // Enrolled site origins.
-    for (const origin of await listOrigins()) {
-      jobs.push(push(siteMemory(origin), origin, origin));
-    }
-    await Promise.all(jobs);
-    out.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
-    const sinceTs = since ? Number(since) : null;
-    const untilTs = until ? Number(until) : null;
-    const q = String(query ?? "").trim().toLowerCase();
-    const matchesAgent = agent
-      ? (e) => e.source === agent
-      : () => true;
-    const matchesQuery = q
-      ? (e) => {
-          const hay = [
-            e.agentLabel, e.type, e.task, e.result, e.tool, e.args, e.url,
-            e.source, e.id,
-          ].map((v) => (v == null ? "" : String(v))).join(" ").toLowerCase();
-          return hay.includes(q);
-        }
-      : () => true;
-    const matchesWindow = (e) =>
-      (sinceTs == null || (e.ts ?? 0) >= sinceTs) &&
-      (untilTs == null || (e.ts ?? 0) <= untilTs);
-    const filtered = out
-      .filter((e) => matchesAgent(e) && matchesQuery(e) && matchesWindow(e))
-      .slice(0, bound);
-    return { entries: filtered, count: filtered.length, total: out.length };
   },
 
   // The hub agent's management surface (list_agents / get_agent / update_agent).

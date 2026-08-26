@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 import {
+  createActivityRoutes,
   createProviderRoutes,
   kvRoutes,
   mergeRouteMaps,
@@ -259,6 +260,7 @@ Deno.test("sw routes: AST verification of route registration across service-work
   // Extract inline routes from ObjectExpressions in the mergeRouteMaps arguments
   const registeredRouteKeys = [];
   const providerRoutes = createProviderRoutes();
+  const activityRoutes = createActivityRoutes();
 
   for (const arg of mergeCall.arguments) {
     if (arg.type === "ObjectExpression") {
@@ -276,6 +278,8 @@ Deno.test("sw routes: AST verification of route registration across service-work
         registeredRouteKeys.push(...Object.keys(permLeaseRoutes));
       } else if (arg.name === "providerRoutes") {
         registeredRouteKeys.push(...Object.keys(providerRoutes));
+      } else if (arg.name === "activityRoutes") {
+        registeredRouteKeys.push(...Object.keys(activityRoutes));
       }
     }
   }

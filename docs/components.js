@@ -5189,6 +5189,18 @@ function backend(type, payload = {}) {
   return RUNTIME_SEND ? RUNTIME_SEND(type, payload) : Promise.resolve({});
 }
 
+// A bounded await: if the worker never answers (e.g. it was killed mid-route,
+// which leaves sendMessage's callback NEVER fired), the caller must still
+// settle — an unbounded await here was the activity-explorer's dead-controls
+// failure (the load promise hung, so the agent select stayed empty and the
+// search box filtered nothing).
+function backendBounded(type, payload = {}, timeoutMs = 12000) {
+  return Promise.race([
+    backend(type, payload),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
+  ]);
+}
+
 function fmtTime(ts) {
   try {
     return new Date(ts).toLocaleTimeString([], { hour12: false });
@@ -5680,12 +5692,15 @@ class ActivityExplorer extends Component {
           color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere;
           font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
         .aex-empty { padding:12px 10px; font-size:13px; color:var(--muted,#635e56); }
+        .aex-retry { margin-left:8px; padding:3px 10px; font:inherit; font-size:12px; cursor:pointer;
+          color:var(--accent,#0e6e63); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
+          border-radius:var(--radius-sm,8px); }
         .aex-count { font-size:11px; color:var(--muted,#635e56); }
       </style>
       <div class="aex">
         <div class="aex-toolbar">
           <input class="aex-search" type="search" placeholder="Search activity…" aria-label="Search activity">
-          <select class="aex-agent" aria-label="Filter by agent"></select>
+          <select class="aex-agent" aria-label="Filter by agent"><option value="">All agents</option></select>
         </div>
         <div class="aex-list" role="log" aria-live="polite"></div>
       </div>`;
@@ -5712,12 +5727,25 @@ class ActivityExplorer extends Component {
     // If entries were seeded synchronously (the gallery), never clobber them
     // with the empty backend result (the _load await would race the setter).
     if (!this._seeded) {
-      const res = await backend("activity.list", {
-        agent: this.getAttribute("agent") || undefined,
-        limit: Number(this.getAttribute("limit")) || 200,
-      });
-      if (!this._seeded) {
-        this._entries = Array.isArray(res.entries) ? res.entries : [];
+      this._loadError = null;
+      try {
+        // BOUNDED: a worker that never answers must not leave the controls
+        // dead — settle with an honest error + retry instead.
+        const res = await backendBounded("activity.list", {
+          agent: this.getAttribute("agent") || undefined,
+          limit: Number(this.getAttribute("limit")) || 200,
+        });
+        if (!this._seeded) {
+          this._entries = Array.isArray(res?.entries) ? res.entries : [];
+          this._loadError = Array.isArray(res?.entries)
+            ? null
+            : (res?.error || "couldn't load the activity log");
+        }
+      } catch {
+        if (!this._seeded) {
+          this._entries = [];
+          this._loadError = "the activity log didn't answer — the agent worker may be busy";
+        }
       }
     }
     const seen = new Map();
@@ -5749,7 +5777,17 @@ class ActivityExplorer extends Component {
     if (!filtered.length) {
       const d = document.createElement("div");
       d.className = "aex-empty";
-      d.textContent = "No activity matches.";
+      // A load failure is surfaced HONESTLY with a retry (never the silent
+      // empty select + dead search box the unbounded load produced).
+      d.textContent = this._loadError || "No activity matches.";
+      if (this._loadError) {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "aex-retry";
+        retry.textContent = "Retry";
+        retry.addEventListener("click", () => this._load());
+        d.append(retry);
+      }
       this._list.append(d);
       return;
     }
