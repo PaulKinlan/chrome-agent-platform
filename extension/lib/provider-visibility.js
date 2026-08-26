@@ -4,7 +4,7 @@
 // global/per-agent selections and deterministic test runs keep working. They
 // are not choices a user can newly select from Settings or /model.
 
-export const INTERNAL_PROVIDER_IDS = Object.freeze(["demo", "prompt-api", "local-opfs"]);
+export const INTERNAL_PROVIDER_IDS = Object.freeze(["demo", "prompt-api"]);
 export const INTERNAL_PROVIDER_ACTIVE_MESSAGE =
   "Internal testing provider active. Choose a listed provider to replace it.";
 

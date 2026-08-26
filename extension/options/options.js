@@ -17,17 +17,6 @@ import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { bindProviderSetDefault } from "../lib/provider-options-save.js";
 import { modelsForVendor } from "../lib/model-prices.js";
 import {
-  LOCAL_MODEL_CATALOG,
-  localModelFeasibility,
-  preflightLocalModel,
-} from "../lib/local-model-catalog.js";
-import {
-  downloadLocalModel,
-  deleteLocalModel,
-  listInstalledModels,
-  verifyModelIntegrity,
-} from "../lib/local-model-manager.js";
-import {
   providerSelectionPresentation,
   renderInternalProviderStatus,
 } from "../lib/provider-visibility.js";
@@ -379,121 +368,6 @@ async function renderToolLibrary() {
     } finally {
       library.previewBusy = false;
     }
-  });
-}
-
-async function renderLocalModels() {
-  const catalog = $("#local-model-catalog");
-  if (!catalog) return;
-  let availableStorageBytes;
-  try {
-    const estimate = await navigator.storage?.estimate?.();
-    if (Number.isFinite(estimate?.quota) && Number.isFinite(estimate?.usage)) {
-      availableStorageBytes = Math.max(0, estimate.quota - estimate.usage);
-    }
-  } catch { /* inability to estimate is rendered as unknown, never as feasible */ }
-  catalog.models = LOCAL_MODEL_CATALOG;
-  catalog.feasibility = localModelFeasibility({
-    deviceMemory: navigator.deviceMemory,
-    // Memory64 support and runtime limits need a dedicated runtime benchmark;
-    // this source slice refuses to infer support from ordinary wasm32 support.
-    memory64: false,
-    opfs: typeof navigator.storage?.getDirectory === "function",
-    availableStorageBytes,
-  });
-
-  try {
-    const installed = await listInstalledModels();
-    catalog.setInstalled(installed);
-  } catch (e) {
-    console.warn("failed to list installed models", e);
-  }
-
-  const activeDownloads = new Map();
-
-  catalog.addEventListener("model-preflight", async (event) => {
-    const modelId = event.detail?.modelId;
-    const model = LOCAL_MODEL_CATALOG.find((entry) => entry.id === modelId);
-    if (!model) return;
-    catalog.setProbeState(model.id, "probing", "Reading one byte from each pinned publisher file…");
-    const result = await preflightLocalModel(model);
-    catalog.setProbeState(
-      model.id,
-      result.ok ? "passed" : "failed",
-      result.ok
-        ? "Publisher preflight passed. Download to OPFS is available on demand."
-        : `Publisher preflight failed closed: ${result.error ?? "unverified response"}`,
-    );
-  });
-
-  catalog.addEventListener("model-download", async (event) => {
-    const modelId = event.detail?.modelId;
-    const model = LOCAL_MODEL_CATALOG.find((entry) => entry.id === modelId);
-    if (!model || activeDownloads.has(modelId)) return;
-
-    const controller = new AbortController();
-    activeDownloads.set(modelId, controller);
-
-    try {
-      await downloadLocalModel({
-        modelId,
-        signal: controller.signal,
-        onProgress: (p) => {
-          catalog.setProgress(modelId, p);
-        },
-      });
-      const installed = await listInstalledModels();
-      catalog.setInstalled(installed);
-      catalog.setProgress(modelId, null);
-    } catch (err) {
-      catalog.setProgress(modelId, null);
-      if (err?.code !== "download_aborted") {
-        catalog.setProbeState(modelId, "failed", `Download failed: ${err?.message ?? err}`);
-      }
-    } finally {
-      activeDownloads.delete(modelId);
-    }
-  });
-
-  catalog.addEventListener("model-cancel", (event) => {
-    const modelId = event.detail?.modelId;
-    const controller = activeDownloads.get(modelId);
-    if (controller) {
-      controller.abort("User cancelled download.");
-      activeDownloads.delete(modelId);
-      catalog.setProgress(modelId, null);
-    }
-  });
-
-  catalog.addEventListener("model-delete", async (event) => {
-    const modelId = event.detail?.modelId;
-    try {
-      await deleteLocalModel({ modelId });
-      const installed = await listInstalledModels();
-      catalog.setInstalled(installed);
-      catalog.setProbeState(modelId, "idle", "Model removed from OPFS.");
-    } catch (err) {
-      console.error("delete model failed", err);
-    }
-  });
-
-  catalog.addEventListener("model-verify", async (event) => {
-    const modelId = event.detail?.modelId;
-    try {
-      const res = await verifyModelIntegrity({ modelId });
-      if (res?.ok && res?.integrityVerified) {
-        catalog.setProbeState(modelId, "passed", "Integrity verified: all file SHA-256 hashes match catalog.");
-      } else {
-        catalog.setProbeState(modelId, "failed", `Integrity check failed: ${res?.error ?? "corrupt files"}`);
-      }
-    } catch (err) {
-      catalog.setProbeState(modelId, "failed", `Verification failed: ${err?.message ?? err}`);
-    }
-  });
-
-  catalog.addEventListener("model-select", (event) => {
-    const modelId = event.detail?.modelId;
-    catalog.setSelected(modelId);
   });
 }
 
@@ -2912,7 +2786,6 @@ chrome.permissions?.onRemoved?.addListener((change) => {
 
 await refreshStoragePermission();
 await renderProviders();
-await renderLocalModels();
 await renderLocalFolders();
 await renderToolLibrary();
 await renderAgents();

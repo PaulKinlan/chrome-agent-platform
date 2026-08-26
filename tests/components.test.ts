@@ -66,7 +66,6 @@ const COMPONENTS = [
   "agent-config-form",
   "provider-select",
   "model-picker",
-  "local-model-catalog",
   "tool-library",
   "agent-nav",
   "error-console",
