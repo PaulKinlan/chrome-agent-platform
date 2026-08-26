@@ -376,6 +376,92 @@ export function createToolCardQueue() {
   };
 }
 
+/** Normalize a tool result's STRUCTURED permission/grant denial (owner P0
+ * CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01). Tools deny with
+ * { error, waitingForPermission:true, permissionRequirement:{ reason,
+ * permissions[], grantOrigins[], grantGlobal } }; this validates + bounds that
+ * shape into a uniform requirement the conversation renders as an IN-CONTEXT
+ * owner approval card. A malformed/unbounded requirement is ignored (fail
+ * closed to the plain error text, never an approval card for a forged shape).
+ * The requirement is only ever a DESCRIPTION — approving it still takes the
+ * real owner click on the card. */
+export function normalizePermissionRequirement(result) {
+  if (result?.waitingForPermission !== true) return null;
+  const req = result?.permissionRequirement;
+  if (!req || typeof req !== "object" || Array.isArray(req)) return null;
+  const cleanStrings = (value, max) =>
+    (Array.isArray(value) ? value : [])
+      .filter((item) => typeof item === "string" && item.length > 0 && item.length <= 240)
+      .slice(0, max);
+  const permissions = [...new Set(cleanStrings(req.permissions, 8))];
+  const grantOrigins = [...new Set(cleanStrings(req.grantOrigins, 50))]
+    .filter((origin) => /^https?:\/\//.test(origin));
+  const grantGlobal = req.grantGlobal === true;
+  if (!permissions.length && !grantOrigins.length && !grantGlobal) return null;
+  const reason = typeof req.reason === "string" && req.reason.trim()
+    ? req.reason.trim().slice(0, 240)
+    : "perform this action";
+  return {
+    reason,
+    permissions,
+    grantOrigins,
+    grantGlobal,
+    key: [...permissions].sort().join(",") + "|" + (grantGlobal ? "<global>" : [...grantOrigins].sort().join(",")),
+  };
+}
+
+/** Execute an approved permission requirement FROM THE OWNER'S CLICK. Order
+ * matters: the Chrome permission request happens FIRST (it needs the live
+ * user gesture; awaiting anything else first can lose transient activation),
+ * then the browser-control grant is routed through the service worker (the
+ * single grant authority). Scope is exactly what the tool computed:
+ * grantOrigins set an origin-scoped grant; grantGlobal (only when the tool's
+ * own semantics already required the global grant) sets the global grant;
+ * nothing is silently broadened. When a grant is set, "storage" is requested
+ * too so the grant PERSISTS (without it the grant is session-only and
+ * evaporates with the MV3 worker — the Settings toggle does the same).
+ * Returns an honest outcome; every failure is surfaced, never swallowed. */
+export async function approvePermissionRequirement(requirement, {
+  sendFn = send,
+  requestPermissions = (permissions) => chrome.permissions.request({ permissions }),
+} = {}) {
+  const out = { ok: true, permissionsGranted: true, grantSet: false, storagePersisted: null, errors: [] };
+  if (requirement?.permissions?.length) {
+    try {
+      out.permissionsGranted = (await requestPermissions([...requirement.permissions])) === true;
+    } catch (e) {
+      out.permissionsGranted = false;
+      out.errors.push(String(e?.message ?? e));
+    }
+    if (!out.permissionsGranted) {
+      out.ok = false;
+      if (!out.errors.length) out.errors.push("the permission request was declined");
+      return out;
+    }
+  }
+  if (requirement?.grantGlobal === true || requirement?.grantOrigins?.length) {
+    // Persist the grant first (silent permission, same gesture) — without it
+    // the grant would be session-only and the retry would deny again after a
+    // worker restart. A declined storage request is reported, not hidden.
+    try {
+      out.storagePersisted = (await requestPermissions(["storage"])) === true;
+    } catch {
+      out.storagePersisted = false;
+    }
+    const body = requirement.grantGlobal === true
+      ? { granted: true }
+      : { granted: true, origins: [...requirement.grantOrigins] };
+    const res = await sendFn("browser-control.set", body).catch((e) => ({ error: String(e?.message ?? e) }));
+    if (res?.grant && typeof res.grant === "object" && typeof res.grant.id === "string") {
+      out.grantSet = true;
+    } else {
+      out.ok = false;
+      out.errors.push(res?.error ?? "the browser-control grant was not set");
+    }
+  }
+  return out;
+}
+
 /** Whether a live tool-result event signals FAILURE. The SW's `ok` flag is
  * AUTHORITATIVE — text heuristics apply ONLY when `ok` is absent (older
  * producers / journal replay), so a valid summary like "failed attempts: 0"
@@ -878,6 +964,92 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // owns its runId, queue, arbiter, and listener, so stale events from another
   // page or attempt are never accepted.
   let attempt = 0;
+
+  // ── in-context permission approval (owner P0 CAP-FB-20260826-
+  // PERMISSIONS-SIMPLIFY-01) ───────────────────────────────────────────────
+  // A tool's STRUCTURED denial (waitingForPermission + permissionRequirement)
+  // renders as an approval card right in the conversation instead of a
+  // dead-end "go to Settings" error. Allow is a genuine owner click: it runs
+  // the exact Chrome permission request + sets the exactly-scoped browser-
+  // control grant, then retries the turn once so the task proceeds. Deny
+  // dismisses; nothing is granted. One card per distinct requirement.
+  const pendingApprovals = new Map(); // key -> { requirement, status, card }
+  let approvalRetryRequested = false;
+  let attemptSettled = false;
+  const handleApprovalDecision = async (requirement, card, sourceEvent, approve) => {
+    const entry = pendingApprovals.get(requirement.key);
+    if (!entry || entry.status !== "pending") return;
+    // A genuine owner gesture only (the Settings approvals surface's guard):
+    // the card's own click event must be browser-trusted with live transient
+    // activation — a scripted/model-forged "click" can never grant.
+    const liveActivation = typeof navigator === "undefined" || !navigator.userActivation
+      ? true // older engine without the API: isTrusted is the remaining bar
+      : navigator.userActivation.isActive === true;
+    if (sourceEvent?.isTrusted !== true || !liveActivation) return;
+    if (!approve) {
+      entry.status = "denied";
+      card?.setAttribute("state", "denied");
+      return;
+    }
+    entry.status = "granting";
+    const outcome = await approvePermissionRequirement(requirement);
+    if (outcome.ok) {
+      entry.status = "granted";
+      card?.setAttribute("state", "granted");
+      approvalRetryRequested = true;
+      if (attemptSettled && !stale()) {
+        // The common case: the run already finished narrating the denial, then
+        // the owner clicked Allow — retry detached (the turn's result was
+        // already returned to the caller; the retry renders into this surface).
+        approvalRetryRequested = false;
+        Promise.resolve().then(() => executeTurn()).catch(() => {});
+      }
+    } else {
+      // Stay actionable + honest: the card reports WHY it failed and can be
+      // retried (e.g. the owner dismissed Chrome's prompt the first time).
+      entry.status = "pending";
+      card?.setAttribute("state", "error");
+      card?.setAttribute("detail", outcome.errors.join("; ") || "the approval could not be completed");
+    }
+  };
+  const maybeRenderApproval = (result) => {
+    const requirement = normalizePermissionRequirement(result);
+    if (!requirement) return;
+    const existing = pendingApprovals.get(requirement.key);
+    if (existing) {
+      // The SAME requirement denied AGAIN after a grant (the grant did not
+      // take effect — e.g. it was set session-only and the worker restarted,
+      // or a narrower scope than the tool needs) — re-open the SAME card for
+      // another owner decision instead of leaving a silent dead-end. A
+      // "denied" decision stays sticky (no nagging after an explicit decline).
+      if (existing.status === "granted") {
+        existing.status = "pending";
+        existing.card?.setAttribute("state", "pending");
+      }
+      return;
+    }
+    let card = null;
+    if (typeof document !== "undefined" && typeof c.append === "function") {
+      card = document.createElement("permission-approval-card");
+      card.setAttribute("reason", requirement.reason);
+      if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));
+      if (requirement.grantOrigins.length) card.setAttribute("origins", JSON.stringify(requirement.grantOrigins));
+      if (requirement.grantGlobal) card.setAttribute("global", "true");
+      card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
+      card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));
+      c.append(card);
+      if (typeof c.scrollTop === "number") c.scrollTop = c.scrollHeight;
+    }
+    pendingApprovals.set(requirement.key, { requirement, status: "pending", card });
+    status({
+      state: "waiting-for-permission",
+      message: `approval needed: ${requirement.reason}`,
+      errorReason: `the agent needs approval to ${requirement.reason}`,
+      errorAction: "use the approval card in the conversation to allow it",
+      errorCategory: "permission",
+    });
+  };
+
   const executeTurn = async () => {
   // A grant-retry re-enters here after its own permission awaits — re-check.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
@@ -963,6 +1135,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
+        // A structured permission/grant denial surfaces an IN-CONTEXT approval
+        // card (one per distinct requirement) instead of only an error card.
+        maybeRenderApproval(ev.result);
         break;
       }
       case "text":
@@ -1116,6 +1291,16 @@ export async function runConversationTurn(container, { text, attachments = [], h
       appendBubble(c, "error", "Error: " + msg);
     }
     appendProviderGrant(category);
+  }
+  // An approval granted DURING this attempt makes one owner-initiated retry:
+  // the capability the agent just asked for is now in place, so the same task
+  // runs again and can actually proceed (the owner's Allow IS the initiation —
+  // this page still never loops or auto-retries on its own).
+  attemptSettled = true;
+  if (approvalRetryRequested && !stale()) {
+    approvalRetryRequested = false;
+    attemptSettled = false;
+    return await executeTurn();
   }
   return res;
   };

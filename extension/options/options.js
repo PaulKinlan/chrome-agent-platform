@@ -2009,7 +2009,21 @@ async function renderPermissions() {
           .sendMessage({ type: "capability.revoke", id: cap.id })
           .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
         if (res?.revoked) saveFlash(`Disabled ${cap.label}.`);
-        else {
+        else if (res?.ok === false && /requires owner approval/i.test(res?.error ?? "")) {
+          // The Disable needs ONE owner confirmation (the security model's
+          // approval flow — capability.revoke is deliberately NOT owner-
+          // direct). Make it VISIBLE + COMPLETING instead of a dead-end error:
+          // remember the intent, open the Approvals section with a plain
+          // explanation, and after the owner approves there, re-send this
+          // exact Disable so it finishes without hunting (owner P0
+          // CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01).
+          pendingCapabilityDisable = { id: cap.id, label: cap.label };
+          saveFlash(
+            `One more step: confirm disabling ${cap.label} in Approvals (opened for you) — it then completes automatically.`,
+          );
+          window.location.hash = "#approvals";
+          renderApprovals();
+        } else {
           saveFlash(
             `Disable ${cap.label} failed: ${res?.error ?? "still granted"}.`,
           );
@@ -2676,6 +2690,29 @@ function saveFlash(msg) {
 const approvalList = $("#approval-list");
 const approvalStatus = $("#approval-status");
 let approvalRenderBusy = false;
+// The guided capability-Disable intent (owner P0 CAP-FB-20260826-
+// PERMISSIONS-SIMPLIFY-01): set when a Permissions-section Disable click
+// surfaces the one-click owner confirmation; consumed after the approval
+// resolves by re-sending that exact Disable so it completes on its own.
+let pendingCapabilityDisable = null;
+
+// Plain-English names for the approval rows — "capability.revoke" /
+// "Private reference 4af9…" told the owner nothing (owner P0).
+const APPROVAL_ACTION_LABELS = {
+  "capability.revoke": "Disable a permission",
+  "asset.update": "Change an artifact",
+  "asset.delete": "Delete an artifact",
+  "agent.delete": "Delete an agent",
+  "agent.update": "Change an agent",
+  "script.delete": "Delete a script",
+  "script.update": "Change a script",
+  "hooks.subscribe": "Allow an automation hook",
+  "hooks.unsubscribe": "Remove an automation hook",
+  "named-agent.create": "Create a named agent",
+  "named-agent.delete": "Delete a named agent",
+  "named-agent.update": "Change a named agent",
+  "named-agent.set-provider": "Change a named agent's provider",
+};
 
 async function resolveApprovalFromClick(event, approvalId, approve, row) {
   if (!event.isTrusted || navigator.userActivation?.isActive !== true) {
@@ -2692,6 +2729,31 @@ async function resolveApprovalFromClick(event, approvalId, approve, row) {
   if (approvalStatus) approvalStatus.textContent = result?.ok
     ? (approve ? "Approved. The exact requesting operation may retry once." : "Denied. The exact request was removed.")
     : "That approval could not be resolved. Refresh and try again.";
+  // Guided capability-Disable completion: the owner approved the confirmation
+  // a Permissions-section Disable asked for — re-send that exact Disable now
+  // (the approval is consumed by the identical retry) so the flow FINISHES
+  // here instead of sending the owner back to hunt for the button again.
+  if (result?.ok && approve && pendingCapabilityDisable) {
+    const intent = pendingCapabilityDisable;
+    const res = await chrome.runtime
+      .sendMessage({ type: "capability.revoke", id: intent.id })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (res?.revoked) {
+      pendingCapabilityDisable = null;
+      saveFlash(`Disabled ${intent.label}.`);
+      renderPermissions();
+      window.location.hash = "#permissions";
+    } else if (res?.ok === false && /requires owner approval/i.test(res?.error ?? "")) {
+      // A different approval was resolved (not the Disable's) — keep the
+      // intent + the guidance; the fresh confirmation row is now listed.
+      if (approvalStatus) approvalStatus.textContent =
+        `Approved. Now confirm the “Disable ${intent.label}” row below to finish.`;
+    } else {
+      pendingCapabilityDisable = null;
+      saveFlash(`Disable ${intent.label} failed: ${res?.error ?? "still granted"}.`);
+      renderPermissions();
+    }
+  }
   await renderApprovals();
 }
 
@@ -2709,14 +2771,18 @@ async function renderApprovals() {
       approvalList.append(empty);
       return;
     }
-    if (approvalStatus) approvalStatus.textContent = "Review the pending action, then approve it once or deny it.";
+    if (approvalStatus) {
+      approvalStatus.textContent = pendingCapabilityDisable
+        ? `Confirm below to finish disabling ${pendingCapabilityDisable.label} — it completes automatically once approved.`
+        : "Review the pending action, then approve it once or deny it.";
+    }
     for (const approval of approvals) {
       const approvalId = approval.approvalId; // closure only
       const row = document.createElement("div");
       row.className = "approval-row";
       const description = document.createElement("div");
       const action = document.createElement("strong");
-      action.textContent = String(approval.action ?? "destructive operation");
+      action.textContent = APPROVAL_ACTION_LABELS[approval.action] ?? String(approval.action ?? "destructive operation");
       const reference = document.createElement("span");
       reference.className = "approval-ref muted";
       reference.textContent = `Private reference ${String(approval.targetRef ?? "unavailable")}`;

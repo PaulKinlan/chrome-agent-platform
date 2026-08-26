@@ -258,6 +258,34 @@ async function hasPermission(perm) {
   }
 }
 
+/** A uniform, STRUCTURED permission/grant denial (owner P0 CAP-FB-20260826-
+ * PERMISSIONS-SIMPLIFY-01). The conversation surfaces render any tool result
+ * carrying waitingForPermission + permissionRequirement as an IN-CONTEXT owner
+ * approval card (Allow / Deny) instead of a dead-end "go to Settings" error.
+ * Security invariants (unchanged from the Settings paths):
+ *   - `permissions` are real Chrome API permission names, requested ONLY from
+ *     a genuine owner click on the approving surface (chrome.permissions
+ *     .request); the service worker never requests them itself.
+ *   - `grantOrigins` is the EXACT canonical origin allowlist the tool itself
+ *     computed — never widened by the approval path.
+ *   - `grantGlobal` is true ONLY where the tool's existing semantics already
+ *     require the global grant (an origin-less tab scope, a browser-wide
+ *     mutation) — the approval card states "all sites" plainly in that case.
+ *   - Nothing here grants anything: this is a DESCRIPTION of what a real owner
+ *     gesture must approve. The denial path is byte-identical otherwise. */
+function permissionDenial(error, { reason, permissions = [], grantOrigins = [], grantGlobal = false } = {}) {
+  return {
+    error,
+    waitingForPermission: true,
+    permissionRequirement: {
+      reason: String(reason ?? "perform this action").slice(0, 240),
+      permissions: [...new Set(permissions)].slice(0, 8),
+      grantOrigins: [...new Set(grantOrigins)].slice(0, 50),
+      grantGlobal: grantGlobal === true,
+    },
+  };
+}
+
 // ── T8 site-data control helpers (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01) ──
 /** Whether the EXACT origin's host permission is granted (cookies need host
  * access for the target site). Only an exact `<origin>/*` pattern is ever
@@ -775,10 +803,13 @@ export async function readPage(tabId) {
  * is asserted adjacent to the mutation and re-checked after the await. */
 async function withTabIdsGrant(tabIds, verb, mutate) {
   if (!(await hasTabsPermission())) {
-    return {
-      error:
-        "tabs permission not granted — enable Browser control in Settings",
-    };
+    return permissionDenial(
+      "tabs permission not granted — enable Browser control in Settings",
+      {
+        reason: `${verb === "grouped" ? "group" : verb === "ungrouped" ? "ungroup" : verb === "moved" ? "move" : "control"} your tabs`,
+        permissions: ["tabs"],
+      },
+    );
   }
   return await withGrantLock(async () => {
     const tabs = await Promise.all(
@@ -809,10 +840,17 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
       ? await isBrowserControlGranted(undefined)
       : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
     if (!covered) {
-      return {
-        error:
-          "browser control not granted for every tab origin here — ask the user to approve it in Settings",
-      };
+      const needsGlobal = hasOriginless || origins.length === 0;
+      return permissionDenial(
+        "browser control not granted for every tab origin here — ask the user to approve it in Settings",
+        {
+          reason: needsGlobal
+            ? `${verb} tabs (one has no single site — this needs the all-sites browser-control grant)`
+            : `${verb} tabs on ${origins.join(", ")}`,
+          grantOrigins: needsGlobal ? [] : origins,
+          grantGlobal: needsGlobal,
+        },
+      );
     }
     try {
       await assertRunOwned();
@@ -833,10 +871,10 @@ async function withTabIdsGrant(tabIds, verb, mutate) {
  * discipline (update_tab_group mutates the group = mutates its tabs). */
 async function withTabGroupGrant(groupId, verb, mutate) {
   if (!(await hasTabsPermission())) {
-    return {
-      error:
-        "tabs permission not granted — enable Browser control in Settings",
-    };
+    return permissionDenial(
+      "tabs permission not granted — enable Browser control in Settings",
+      { reason: `${verb} a tab group`, permissions: ["tabs"] },
+    );
   }
   return await withGrantLock(async () => {
     const tg = tabGroupsApi();
@@ -870,10 +908,17 @@ async function withTabGroupGrant(groupId, verb, mutate) {
       ? await isBrowserControlGranted(undefined)
       : (await Promise.all(origins.map((o) => isBrowserControlGranted(o)))).every(Boolean);
     if (!covered) {
-      return {
-        error:
-          "browser control not granted for every tab origin in this group — ask the user to approve it in Settings",
-      };
+      const needsGlobal = hasOriginless || origins.length === 0;
+      return permissionDenial(
+        "browser control not granted for every tab origin in this group — ask the user to approve it in Settings",
+        {
+          reason: needsGlobal
+            ? `${verb} a tab group (one tab has no single site — this needs the all-sites browser-control grant)`
+            : `${verb} a tab group on ${origins.join(", ")}`,
+          grantOrigins: needsGlobal ? [] : origins,
+          grantGlobal: needsGlobal,
+        },
+      );
     }
     try {
       await assertRunOwned();
@@ -2509,7 +2554,10 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ windowId }) => {
         if (!(await hasPermission("tabGroups"))) {
-          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+          return permissionDenial(
+            "tab groups permission not granted — enable Tab Groups in Settings",
+            { reason: "list your tab groups", permissions: ["tabGroups"] },
+          );
         }
         const tg = tabGroupsApi();
         if (!tg) return { error: "tab groups API not available in this browser context" };
@@ -2535,7 +2583,10 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabIds, title, color }) => {
         if (!(await hasPermission("tabGroups"))) {
-          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+          return permissionDenial(
+            "tab groups permission not granted — enable Tab Groups in Settings",
+            { reason: "group your tabs", permissions: ["tabGroups", "tabs"] },
+          );
         }
         return await withTabIdsGrant(tabIds, "grouped", async () => {
           const tg = tabGroupsApi();
@@ -2566,7 +2617,10 @@ export function browserToolset(readOnly = false) {
       }).refine((v) => v.title !== undefined || v.color !== undefined || v.collapsed !== undefined, "at least one field is required"),
       execute: async ({ groupId, title, color, collapsed }) => {
         if (!(await hasPermission("tabGroups"))) {
-          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+          return permissionDenial(
+            "tab groups permission not granted — enable Tab Groups in Settings",
+            { reason: "update a tab group", permissions: ["tabGroups", "tabs"] },
+          );
         }
         return await withTabGroupGrant(groupId, "updated", async () => {
           const props = {};
@@ -2594,7 +2648,10 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabIds }) => {
         if (!(await hasPermission("tabGroups"))) {
-          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+          return permissionDenial(
+            "tab groups permission not granted — enable Tab Groups in Settings",
+            { reason: "ungroup your tabs", permissions: ["tabGroups", "tabs"] },
+          );
         }
         return await withTabIdsGrant(tabIds, "ungrouped", async () => {
           const tabsApi = chromeApi("tabs");
@@ -2615,7 +2672,10 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabIds, groupId }) => {
         if (!(await hasPermission("tabGroups"))) {
-          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+          return permissionDenial(
+            "tab groups permission not granted — enable Tab Groups in Settings",
+            { reason: "move tabs into a group", permissions: ["tabGroups", "tabs"] },
+          );
         }
         return await withTabIdsGrant(tabIds, "moved", async () => {
           const tg = tabGroupsApi();
