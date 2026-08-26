@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.297] — 2026-08-26
+- Usage numbers work now: the extension finally asks providers to stream their token usage, so per-run and per-agent call/token counts are real (they were silently always zero before). Providers that don't report usage are recorded honestly as unknown, never faked
+
 ## [0.2.296] — 2026-08-26
 - Back button works properly now: from any Settings page, Back takes you straight Home in one press (no more blank screen), Settings sections are still directly linkable, and clicking the 'Chrome agent platform' header in Settings goes Home
 
