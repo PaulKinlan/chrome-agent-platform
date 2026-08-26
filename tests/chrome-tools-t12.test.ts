@@ -511,3 +511,21 @@ Deno.test("T12 list_content_scripts: read-only, bounded, permission-gated", asyn
   assertEquals(r.contentScripts[0].jsBytes, 300);
   assertEquals(r.contentScripts[0].world, "ISOLATED");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// readOnly (scoped-hook) exposure: the 3 T12 reads are exposed; NO T12 mutation.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("T12 readOnly: the 3 reads are exposed; every T12 mutation is excluded", () => {
+  reset();
+  const scoped = browserToolset(true);
+  for (const name of ["list_debugger_targets", "list_user_scripts", "list_content_scripts"]) {
+    assert(name in scoped, `${name} exposed to scoped runs`);
+  }
+  for (const name of [
+    "debugger_attach", "debugger_detach", "debugger_send_command",
+    "register_user_script", "update_user_script", "unregister_user_script",
+    "register_content_script", "update_content_script", "unregister_content_script",
+  ]) {
+    assert(!(name in scoped), `${name} must NOT be exposed to scoped runs`);
+  }
+});

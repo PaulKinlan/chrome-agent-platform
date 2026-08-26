@@ -2879,6 +2879,10 @@ export function browserToolset(readOnly = false) {
       get_content_setting: all.get_content_setting,
       list_tab_groups: all.list_tab_groups,
       list_downloads: all.list_downloads,
+      // Tranche-12 reads (observe-only).
+      list_debugger_targets: all.list_debugger_targets,
+      list_user_scripts: all.list_user_scripts,
+      list_content_scripts: all.list_content_scripts,
     };
   }
   return all;
