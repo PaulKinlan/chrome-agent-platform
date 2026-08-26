@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.293] — 2026-08-26
+- Fixed the tab-group tools to call the real Chrome API: grouping/ungrouping is chrome.tabs.group()/ungroup() (the previous calls used chrome.tabGroups.group/ungroup which don't exist), and a group's title/colour is set via chrome.tabGroups.update. The 'tg.group is not a function' crash is gone
+
 ## [0.2.292] — 2026-08-26
 - Scheduled tasks now show up under their agent: a scheduled run is attributed to the agent/thread that scheduled it, so it (and its per-agent log) appears in the Agents task/conversation view instead of running invisibly. Open an agent to see what its scheduled runs did
 
