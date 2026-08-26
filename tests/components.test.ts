@@ -392,14 +392,14 @@ Deno.test("components: generateNonce is unique + 32 hex chars", async () => {
   if (!/^[0-9a-f]{32}$/.test(a)) throw new Error(`nonce not 32 hex chars: ${a}`);
 });
 
-Deno.test("components: preferenceBootstrapScript applies theme/locale + validates source + nonce", async () => {
+Deno.test("components: preferenceBootstrapScript applies locale + validates source + nonce", async () => {
   const mod = await import("../extension/shared/components.js");
   const script = mod.preferenceBootstrapScript("abc123");
   if (!script.includes("cap:preference-ready")) throw new Error("no readiness announce");
   if (!script.includes("e.source!==window.parent")) throw new Error("no source check");
   if (!script.includes("nonce")) throw new Error("no nonce check");
-  if (!script.includes("data-theme")) throw new Error("no theme apply");
   if (!script.includes("lang")) throw new Error("no locale apply");
+  if (script.includes("data-theme") || script.includes("cap:themed")) throw new Error("theme machinery must be gone (theme switching removed)");
 });
 
 Deno.test("components: formatTsLabel renders relative + absolute time", async () => {

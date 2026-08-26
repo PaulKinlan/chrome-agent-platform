@@ -131,12 +131,6 @@ const PROVIDERS = [
   },
 ];
 
-const THEMES = [
-  { id: "sunlit", label: "Paper", swatch: "#f7f6f3,#0e6e63" },
-  { id: "midnight", label: "Charcoal", swatch: "#181614,#3ec3b0" },
-  { id: "neon", label: "Violet", swatch: "#0e0e14,#7c5cff" },
-  { id: "terminal", label: "Terminal", swatch: "#0b0f0d,#4ade80" },
-];
 
 const $ = (sel) => document.querySelector(sel);
 // Shared key-value access routes through the SERVICE WORKER (the single
@@ -1789,35 +1783,6 @@ async function renderBackgroundAgents() {
   }
 }
 
-// ── Appearance ──
-async function renderAppearance(restoreFocus = false) {
-  const s = await storage.get("cap:theme");
-  const current = s["cap:theme"] ?? "sunlit";
-  const grid = $("#theme-grid");
-  grid.innerHTML = "";
-  for (const t of THEMES) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "theme-card" + (current === t.id ? " active" : "");
-    card.setAttribute("aria-pressed", String(current === t.id));
-    card.innerHTML = `
-      <span class="theme-swatch" style="background: linear-gradient(135deg, ${t.swatch})"></span>
-      <span class="theme-label">${t.label}</span>`;
-    card.addEventListener("click", async () => {
-      await storage.set({ "cap:theme": t.id });
-      document.documentElement.dataset.theme = t.id;
-      renderAppearance(true); // restore focus to the active card after rerender
-      saveFlash(`Theme: ${t.label}.`);
-    });
-    grid.appendChild(card);
-  }
-  document.documentElement.dataset.theme = current;
-  if (restoreFocus) {
-    // A rerender replaces the focused subtree — re-focus the (now) active card
-    // so a keyboard/AT user is not stranded (the round-13 focus finding).
-    grid.querySelector(".theme-card.active")?.focus();
-  }
-}
 
 // ── Browser control ──
 async function renderBrowser() {
@@ -2904,7 +2869,6 @@ await renderToolLibrary();
 await renderAgents();
 await renderBackgroundAgents();
 await renderEnroll();
-await renderAppearance();
 await renderBrowser();
 await renderPermissions();
 await renderApprovals();

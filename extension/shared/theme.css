@@ -1,5 +1,5 @@
 :root {
-  /* ── Color tokens (per theme; overridden by [data-theme] below) ──
+  /* ── Color tokens — the single design system (theme switching removed; keep this identity). ──
      The identity is a calm technical instrument: a warm-neutral paper (light)
      with hairline borders and ONE confident petrol-teal accent; a warm charcoal
      for dark. No AI beige, no default purple/blue, no rainbow glow. */
@@ -221,65 +221,3 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* ── Theme variants ──
    The default (above) is "paper": a warm-neutral light with a petrol-teal
    accent. Each theme restyles the same custom properties. */
-
-[data-theme="sunlit"] {
-  --bg: #f7f6f3;
-  --panel: #ffffff;
-  --panel-2: #efede8;
-  --border: #e3e0d9;
-  --text: #1d1b18;
-  --muted: #635e56;
-  --accent: #0e6e63;
-  --accent-hover: #0a5c53;
-  --accent2: #b45309;
-  --danger: #b3261e;
-  --btn-fg: #ffffff;
-  --on-accent-muted: #d7f0ea;
-}
-
-[data-theme="midnight"] {
-  --bg: #181614;
-  --panel: #211e1b;
-  --panel-2: #2a2622;
-  --border: #38332d;
-  --text: #ece8e2;
-  --muted: #9c9489;
-  --accent: #3ec3b0;
-  --accent-hover: #5ad4c1;
-  --accent2: #f0a04b;
-  --danger: #f27d6a;
-  --btn-fg: #0d1f1c;
-  --on-accent-muted: rgba(62, 195, 176, 0.18);
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
-}
-
-[data-theme="neon"] {
-  --bg: #0e0e14;
-  --panel: #15151f;
-  --panel-2: #1d1d2b;
-  --border: #2e2b45;
-  --text: #ece9f7;
-  --muted: #9791b5;
-  --accent: #7c5cff;
-  --accent-hover: #9377ff;
-  --accent2: #22d3ee;
-  --danger: #fb7185;
-  --btn-fg: #ffffff;
-  --on-accent-muted: rgba(124, 92, 255, 0.18);
-}
-
-[data-theme="terminal"] {
-  --bg: #0b0f0d;
-  --panel: #111613;
-  --panel-2: #171e1a;
-  --border: #2a352d;
-  --text: #d5e0d8;
-  --muted: #7f8f86;
-  --accent: #4ade80;
-  --accent-hover: #6ee7a0;
-  --accent2: #a3e635;
-  --danger: #f87171;
-  --btn-fg: #052e12;
-  --on-accent-muted: rgba(74, 222, 128, 0.18);
-}

@@ -11,10 +11,7 @@
 export const PREFERENCE_MSG_TYPE = "cap:preference";
 
 /** The ONLY keys a layer may receive. Anything else is rejected. */
-export const ALLOWED_PREFERENCE_KEYS = ["theme", "locale"];
-
-/** The known theme ids (mirrors the design-system THEMES metadata). */
-export const KNOWN_THEMES = ["midnight", "sunlit", "neon", "terminal"];
+export const ALLOWED_PREFERENCE_KEYS = ["locale"];
 
 /** A loose BCP-47 language tag (e.g. "en", "en-GB", "zh-Hans-CN"). */
 const LOCALE_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/;
@@ -29,7 +26,6 @@ export function buildPreferenceMessage(preference, nonce) {
     type: PREFERENCE_MSG_TYPE,
     nonce: String(nonce ?? ""),
     preference: {
-      ...(typeof preference?.theme === "string" ? { theme: preference.theme } : {}),
       ...(typeof preference?.locale === "string" ? { locale: preference.locale } : {}),
     },
   };
@@ -64,12 +60,6 @@ export function validatePreferenceMessage(data, { nonce = "", sourceIsParent = f
     }
   }
   const out = {};
-  if ("theme" in data.preference) {
-    if (!KNOWN_THEMES.includes(data.preference.theme)) {
-      return { ok: false, error: `unknown theme: ${data.preference.theme}` };
-    }
-    out.theme = data.preference.theme;
-  }
   if ("locale" in data.preference) {
     const loc = String(data.preference.locale ?? "");
     if (!loc || !LOCALE_RE.test(loc) || loc.length > 64) {

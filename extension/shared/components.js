@@ -294,7 +294,7 @@ export function generateNonce() {
 }
 
 /** The bootstrapping script injected into a generated document. It (a) announces
- * readiness to the parent, and (b) applies a parent-validated theme/locale. It
+ * readiness to the parent, and (b) applies a parent-validated locale. It
  * re-checks the nonce + the source (parent only) so a sibling frame cannot forge
  * a preference. It has no network access (the CSP) + no parent-DOM access (the
  * sandbox), so it is a confined, one-way receiver.
@@ -304,10 +304,7 @@ export function preferenceBootstrapScript(nonce) {
   return `<script data-cap-bootstrap>${[
     "(function(){var nonce=" + n + ";",
     "function apply(p){if(!p)return;",
-    "if(p.theme){try{document.documentElement.setAttribute('data-theme',p.theme);}catch(e){}}",
     "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}",
-    "try{document.documentElement.setAttribute('data-cap-themed','1');}catch(e){}",
-    "try{document.dispatchEvent(new CustomEvent('cap:themed',{detail:p}));}catch(e){}}",
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
     "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
     "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
@@ -433,11 +430,10 @@ export function wireHtmlFramePreference(container, { nonce, theme, locale } = {}
   };
 }
 
-/** The current theme + locale to percolate into a generated UI (host-document
- * state, set by apply-theme.js). */
+/** The current locale to percolate into a generated UI (host-document state).
+ * (Theme switching was removed — the single design system in theme.css stands.) */
 export function currentFramePreference() {
   return {
-    theme: document.documentElement?.dataset?.theme || "sunlit",
     locale: document.documentElement?.lang || (typeof navigator !== "undefined" ? navigator.language : undefined) || "",
   };
 }
