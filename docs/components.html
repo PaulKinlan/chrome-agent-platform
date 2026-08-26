@@ -319,14 +319,6 @@
         <p class="caption">the SAME maintained catalogue the Providers section uses (modelsForVendor → llm-prices, newest-first). ARIA combobox: type to filter, arrows + Enter, Escape reverts; an unknown typed id commits as a custom value. Empty catalogue = free-text mode (Ollama / OpenAI-compatible).</p>
       </div>
 
-      <div class="specimen" id="local-model-catalog-specimen">
-        <h3 class="spec"><code class="tag">&lt;local-model-catalog&gt;</code> — pinned publisher models and preflight states</h3>
-        <div class="stage column" style="max-width:720px">
-          <local-model-catalog id="local-model-demo"></local-model-catalog>
-        </div>
-        <p class="caption">The SAME catalogue component Settings uses. The specimen shows exact installed payloads, hardware/Memory64/OPFS warnings, a disabled Download gate, and the explicit no-auto-eviction policy. Runtime and full OPFS installation remain unimplemented.</p>
-      </div>
-
       <div class="specimen" id="tool-library-specimen">
         <h3 class="spec"><code class="tag">&lt;tool-library&gt;</code> — READ-ONLY tool catalog diagnostics (panel-1 slice)</h3>
         <div class="stage column" style="max-width:720px">
@@ -390,7 +382,6 @@
 
     <script type="module">
       import { PERMISSIONS, THEMES } from "./components.js";
-      import { LOCAL_MODEL_CATALOG, localModelFeasibility } from "./local-model-catalog.js";
 
       const log = (sel, msg) => {
         const el = document.querySelector(sel);
@@ -483,16 +474,6 @@
         { role: "tool", "tool-name": "verify_syntax", "tool-status": "error", "tool-args": "{\"lang\":\"python\"}", "tool-result": "python3 not installed on this machine" },
         { role: "system", content: "Here is the function:\n\n```python\ndef greet(name=\"world\"):\n    return f\"Hello, {name}!\"\n```\n\nUse it with `greet(\"Paul\")`. A few notes:\n- it defaults to \"world\"\n- it is an f-string\n- see [the docs](https://docs.python.org/3/tutorial/inputoutput.html)" },
       ]);
-
-      // <local-model-catalog> example — exact immutable publisher metadata,
-      // with intentionally conservative capability warnings and no network.
-      const localModelDemo = document.getElementById("local-model-demo");
-      localModelDemo.models = LOCAL_MODEL_CATALOG;
-      localModelDemo.feasibility = localModelFeasibility({
-        deviceMemory: 8,
-        memory64: false,
-        opfs: false,
-      });
 
       // <tool-library> specimens — fixture-driven READ-ONLY states (no backend,
       // no network; the real surface calls the Settings-principal shadow route).
