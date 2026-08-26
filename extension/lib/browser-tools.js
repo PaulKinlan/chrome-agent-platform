@@ -2511,13 +2511,20 @@ export function browserToolset(readOnly = false) {
           return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
         }
         return await withTabIdsGrant(tabIds, "grouped", async () => {
-          const options = { tabIds };
-          if (title !== undefined) options.title = title;
-          if (color !== undefined) options.color = color;
           const tg = tabGroupsApi();
-          if (!tg) return { error: "tab groups API not available in this browser context" };
-          const group = await tg.group(options);
-          return { ok: true, groupId: group.id, tabIds };
+          const tabsApi = chromeApi("tabs");
+          if (!tg || !tabsApi) return { error: "tab groups API not available in this browser context" };
+          // CORRECT API: grouping is chrome.tabs.group() (returns the new groupId as a
+          // NUMBER); title/color are set AFTERWARD via chrome.tabGroups.update().
+          // (chrome.tabGroups.group() does NOT exist — that was the broken call.)
+          const groupId = await tabsApi.group({ tabIds });
+          if (title !== undefined || color !== undefined) {
+            const props = {};
+            if (title !== undefined) props.title = title;
+            if (color !== undefined) props.color = color;
+            await tg.update(groupId, props);
+          }
+          return { ok: true, groupId, tabIds };
         });
       },
     }),
@@ -2563,9 +2570,11 @@ export function browserToolset(readOnly = false) {
           return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
         }
         return await withTabIdsGrant(tabIds, "ungrouped", async () => {
-          const tg = tabGroupsApi();
-          if (!tg) return { error: "tab groups API not available in this browser context" };
-          await tg.ungroup(tabIds);
+          const tabsApi = chromeApi("tabs");
+          if (!tabsApi) return { error: "tab groups API not available in this browser context" };
+          // CORRECT API: ungrouping is chrome.tabs.ungroup() (chrome.tabGroups.ungroup()
+          // does NOT exist).
+          await tabsApi.ungroup(tabIds);
           return { ok: true, tabIds };
         });
       },
@@ -2583,9 +2592,13 @@ export function browserToolset(readOnly = false) {
         }
         return await withTabIdsGrant(tabIds, "moved", async () => {
           const tg = tabGroupsApi();
-          if (!tg) return { error: "tab groups API not available in this browser context" };
-          const group = await tg.move(tabIds, groupId);
-          return { ok: true, groupId: group.id, tabIds };
+          const tabsApi = chromeApi("tabs");
+          if (!tg || !tabsApi) return { error: "tab groups API not available in this browser context" };
+          // CORRECT API: adding tabs to an EXISTING group is chrome.tabs.group({tabIds,
+          // groupId}) (chrome.tabGroups.move(tabIds, groupId) does NOT exist —
+          // tabGroups.move() is for repositioning the GROUP, with a different signature).
+          const gid = await tabsApi.group({ tabIds, groupId });
+          return { ok: true, groupId: gid, tabIds };
         });
       },
     }),

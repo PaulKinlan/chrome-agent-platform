@@ -65,25 +65,25 @@ globalThis.chrome = {
   },
   tabs: {
     get: async (id) => tabs.find((t) => t.id === id) ?? null,
-  },
-  tabGroups: {
-    query: async (q) => [...tabGroups.values()].filter((g) => !q?.windowId || g.windowId === q.windowId),
-    get: async (id) => tabGroups.get(id) ?? null,
-    group: async ({ tabIds, title, color }) => {
-      const group = { id: nextGroupId++, title: title ?? "", color: color ?? "grey", collapsed: false, windowId: 1, tabIds };
+    // REAL API: chrome.tabs.group({tabIds, groupId?}) → returns the groupId (a NUMBER).
+    // With groupId it adds tabs to that existing group; without it creates a new group.
+    group: async ({ tabIds, groupId }) => {
+      let group;
+      if (groupId !== undefined) {
+        group = tabGroups.get(groupId);
+        if (!group) throw new Error("no group");
+      } else {
+        group = { id: nextGroupId++, title: "", color: "grey", collapsed: false, windowId: 1, tabIds: [] };
+        tabGroups.set(group.id, group);
+      }
       for (const t of tabIds) {
         const tab = tabs.find((x) => x.id === t);
         if (tab) tab.groupId = group.id;
+        if (!group.tabIds.includes(t)) group.tabIds.push(t);
       }
-      tabGroups.set(group.id, group);
-      return group;
+      return group.id;
     },
-    update: async (id, props) => {
-      const group = tabGroups.get(id);
-      if (!group) throw new Error("no group");
-      Object.assign(group, props);
-      return group;
-    },
+    // REAL API: chrome.tabs.ungroup(tabIds).
     ungroup: async (tabIds) => {
       for (const id of tabIds) {
         const tab = tabs.find((t) => t.id === id);
@@ -95,16 +95,18 @@ globalThis.chrome = {
       }
       return [];
     },
-    move: async (tabIds, groupId) => {
-      const group = tabGroups.get(groupId);
+  },
+  tabGroups: {
+    query: async (q) => [...tabGroups.values()].filter((g) => !q?.windowId || g.windowId === q.windowId),
+    get: async (id) => tabGroups.get(id) ?? null,
+    update: async (id, props) => {
+      const group = tabGroups.get(id);
       if (!group) throw new Error("no group");
-      for (const id of tabIds) {
-        const tab = tabs.find((t) => t.id === id);
-        if (tab) tab.groupId = groupId;
-        if (!group.tabIds.includes(id)) group.tabIds.push(id);
-      }
+      Object.assign(group, props);
       return group;
     },
+    // NOTE: chrome.tabGroups has NO group/ungroup methods, and tabGroups.move() is for
+    // repositioning the GROUP (move(groupId, {index})) — not for adding tabs to a group.
   },
   downloads: {
     download: async ({ url, filename, saveAs }) => {
