@@ -1157,6 +1157,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: confirm whether a headed environment is available at all; if not, mark this `BLOCKED` with that owner and stop re-litigating the three residuals separately
 - Recover: `grep -n "headed\|HEADED" scripts/webmcp-acceptance.ts && sed -n '1,40p' docs/WEBMCP-ACCEPTANCE.md`
 - History:
+  - 2026-08-26 23:26 UTC — ENVIRONMENT DETERMINATION (read-only,
+    /tmp/cap-headed-acceptance-env/GLM.md f49bc865): headed display AVAILABLE —
+    ACTIONABLE, NOT BLOCKED. Hyprland 0.55.4 on seat0 (SDDM autologin), Xwayland
+    :0 + wayland-1 live, grim+slurp installed, chromium 150 present. Transient
+    probe caveat: hyprlock + empty hyprctl monitors (locked late-night session) —
+    a SCHEDULING PRECONDITION (run in an unlocked session with an active monitor
+    + Paul present as the human clicker), not headlessness. NEXT: write the
+    headed script (chromium --ozone-platform=wayland, grim evidence to durable
+    storage, per-step manual-gesture labels, headless suites unchanged/fail-closed),
+    then run it in an unlocked window with Paul.
   - 2026-08-25 09:40 UTC — opened to consolidate three residuals that have each been carried as "needs a headed test" without an owner: no headed screenshot success path, no full real-enrollment lifecycle journey, and the WebMCP OS prompt gate.
 
 ## [CAP-FB-20260825-OWNER-DECISION-QUEUE-01] Product decisions blocking tracked work
