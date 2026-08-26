@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.303] — 2026-08-26
+- Permissions are simple now: when an agent's tool needs a permission, the request appears right there in the conversation — 'This agent wants to group tabs — Allow?' — and one click grants exactly what's needed (nothing broader) and retries the task. No more two-layer confusion or dead-ends pointing at Settings. Deny is sticky, and Settings has a guided two-step revoke
+
 ## [0.2.302] — 2026-08-26
 - No surface can blank out silently anymore: every data-loading view (providers, usage, agents, activity, tool library) now times out with an honest error + Retry if the service worker can't answer — the class that killed recent activity, artifacts, providers and tools together on a heavy profile
 
