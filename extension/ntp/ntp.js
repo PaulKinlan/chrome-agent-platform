@@ -1024,7 +1024,12 @@ function hideThreadViewInner() {
 }
 function hideViewInner() {
   viewOverlay.hidden = true;
-  viewFrame.src = "about:blank";
+  // CAP-FB-20260826-BACK-STACK-02: do NOT set viewFrame.src="about:blank" here.
+  // A cross-document navigation (X → about:blank) appends a JOINT session-history
+  // entry, so every close polluted the top frame's history and the next open
+  // needed an extra Back press (the "blank screen, press back twice" bug).
+  // Leaving the embedded document loaded (just hidden) keeps the joint history
+  // clean; the next openView() navigates it with a replace (see openView).
   syncViewOpen();
 }
 function showThreadView(options = {}) {
@@ -2220,7 +2225,24 @@ function openView(path, title, trigger) {
   const targetRoute = embeddedViewRoute(path);
   // Start the embedded document load before snapshot capture so the named
   // destination overlay is populated at the transition midpoint.
-  viewFrame.src = chrome.runtime.getURL(path);
+  // CAP-FB-20260826-BACK-STACK-02: a plain `viewFrame.src = url` is a
+  // cross-document navigation that APPENDS a joint session-history entry —
+  // combined with the pushState below that produced TWO entries per open (the
+  // "press Back twice" bug). Navigate an ALREADY-loaded iframe with a REPLACE
+  // (location.replace) so the pushState below is the SINGLE history entry; the
+  // very first load (empty iframe) still uses src= (which replaces the initial
+  // about:blank and adds nothing).
+  const frameUrl = chrome.runtime.getURL(path);
+  if (viewFrame.contentWindow && viewFrame.src && viewFrame.src !== "about:blank" && viewFrame.src !== frameUrl) {
+    try {
+      viewFrame.contentWindow.location.replace(frameUrl);
+    } catch {
+      // Cross-origin fallback (should not happen — the frame is same-extension):
+      viewFrame.src = frameUrl;
+    }
+  } else {
+    viewFrame.src = frameUrl;
+  }
   viewFrame.title = title;
   viewTitle.textContent = title;
 
