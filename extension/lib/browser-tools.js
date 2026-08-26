@@ -2449,6 +2449,9 @@ export function browserToolset(readOnly = false) {
         windowId: z.number().int().min(1).optional(),
       }),
       execute: async ({ windowId }) => {
+        if (!(await hasPermission("tabGroups"))) {
+          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+        }
         const tg = tabGroupsApi();
         if (!tg) return { error: "tab groups API not available in this browser context" };
         const groups = await tg.query(windowId ? { windowId } : {});
@@ -2472,6 +2475,9 @@ export function browserToolset(readOnly = false) {
         color: z.enum(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]).optional(),
       }),
       execute: async ({ tabIds, title, color }) => {
+        if (!(await hasPermission("tabGroups"))) {
+          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+        }
         return await withTabIdsGrant(tabIds, "grouped", async () => {
           const options = { tabIds };
           if (title !== undefined) options.title = title;
@@ -2493,6 +2499,9 @@ export function browserToolset(readOnly = false) {
         collapsed: z.boolean().optional(),
       }).refine((v) => v.title !== undefined || v.color !== undefined || v.collapsed !== undefined, "at least one field is required"),
       execute: async ({ groupId, title, color, collapsed }) => {
+        if (!(await hasPermission("tabGroups"))) {
+          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+        }
         return await withTabGroupGrant(groupId, "updated", async () => {
           const props = {};
           if (title !== undefined) props.title = title;
@@ -2518,6 +2527,9 @@ export function browserToolset(readOnly = false) {
         tabIds: z.array(z.number().int().min(1)).min(1).max(16),
       }),
       execute: async ({ tabIds }) => {
+        if (!(await hasPermission("tabGroups"))) {
+          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+        }
         return await withTabIdsGrant(tabIds, "ungrouped", async () => {
           const tg = tabGroupsApi();
           if (!tg) return { error: "tab groups API not available in this browser context" };
@@ -2534,6 +2546,9 @@ export function browserToolset(readOnly = false) {
         groupId: z.number().int().min(1),
       }),
       execute: async ({ tabIds, groupId }) => {
+        if (!(await hasPermission("tabGroups"))) {
+          return { error: "tab groups permission not granted — enable Tab Groups in Settings" };
+        }
         return await withTabIdsGrant(tabIds, "moved", async () => {
           const tg = tabGroupsApi();
           if (!tg) return { error: "tab groups API not available in this browser context" };

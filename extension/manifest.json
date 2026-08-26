@@ -9,6 +9,7 @@
     "storage",
     "sidePanel",
     "tabs",
+    "tabGroups",
     "activeTab",
     "scripting",
     "notifications",

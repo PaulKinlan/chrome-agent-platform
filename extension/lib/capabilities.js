@@ -41,6 +41,13 @@ export const CAPABILITIES = [
     gates: "Gates: opening, navigating, closing and listing tabs; reading tab URLs and titles.",
   },
   {
+    id: "tabGroups",
+    permissions: ["tabGroups"],
+    label: "Tab groups",
+    hint: "Create, rename, recolor, collapse and manage tab groups, and move tabs between them. Without it the tabGroups API isn't injected, so the group tools return 'not available'.",
+    gates: "Gates: list_tab_groups, group_tabs, update_tab_group, ungroup_tabs, move_tab_to_group.",
+  },
+  {
     id: "activeTab",
     permissions: ["activeTab"],
     label: "Screenshots",

@@ -18,7 +18,7 @@ import { clearRunFence } from "../extension/lib/run-fence.js";
 
 // ---- in-memory chrome shim ----
 const store = new Map();
-const granted = new Set(["storage", "tabs", "downloads"]);
+const granted = new Set(["storage", "tabs", "downloads", "tabGroups"]);
 const tabs = []; // { id, url, title, windowId, groupId? }
 const tabGroups = new Map(); // id -> { id, title, color, collapsed, windowId, tabIds: [] }
 const downloads = new Map(); // id -> { id, url, filename, state, mime, bytesReceived, totalBytes, startTime }
@@ -32,6 +32,7 @@ function reset() {
   granted.add("storage");
   granted.add("tabs");
   granted.add("downloads");
+  granted.add("tabGroups");
   tabs.length = 0;
   tabGroups.clear();
   downloads.clear();
@@ -149,9 +150,9 @@ Deno.test("T3/T4: browserToolset has exactly 130 tools matching BROWSER_TOOL_NAM
 // ──────────────────────────────────────────────────────────────────────────
 // T3 tabGroups: reads light, mutations grant-gated (tab-origin discipline).
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T3 list_tab_groups: read-only, no permission/grant needed, bounded", async () => {
+Deno.test("T3 list_tab_groups: read-only, needs the tabGroups permission (not tabs), bounded", async () => {
   reset();
-  granted.delete("tabs"); // tabGroups itself needs NO permission
+  granted.delete("tabs"); // tabGroups needs the tabGroups permission, NOT tabs — proving it works without tabs
   addTab("https://a.example/1");
   const group = { id: 7, title: "Sorting hat", color: "blue", collapsed: false, windowId: 1, tabIds: [1] };
   tabGroups.set(7, group);
@@ -399,4 +400,26 @@ Deno.test("REVISE: update_tab_group with an origin-less tab in the group — ori
   const ok = await tools().update_tab_group.execute({ groupId: g.groupId, color: "red" });
   assertEquals(ok.ok, true, "global grant authorizes the group update");
   assertEquals(tabGroups.get(g.groupId).color, "red");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// tabGroups permission: without it every tabGroups tool fails honest (the
+// chrome.tabGroups namespace isn't injected without the manifest permission).
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("T3 tabGroups permission: without tabGroups every tabGroups tool fails honest (never throws)", async () => {
+  reset();
+  granted.delete("tabGroups");
+  addTab("https://a.example/1");
+  for (const [name, args] of [
+    ["list_tab_groups", {}],
+    ["group_tabs", { tabIds: [1] }],
+    ["update_tab_group", { groupId: 1, title: "x" }],
+    ["ungroup_tabs", { tabIds: [1] }],
+    ["move_tab_to_group", { tabIds: [1], groupId: 1 }],
+  ]) {
+    let threw = null; let out;
+    try { out = await tools()[name].execute(args); } catch (e) { threw = e; }
+    assert(!threw, `${name} must not throw without the tabGroups permission`);
+    assert(out?.error?.includes("tab groups permission not granted"), `${name} must give the honest enable-in-Settings error, got: ${JSON.stringify(out)}`);
+  }
 });
