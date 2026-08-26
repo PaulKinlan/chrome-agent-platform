@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.299] — 2026-08-26
+- The 'Find tools for a Site Agent' dialog now scrolls when there are a lot of tabs/tools (it was clipping them with no way to scroll). Also fixes every other dialog with long content
+
 ## [0.2.298] — 2026-08-26
 - Fixed Recent Activity not loading on a real profile: with many background agents the activity feed hung forever (dead search and filters). It now loads fast with per-store fault isolation and a timeout that shows an honest error + Retry instead of dead controls
 
