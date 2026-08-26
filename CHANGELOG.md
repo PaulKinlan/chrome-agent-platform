@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.308] — 2026-08-26
+- Agent-worker architecture Phase 1: each agent now has a dedicated shared worker (hosted by the extension's offscreen document, bootstrapped through the service worker) with a validated port handshake for the UI and a durable alive-set that re-creates workers on wake. Foundation only — the run loop migrates in Phase 2
+
 ## [0.2.307] — 2026-08-26
 - Local models removed (the download never worked — Chrome's built-in AI storage cap): the UI and download machinery are gone and the code is simpler. The full architecture is logged in docs/LOCAL-MODELS-ARCHITECTURE.md so we can rebuild it later — including the future direction of loading gguf models from your own drive. Ollama still works as a local provider (it's just an OpenAI-compatible endpoint)
 
