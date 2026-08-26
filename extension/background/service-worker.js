@@ -397,6 +397,7 @@ import {
 import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
+import { setRunContext, clearRunContext } from "../lib/run-context.js";
 import {
   acceptToolSnapshot,
   applyWebmcpLifecycle,
@@ -668,6 +669,19 @@ async function handleAlarm(alarm) {
         }).catch(() => {});
       }
     } else {
+      // Surface attribution for the fired run: the owner captured at schedule
+      // time (schedule_task inside an agent run, or background-agent.set).
+      // LEGACY fallback: payloads persisted before owner capture have no
+      // `owner` — a `recipe:<id>` alarm name is minted ONLY by
+      // background-agent.set, so those still attribute to their background
+      // agent. A genuinely unattributed task (owner-less, non-recipe) keeps
+      // threadId/agentSurfaceRef null — previous behavior, no regression.
+      const legacyRecipeId = !task.owner && alarm.name.startsWith("recipe:")
+        ? alarm.name.slice("recipe:".length)
+        : null;
+      const fireOwner = task.owner ?? (legacyRecipeId
+        ? { agentRole: `background:${legacyRecipeId}`, agentSurfaceRef: `background:${legacyRecipeId}` }
+        : null);
       await runTask({
         id: alarm.name,
         task: task.task ?? alarm.name,
@@ -676,6 +690,9 @@ async function handleAlarm(alarm) {
         runKind: "scheduled",
         attachments: task.attachments ?? [],
         fence,
+        threadId: fireOwner?.threadId ?? null,
+        agentRole: fireOwner?.agentRole ?? "",
+        agentSurfaceRef: fireOwner?.agentSurfaceRef ?? null,
         // A background/scheduled agent gets its OWN OPFS (memory + run log),
         // keyed by the schedule name — never the master's memory.
         memory: backgroundAgentMemory(alarm.name),
@@ -2059,6 +2076,13 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       });
     }, 15_000);
     try {
+      // Stamp THIS run's surface attribution for the tools it invokes: a
+      // schedule_task call inside this run persists the owner into the
+      // scheduled-task payload so the FIRED run (long after this one settles)
+      // projects back into this agent/thread's conversation surface. Set for
+      // EVERY run — interactive included — not only fenced scheduled runs;
+      // cleared in the finally below (same lifecycle as the run fence).
+      setRunContext({ threadId, agentRole, agentSurfaceRef });
       orch = await ensureOrchestrator(
         journalingProgress,
         scoped,
@@ -2308,6 +2332,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       } catch { /* best-effort */ }
       finalizeExecution(executionId);
       clearRunFence();
+      clearRunContext();
       // Unbind the per-run PROGRESS callback (the live UI + the journaling
       // forwarder) so no stale callback survives into the next run — the next
       // run's ensureOrchestrator rebinds inside ITS lock.
@@ -4777,6 +4802,15 @@ const handlers = mergeRouteMaps(
       delayMs: periodInMinutes * 60 * 1000,
       periodInMinutes,
       name,
+      // Attribute the recurring run to THIS background agent (same identity
+      // as background-agent.run) so each fired run's durable record carries
+      // agentId `background:<id>` and projects into the agent's own
+      // task/conversation surface (the owner report: scheduled alarm runs
+      // were invisible in the Agents view).
+      owner: {
+        agentRole: `background:${recipe.id}`,
+        agentSurfaceRef: `background:${recipe.id}`,
+      },
     });
     broadcastRegistryChanged();
     return { ok: true, enabled: true, id: recipe.id, name, nextRunAt: when };

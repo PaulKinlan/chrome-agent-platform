@@ -12,6 +12,29 @@ const INFLIGHT_KEY = "cap:scheduledInflight";
 // capacity, not an OPFS/memory key ceiling; owner memory remains byte-bounded.
 export const MAX_ACTIVE_ALARMS = 500;
 
+// The owning run's surface attribution, persisted with the payload so the
+// FIRED run can be attributed back to the agent/thread that scheduled it
+// (CAP-FB-20260826 scheduled-run visibility). Bounded so a caller can never
+// grow the payload without limit; unknown/non-string fields normalize away.
+const OWNER_ATTRIB_MAX = 200;
+function boundedOwner(owner) {
+  if (!owner || typeof owner !== "object") return null;
+  const bound = (v) => {
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    return t ? t.slice(0, OWNER_ATTRIB_MAX) : null;
+  };
+  const threadId = bound(owner.threadId);
+  const agentRole = bound(owner.agentRole);
+  const agentSurfaceRef = bound(owner.agentSurfaceRef);
+  if (!threadId && !agentRole && !agentSurfaceRef) return null;
+  return {
+    ...(threadId ? { threadId } : {}),
+    ...(agentRole ? { agentRole } : {}),
+    ...(agentSurfaceRef ? { agentSurfaceRef } : {}),
+  };
+}
+
 /** The chrome.alarms API when the OPTIONAL `alarms` permission is granted,
  * else null. Scheduling degrades gracefully to a clear error when absent. */
 function alarmsApi() {
@@ -136,7 +159,7 @@ export const SCHEDULED_TASK_KEY = TASK_KEY;
 
 /** Validate timing FIRST, then persist, then create the alarm (atomic order). */
 export async function scheduleTask(
-  { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName, scriptId },
+  { task, at, delayMs, periodInMinutes, attachments = [], name: explicitName, scriptId, owner = null },
 ) {
   return withLock(async () => {
     // Resolve `when` before any persistence so a bad time can't orphan a stored task.
@@ -196,7 +219,8 @@ export async function scheduleTask(
     await assertRunOwned();
 
     const tasks = { ...(store[TASK_KEY] ?? {}) };
-    tasks[name] = { name, task, at: when, periodInMinutes, attachments, ...(scriptId ? { scriptId } : {}) };
+    const boundedScheduleOwner = boundedOwner(owner);
+    tasks[name] = { name, task, at: when, periodInMinutes, attachments, ...(scriptId ? { scriptId } : {}), ...(boundedScheduleOwner ? { owner: boundedScheduleOwner } : {}) };
     await kvSet({ [TASK_KEY]: tasks });
 
     // Re-check the fence before the IRREVERSIBLE alarm creation (a second abort
@@ -325,6 +349,10 @@ export async function listScheduledTasks() {
       task: t.task,
       at: t.at,
       periodInMinutes: t.periodInMinutes,
+      // The owning agent/thread (when the task was scheduled from inside an
+      // agent run) — surfaced so the owner can see WHICH agent a scheduled
+      // task belongs to.
+      owner: t.owner ?? null,
       quarantined: Boolean(t.quarantined),
       quarantinedAt: t.quarantinedAt ?? null,
       cancelling: Boolean(t.cancelling),
@@ -389,6 +417,9 @@ export async function retryScheduledTask(name) {
     periodInMinutes: task.periodInMinutes,
     attachments: task.attachments ?? [],
     scriptId: task.scriptId,
+    // A retry re-arms the SAME logical task — its surface attribution must
+    // survive, or the retried run loses its agent/thread projection.
+    owner: task.owner ?? null,
   });
   return { ok: true, name, retried: true, when: scheduled.when };
 }
