@@ -4309,7 +4309,7 @@ class AgentDialog extends Component {
       .title { font-weight:700; font-size:16px; }
       .x { background:transparent; border:0; color:var(--text,#1d1b18); cursor:pointer; padding:4px; border-radius:4px; }
       .x:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .body { color:var(--text,#1d1b18); flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+      .body { color:var(--text,#1d1b18); flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow-y:auto; overflow-x:hidden; }
     `, `<dialog part="dialog" class="dialog" aria-label="${escapeHtml(title)}">
         <div class="head"><span class="title">${escapeHtml(title)}</span>
           <button type="button" class="x" aria-label="Close">${ICONS.close}</button></div>
