@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.298] — 2026-08-26
+- Fixed Recent Activity not loading on a real profile: with many background agents the activity feed hung forever (dead search and filters). It now loads fast with per-store fault isolation and a timeout that shows an honest error + Retry instead of dead controls
+
 ## [0.2.297] — 2026-08-26
 - Usage numbers work now: the extension finally asks providers to stream their token usage, so per-run and per-agent call/token counts are real (they were silently always zero before). Providers that don't report usage are recorded honestly as unknown, never faked
 
