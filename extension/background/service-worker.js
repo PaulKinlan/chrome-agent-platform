@@ -372,6 +372,7 @@ import {
   INFLIGHT_HEARTBEAT_MS,
   blockScheduledTaskForStorage,
   cancelScheduledTask,
+  cancelScheduledTaskBackground,
   disarmScheduledAlarms,
   heartbeatInflight,
   listScheduledTasks,
@@ -3731,7 +3732,10 @@ const handlers = mergeRouteMaps(
       // deterministic `recipe:<slug>` scheduled task; deleting the agent must
       // disarm it, else its alarm keeps firing forever as an orphan. Best-effort
       // — "no such task" just means it wasn't scheduled.
-      await cancelScheduledTask(`recipe:${slug}`).catch(() => ({ ok: false }));
+      // Non-blocking disarm (owner: deleting an agent must be instant). The
+      // payload is marked cancelling (inert) + the live run aborted NOW; the
+      // alarm-clear + payload cleanup finishes in the background.
+      cancelScheduledTaskBackground(`recipe:${slug}`);
       broadcastProgress({ type: "named-agent-changed" });
     }
     broadcastRegistryChanged();
@@ -4776,13 +4780,16 @@ const handlers = mergeRouteMaps(
     const name = `recipe:${recipe.id}`;
     const enabled = m?.enabled !== false;
     if (!enabled) {
-      const r = await cancelScheduledTask(name);
+      // Non-blocking cancel (owner: disabling must be instant — the payload is
+      // marked cancelling/inert + the live run aborted now; alarm cleanup
+      // finishes in the background).
+      const r = cancelScheduledTaskBackground(name);
       // Unsubscribe the recipe's event triggers (the hooks registry) on disable.
       for (const hookId of recipe.hooks ?? []) {
         await unsubscribeHook({ hookId, recipeId: recipe.id }).catch(() => {});
       }
       broadcastRegistryChanged();
-      return { ok: true, enabled: false, id: recipe.id, ...r };
+      return { ok: true, enabled: false, id: recipe.id, stopping: r.stopping, name };
     }
     const periodInMinutes = recipe.schedule?.periodInMinutes;
     if (!periodInMinutes) {

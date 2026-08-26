@@ -490,6 +490,12 @@ export async function cancelScheduledTask(name, terminationTimeoutMs = CANCEL_TE
   }
 
   // ---- Phase 2 (under the scheduling lock): clear + confirm + delete ---------
+  return finalizeCancellation(name);
+}
+
+/** Phase-2 of cancellation (alarm clear + confirm-absent + payload delete),
+ * extracted so the non-blocking delete path shares the SAME fail-closed logic. */
+async function finalizeCancellation(name) {
   return withLock(async () => {
     // Clear the alarm (best-effort — a one-shot may already be consumed), then
     // CONFIRM absence via alarms.get so a periodic alarm whose clear FAILED is
@@ -528,6 +534,36 @@ export async function cancelScheduledTask(name, terminationTimeoutMs = CANCEL_TE
     await kvSet({ [TASK_KEY]: tasks });
     return { ok: true, name, cancelled: true, alarmAbsent: true };
   });
+}
+
+/** NON-BLOCKING cancel for agent deletion / background-agent disable
+ * (owner: deleting a background agent must be instant, not a 5s termination
+ * dance). Marks the payload `cancelling` (inert — no NEW run starts), aborts
+ * the live run's controller NOW (side-effecting tools fence off the abort),
+ * and finishes the alarm-clear + payload-delete ASYNC. The caller returns
+ * immediately; reconciliation reaps any residue if the background cleanup is
+ * interrupted (a service-worker kill mid-cleanup leaves the inert cancelling
+ * payload, which handleAlarm skips and reconcileScheduledTasks reaps). */
+export function cancelScheduledTaskBackground(name) {
+  const done = (async () => {
+    let live = null;
+    await withLock(async () => {
+      const store = await kvGet(TASK_KEY);
+      const tasks = { ...(store[TASK_KEY] ?? {}) };
+      const existing = tasks[name];
+      if (!existing) return;
+      tasks[name] = { ...existing, cancelling: true, cancellingAt: Date.now() };
+      await kvSet({ [TASK_KEY]: tasks });
+      live = activeRuns.get(name) ?? null;
+    });
+    if (live) {
+      try { live.controller.abort(); } catch { /* already aborted */ }
+    }
+    await finalizeCancellation(name);
+  })();
+  // The returned promise is fire-and-forget by the callers; expose it so tests
+  // can await the cleanup without blocking the delete route.
+  return { promise: done, name, stopping: true };
 }
 
 /** Remove a one-shot task only AFTER its result is committed (durable).

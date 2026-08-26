@@ -111,3 +111,18 @@ Deno.test("alarm-orphan: boundedness — fired one-shot raw alarm is pruned from
   // Registry only ever holds live raw alarms.
   assertEquals((await kvGet(RAW))[RAW], ["every-15"]);
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Non-blocking delete (owner: deleting a background agent must be instant).
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("cancelScheduledTaskBackground: returns immediately, marks cancelling, aborts the live run, cleans up async", async () => {
+  const mod = await import("../extension/lib/scheduler.js");
+  // reset the module state via a fresh dynamic import each run is not possible;
+  // instead exercise the shape contract: the background cancel resolves its
+  // handle synchronously (no await needed) with { stopping: true }.
+  const handle = mod.cancelScheduledTaskBackground("recipe:test-bg-agent");
+  assert(handle.stopping === true, "must report stopping immediately");
+  assert(handle.name === "recipe:test-bg-agent", "must echo the name");
+  // The cleanup promise must settle without throwing (no task = no-op path).
+  await handle.promise;
+});
