@@ -580,12 +580,19 @@ async function discoverTab(tab) {
 // ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
   const el = document.getElementById("named-agents");
-  const res = await send("named-agent.list").catch(() => ({ agents: [] }));
-  const agents = Array.isArray(res.agents) ? res.agents : [];
+  // Unified agents list (CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01): the hub's
+  // Agents box shows named AND background agents together — a background agent
+  // is marked "Runs in the background" and keeps its enable/disable switch.
+  const [namedRes, bgRes] = await Promise.all([
+    send("named-agent.list").catch(() => ({ agents: [] })),
+    send("background-agent.list").catch(() => ({ agents: [] })),
+  ]);
+  const agents = Array.isArray(namedRes.agents) ? namedRes.agents : [];
+  const background = (Array.isArray(bgRes.agents) ? bgRes.agents : []).filter((a) => a.enabled);
   if (el) {
     el.replaceChildren();
-    if (!agents.length) {
-      el.innerHTML = `<div class="empty">No named agents yet. Create one in a task ("create an agent…") or with /agent:create.</div>`;
+    if (!agents.length && !background.length) {
+      el.innerHTML = `<div class="empty">No agents yet. Create one in a task ("create an agent…"), enable a background agent in Settings, or use /agent:create.</div>`;
     } else {
       for (const a of agents.slice(0, 6)) {
         const row = document.createElement("capability-row");
@@ -601,6 +608,39 @@ async function renderNamedAgents() {
         row.addEventListener("open", () => openAgentChat(a.id || a.name));
         el.append(row);
       }
+      for (const a of background) {
+        const row = document.createElement("capability-row");
+        row.setAttribute("name", a.name || a.id);
+        row.setAttribute("description", `Runs in the background${a.description ? " · " + a.description : ""}`);
+        row.setAttribute("icon", "");
+        // item 61: a background agent is an INDEPENDENT agent — a chevron opens
+        // its view (history + chat) AND a switch enables/disables it.
+        row.setAttribute("action", "open-toggle");
+        row.setAttribute("enabled", "");
+        if (a.schedule?.periodInMinutes) {
+          row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
+        }
+        row.addEventListener("open", () => openBackgroundAgentChat(a.id, a.name));
+        row.addEventListener("toggle", async (ev) => {
+          const enabled = ev.detail?.enabled;
+          // ENABLE time (a real user gesture): request the OPTIONAL notifications
+          // permission so scheduled completions can surface as notifications.
+          if (enabled) {
+            try {
+              await chrome.permissions?.request?.({ permissions: ["notifications"] });
+            } catch { /* not grantable here — the run-time path skips the notification */ }
+          }
+          const r = await send("background-agent.set", { id: a.id, enabled })
+            .catch(() => ({ ok: false, error: "request failed" }));
+          if (r?.ok) {
+            setStatus(`${a.name} ${enabled ? "enabled" : "disabled"}`);
+          } else {
+            setStatus(`couldn't ${enabled ? "enable" : "disable"} ${a.name}: ${r?.error ?? "unknown"}`, false);
+          }
+          await renderNamedAgents();
+        });
+        el.append(row);
+      }
       if (agents.length > 6) {
         const more = document.createElement("div");
         more.className = "empty";
@@ -609,7 +649,10 @@ async function renderNamedAgents() {
       }
     }
   }
-  renderSidebarAgents(agents);
+  renderSidebarAgents([
+    ...agents.map((a) => ({ ...a, kind: "named" })),
+    ...background.map((a) => ({ ...a, kind: "background" })),
+  ]);
   refreshAgentCount();
 }
 
@@ -628,10 +671,11 @@ async function renderSidebarAgents(agents) {
     return;
   }
   for (const a of rows) {
+    const isBackground = a.kind === "background";
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-item";
-    item.title = (a.name || a.id) + (a.role ? " — " + a.role : "");
+    item.title = (a.name || a.id) + (isBackground ? " — runs in the background" : (a.role ? " — " + a.role : ""));
     const avatar = document.createElement("img");
     avatar.className = "a-avatar";
     avatar.alt = "";
@@ -640,7 +684,12 @@ async function renderSidebarAgents(agents) {
     const label = document.createElement("span");
     label.className = "a-name";
     label.append(document.createTextNode(a.name || a.id));
-    if (a.role) {
+    if (isBackground) {
+      const role = document.createElement("span");
+      role.className = "a-role";
+      role.textContent = "background";
+      label.append(role);
+    } else if (a.role) {
       const role = document.createElement("span");
       role.className = "a-role";
       // The full role is stored intact (no limit) and shown on hover via
@@ -651,7 +700,10 @@ async function renderSidebarAgents(agents) {
       label.append(role);
     }
     item.append(avatar, label);
-    item.addEventListener("click", () => openAgentChat(a.id || a.name));
+    item.addEventListener("click", () => {
+      if (isBackground) openBackgroundAgentChat(a.id, a.name);
+      else openAgentChat(a.id || a.name);
+    });
     list.append(item);
   }
 }
@@ -661,56 +713,11 @@ async function renderSidebarAgents(agents) {
 // full catalog (presets + disabled) lives in Settings behind the "Configure"
 // link + the base-select picker.
 async function renderBackgroundAgents() {
-  const el = document.getElementById("background-agents");
-  if (!el) return;
-  const res = await send("background-agent.list").catch(() => ({ agents: [] }));
-  const agents = Array.isArray(res.agents) ? res.agents : [];
-  const active = agents.filter((a) => a.enabled);
-  el.replaceChildren();
-  if (!active.length) {
-    el.innerHTML = `<div class="empty">No background agents running — <a href="#" class="hint-link" data-open-bg>enable one in Settings</a>.</div>`;
-    el.querySelector("[data-open-bg]")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      openView("options/options.html#background-agents", "Background agents", e.currentTarget);
-    });
-  } else {
-    for (const a of active) {
-      const row = document.createElement("capability-row");
-      row.setAttribute("name", a.name || a.id);
-      row.setAttribute("description", a.description || "");
-      row.setAttribute("icon", "");
-      // item 61: a background agent is an INDEPENDENT agent — a chevron opens
-      // its view (history + chat) AND a switch enables/disables it.
-      row.setAttribute("action", "open-toggle");
-      if (a.enabled) row.setAttribute("enabled", "");
-      if (a.schedule?.periodInMinutes) {
-        row.setAttribute("last-run", `every ${a.schedule.periodInMinutes} min`);
-      }
-      row.addEventListener("open", () => openBackgroundAgentChat(a.id, a.name));
-      row.addEventListener("toggle", async (ev) => {
-        const enabled = ev.detail?.enabled;
-        // ENABLE time (a real user gesture): request the OPTIONAL notifications
-        // permission so the scheduled completions can surface as notifications.
-        // Never request from the SW (no gesture — Chrome rejects it). Best-effort:
-        // a denial just means the notification is skipped at run time.
-        if (enabled) {
-          try {
-            await chrome.permissions?.request?.({ permissions: ["notifications"] });
-          } catch { /* not grantable here — the run-time path skips the notification */ }
-        }
-        const r = await send("background-agent.set", { id: a.id, enabled })
-          .catch(() => ({ ok: false, error: "request failed" }));
-        if (r?.ok) {
-          setStatus(`${a.name} ${enabled ? "enabled" : "disabled"}`);
-        } else {
-          setStatus(`couldn't ${enabled ? "enable" : "disable"} ${a.name}: ${r?.error ?? "unknown"}`, false);
-        }
-        await renderBackgroundAgents();
-      });
-      el.append(row);
-    }
-  }
-  refreshAgentCount();
+  // CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01: background agents are now rendered
+  // INSIDE the unified Agents list (renderNamedAgents). Kept as a no-op so the
+  // existing refresh call sites (deletion, broadcasts) don't break; they now
+  // trigger the unified render instead.
+  await renderNamedAgents();
 }
 
 async function refreshAgentCount() {

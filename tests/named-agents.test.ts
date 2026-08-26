@@ -131,6 +131,25 @@ Deno.test("named agents: create → get → update → list → delete", async (
   assertEquals((await listNamedAgents()).length, 0);
 });
 
+Deno.test("named agents: full delete clears the agent's memory/OPFS store too", async () => {
+  // CAP-FB-20260826-DELETE-AGENT-FOLDER-01: deleting a named agent must remove
+  // BOTH the registry record AND the agent's own OPFS sandbox (memory + history
+  // + skills + agents.md) — the owner's "delete the named agent folder" ask.
+  const created = await createNamedAgent({ name: "Sorting Hat", role: "groups tabs" });
+  assert(created.ok, "create ok");
+  const id = created.agent.id;
+  const mem = namedAgentMemory(id);
+  await mem.set("note", { text: "remember this" });
+  const before = await mem.keys();
+  assert(before.includes("note"), "memory is seeded before delete");
+
+  const del = await deleteNamedAgent(id);
+  assert(del.ok, "delete ok");
+  assertEquals(await getNamedAgent(id), null, "registry record gone");
+  const after = await namedAgentMemory(id).keys();
+  assertEquals(after, [], "agent OPFS store fully cleared after delete");
+});
+
 Deno.test("named agents: instance identity is non-reusable and revisions advance", async () => {
   const id = "approval-instance-agent";
   const first = await createNamedAgent({ id, name: "Instance", role: "one" });
