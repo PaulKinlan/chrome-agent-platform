@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.289] — 2026-08-26
+- Hardened the browser tools against a missing Chrome API: windows, toolbar-action, command and session tools now return a clean 'not available' error instead of crashing with 'Cannot read properties of undefined' — the same class the logging surfaced in tab groups
+
 ## [0.2.288] — 2026-08-26
 - Fixed two errors the new logging surfaced: tab-group tools now return a clean 'not available' error instead of crashing when the API isn't there, and the task scheduler's tool description now says clearly that it needs a time or a delay
 
