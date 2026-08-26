@@ -24,8 +24,6 @@ const FILES = [
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
   // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).
   ["extension/lib/pure.js", "docs/pure.js"],
-  // Product-owned local model metadata used by the shared catalogue specimen.
-  ["extension/lib/local-model-catalog.js", "docs/local-model-catalog.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {

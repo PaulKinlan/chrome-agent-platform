@@ -136,8 +136,8 @@ Deno.test("tool-library: responsive/RTL/theme rules are logical-property only", 
 Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow summary", async () => {
   const html = await text("../extension/options/options.html");
   const nav = html.indexOf('data-section="tool-library"');
-  const localModels = html.indexOf('data-section="local-models"');
-  assert(localModels > 0 && nav > localModels && nav < html.indexOf('data-section="agents"'), "nav item sits between Local models and Agents");
+  const localFolders = html.indexOf('data-section="local-folders"');
+  assert(localFolders > 0 && nav > localFolders && nav < html.indexOf('data-section="agents"'), "nav item sits between Local folders and Agents");
   const section = html.slice(html.indexOf('id="tool-library"'), html.indexOf('id="tool-library"') + 700);
   assertNotMatch(section, /<button/, "the section markup contains no buttons");
   assertMatch(section, /Read-only diagnostics/, "the section carries the truthful intro");
@@ -149,7 +149,7 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
   assertMatch(js, /"tool-catalog\.shadow"[\s\S]{0,80}action:\s*"summary"/, "the wiring requests ONLY the summary action");
   assertNotMatch(js, /action:\s*"search"|action:\s*"capture"|action:\s*"resolve"/, "no search/capture/resolve in this slice");
   const fnStart = js.indexOf("async function renderToolLibrary");
-  const fnEnd = js.indexOf("async function renderLocalModels");
+  const fnEnd = js.indexOf("async function renderLocalFolders");
   const fn = js.slice(fnStart, fnEnd);
   // The ONLY listener in the Tool Library wiring: the preview-request handler.
   assertMatch(fn, /tool-preview-request/, "the wiring handles the explicit preview click");

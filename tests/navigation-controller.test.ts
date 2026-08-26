@@ -281,9 +281,9 @@ Deno.test("Navigation Controller: Multi-step back/forward chain keeps aria-curre
   assertEquals(currentSections[currentSections.length - 1], "usage");
   assertEquals(renderLog.includes("renderUsage(traverse=false)"), true);
 
-  // Step 3: Nav to local-models
-  await ctrl.navigate("#local-models");
-  assertEquals(currentSections[currentSections.length - 1], "local-models");
+  // Step 3: Nav to local-folders
+  await ctrl.navigate("#local-folders");
+  assertEquals(currentSections[currentSections.length - 1], "local-folders");
 
   // Step 4: Traverse back to usage
   await env.fakeNavigation.dispatchNavigate("chrome-extension://test/options/options.html#usage", {
@@ -419,7 +419,6 @@ Deno.test("Navigation Controller: Reload-restore correctly resolves each route c
 Deno.test("OPTIONS_PRODUCT_HASHES contains all allowed settings deep links", () => {
   const required = [
     "#providers",
-    "#local-models",
     "#tool-library",
     "#agents",
     "#background",

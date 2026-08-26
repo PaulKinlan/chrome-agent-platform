@@ -214,7 +214,7 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
   assert(isExactOptionsSender(exact, id, url));
   assert(isExactOptionsSender({ id, url, documentId: "doc-2" }, id, url), "Chrome extension-page senders omit origin/frame/lifecycle metadata");
-  for (const hash of ["#providers", "#local-models", "#tool-library", "#agents", "#background", "#background-agents", "#appearance", "#browser", "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data", "#about"]) {
+  for (const hash of ["#providers", "#tool-library", "#agents", "#background", "#background-agents", "#appearance", "#browser", "#permissions", "#approvals", "#hooks", "#prompts", "#usage", "#data", "#about"]) {
     assert(isExactOptionsSender({ ...exact, url: url + hash }, id, url), `the exact Settings document owns ${hash}`);
   }
   assert(!isExactOptionsSender({ ...exact, url: url + "#foreign" }, id, url), "unknown fragments remain outside the owner surface");
@@ -236,7 +236,7 @@ Deno.test("every shipped Settings navigation hash remains inside exact owner aut
   const exact = { id, url, origin: `chrome-extension://${id}`, frameId: 0, documentLifecycle: "active", documentId: "doc-1" };
   const html = Deno.readTextFileSync(new URL("../extension/options/options.html", import.meta.url));
   const hashes = [...html.matchAll(/<a\s+href="(#[^"]+)"\s+class="nav-item"/g)].map((match) => match[1]);
-  assertEquals(hashes.length, 15, "the complete Settings navigation is covered by this authority drift test");
+  assertEquals(hashes.length, 14, "the complete Settings navigation is covered by this authority drift test");
   for (const hash of hashes) {
     assert(isExactOptionsSender({ ...exact, url: url + hash }, id, url), `Settings navigation hash ${hash} must retain owner authority`);
   }
