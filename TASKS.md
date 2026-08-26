@@ -345,6 +345,20 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: run the licence/feasibility triage across all eighteen candidates
 - Recover: `git grep -n "EXTENDED-TOOL-FAMILIES" -- TASKS.md`
 - History:
+  - 2026-08-26 23:15 UTC — LICENCE/FEASIBILITY TRIAGE DONE (read-only research,
+    /tmp/cap-extended-tool-families-research/GLM.md da8f7f2c): 18/18 candidates
+    inventoried. GPL-family blockers (5 candidates, ONE owner decision unblocks):
+    pandoc GPLv2+ (+~58MB wasm large-tier), fend GPL-3.0+ since v1.4.0 (pin
+    pre-1.4.0 MIT as escape hatch), awk/sed/date (GNU/busybox GPL — permissive
+    routes: toybox 0BSD, onetrueawk, NetBSD-style sed, or the house clean-room C
+    pattern a2/b2). Feasibility: lychee network-bound (offline-file mode only),
+    zq/zed upstream ARCHIVED (frozen provenance), tesseract needs a traineddata
+    asset class, jq needs NOTICES for decNumber ICU + Heimdal-derived code.
+    TIER PLAN: T1 = jq + 6 Rust one-lane wins (htmlq, numbat, bttf, tokei, xan,
+    qsv) — 7 admissions for 2 toolchain investments; T2 = qpdf, tesseract,
+    pup/mlr/zq (Go wasip1 lane); T3 = the 6 decision-blocked. NEXT: owner
+    decision on the GPL/permissive routes unblocks T3; T1 is actionable without
+    it. No admission claims made.
   - 2026-08-23 22:05 UTC — captured from direct product-owner feedback.
 
 ## [CAP-FB-20260823-PYODIDE-PYTHON-01] Python in the browser via Pyodide
