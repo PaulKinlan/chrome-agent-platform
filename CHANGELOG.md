@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.291] — 2026-08-26
+- Fixed orphaned scheduled alarms: deleting a task or agent now removes its alarm, and an alarm that fires for a schedule that no longer exists is cleared instead of firing forever (the recipe:auto-group-by-domain ghost). Recurring raw alarms you set with create_alarm are left alone
+
 ## [0.2.290] — 2026-08-26
 - Tab groups now actually work: the tabGroups permission is declared and listed in Settings (it wasn't, which is why the API was 'not available'). Enable 'Tab groups' in Settings, then the group tools (create/rename/recolor/collapse/move tabs) work
 
