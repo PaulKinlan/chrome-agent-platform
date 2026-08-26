@@ -19,7 +19,7 @@ HTMLQ_SHA="1361c8c46811dd7b961c3fe9c6b04f9318a345e8"  # git commit of v0.4.0
 ROOT=$(cd "$(dirname "$0")" && pwd)
 # Build artifacts live OUTSIDE the bundled tree (the bundled tree is a
 # drift-verified generated output; stray cargo artifacts there fail verify).
-WORK="${CARGO_BUILD_DIR:-$ROOT/../../.build/rust-lane}"   # repo-root/.build/rust-lane (gitignored)
+WORK="${CARGO_BUILD_DIR:-$ROOT/../../../.build/rust-lane}"  # repo-root/.build/rust-lane (gitignored)
 SRC="$WORK/source/htmlq"
 OUT="$ROOT/binaries/${1:?usage: build.sh PASS_NAME}"
 mkdir -p "$WORK" "$OUT"
