@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.287] — 2026-08-26
+- Real observability: npm run build now makes a debug build with source maps and verbose logging; npm run build:production makes the store bundle (unchanged). A namespaced, levelled, timed logger and performance marks now trace grants, every tool call, model round-trips, and task loading — with a trace you can dump. Security assertions identical in both modes
+
 ## [0.2.286] — 2026-08-26
 - Power tools: attach Chrome DevTools Protocol debugging to tabs and send allowlisted commands (network conditions, CPU throttling, device emulation, navigation, screenshots, performance metrics) — Runtime.evaluate is never available; register user scripts and dynamic content scripts on specific sites
 
