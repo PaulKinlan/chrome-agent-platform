@@ -2847,11 +2847,31 @@ function wireSectionAnchors() {
 }
 wireSectionAnchors();
 
+// CAP-FB-20260826-HEADER-HOME-01: the "Chrome Agent Platform" brand in the
+// settings panel acts as a Home link — clicking it asks the parent NTP (the
+// overlay host) to close the settings view and return to the hub.
+{
+  const brand = document.getElementById("about-brand-home");
+  const goHome = () => {
+    try { window.parent?.postMessage({ type: "cap:go-home" }, "*"); } catch {}
+  };
+  brand?.addEventListener("click", goHome);
+  brand?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goHome(); }
+  });
+}
+
 document.querySelectorAll(".nav-item").forEach((a) => {
   a.addEventListener("click", (e) => {
     e.preventDefault();
     const targetHash = a.getAttribute("href") || `#${a.dataset.section}`;
-    navigationController.navigate(targetHash);
+    // CAP-FB-20260826-BACK-STACK-01: settings sub-navigation REPLACES history
+    // (never pushes) so the WHOLE settings surface is ONE entry in the joint
+    // session history. Without this, every section click stacked an iframe
+    // hash entry, and the NTP Back button traversed those dead intermediate
+    // states — the "blank screen, press back twice" bug. Each section stays
+    // linkable: the hash still updates to #section via replaceState.
+    navigationController.navigate(targetHash, { replace: true });
   });
 });
 

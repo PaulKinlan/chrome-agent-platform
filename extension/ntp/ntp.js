@@ -2482,6 +2482,13 @@ async function attachAssetToComposer({ id, name, type, origin }, { closeOverlay 
 
 window.addEventListener("message", async (e) => {
   const d = e.data;
+  if (d?.type === "cap:go-home") {
+    // CAP-FB-20260826-HEADER-HOME-01: the settings panel's brand asked to go
+    // Home — close the overlay (only our own embedded view may drive this).
+    if (e.source !== viewFrame.contentWindow) return;
+    if (!viewOverlay?.hidden) closeView();
+    return;
+  }
   if (d?.type === "use-skill") {
     // A skill was chosen on the Skills page → close the overlay + pre-fill the
     // composer with the /skill:<id> reference (the skill is INCLUDED in the

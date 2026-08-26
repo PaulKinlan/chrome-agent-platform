@@ -439,3 +439,56 @@ Deno.test("OPTIONS_PRODUCT_HASHES contains all allowed settings deep links", () 
     assert(OPTIONS_PRODUCT_HASHES.has(h), `OPTIONS_PRODUCT_HASHES must contain ${h}`);
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// CAP-FB-20260826-BACK-STACK-01: settings sub-navigation REPLACES history.
+// Clicking through settings sections must keep the WHOLE settings surface at
+// ONE history entry (replaceState, never pushState), so the NTP Back button
+// returns to the prior view in ONE press — no stacked dead/blank intermediates.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("Back-stack fix: settings sub-nav with replace:true keeps ONE history entry (no blank-screen stack)", async () => {
+  const env = createMockNavigationEnvironment({ initialHash: "#providers", hasModernNav: true });
+  const ctrl = createNavigationController({
+    win: env.win,
+    normalizeHash: normalizeSettingsSectionId,
+    isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+    onNavigate: async () => {},
+  });
+  await ctrl.syncCurrent();
+  const stackBefore = env.historyStack.length;
+
+  // Click through several settings sections with replace:true (what options.js now passes).
+  await ctrl.navigate("#agents", { replace: true });
+  await ctrl.navigate("#background", { replace: true });
+  await ctrl.navigate("#appearance", { replace: true });
+
+  assertEquals(
+    env.historyStack.length,
+    stackBefore,
+    "settings sub-navigation must NOT push new history entries — the whole settings surface stays ONE entry (replaceState)",
+  );
+  // The current section still updated (linkable state), just not stacked.
+  assertEquals(env.fakeLocation.hash, "#appearance", "the last section is the live (replaceable) hash");
+});
+
+Deno.test("Back-stack fix: settings sub-nav with replace:true uses history.replaceState, not pushState", async () => {
+  // Force the legacy (non-modern) path so the pushState/replaceState branch is exercised.
+  const env = createMockNavigationEnvironment({ initialHash: "#providers", hasModernNav: false });
+  let pushes = 0;
+  let replaces = 0;
+  const origPush = env.fakeHistory.pushState;
+  const origReplace = env.fakeHistory.replaceState;
+  env.fakeHistory.pushState = (...a) => { pushes++; return origPush.apply(env.fakeHistory, a); };
+  env.fakeHistory.replaceState = (...a) => { replaces++; return origReplace.apply(env.fakeHistory, a); };
+  const ctrl = createNavigationController({
+    win: env.win,
+    normalizeHash: normalizeSettingsSectionId,
+    isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+    onNavigate: async () => {},
+  });
+  await ctrl.syncCurrent();
+  await ctrl.navigate("#agents", { replace: true });
+  assertEquals(pushes, 0, "replace:true must never call pushState");
+  assertEquals(replaces, 1, "replace:true must call replaceState exactly once");
+  assertEquals(env.historyStack.length, 1, "history stays at one entry — Back returns Home in one press");
+});
