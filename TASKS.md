@@ -1148,15 +1148,27 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Workspace: none
 - Branch: none
 - Base: `784cd7f7275a7f63db856ee4231e523700bc861b`
-- Candidate: —
+- Candidate: this commit (`scripts/headed-acceptance.ts` — the headed macro; the RUN itself remains queued)
 - Shipping: —
 - Acceptance: a documented, repeatable headed run that covers the three gaps currently recorded as permanently open — (a) a screenshot success path, since headless auto-denies arbitrary-tab capture; (b) one full enrollment lifecycle as a single journey: enroll, discover, invoke, clean up, retry; (c) the two WebMCP operating-system permission prompts from `docs/WEBMCP-ACCEPTANCE.md`. The run states plainly which steps needed a human click and which were automated; its evidence is written to durable storage, never to a RAM-backed filesystem; a headless run continues to pass unchanged and continues to assert fail-closed behaviour
 - Review: independent review that the headed path exercises production code rather than a test-only shortcut — the round-28 WebMCP block was caused by acceptance that bypassed the implementation
 - Gates: the headed run itself, with retained screenshots; the existing headless suites still green and still asserting fail-closed denial; explicit labelling of every manual gesture
 - Blockers: needs a machine with a display. If none is available, that must be recorded as the blocker with a named owner rather than leaving three residuals permanently open in `KNOWN-ISSUES.md`
-- Next: confirm whether a headed environment is available at all; if not, mark this `BLOCKED` with that owner and stop re-litigating the three residuals separately
+- Next: run the macro in an unlocked session with Paul present as the human clicker, then close with the retained manifest + screenshots (the pre-flight already fails closed with exit 2 while the session is locked)
 - Recover: `grep -n "headed\|HEADED" scripts/webmcp-acceptance.ts && sed -n '1,40p' docs/WEBMCP-ACCEPTANCE.md`
 - History:
+  - 2026-08-27 00:40 UTC — HEADED MACRO SCRIPTED (`scripts/headed-acceptance.ts`):
+    pre-flight fail-closed (exit 2 without `--headed`, without grim/hyprctl, or
+    with empty `hyprctl -j monitors` — verified live against the locked session),
+    headed chromium `--ozone-platform=wayland` with the REAL extension (no
+    manifest variant), the one journey (enroll → screenshot success → discover →
+    pick → invoke → clean up → retry) with 4 labelled MANUAL steps (action-icon
+    capture, enroll host prompt, WebMCP tabs prompt, WebMCP host prompt) driving
+    the production selectors (`#enroll-origin`/`#enroll-btn`/`#discover-page`/
+    picker/`.disenroll-origin`), grim + CDP evidence to durable storage (default
+    `$HOME/cap-evidence/headed-acceptance/<ts>`, tmpfs refused), a machine-verifiable
+    `headed-acceptance-manifest.json`, and the headless suites untouched
+    (they keep asserting the fail-closed denials).
   - 2026-08-26 23:26 UTC — ENVIRONMENT DETERMINATION (read-only,
     /tmp/cap-headed-acceptance-env/GLM.md f49bc865): headed display AVAILABLE —
     ACTIONABLE, NOT BLOCKED. Hyprland 0.55.4 on seat0 (SDDM autologin), Xwayland
