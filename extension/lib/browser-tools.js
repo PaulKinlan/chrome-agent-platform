@@ -17,6 +17,10 @@ const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
 
 const GRANT_KEY = "cap:browserControlGrant";
+// Registry of raw create_alarm alarms (no task payload by design). The
+// scheduler's fire-time orphan reaper skips alarms listed here, so a legit raw
+// periodic alarm recurs instead of being cleared as a false orphan.
+const RAW_ALARM_KEY = "cap:rawAlarms";
 /** T6: MHTML snapshots are returned inline — hard-capped so a hostile page
  * can't flood the run (over-cap pages are REFUSED with the size reported
  * honestly, never silently truncated into an unusable partial file). */
@@ -1839,6 +1843,12 @@ export function browserToolset(readOnly = false) {
         if (periodInMinutes !== undefined) info.periodInMinutes = periodInMinutes;
         if (when !== undefined) info.when = when;
         await chrome.alarms.create(name, info);
+        // Register the raw alarm so the scheduler's fire-time orphan reaper does
+        // NOT clear it: a create_alarm alarm has NO task payload by design, and a
+        // periodic raw alarm is meant to recur (the indiscriminate reap was
+        // wrongly killing raw periodic alarms on first fire).
+        const raw = (await kvGet(RAW_ALARM_KEY))[RAW_ALARM_KEY] ?? [];
+        if (!raw.includes(name)) await kvSet({ [RAW_ALARM_KEY]: [...raw, name] });
         return { ok: true, name, ...info };
       },
     }),
@@ -1876,6 +1886,10 @@ export function browserToolset(readOnly = false) {
           return { error: "run aborted — alarm not cleared" };
         }
         const cleared = await chrome.alarms.clear(name);
+        if (cleared) {
+          const raw = (await kvGet(RAW_ALARM_KEY))[RAW_ALARM_KEY] ?? [];
+          await kvSet({ [RAW_ALARM_KEY]: raw.filter((n) => n !== name) });
+        }
         return { ok: true, name, cleared: cleared === true };
       },
     }),

@@ -522,6 +522,9 @@ chrome.runtime.onConnect.addListener((port) => {
 
 // ---- alarm scheduler (persists the full task payload) ----
 const TASK_KEY = "cap:scheduledTasks";
+// Registry of raw create_alarm alarms (no task payload by design). handleAlarm's
+// fire-time orphan reaper skips these so a legit raw periodic alarm recurs.
+const RAW_ALARM_KEY = "cap:rawAlarms";
 
 async function registerAlarm(task) {
   // The ONE atomic scheduling path (validation → persist → alarm.create).
@@ -595,12 +598,28 @@ async function handleAlarm(alarm) {
     const store = await kvGet(TASK_KEY);
     const task = store[TASK_KEY]?.[alarm.name];
     if (!task) {
+      // No payload. Distinguish a GENUINE ORPHAN (a scheduleTask-created alarm
+      // whose payload was deleted — reap it so it stops firing) from a LEGIT RAW
+      // create_alarm alarm (no payload BY DESIGN — registered in cap:rawAlarms,
+      // meant to recur; do NOT reap it).
+      const rawAlarms = (await kvGet(RAW_ALARM_KEY))[RAW_ALARM_KEY] ?? [];
+      if (rawAlarms.includes(alarm.name)) {
+        logSchedulerDiagnostic({
+          event: "raw_alarm_fired",
+          alarmName: alarm.name,
+          path: "service-worker:handleAlarm",
+          storeState: "absent",
+          reason: "Raw create_alarm alarm fired with no task payload (by design); left armed to recur.",
+          actionTaken: "left_armed",
+        }, "info");
+        return;
+      }
       logSchedulerDiagnostic({
         event: "alarm_payload_missing",
         alarmName: alarm.name,
         path: "service-worker:handleAlarm",
         storeState: "absent",
-        reason: "Alarm fired but no matching task payload found in cap:scheduledTasks. Alarm was likely created directly via create_alarm without schedule_task.",
+        reason: "Alarm fired but no matching task payload found in cap:scheduledTasks and it is not a registered raw alarm — a genuine orphan (its task/agent was removed without disarming). Reaping so it stops firing.",
         actionTaken: "cleared_orphaned_alarm",
       }, "error");
       try {
@@ -3643,7 +3662,15 @@ const handlers = mergeRouteMaps(
         );
       },
     });
-    if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
+    if (r?.ok !== false) {
+      // Deletion-time alarm cleanup (owner P1: alarms must not outlive the
+      // agent). If this agent was enabled as a BACKGROUND agent it has a
+      // deterministic `recipe:<slug>` scheduled task; deleting the agent must
+      // disarm it, else its alarm keeps firing forever as an orphan. Best-effort
+      // — "no such task" just means it wasn't scheduled.
+      await cancelScheduledTask(`recipe:${slug}`).catch(() => ({ ok: false }));
+      broadcastProgress({ type: "named-agent-changed" });
+    }
     broadcastRegistryChanged();
     return r;
   },
