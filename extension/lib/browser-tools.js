@@ -9,6 +9,7 @@ import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
+import { currentRunContext } from "./run-context.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
@@ -1618,12 +1619,21 @@ export function browserToolset(readOnly = false) {
           return { error: "run aborted — task not scheduled" };
         }
         // The ONE atomic scheduling path (shared with the register-task route).
+        // Attribute the schedule to the run that created it: the SW stamps the
+        // active run's surface (threadId/agentRole/agentSurfaceRef) into
+        // run-context around every runTask, so the FIRED run — long after this
+        // one settles — projects back into this agent/thread's conversation
+        // (the owner report: alarm runs were invisible in the Agents view).
+        const runCtx = currentRunContext();
         const { name, when } = await scheduleTask({
           task,
           at,
           delayMs,
           periodInMinutes,
           scriptId,
+          owner: runCtx
+            ? { threadId: runCtx.threadId, agentRole: runCtx.agentRole, agentSurfaceRef: runCtx.agentSurfaceRef }
+            : null,
         });
         return { ok: true, name, when };
       },
