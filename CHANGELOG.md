@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.305] — 2026-08-26
+- Deleting or disabling a background agent is now instant — it stops waiting on the running task's 5-second termination confirmation. The agent is removed immediately and the in-flight run is aborted in the background (the task payload is marked cancelled first so it can't commit anything)
+
 ## [0.2.304] — 2026-08-26
 - Back button actually fixed now (real-browser proven): Settings/Assets/Directory/Skills all return to the hub in ONE press with no blank screen — the fix is at the right layer this time
 
