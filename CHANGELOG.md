@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.296] — 2026-08-26
+- Back button works properly now: from any Settings page, Back takes you straight Home in one press (no more blank screen), Settings sections are still directly linkable, and clicking the 'Chrome agent platform' header in Settings goes Home
+
 ## [0.2.295] — 2026-08-26
 - Audited every Chrome API call in all 130 tools against the official Chromium schemas and fixed everything that was wrong: tab groups, the MHTML page-save (was calling a non-existent method, so it never worked), keep-awake release, and per-site content settings (a read that always failed + a clear that could have wiped settings browser-wide). Test doubles now mirror the real APIs and reject wrong shapes, so this class of bug can't come back
 
