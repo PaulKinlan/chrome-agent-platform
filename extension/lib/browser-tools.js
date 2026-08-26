@@ -302,6 +302,23 @@ const T8_CONTENT_SETTING_VALUES = Object.freeze({
   popups: Object.freeze(["allow", "block", "ask"]),
 });
 
+/** The contentSettings API has NO per-pattern clear — clear({scope?}) wipes
+ * EVERY pattern for a resource browser-wide (a grant-scope escape under a
+ * single-origin grant). To preserve the single-origin contract, "clear" is
+ * implemented as a reset of the origin's pattern to the resource's documented
+ * default (authoritative chromium content_settings.json descriptions:
+ * cookies/images/javascript default "allow"; location/notifications default
+ * "ask"; popups default "block"). Pinned so the reset value can never drift
+ * from the schema. */
+const T8_CONTENT_SETTING_DEFAULTS = Object.freeze({
+  cookies: "allow",
+  images: "allow",
+  javascript: "allow",
+  location: "ask",
+  notifications: "ask",
+  popups: "block",
+});
+
 /** Window-level mutation under the SAME grant discipline as close_tab
  * (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01): the window's tab origins
  * are re-read INSIDE the grant lock (a navigation/move since any earlier read
@@ -2375,9 +2392,14 @@ export function browserToolset(readOnly = false) {
         }
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
+        // CORRECT API: contentSettings.get REQUIRES primaryUrl (a URL) —
+        // primaryPattern is a set()-only parameter, so the old shape always
+        // threw in real Chrome. The representative URL for an exact-origin
+        // pattern is `${origin}/` (per the schema's primaryUrl semantics).
+        const origin = canonicalOrigin(pattern.value);
         let result = null;
         try {
-          result = await chrome.contentSettings[resource].get({ primaryPattern: pattern.value });
+          result = await chrome.contentSettings[resource].get({ primaryUrl: `${origin}/` });
         } catch (e) {
           return { error: `content-setting read failed: ${String(e?.message ?? e).slice(0, 200)}` };
         }
@@ -2431,7 +2453,7 @@ export function browserToolset(readOnly = false) {
     }),
     clear_content_settings: tool({
       description:
-        "Clear one content setting for a SINGLE-ORIGIN pattern (broad/wildcard patterns are rejected), restoring the default. Requires contentSettings permission and browser-control permission for that origin (scoped + expiring).",
+        "Reset one content setting for a SINGLE-ORIGIN pattern to the resource default (allow for cookies/images/javascript, ask for location/notifications, block for popups). The contentSettings API has NO per-pattern clear — chrome.contentSettings.*.clear({scope}) would wipe EVERY pattern for the resource browser-wide, so this resets the origin's pattern to the documented default instead, preserving the single-origin scope. Requires contentSettings permission and browser-control permission for that origin (scoped + expiring).",
       inputSchema: z.object({
         resource: z.enum(["cookies", "images", "javascript", "location", "notifications", "popups"]),
         primaryPattern: z.string().min(1).max(512),
@@ -2443,6 +2465,11 @@ export function browserToolset(readOnly = false) {
         const pattern = t8SingleOriginPattern(primaryPattern);
         if (!pattern.ok) return { error: pattern.error };
         const origin = canonicalOrigin(pattern.value);
+        // Per-pattern clear does not exist in the API; the honest single-origin
+        // equivalent is set() back to the resource's documented default
+        // (T8_CONTENT_SETTING_DEFAULTS) — NEVER clear({scope}), which is
+        // browser-wide and would escape this origin's grant.
+        const defaultSetting = T8_CONTENT_SETTING_DEFAULTS[resource];
         return await withGrantLock(async () => {
           if (!(await isBrowserControlGranted(origin))) {
             return {
@@ -2453,19 +2480,19 @@ export function browserToolset(readOnly = false) {
           try {
             await assertRunOwned();
           } catch {
-            return { error: "run aborted — content setting not cleared" };
+            return { error: "run aborted — content setting not reset" };
           }
           try {
-            await chrome.contentSettings[resource].clear({ primaryPattern: pattern.value });
+            await chrome.contentSettings[resource].set({ primaryPattern: pattern.value, setting: defaultSetting });
           } catch (e) {
-            return { error: `content-setting clear failed: ${String(e?.message ?? e).slice(0, 200)}` };
+            return { error: `content-setting reset failed: ${String(e?.message ?? e).slice(0, 200)}` };
           }
           try {
             await assertRunOwned();
           } catch {
-            return { error: "run aborted — content setting cleared then aborted" };
+            return { error: "run aborted — content setting reset then aborted" };
           }
-          return { ok: true, resource, primaryPattern: pattern.value, cleared: true };
+          return { ok: true, resource, primaryPattern: pattern.value, setting: defaultSetting, restoredDefault: true };
         });
       },
     }),

@@ -147,8 +147,16 @@ globalThis.chrome = {
     clearFont: async ({ genericFamily }) => { chromeCalls.push(["fontSettings.clearFont", genericFamily]); delete fontState.fonts[genericFamily]; },
   },
   power: {
-    requestKeepAwake: async (level) => { chromeCalls.push(["power.requestKeepAwake", level]); powerState.level = level; },
-    releaseKeepAwake: async () => { chromeCalls.push(["power.release"]); powerState.level = null; powerState.released += 1; },
+    // Mirrors the REAL power API (authoritative power.webidl):
+    // requestKeepAwake(level) requires level in {"system","display"};
+    // releaseKeepAwake() takes NO arguments. Wrong shapes THROW.
+    requestKeepAwake: async (level) => {
+      if (level !== "system" && level !== "display") {
+        throw new Error("power.requestKeepAwake level must be 'system' or 'display'");
+      }
+      chromeCalls.push(["power.requestKeepAwake", level]); powerState.level = level;
+    },
+    releaseKeepAwake: async () => { chromeCalls.push(["power.releaseKeepAwake"]); powerState.level = null; powerState.released += 1; },
   },
   search: {
     query: async ({ text }) => { chromeCalls.push(["search.query", text]); searchCalls.push(text); },

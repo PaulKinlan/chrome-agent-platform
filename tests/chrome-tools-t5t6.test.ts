@@ -66,7 +66,15 @@ globalThis.chrome = {
     removeEntry: async ({ url }) => { readingList.delete(url); },
   },
   pageCapture: {
-    saveAsMHTML: async () => ({ size: mhtmlSize, text: async () => "M".repeat(mhtmlSize) }),
+    // Mirrors the REAL pageCapture API (authoritative page_capture.json):
+    // saveAsMHTML(details) REQUIRES details.tabId (integer >= 0). Wrong shapes
+    // THROW so a test can never mirror a wrong API again.
+    saveAsMHTML: async (details) => {
+      if (!details || !Number.isInteger(details.tabId) || details.tabId < 0) {
+        throw new Error("pageCapture.saveAsMHTML requires details.tabId (integer >= 0)");
+      }
+      return { size: mhtmlSize, text: async () => "M".repeat(mhtmlSize) };
+    },
   },
   tabs: {
     get: async (id) => tabs.find((t) => t.id === id) ?? Promise.reject(new Error("no tab")),

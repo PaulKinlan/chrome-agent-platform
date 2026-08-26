@@ -6,7 +6,7 @@
 // grant discipline (site-scoped mutations need the origin granted; the
 // browser-wide wipe needs the GLOBAL grant). In-memory chrome shim extended
 // from chrome-tools-t1.test.ts.
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   browserToolset,
   setGlobalBrowserControlGrant,
@@ -24,6 +24,9 @@ const cookieStores = [{ id: "0", tabIds: [1, 2] }];
 const wiped = []; // { options, dataTypes }
 const contentSettingValues = new Map(); // `${resource}|${pattern}` -> setting
 const chromeCalls = []; // records sensitive chrome calls for "never reached" assertions
+// The REAL per-resource defaults (authoritative chromium content_settings.json)
+// — the shim's get() must fall back to these, exactly like real Chrome.
+const T8_DEFAULTS = { cookies: "allow", images: "allow", javascript: "allow", location: "ask", notifications: "ask", popups: "block" };
 
 function reset() {
   store.clear();
@@ -94,17 +97,33 @@ globalThis.chrome = {
     ["cookies", "images", "javascript", "location", "notifications", "popups"].map((resource) => [
       resource,
       {
-        get: async ({ primaryPattern }) => {
-          chromeCalls.push(["contentSettings.get", resource, primaryPattern]);
-          return { setting: contentSettingValues.get(`${resource}|${primaryPattern}`) ?? "allow" };
+        // Mirrors the REAL contentSettings API shapes (authoritative chromium
+        // content_settings.json): get({primaryUrl}) REQUIRES a URL;
+        // set({primaryPattern, setting}); clear({scope?}) takes NO pattern.
+        // Wrong shapes THROW so a test can never mirror a wrong API again.
+        get: async (details) => {
+          if (!details || typeof details.primaryUrl !== "string" || "primaryPattern" in details) {
+            throw new Error("contentSettings.get requires primaryUrl (string) — primaryPattern is not a get parameter");
+          }
+          chromeCalls.push(["contentSettings.get", resource, details.primaryUrl]);
+          const origin = new URL(details.primaryUrl).origin;
+          return { setting: contentSettingValues.get(`${resource}|${origin}/*`) ?? T8_DEFAULTS[resource] };
         },
-        set: async ({ primaryPattern, setting }) => {
-          chromeCalls.push(["contentSettings.set", resource, primaryPattern, setting]);
-          contentSettingValues.set(`${resource}|${primaryPattern}`, setting);
+        set: async (details) => {
+          if (!details || typeof details.primaryPattern !== "string" || typeof details.setting !== "string") {
+            throw new Error("contentSettings.set requires primaryPattern (string) + setting");
+          }
+          chromeCalls.push(["contentSettings.set", resource, details.primaryPattern, details.setting]);
+          contentSettingValues.set(`${resource}|${details.primaryPattern}`, details.setting);
         },
-        clear: async ({ primaryPattern }) => {
-          chromeCalls.push(["contentSettings.clear", resource, primaryPattern]);
-          contentSettingValues.delete(`${resource}|${primaryPattern}`);
+        clear: async (details) => {
+          if (details && "primaryPattern" in details) {
+            throw new Error("contentSettings.clear takes {scope?} ONLY — there is no per-pattern clear");
+          }
+          chromeCalls.push(["contentSettings.clear", resource, details?.scope ?? null]);
+          for (const key of [...contentSettingValues.keys()]) {
+            if (key.startsWith(`${resource}|`)) contentSettingValues.delete(key);
+          }
         },
       },
     ]),
@@ -274,10 +293,34 @@ Deno.test("T8 contentSettings mutation: grant-gated single-origin set/clear + pe
   assertEquals(contentSettingValues.get("javascript|https://example.com/*"), "block");
   const getRes = await t.get_content_setting.execute({ resource: "javascript", primaryPattern: "https://example.com/*" });
   assertEquals(getRes.setting, "block");
+  // The product's get must reach chrome with the REAL API shape (primaryUrl, not primaryPattern).
+  assert(chromeCalls.some((c) => c[0] === "contentSettings.get" && c[1] === "javascript" && c[2] === "https://example.com/"), "get used primaryUrl");
   const clearRes = await t.clear_content_settings.execute({ resource: "javascript", primaryPattern: "https://example.com/*" });
-  assertEquals(clearRes.cleared, true);
-  assertEquals(contentSettingValues.has("javascript|https://example.com/*"), false);
+  assertEquals(clearRes.ok, true);
+  assertEquals(clearRes.restoredDefault, true);
+  // "clear" is a single-origin reset to the resource default (javascript default = allow) —
+  // it must NEVER reach chrome.contentSettings.clear (which is browser-wide {scope?} only).
+  assertEquals(clearRes.setting, "allow");
+  assertEquals(contentSettingValues.get("javascript|https://example.com/*"), "allow");
+  assertEquals(chromeCalls.filter((c) => c[0] === "contentSettings.clear").length, 0, "no browser-wide clear call");
+  assert(chromeCalls.some((c) => c[0] === "contentSettings.set" && c[1] === "javascript" && c[2] === "https://example.com/*" && c[3] === "allow"), "reset used set() with the default");
   await revokeBrowserControlGrant();
+});
+
+Deno.test("T8 contentSettings shim realism: wrong API shapes THROW in the shim (a test can never mirror a wrong API again)", async () => {
+  reset();
+  grantedPermissions.add("contentSettings");
+  // get with primaryPattern (the OLD wrong shape) throws in the shim — exactly like real Chrome.
+  await assertRejects(() => chrome.contentSettings.javascript.get({ primaryPattern: "https://example.com/*" }));
+  // clear with a pattern throws — the API has no per-pattern clear.
+  await assertRejects(() => chrome.contentSettings.javascript.clear({ primaryPattern: "https://example.com/*" }));
+  // set without a setting throws.
+  await assertRejects(() => chrome.contentSettings.javascript.set({ primaryPattern: "https://example.com/*" }));
+  // The right shapes work: set with primaryPattern, get with primaryUrl, clear with scope only.
+  await chrome.contentSettings.javascript.set({ primaryPattern: "https://example.com/*", setting: "block" });
+  assertEquals((await chrome.contentSettings.javascript.get({ primaryUrl: "https://example.com/" })).setting, "block");
+  await chrome.contentSettings.javascript.clear({ scope: "regular" });
+  assertEquals((await chrome.contentSettings.javascript.get({ primaryUrl: "https://example.com/" })).setting, "allow", "clear({scope}) wipes back to the default");
 });
 
 Deno.test("T8 bounded outputs: list_cookies truncates to maxResults with an honest total", async () => {
