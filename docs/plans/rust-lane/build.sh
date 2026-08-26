@@ -5,12 +5,16 @@
 # pinned crate + licence NOTICE + spec contract, re-run this recipe).
 set -euo pipefail
 
-# CRITICAL (env block on this host): /usr/bin/cargo is the Arch system Rust,
-# whose wasm32-wasip1 std is EMPTY (0 rlibs) and shadows the rustup toolchain
-# in PATH. Pin both RUSTC and CARGO to the rustup toolchain that has the full
-# wasi-preview1 std installed (`rustup target add wasm32-wasip1`).
-export RUSTC="${RUSTC:-$(rustup which rustc)}"
-export CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"
+# CRITICAL (env block on this host): /usr/bin/cargo + /usr/bin/rustc are the Arch
+# system Rust, whose wasm32-wasip1 std is EMPTY (0 rlibs) and shadow the rustup
+# toolchain in PATH. cargo spawns `rustc` from PATH unless RUSTC is set, so we pin
+# BOTH to the EXPLICIT rustup toolchain. The `export RUSTC=` line is load-bearing
+# (it overrides cargo's child-rustc resolution). CARGO is the rustup SHIM
+# (~/.cargo/bin/cargo), NOT the toolchain's direct cargo binary (the direct
+# binary drops the rustup env context and re-resolves the system rustc).
+TOOLCHAIN="stable-x86_64-unknown-linux-gnu"   # explicit, never "default"
+export RUSTC="$(rustup which --toolchain "$TOOLCHAIN" rustc)"
+export CARGO="$HOME/.cargo/bin/cargo"
 
 # htmlq: v0.4.0 (MIT) — https://github.com/mgdm/htmlq
 HTMLQ_VERSION="v0.4.0"
