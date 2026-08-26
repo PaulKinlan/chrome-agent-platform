@@ -1,0 +1,46 @@
+{
+  "timestamp": "2026-08-26T23:12:58.658Z",
+  "commit": "afc5bfd195a202e5c3f8ae5267f9206bc44b8988",
+  "ancestorTested": "0856225fc2d384d0e5df01bd1c97603201883dd2",
+  "passCount": 9,
+  "failCount": 0,
+  "results": [
+    {
+      "test": "Service worker discovered and extension loaded",
+      "pass": true
+    },
+    {
+      "test": "permission-approval-card is registered in customElements",
+      "pass": true
+    },
+    {
+      "test": "Approval card attached and rendered with shadow DOM elements",
+      "pass": true
+    },
+    {
+      "test": "Approval card displays reason and controls",
+      "pass": true
+    },
+    {
+      "test": "Clicking 'Not now' (Deny) sets state to denied with appropriate message",
+      "pass": true
+    },
+    {
+      "test": "Permissions section lists capability rows with labels and gates",
+      "pass": true
+    },
+    {
+      "test": "capability.revoke triggers requireOwnerApproval (security gate intact)",
+      "pass": true
+    },
+    {
+      "test": "Approvals section displays pending revocation with clear guidance",
+      "pass": true
+    },
+    {
+      "test": "Pending capability revocation approval resolves successfully",
+      "pass": true
+    }
+  ],
+  "evidenceDir": "/home/paulkinlan/chrome-agent-platform/.cache/kat-permissions-1787785971809"
+}
