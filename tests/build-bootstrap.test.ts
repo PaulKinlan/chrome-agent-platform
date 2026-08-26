@@ -17,7 +17,7 @@ const DIST = path.join(EXT, "dist");
 const VERSIONS = path.join(EXT, "dist-versions");
 
 function build() {
-  return execFileSync("node", ["build.mjs"], {
+  return execFileSync("node", ["build.mjs", "--target=store"], {
     cwd: ROOT,
     encoding: "utf8",
     timeout: 180_000,

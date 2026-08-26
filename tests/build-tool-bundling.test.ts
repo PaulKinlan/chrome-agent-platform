@@ -68,10 +68,12 @@ Deno.test("regen idempotence: full regeneration reproduces the committed bytes e
 Deno.test("flag confinement: unknown build args fail; disabled targets still refuse", () => {
   const bad = run("node", ["build.mjs", "--target=store", "--bogus-flag"]);
   assertNotEquals(bad.code, 0);
-  assertStringIncludes(bad.stderr, "usage: node build.mjs [--target=store] [--regen-tools]");
-  const dev = run("node", ["build.mjs", "--target=developer", "--regen-tools"]);
-  assertNotEquals(dev.code, 0);
-  assertStringIncludes(dev.stderr, "target_developer_not_enabled");
+  assertStringIncludes(bad.stderr, "usage: node build.mjs [--target=developer|store] [--regen-tools]");
+  // developer (debug) is ENABLED (observability workstream) — the enterprise
+  // target remains disabled.
+  const ent = run("node", ["build.mjs", "--target=enterprise", "--regen-tools"]);
+  assertNotEquals(ent.code, 0);
+  assertStringIncludes(ent.stderr, "target_enterprise_not_enabled");
 });
 
 Deno.test("build wiring: the DEFAULT build fails closed on generated drift (prove verify, not regen, is the default)", () => {

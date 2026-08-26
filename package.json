@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
-    "build": "node build.mjs --target=store",
+    "build": "node build.mjs --target=developer",
+    "build:debug": "node build.mjs --target=developer",
+    "build:production": "node build.mjs --target=store",
     "build:regen-tools": "node build.mjs --target=store --regen-tools",
     "sync:gallery": "node scripts/sync-gallery.mjs",
     "check:gallery": "node scripts/sync-gallery.mjs --check",

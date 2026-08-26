@@ -14,6 +14,8 @@ import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
 import { sha256Hex, utf8ByteLength } from "./pure.js";
+import { capLog } from "./cap-log.js";
+import { perfSpan } from "./cap-perf.js";
 import { isToolResultFailure } from "./tool-summary.js";
 import {
   createLazyProviderToolset,
@@ -21,6 +23,8 @@ import {
   executableBuiltinToolRecords,
   executableManagementToolRecords,
 } from "./lazy-tool-protocol.js";
+
+const modelLog = capLog("model");
 
 // The default system prompt = the versioned worker base (cap.worker.base) +
 // the immutable protected constraints, composed by the SINGLE composition
@@ -458,10 +462,15 @@ export function createAgent({
   const boundModel = new Proxy(model.model, {
     get(target, prop, receiver) {
       const pushAttempt = () => ({ id: crypto.randomUUID(), occurredAt: new Date().toISOString(), ordinal: ++attemptOrdinal });
-      const guarded = (fn, options) => {
+      const guarded = (fn, options, method = "doStream") => {
         emitAttestation(options);
         const entry = pushAttempt();
         attemptQueue.push(entry);
+        // Model round-trip observability: method + attempt ordinal + call
+        // latency (time to the provider's response OBJECT — stream consumption
+        // continues after). NEVER log options/content (prompts, messages).
+        const span = perfSpan(`model:${method}`);
+        modelLog.debug(`call attempt ${entry.ordinal}`, method);
         const drop = () => {
           const i = attemptQueue.indexOf(entry);
           if (i >= 0) attemptQueue.splice(i, 1);
@@ -473,21 +482,32 @@ export function createAgent({
           // Synchronous throw (a non-async doStream/doGenerate) — this attempt
           // failed and will never emit usage.
           drop();
+          span.end("throw");
+          modelLog.warn(`attempt ${entry.ordinal} threw`, err?.message ?? err);
           throw err;
         }
         // Wrap in Promise.resolve so BOTH a Promise rejection AND a plain
         // {stream} / non-thenable return are handled: the rejection drops the
         // entry; a resolved value (incl. a plain object) passes through untouched.
-        return Promise.resolve(result).catch((err) => {
-          drop();
-          throw err;
-        });
+        return Promise.resolve(result).then(
+          (value) => {
+            span.end("ok");
+            modelLog.debug(`attempt ${entry.ordinal} response`, method);
+            return value;
+          },
+          (err) => {
+            drop();
+            span.end("error");
+            modelLog.warn(`attempt ${entry.ordinal} failed`, err?.message ?? err);
+            throw err;
+          },
+        );
       };
       if (prop === "doGenerate" && typeof target.doGenerate === "function") {
-        return (options) => guarded(target.doGenerate.bind(target), options);
+        return (options) => guarded(target.doGenerate.bind(target), options, "doGenerate");
       }
       if (prop === "doStream" && typeof target.doStream === "function") {
-        return (options) => guarded(target.doStream.bind(target), options);
+        return (options) => guarded(target.doStream.bind(target), options, "doStream");
       }
       return Reflect.get(target, prop, receiver);
     },

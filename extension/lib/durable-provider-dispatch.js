@@ -1,4 +1,8 @@
 import { providerRunGate } from "./provider-gate.js";
+import { capLog } from "./cap-log.js";
+import { perfSpan } from "./cap-perf.js";
+
+const dispatchLog = capLog("durable");
 
 /**
  * Apply the production provider gate before a durable dispatch boundary.
@@ -14,8 +18,12 @@ export async function dispatchDurableProviderRun({
   dispatch,
   runGate = providerRunGate,
 }) {
+  const span = perfSpan("durable:dispatch");
+  dispatchLog.info("dispatch start", { executionId });
   const gate = await runGate(providerConfig);
   if (!gate.ok) {
+    span.end(gate.code === "permission_required" ? "paused" : "blocked");
+    dispatchLog.warn("dispatch gated", { executionId, code: gate.code });
     if (gate.code === "permission_required") {
       const paused = await durableRuns.pauseForPermission(executionId, {
         code: gate.code,
@@ -46,5 +54,14 @@ export async function dispatchDurableProviderRun({
       errorAction: "Retry after the provider becomes available.",
     };
   }
-  return await dispatch();
+  try {
+    const result = await dispatch();
+    span.end("ok");
+    dispatchLog.info("dispatch complete", { executionId });
+    return result;
+  } catch (e) {
+    span.end("error");
+    dispatchLog.error("dispatch failed", { executionId, error: e?.message ?? e });
+    throw e;
+  }
 }

@@ -29,12 +29,15 @@ import {
 
 function parseBuildTarget(args) {
   if (!Array.isArray(args) || args.length > 1) {
-    throw new Error("usage: node build.mjs [--target=store] [--regen-tools]");
+    throw new Error("usage: node build.mjs [--target=developer|store] [--regen-tools]");
   }
-  if (args.length === 0 || args[0] === "--target=store") return "store";
-  if (args[0] === "--target=developer") {
-    throw new Error("target_developer_not_enabled");
-  }
+  // DEFAULT is the DEBUG (developer) build: sourcemaps + verbose logging by
+  // default, so `npm run build` gives the owner diagnosable traces. The Store
+  // bundle is the explicit `--target=store` (`npm run build:production`).
+  // Identical security assertions run in BOTH modes — the mode flips ONLY
+  // sourcemap emission and the default log verbosity.
+  if (args.length === 0 || args[0] === "--target=developer") return "developer";
+  if (args[0] === "--target=store") return "store";
   if (args[0] === "--target=enterprise") {
     throw new Error("target_enterprise_not_enabled");
   }
@@ -260,9 +263,20 @@ try {
     // while esbuild was running.
     const sourceBefore = await computeIndexedSourceAuthority({ root: ROOT });
 
+    // Build MODE (developer = debug / store = production). The mode flips
+    // exactly two things: external sourcemaps (debug only) and the default
+    // log verbosity injected as __CAP_BUILD_LOG_DEFAULT__ (cap-log.js reads
+    // it; the owner's explicit storage choice always wins). NOTHING below
+    // relaxes any security assertion — the bundled-tool verify gate, seam
+    // scan, no-new-Function scrub, oracle/test-control AST scan and the
+    // dist.complete marker authority run identically in both modes.
+    const DEBUG_BUILD = BUILD_TARGET === "developer";
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
-      logLevel: "silent", sourcemap: false, legalComments: "none",
+      logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",
+      define: {
+        __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
+      },
     };
     const SW = path.join(STAGE, "background/service-worker.js");
     const OPT = path.join(STAGE, "options.bundle.js");

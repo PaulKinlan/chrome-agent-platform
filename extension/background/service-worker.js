@@ -437,6 +437,8 @@ import {
   payloadDigest,
   resolvePendingApproval,
 } from "../lib/owner-approval.js";
+import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity } from "../lib/cap-log.js";
+import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
 // provider failures through describeError (one actionable error with the status
@@ -444,6 +446,19 @@ import {
 // retry count) was the "flood" Paul saw. Quiet it so the single real error is
 // the only thing in the console.
 globalThis.AI_SDK_LOG_WARNINGS = false;
+
+// ---- observability (CAP-FB-20260826-OBSERVABILITY-01) ----
+// The extension-wide logger + perf layer. The SW is the hub: it logs its own
+// lifecycle and owns the trace-dump routes the owner reads when something is
+// slow ("click a task, 10s, no trace" → a per-stage breakdown).
+const swLog = capLog("sw");
+const routeLog = capLog("sw:route");
+try {
+  swLog.info("service worker evaluated", {
+    version: chrome.runtime.getManifest()?.version ?? "?",
+    verbosity: getLogVerbosity(),
+  });
+} catch { /* never throw from a logger */ }
 
 // ---- run serialization ----
 // The cached orchestrator (and its single agent-do abort controller) is SHARED
@@ -524,9 +539,14 @@ async function registerAlarm(task) {
 }
 
 async function handleAlarm(alarm) {
+  const schedLog = capLog("scheduler");
+  const fireSpan = perfSpan("scheduler:task_fire");
+  schedLog.info("alarm fired", { task: alarm.name });
   // In-flight lock: a slow run must not overlap the next alarm (periodic).
   const lock = await tryAcquireInflight(alarm.name);
   if (!lock.acquired) {
+    fireSpan.end("skipped");
+    schedLog.warn("task already in flight — skipped overlap", { task: alarm.name });
     logSchedulerDiagnostic({
       event: "task_already_in_flight",
       alarmName: alarm.name,
@@ -701,6 +721,8 @@ async function handleAlarm(alarm) {
   } finally {
     clearInterval(hb);
     await releaseInflight(alarm.name, token);
+    fireSpan.end("ok");
+    schedLog.info("alarm handled", { task: alarm.name });
   }
 }
 
@@ -5701,6 +5723,39 @@ const handlers = mergeRouteMaps(
   async "diagnostics.clear"() {
     return diagnosticClear();
   },
+
+  // ---- observability trace dump (CAP-FB-20260826-OBSERVABILITY-01) ----
+  // The owner's "what is it doing" surface: recent log lines (ring buffer,
+  // redacted at write time) + the performance breakdown (cap:* measures).
+  // From any extension page console:
+  //   chrome.runtime.sendMessage({type:"observability.dumpTrace"}, console.log)
+  async "observability.dumpTrace"() {
+    const logs = dumpLogBuffer();
+    const perf = perfSummary();
+    swLog.info("trace dump", { logEntries: logs.entries.length, dropped: logs.dropped, stages: perf.measures.length });
+    return {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      verbosity: getLogVerbosity(),
+      logs,
+      perf,
+    };
+  },
+  async "observability.clearTrace"() {
+    clearLogBuffer();
+    perfClear();
+    swLog.info("trace cleared");
+    return { ok: true };
+  },
+  async "observability.setVerbosity"({ level } = {}) {
+    try {
+      await setLogVerbosity(level);
+      swLog.info("verbosity set", { level: getLogVerbosity() });
+      return { ok: true, level: getLogVerbosity() };
+    } catch (e) {
+      return { ok: false, error: e?.message ?? String(e) };
+    }
+  },
   // A page forwards its OWN realm's CSP violations + uncaught errors here (the
   // extension pages listen for `securitypolicyviolation` / `error` and report
   // them so the ONE console shows the whole extension, not just the SW).
@@ -5820,6 +5875,7 @@ durableRecoveryReady.then(async () => {
 // This is an allowlist — unknown/new routes default to denied for page senders.
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  routeLog.debug("route", message?.type, sender?.tab?.id != null ? `tab:${sender.tab.id}` : "extension");
   if (!handlers[message?.type]) {
     sendResponse({ ok: false, error: `unknown message: ${message?.type}` });
     return true;
@@ -5975,6 +6031,7 @@ chrome.permissions?.contains?.({ permissions: ["webRequest"] })?.then((ok) => {
 }).catch(() => {});
 
 chrome.runtime.onInstalled?.addListener(() => {
+  swLog.info("extension installed/updated", { version: chrome.runtime.getManifest()?.version ?? "?" });
   recordBrowserEvent("extension-installed", {}).catch(() => {});
 });
 

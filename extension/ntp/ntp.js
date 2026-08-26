@@ -60,6 +60,11 @@ import {
   refreshDiagnostics,
   startDiagnosticPolling,
 } from "../shared/diagnostics-client.js";
+import { capLog } from "../lib/cap-log.js";
+import { perfSpan } from "../lib/cap-perf.js";
+
+const ntpLog = capLog("ntp");
+ntpLog.info("new tab page evaluated");
 
 const statusEl = document.getElementById("status");
 const durableRunRegistry = document.getElementById("durable-run-registry");
@@ -1103,6 +1108,10 @@ const terminalThreadProjectionLifecycle = createTerminalThreadProjectionLifecycl
 });
 
 async function openThread(id) {
+  // Observability: the owner's "click a task, wait 10s" path — this span is
+  // the end-to-end thread-open measurement (perfSummary breaks it out).
+  const openSpan = perfSpan("ntp:open_thread");
+  ntpLog.debug("open thread", id);
   const owner = runSurfaceOwner.claim();
   currentThreadId = id;
   currentAgentId = null; // a thread is NOT an agent chat
@@ -1138,7 +1147,10 @@ async function openThread(id) {
   }
   // Another open/run may have claimed the surface during either await. Fence
   // every following title/message/status write as one owner-bound commit.
-  if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
+  if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) {
+    openSpan.end("superseded");
+    return;
+  }
   const thread = res.ok ? res.thread : null;
   renderThreadProjection(thread, owner);
   // Restore the run view for a task that was executing (or terminally settled)
@@ -1154,6 +1166,7 @@ async function openThread(id) {
     && actionableRunsForSurface(latestDurableRuns, { threadId: id }).length > 0;
   renderRunStatus(live ? { state: "running", activity: "run in progress" } : { state: "idle" });
   renderTasks(id);
+  openSpan.end("ok");
 }
 
 // ── the BACKGROUND-agent chat surface (item 61): a background agent is an

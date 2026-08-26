@@ -10,6 +10,11 @@ import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
+import { capLog } from "./cap-log.js";
+import { perfSpan } from "./cap-perf.js";
+
+const grantLog = capLog("browser:grant");
+const toolDispatchLog = capLog("tool");
 
 const GRANT_KEY = "cap:browserControlGrant";
 /** T6: MHTML snapshots are returned inline — hard-capped so a hostile page
@@ -78,16 +83,22 @@ function grantExpired(grant) {
 export async function isBrowserControlGranted(origin) {
   const s = await kvGet(GRANT_KEY);
   const grant = s[GRANT_KEY];
-  if (!grant || typeof grant !== "object") return false;
-  if (grantExpired(grant)) return false;
-  if (grant.scope === "global") return true;
-  if (
-    grant.scope === "origins" && Array.isArray(grant.origins) &&
-    grant.origins.length > 0
-  ) {
-    return typeof origin === "string" && grant.origins.includes(origin);
-  }
-  return false; // an empty/unknown origin list is DENIED, never unrestricted
+  const granted = (() => {
+    if (!grant || typeof grant !== "object") return false;
+    if (grantExpired(grant)) return false;
+    if (grant.scope === "global") return true;
+    if (
+      grant.scope === "origins" && Array.isArray(grant.origins) &&
+      grant.origins.length > 0
+    ) {
+      return typeof origin === "string" && grant.origins.includes(origin);
+    }
+    return false; // an empty/unknown origin list is DENIED, never unrestricted
+  })();
+  // Grant observability: scope + outcome ONLY — never the grant id or the full
+  // origin list (cap-log masks token-shaped runs, but we don't even emit them).
+  grantLog.debug("check", { origin: origin ?? "<global>", scope: grant?.scope ?? "none", granted });
+  return granted;
 }
 
 function clampExpiryMs(expiryMs) {
@@ -5084,7 +5095,7 @@ export function browserToolset(readOnly = false) {
   // navigate_tab / close_tab / schedule_task are DURABLE/DESTRUCTIVE and must
   // never be driven by untrusted event data.
   if (readOnly) {
-    return {
+    return wrapToolsetForObservability({
       read_page: all.read_page,
       capture_screenshot: all.capture_screenshot,
       list_tabs: all.list_tabs,
@@ -5120,9 +5131,38 @@ export function browserToolset(readOnly = false) {
       list_content_scripts: all.list_content_scripts,
       list_tab_groups: all.list_tab_groups,
       list_downloads: all.list_downloads,
+    });
+  }
+  return wrapToolsetForObservability(all);
+}
+
+// ── tool-dispatch observability (CAP-FB-20260826-OBSERVABILITY-01) ─────────
+// Wrap every browser tool's execute: entry (debug), duration (perf measure),
+// outcome (ok / error / threw). Tool RESULT objects carry `{error}` on failure
+// (house pattern) — a denied grant surfaces here as a warn with the reason.
+function wrapToolsetForObservability(toolset) {
+  for (const [name, def] of Object.entries(toolset)) {
+    if (!def || typeof def.execute !== "function" || def.__capObserved) continue;
+    const inner = def.execute;
+    def.__capObserved = true;
+    def.execute = async (args, opts) => {
+      const span = perfSpan(`tool:${name}`);
+      toolDispatchLog.debug("dispatch", name);
+      try {
+        const result = await inner(args, opts);
+        const failed = result != null && typeof result === "object" && typeof result.error === "string";
+        span.end(failed ? "error" : "ok");
+        if (failed) toolDispatchLog.warn(name, "→", result.error);
+        else toolDispatchLog.debug(name, "→ ok");
+        return result;
+      } catch (e) {
+        span.end("throw");
+        toolDispatchLog.error(name, "threw:", e?.message ?? e);
+        throw e;
+      }
     };
   }
-  return all;
+  return toolset;
 }
 
 // ── T13 deep tab control (shared grant helper) ──

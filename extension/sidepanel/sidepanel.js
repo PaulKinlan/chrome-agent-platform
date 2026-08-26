@@ -21,6 +21,9 @@ import {
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { siteAgentToolsMessage } from "../shared/site-agent-copy.js";
 import { confirmActionDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { capLog } from "../lib/cap-log.js";
+
+capLog("sidepanel").info("side panel evaluated");
 
 const urlInput = document.getElementById("url");
 const statusEl = document.getElementById("status");
