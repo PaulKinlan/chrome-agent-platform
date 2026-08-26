@@ -8,6 +8,7 @@
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { createOffscreenWasmHost } from "../lib/wasm-offscreen-host.js";
 import { WasmExecutor } from "../lib/wasm-executor.js";
+import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
   handleScriptRunMessage(message, sendResponse, document, "offscreen")
@@ -16,3 +17,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
   handleScriptRunMessage(message, sendResponse, document, "offscreen")
 );
+
+// Agent shared workers (CAP-FB-20260826-AGENT-WORKERS-01): this offscreen doc
+// is the worker host — the SW can't construct workers, so it asks this host to
+// create/hold/close per-agent shared workers.
+registerAgentWorkerHost();

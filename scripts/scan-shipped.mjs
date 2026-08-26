@@ -228,6 +228,14 @@ const MINIFIER_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 const JWT_WORKER_HOST_CANONICAL_PATH = "extension/lib/jwt-decode.js";
 const JWT_WORKER_HOST_CANONICAL_LOCATION = { line: 60, column: 19 };
 const JWT_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// The agent-worker host (CAP-FB-20260826-AGENT-WORKERS-01) constructs the
+// per-agent SHARED worker from a runtime-resolved `chrome.runtime.getURL` URL
+// (shared workers require an ABSOLUTE URL, so a source literal is impossible).
+// A SEPARATE canonical entry bound to the exact line/column + the exact
+// `new SharedWorker(` shape, never a broad exemption.
+const AGENT_WORKER_HOST_CANONICAL_PATH = "extension/lib/agent-worker-host.js";
+const AGENT_WORKER_HOST_CANONICAL_LOCATION = { line: 36, column: 13 };
+const AGENT_WORKER_HOST_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -437,6 +445,13 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === JWT_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(JWT_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, AGENT_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "SharedWorker" &&
+            node.loc?.start?.line === AGENT_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === AGENT_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(AGENT_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);

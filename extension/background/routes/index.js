@@ -5,6 +5,7 @@ export { kvRoutes } from "./kv.js";
 export { permLeaseRoutes } from "./perm-lease.js";
 export { createProviderRoutes } from "./provider.js";
 export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from "./activity.js";
+export { createAgentWorkerRoutes, reconcileAgentWorkers } from "./agent-worker.js";
 
 /**
  * Merge route maps into a single frozen dictionary.

@@ -1,8 +1,8 @@
 # Agent Execution Architecture — Feasibility Deep-Dive
 
-**Status:** design proposal (no code changes). Owner question: should each agent be its own isolated worker instead of everything running in the MV3 service worker?
+**Status:** DECIDED + Phase 1 foundation implemented (2026-08-26). Owner chose **per-agent SHARED WORKERS** (MessagePorts passed to clients, SW-hop bootstrap). Phase 1 (the "keep building on it" foundation) is live; Phases 2–4 are next.
 
-**Verdict (TL;DR):** Feasible and worthwhile — but recommend **per-agent DEDICATED workers hosted by the single existing offscreen document**, with the service worker as the durable coordinator/launcher — **not shared workers**. Shared workers are workable but buy nothing over dedicated workers given the extension's existing service-worker-routed message model, while adding naming/discovery complexity. The real win is **fault + memory isolation** (one crashed/leaky agent no longer kills the router + every other agent), not raw throughput.
+**Verdict (TL;DR):** Feasible and worthwhile — the owner chose **per-agent SHARED WORKERS** hosted by the single offscreen document, with the service worker as the durable coordinator/launcher. Shared workers give the UI a live raw MessagePort to its agent (NTP + sidepanel each hold a port to the SAME live instance) while the SW stays the routing/auth authority. The real win is **fault + memory isolation** (one crashed/leaky agent no longer kills the router + every other agent), plus low-latency client streams.
 
 ---
 
@@ -70,7 +70,7 @@ Given the constraints above, compare the two candidates (both hosted by the offs
 | **Lifetime** | dies when the *last* port closes → the offscreen doc must hold a port per agent anyway | dies when the offscreen doc's single port closes → same reconciliation |
 | **Migration cost** | higher (naming, port fan-out, client reconnection) | lower (one creator, one owner) |
 
-**Recommendation: per-agent DEDICATED workers.** The shared worker's only real advantage is multiple *simultaneous raw ports* from the UI — but the extension's message model deliberately routes **everything** through the service worker's validated routes (auth, grant-lock, redaction, permission gating). The UI does not need a raw port to the agent; it posts messages via the SW and subscribes to state via `BroadcastChannel`. Shared workers therefore add naming/discovery complexity for a benefit we don't use. If we later want the UI to hold a live low-latency stream directly to an agent, shared workers become the right tool — but that's a follow-on, not the first step.
+**Decision (owner): per-agent SHARED workers.** The owner wants the UI to hold a live raw `MessagePort` to its agent (NTP + sidepanel each connect to the SAME live instance), so a client can stream progress at low latency instead of polling the SW. Routing/auth/grant/redaction STILL stay in the SW: a client asks the SW to validate + ensure the worker, then constructs the same shared worker (same `url + name`) for its own port — the port is a *transport*, never an authority bypass. Naming/discovery is convention-based (deterministic `workerUrl` + `{name: agentId}`), which is exactly the "no enumeration API" reality; the offscreen host is the keep-alive owner and the SW's alive-set is the durable authority.
 
 ---
 
@@ -101,19 +101,25 @@ Reconciliation loop (all idempotent):
 
 ---
 
-## 6. Migration phasing
+## 6. Migration phasing (DECIDED: shared workers)
 
-**Phase 0 — keep the loop in the SW, harden the blast radius** (smallest risk): make every agent loop's top-level `catch` a hard fault boundary (no uncaught rejection escapes to the SW realm), and cap per-agent in-flight memory. Low effort, partial isolation.
+### Phase 1 — foundation (DONE): offscreen host + shared-worker shell + SW authority
 
-**Phase 1 — move the agent-do run loop into the offscreen host** (the core move): add an agent-executor worker entry, have the SW dispatch `runTask`'s loop to the offscreen-hosted worker instead of running it inline, while keeping routing/auth/storage/grant-lock/durability in the SW. Reuse the existing `ensureOffscreen()` + claim protocol already used for the script sandbox.
+- `workers/agent-worker.js` — the per-agent SHARED worker shell (`self.name` = agent id; readiness/state over `cap:agent:<id>` BroadcastChannel; ping/pong; port-hold keep-alive; a clear seam for the Phase-2 run loop).
+- `lib/agent-worker-host.js` — the offscreen doc's worker host: creates/holds/closes shared workers (the SW can't), one authoritative `agentId -> {worker, port}` map.
+- `background/routes/agent-worker.js` — the SW authority: `agent-worker.ensure` (validate + ensure host + worker + record the durable alive-set), `agent-worker.close`, `agent-worker.alive`, and `reconcileAgentWorkers` (re-ensure on wake).
 
-**Phase 2 — per-agent dedicated worker + BroadcastChannel state** (the isolation payoff): one worker per live agent, `cap:agent:<id>` state channel, the SW's reconcile-on-wake manager.
+### Phase 2 — move the agent-do run loop into the worker (NEXT)
 
-**Stays in the SW (forever, by design):** message routing + auth (`requireSettingsSender` et al.), the browser-control grant lock + permissions authority, alarm scheduling, durable-runs journal authority, provider/credential authority, the run fence. The SW remains the *single message and authority chokepoint* — it just stops *executing* the loop.
+### Phase 3 — durability mapping (run progress/logs survive worker death via durable-runs/OPFS)
 
-**Concurrency win:** the SW is freed to route while each agent runs on its own thread (dedicated worker) in its own realm. One agent's crash/memory blowup is contained to that worker (and recoverable via the durable journal) instead of taking down the router.
+### Phase 4 — UI ports everywhere + background agents fully on workers
 
----
+**Stays in the SW (forever, by design):** message routing + auth (`requireSettingsSender` et al.), the browser-control grant lock + permissions authority, alarm scheduling, durable-runs journal authority, provider/credential authority, the run fence, and the alive-set. The SW remains the *single message and authority chokepoint* — it just stops *executing* the loop.
+
+**Concurrency win:** the SW is freed to route while each agent runs in its own worker realm. One agent's crash/memory blowup is contained to that worker (and recoverable via the durable journal) instead of taking down the router.
+
+**Port handshake (the "pass the port to clients" protocol):** a validated client calls `agent-worker.ensure` → the SW ensures the offscreen host + the shared worker + records the alive-set → the client constructs the SAME shared worker (`new SharedWorker(workerUrl, { name: agentId })`) and holds its own live `MessagePort`; the offscreen host ALSO holds a keep-alive port so the worker survives with zero visible pages. BroadcastChannel `cap:agent:<agentId>` is the connectionless state stream for any surface.
 
 ## 7. Risks & open questions
 

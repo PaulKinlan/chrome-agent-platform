@@ -28,6 +28,8 @@ import {
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
 import {
   createActivityRoutes,
+  createAgentWorkerRoutes,
+  reconcileAgentWorkers,
   createProviderRoutes,
   kvRoutes,
   mergeRouteMaps,
@@ -2880,6 +2882,7 @@ const activityRoutes = createActivityRoutes({
 
 const handlers = mergeRouteMaps(
   activityRoutes,
+  createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet }),
   {
   // The controlled cross-origin fetch for the script-host (and any extension
   // page): the service worker performs the fetch with the extension's host
@@ -6343,6 +6346,9 @@ recoverOnBoot().catch((e) =>
 );
 reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
   console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
+);
+reconcileAgentWorkers({ ensureOffscreen, kvGet }).catch((e) =>
+  console.error("reconcileAgentWorkers:", e?.message ?? e)
 );
 
 // ---- keyboard commands (manifest `commands`) ---------------------------
