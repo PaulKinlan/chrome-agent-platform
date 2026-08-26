@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.307] — 2026-08-26
+- Local models removed (the download never worked — Chrome's built-in AI storage cap): the UI and download machinery are gone and the code is simpler. The full architecture is logged in docs/LOCAL-MODELS-ARCHITECTURE.md so we can rebuild it later — including the future direction of loading gguf models from your own drive. Ollama still works as a local provider (it's just an OpenAI-compatible endpoint)
+
 ## [0.2.306] — 2026-08-26
 - Background agents now live IN the agents list (side panel + hub) with a 'runs in the background' marker, their schedule and a toggle — and you can fully delete a named agent (folder, record, memory and OPFS storage all go)
 
