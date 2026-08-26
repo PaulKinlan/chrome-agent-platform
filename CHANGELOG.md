@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.290] — 2026-08-26
+- Tab groups now actually work: the tabGroups permission is declared and listed in Settings (it wasn't, which is why the API was 'not available'). Enable 'Tab groups' in Settings, then the group tools (create/rename/recolor/collapse/move tabs) work
+
 ## [0.2.289] — 2026-08-26
 - Hardened the browser tools against a missing Chrome API: windows, toolbar-action, command and session tools now return a clean 'not available' error instead of crashing with 'Cannot read properties of undefined' — the same class the logging surfaced in tab groups
 
