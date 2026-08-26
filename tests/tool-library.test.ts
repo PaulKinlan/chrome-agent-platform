@@ -136,8 +136,9 @@ Deno.test("tool-library: responsive/RTL/theme rules are logical-property only", 
 Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow summary", async () => {
   const html = await text("../extension/options/options.html");
   const nav = html.indexOf('data-section="tool-library"');
-  const localModels = html.indexOf('data-section="local-models"');
-  assert(localModels > 0 && nav > localModels && nav < html.indexOf('data-section="agents"'), "nav item sits between Local models and Agents");
+  const localFolders = html.indexOf('data-section="local-folders"');
+  const agents = html.indexOf('data-section="agents"');
+  assert(localFolders > 0 && nav > localFolders && nav < agents, "nav item sits between Local folders and Agents (Local models was removed)");
   const section = html.slice(html.indexOf('id="tool-library"'), html.indexOf('id="tool-library"') + 700);
   assertNotMatch(section, /<button/, "the section markup contains no buttons");
   assertMatch(section, /Read-only diagnostics/, "the section carries the truthful intro");

@@ -17,17 +17,6 @@ import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { bindProviderSetDefault } from "../lib/provider-options-save.js";
 import { modelsForVendor } from "../lib/model-prices.js";
 import {
-  LOCAL_MODEL_CATALOG,
-  localModelFeasibility,
-  preflightLocalModel,
-} from "../lib/local-model-catalog.js";
-import {
-  downloadLocalModel,
-  deleteLocalModel,
-  listInstalledModels,
-  verifyModelIntegrity,
-} from "../lib/local-model-manager.js";
-import {
   providerSelectionPresentation,
   renderInternalProviderStatus,
 } from "../lib/provider-visibility.js";
@@ -366,121 +355,6 @@ async function renderToolLibrary() {
     } finally {
       library.previewBusy = false;
     }
-  });
-}
-
-async function renderLocalModels() {
-  const catalog = $("#local-model-catalog");
-  if (!catalog) return;
-  let availableStorageBytes;
-  try {
-    const estimate = await navigator.storage?.estimate?.();
-    if (Number.isFinite(estimate?.quota) && Number.isFinite(estimate?.usage)) {
-      availableStorageBytes = Math.max(0, estimate.quota - estimate.usage);
-    }
-  } catch { /* inability to estimate is rendered as unknown, never as feasible */ }
-  catalog.models = LOCAL_MODEL_CATALOG;
-  catalog.feasibility = localModelFeasibility({
-    deviceMemory: navigator.deviceMemory,
-    // Memory64 support and runtime limits need a dedicated runtime benchmark;
-    // this source slice refuses to infer support from ordinary wasm32 support.
-    memory64: false,
-    opfs: typeof navigator.storage?.getDirectory === "function",
-    availableStorageBytes,
-  });
-
-  try {
-    const installed = await listInstalledModels();
-    catalog.setInstalled(installed);
-  } catch (e) {
-    console.warn("failed to list installed models", e);
-  }
-
-  const activeDownloads = new Map();
-
-  catalog.addEventListener("model-preflight", async (event) => {
-    const modelId = event.detail?.modelId;
-    const model = LOCAL_MODEL_CATALOG.find((entry) => entry.id === modelId);
-    if (!model) return;
-    catalog.setProbeState(model.id, "probing", "Reading one byte from each pinned publisher file…");
-    const result = await preflightLocalModel(model);
-    catalog.setProbeState(
-      model.id,
-      result.ok ? "passed" : "failed",
-      result.ok
-        ? "Publisher preflight passed. Download to OPFS is available on demand."
-        : `Publisher preflight failed closed: ${result.error ?? "unverified response"}`,
-    );
-  });
-
-  catalog.addEventListener("model-download", async (event) => {
-    const modelId = event.detail?.modelId;
-    const model = LOCAL_MODEL_CATALOG.find((entry) => entry.id === modelId);
-    if (!model || activeDownloads.has(modelId)) return;
-
-    const controller = new AbortController();
-    activeDownloads.set(modelId, controller);
-
-    try {
-      await downloadLocalModel({
-        modelId,
-        signal: controller.signal,
-        onProgress: (p) => {
-          catalog.setProgress(modelId, p);
-        },
-      });
-      const installed = await listInstalledModels();
-      catalog.setInstalled(installed);
-      catalog.setProgress(modelId, null);
-    } catch (err) {
-      catalog.setProgress(modelId, null);
-      if (err?.code !== "download_aborted") {
-        catalog.setProbeState(modelId, "failed", `Download failed: ${err?.message ?? err}`);
-      }
-    } finally {
-      activeDownloads.delete(modelId);
-    }
-  });
-
-  catalog.addEventListener("model-cancel", (event) => {
-    const modelId = event.detail?.modelId;
-    const controller = activeDownloads.get(modelId);
-    if (controller) {
-      controller.abort("User cancelled download.");
-      activeDownloads.delete(modelId);
-      catalog.setProgress(modelId, null);
-    }
-  });
-
-  catalog.addEventListener("model-delete", async (event) => {
-    const modelId = event.detail?.modelId;
-    try {
-      await deleteLocalModel({ modelId });
-      const installed = await listInstalledModels();
-      catalog.setInstalled(installed);
-      catalog.setProbeState(modelId, "idle", "Model removed from OPFS.");
-    } catch (err) {
-      console.error("delete model failed", err);
-    }
-  });
-
-  catalog.addEventListener("model-verify", async (event) => {
-    const modelId = event.detail?.modelId;
-    try {
-      const res = await verifyModelIntegrity({ modelId });
-      if (res?.ok && res?.integrityVerified) {
-        catalog.setProbeState(modelId, "passed", "Integrity verified: all file SHA-256 hashes match catalog.");
-      } else {
-        catalog.setProbeState(modelId, "failed", `Integrity check failed: ${res?.error ?? "corrupt files"}`);
-      }
-    } catch (err) {
-      catalog.setProbeState(modelId, "failed", `Verification failed: ${err?.message ?? err}`);
-    }
-  });
-
-  catalog.addEventListener("model-select", (event) => {
-    const modelId = event.detail?.modelId;
-    catalog.setSelected(modelId);
   });
 }
 
@@ -2670,78 +2544,6 @@ function saveFlash(msg) {
   }, 2500);
 }
 
-// ── owner approvals ────────────────────────────────────────────────────────
-// Approval ids live only in click-handler closures. No id, target, digest,
-// payload, origin or execution identifier is written into the DOM.
-const approvalList = $("#approval-list");
-const approvalStatus = $("#approval-status");
-let approvalRenderBusy = false;
-
-async function resolveApprovalFromClick(event, approvalId, approve, row) {
-  if (!event.isTrusted || navigator.userActivation?.isActive !== true) {
-    if (approvalStatus) approvalStatus.textContent = "Use a real click to approve or deny.";
-    return;
-  }
-  for (const button of row.querySelectorAll("button")) button.disabled = true;
-  if (approvalStatus) approvalStatus.textContent = approve ? "Approving…" : "Denying…";
-  const result = await chrome.runtime.sendMessage({
-    type: "management.resolve-approval",
-    approvalId,
-    approve,
-  }).catch(() => ({ ok: false }));
-  if (approvalStatus) approvalStatus.textContent = result?.ok
-    ? (approve ? "Approved. The exact requesting operation may retry once." : "Denied. The exact request was removed.")
-    : "That approval could not be resolved. Refresh and try again.";
-  await renderApprovals();
-}
-
-async function renderApprovals() {
-  if (!approvalList || approvalRenderBusy) return;
-  approvalRenderBusy = true;
-  try {
-    const response = await chrome.runtime.sendMessage({ type: "management.pending-approvals" }).catch(() => null);
-    const approvals = Array.isArray(response?.approvals) ? response.approvals : [];
-    approvalList.replaceChildren();
-    if (!approvals.length) {
-      const empty = document.createElement("p");
-      empty.className = "muted";
-      empty.textContent = "No pending approvals.";
-      approvalList.append(empty);
-      return;
-    }
-    if (approvalStatus) approvalStatus.textContent = "Review the pending action, then approve it once or deny it.";
-    for (const approval of approvals) {
-      const approvalId = approval.approvalId; // closure only
-      const row = document.createElement("div");
-      row.className = "approval-row";
-      const description = document.createElement("div");
-      const action = document.createElement("strong");
-      action.textContent = String(approval.action ?? "destructive operation");
-      const reference = document.createElement("span");
-      reference.className = "approval-ref muted";
-      reference.textContent = `Private reference ${String(approval.targetRef ?? "unavailable")}`;
-      description.append(action, reference);
-      const controls = document.createElement("div");
-      controls.className = "approval-controls";
-      const approve = document.createElement("button");
-      approve.type = "button";
-      approve.className = "btn primary";
-      approve.textContent = "Approve once";
-      const deny = document.createElement("button");
-      deny.type = "button";
-      deny.className = "btn ghost";
-      deny.textContent = "Deny";
-      approve.addEventListener("click", (event) => resolveApprovalFromClick(event, approvalId, true, row));
-      deny.addEventListener("click", (event) => resolveApprovalFromClick(event, approvalId, false, row));
-      controls.append(approve, deny);
-      row.append(description, controls);
-      approvalList.append(row);
-    }
-  } finally {
-    approvalRenderBusy = false;
-  }
-}
-
 // nav active state
 export function handleSettingsHashNavigation(hash, isTraverse = false) {
   const sectionId = normalizeSettingsSectionId(hash);
@@ -2762,7 +2564,6 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   });
 
   if (sectionId === "local-folders") renderLocalFolders();
-  if (sectionId === "approvals") renderApprovals();
   if (sectionId === "usage") renderUsage();
 
   section.scrollIntoView({
@@ -2898,7 +2699,6 @@ chrome.permissions?.onRemoved?.addListener((change) => {
 
 await refreshStoragePermission();
 await renderProviders();
-await renderLocalModels();
 await renderLocalFolders();
 await renderToolLibrary();
 await renderAgents();
@@ -2907,8 +2707,6 @@ await renderEnroll();
 await renderAppearance();
 await renderBrowser();
 await renderPermissions();
-await renderApprovals();
-setInterval(() => { if (document.visibilityState === "visible") renderApprovals(); }, 1500);
 await renderHooks();
 await renderPrompts();
 await renderUsage();

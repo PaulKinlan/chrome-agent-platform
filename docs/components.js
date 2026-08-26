@@ -7283,8 +7283,9 @@ class ToolLibrary extends Component {
         details.append(summaryEl);
         // ONE bounded per-tool summary list per category (name, source label,
         // version/availability, one-line description). Read-only — no action,
-        // grant or verify surface is ever rendered here.
-        const rows = Array.isArray(rowsBySource[kind]) ? rowsBySource[kind].slice(0, 64) : [];
+        // grant or verify surface is ever rendered here. Bounded at 256 rows to
+        // match TOOL_LIBRARY_SUMMARY_LIMITS.maxRowsPerSource (the full registry).
+        const rows = Array.isArray(rowsBySource[kind]) ? rowsBySource[kind].slice(0, 256) : [];
         if (rows.length) {
           const list = document.createElement("ul");
           list.className = "source-tools";

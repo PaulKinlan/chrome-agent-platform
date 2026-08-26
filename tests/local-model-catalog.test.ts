@@ -328,7 +328,7 @@ Deno.test("local model UI contract exposes exact size, disabled-until-pass and t
     "Download lacks the model-bound accessible name",
   );
   assert(
-    options.includes('<local-model-catalog id="local-model-catalog">'),
-    "Settings does not host shared component",
+    !options.includes('<local-model-catalog id="local-model-catalog">'),
+    "local models are hidden — Settings no longer hosts the local-model catalog (CAP-FB-20260826-LOCAL-MODELS-HIDE-01)",
   );
 });

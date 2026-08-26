@@ -367,8 +367,8 @@ async function renderSiteAgents() {
   if (unenrolledTabs.length > 0) {
     const banner = document.createElement("div");
     banner.className = "proactive-discovery-banner";
-    banner.style.marginTop = agents.length ? "8px" : "0";
-    banner.style.padding = "8px 10px";
+    banner.style.margin = agents.length ? "10px 0 12px" : "0 0 12px";
+    banner.style.padding = "10px 12px";
     banner.style.borderRadius = "8px";
     banner.style.background = "var(--bg-surface-secondary, rgba(0,0,0,0.03))";
     banner.style.border = "1px solid var(--border-subtle, rgba(0,0,0,0.08))";
