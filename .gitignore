@@ -11,3 +11,4 @@ node_modules
 # provider-picker integration additions
 extension/dist-versions/
 dist-archives/
+.cache/
