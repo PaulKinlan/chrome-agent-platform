@@ -1842,13 +1842,21 @@ export function browserToolset(readOnly = false) {
         if (delayInMinutes !== undefined) info.delayInMinutes = delayInMinutes;
         if (periodInMinutes !== undefined) info.periodInMinutes = periodInMinutes;
         if (when !== undefined) info.when = when;
-        await chrome.alarms.create(name, info);
-        // Register the raw alarm so the scheduler's fire-time orphan reaper does
-        // NOT clear it: a create_alarm alarm has NO task payload by design, and a
-        // periodic raw alarm is meant to recur (the indiscriminate reap was
-        // wrongly killing raw periodic alarms on first fire).
-        const raw = (await kvGet(RAW_ALARM_KEY))[RAW_ALARM_KEY] ?? [];
-        if (!raw.includes(name)) await kvSet({ [RAW_ALARM_KEY]: [...raw, name] });
+        // Register the raw alarm BEFORE creating it so a `when≈now` one-shot
+        // cannot fire into the gap and be reaped as a false orphan. Registration
+        // tells the scheduler's fire-time orphan reaper this alarm has NO task
+        // payload BY DESIGN: a periodic raw alarm is meant to recur (the
+        // indiscriminate reap was wrongly killing raw periodic alarms on first
+        // fire). If the create itself fails, roll the registration back so the
+        // registry stays exact.
+        const rawBefore = (await kvGet(RAW_ALARM_KEY))[RAW_ALARM_KEY] ?? [];
+        if (!rawBefore.includes(name)) await kvSet({ [RAW_ALARM_KEY]: [...rawBefore, name] });
+        try {
+          await chrome.alarms.create(name, info);
+        } catch (e) {
+          await kvSet({ [RAW_ALARM_KEY]: rawBefore }).catch(() => {});
+          throw e;
+        }
         return { ok: true, name, ...info };
       },
     }),

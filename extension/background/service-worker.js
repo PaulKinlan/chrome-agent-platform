@@ -604,14 +604,35 @@ async function handleAlarm(alarm) {
       // meant to recur; do NOT reap it).
       const rawAlarms = (await kvGet(RAW_ALARM_KEY))[RAW_ALARM_KEY] ?? [];
       if (rawAlarms.includes(alarm.name)) {
-        logSchedulerDiagnostic({
-          event: "raw_alarm_fired",
-          alarmName: alarm.name,
-          path: "service-worker:handleAlarm",
-          storeState: "absent",
-          reason: "Raw create_alarm alarm fired with no task payload (by design); left armed to recur.",
-          actionTaken: "left_armed",
-        }, "info");
+        // Boundedness (review MEDIUM): a fired ONE-SHOT raw alarm is auto-removed
+        // by Chrome, so alarms.get(name) returns null — prune its registry entry
+        // here (the only fire-time opportunity), else distinct-name one-shot
+        // usage would grow cap:rawAlarms without limit. A still-armed alarm
+        // (periodic, or a one-shot that somehow survived) keeps its entry.
+        let stillArmed = null;
+        try {
+          stillArmed = await chrome.alarms?.get?.(alarm.name) ?? null;
+        } catch { /* best effort */ }
+        if (!stillArmed) {
+          await kvSet({ [RAW_ALARM_KEY]: rawAlarms.filter((n) => n !== alarm.name) }).catch(() => {});
+          logSchedulerDiagnostic({
+            event: "raw_alarm_pruned",
+            alarmName: alarm.name,
+            path: "service-worker:handleAlarm",
+            storeState: "absent",
+            reason: "Fired one-shot raw alarm is no longer armed (Chrome auto-removed it); pruned its cap:rawAlarms entry to keep the registry bounded.",
+            actionTaken: "pruned_registry_entry",
+          }, "info");
+        } else {
+          logSchedulerDiagnostic({
+            event: "raw_alarm_fired",
+            alarmName: alarm.name,
+            path: "service-worker:handleAlarm",
+            storeState: "absent",
+            reason: "Raw create_alarm alarm fired with no task payload (by design); left armed to recur.",
+            actionTaken: "left_armed",
+          }, "info");
+        }
         return;
       }
       logSchedulerDiagnostic({

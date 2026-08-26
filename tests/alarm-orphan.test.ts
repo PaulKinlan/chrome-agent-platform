@@ -60,20 +60,54 @@ Deno.test("alarm-orphan: create_alarm registers the raw alarm in cap:rawAlarms; 
 
 Deno.test("alarm-orphan: the fire-time distinguisher — orphan reaped, registered raw alarm kept", async () => {
   reset();
-  // Mirror of handleAlarm's new no-payload branch.
+  // Mirror of handleAlarm's new no-payload branch (with the boundedness prune).
   async function fireDecision(alarmName) {
     const task = (await kvGet("cap:scheduledTasks"))["cap:scheduledTasks"]?.[alarmName];
     if (task) return "run";
     const rawAlarms = (await kvGet(RAW))[RAW] ?? [];
-    return rawAlarms.includes(alarmName) ? "keep-armed" : "reap";
+    if (rawAlarms.includes(alarmName)) {
+      const stillArmed = await chrome.alarms.get(alarmName);
+      if (!stillArmed) {
+        await kvSet({ [RAW]: rawAlarms.filter((n) => n !== alarmName) });
+        return "prune";
+      }
+      return "keep-armed";
+    }
+    return "reap";
   }
   // A scheduleTask alarm that lost its payload AND is not a raw alarm → orphan → reap.
   await kvRemove(RAW);
   assertEquals(await fireDecision("recipe:deleted-agent"), "reap", "a scheduleTask alarm with no payload and no raw registration is a genuine orphan");
-  // A legit create_alarm raw alarm (registered) → keep armed.
+  // A legit create_alarm PERIODIC raw alarm (registered, still armed) → keep armed + entry.
   await kvSet({ [RAW]: ["wake-sw"] });
-  assertEquals(await fireDecision("wake-sw"), "keep-armed", "a registered raw alarm is NOT reaped");
+  armedAlarms.set("wake-sw", { periodInMinutes: 15 });
+  assertEquals(await fireDecision("wake-sw"), "keep-armed", "a registered recurring raw alarm is NOT reaped");
   // An alarm WITH a payload runs normally.
   await kvSet({ ["cap:scheduledTasks"]: { "recipe:live": { task: "x" } } });
   assertEquals(await fireDecision("recipe:live"), "run", "an alarm with a payload runs");
+});
+
+Deno.test("alarm-orphan: boundedness — fired one-shot raw alarm is pruned from the registry; recurring keeps its entry across fires", async () => {
+  reset();
+  // Mirror of handleAlarm's raw branch prune (alarms.get(name) === null ⇒ one-shot already auto-removed).
+  async function fireRaw(alarmName) {
+    const rawAlarms = (await kvGet(RAW))[RAW] ?? [];
+    if (!rawAlarms.includes(alarmName)) return "reap";
+    const stillArmed = await chrome.alarms.get(alarmName);
+    if (!stillArmed) await kvSet({ [RAW]: rawAlarms.filter((n) => n !== alarmName) });
+    return stillArmed ? "keep-armed" : "pruned";
+  }
+  // One-shot: registered via the real tool, then Chrome auto-removes it on fire.
+  await tools().create_alarm.execute({ name: "once", delayInMinutes: 0.1 });
+  assert((await kvGet(RAW))[RAW]?.includes("once"), "registered before create");
+  armedAlarms.delete("once"); // simulate Chrome auto-removal after the one-shot fired
+  assertEquals(await fireRaw("once"), "pruned");
+  assert(!((await kvGet(RAW))[RAW] ?? []).includes("once"), "registry no longer holds the fired one-shot (bounded)");
+  // Recurring: entry survives repeated fires while the alarm stays armed.
+  await tools().create_alarm.execute({ name: "every-15", periodInMinutes: 15 });
+  assertEquals(await fireRaw("every-15"), "keep-armed");
+  assertEquals(await fireRaw("every-15"), "keep-armed");
+  assert((await kvGet(RAW))[RAW]?.includes("every-15"), "recurring raw alarm keeps its entry across fires");
+  // Registry only ever holds live raw alarms.
+  assertEquals((await kvGet(RAW))[RAW], ["every-15"]);
 });
