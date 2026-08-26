@@ -400,6 +400,14 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   line, and the top-level-only CSP constraint
 - Recover: `git grep -n "PYODIDE" -- TASKS.md`
 - History:
+  - 2026-08-26 23:25 UTC — OWNER DECISION: OPTION A — approve the Pyodide MVS
+    with the four resolutions (default-tier admission + memory-evidence gate;
+    bounded MAXIMUM_MEMORY≤2048-page build; the one reviewed PSF-2.0 licence
+    line; top-level-only non-eval PyProxy entrypoint). DISPATCHED: pinned tag +
+    bounded build → default-tier runtime via the existing authority,
+    content-addressed OPFS cache, ONE python stdin/stdout tool (≤2KiB in,
+    ≤64KiB out, top-level-only, existing termination fence), separate Emscripten
+    dispatcher profile, WASI host NOT widened, zero manifest/key/network change.
   - 2026-08-26 23:23 UTC — OWNER-DECISION PACKET (read-only,
     /tmp/cap-pyodide-decision/GLM.md a6c2ebaa): all 4 caveats verified against
     committed source (default-tier 16MiB fits Pyodide core 8.4-12.3MB; bounded
