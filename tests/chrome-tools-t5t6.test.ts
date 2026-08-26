@@ -66,7 +66,7 @@ globalThis.chrome = {
     removeEntry: async ({ url }) => { readingList.delete(url); },
   },
   pageCapture: {
-    saveTabAsMHTML: async () => ({ size: mhtmlSize, text: async () => "M".repeat(mhtmlSize) }),
+    saveAsMHTML: async () => ({ size: mhtmlSize, text: async () => "M".repeat(mhtmlSize) }),
   },
   tabs: {
     get: async (id) => tabs.find((t) => t.id === id) ?? Promise.reject(new Error("no tab")),
@@ -238,13 +238,13 @@ Deno.test("T6 r2 (review): save_page_as_mhtml re-checks tab identity inside the 
   // B2: abort lands during capture — bytes must NOT be returned.
   const fence = { signal: { aborted: false } };
   setRunFence(fence);
-  const origText = chrome.pageCapture.saveTabAsMHTML;
-  chrome.pageCapture.saveTabAsMHTML = async () => {
+  const origText = chrome.pageCapture.saveAsMHTML;
+  chrome.pageCapture.saveAsMHTML = async () => {
     fence.signal.aborted = true; // abort lands DURING the capture await
     return { size: 64, text: async () => "M".repeat(64) };
   };
   const aborted = await tools().save_page_as_mhtml.execute({ tabId: 7 });
-  chrome.pageCapture.saveTabAsMHTML = origText;
+  chrome.pageCapture.saveAsMHTML = origText;
   clearRunFence();
   assert(aborted.error.includes("run aborted"), `post-capture abort refuses: ${aborted.error}`);
   assert(!aborted.mhtml, "bytes discarded on abort");
@@ -256,13 +256,13 @@ Deno.test("T6 r2 (review): save_page_as_mhtml capture failures are structured, n
   granted.add("pageCapture");
   grantedOrigins.add("https://example.com/*");
   await setOriginBrowserControlGrant(["https://example.com"], Date.now() + 5 * 60_000);
-  const orig = chrome.pageCapture.saveTabAsMHTML;
-  chrome.pageCapture.saveTabAsMHTML = async () => { throw new Error("chrome exploded"); };
+  const orig = chrome.pageCapture.saveAsMHTML;
+  chrome.pageCapture.saveAsMHTML = async () => { throw new Error("chrome exploded"); };
   const threw = await tools().save_page_as_mhtml.execute({ tabId: 7 });
   assert(threw.error.startsWith("capture failed:"), `throw → structured: ${threw.error}`);
-  chrome.pageCapture.saveTabAsMHTML = async () => null;
+  chrome.pageCapture.saveAsMHTML = async () => null;
   const nul = await tools().save_page_as_mhtml.execute({ tabId: 7 });
   assert(nul.error.includes("no data"), `null blob guarded: ${nul.error}`);
-  chrome.pageCapture.saveTabAsMHTML = orig;
+  chrome.pageCapture.saveAsMHTML = orig;
   await revokeBrowserControlGrant();
 });

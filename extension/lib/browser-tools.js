@@ -3410,7 +3410,9 @@ export function browserToolset(readOnly = false) {
           }
           let blob = null;
           try {
-            blob = await chrome.pageCapture.saveTabAsMHTML({ tabId: target.id });
+            // CORRECT API: chrome.pageCapture.saveAsMHTML({tabId}) —
+            // saveTabAsMHTML does NOT exist (same imagined-API class as tabGroups).
+            blob = await chrome.pageCapture.saveAsMHTML({ tabId: target.id });
           } catch (e) {
             return { error: `capture failed: ${e?.message ?? e}` };
           }
@@ -4366,7 +4368,9 @@ export function browserToolset(readOnly = false) {
             return { error: "run aborted — keep-awake not released" };
           }
           try {
-            await chrome.power.release();
+            // CORRECT API: chrome.power.releaseKeepAwake() — chrome.power.release()
+            // does NOT exist.
+            await chrome.power.releaseKeepAwake();
           } catch (e) {
             return { error: `keep-awake release failed: ${String(e?.message ?? e).slice(0, 200)}` };
           }

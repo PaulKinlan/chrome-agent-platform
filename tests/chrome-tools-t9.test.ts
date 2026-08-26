@@ -148,7 +148,7 @@ globalThis.chrome = {
   },
   power: {
     requestKeepAwake: async (level) => { chromeCalls.push(["power.requestKeepAwake", level]); powerState.level = level; },
-    release: async () => { chromeCalls.push(["power.release"]); powerState.level = null; powerState.released += 1; },
+    releaseKeepAwake: async () => { chromeCalls.push(["power.release"]); powerState.level = null; powerState.released += 1; },
   },
   search: {
     query: async ({ text }) => { chromeCalls.push(["search.query", text]); searchCalls.push(text); },
