@@ -225,6 +225,16 @@ async function hasTabsPermission() {
   }
 }
 
+/** The tabGroups API namespace, or null when unavailable. `chrome.tabGroups` is
+ * undefined when the API isn't exposed in this context (seen live as
+ * "Cannot read properties of undefined (reading 'query')" from list_tab_groups)
+ * — every tabGroups tool must guard through this instead of touching
+ * `chrome.tabGroups` directly, so the failure is an honest structured error,
+ * never a raw throw to the model. */
+function tabGroupsApi() {
+  return typeof chrome !== "undefined" && chrome.tabGroups ? chrome.tabGroups : null;
+}
+
 async function hasPermission(perm) {
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) return false;
@@ -798,7 +808,9 @@ async function withTabGroupGrant(groupId, verb, mutate) {
     };
   }
   return await withGrantLock(async () => {
-    const group = await chrome.tabGroups.get(groupId).catch(() => null);
+    const tg = tabGroupsApi();
+    if (!tg) return { error: "tab groups API not available in this browser context" };
+    const group = await tg.get(groupId).catch(() => null);
     if (!group) return { error: "no such tab group" };
     const tabIds = Array.isArray(group.tabIds) ? group.tabIds : [];
     const tabs = await Promise.all(
@@ -1573,11 +1585,11 @@ export function browserToolset(readOnly = false) {
     }),
     schedule_task: tool({
       description:
-        "Schedule a future task to run the agent at an absolute time (epoch ms) or after a delay (ms). The task runs even if the browser is idle. Pass scriptId (a script you created with create_script) to run that JS directly on the schedule — no model re-invocation.",
+        "Schedule a future task to run the agent. REQUIRED: pass exactly one of `at` (absolute epoch ms in the future) or `delayMs` (a positive delay in ms) — a call with neither fails. The task runs even if the browser is idle. Pass scriptId (a script you created with create_script) to run that JS directly on the schedule — no model re-invocation.",
       inputSchema: z.object({
         task: z.string().min(1).max(4000),
-        at: z.number().optional(),
-        delayMs: z.number().optional(),
+        at: z.number().optional().describe("absolute epoch ms in the future — pass this OR delayMs, exactly one is required"),
+        delayMs: z.number().optional().describe("positive delay in ms from now — pass this OR at, exactly one is required"),
         periodInMinutes: z.number().optional(),
         scriptId: z.string().optional().describe("run this script instead of the model"),
       }),
@@ -2420,7 +2432,9 @@ export function browserToolset(readOnly = false) {
         windowId: z.number().int().min(1).optional(),
       }),
       execute: async ({ windowId }) => {
-        const groups = await chrome.tabGroups.query(windowId ? { windowId } : {});
+        const tg = tabGroupsApi();
+        if (!tg) return { error: "tab groups API not available in this browser context" };
+        const groups = await tg.query(windowId ? { windowId } : {});
         return {
           tabGroups: (Array.isArray(groups) ? groups : []).slice(0, 64).map((g) => ({
             id: g.id,
@@ -2445,7 +2459,9 @@ export function browserToolset(readOnly = false) {
           const options = { tabIds };
           if (title !== undefined) options.title = title;
           if (color !== undefined) options.color = color;
-          const group = await chrome.tabGroups.group(options);
+          const tg = tabGroupsApi();
+          if (!tg) return { error: "tab groups API not available in this browser context" };
+          const group = await tg.group(options);
           return { ok: true, groupId: group.id, tabIds };
         });
       },
@@ -2465,7 +2481,9 @@ export function browserToolset(readOnly = false) {
           if (title !== undefined) props.title = title;
           if (color !== undefined) props.color = color;
           if (collapsed !== undefined) props.collapsed = collapsed;
-          const group = await chrome.tabGroups.update(groupId, props);
+          const tg = tabGroupsApi();
+          if (!tg) return { error: "tab groups API not available in this browser context" };
+          const group = await tg.update(groupId, props);
           return {
             ok: true,
             groupId,
@@ -2484,7 +2502,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabIds }) => {
         return await withTabIdsGrant(tabIds, "ungrouped", async () => {
-          await chrome.tabGroups.ungroup(tabIds);
+          const tg = tabGroupsApi();
+          if (!tg) return { error: "tab groups API not available in this browser context" };
+          await tg.ungroup(tabIds);
           return { ok: true, tabIds };
         });
       },
@@ -2498,7 +2518,9 @@ export function browserToolset(readOnly = false) {
       }),
       execute: async ({ tabIds, groupId }) => {
         return await withTabIdsGrant(tabIds, "moved", async () => {
-          const group = await chrome.tabGroups.move(tabIds, groupId);
+          const tg = tabGroupsApi();
+          if (!tg) return { error: "tab groups API not available in this browser context" };
+          const group = await tg.move(tabIds, groupId);
           return { ok: true, groupId: group.id, tabIds };
         });
       },
