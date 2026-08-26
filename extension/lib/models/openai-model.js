@@ -77,6 +77,16 @@ export function createOpenAICompatibleModel(config) {
     baseURL,
     apiKey: apiKey ?? "",
     name: "configured",
+    // Ask the provider to include token usage in the streaming response. The
+    // AI SDK only forwards `stream_options: { include_usage: true }` when this
+    // is set (dist: "only include stream_options when in strict compatibility
+    // mode"). WITHOUT it most OpenAI-compatible endpoints omit usage from the
+    // stream, so agent-do's onStepEnd sees step.usage === undefined and records
+    // 0 — which recordUsage then drops (inputTokens===0 && outputTokens===0),
+    // yielding ZERO usage rows. This is the root cause of "usage calls/tokens
+    // aren't working" (every real provider — openai/anthropic/gemini/deepseek/
+    // BYO-endpoint — routes through this adapter).
+    includeUsage: true,
     // Intercept the provider fetch to log the real HTTP status/body ONCE (the
     // SDK's AI_APICallError message is generic). The SDK still throws the
     // AI_APICallError with statusCode/responseBody for describeError to map.
