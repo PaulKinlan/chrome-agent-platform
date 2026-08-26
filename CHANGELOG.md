@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.294] — 2026-08-26
+- Agent lifecycle now visible in the logs: when logging is verbose you see each agent step, every tool call with its duration and outcome, and the run's total steps/time/tokens — redacted so no prompt or page content ever appears. Off in production, on in the debug build
+
 ## [0.2.293] — 2026-08-26
 - Fixed the tab-group tools to call the real Chrome API: grouping/ungrouping is chrome.tabs.group()/ungroup() (the previous calls used chrome.tabGroups.group/ungroup which don't exist), and a group's title/colour is set via chrome.tabGroups.update. The 'tg.group is not a function' crash is gone
 
