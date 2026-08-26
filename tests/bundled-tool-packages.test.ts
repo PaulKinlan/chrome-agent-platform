@@ -46,15 +46,18 @@ function diskInventory() {
 }
 
 Deno.test("SPDX: exact single tokens admitted, including Zlib", () => {
-  for (const id of ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "Zlib", "blessing"]) {
+  for (const id of ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "PSF-2.0", "Zlib", "blessing"]) {
     assert(isValidLicenseExpression(id), id);
   }
 });
 
-Deno.test("SPDX: exact two-operand AND composites admitted (toml dual, gzip composite)", () => {
+Deno.test("SPDX: exact two-operand AND composites admitted (toml dual, gzip composite, pyodide)", () => {
   assert(isValidLicenseExpression("MIT AND Apache-2.0"));
   assert(isValidLicenseExpression("Zlib AND Apache-2.0"));
   assert(isValidLicenseExpression("Apache-2.0 AND Apache-2.0"));
+  // The Pyodide runtime is MPL-2.0 (Pyodide core) AND PSF-2.0 (the bundled
+  // CPython standard library) — the one reviewed composite for the runtime admission.
+  assert(isValidLicenseExpression("MPL-2.0 AND PSF-2.0"));
 });
 
 Deno.test("SPDX: everything else rejected fail-closed", () => {
