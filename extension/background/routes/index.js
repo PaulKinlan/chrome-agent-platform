@@ -4,6 +4,7 @@ export { requireSettingsSender } from "./auth.js";
 export { kvRoutes } from "./kv.js";
 export { permLeaseRoutes } from "./perm-lease.js";
 export { createProviderRoutes } from "./provider.js";
+export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from "./activity.js";
 
 /**
  * Merge route maps into a single frozen dictionary.
