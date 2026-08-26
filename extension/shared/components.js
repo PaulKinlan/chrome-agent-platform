@@ -6401,6 +6401,30 @@ class DurableRunRegistry extends Component {
   get runs() { return structuredClone(this._runs); }
   setLogs(executionId, logs) { this._logs.set(executionId, Array.isArray(logs) ? structuredClone(logs) : []); this._render(); this._wire(); }
   _context(run) { return String(run.taskPreview || run.agentId || run.kind || "run").slice(0, 120); }
+  // Human-facing phase labels (the internal phases are machinery, not prose —
+  // the owner said the raw strings push everything off screen; keep them subtle).
+  _phaseLabel(phase) {
+    return ({
+      running: "Running", settling: "Finishing", "paused-permission": "Paused — needs permission",
+      "paused-interruption": "Paused", "paused-side-effect-uncertain": "Paused — outcome uncertain",
+      "paused-provider-change": "Paused — provider changed", "resume-dispatching": "Resuming…",
+      done: "Done", failed: "Failed", cancelled: "Cancelled",
+    })[phase] || String(phase || "unknown");
+  }
+  // A one-line, human reason: the raw internal detail stays in the logs/title,
+  // never as visible prose.
+  _reasonLine(run) {
+    const raw = run.pause?.reason || run.terminal?.summary || "";
+    if (!raw) return "";
+    const text = String(raw).replace(/\s+/g, " ").slice(0, 90);
+    return text.length >= String(raw).length ? text : `${text}…`;
+  }
+  // Truncate the task preview to a subtle one-liner (the full text stays in
+  // the title attribute + logs).
+  _shortContext(run) {
+    const ctx = this._context(run);
+    return ctx.length > 64 ? `${ctx.slice(0, 64)}…` : ctx;
+  }
   _cancellable(phase) { return durableRunActionsForPhase(phase).cancel; }
   _resumable(phase) { return durableRunActionsForPhase(phase).resume; }
   async _confirmCancel(run) {
@@ -6434,28 +6458,42 @@ class DurableRunRegistry extends Component {
     } }));
   }
   _render() {
-    const items = this._runs.map((run, index) => {
+    // Subtle: the owner said the run cards push everything off screen. Cap the
+    // visible list to the 3 most-recent runs; older ones become a muted
+    // "+N earlier runs" line (the full history is in the logs/activity view).
+    const MAX_VISIBLE = 3;
+    const all = this._runs;
+    const shown = all.slice(0, MAX_VISIBLE);
+    const overflow = all.length - shown.length;
+    const items = shown.map((run, index) => {
       const context = this._context(run);
+      const short = this._shortContext(run);
+      const phaseLabel = this._phaseLabel(run.phase);
+      const reason = this._reasonLine(run);
       const descriptionId = `durable-run-${index}-description`;
       const pending = this._pending.has(run.executionId);
       const logs = this._logs.get(run.executionId);
-      return `<li class="run" data-execution-id="${escapeHtml(run.executionId)}" ${pending ? 'aria-busy="true"' : ""}>
-        <div class="summary"><strong>${escapeHtml(context)}</strong><span class="phase">${escapeHtml(run.phase || "unknown")}</span></div>
-        <p class="description" id="${descriptionId}">Execution ${escapeHtml(run.executionId)}. ${escapeHtml(run.pause?.reason || run.terminal?.summary || "Retained run history.")}</p>
+      return `<li class="run" data-execution-id="${escapeHtml(run.executionId)}" title="${escapeHtml(context)}" ${pending ? 'aria-busy="true"' : ""}>
+        <div class="summary"><strong>${escapeHtml(short)}</strong><span class="phase">${escapeHtml(phaseLabel)}</span></div>
+        ${reason ? `<p class="description" id="${descriptionId}">${escapeHtml(reason)}</p>` : ""}
         <div class="actions">
-          ${this._cancellable(run.phase) ? `<button type="button" data-action="cancel" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>Cancel ${escapeHtml(context)}</button>` : ""}
-          ${this._resumable(run.phase) ? `<button type="button" data-action="resume" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>${run.phase === "paused-side-effect-uncertain" ? "Retry" : "Resume"} ${escapeHtml(context)}</button>` : ""}
-          <button type="button" data-action="logs" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>View logs for ${escapeHtml(context)}</button>
+          ${this._cancellable(run.phase) ? `<button type="button" data-action="cancel" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>Cancel</button>` : ""}
+          ${this._resumable(run.phase) ? `<button type="button" data-action="resume" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>${run.phase === "paused-side-effect-uncertain" ? "Retry" : "Resume"}</button>` : ""}
+          <button type="button" data-action="logs" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>View logs</button>
         </div>
         ${logs ? `<pre class="logs" tabindex="0" aria-label="Retained logs for ${escapeHtml(context)}">${escapeHtml(JSON.stringify(logs, null, 2))}</pre>` : ""}
       </li>`;
     }).join("");
+    const overflowLine = overflow > 0
+      ? `<li class="overflow" role="note">+${overflow} earlier ${overflow === 1 ? "run" : "runs"} — see activity for the full history.</li>`
+      : "";
     mountTemplate(this, `
       :host { display:block; min-inline-size:0; }
       :host([hidden]) { display:none; }
       .heading { margin:0 0 .5rem; font-size:1rem; color:var(--ink,#1d1b18); }
       ul { list-style:none; margin:0; padding:0; display:grid; gap:.625rem; }
       .run { min-inline-size:0; padding:.75rem; border:1px solid var(--border,#e3e0d9); border-radius:.75rem; background:var(--panel,#fff); }
+      .overflow { list-style:none; color:var(--muted,#635e56); font-size:.8125rem; padding-inline:.25rem; }
       .summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:.375rem .75rem; min-inline-size:0; }
       strong { overflow-wrap:anywhere; }
       .phase { color:var(--muted,#635e56); font-size:.8125rem; }
@@ -6469,7 +6507,7 @@ class DurableRunRegistry extends Component {
       .logs { max-block-size:14rem; overflow:auto; margin:.625rem 0 0; padding:.625rem; border-radius:.5rem; background:var(--panel-2,#efede8); white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; }
       .status { min-block-size:1.25rem; margin:.5rem 0 0; color:var(--muted,#635e56); }
       .error { color:var(--danger,#b3261e); }
-    `, `<section aria-label="Current conversation run controls"><h2 class="heading">Current run</h2><ul role="list">${items}</ul><p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
+    `, `<section aria-label="Current conversation run controls"><h2 class="heading">Current run</h2><ul role="list">${items}${overflowLine}</ul><p class="status ${this._error ? "error" : ""}" role="status" aria-live="polite">${escapeHtml(this._error || this._message)}</p></section>`);
   }
   _wire() {
     for (const button of this._root.querySelectorAll("button[data-action]")) {
