@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.310] — 2026-08-27
+- The shared-worker transformation is COMPLETE: each agent runs in its own shared worker (isolated, fault-contained), the UI holds live ports with live progress, background agents run on workers with zero visible pages, and a single-driver lease means only one surface can drive browser commands at a time — with reads like screenshots still always available
+
 ## [0.2.309] — 2026-08-27
 - The shared-worker transformation continues: Phase 2 complete — the agent loop now runs inside each agent's own shared worker with tools executing through the service worker's validated authority (same grant/redaction as interactive, nothing new the worker can do on its own)
 
