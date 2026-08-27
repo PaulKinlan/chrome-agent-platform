@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.320] — 2026-08-27
+- The extension no longer asks for Chrome's debugger permission — it was added for the DevTools-protocol power tools and brought Chrome's all-sites warning plus a permanent 'started debugging this browser' bar with it. Those four tools are gone for now and can come back later behind a developer-only surface. Also: the browser-test suite is honest again (it had been silently driving a settings page deleted two weeks ago, which made it report 26 of 127 checks when the product was fine)
+
 ## [0.2.319] — 2026-08-27
 - Python is nearly here: the bounded non-eval python tool is built and tested (your code runs through the Pyodide interpreter, never eval; 2KiB in / 64KiB out, fenced). The remaining step is the actual Pyodide runtime binary — an Emscripten build, with the exact script checked in ready to run
 

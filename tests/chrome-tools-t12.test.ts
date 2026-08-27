@@ -1,9 +1,9 @@
 // @ts-nocheck
 // CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01 — Tranche 12 (power tools:
-// chrome.debugger CDP with a bounded method allowlist, chrome.userScripts and
+// chrome.userScripts and
 // chrome.scripting dynamic content scripts with single-origin matches).
 // KATs: CDP allowlist enforcement (Runtime.evaluate + unknown methods refused
-// BEFORE any Chrome call), args bounds, GLOBAL-grant-only for every debugger
+// BEFORE any Chrome call), args bounds, GLOBAL-grant-only for every
 // mutation, single-origin matches enforcement (<all_urls>/wildcards refused
 // before any Chrome call), host-permission scoping, origin-coverage of every
 // matches pattern, bounded outputs + honest truncation. In-memory chrome shim
@@ -18,7 +18,9 @@ import {
 import {
   BROWSER_TOOL_NAMES,
   CHROME_TOOL_CAPABILITY_BOUNDS,
+  CHROME_TOOL_CAPABILITY_TABLE,
 } from "../extension/lib/chrome-tool-capabilities.js";
+import { CAPABILITIES } from "../extension/lib/capabilities.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
 
 // ---- in-memory chrome shim ----
@@ -162,177 +164,22 @@ function tools() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Registry parity: the 12 T12 tools are appended AND the counts are honest.
+// Registry parity: the 8 T12 tools are appended AND the counts are honest.
+// (The 4 chrome.debugger CDP tools were removed 2026-08-27 — see the guard below.)
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12: browserToolset has exactly 130 tools matching BROWSER_TOOL_NAMES (118 + 12)", () => {
+Deno.test("T12: browserToolset has exactly 126 tools matching BROWSER_TOOL_NAMES (118 + 8)", () => {
   reset();
   const browser = tools();
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
-  assertEquals(BROWSER_TOOL_NAMES.length, 130);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 130);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 159);
+  assertEquals(BROWSER_TOOL_NAMES.length, 126);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 126);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 155);
   for (const name of [
-    "list_debugger_targets", "debugger_attach", "debugger_detach", "debugger_send_command",
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
   ]) {
     assert(name in browser, `${name} present`);
   }
-});
-
-// ──────────────────────────────────────────────────────────────────────────
-// chrome.debugger: permission + GLOBAL grant discipline
-// ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12 debugger tools: denied honestly without the debugger permission (no Chrome call)", async () => {
-  reset();
-  addTab("https://a.example/1");
-  await setGlobalBrowserControlGrant();
-  for (const [name, args] of [
-    ["list_debugger_targets", {}],
-    ["debugger_attach", { tabId: 1 }],
-    ["debugger_detach", { tabId: 1 }],
-    ["debugger_send_command", { tabId: 1, method: "Network.enable" }],
-  ]) {
-    const r = await tools()[name].execute(args);
-    assertEquals(r.error, "debugger permission not granted — enable Debugger in Settings", name);
-  }
-  assertEquals(debuggerCalls.length, 0);
-});
-
-Deno.test("T12 debugger_attach: an ORIGIN grant is never enough — only the GLOBAL grant authorizes CDP", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  await setOriginBrowserControlGrant(["https://a.example"]);
-  const denied = await tools().debugger_attach.execute({ tabId: tab.id });
-  assert(denied.error.includes("global grant"), denied.error);
-  assertEquals(debuggerCalls.length, 0);
-  await revokeBrowserControlGrant();
-  const deniedNone = await tools().debugger_attach.execute({ tabId: tab.id });
-  assert(deniedNone.error.includes("global grant"), deniedNone.error);
-  await setGlobalBrowserControlGrant();
-  const ok = await tools().debugger_attach.execute({ tabId: tab.id });
-  assertEquals(ok, { ok: true, tabId: tab.id, protocolVersion: "1.3" });
-  assertEquals(debuggerCalls, [["attach", { tabId: tab.id }, "1.3"]]);
-});
-
-Deno.test("T12 debugger_attach: already attached → honest bounded error, never a raw throw", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  await setGlobalBrowserControlGrant();
-  assertEquals((await tools().debugger_attach.execute({ tabId: tab.id })).ok, true);
-  const again = await tools().debugger_attach.execute({ tabId: tab.id });
-  assert(typeof again.error === "string" && again.error.includes("Another debugger is already attached"), JSON.stringify(again));
-});
-
-Deno.test("T12 debugger_detach: grant-gated + honest when nothing is attached", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  const denied = await tools().debugger_detach.execute({ tabId: tab.id });
-  assert(denied.error.includes("global grant"), denied.error);
-  await setGlobalBrowserControlGrant();
-  const notAttached = await tools().debugger_detach.execute({ tabId: tab.id });
-  assert(notAttached.error.includes("No debugger is attached"), JSON.stringify(notAttached));
-  attachedTabs.add(tab.id);
-  const ok = await tools().debugger_detach.execute({ tabId: tab.id });
-  assertEquals(ok, { ok: true, tabId: tab.id });
-});
-
-// ──────────────────────────────────────────────────────────────────────────
-// CDP allowlist: Runtime.evaluate + unknown methods refused BEFORE Chrome
-// ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12 debugger_send_command: Runtime.evaluate refused BY DESIGN with rationale (no Chrome call)", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  attachedTabs.add(tab.id);
-  await setGlobalBrowserControlGrant();
-  const r = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Runtime.evaluate" });
-  assert(r.error.includes("arbitrary JavaScript"), JSON.stringify(r));
-  const r2 = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Runtime.callFunctionOn" });
-  assert(r2.error.includes("Runtime.* methods") || r2.error.includes("refused"), JSON.stringify(r2));
-  assertEquals(debuggerCalls.length, 0);
-});
-
-Deno.test("T12 debugger_send_command: unknown methods refused BEFORE chrome.debugger.sendCommand", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  attachedTabs.add(tab.id);
-  await setGlobalBrowserControlGrant();
-  for (const method of ["DOM.getDocument", "Storage.clearDataForOrigin", "Network.setBypassServiceWorker"]) {
-    const r = await tools().debugger_send_command.execute({ tabId: tab.id, method });
-    assert(r.error.includes("not on the allowlist"), `${method}: ${JSON.stringify(r)}`);
-  }
-  assertEquals(debuggerCalls.length, 0);
-});
-
-Deno.test("T12 debugger_send_command: allowlisted method runs under the global grant; args bounded", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  attachedTabs.add(tab.id);
-  await setGlobalBrowserControlGrant();
-  const ok = await tools().debugger_send_command.execute({
-    tabId: tab.id,
-    method: "Emulation.setCPUThrottlingRate",
-    argsJson: JSON.stringify({ rate: 4 }),
-  });
-  assertEquals(ok.ok, true);
-  assertEquals(ok.truncated, false);
-  assertEquals(debuggerCalls[0][0], "sendCommand");
-  assertEquals(debuggerCalls[0][2], "Emulation.setCPUThrottlingRate");
-  assertEquals(debuggerCalls[0][3], { rate: 4 });
-  // args bounds (defense in depth — execute is called directly here):
-  const tooBig = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Network.enable", argsJson: "x".repeat(4097) });
-  assert(tooBig.error.includes("4 KiB"), JSON.stringify(tooBig).slice(0, 120));
-  const badJson = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Network.enable", argsJson: "{oops" });
-  assert(badJson.error.includes("valid JSON"), JSON.stringify(badJson));
-  const notObject = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Network.enable", argsJson: "[1,2]" });
-  assert(notObject.error.includes("JSON object"), JSON.stringify(notObject));
-  assertEquals(debuggerCalls.length, 1); // only the first command reached Chrome
-});
-
-Deno.test("T12 debugger_send_command: an ORIGIN grant is refused for CDP commands", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  attachedTabs.add(tab.id);
-  await setOriginBrowserControlGrant(["https://a.example"]);
-  const r = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Network.enable" });
-  assert(r.error.includes("global grant"), JSON.stringify(r));
-  assertEquals(debuggerCalls.length, 0);
-});
-
-Deno.test("T12 debugger_send_command: results > 8 KiB truncated with an honest flag", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  const tab = addTab("https://a.example/1");
-  attachedTabs.add(tab.id);
-  await setGlobalBrowserControlGrant();
-  sendCommandResult = { data: "y".repeat(9000) };
-  const r = await tools().debugger_send_command.execute({ tabId: tab.id, method: "Performance.getMetrics" });
-  assertEquals(r.ok, true);
-  assertEquals(r.truncated, true);
-  assertEquals(r.result.length, 8192);
-  assert(r.resultBytes > 8192);
-});
-
-Deno.test("T12 list_debugger_targets: read-only, bounded, permission-gated", async () => {
-  reset();
-  grantedPermissions.add("debugger");
-  for (let i = 0; i < 5; i++) addTab(`https://a.example/${i}`);
-  const r = await tools().list_debugger_targets.execute({ maxResults: 3 });
-  assertEquals(r.targets.length, 3);
-  assertEquals(r.total, 5);
-  assertEquals(r.truncated, true);
-  assertEquals(r.targets[0].tabId, 1);
-  assertEquals(debuggerCalls.length, 0);
-  // no grant needed for the read:
-  const noGrant = await tools().list_debugger_targets.execute({});
-  assertEquals(noGrant.total, 5);
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -513,19 +360,48 @@ Deno.test("T12 list_content_scripts: read-only, bounded, permission-gated", asyn
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// readOnly (scoped-hook) exposure: the 3 T12 reads are exposed; NO T12 mutation.
+// readOnly (scoped-hook) exposure: the 2 T12 reads are exposed; NO T12 mutation.
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12 readOnly: the 3 reads are exposed; every T12 mutation is excluded", () => {
+Deno.test("T12 readOnly: the 2 reads are exposed; every T12 mutation is excluded", () => {
   reset();
   const scoped = browserToolset(true);
-  for (const name of ["list_debugger_targets", "list_user_scripts", "list_content_scripts"]) {
+  for (const name of ["list_user_scripts", "list_content_scripts"]) {
     assert(name in scoped, `${name} exposed to scoped runs`);
   }
   for (const name of [
-    "debugger_attach", "debugger_detach", "debugger_send_command",
     "register_user_script", "update_user_script", "unregister_user_script",
     "register_content_script", "update_content_script", "unregister_content_script",
   ]) {
     assert(!(name in scoped), `${name} must NOT be exposed to scoped runs`);
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// REMOVAL GUARD (2026-08-27, owner decision Q17).
+// chrome.debugger was removed: it carries Chrome's all-sites permission
+// warning and a persistent "started debugging this browser" bar, which is not
+// acceptable in the product's current posture. The tools may return later
+// behind a separate developer-only surface — as a DELIBERATE act, not by a
+// tranche quietly re-adding a name. This guard fails loudly if that happens,
+// and the chrome.debugger shim above stays in place precisely so that a
+// resurrected tool would have something to call and still be caught here.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("T12 GUARD: chrome.debugger is absent from the manifest, the capability table and the toolset", async () => {
+  reset();
+  const manifest = JSON.parse(await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)));
+  assert(!JSON.stringify(manifest).includes("debugger"), "no debugger anywhere in the manifest");
+  assert(!(manifest.optional_permissions ?? []).includes("debugger"), "debugger is not an optional permission");
+
+  const browser = tools();
+  const scoped = browserToolset(true);
+  for (const name of [
+    "list_debugger_targets", "debugger_attach", "debugger_detach", "debugger_send_command",
+  ]) {
+    assert(!(name in browser), `${name} must NOT be in the toolset`);
+    assert(!(name in scoped), `${name} must NOT be exposed to scoped runs`);
+    assert(!BROWSER_TOOL_NAMES.includes(name), `${name} must NOT be in BROWSER_TOOL_NAMES`);
+  }
+  assert(!CHROME_TOOL_CAPABILITY_TABLE.some((row) => row.toolName.includes("debugger")), "no debugger row in the capability table");
+  assert(!CAPABILITIES.some((c) => c.id === "debugger"), "no debugger capability offered in Settings");
+  assertEquals(debuggerCalls.length, 0);
 });

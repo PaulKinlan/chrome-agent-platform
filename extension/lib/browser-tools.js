@@ -573,7 +573,7 @@ async function captureActiveTab({ origin, grantIdBefore, tabId }) {
 /**
  * Capture a PNG screenshot of the active tab, gated by the browser-control
  * grant FOR THAT TAB'S ORIGIN. Uses chrome.tabs.captureVisibleTab (the standard
- * extension screenshot API — NOT the Chrome debugger, which cannot be optional
+ * extension screenshot API — NOT the Chrome debugger (removed 2026-08-27)
  * and carries Chrome's all-sites warning) with an exact host grant for the
  * selected origin. `activeTab` is deliberately NOT a background/model fallback:
  * Chrome only activates its temporary host authority after a qualifying owner
@@ -1204,75 +1204,19 @@ export async function recordRequestActivity(entry) {
 }
 
 // ── T12 power tools: grant discipline ───────────────────────────────────────
-// chrome.debugger (CDP) is the most powerful surface in the platform: every
-// debugger mutation is MUTATING and needs the GLOBAL browser-control grant
-// (an origin-scoped grant is never enough — a debugger session reaches inside
-// the page beyond one origin's product semantics, and Chrome surfaces the
-// debugging infobar). User scripts and dynamic content scripts inject code
-// into matched origins: every matches pattern must be ONE exact http(s)
-// origin (<all_urls>, wildcard-subdomain and multi-origin patterns refused),
-// and the product grant must cover EVERY matches origin — the corrected house
-// discipline (mirror of withTabIdsGrant): any origin-less scope or an empty
-// origin set forces the GLOBAL grant; only all-origin sets may be satisfied
-// by per-origin grants. Host permissions for matched origins must already be
-// granted via the Settings flow — the service worker never requests them.
-
-async function withDebuggerGrant(verb, mutate) {
-  if (!(await hasPermission("debugger"))) {
-    return {
-      error: "debugger permission not granted — enable Debugger in Settings",
-    };
-  }
-  return await withGrantLock(async () => {
-    // Browser-power scope: ONLY a global grant authorizes CDP control
-    // (undefined origin never matches an origin-scoped grant).
-    if (!(await isBrowserControlGranted(undefined))) {
-      return {
-        error:
-          "browser control not granted globally — debugger control is browser-wide and needs the global grant (an origin-scoped grant is refused)",
-      };
-    }
-    try {
-      await assertRunOwned();
-    } catch {
-      return { error: `run aborted — debugger not ${verb}` };
-    }
-    let result;
-    try {
-      result = await mutate();
-    } catch (e) {
-      // Chrome's own message is the honest content (e.g. "Another debugger
-      // is already attached to the tab") — surface it bounded + structured.
-      return { error: `debugger ${verb} failed: ${String(e?.message ?? e).slice(0, 200)}` };
-    }
-    try {
-      await assertRunOwned();
-    } catch {
-      return { error: `run aborted — debugger ${verb} then aborted` };
-    }
-    return result;
-  });
-}
-
-/** The bounded CDP method allowlist (T12). Runtime.evaluate is deliberately
- * EXCLUDED — it is arbitrary in-page JavaScript execution and never
- * admissible from this surface; the tool names the refusal. Everything not on
- * this list is refused BEFORE chrome.debugger.sendCommand is reached. */
-const T12_CDP_ALLOWLIST = Object.freeze([
-  "Network.enable",
-  "Network.disable",
-  "Network.emulateNetworkConditions",
-  "Emulation.setDeviceMetricsOverride",
-  "Emulation.clearDeviceMetricsOverride",
-  "Emulation.setCPUThrottlingRate",
-  "Emulation.setGeolocationOverride",
-  "Emulation.setUserAgentOverride",
-  "Page.navigate",
-  "Page.reload",
-  "Page.captureScreenshot",
-  "Performance.enable",
-  "Performance.getMetrics",
-]);
+// User scripts and dynamic content scripts inject code into matched origins:
+// every matches pattern must be ONE exact http(s) origin (<all_urls>,
+// wildcard-subdomain and multi-origin patterns refused), and the product grant
+// must cover EVERY matches origin — the corrected house discipline (mirror of
+// withTabIdsGrant): any origin-less scope or an empty origin set forces the
+// GLOBAL grant; only all-origin sets may be satisfied by per-origin grants.
+// Host permissions for matched origins must already be granted via the
+// Settings flow — the service worker never requests them.
+//
+// chrome.debugger (CDP) was declared here and is REMOVED (2026-08-27, owner
+// decision Q17): it carries Chrome's all-sites permission warning and the
+// persistent "started debugging this browser" bar. The tools and the optional
+// permission may return later behind a separate developer-only surface.
 
 /** Validate a script `matches` list as single exact http(s) origin patterns
  * (pure; never throws). Returns { patterns, origins } or { error } — reuses
@@ -4915,121 +4859,11 @@ export function browserToolset(readOnly = false) {
       },
     }),
     // ── T12 power tools ───────────────────────────────────────────────────
-    // chrome.debugger (CDP — allowlisted methods only, GLOBAL grant only),
     // chrome.userScripts (USER_SCRIPT world, single-origin matches) and
     // chrome.scripting dynamic content scripts (single-origin matches).
     // desktopCapture is intentionally ABSENT: chooseDesktopMedia requires a
     // user-gesture-visible requester page and the extension exposes no such
     // owned channel (documented exclusion — no stub tool).
-    list_debugger_targets: tool({
-      description:
-        "List the browser's attachable debugger targets (tabs: id, windowId, title, url where the tabs permission makes them visible). Read-only; requires the debugger permission. Attaching shows Chrome's debugging infobar.",
-      inputSchema: z.object({
-        maxResults: z.number().int().min(1).max(100).optional(),
-      }),
-      execute: async ({ maxResults = 50 }) => {
-        if (!(await hasPermission("debugger"))) {
-          return { error: "debugger permission not granted — enable Debugger in Settings" };
-        }
-        let tabs = [];
-        try {
-          tabs = await chrome.tabs.query({});
-        } catch (e) {
-          return { error: `tab query failed: ${String(e?.message ?? e).slice(0, 200)}` };
-        }
-        const rows = Array.isArray(tabs) ? tabs : [];
-        return {
-          targets: rows.slice(0, maxResults).map((t) => ({
-            tabId: t.id,
-            windowId: t.windowId ?? null,
-            title: typeof t.title === "string" ? t.title.slice(0, 128) : null,
-            url: typeof t.url === "string" ? t.url.slice(0, 2048) : null,
-          })),
-          returned: Math.min(rows.length, maxResults),
-          total: rows.length,
-          truncated: rows.length > maxResults,
-        };
-      },
-    }),
-    debugger_attach: tool({
-      description:
-        "Attach the Chrome DevTools Protocol debugger to a tab (protocol 1.3). Requires the GLOBAL browser-control grant (an origin grant is refused). Chrome shows the debugging infobar while attached.",
-      inputSchema: z.object({
-        tabId: z.number().int().min(1),
-        protocolVersion: z.enum(["1.3"]).optional(),
-      }),
-      execute: async ({ tabId, protocolVersion = "1.3" }) => {
-        return await withDebuggerGrant("attached", async () => {
-          await chrome.debugger.attach({ tabId }, protocolVersion);
-          return { ok: true, tabId, protocolVersion };
-        });
-      },
-    }),
-    debugger_detach: tool({
-      description:
-        "Detach the Chrome DevTools Protocol debugger from a tab. Requires the GLOBAL browser-control grant.",
-      inputSchema: z.object({ tabId: z.number().int().min(1) }),
-      execute: async ({ tabId }) => {
-        return await withDebuggerGrant("detached", async () => {
-          await chrome.debugger.detach({ tabId });
-          return { ok: true, tabId };
-        });
-      },
-    }),
-    debugger_send_command: tool({
-      description:
-        "Send ONE allowlisted CDP command to an attached tab: Network.enable/disable/emulateNetworkConditions, Emulation.setDeviceMetricsOverride/clearDeviceMetricsOverride/setCPUThrottlingRate/setGeolocationOverride/setUserAgentOverride, Page.navigate/reload/captureScreenshot, Performance.enable/getMetrics. Runtime.evaluate and every other method are refused. Requires the GLOBAL browser-control grant. argsJson is a JSON object string (<=4 KiB); results are truncated at 8 KiB with an honest flag.",
-      inputSchema: z.object({
-        tabId: z.number().int().min(1),
-        method: z.string().min(1).max(64),
-        argsJson: z.string().max(4096).optional(),
-      }),
-      execute: async ({ tabId, method, argsJson }) => {
-        if (typeof method === "string" && (method === "Runtime.evaluate" || method.startsWith("Runtime."))) {
-          return {
-            error:
-              "Runtime.evaluate (and all Runtime.* methods) refused by design: it executes arbitrary JavaScript inside the page and is never admissible from this surface",
-          };
-        }
-        if (!T12_CDP_ALLOWLIST.includes(method)) {
-          return {
-            error: `CDP method refused: '${String(method).slice(0, 64)}' is not on the allowlist (${T12_CDP_ALLOWLIST.join(", ")})`,
-          };
-        }
-        if (argsJson !== undefined && argsJson.length > 4096) {
-          return { error: "argsJson exceeds the 4 KiB bound" };
-        }
-        let args = {};
-        if (argsJson !== undefined) {
-          try {
-            args = JSON.parse(argsJson);
-          } catch {
-            return { error: "argsJson must be valid JSON" };
-          }
-          if (typeof args !== "object" || args === null || Array.isArray(args)) {
-            return { error: "argsJson must be a JSON object of CDP parameters" };
-          }
-        }
-        return await withDebuggerGrant("command-sent", async () => {
-          const result = await chrome.debugger.sendCommand({ tabId }, method, args);
-          let serialized = "{}";
-          try {
-            serialized = JSON.stringify(result ?? {});
-          } catch {
-            serialized = "{}";
-          }
-          const truncated = serialized.length > 8192;
-          return {
-            ok: true,
-            tabId,
-            method,
-            result: truncated ? serialized.slice(0, 8192) : serialized,
-            resultBytes: serialized.length,
-            truncated,
-          };
-        });
-      },
-    }),
     register_user_script: tool({
       description:
         "Register a USER_SCRIPT-world user script (id + js + matches). matches must be single exact http(s) origin patterns — <all_urls> and wildcard patterns are refused. Requires the userScripts permission, the exact-origin HOST permission for every match (granted in Settings), and the browser-control grant covering every matches origin.",
@@ -5346,7 +5180,6 @@ export function browserToolset(readOnly = false) {
       list_tts_voices: all.list_tts_voices,
       tts_is_speaking: all.tts_is_speaking,
       // Tranche-12 reads (observe-only).
-      list_debugger_targets: all.list_debugger_targets,
       list_user_scripts: all.list_user_scripts,
       list_content_scripts: all.list_content_scripts,
       list_tab_groups: all.list_tab_groups,

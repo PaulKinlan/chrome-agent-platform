@@ -1718,8 +1718,8 @@ async function renderBrowser() {
         storageGranted = await chrome.permissions.request({ permissions: ["storage"] });
       } catch { storageGranted = false; }
       // The Screenshots capability requests the SILENT `activeTab` permission
-      // (NOT `tabs`, which warns and can't be granted in headless; NOT the
-      // Chrome debugger, which can't be optional) — this ENABLES Chrome's
+      // (NOT `tabs`, which warns and can't be granted in headless) — this
+      // ENABLES Chrome's
       // transient owner-invoked capture (clicking the extension icon while
       // viewing a page). It never authorizes a background or model-selected
       // capture (those require exact site access). Requested HERE (a real user

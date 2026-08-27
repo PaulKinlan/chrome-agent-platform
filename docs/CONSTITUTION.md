@@ -39,8 +39,14 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 - **Permissions** — ALL optional (Paul's hard requirement): the manifest declares
   an empty `permissions` array; `alarms`/`storage`/`sidePanel`/`tabs`/`scripting`/
   `notifications` are `optional_permissions`, host access is
-  `optional_host_permissions`. No `debugger` anywhere (it cannot be optional and
-  carries Chrome's all-sites warning) — screenshots use
+  `optional_host_permissions`. No `debugger` anywhere. It was re-declared
+  as an *optional* permission at `0.2.286` for the CDP power tools and removed
+  again on 2026-08-27 (owner decision, Q17): the original rationale was
+  imprecise — `debugger` **can** be declared optional — but the real costs
+  stand, namely Chrome's all-sites permission warning and the persistent
+  "started debugging this browser" bar. `tests/chrome-tools-t12.test.ts` holds
+  a removal guard and `scripts/chrome-journeys.ts` asserts absence from the
+  manifest, so a future tranche cannot reintroduce it silently. Screenshots useScreenshots use
   `chrome.tabs.captureVisibleTab` (the ACTIVE tab). `activeTab` is transient and
   tied to a qualifying owner invocation on the current tab; it is never a
   model/background fallback. Model-selected screenshots require exact host
@@ -67,7 +73,8 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 ## 3. Design consistency
 
 - One design language: shared spacing/icon/button scale (the `icon-btn` scale).
-- The theme picker themes every surface consistently.
+- One design system, applied consistently to every surface. (The theme picker was
+  removed at `0.2.301` — it only ever worked on Settings and was unused.)
 - Icons: inline SVG, line-art, currentColor (no emoji).
 - States: idle/loading/responding/error/empty are designed + consistent.
 

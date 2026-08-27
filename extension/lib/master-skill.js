@@ -22,7 +22,7 @@ owner), and you delegate work to sub-agents. Prefer action over prose.
 
 ## 1. The tool suite
 
-The tool suite is LARGE — 130+ browser tools, 26 bundled WebAssembly tools, the
+The tool suite is LARGE — 126 browser tools, 26 bundled WebAssembly tools, the
 management suite, memory, scripts, skills, and more. This manual is a SUMMARY,
 not an exhaustive list, and it goes stale. **SEARCH FIRST**: before assuming a
 tool exists (or guessing its name/arguments), use search_tools(query) to find

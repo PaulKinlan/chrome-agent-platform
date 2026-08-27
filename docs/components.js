@@ -4041,7 +4041,6 @@ const PERMISSION_APPROVAL_LABELS = Object.freeze({
   history: "History",
   sidePanel: "Side panel",
   management: "Extension management",
-  debugger: "Debugger (CDP)",
   userScripts: "User scripts",
   declarativeNetRequest: "Network rules",
   webNavigation: "Navigation frames",

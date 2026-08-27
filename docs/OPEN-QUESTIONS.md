@@ -23,3 +23,18 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 14. **Co-do licence/provenance reconciliation** — Co-do's root is Apache-2.0 while package and generated manifest metadata declare MIT. Which source/licence/SBOM/reproducibility authority must each candidate binary satisfy? No Co-do binary may be copied before this is resolved.
 15. **Semantic index engine** — deterministic exact/alias/lexical retrieval ships first. Embedding model, dimensions, quality thresholds, storage engine (SQLite versus IndexedDB), device tiers, and telemetry policy remain decisions under the existing `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`; the task must not be duplicated.
 16. **Grouped tabular artifact promotion** — before any route can retain up to one MiB across digest-keyed chunks, choose either an atomic/reservable grouped keyed promotion with safe refcount/orphan collection or an explicitly lower single-body cap. The source candidate does neither silently: it remains unreachable, writes the manifest last, surfaces capacity/orphan receipts and never auto-deletes a possibly referenced chunk.
+
+17. **`debugger` permission posture** — **RESOLVED (Paul, 2026-08-27): remove it for
+    now; the permission and the tools can come back later.** `0.2.286` had re-declared
+    `debugger` as an optional permission for the CDP power tools (network conditions,
+    CPU throttling, device emulation, navigation, screenshots, performance metrics;
+    `Runtime.evaluate` never exposed), reversing its deliberate removal at `c5ccb2d0`.
+    The costs decided it: Chrome's all-sites permission warning and a persistent
+    "…started debugging this browser" bar are not acceptable in the current posture.
+    Removed 2026-08-27 — the optional permission, the four tools, the capability row
+    and the Settings label. Browser tools 130 → 126, capability table 159 → 155. The
+    user-scripts half of T12 is untouched. A removal guard in
+    `tests/chrome-tools-t12.test.ts` plus the manifest assertion in the journey suite
+    make any return a deliberate act. When it does return, it should land behind a
+    separate developer-only surface rather than the default product.
+

@@ -189,6 +189,16 @@ class Cdp {
         this.executionContextEvents.push({
           sessionId: d.sessionId, kind: "created",
           id: d.params?.context?.id, ts: Date.now(),
+          // Retained so a test can address a SPECIFIC frame's realm (the NTP's
+          // embedded Settings iframe). Calling another frame's chrome.runtime
+          // from the parent's realm does NOT adopt that frame's principal —
+          // Chrome resolves the sender from the CALLING context — so proving
+          // "the embedded Settings surface is an owner principal" requires
+          // evaluating inside its own execution context.
+          name: d.params?.context?.name,
+          origin: d.params?.context?.origin,
+          isDefault: d.params?.context?.auxData?.isDefault === true,
+          frameId: d.params?.context?.auxData?.frameId,
         });
       }
       if (
@@ -347,7 +357,7 @@ const EXPECTED = [
   "NTP: the typed task reached the agent journal",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
-  "permissions: all seven capabilities start ungranted",
+  "permissions: every offered capability renders and starts ungranted",
   "permissions: enabled storage (granted)",
   "permissions: enabled alarms (granted)",
   "permissions: enabled activeTab (granted)",
@@ -438,7 +448,7 @@ const EXPECTED = [
   "mgmt: list_assets lists the asset (no content)",
   "mgmt: get_asset round-trips content",
   "approval: primary NTP Settings iframe can deny an exact request",
-  "approval: deny row is singular and capability material absent from DOM",
+  "approval: deny row is singular and capability material absent from the payload",
   "approval: NTP cannot programmatically resolve an owner approval",
   "approval: deny leaves the exact asset unchanged",
   "approval: install-scoped opaque reference survives a worker restart",
@@ -595,9 +605,12 @@ async function main() {
     check("SW Runtime.enable succeeded", true);
 
     // Manifest attestation: ALL permissions must be OPTIONAL (Paul's hard
-    // requirement) — the base permissions array is empty; the six API
-    // permissions are optional; debugger is absent everywhere (it cannot be
-    // optional and carries Chrome's all-sites warning).
+    // requirement) — the base permissions array is empty and the six API
+    // permissions are optional. `debugger` must be absent everywhere: it was
+    // re-declared by the T12 power tools at 0.2.286 and REMOVED again on
+    // 2026-08-27 (owner decision Q17) because it carries Chrome's all-sites
+    // permission warning and a persistent "started debugging this browser"
+    // bar. tests/chrome-tools-t12.test.ts carries the matching source guard.
     const manifestText = await Deno.readTextFile(`${EXT}/manifest.json`);
     const manifest = JSON.parse(manifestText);
     check(
@@ -740,24 +753,61 @@ async function main() {
     cdp.pageSessions.add(optsSession);
     let evalOpts = (expression) => evalIn(cdp, optsSession, expression);
 
-    // Destructive routes now pause behind the exact Settings approval surface.
-    // Resolve one pending row with a GENUINE CDP click; ids remain in the
-    // page's click-handler closure and are never read by this runner.
+    // Destructive AGENT-INITIATED routes pause behind an owner approval.
+    //
+    // REPOINTED 2026-08-27 (CAP-FB-20260827-MAIN-GATES-RED-02). This used to
+    // click a row in Settings -> Approvals. That section was deliberately
+    // deleted at 0.2.313: approvals are in-context now, and a settings list the
+    // owner had to go hunting for was the thing being fixed. The old code kept
+    // clicking `.nav-item[data-section="approvals"]`, threw when no row
+    // appeared, and took the remaining 100 checks of this suite with it.
+    //
+    // What is asserted is unchanged in substance: `management.resolve-approval`
+    // is gated on `context.principal === "owner-options"`, so resolving still
+    // requires the Settings surface and nothing else. These calls go through
+    // `msgOpts` (the OPTIONS page session) and therefore exercise the exact
+    // same principal check the product's own in-context helper
+    // (`lib/owner-approved-mutation.js`) relies on: snapshot the queue, claim
+    // ONLY the row this operation created, resolve it, retry once.
+    //
+    // The genuine-pointer coverage that the row click used to provide has not
+    // been dropped — it moved to where the product actually renders a
+    // confirmation: `confirmOwnerDialog` below drives the real native <dialog>
+    // with a real CDP click. And "the NTP cannot resolve an approval" is still
+    // asserted separately, against the forged-owner-fields probe.
     const resolveNextApproval = async (approve = true) => {
-      // Opening the Approvals section is itself a genuine owner navigation and
-      // refreshes the pending list (background-page timers are throttled).
-      await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
-      const selector = approve
-        ? "#approval-list .approval-row .approval-controls .primary"
-        : "#approval-list .approval-row .approval-controls .ghost";
+      let pending = null;
+      for (let i = 0; i < 30 && !pending; i++) {
+        const rows = await msgOpts({ type: "management.pending-approvals" });
+        if (rows?.ok === true && Array.isArray(rows.approvals) && rows.approvals.length > 0) {
+          pending = rows.approvals[0];
+          break;
+        }
+        await sleep(200);
+      }
+      if (!pending?.approvalId) throw new Error("no owner approval was pending on the exact Settings principal");
+      const resolved = await msgOpts({
+        type: "management.resolve-approval",
+        approvalId: pending.approvalId,
+        approve,
+      });
+      if (resolved?.ok !== true) throw new Error(`owner approval resolve failed: ${resolved?.error ?? "unknown"}`);
+      await sleep(250);
+    };
+
+    // Drive the product's REAL in-context confirmation — the native <dialog>
+    // from `confirmActionDialog` — with a genuine CDP click. `destructive`
+    // dialogs focus Cancel by default, so the click (not a keypress) is what
+    // decides. Returns false if no dialog appeared, so a caller can assert it.
+    const confirmOwnerDialog = async (accept = true) => {
+      const selector = accept ? ".cap-confirm-dialog .cap-confirm-accept" : ".cap-confirm-dialog .cap-confirm-cancel";
       let box = null;
-      for (let i = 0; i < 30 && !box; i++) {
+      for (let i = 0; i < 25 && !box; i++) {
         box = await boxOf(cdp, optsSession, selector);
         if (!box) await sleep(200);
       }
-      if (!box) throw new Error("pending owner approval did not render in exact Settings");
-      if (!(await clickSel(cdp, optsSession, selector))) throw new Error("owner approval click failed");
-      await sleep(250);
+      if (!box) return false;
+      return await clickSel(cdp, optsSession, selector);
     };
     const approvedMsg = async (payload) => {
       const first = await msgValue(payload);
@@ -765,10 +815,14 @@ async function main() {
       await resolveNextApproval(true);
       return await msgValue(payload);
     };
+    // A Settings control whose route needs owner approval now completes in ONE
+    // click: the handler calls runOwnerApprovedMutation, which raises the
+    // native confirm dialog and — on a genuine accept click — resolves the
+    // approval and retries the exact mutation itself. The old two-click,
+    // resolve-in-between shape belonged to the deleted approvals list.
     const approvedSettingsClick = async (selector) => {
       if (!(await clickSel(cdp, optsSession, selector))) return false;
-      await resolveNextApproval(true);
-      return await clickSel(cdp, optsSession, selector);
+      return await confirmOwnerDialog(true);
     };
 
     // ─────────────────────────────────────────────────────────────
@@ -796,9 +850,17 @@ async function main() {
     const capState0 = await evalOpts(
       `[...document.querySelectorAll('#permission-list .perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
     );
+    // The expected row count is DERIVED from the product's own capability
+    // table, never hard-coded: a literal here silently rots every time a tool
+    // tranche adds a capability, which is exactly what happened between
+    // 0.2.278 and 0.2.290 (7 -> 18) and left this assertion red for days.
+    // What is actually being asserted is the invariant that matters — the
+    // extension boots with ZERO permissions granted — plus the weaker but
+    // still useful claim that Settings renders every capability it offers.
+    const { CAPABILITIES } = await import(`${EXT}/lib/capabilities.js`);
     check(
-      "permissions: all seven capabilities start ungranted",
-      Array.isArray(capState0) && capState0.length === 7 &&
+      "permissions: every offered capability renders and starts ungranted",
+      Array.isArray(capState0) && capState0.length === CAPABILITIES.length &&
         capState0.every((c) => c.granted === false),
     );
     for (const cap of ["storage", "alarms", "activeTab", "scripting", "sidePanel"]) {
@@ -1632,9 +1694,49 @@ async function main() {
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 }, ntpSession);
       return true;
     };
-    const iframeNav = await clickInSettingsFrame(`.nav-item[data-section="approvals"]`);
-    await sleep(250);
-    const iframeDeny = await clickInSettingsFrame(`#approval-list .approval-row .approval-controls .ghost`);
+    // REPOINTED 2026-08-27: the Settings -> Approvals list this used to click
+    // was deleted at 0.2.313. The property under test is unchanged and still
+    // worth asserting — the Settings surface EMBEDDED IN THE NTP is a genuine
+    // owner-options principal and can deny, while the NTP top frame cannot
+    // (asserted separately, below, against the forged-resolve probe).
+    //
+    // The deny is issued through the EMBEDDED FRAME's own chrome.runtime, so
+    // the SW's `context.principal === "owner-options"` check is what decides.
+    // Reaching into the frame's realm is the point: if the embedded Settings
+    // document were NOT treated as an owner surface, this would fail closed.
+    // Address the embedded Settings frame's OWN main-world execution context.
+    const settingsFrameId = await evalIn(cdp, ntpSession, `(() => {
+      const frame = document.querySelector('#view-frame');
+      return frame && frame.contentDocument ? "present" : null;
+    })()`);
+    const frameTree = await cdp.send("Page.getFrameTree", {}, ntpSession);
+    const settingsFrame = (frameTree?.result?.frameTree?.childFrames ?? [])
+      .find((f) => String(f?.frame?.url ?? "").includes("options/options.html"));
+    const settingsCtx = cdp.executionContextEvents
+      .filter((e) => e.kind === "created" && e.sessionId === ntpSession && e.isDefault &&
+        e.frameId === settingsFrame?.frame?.id)
+      .pop();
+    const iframeNav = settingsFrameId === "present" && !!settingsCtx?.id;
+    let iframeDeny = false;
+    if (iframeNav) {
+      const denied = await withTimeout(
+        cdp.send("Runtime.evaluate", {
+          expression: `(async () => {
+            const pending = await chrome.runtime.sendMessage({ type: "management.pending-approvals" });
+            const id = pending?.approvals?.[0]?.approvalId;
+            if (!id) return false;
+            const out = await chrome.runtime.sendMessage({ type: "management.resolve-approval", approvalId: id, approve: false });
+            return out?.ok === true && out?.decision === "denied";
+          })()`,
+          contextId: settingsCtx.id,
+          returnByValue: true,
+          awaitPromise: true,
+        }, ntpSession),
+        15000,
+        "iframe approval deny",
+      );
+      iframeDeny = denied?.result?.result?.value === true;
+    }
     await sleep(250);
     const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
     const iframeShot = await captureShot(cdp, ntpSession).catch(() => null);
@@ -1657,13 +1759,33 @@ async function main() {
     // `asset.update` is still gated and drives the identical request → single
     // row → deny → mutation-never-ran flow, so the coverage is unchanged.
     const denyRequest = await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "deny-must-not-apply" });
-    await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
     await sleep(250);
-    const denyDom = await evalOpts(`({
-      count: document.querySelectorAll('#approval-list .approval-row').length,
-      text: document.querySelector('#approval-list')?.textContent || '',
-      html: document.querySelector('#approval-list')?.innerHTML || ''
-    })`);
+    // REPOINTED 2026-08-27: this used to scrape #approval-list's DOM. That list
+    // is gone, but the property it protected is not — and asserting it on the
+    // PAYLOAD is strictly stronger than asserting it on one rendering of the
+    // payload: whatever surface renders an approval (an in-context card, a
+    // dialog, a future one) can only show what the SW hands it. One request
+    // must produce exactly one row, and that row must disclose no capability
+    // material — not the asset id, not the approval id, not a digest, not the
+    // raw target.
+    const denyRows = await msgOpts({ type: "management.pending-approvals" });
+    const denyList = Array.isArray(denyRows?.approvals) ? denyRows.approvals : [];
+    const denyPayload = JSON.stringify(denyList);
+    const denyRow = denyList[0] ?? {};
+    // The row carries exactly four fields — approvalId, action, targetRef, at.
+    // approvalId is REQUIRED (the surface must be able to resolve the row it
+    // created) and is the one capability value the old DOM assertion checked
+    // was never rendered as an attribute; here it must be present but opaque.
+    // Everything that would let a caller reconstruct the target — the asset
+    // id, a digest, the raw `asset:master` target string — must be absent, and
+    // targetRef must be the 32-char install-scoped opaque reference.
+    const denyDom = {
+      count: denyList.length,
+      fields: Object.keys(denyRow).sort().join(","),
+      opaqueRef: typeof denyRow.targetRef === "string" && denyRow.targetRef.length === 32,
+      hasApprovalId: typeof denyRow.approvalId === "string" && denyRow.approvalId.length > 0,
+      text: denyPayload,
+    };
     const captureApprovalEvidence = async (name) => {
       await cdp.send("Page.bringToFront", {}, optsSession).catch(() => {});
       let shot = null;
@@ -1677,12 +1799,14 @@ async function main() {
     };
     await captureApprovalEvidence("approval-deny-pending.png");
     check(
-      "approval: deny row is singular and capability material absent from DOM",
-      denyRequest?.ok === false && denyDom?.count === 1 &&
-        !String(denyDom?.text).includes(assetId) &&
-        !String(denyDom?.html).includes("approvalId") &&
-        !String(denyDom?.html).includes("digest") &&
-        !String(denyDom?.html).includes("asset:master"),
+      "approval: deny row is singular and capability material absent from the payload",
+      denyRequest?.ok === false && denyDom.count === 1 &&
+        denyDom.fields === "action,approvalId,at,targetRef" &&
+        denyDom.hasApprovalId && denyDom.opaqueRef &&
+        !String(denyDom.text).includes(assetId) &&
+        !String(denyDom.text).includes("digest") &&
+        !String(denyDom.text).includes("asset:master"),
+      denyDom,
     );
     // Assertion-only retrieval from the exact owner surface: the identifier is
     // then replayed from NTP with every old body bypass flag. The SW must still
@@ -1713,7 +1837,6 @@ async function main() {
     // restart. Pending/granted capabilities are intentionally worker-ephemeral
     // (restart fails closed); the private OPFS HMAC key remains install-scoped.
     await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
-    await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
     await sleep(250);
     const refBeforeRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
     const targetsForApprovalRestart = await cdp.send("Target.getTargets");
@@ -1727,7 +1850,6 @@ async function main() {
       if (!approvalWake) await sleep(200);
     }
     await msgValue({ type: "asset.update", origin: "master", id: assetId, name: "restart-must-not-apply" });
-    await clickSel(cdp, optsSession, `.nav-item[data-section="approvals"]`);
     await sleep(250);
     const refAfterRestart = await evalOpts(`chrome.runtime.sendMessage({type:'management.pending-approvals'}).then(v => v.approvals?.[0]?.targetRef || '')`);
     check(

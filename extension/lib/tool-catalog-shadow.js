@@ -13,7 +13,7 @@ import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
 // Bounded read-only per-tool summary limits (the tool-library `<details>`
 // slice). Metadata only — never execution/grant/verify authority.
 const TOOL_LIBRARY_SUMMARY_LIMITS = Object.freeze({
-  // 256 covers the full browser-tool registry (130 chrome-api tools + headroom)
+  // 256 covers the full browser-tool registry (126 chrome-api tools + headroom)
   // so the Settings tool library's per-source count MATCHES the rendered rows
   // (CAP-FB-20260826-TOOL-LIBRARY-COUNT-01: the count said 130 but only 64 rows
   // rendered). The per-row name/description stays byte-bounded.
