@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.319] — 2026-08-27
+- Python is nearly here: the bounded non-eval python tool is built and tested (your code runs through the Pyodide interpreter, never eval; 2KiB in / 64KiB out, fenced). The remaining step is the actual Pyodide runtime binary — an Emscripten build, with the exact script checked in ready to run
+
 ## [0.2.318] — 2026-08-27
 - Artifacts are fixed: the viewer now fills the window (no more tiny unclickable box), and there's an 'Open in new tab' so an artifact opens as a full tab. The new-tab page is a minimal web-accessible resource — nothing else is exposed
 
