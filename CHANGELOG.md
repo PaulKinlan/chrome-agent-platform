@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.317] — 2026-08-27
+- Opening a task is now instant and the full history is still there: the log reads use an ordered per-run index with paging, so the first screen renders fast regardless of how much history exists, and you can page back through everything
+
 ## [0.2.316] — 2026-08-27
 - xan is IN — a real, runnable WASI CSV toolkit (the rayon thread-pool now runs serially via a shim, and the two GPL-family deps the review caught are properly excluded with honest licence accounting). The same shim is what tokei and qsv will ride on next
 
