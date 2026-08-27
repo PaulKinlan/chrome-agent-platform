@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.318] — 2026-08-27
+- Artifacts are fixed: the viewer now fills the window (no more tiny unclickable box), and there's an 'Open in new tab' so an artifact opens as a full tab. The new-tab page is a minimal web-accessible resource — nothing else is exposed
+
 ## [0.2.317] — 2026-08-27
 - Opening a task is now instant and the full history is still there: the log reads use an ordered per-run index with paging, so the first screen renders fast regardless of how much history exists, and you can page back through everything
 
