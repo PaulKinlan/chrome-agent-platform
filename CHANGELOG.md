@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.309] — 2026-08-27
+- The shared-worker transformation continues: Phase 2 complete — the agent loop now runs inside each agent's own shared worker with tools executing through the service worker's validated authority (same grant/redaction as interactive, nothing new the worker can do on its own)
+
 ## [0.2.308] — 2026-08-26
 - Agent-worker architecture Phase 1: each agent now has a dedicated shared worker (hosted by the extension's offscreen document, bootstrapped through the service worker) with a validated port handshake for the UI and a durable alive-set that re-creates workers on wake. Foundation only — the run loop migrates in Phase 2
 
