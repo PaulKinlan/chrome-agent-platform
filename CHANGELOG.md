@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.312] — 2026-08-27
+- Your UI batch is in: the add-agent empty state shows your requested text, the discovered-sites box has proper spacing, the tool library actually lists all 130 tools (the count and the rows finally agree), local models are hidden, and the system prompt now tells agents to search for tools first. The approvals section is kept for now — it's what the 'disable a permission' flow rides on — and I'll move that confirmation into the conversation itself next
+
 ## [0.2.311] — 2026-08-27
 - Fixed tasks not responding: run dispatches were hitting the 12-second safety timeout (meant for quick data loads), so any task over 12 seconds showed 'the agent worker didn't answer' even though it finished. Task runs now get their own long timeout
 
