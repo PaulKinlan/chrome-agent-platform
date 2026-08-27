@@ -35,3 +35,85 @@ Rainbow conic-gradient "glow". Emoji icons. Uppercase tracked kicker labels.
 3. Restraint — one accent, used for actions/selection/state only, never decoration.
 4. Consistency — one component vocabulary everywhere; same button, same control.
 5. Calm motion — 150–250ms state transitions only; reduced-motion respected.
+
+---
+
+# Where the product is going (2026-08-28)
+
+Written after auditing the shipped product in a real loaded extension. The owner's
+report was "the UI is starting to get messy". It is — but not in a hundred small
+ways. There are three structural causes, and they are measurable.
+
+## Why it feels messy
+
+**1. The product speaks three vocabularies for the same nouns.**
+One view is `Assets` in the sidebar, `Recent artifacts` on the card next to it,
+`artifacts/index.html` on disk, and `asset.*` in the routes — and `ntp.js` opens it
+with the title "Assets" in one place and "Artifacts" in another. `Skills` in the nav
+is `recipes/index.html` served by `recipe.*` routes. `Agents` labels a sidebar
+section, a card, and a row inside that card. A person builds a mental model out of
+nouns; three names for one noun means there is no model to build. This is the
+cheapest thing on this page to fix and the fastest to feel.
+
+**2. Every capability got its own HTML document, and the hub embeds them in an
+iframe.** Twelve HTML surfaces ship; two of them — `chat/chat.html` and
+`memory/explorer.html` — are referenced by nothing at all and still ship to users.
+Settings, Directory, Skills and Assets are separate documents loaded into
+`#view-frame`. Five tracked defects trace to that one decision: two back-stack fixes
+(`0.2.296`, `0.2.304`), the task-view transition ghost, the covered-nub overflow, the
+intermittent UI flash, and the Settings monolith — because when a view is a document,
+adding a feature means appending a `<section>`, which is how Settings reached
+12,837px with all twelve panels rendered at once. The architecture scales by
+accretion and the defect list is the accretion becoming visible.
+
+**3. The hub is three products stacked in one scroll.** An onboarding flow (six
+competing actions), a launcher (the composer), and a dashboard (three status cards
+that are empty on a fresh profile). This file says the job is "start a task, see
+what's happening, and drill in" — and the composer, which is the whole first half of
+that sentence, is the second element on the page and visually weaker than the card
+above it.
+
+## The direction
+
+**Nouns before pixels.** One name per concept, enforced by a check the way
+`check:gallery` enforces component drift: **Artifacts** (never Assets), **Skills**
+(never recipes), **Agents** used once per view. Rename the routes and the files to
+match what the UI says, not the other way round. Nothing else on this list changes
+the felt quality of the product as cheaply.
+
+**The hub is a composer and a timeline, not a dashboard.** A returning power user
+mid-task needs two things: somewhere to say the next thing, and what happened while
+they were gone. Three separate mostly-empty status cards are not that. Collapse
+Agents / Recent artifacts / Recent activity into one activity stream with filters,
+and let the composer own the top of the page.
+
+**Subtract surfaces.** Delete the two dead documents. Then ask of each remaining
+view whether it earns being a view: Directory is a reference table that could live
+inside the hub, and the memory explorer already lost that argument by being
+unreachable for weeks without anyone noticing.
+
+**Collapse the view-frame — after the demo.** Same-origin extension pages loaded
+into an iframe of another extension page buy nothing and cost the back-stack, a
+double bootstrap per view, and the Settings monolith. Making the hub one document
+with real client-side views retires a whole class of defect. It is the biggest lever
+here and also the biggest risk, so it is deliberately sequenced after the demo, not
+before it.
+
+**Settings needs an information architecture, not more sections.** Twelve flat
+panels is a list, not a structure. Six groups — Providers & models · Agents ·
+Permissions & security · Tools · Data · Advanced — and render the one that was asked
+for.
+
+**The conversation should read as what the agent did.** Today a tool call is either
+a name and a status chip, or 462px of object inspector. Neither tells the story. The
+transcript is the product's main surface and should read as a narrative with detail
+available on demand — not a debugger that happens to be embedded in a chat.
+
+## The one thing to decide
+
+The product currently presents 126 browser tools, 26 bundled Wasm tools, WebMCP site
+agents, hooks, generated scripts, artifacts, skills and background agents as
+co-equals. That is an enormous capability surface and a very thin story. Before the
+exec demo, pick the **one** thing this is for and let the hub argue for it; the rest
+stays available but stops competing for the first screen. Capability is not the
+problem — the absence of a spine is.

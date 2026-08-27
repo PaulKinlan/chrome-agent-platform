@@ -194,6 +194,12 @@ shippable:
 3. `CAP-FB-20260827-HUB-FIRST-RUN-01` — the first-run card offers six competing actions
    above the composer and a fresh profile stacks seven empty states, one of which shows
    filtered-empty copy to someone who has never had data.
+4. `CAP-FB-20260828-NOUN-DISCIPLINE-01` — the product speaks three vocabularies for the
+   same nouns (Assets / Recent artifacts / `asset.*`; Skills served by `recipes/`). The
+   cheapest item in the UI backlog and the fastest one a person feels.
+
+**The product direction behind these** — why the UI reads as messy, and what to do about
+it structurally — is in [PRODUCT.md](PRODUCT.md), "Where the product is going".
 
 Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review with the falsification gates) and
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` (it protects the evidence everything else cites).

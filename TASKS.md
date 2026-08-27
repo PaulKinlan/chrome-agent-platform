@@ -160,7 +160,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-**This file holds only what is in progress or still to do — 33 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
+**This file holds only what is in progress or still to do — 37 entries.** Completed work is archived in [TASKS-DONE.md](TASKS-DONE.md) at triage; **merged is done** (Paul, 2026-08-28), so nothing sits in a terminal state here. Most urgent first (regenerated 2026-08-28). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -174,6 +174,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
 | P0 | OPEN | [`CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01`](#cap-fb-20260827-thread-open-sequential-reads-01-thread-open-serializes-25-opfs-reads-before-first-paint) | Thread open serializes 25 OPFS reads before first paint |
 | P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
+| P0 | OPEN | [`CAP-FB-20260828-NOUN-DISCIPLINE-01`](#cap-fb-20260828-noun-discipline-01-one-name-per-concept--assetsartifacts-skillsrecipes-agents-three-deep) | One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
 | P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
@@ -189,6 +190,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
 | P1 | OPEN | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
 | P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
+| P1 | OPEN | [`CAP-FB-20260828-HUB-AS-TIMELINE-01`](#cap-fb-20260828-hub-as-timeline-01-the-hub-is-a-dashboard-it-should-be-a-composer-and-a-timeline) | The hub is a dashboard; it should be a composer and a timeline |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
 | P2 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
 | P2 | OPEN | [`CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`](#cap-fb-20260822-builtin-wasm-tools-01-provenance-clean-bundled-wasm-tool-tranche) | Provenance-clean bundled Wasm tool tranche |
@@ -199,6 +201,8 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P2 | OPEN | [`CAP-FB-20260825-CONCURRENCY-RESIDUALS-01`](#cap-fb-20260825-concurrency-residuals-01-close-the-four-open-concurrency-verifications) | Close the four open concurrency verifications |
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
+| P2 | OPEN | [`CAP-FB-20260828-DEAD-SURFACES-01`](#cap-fb-20260828-dead-surfaces-01-two-html-surfaces-ship-to-users-and-nothing-links-to-them) | Two HTML surfaces ship to users and nothing links to them |
+| P2 | OPEN | [`CAP-FB-20260828-VIEW-FRAME-COLLAPSE-01`](#cap-fb-20260828-view-frame-collapse-01-collapse-the-iframe-view-model-into-one-hub-document) | Collapse the iframe view model into one hub document |
 | P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
 | P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
@@ -1159,6 +1163,86 @@ evidence every other task depends on).
   status: done
   landed_version: 0.2.287
   summary: "Owner (2026-08-26): the extension has NO observability. Significant logging was requested before but isn't there. Clicking a task takes ~10s with zero trace of what's happening. One error seen: 'VM5974:2 Uncaught TypeError: Cannot read properties of undefined (reading startTime)' in et.reportAllChanges — that script is MINIFIED and is NOT our shipped code (our SW + options bundles are already unminified; grep confirms reportAllChanges absent), so it's a page the agent visited — we need logging to separate ours from theirs. REQUIREMENTS: (1) debug build with unminified code + source maps in npm run build; npm run build:production / --target=store stays the minified Store bundle; (2) a real logging layer — structured console logs with namespaces + levels + timing (grep-able like [cap:sw:grant]), console.groupCollapsed for runs; (3) performance.mark/measure around every slow path (task load, navigation, tool dispatch, model round-trips) + summary timing logs so a 10s task load becomes a readable breakdown; (4) use Chrome's native logging/performance features throughout (SW, NTP, side panel, content scripts); (5) a way to dump/ship the trace. Goal: use observability to improve the product. CRITICAL: debug mode must NOT weaken the production security assertions (seam scan, no-new-Function, oracle scan, bundled-tool verify) — logging verbosity is the only thing debug relaxes."
+
+## [CAP-FB-20260828-NOUN-DISCIPLINE-01] One name per concept — Assets/Artifacts, Skills/recipes, Agents three deep
+- Feedback: 2026-08-28 — product owner: "the UI is starting to get messy". Root-caused in PRODUCT.md, "Where the product is going": the product speaks three vocabularies for the same nouns
+- Updated: 2026-08-28 01:10 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30cd7f59`
+- Candidate: —
+- Shipping: —
+- Acceptance: exactly one user-facing name per concept, and the code agrees with it. **Artifacts**, never Assets: the sidebar item, the hub card, both `openView` titles and the route family all say the same word. **Skills**, never recipes: `recipes/index.html` and the `recipe.*` routes are renamed to match the nav that already says Skills. **Agents** appears once per view, not as a sidebar section AND a card AND a row inside that card. A `check:vocabulary` script fails the build on a banned term the way `check:gallery` fails on component drift, so this cannot come back
+- Review: fresh-session review of the diff; falsification — the vocabulary check must be shown failing when a banned term is reintroduced
+- Gates: full unit suite; Chrome journeys green (several journeys select views by label); gallery drift; the new vocabulary check
+- Blockers: —
+- Next: settle the two names with the owner first (Artifacts vs Assets; Skills is already decided by the nav), then rename outward from the routes
+- Recover: `git grep -n "Assets\|asset\." -- extension/ntp extension/artifacts | head`
+- History:
+  - 2026-08-28 01:10 UTC — captured from a product audit of the shipped extension. The same view is `Assets` in the hub sidebar, `Recent artifacts` on the card beside it, `artifacts/index.html` on disk and `asset.*` in the routes — and `extension/ntp/ntp.js` opens it with the title "Assets" at one call site and "Artifacts" at another, so the SAME view has two titles in one file. `Skills` in the nav is `recipes/index.html` served by `recipe.*` routes; `CAP-FB-20260821-RECIPES-SKILLS-RENAME-01` is the unfinished half of that and should be absorbed here or sequenced with it. `Agents` labels a sidebar section, a hub card, and a row inside that card. This is the cheapest item in the whole UI backlog and the fastest one a person feels — a user builds a mental model out of nouns, and three names for one noun means there is no model to build.
+
+## [CAP-FB-20260828-HUB-AS-TIMELINE-01] The hub is a dashboard; it should be a composer and a timeline
+- Feedback: 2026-08-28 — product audit; pairs with CAP-FB-20260827-HUB-FIRST-RUN-01 (that one is the first-run card, this one is the steady state)
+- Updated: 2026-08-28 01:10 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30cd7f59`
+- Candidate: —
+- Shipping: —
+- Acceptance: the composer is the primary element of the hub in the steady state, not only on a fresh profile. The three separate status cards (Agents, Recent artifacts, Recent activity) become ONE activity stream with filters, so a returning owner sees what happened while they were away as a single chronological thing rather than three partial views of it. Drilling into an agent, an artifact or a run still works from that stream. Verified with before/after screenshots on a profile that has real history, not an empty one
+- Review: fresh-session review; the impeccable design skill is mandatory
+- Gates: Chrome journeys green; a11y pass; the impeccable design pass; hub render stays under the existing budget
+- Blockers: —
+- Next: build the profile-with-history fixture first — every hub screenshot to date has been of an empty profile, which is why the composition problem was invisible
+- Recover: `git grep -n "Recent artifacts\|Recent activity" -- extension/ntp/ntp.html`
+- History:
+  - 2026-08-28 01:10 UTC — captured from a product audit. PRODUCT.md states the job as "start a task, see what's happening, and drill in". Today the hub answers the second half with three mostly-empty cards and answers the first half with a composer placed below them. A returning power user mid-task needs somewhere to say the next thing and a record of what happened while they were gone; three partial views of the second thing is not that.
+
+## [CAP-FB-20260828-DEAD-SURFACES-01] Two HTML surfaces ship to users and nothing links to them
+- Feedback: 2026-08-28 — product audit of the shipped surface inventory
+- Updated: 2026-08-28 01:10 UTC
+- Status: OPEN
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30cd7f59`
+- Candidate: —
+- Shipping: —
+- Acceptance: `extension/chat/chat.html` and `extension/memory/explorer.html` are removed along with their JS, or a reachable entry point is added on purpose. The packaged extension contains no HTML document that nothing references. A build assertion enumerates shipped HTML entry points and fails on an unreferenced one, so the next dead surface is caught at build time
+- Review: fresh-session review; falsification — the build assertion must be shown failing against an unreferenced page
+- Gates: unit suite; Chrome journeys green; `npm run package` succeeds and the archive inventory shrinks by exactly the removed files
+- Blockers: confirm with the owner that neither is a deliberate future entry point before deleting
+- Next: check whether `chat/chat.html` was superseded by the in-hub thread view — if so it is a straightforward delete
+- Recover: `for f in $(find extension -name '*.html' -not -path '*/dist*'); do echo "$f $(grep -rl $(basename $f) extension --include=*.js --include=*.html --include=*.json | grep -v dist | grep -vc $f)"; done`
+- History:
+  - 2026-08-28 01:10 UTC — twelve HTML surfaces ship. `extension/chat/chat.html` and `extension/memory/explorer.html` are referenced by nothing — no JS, no HTML, no manifest entry. The memory explorer was already noted as unreachable during the 2026-08-25 Data-and-memory work and recorded as "a removal candidate" rather than removed; it has been shipping unreachable ever since. Dead surfaces are not free: they are packaged, they are scanned by the Store gates, and they make the product look larger and less considered than it is.
+
+## [CAP-FB-20260828-VIEW-FRAME-COLLAPSE-01] Collapse the iframe view model into one hub document
+- Feedback: 2026-08-28 — product audit; the single largest structural lever in the UI, and deliberately sequenced AFTER the exec demo
+- Updated: 2026-08-28 01:10 UTC
+- Status: OPEN
+- Priority: P2
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `30cd7f59`
+- Candidate: —
+- Shipping: —
+- Acceptance: Settings, Directory, Skills and Artifacts render as client-side views of the hub document rather than separate documents inside `#view-frame`. Back navigation is ordinary history with no joint top-frame/iframe stack; each view is still addressable by URL; the single-history-entry behaviour from `0.2.296` is preserved by construction rather than by special-casing. The defect classes this retires are named and their regression tests kept: back-stack, view-transition ghosting, covered-nub inertness, and the intermittent flash/relayout
+- Review: fresh-session review; this is large enough to warrant staging behind a flag and landing view by view
+- Gates: full unit suite; Chrome journeys green at every stage; a11y pass on focus movement between views; the impeccable design pass; hub render budget
+- Blockers: sequenced after the exec demo by owner priority — it is the biggest lever and the biggest risk, and the demo path comes first
+- Next: do NOT start before the demo. When it starts, take Directory first: it is the smallest view and the least used, so it proves the pattern cheaply
+- Recover: `git grep -n "openView\|view-frame" -- extension/ntp/ntp.js`
+- History:
+  - 2026-08-28 01:10 UTC — captured from a product audit. Settings, Directory, Skills and Artifacts are separate HTML documents loaded into an iframe of the new-tab page — all same-origin extension pages, so the iframe buys no isolation. It costs: a joint history stack between the top frame and the iframe (two separate back-button fixes, `0.2.296` and `0.2.304`), a full document bootstrap per view switch, and the Settings monolith, because when a view is a document the way to add a feature is to append a `<section>` — which is how Settings reached 12,837px with all twelve panels rendered simultaneously. Five tracked defects trace to this one decision. `CAP-FB-20260827-SETTINGS-MONOLITH-01` can be done independently and first; this entry is the general fix.
 
 ## [CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01] Tool-call cards show shape, not answers
 - Feedback: 2026-08-27 — product owner: "the tools calling bubbles don't help as much, I'd expect some better info, then formatted and ability to see JSON input and response better"

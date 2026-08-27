@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.325] — 2026-08-27
+- Product direction: audited the whole UI and wrote down why it reads as messy — the same thing is called Assets in one place and Artifacts in another, every view is a separate page loaded in an iframe (which is where the back-button and layout bugs came from), and the hub is an onboarding flow, a launcher and a dashboard stacked in one scroll
+
 ## [0.2.324] — 2026-08-27
 - Internal: the task tracker now shows only live work — 13 finished items were still sitting in it looking unfinished (five had actually shipped and never got closed), and the known-issues file had become a second copy of the same list
 
