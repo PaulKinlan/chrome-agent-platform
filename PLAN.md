@@ -49,7 +49,7 @@ the roadmap: what's landed vs what's next.
 
 ## Principles (from the 2026-08-15 thread — NON-NEGOTIABLE)
 - **Never accept "it serves" as "it works."** Every feature/fix is verified by driving the real behavior in a browser (CDP) with screenshots as evidence. A route returning 200 or a build passing is zero evidence.
-- **Independent review before push** — a different model/session reviews the diff + evidence; vision review is one gate, not a substitute for code/security review.
+- **Review before push, labelled honestly** (revised 2026-08-27) — prefer a fresh session on the diff; an author review is permitted and must then clear the falsification gates (a changed assertion proven to go red against the unfixed product; a fix proven to reproduce before and not after; deleted coverage replaced by a guard). Never write "independent" when it was an author review. See AGENTS.md, "Review without a second model".
 - **Commit locally; push only after review clears.** No pushing skeletons.
 - **Real libraries, not patterns.** agent-do is imported, not reimplemented. Providers actually work.
 - **Honest absence** — if something can't be verified, mark it unverified; never claim it works.
@@ -72,8 +72,10 @@ no `-vN+1` without a commit in `-vN`, durable worktrees) stands.
 
 **Lifecycle:** `OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps.
 `DONE` = merged **and** the journey suite green at that tip; it does not require a
-per-task owner interaction. Independent review by a different model/session and
-real-browser verification are retained unchanged. See `AGENTS.md` for the normative rules.
+per-task owner interaction. Real-browser verification is retained unchanged; the
+different-model review requirement was replaced on 2026-08-27 by a labelled review plus
+mechanical falsification gates, because no second model is available and a rule satisfied
+on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 
 ## Where the product actually is (2026-08-27, `0.2.319`)
 
@@ -191,7 +193,7 @@ shippable:
    above the composer and a fresh profile stacks seven empty states, one of which shows
    filtered-empty copy to someone who has never had data.
 
-Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed, awaiting independent review) and
+Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review with the falsification gates) and
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` (it protects the evidence everything else cites).
 
 **P1.** Dialog consolidation (five implementations, three hand-rolled outside the component

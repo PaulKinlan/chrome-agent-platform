@@ -101,18 +101,33 @@ dns-fail, asset block, throttling, memory, backgrounding, permissions,
 incognito, interventions) and the fix skill maps findings to the guides. Run
 the audit on the extension's surfaces where applicable.
 
-## 6. The reviewer-agent workflow (LLM-as-judge)
+## 6. The review workflow (revised by Paul, 2026-08-27)
 
-Every change is reviewed by an independent agent against this constitution:
+Every change is reviewed against this constitution. The normative rules live in
+`AGENTS.md` under "Review without a second model"; the short version:
 
 1. **Build** — a worker implements.
-2. **Review** — a DIFFERENT model/session reviews the diff against the
-   constitution (security vectors, accessibility, design, memory/perf) with
-   severity + file/line. Not the same model that wrote it.
-3. **Fix** — the worker addresses the findings.
-4. **Re-review** — the reviewer confirms each finding resolved, with evidence.
-5. **Push only after re-review clears.** Vision review is one gate, not a
-   substitute for code/security review.
+2. **Review** — the diff is read against the constitution (security vectors,
+   accessibility, design, memory/perf) with severity + file/line. Prefer a
+   FRESH SESSION that sees only the diff. There is no second model available,
+   so an author review is permitted — and must then clear the falsification
+   gates in step 3.
+3. **Falsify, don't just inspect.** A changed assertion must be shown going RED
+   against the unfixed product and GREEN after, with both recorded. A fix must
+   reproduce the bug before and not after, in a real loaded extension. Deleted
+   coverage must leave a guard that fails if the property comes back. These are
+   mechanical; they do not depend on a reviewer noticing anything.
+4. **Fix** — the worker addresses the findings.
+5. **Re-review** — each finding is confirmed resolved, with evidence.
+6. **Push after the suite is green at the tip.** Vision review is one gate, not
+   a substitute for code/security review.
+
+**Label reviews honestly.** `author review` and `independent review` are
+different claims; never write the second when the first is what happened.
+Taste, architecture and "you solved the wrong problem" are what a second reader
+used to catch and no gate above replaces — those now rest on the owner using
+the product. That is an accepted trade, recorded so nobody mistakes it for
+coverage that exists.
 
 ## 7. Auto-research loops (performance / security / accessibility / design)
 

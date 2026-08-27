@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.322] — 2026-08-27
+- Internal process change: reviews no longer require a second model (there isn't one) — instead a changed test now has to be proven capable of failing before it counts as evidence. It caught a bug on its first use: a check I'd 'fixed' the day before turned out to be one that could never fail
+
 ## [0.2.321] — 2026-08-27
 - Housekeeping: the project's own docs and task tracker had drifted about two weeks behind the code — your 2026-08-26 bug batch was fully shipped but every one of its 15 items still read as open, and the plan still listed finished work as in-flight. All reconciled against the real tree, with each item's shipping version recorded
 

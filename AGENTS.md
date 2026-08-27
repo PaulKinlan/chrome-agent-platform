@@ -17,7 +17,8 @@ there. The reviewer agents check against it.
 
 ## The workflow (LLM-as-judge)
 1. Build (a worker implements).
-2. Review (a DIFFERENT model/session, against the constitution — security,
+2. Review (a fresh session on the diff where possible; otherwise an author review
+   clearing the falsification gates — against the constitution: security,
    accessibility, design, memory/perf, severity + file/line).
 3. Fix (the worker addresses the findings).
 4. Re-review (the reviewer confirms each finding resolved, with evidence).
@@ -68,13 +69,12 @@ there. The reviewer agents check against it.
   (docs/components.html — the playground where components are tested in isolation
   without running the extension). The gallery imports the SAME components.js
   (scripts/sync-gallery.mjs; check:gallery fails on drift).
-- **Scale out + delegate reviews (Paul, 2026-08-17).** Use the whole fleet: spawn
-  subagents for parallel implementation AND delegate to the other pi instances via
-  intercom (sol, GLM-5.3, deepseek-v4-pro, deepseek-v4-flash). **Every change gets
-  an independent review from a DIFFERENT agent/instance** — not self-review. The
-  reviewers run continuously on the pushed work; their findings are tracked
-  (KNOWN-ISSUES) + actioned. Don''t leave the other instances idle — distribute the
-  work + the reviews across them.
+- **Scale out (Paul, 2026-08-17; review half superseded 2026-08-27).** Spawn subagents
+  for parallel implementation where the work genuinely divides. The review half of this
+  rule — delegating to other instances (sol, GLM-5.3, deepseek-v4-pro) — no longer
+  applies: that fleet is not available. See "Review without a second model". Findings
+  are still tracked in KNOWN-ISSUES and actioned; they now come from review passes and
+  from the owner using the product.
 - **Continuous skill/quality runs (Paul, 2026-08-17).** Spin up subagents to
   regularly run the quality skills in the background: the impeccable design pass
   (the UI consistency), the modern-web-guidance checks, and the web-resilience
@@ -104,14 +104,13 @@ there. The reviewer agents check against it.
   composer ↔ the command registry ↔ the autocomplete ↔ the skills/agents registry;
   the permissions ↔ every feature that needs them; the components ↔ the pages that
   use them. When in doubt, grep for the old term/concept across the repo.
-- **Fleet validation (Paul, 2026-08-16).** Every change is validated by a DIFFERENT
-  review agent before it is considered done — the intercom fleet (sol for code/
-  security review, deepseek-v4-pro for vision/UI review, GLM-5.3 for a second
-  opinion / independent review). The coordinator CAN commit + push frequently (Paul
-  tests regularly), but the review agents run on the pushed work continuously:
-  review the latest HEAD, report findings, and the coordinator actions them. Never
-  let a change sit unreviewed. The review agents' feedback is tracked (KNOWN-ISSUES)
-  + worked, not ignored.
+- **Validation (Paul, 2026-08-16; revised 2026-08-27).** The intercom review fleet is
+  gone, so validation is now: the falsification gates on the change itself, the full
+  suite green, real-browser evidence, and the owner exercising the product. Commit and
+  push frequently — Paul tests regularly, and shipping something he can actually click
+  is worth more than a review queue that never drains. Never let a change sit
+  unreviewed; "reviewed" now means a declared author or fresh-session pass, not a
+  second instance.
 
 ## Testing
 - deno test tests/ — the pure/unit suite.
@@ -184,7 +183,7 @@ off-ramps. That is the whole lifecycle.
 | State | Means | To leave it you need |
 |---|---|---|
 | `OPEN` | Not started, or being worked on. | A candidate commit and a reviewer. |
-| `IN_REVIEW` | A candidate exists and a **different model/session** is reviewing it. | A review verdict. A failed review stays `IN_REVIEW` with the findings recorded — it does not need its own state. |
+| `IN_REVIEW` | A candidate exists and is under review — a fresh session on the diff where possible, an author review with the falsification gates otherwise. The `Review:` field says which. | A review verdict. A failed review stays `IN_REVIEW` with the findings recorded — it does not need its own state. |
 | `MERGED` | On `origin/main`. | The Chrome journey suite green at that tip. |
 | `DONE` | Merged **and** the journey suite green at that tip. Terminal. | — |
 | `BLOCKED` | Stopped on something external. Records an owner, the reason, and one next action. | Resolution of the named blocker. |
@@ -204,10 +203,53 @@ them through this mapping.
 
 Two rules are load-bearing and are not negotiable:
 
-1. **A different model/session reviews every change.** Never self-review.
+1. **Every change is reviewed, and the review is labelled for what it actually was.**
+   (Revised by Paul, 2026-08-27 — see "Review without a second model" below.) The old
+   rule required a DIFFERENT model/session and forbade self-review. There is no second
+   model available, so that rule was being satisfied on paper or not at all, which is
+   worse than not having it. What replaces it is: a review always happens, it is
+   declared as `author` or `independent` truthfully, and an author review must clear
+   the falsification gates that catch what a second reader used to catch.
 2. **Real browser verification.** Drive the actual behaviour in a real loaded extension
-   with evidence. "It serves" is still not "it works". The 126-check journey suite is a
+   with evidence. "It serves" is still not "it works". The 127-check journey suite is a
    strong gate and it is sufficient.
+
+### Review without a second model (Paul, 2026-08-27)
+
+The point of the different-model rule was never the second model. It was that an author
+cannot see the thing they were already blind to when they wrote the code. With one model,
+that blindness does not go away — so it has to be attacked mechanically instead of
+socially.
+
+**Every change still gets a review pass.** Prefer a FRESH SESSION that reads only the
+diff, with no memory of having written it. Same model, different context; weaker than a
+second model, better than reading your own reasoning back to yourself.
+
+**An author review must clear the falsification gates.** These are mechanical — they do
+not depend on the reviewer noticing anything:
+
+1. **A changed test must be proven able to fail.** If a commit adds or edits an
+   assertion, revert the product fix, show the assertion go RED, restore, show it go
+   GREEN, and record both in the entry. An assertion that has never been observed
+   failing is not evidence of anything. This is the single highest-value gate here,
+   because quietly weakening an assertion is exactly how a green suite starts lying —
+   and it is what happened twice in three days (`MAIN-GATES-RED-01`, `-RED-02`).
+2. **A fix must be proven to fix.** The reported behaviour reproduces before the change
+   and does not after, driven in a real loaded extension.
+3. **Deleting coverage requires a guard.** Removing tests is allowed; removing the
+   property they protected is not. Leave an assertion that fails if the thing comes
+   back (the pattern in `tests/chrome-tools-t12.test.ts` for the removed `debugger`).
+4. **The full suite green at the tip**, which was already the bar for `DONE`.
+
+**Never claim independence that did not happen.** The `Review:` field records
+`author review <date>` or `independent review <date>, <who>`. Do not write "reviewed"
+and leave the kind ambiguous. Historical entries saying "no independent review — the
+product owner asked the author to review directly" are the honest pattern; keep it.
+
+**What is genuinely weaker now, stated plainly:** taste, architecture and "you have
+solved the wrong problem" are the classes a second reader caught and no gate above will.
+Those now rest on the owner noticing them in the product. That is an accepted trade, not
+an oversight. If a second model becomes available, rule 1 reverts to requiring it.
 
 Deleted: content-addressed gate evidence, live remote attestation, versioned acceptance
 packages, and the separate `GATED`/`READY_FOR_BROWSER`/`INTEGRATING`/`PUSHED`/`CONFIRMED`

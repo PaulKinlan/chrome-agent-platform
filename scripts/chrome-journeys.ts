@@ -357,7 +357,7 @@ const EXPECTED = [
   "NTP: the typed task reached the agent journal",
   "Settings: Permissions panel present",
   "approval: forged NTP owner/activation fields are refused",
-  "permissions: every offered capability renders and starts ungranted",
+  "permissions: all capabilities start ungranted and the driven ones are present",
   "permissions: enabled storage (granted)",
   "permissions: enabled alarms (granted)",
   "permissions: enabled activeTab (granted)",
@@ -850,18 +850,31 @@ async function main() {
     const capState0 = await evalOpts(
       `[...document.querySelectorAll('#permission-list .perm-row')].map(r => ({ granted: !!r.querySelector('.perm-state.granted') }))`,
     );
-    // The expected row count is DERIVED from the product's own capability
-    // table, never hard-coded: a literal here silently rots every time a tool
-    // tranche adds a capability, which is exactly what happened between
-    // 0.2.278 and 0.2.290 (7 -> 18) and left this assertion red for days.
-    // What is actually being asserted is the invariant that matters — the
-    // extension boots with ZERO permissions granted — plus the weaker but
-    // still useful claim that Settings renders every capability it offers.
-    const { CAPABILITIES } = await import(`${EXT}/lib/capabilities.js`);
+    // A hard-coded count here silently rots every time a tool tranche adds a
+    // capability — which is exactly what happened between 0.2.278 and 0.2.290
+    // (7 -> 18) and left this assertion red for days. But simply deriving the
+    // count from CAPABILITIES is WORSE: Settings renders its rows straight from
+    // that list, so both sides move together and the check can never fail. That
+    // was verified by adding a phantom capability and watching the derived
+    // version still pass.
+    //
+    // So assert the two things that are actually falsifiable:
+    //   1. the extension boots with ZERO capabilities granted (the real
+    //      invariant — every permission is optional), and
+    //   2. every capability this suite goes on to DRIVE is present by id, which
+    //      breaks if one is renamed or dropped out from under the journey.
+    const drivenCapabilities = [
+      "storage", "alarms", "activeTab", "scripting", "sidePanel", "tabs", "notifications",
+    ];
+    const capIds = await evalOpts(
+      `[...document.querySelectorAll('#permission-list .perm-row .grant-perm')].map(b => b.dataset.capability)`,
+    );
     check(
-      "permissions: every offered capability renders and starts ungranted",
-      Array.isArray(capState0) && capState0.length === CAPABILITIES.length &&
-        capState0.every((c) => c.granted === false),
+      "permissions: all capabilities start ungranted and the driven ones are present",
+      Array.isArray(capState0) && capState0.length > 0 &&
+        capState0.every((c) => c.granted === false) &&
+        Array.isArray(capIds) &&
+        drivenCapabilities.every((id) => capIds.includes(id)),
     );
     for (const cap of ["storage", "alarms", "activeTab", "scripting", "sidePanel"]) {
       const clicked = await clickSel(
