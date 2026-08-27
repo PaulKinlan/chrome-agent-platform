@@ -115,6 +115,15 @@ function confirmDeleteDialog(name, type) {
 }
 
 function wireCard(card) {
+  card.addEventListener("open-tab", (e) => {
+    const { id, origin } = e.detail ?? {};
+    const url = chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`);
+    if (typeof chrome !== "undefined" && chrome.tabs?.create) {
+      chrome.tabs.create({ url });
+    } else {
+      window.open(url, "_blank");
+    }
+  });
   card.addEventListener("open", (e) => {
     // Item 53/54: open the artifact in an <agent-dialog> (the full live render)
     // instead of navigating to the artifact.html viewer, which doubled up its
@@ -174,8 +183,47 @@ async function openArtifactDialog(id, origin) {
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", asset.name ?? "Artifact");
   const body = document.createElement("div");
-  body.style.minWidth = "min(76vw, 920px)";
-  body.style.minHeight = "200px";
+  body.style.minWidth = "min(92vw, 1280px)";
+  body.style.width = "100%";
+  body.style.height = "80vh";
+  body.style.minHeight = "min(80vh, 850px)";
+  body.style.display = "flex";
+  body.style.flexDirection = "column";
+
+  const headActions = document.createElement("div");
+  headActions.style.display = "flex";
+  headActions.style.justifyContent = "space-between";
+  headActions.style.alignItems = "center";
+  headActions.style.marginBottom = "8px";
+  headActions.style.flex = "0 0 auto";
+
+  const metaSpan = document.createElement("span");
+  metaSpan.style.fontSize = "12px";
+  metaSpan.style.color = "var(--muted)";
+  metaSpan.textContent = `${asset.type ?? "data"} · ${asset.size ?? 0} B · ${origin ?? "master"}`;
+
+  const openTabBtn = document.createElement("button");
+  openTabBtn.type = "button";
+  openTabBtn.className = "btn";
+  openTabBtn.style.padding = "4px 10px";
+  openTabBtn.style.fontSize = "12px";
+  openTabBtn.style.cursor = "pointer";
+  openTabBtn.style.display = "inline-flex";
+  openTabBtn.style.alignItems = "center";
+  openTabBtn.style.gap = "4px";
+  openTabBtn.style.border = "1px solid var(--border)";
+  openTabBtn.style.borderRadius = "var(--radius-sm, 6px)";
+  openTabBtn.style.background = "transparent";
+  openTabBtn.style.color = "var(--text)";
+  openTabBtn.innerHTML = `<span>Open in new tab</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+  openTabBtn.addEventListener("click", () => {
+    const url = chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`);
+    if (typeof chrome !== "undefined" && chrome.tabs?.create) chrome.tabs.create({ url });
+    else window.open(url, "_blank");
+  });
+  headActions.append(metaSpan, openTabBtn);
+  body.append(headActions);
+
   const type = asset.type ?? "data";
   const content = asset.content ?? "";
   if (type === "html" || (type === "text" && isHtmlDocument(content))) {
@@ -184,7 +232,27 @@ async function openArtifactDialog(id, origin) {
     frame.style.borderRadius = "10px";
     frame.style.overflow = "hidden";
     frame.style.background = "#fff";
+    frame.style.flex = "1 1 auto";
+    frame.style.display = "flex";
+    frame.style.flexDirection = "column";
+    frame.style.height = "100%";
+    frame.style.minHeight = "min(72vh, 760px)";
     frame.innerHTML = renderHtmlFrame(content);
+    const htmlFrameEl = frame.querySelector(".html-frame");
+    if (htmlFrameEl) {
+      htmlFrameEl.style.flex = "1";
+      htmlFrameEl.style.display = "flex";
+      htmlFrameEl.style.flexDirection = "column";
+      htmlFrameEl.style.height = "100%";
+      const iframe = htmlFrameEl.querySelector("iframe");
+      if (iframe) {
+        iframe.style.flex = "1";
+        iframe.style.width = "100%";
+        iframe.style.height = "100%";
+        iframe.style.minHeight = "min(72vh, 760px)";
+        iframe.style.maxHeight = "none";
+      }
+    }
     const frameCleanup = wireHtmlFrameContent(frame); // deliver the staged guarded HTML to the sandbox host
     frameCleanups.push(frameCleanup); // retained → cleaned on the dialog close
     body.append(frame);
@@ -193,12 +261,18 @@ async function openArtifactDialog(id, origin) {
     img.src = content;
     img.alt = asset.name ?? "artifact";
     img.style.maxWidth = "100%";
+    img.style.maxHeight = "72vh";
+    img.style.objectFit = "contain";
+    img.style.display = "block";
     body.append(img);
   } else {
     const pre = document.createElement("pre");
     pre.textContent = content;
     pre.style.whiteSpace = "pre-wrap";
     pre.style.fontSize = "13px";
+    pre.style.flex = "1 1 auto";
+    pre.style.overflow = "auto";
+    pre.style.maxHeight = "72vh";
     body.append(pre);
   }
   dialog.append(body);

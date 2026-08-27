@@ -48,6 +48,7 @@ export const ICONS = {
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+  external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1630,6 +1631,7 @@ class ArtifactCard extends Component {
         <span class="meta">${escapeHtml(type)} · ${escapeHtml(size)} B · ${escapeHtml(origin)}${t ? " · " + escapeHtml(t) : ""}</span>
       </div>
       <div class="actions">
+        <button type="button" data-act="open-tab" title="Open in new tab">${ICONS.external}<span>New tab</span></button>
         <button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>
         <button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>
       </div>
@@ -1652,6 +1654,7 @@ class ArtifactCard extends Component {
     this._root.querySelector(".preview")?.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._emit("open", detail()); }
     });
+    this._root.querySelector('[data-act="open-tab"]')?.addEventListener("click", () => this._emit("open-tab", detail()));
     this._root.querySelector('[data-act="reuse"]')?.addEventListener("click", () => this._emit("reuse", detail()));
     this._root.querySelector('[data-act="delete"]')?.addEventListener("click", () => this._emit("delete", detail()));
   }

@@ -18,10 +18,22 @@ const origin = params.get("origin") ?? "master";
 const nameEl = document.getElementById("name");
 const metaEl = document.getElementById("meta");
 const out = document.getElementById("out");
+const copyBtn = document.getElementById("copy-content");
 
 document.getElementById("back").addEventListener("click", () => {
   if (history.length > 1) history.back();
   else location.href = "../ntp/ntp.html";
+});
+
+let currentAssetContent = "";
+copyBtn?.addEventListener("click", async () => {
+  if (!currentAssetContent) return;
+  try {
+    await navigator.clipboard.writeText(currentAssetContent);
+    const orig = copyBtn.textContent;
+    copyBtn.textContent = "Copied!";
+    setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+  } catch {}
 });
 
 async function main() {
@@ -37,6 +49,7 @@ async function main() {
   }
   nameEl.textContent = asset.name ?? "Artifact";
   metaEl.textContent = `${asset.type ?? "unknown"} · ${asset.size ?? 0} B · ${origin}`;
+  currentAssetContent = asset.content ?? "";
 
   if (asset.type === "html" || (asset.type === "text" && /^\s*<!doctype html|<html|</i.test(asset.content ?? ""))) {
     const frame = document.createElement("div");
@@ -60,15 +73,14 @@ async function main() {
     window.addEventListener("pagehide", cleanup, { once: true });
   } else if (asset.type === "image") {
     const img = document.createElement("img");
+    img.className = "artifact-img";
     img.src = asset.content ?? "";
     img.alt = asset.name ?? "artifact";
-    img.style.maxWidth = "100%";
     out.append(img);
   } else {
     const pre = document.createElement("pre");
+    pre.className = "artifact-pre";
     pre.textContent = asset.content ?? "";
-    pre.style.whiteSpace = "pre-wrap";
-    pre.style.fontSize = "13px";
     out.append(pre);
   }
 }

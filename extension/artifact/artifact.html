@@ -1,33 +1,48 @@
 <!doctype html>
 <html lang="en">
-  <head><link rel="icon" href="../icons/icon16.png">
-
+  <head>
+    <link rel="icon" href="../icons/icon16.png">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Artifact — Chrome Agent Platform</title>
     <link rel="stylesheet" href="../shared/theme.css">
     <script type="module" src="../shared/components.js"></script>
     <style>
-      .wrap { max-width: 960px; margin: 0 auto; padding: 28px 24px 64px; }
-      .head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+      body { margin: 0; padding: 0; background: var(--bg, #f7f6f3); min-height: 100vh; display: flex; flex-direction: column; }
+      .wrap { max-width: 1400px; width: 100%; height: 100vh; margin: 0 auto; padding: 16px 24px; display: flex; flex-direction: column; box-sizing: border-box; }
+      .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex: 0 0 auto; }
+      .head-left { display: flex; align-items: center; gap: 12px; }
       .head h1 { font-size: 18px; font-weight: 650; margin: 0; color: var(--text, #1d1b18); }
       .meta { font-size: 12px; color: var(--muted, #635e56); }
       .back { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
-        border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm); background: transparent;
+        border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 6px); background: transparent;
         color: var(--text, #1d1b18); cursor: pointer; font: inherit; }
-      .frame { border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-md);
-        overflow: hidden; background: #fff; }
-      .frame iframe { width: 100%; height: 72vh; border: 0; display: block; }
+      .back:hover { border-color: var(--accent, #0e6e63); color: var(--accent, #0e6e63); }
+      .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+        border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 6px); background: var(--panel, #fff);
+        color: var(--text, #1d1b18); cursor: pointer; font: inherit; font-size: 13px; }
+      .btn:hover { border-color: var(--accent, #0e6e63); }
+      #out { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .frame { flex: 1 1 auto; display: flex; flex-direction: column; height: 100%; min-height: 0; border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-md, 10px);
+        overflow: hidden; background: #fff; box-shadow: var(--shadow-1, 0 1px 2px rgba(29,27,24,.05)); }
+      .frame .html-frame, .frame iframe { width: 100%; height: 100%; flex: 1 1 auto; border: 0; display: block; }
       .error { color: var(--danger, #b3261e); font-size: 14px; padding: 12px 0; }
+      pre.artifact-pre { flex: 1 1 auto; margin: 0; padding: 16px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--panel, #fff); border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-md, 10px); overflow: auto; white-space: pre-wrap; }
+      img.artifact-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; margin: auto; }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="head">
-        <button class="back" id="back" type="button">← Back</button>
-        <div>
-          <h1 id="name">Artifact</h1>
-          <div class="meta" id="meta"></div>
+        <div class="head-left">
+          <button class="back" id="back" type="button">← Back</button>
+          <div>
+            <h1 id="name">Artifact</h1>
+            <div class="meta" id="meta"></div>
+          </div>
+        </div>
+        <div class="head-right">
+          <button class="btn" id="copy-content" type="button">Copy content</button>
         </div>
       </div>
       <div id="out"></div>
