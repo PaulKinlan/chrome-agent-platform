@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.316] — 2026-08-27
+- xan is IN — a real, runnable WASI CSV toolkit (the rayon thread-pool now runs serially via a shim, and the two GPL-family deps the review caught are properly excluded with honest licence accounting). The same shim is what tokei and qsv will ride on next
+
 ## [0.2.315] — 2026-08-27
 - jq is IN — a real, single-threaded WASI jq (tiny 490KB, 19 pure-WASI imports, runs filters and object transforms). The patched-fork route works: xan now builds too (needs the rayon serial-fallback next), qsv has a precise patch plan
 
