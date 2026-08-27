@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.311] — 2026-08-27
+- Fixed tasks not responding: run dispatches were hitting the 12-second safety timeout (meant for quick data loads), so any task over 12 seconds showed 'the agent worker didn't answer' even though it finished. Task runs now get their own long timeout
+
 ## [0.2.310] — 2026-08-27
 - The shared-worker transformation is COMPLETE: each agent runs in its own shared worker (isolated, fault-contained), the UI holds live ports with live progress, background agents run on workers with zero visible pages, and a single-driver lease means only one surface can drive browser commands at a time — with reads like screenshots still always available
 
