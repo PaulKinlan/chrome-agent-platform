@@ -1,0 +1,8 @@
+[package]
+name = "namedlock"
+version = "0.7.0"
+edition = "2021"
+description = "No-op WASI stub for namedlock (file locking is meaningless under wasi-preview1 single-threading)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

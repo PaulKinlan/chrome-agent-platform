@@ -4,12 +4,14 @@ Aggregate (BUILT wasm32-wasip1 tree): MIT AND Apache-2.0 AND BSD-3-Clause AND
 BSD-2-Clause AND Unicode-3.0 AND ISC AND Zlib AND CC0-1.0 AND MPL-2.0 AND
 Unlicense AND BSL-1.0 AND 0BSD AND (Apache-2.0 WITH LLVM-exception).
 
-No GPL/AGPL/LGPL in the BUILT tree. GPL-family crates present in Cargo.lock but
-EXCLUDED from the wasip1 build (target-gated, verified absent from
-`cargo tree --locked -e normal,build --target wasm32-wasip1`):
-- namedlock@0.7.0 — GPL-2.0+ (lock-only; non-wasip1 target)
-- priority-queue@1.4.0 — LGPL-3.0 OR MPL-2.0 (lock-only; MPL arm admissible, absent from build)
-- r-efi@5.3.0 / r-efi@6.0.0 — MIT OR Apache-2.0 OR LGPL-2.1-or-later (target-specific wasm32-unknown-unknown; absent from wasip1 build)
+No GPL/AGPL/LGPL in the BUILT tree. GPL-family crates are EXCLUDED from the
+wasip1 build via permissive [patch.crates-io] STUBS (our own MIT OR Apache-2.0
+crates replacing the GPL-family originals) — verified by
+`cargo tree --locked -e normal,build --target wasm32-wasip1` showing ONLY the
+path stubs AND the crates.io rlibs ABSENT from target/wasm32-wasip1/release/deps:
+- namedlock@0.7.0 — GPL-2.0+ → replaced by docs/plans/rust-lane/namedlock-wasi (no-op: file locking is meaningless under wasip1 single-threading)
+- priority-queue@1.4.0 — LGPL-3.0 OR MPL-2.0 → replaced by docs/plans/rust-lane/priority-queue-wasi (Vec-backed, O(n) linear ops; top-k sizes are small)
+- r-efi@5.3.0 / r-efi@6.0.0 — MIT OR Apache-2.0 OR LGPL-2.1-or-later (target-specific wasm32-unknown-unknown; genuinely absent from the wasip1 build — no stub needed)
 
 MPL-2.0 (file-level weak copyleft, admissible + FLAGGED): 5 crates in the resolve.
 Full per-crate licence texts vendored at the retained-build admission step.

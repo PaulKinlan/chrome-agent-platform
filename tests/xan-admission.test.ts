@@ -22,10 +22,19 @@ Deno.test("xan: pure WASI preview-1, no threads, default tier (binary if present
 
 Deno.test("xan: the never-fabricate inputs are real (sha + commit + licence + shim)", () => {
   const prov = readFileSync(new URL("../docs/plans/rust-lane/xan/PROVENANCE.md", import.meta.url), "utf8");
-  assert(prov.includes("67415dff0e19403418f210a6854e3e623b8401ffea05bd188d8531a66aa42cee"), "binary sha256 recorded");
+  assert(prov.includes("d8a1246ccf7c06d02b88656344909a677af58e5fd3d28464800c5815f5d4bd06"), "binary sha256 recorded");
   assert(prov.includes("ae02022bf700b5b414c7481ebf69f207f38314ad"), "source commit pinned");
   assert(prov.includes("MIT OR Unlicense"), "upstream licence recorded");
   assert(prov.includes("rayon-wasi serial shim"), "the serial shim is disclosed");
+});
+
+Deno.test("xan: the GPL-family crates are EXCLUDED via permissive stubs (honest NOTICES)", () => {
+  const notices = readFileSync(new URL("../docs/plans/rust-lane/xan/xan-NOTICES.txt", import.meta.url), "utf8");
+  assert(notices.includes("namedlock-wasi"), "namedlock GPL-2.0+ exclusion stub is documented");
+  assert(notices.includes("priority-queue-wasi"), "priority-queue LGPL exclusion stub is documented");
+  assert(!/GPL-2\.0\+ \(lock-only; non-wasip1 target\)/.test(notices), "no stale 'lock-only absent' claim");
+  const bs = readFileSync(new URL("../docs/plans/rust-lane/xan/build.sh", import.meta.url), "utf8");
+  assert(bs.includes("namedlock = { path") && bs.includes("priority-queue = { path"), "build.sh installs all three stubs");
 });
 
 Deno.test("xan: the serial rayon shim is committed + is the single unblock for the rayon tools", () => {

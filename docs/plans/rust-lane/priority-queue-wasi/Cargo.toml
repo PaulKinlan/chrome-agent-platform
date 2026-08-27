@@ -1,0 +1,8 @@
+[package]
+name = "priority-queue"
+version = "1.4.0"
+edition = "2021"
+description = "Vec-backed WASI stub for priority-queue (O(n) linear ops — top-k sizes are small; avoids the LGPL/GPL-family crate)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
