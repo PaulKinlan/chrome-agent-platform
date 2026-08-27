@@ -1144,3 +1144,119 @@ Deno.test("durable runs: quota rollback NEVER deletes a possibly-effectful execu
   assertEquals(result.preserved, true, "progressed authority is preserved");
   assertEquals(await store.has(`run:${executionId}`), true, "the execution authority survives");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Thread-open perf (P0, second pass): the per-execution log index makes a
+// bounded listLogs read O(page) instead of O(total), with cursor pagination
+// for the FULL history. The old path enumerated every store key + did a
+// per-row store.get + sort — 1.3-1.7s PER execution.
+// ──────────────────────────────────────────────────────────────────────────
+
+class CountingStore extends FakeStore {
+  getCalls = 0;
+  async get(key) {
+    this.getCalls += 1;
+    return super.get(key);
+  }
+}
+
+async function startIndexedRun(registry, id, threadId = "thread-idx") {
+  await registry.start({
+    executionId: id,
+    clientCorrelationId: `page-${id}`,
+    threadId,
+    kind: "task",
+    taskPreview: "indexed run",
+    journalTarget: "master",
+    resumeRequest: { id: `task-${id}`, task: "indexed run", memoryOrigin: "master", providerBinding: { schemaVersion: 1, provider: "demo", model: "demo", requestedScope: null, local: true }, idempotencyKey: id },
+  });
+}
+
+Deno.test("thread-log index: a bounded listLogs reads O(page), not O(total) (fast-path)", async () => {
+  const store = new CountingStore();
+  const { registry } = harness(store);
+  const id = "exec_idx_fast";
+  await startIndexedRun(registry, id);
+  const TOTAL = 2000;
+  for (let i = 0; i < TOTAL; i += 1) {
+    await registry.appendLog(id, { type: "tool-call", tool: `t${i}` }, `key-${i}`);
+  }
+  // The appendLogs above also built the index. A bounded read must NOT enumerate
+  // the whole store: get() calls ≤ limit + a few (index read + readRecord).
+  store.getCalls = 0;
+  const rows = await registry.listLogs(id, 250);
+  assertEquals(rows.length, 250, "recent page = the most-recent 250 rows");
+  assert(store.getCalls < 300, `fast path should read ~limit rows, not all ${TOTAL}: saw ${store.getCalls} get() calls`);
+  // The most-recent rows are the highest-indexed tools.
+  assertEquals(rows[0].tool, `t${TOTAL - 250}`, "oldest of the page");
+  assertEquals(rows[249].tool, `t${TOTAL - 1}`, "newest of the page");
+});
+
+Deno.test("thread-log index: cursor pagination reaches the OLDEST rows (full history)", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_idx_page";
+  await startIndexedRun(registry, id);
+  const TOTAL = 500;
+  for (let i = 0; i < TOTAL; i += 1) {
+    await registry.appendLog(id, { type: "tool-call", tool: `t${i}` }, `key-${i}`);
+  }
+  const PAGE = 100;
+  // Read the index (append order == at order here — the harness `now` increments).
+  const idx = await store.get(`run-log-idx:${id}`);
+  const ordered = idx.entries.slice().sort((a, b) => a.at - b.at);
+
+  // First page = the most-recent PAGE rows (no cursor).
+  const page1 = await registry.listLogs(id, { limit: PAGE });
+  assertEquals(page1.length, PAGE);
+  assertEquals(page1[0].tool, `t${TOTAL - PAGE}`, "first page oldest");
+  assertEquals(page1[PAGE - 1].tool, `t${TOTAL - 1}`, "first page newest");
+
+  // Page back one page at a time using each page's oldest row key as the cursor,
+  // until the OLDEST row (t0) is reached — proving the FULL history is reachable.
+  let cursor = ordered[ordered.length - PAGE].key; // oldest key of the first page
+  let found = false;
+  for (let guard = 0; guard < 20 && !found; guard += 1) {
+    const page = await registry.listLogs(id, { limit: PAGE, before: cursor });
+    if (page.length === 0) break;
+    if (page.some((r) => r.tool === "t0")) { found = true; break; }
+    const oldestAt = page[0].at ?? 0;
+    const oldestEntry = ordered.find((e) => e.at === oldestAt);
+    if (!oldestEntry) break;
+    cursor = oldestEntry.key;
+  }
+  assert(found, "paging back reaches the OLDEST row (t0)");
+});
+
+Deno.test("thread-log index: a pre-index execution rebuilds the index on first bounded read", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_idx_legacy";
+  await startIndexedRun(registry, id);
+  // Append rows, then DELETE the index to simulate a pre-index (legacy) execution.
+  await registry.appendLog(id, { type: "tool-call", tool: "a" }, "k1");
+  await registry.appendLog(id, { type: "tool-call", tool: "b" }, "k2");
+  await registry.appendLog(id, { type: "tool-call", tool: "c" }, "k3");
+  await store.delete(`run-log-idx:${id}`);
+  assertEquals(await store.get(`run-log-idx:${id}`), null, "index removed to simulate legacy");
+  const rows = await registry.listLogs(id, 2);
+  assertEquals(rows.length, 2, "bounded read still returns the recent slice");
+  assertEquals(rows[0].tool, "b");
+  assertEquals(rows[1].tool, "c");
+  const idx = await store.get(`run-log-idx:${id}`);
+  assert(Array.isArray(idx?.entries) && idx.entries.length === 4, "the fallback rebuilt the index from existing rows (accepted + 3 appends)");
+});
+
+Deno.test("thread-log index: full history (unbounded) still returns every row", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_idx_full";
+  await startIndexedRun(registry, id);
+  for (let i = 0; i < 50; i += 1) await registry.appendLog(id, { type: "tool-call", tool: `t${i}` }, `k${i}`);
+  const all = await registry.listLogs(id);
+  assertEquals(all.length, 51, "unbounded read returns the FULL history (accepted + 50 appends)");
+  assertEquals(all[0].type, "accepted", "the admission marker is the oldest row");
+  assertEquals(all[1].tool, "t0");
+  assertEquals(all[50].tool, "t49");
+});
+

@@ -23,6 +23,7 @@ const INDEX_KEY = "run-registry";
 const RUN_PREFIX = "run:";
 const OUTBOX_PREFIX = "run-outbox:";
 const LOG_PREFIX = "run-log:";
+const LOG_IDX_PREFIX = "run-log-idx:";
 const RESUME_PREFIX = "run-resume:";
 const PAYLOAD_PREFIX = "run-payload:";
 const RESUME_CHUNK_CHARS = 64 * 1024;
@@ -288,6 +289,7 @@ export function createDurableRunRegistry({
       const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idText)))]
         .map((byte) => byte.toString(16).padStart(2, "0")).join("");
       const key = `${LOG_PREFIX}${executionId}:${digest}`;
+      const at = Number.isFinite(entry?.at) ? entry.at : now();
       if (!(await store.has(key))) {
         const cloned = structuredClone(entry);
         const serialized = JSON.stringify(cloned);
@@ -299,34 +301,103 @@ export function createDurableRunRegistry({
           schemaVersion: 1,
           retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
           executionId,
-          at: Number.isFinite(entry?.at) ? entry.at : now(),
+          at,
           idempotencyKey: bounded(idText, 500),
+        });
+      }
+      // Maintain the per-execution index of row keys (append order, FULL history —
+      // no cap) so a bounded listLogs reads ONLY the requested page without
+      // enumerating the whole store (the owner P0 thread-open perf: the old
+      // full-scan + per-row store.get + sort was 1.3-1.7s PER execution). Written
+      // atomically with the row (same locked region). The index entry carries the
+      // SAME `at` as the row it names (single now() — a second call would skew the
+      // index order away from the row order).
+      const idxKey = `${LOG_IDX_PREFIX}${executionId}`;
+      const idx = (await store.get(idxKey)) ?? { schemaVersion: 1, retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion, executionId, entries: [] };
+      const entries = Array.isArray(idx.entries) ? idx.entries.filter((e) => e && typeof e.key === "string") : [];
+      if (!entries.some((e) => e.key === key)) {
+        entries.push({ key, at });
+        await store.setTrusted(idxKey, {
+          schemaVersion: 1,
+          retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+          executionId,
+          entries,
         });
       }
       return structuredClone(await store.get(key));
     });
   }
 
-  async function listLogs(executionId, limit = Infinity) {
+  async function listLogs(executionId, opts = Infinity) {
     return locked(async () => {
       const record = await readRecord(executionId);
       if (!record) throw new Error("unknown execution");
       const prefix = `${LOG_PREFIX}${executionId}:`;
-      const rows = [];
+      // Cursor pagination: a plain number means "limit"; an object means
+      // { limit, before } where `before` is a row KEY cursor for paging back
+      // through the FULL history one bounded page at a time.
+      const isObj = opts != null && typeof opts === "object" && !Array.isArray(opts);
+      const limit = isObj ? (opts.limit ?? Infinity) : opts;
+      const before = isObj ? (opts.before ?? null) : null;
+      const useBounded = Number.isFinite(limit) && limit > 0;
+      const hydrate = (rows) => Promise.all(rows.map(async (row) => (row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row)));
+      const sortByAt = (rows) => rows.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.idempotencyKey ?? a.type).localeCompare(String(b.idempotencyKey ?? b.type)));
+
+      // FAST PATH: a bounded read serves the requested page straight from the index
+      // (ONE store.get + ≤limit row reads — no full-store enumeration). No `before`
+      // = the most-recent `limit` rows; with `before` = the `limit` rows strictly
+      // earlier in log order (page back).
+      if (useBounded) {
+        const idx = await store.get(`${LOG_IDX_PREFIX}${executionId}`);
+        if (Array.isArray(idx?.entries) && idx.entries.length > 0) {
+          const ordered = idx.entries.slice().sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+          let slice = ordered;
+          if (before != null) {
+            const pos = ordered.findIndex((e) => e.key === before);
+            slice = pos > 0 ? ordered.slice(0, pos) : [];
+          }
+          const keys = slice.slice(-limit).map((e) => e.key);
+          const rows = [];
+          let complete = true;
+          for (const key of keys) {
+            const row = await store.get(key);
+            if (row == null) { complete = false; break; } // stale index → rebuild below
+            if (row.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
+              throw new Error(`unknown durable run log retention policy: ${row.retentionPolicyVersion}`);
+            }
+            rows.push(row);
+          }
+          if (complete && rows.length > 0) {
+            return await hydrate(sortByAt(rows));
+          }
+        }
+      }
+
+      // FALLBACK (legacy unindexed execution, an unbounded read, or a bounded read
+      // whose index missed): full scan ONCE, persist the index, then serve.
+      const combined = [];
       for (const key of (await store.keys()).filter((value) => value.startsWith(prefix)).sort()) {
         const row = await store.get(key);
         if (row?.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
           throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
         }
-        rows.push(row);
+        combined.push({ key, at: row?.at ?? 0, row });
       }
-      rows.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.idempotencyKey ?? a.type).localeCompare(String(b.idempotencyKey ?? b.type)));
-      // Bound the replay (owner P0 thread-open perf): only the most-recent `limit`
-      // rows are hydrated (the payload read is the expensive part). The sort above
-      // already needs every row's `at`, but the payload is only fetched for what we
-      // actually render. Full history remains available by passing no limit.
-      const limited = Number.isFinite(limit) && limit > 0 ? rows.slice(-limit) : rows;
-      return await Promise.all(limited.map(async (row) => (row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row)));
+      combined.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.row.idempotencyKey ?? a.row.type).localeCompare(String(b.row.idempotencyKey ?? b.row.type)));
+      // Persist the FULL ordered index so subsequent reads (and pagination) are fast.
+      await store.setTrusted(`${LOG_IDX_PREFIX}${executionId}`, {
+        schemaVersion: 1,
+        retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+        executionId,
+        entries: combined.map((c) => ({ key: c.key, at: c.at })),
+      });
+      let slice = combined;
+      if (before != null) {
+        const pos = combined.findIndex((c) => c.key === before);
+        slice = pos > 0 ? combined.slice(0, pos) : [];
+      }
+      const limited = useBounded ? slice.slice(-limit).map((c) => c.row) : combined.map((c) => c.row);
+      return await hydrate(limited);
     });
   }
 
@@ -494,6 +565,7 @@ export function createDurableRunRegistry({
         const recordKey = `${RUN_PREFIX}${executionId}`;
         const owned = (candidate) => candidate === recordKey ||
           candidate === `${OUTBOX_PREFIX}${executionId}` ||
+          candidate === `${LOG_IDX_PREFIX}${executionId}` ||
           candidate.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
           candidate.startsWith(`${LOG_PREFIX}${executionId}:`) ||
           candidate.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);
@@ -531,6 +603,7 @@ export function createDurableRunRegistry({
       const ids = Array.isArray(rawIndex) ? rawIndex : [];
       const owned = (key) => key === recordKey ||
         key === `${OUTBOX_PREFIX}${executionId}` ||
+        key === `${LOG_IDX_PREFIX}${executionId}` ||
         key.startsWith(`${LOG_PREFIX}${executionId}:`) ||
         key.startsWith(`${RESUME_PREFIX}${executionId}:`) ||
         key.startsWith(`${PAYLOAD_PREFIX}${executionId}:`);

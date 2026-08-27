@@ -221,9 +221,9 @@ const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
 // its own byte-bounded store; the registry uses a separate store.
 const DURABLE_ROOT = "durable-runs";
 const DURABLE_INDEX_KEY = "run-registry";
-const DURABLE_PREFIXES = ["run:", "run-outbox:", "run-log:", "run-resume:", "run-payload:"];
+const DURABLE_PREFIXES = ["run:", "run-outbox:", "run-log:", "run-log-idx:", "run-resume:", "run-payload:"];
 const EXECUTION_ID_SOURCE = "(?:exec:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|exec_[A-Za-z0-9][A-Za-z0-9_-]{7,194})";
-const DURABLE_KEY_RE = new RegExp(`^(?:run|run-outbox|run-log|run-resume|run-payload):(${EXECUTION_ID_SOURCE})(?::|$)`, "i");
+const DURABLE_KEY_RE = new RegExp(`^(?:run|run-outbox|run-log|run-log-idx|run-resume|run-payload):(${EXECUTION_ID_SOURCE})(?::|$)`, "i");
 // The thread → executions reverse index (the log redesign). It is keyed by
 // THREAD id, not execution id, so it needs its own bounded store per thread —
 // the per-execution router below cannot place it, and before this existed every
