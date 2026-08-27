@@ -1,0 +1,63 @@
+diff --git a/src/language/language_type.rs b/src/language/language_type.rs
+--- a/src/language/language_type.rs
++++ b/src/language/language_type.rs
+@@ -118,7 +118,7 @@ impl LanguageType {
+                             (0, 1, 0)
+                         }
+                     })
+-                    .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
++                    .fold((0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
+             };
+ 
+             let (mut stats, (blanks, code, comments)) = rayon::join(parse_lines, simple_parse);
+diff --git a/src/utils/fs.rs b/src/utils/fs.rs
+--- a/src/utils/fs.rs
++++ b/src/utils/fs.rs
+@@ -55,10 +55,13 @@ pub fn get_all_files<A: AsRef<Path>>(
+         .ignore(ignore_dot)
+         .parents(ignore && config.no_ignore_parent.map(|b| !b).unwrap_or(true));
+ 
+-    walker.build_parallel().run(move || {
++    // WASI serial walk (build_parallel spawns scoped threads — no wasi thread
++    // support). Equivalent serial iteration of walker.build() with the SAME
++    // entry error handling + file filter.
++    {
+         let tx = tx.clone();
+-        Box::new(move |entry| {
+-            let entry = match entry {
++        for result in walker.build() {
++            let entry = match result {
+                 Ok(entry) => entry,
+                 Err(error) => {
+                     use ignore::Error;
+@@ -69,21 +72,24 @@ pub fn get_all_files<A: AsRef<Path>>(
+                         } = **error
+                         {
+                             error!("{} reading {}", error, path.display());
+-                            return Continue;
++                            continue;
+                         }
+                     }
+                     error!("{}", error);
+-                    return Continue;
++                    continue;
+                 }
+             };
+ 
+             if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                 tx.send(entry).unwrap();
+             }
+-
+-            Continue
+-        })
+-    });
++        }
++    }
++    // Close the channel: the OUTER `tx` must be dropped or rx.into_iter() never
++    // terminates (it yields until the channel disconnects). The original
++    // build_parallel closure MOVED tx (consuming it); the serial walk clones it,
++    // so drop the outer sender explicitly.
++    drop(tx);
+ 
+     let rx_iter = rx
+         .into_iter()

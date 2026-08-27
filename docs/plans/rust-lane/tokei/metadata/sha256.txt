@@ -1,1 +1,1 @@
-5fdae5061793e211d282ca6fcb70646689d6542bb8e119794f5ca99fdcb07004  docs/plans/rust-lane/tokei/binaries/tokei.wasm
+94b92edc10c4f3844d1aa30ed6baf948fb4fdd00165909ae28e2b55e97cf02a3

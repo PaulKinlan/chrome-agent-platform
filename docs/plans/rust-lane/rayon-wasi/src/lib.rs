@@ -7,7 +7,7 @@ pub mod slice {
 }
 
 pub mod prelude {
-    pub use crate::{IntoParallelRefIterator, ParallelIterator, ParallelSliceMut};
+    pub use crate::{IntoParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator, ParallelSliceMut};
 }
 
 pub trait ParallelSliceMut<T: Send> {
@@ -37,6 +37,40 @@ impl<'a, T: 'a + Sync> IntoParallelRefIterator<'a> for Vec<T> {
     fn par_iter(&'a self) -> Self::Iter { self.iter() }
 }
 
+/// Mutable parallel ref iteration — serial (std slice::IterMut / map IterMut).
+pub trait IntoParallelRefMutIterator<'a> {
+    type Item: 'a;
+    type Iter: ParallelIterator<Item = Self::Item>;
+    fn par_iter_mut(&'a mut self) -> Self::Iter;
+}
+impl<'a, T: 'a + Send> IntoParallelRefMutIterator<'a> for [T] {
+    type Item = &'a mut T; type Iter = std::slice::IterMut<'a, T>;
+    fn par_iter_mut(&'a mut self) -> Self::Iter { self.iter_mut() }
+}
+impl<'a, T: 'a + Send> IntoParallelRefMutIterator<'a> for Vec<T> {
+    type Item = &'a mut T; type Iter = std::slice::IterMut<'a, T>;
+    fn par_iter_mut(&'a mut self) -> Self::Iter { self.iter_mut() }
+}
+impl<'a, K: 'a + Ord, V: 'a + Send> IntoParallelRefMutIterator<'a> for std::collections::BTreeMap<K, V> {
+    type Item = (&'a K, &'a mut V); type Iter = std::collections::btree_map::IterMut<'a, K, V>;
+    fn par_iter_mut(&'a mut self) -> Self::Iter { self.iter_mut() }
+}
+
+/// Owned parallel iteration (`into_par_iter` / `par_bridge`) — serial bridge
+/// over any std Iterator (the real rayon's par_bridge spawns a channel + threads,
+/// which hangs on wasi-preview1 — this returns the iterator unchanged).
+pub trait IntoParallelIterator {
+    type Item;
+    type Iter: ParallelIterator<Item = Self::Item>;
+    fn into_par_iter(self) -> Self::Iter where Self: Sized;
+    fn par_bridge(self) -> Self::Iter where Self: Sized { self.into_par_iter() }
+}
+impl<I: Iterator> IntoParallelIterator for I {
+    type Item = I::Item;
+    type Iter = I;
+    fn into_par_iter(self) -> Self::Iter { self }
+}
+
 pub trait ParallelIterator: Iterator + Sized {
     fn try_for_each<OP, E>(self, op: OP) -> Result<(), E>
     where OP: Fn(Self::Item) -> Result<(), E> + Sync + Send, E: Send {
@@ -45,6 +79,10 @@ pub trait ParallelIterator: Iterator + Sized {
         }
         Ok(())
     }
+    // NOTE: rayon's `reduce(identity, op)` is NOT re-declared here — it collides
+    // with std Iterator::reduce (different arity) for the blanket impl. The
+    // one tokei call site is patched to std Iterator::fold (equivalent for
+    // empty + non-empty).
 }
 impl<I: Iterator> ParallelIterator for I {}
 
