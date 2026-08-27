@@ -6,7 +6,9 @@
 //   - ensure a worker is alive (offscreen doc + per-agent shared worker);
 //   - the durable ALIVE-SET — "which agents should be alive" — lives here
 //     (chrome.storage kv), NOT in any worker;
-//   - reconcile-on-wake re-ensures agents whose workers died.
+//   - reconcile-on-wake re-ensures agents whose workers died;
+//   - Phase 3 durability routes: progress/result/journal commitments from
+//     worker runs are received, validated, redacted, and durably written.
 //
 // Clients (NTP/sidepanel) hold a port by constructing the SAME shared worker
 // (`new SharedWorker(workerUrl, { name: agentId })`); the SW's `ensure` route
@@ -17,6 +19,7 @@ import { capLog } from "../../lib/cap-log.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
 const WORKER_PATH = "workers/agent-worker.js";
+const MAX_PREVIEW_CHARS = 240;
 
 const log = capLog("agent-workers");
 
@@ -32,7 +35,78 @@ function workerUrl() {
     : WORKER_PATH;
 }
 
-export function createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet }) {
+function validExecutionId(value) {
+  if (typeof value !== "string" || value.length > 200) return false;
+  const lower = value.toLowerCase();
+  if (["__proto__", "prototype", "constructor"].includes(lower)) return false;
+  return /^exec:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    || /^exec_[a-zA-Z0-9][a-zA-Z0-9_-]{7,194}$/.test(value);
+}
+
+function bounded(value, max = MAX_PREVIEW_CHARS) {
+  const s = String(value ?? "");
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function redactedPreview(value, max = MAX_PREVIEW_CHARS) {
+  return bounded(value, max)
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [redacted]")
+    .replace(/\b(api[_-]?key|token|secret|password|credential|access[_-]?key)\b\s*[:=]\s*\S+/gi, "$1=[redacted]");
+}
+
+function sanitizeProgressEvent(event) {
+  if (!event || typeof event !== "object") return { type: "progress" };
+  const type = String(event.type ?? "progress").slice(0, 64);
+  const out = { type };
+  if (event.toolName != null) out.toolName = String(event.toolName).slice(0, 128);
+  if (event.toolArgs != null) {
+    let raw;
+    try { raw = JSON.stringify(event.toolArgs); } catch { raw = String(event.toolArgs); }
+    out.toolArgs = redactedPreview(raw, 2048);
+  }
+  if (event.result != null) {
+    let raw;
+    try { raw = typeof event.result === "string" ? event.result : JSON.stringify(event.result); } catch { raw = String(event.result); }
+    out.result = redactedPreview(raw, 2048);
+  }
+  if (event.text != null) out.text = redactedPreview(event.text, 2048);
+  if (event.step != null && Number.isFinite(event.step)) out.step = event.step;
+  if (event.totalSteps != null && Number.isFinite(event.totalSteps)) out.totalSteps = event.totalSteps;
+  if (event.durationMs != null && Number.isFinite(event.durationMs)) out.durationMs = event.durationMs;
+  if (event.ok !== undefined) out.ok = Boolean(event.ok);
+  return out;
+}
+
+function sanitizeJournalEntry(entry, executionId) {
+  if (!entry || typeof entry !== "object") return { type: "task", executionId };
+  const type = String(entry.type ?? "task").slice(0, 64);
+  const id = entry.id ? String(entry.id).slice(0, 200) : String(Date.now());
+  const out = { type, id, executionId };
+  if (entry.task != null) out.task = redactedPreview(entry.task, 4096);
+  if (entry.result != null) {
+    let raw;
+    try { raw = typeof entry.result === "string" ? entry.result : JSON.stringify(entry.result); } catch { raw = String(entry.result); }
+    out.result = redactedPreview(raw, 65536);
+  }
+  if (entry.tool != null) out.tool = String(entry.tool).slice(0, 128);
+  if (entry.args != null) out.args = redactedPreview(entry.args, 4096);
+  if (entry.callId != null) out.callId = String(entry.callId).slice(0, 200);
+  if (entry.run != null) out.run = String(entry.run).slice(0, 200);
+  if (entry.ok !== undefined) out.ok = Boolean(entry.ok);
+  if (entry.at != null && Number.isFinite(entry.at)) out.at = entry.at;
+  return out;
+}
+
+export function createAgentWorkerRoutes({
+  ensureOffscreen,
+  kvGet,
+  kvSet,
+  durableRegistry = null,
+  broadcastProgress = null,
+  markScheduledDone = null,
+  resolveJournalStore = null,
+  journalAppend = null,
+}) {
   const readAliveSet = async () => {
     const s = await kvGet(ALIVE_KEY);
     const list = s?.[ALIVE_KEY];
@@ -85,6 +159,123 @@ export function createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet }) {
       const alive = await readAliveSet();
       await writeAliveSet(alive.filter((id) => id !== agentId));
       return { ok: true, agentId, closed: true };
+    },
+
+    /** Phase 3: Bounded, redacted progress commit from a worker run.
+     * Records progress in durable registry logs + updates execution heartbeat
+     * + broadcasts live progress to UI ports. */
+    async "agent-worker.progress"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const executionId = String(m?.executionId ?? "");
+      if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
+      const event = m?.event;
+      if (!event || typeof event !== "object") return { ok: false, error: "missing event" };
+
+      const sanitized = sanitizeProgressEvent(event);
+      const rawType = sanitized.type || "progress";
+
+      if (durableRegistry) {
+        try {
+          await durableRegistry.heartbeat(executionId, { progressed: true });
+          const logKey = m?.logKey ? String(m.logKey).slice(0, 128) : `${rawType}:${Date.now()}`;
+          await durableRegistry.appendLog(executionId, sanitized, logKey);
+        } catch (err) {
+          log.warn("progress log append failed", { executionId, error: err?.message ?? err });
+        }
+      }
+
+      if (typeof broadcastProgress === "function") {
+        try {
+          broadcastProgress({
+            ...sanitized,
+            runId: executionId,
+            agentId: m?.agentId ? String(m.agentId).slice(0, 128) : undefined,
+          });
+        } catch { /* best-effort broadcast */ }
+      }
+
+      return { ok: true, executionId };
+    },
+
+    /** Phase 3: Terminal result commitment from a worker run.
+     * Settle execution in the durable-runs registry, update phase, and mark
+     * scheduled alarms done if applicable. */
+    async "agent-worker.result"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const executionId = String(m?.executionId ?? "");
+      if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
+
+      const ok = m?.ok === true;
+      const result = m?.result !== undefined ? bounded(m.result, 64 * 1024) : undefined;
+      const error = m?.error ? bounded(m.error, 2048) : undefined;
+      const errorCategory = m?.errorCategory ? String(m.errorCategory).slice(0, 64) : undefined;
+      const errorReason = m?.errorReason ? bounded(m.errorReason, 512) : undefined;
+      const errorAction = m?.errorAction ? bounded(m.errorAction, 512) : undefined;
+      const logicalId = m?.logicalId ? bounded(m.logicalId, 200) : undefined;
+      const scheduleName = m?.scheduleName ? bounded(m.scheduleName, 200) : undefined;
+      const aborted = m?.aborted === true;
+
+      let terminal = null;
+      if (durableRegistry) {
+        terminal = await durableRegistry.settle(executionId, {
+          ok,
+          result,
+          error,
+          errorCategory: aborted ? "aborted" : errorCategory,
+          errorReason,
+          errorAction,
+          logicalId,
+          aborted,
+        });
+      }
+
+      if ((scheduleName || logicalId) && typeof markScheduledDone === "function") {
+        try {
+          const schedId = scheduleName || logicalId;
+          await markScheduledDone(schedId, m?.scheduleToken ?? executionId);
+        } catch (err) {
+          log.warn("markScheduledDone failed", { executionId, scheduleName, error: err?.message ?? err });
+        }
+      }
+
+      return {
+        ok: true,
+        executionId,
+        phase: terminal?.phase ?? (ok ? "terminal" : aborted ? "cancelled" : "terminal"),
+        cancelled: terminal?.phase === "cancelled" || aborted,
+      };
+    },
+
+    /** Phase 3: Bounded journal entry append to persistent OPFS memory store. */
+    async "agent-worker.journal-append"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const target = String(m?.target ?? "master").slice(0, 300);
+      const entry = m?.entry;
+      if (!entry || typeof entry !== "object") return { ok: false, error: "missing entry" };
+
+      const executionId = m?.executionId ? String(m.executionId) : null;
+      if (executionId && !validExecutionId(executionId)) {
+        return { ok: false, error: "invalid executionId" };
+      }
+
+      const sanitized = sanitizeJournalEntry(entry, executionId);
+      const memStore = resolveJournalStore ? await resolveJournalStore(target) : null;
+      if (memStore && typeof journalAppend === "function") {
+        try {
+          await journalAppend(memStore, sanitized);
+        } catch (err) {
+          return { ok: false, error: `journal append failed: ${err?.message ?? err}` };
+        }
+      }
+
+      if (executionId && durableRegistry) {
+        try {
+          const logKey = m?.logKey ? String(m.logKey).slice(0, 128) : `${sanitized.type || "entry"}:${sanitized.id || Date.now()}`;
+          await durableRegistry.appendLog(executionId, sanitized, logKey);
+        } catch { /* best-effort log */ }
+      }
+
+      return { ok: true, id: sanitized.id ?? null };
     },
   };
 }

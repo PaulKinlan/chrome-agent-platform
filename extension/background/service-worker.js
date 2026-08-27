@@ -2882,7 +2882,16 @@ const activityRoutes = createActivityRoutes({
 
 const handlers = mergeRouteMaps(
   activityRoutes,
-  createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet }),
+  createAgentWorkerRoutes({
+    ensureOffscreen,
+    kvGet,
+    kvSet,
+    durableRegistry: durableRuns,
+    broadcastProgress,
+    markScheduledDone,
+    resolveJournalStore: resolveMemory,
+    journalAppend,
+  }),
   {
   // The controlled cross-origin fetch for the script-host (and any extension
   // page): the service worker performs the fetch with the extension's host
