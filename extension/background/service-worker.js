@@ -3540,18 +3540,24 @@ const handlers = mergeRouteMaps(
     return { threads: await listThreads() };
   },
   async "thread.get"(m) {
+    const readSpan = perfSpan("thread.get:read");
     const thread = await getThread(m.id);
+    readSpan.end("ok");
     if (!thread) return { ok: false, error: "thread not found" };
     // The thread is a VIEW over the single authoritative per-execution durable
     // run log (log-redesign): derive the tool cards from the durable logs and
     // reconcile any missing terminal marker — every journaled tool call + every
     // turn is visible on reopen, and a stuck "running" thread self-heals.
+    // BOUNDED: the view reads only the recent executions + recent log rows
+    // (owner P0 thread-open perf — the full replay took ~10s).
+    const viewSpan = perfSpan("thread.get:view");
     const view = await buildThreadRunView(thread, {
       listThreadExecutions: (id) => durableRuns.listThreadExecutions(id),
-      listLogs: (id) => durableRuns.listLogs(id),
+      listLogs: (id, limit) => durableRuns.listLogs(id, limit),
       commitTerminal: commitThreadTerminal,
       recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
     });
+    viewSpan.end("ok");
     return { ok: true, thread: view };
   },
   async "thread.delete"(m) {

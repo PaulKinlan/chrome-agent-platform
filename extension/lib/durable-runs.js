@@ -307,7 +307,7 @@ export function createDurableRunRegistry({
     });
   }
 
-  async function listLogs(executionId) {
+  async function listLogs(executionId, limit = Infinity) {
     return locked(async () => {
       const record = await readRecord(executionId);
       if (!record) throw new Error("unknown execution");
@@ -318,10 +318,15 @@ export function createDurableRunRegistry({
         if (row?.retentionPolicyVersion !== RUN_RETENTION_POLICY.policyVersion) {
           throw new Error(`unknown durable run log retention policy: ${row?.retentionPolicyVersion}`);
         }
-        rows.push(row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row);
+        rows.push(row);
       }
       rows.sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || String(a.idempotencyKey ?? a.type).localeCompare(String(b.idempotencyKey ?? b.type)));
-      return rows;
+      // Bound the replay (owner P0 thread-open perf): only the most-recent `limit`
+      // rows are hydrated (the payload read is the expensive part). The sort above
+      // already needs every row's `at`, but the payload is only fetched for what we
+      // actually render. Full history remains available by passing no limit.
+      const limited = Number.isFinite(limit) && limit > 0 ? rows.slice(-limit) : rows;
+      return await Promise.all(limited.map(async (row) => (row?.payloadRef ? { ...row, payload: await readJsonPayload(executionId, row.payloadRef) } : row)));
     });
   }
 

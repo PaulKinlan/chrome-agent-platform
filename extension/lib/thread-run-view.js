@@ -11,6 +11,15 @@
 // missing terminal marker from the run's durable terminal authority.
 
 import { projectThreadWithRunLogs } from "../shared/conversation.js";
+import { perfSpan } from "./cap-perf.js";
+
+// Bounded replay (owner P0 thread-open perf): the thread is a VIEW over the
+// per-execution run log, but re-reading EVERY execution's ENTIRE log made a
+// task open take ~10s (it scales with history). Render only the most-recent
+// executions + their most-recent log rows; totals are reported honestly so the
+// surface can say "showing N of M". Full history stays available on demand.
+const MAX_VIEW_EXECUTIONS = 25;
+const MAX_VIEW_LOG_ROWS = 250;
 
 /** Build the render-ready thread view.
  * deps:
@@ -38,26 +47,40 @@ export async function buildThreadRunView(thread, deps) {
     recordFailure("thread-view-executions", `could not list executions for ${thread.id}: ${String(e?.message ?? e).slice(0, 200)}`);
     return { ...thread, viewDegraded: true };
   }
+  // Bound the replay: listThreadExecutions is already chronological (ascending
+  // by startedAt) — only the most-recent executions are read for logs.
+  const totalExecutions = executions.length;
+  const viewedExecutions = executions.slice(-MAX_VIEW_EXECUTIONS);
+  const truncatedExecutions = totalExecutions - viewedExecutions.length;
   const withLogs = [];
-  for (const e of executions) {
+  for (const e of viewedExecutions) {
     let logs = [];
     let logFailed = false;
+    let truncatedLogs = false;
+    const logSpan = perfSpan(`thread-view:logs:${e.executionId}`);
     try {
-      logs = await listLogs(e.executionId);
+      logs = await listLogs(e.executionId, MAX_VIEW_LOG_ROWS);
+      // listLogs returns the most-recent `limit` rows (ascending by at); hitting
+      // the cap means there may be older rows omitted — flag it honestly.
+      truncatedLogs = logs.length >= MAX_VIEW_LOG_ROWS;
     } catch (err) {
       logFailed = true;
       recordFailure("thread-view-logs", `could not read run log for ${e.executionId}: ${String(err?.message ?? err).slice(0, 200)}`);
     }
+    logSpan.end(logFailed ? "error" : "ok");
     withLogs.push({
       executionId: e.executionId,
       logs,
       logFailed,
+      truncatedLogs,
       phase: e.record?.phase ?? null,
       pause: e.record?.pause ?? null,
       terminal: e.record?.terminal ?? null,
     });
   }
+  const projectSpan = perfSpan("thread-view:project");
   const { messages, missingTerminals } = projectThreadWithRunLogs(thread, withLogs);
+  projectSpan.end("ok");
 
   // RECONCILIATION: a terminal-phase execution whose terminal marker never
   // reached the body (the pre-redesign lossy path, or a crash between outbox
@@ -125,6 +148,9 @@ export async function buildThreadRunView(thread, deps) {
     ...thread,
     messages,
     status,
+    totalExecutions,
+    truncatedExecutions,
+    ...(withLogs.some((e) => e.truncatedLogs) ? { truncatedLogs: true } : {}),
     ...(repairFailed ? { repairFailed: true } : {}),
     ...(withLogs.some((e) => e.logFailed) ? { viewDegraded: true } : {}),
   };
