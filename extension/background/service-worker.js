@@ -2880,12 +2880,45 @@ const activityRoutes = createActivityRoutes({
   slugifyAgentId,
 });
 
+// ── PHASE-2 tool bridge — the SW's single tool executor for worker RPC ──────
+// The worker's run loop sends { type: "agent-worker.tool", toolName, args }; the
+// route resolves here. Resolve from the SAME browser + management toolsets the
+// interactive path uses, execute (the tool's own grant-lock / run-fence run
+// inside its execute closure), then redact secret keys defensively. The worker
+// holds no authority — every destructive op is still gated by the tool itself.
+let cachedWorkerBrowserTools = null;
+function workerBrowserTools() {
+  if (!cachedWorkerBrowserTools) cachedWorkerBrowserTools = browserToolset(false);
+  return cachedWorkerBrowserTools;
+}
+function executeWorkerTool(toolName, args, context) {
+  const name = String(toolName ?? "").slice(0, 128);
+  const a = args && typeof args === "object" ? args : {};
+  const management = managementToolset({
+    callRoute: (type, body) => dispatchRoute(type, body, context),
+  });
+  const tool = workerBrowserTools()[name] ?? management[name];
+  if (!tool) return Promise.resolve({ ok: false, error: `unknown tool: ${name}` });
+  return Promise.resolve(tool.execute(a))
+    .then((result) => redactSecrets(result ?? null))
+    .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
+}
+
 const handlers = mergeRouteMaps(
   activityRoutes,
   createAgentWorkerRoutes({
     ensureOffscreen,
     kvGet,
     kvSet,
+    // ── PHASE-2 tool bridge authority ───────────────────────────────────────
+    // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
+    // ONLY tool executor: resolve the tool by name from the SAME toolsets the
+    // interactive path builds, execute it so its OWN grant-lock / run-fence /
+    // redaction run, and return the (already tool-bounded) result with key-based
+    // secret redaction on top. The worker gains NO authority — it can only reach
+    // a tool the SW exposes, and that tool enforces the SAME gates as an
+    // interactive tool call.
+    executeTool: executeWorkerTool,
     durableRegistry: durableRuns,
     broadcastProgress,
     markScheduledDone,

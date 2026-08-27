@@ -120,7 +120,7 @@ Deno.test("P2 agent-worker.run + agent-worker.tool: validate principal + authori
     ensureOffscreen,
     kvGet,
     kvSet,
-    executeTool: async (name, args) => { executed.push({ name, args }); return { ok: true, result: `ran ${name}` }; },
+    executeTool: async (name, args, context) => { executed.push({ name, args, context }); return { ok: true, result: `ran ${name}` }; },
   });
   const c = { principal: "extension" };
 
@@ -134,6 +134,10 @@ Deno.test("P2 agent-worker.run + agent-worker.tool: validate principal + authori
   const tool = await routes["agent-worker.tool"]({ toolName: "memory_set", args: { k: "v" } }, c);
   assertEquals(tool.ok, true);
   assertEquals(executed[0]?.name, "memory_set");
+  // The route must pass the CALLER CONTEXT through to the executor (the SW's
+  // executeWorkerTool uses it to bind management-tool dispatch to the right
+  // principal) — this is the P2 tool-wiring seam.
+  assertEquals(executed[0]?.context, c);
 
   // unauthorized principal: both routes refuse before any host/executor work.
   executed = [];
@@ -144,6 +148,24 @@ Deno.test("P2 agent-worker.run + agent-worker.tool: validate principal + authori
     assertEquals(r2.error, "unauthorized_principal");
   }
   assertEquals(executed.length, 0, "no tool may execute for an unauthorized caller");
+});
+
+Deno.test("P2 agent-worker.tool: empty toolName refused before the executor; a throwing executor is a bounded error", async () => {
+  reset();
+  let called = 0;
+  const routes = createAgentWorkerRoutes({
+    ensureOffscreen, kvGet, kvSet,
+    executeTool: async () => { called += 1; throw new Error("boom " + "x".repeat(300)); },
+  });
+  const c = { principal: "extension" };
+  // empty toolName → invalid, executor never called
+  const empty = await routes["agent-worker.tool"]({ toolName: "" }, c);
+  assertEquals(empty.error, "invalid toolName");
+  assertEquals(called, 0);
+  // a throwing executor surfaces a bounded error (never a raw long throw)
+  const boom = await routes["agent-worker.tool"]({ toolName: "memory_set" }, c);
+  assertEquals(boom.ok, false);
+  assert(boom.error.length <= 200, "executor error must be bounded");
 });
 
 Deno.test("P2 agent-worker.tool: honest error when the executor is not wired", async () => {

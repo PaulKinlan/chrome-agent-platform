@@ -190,7 +190,7 @@ export function createAgentWorkerRoutes({
         return { ok: false, error: "tool execution not wired in this context" };
       }
       try {
-        return await executeTool(toolName, m?.args ?? {});
+        return await executeTool(toolName, m?.args ?? {}, context);
       } catch (e) {
         return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
       }
