@@ -9,6 +9,7 @@ import { scheduleTask } from "./scheduler.js";
 import { canonicalOrigin } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
+import { ensureBrowserCommandLease, currentBrowserCommandSurface } from "./browser-command-lease.js";
 import { currentRunContext } from "./run-context.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { capLog } from "./cap-log.js";
@@ -38,7 +39,25 @@ const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs 
 // grant and denies).
 let grantMutex = Promise.resolve();
 function withGrantLock(fn) {
-  const run = grantMutex.then(fn, fn);
+  const run = grantMutex.then(async () => {
+    // P4 single-driver (CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01): a DESTRUCTIVE
+    // browser mutation must be authorized by the browser-command lease — the
+    // SAME check the worker RPC path hits (both paths execute the same tool
+    // closures). Surface identity: the worker route sets the context surface
+    // (worker:<agentId>); the interactive path falls back to the run-context
+    // stamp. LAZY acquire (nobody driving → this surface becomes the driver);
+    // a DIFFERENT surface holding the lease → honest refusal. runTask's finally
+    // releases the surface's lease at run end.
+    const ctx = currentRunContext();
+    const surface = currentBrowserCommandSurface()
+      || ctx?.agentSurfaceRef
+      || ctx?.threadId
+      || ctx?.agentRole
+      || "interactive";
+    const auth = await ensureBrowserCommandLease(kvGet, kvSet, surface);
+    if (!auth.ok) return { error: auth.error };
+    return fn();
+  }, fn);
   grantMutex = run.then(() => {}, () => {});
   return run;
 }

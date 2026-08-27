@@ -118,3 +118,60 @@ export async function withBrowserCommandLease(kvGet, kvSet, { surfaceId, runId, 
     await releaseBrowserCommandLease(kvGet, kvSet, acq.lease.id).catch(() => {});
   }
 }
+
+// ── Run-scoped context (the SW is single-threaded; a module slot is safe) ──
+// The destructive-tool gate needs to know WHICH SURFACE is currently executing.
+// Both paths set this slot for the duration of their tool execution:
+//   - the INTERACTIVE run computes its surface from run-context (withGrantLock
+//     falls back to it when this slot is unset);
+//   - the WORKER run (agent-worker.tool route) sets it to the worker's surface
+//     (worker:<agentId>) around each tool execution.
+let currentContextSurface = null;
+
+/** Mark the CURRENT execution's surface (for the tool gate). */
+export function enterBrowserCommandContext(surfaceId) {
+  currentContextSurface = surfaceId ? String(surfaceId).slice(0, 200) : null;
+}
+
+/** Clear the current-execution surface (run/tool finished). */
+export function exitBrowserCommandContext() {
+  currentContextSurface = null;
+}
+
+/** The surface the current execution claims (or null). */
+export function currentBrowserCommandSurface() {
+  return currentContextSurface;
+}
+
+/** The single-driver gate used by EVERY destructive browser mutation (both the
+ * interactive and worker paths): if a live lease exists AND its surface is NOT
+ * the caller's surface, refuse — the caller is a competing surface. Nobody
+ * driving, or the caller being the holder, both pass. */
+export async function ensureBrowserCommandLease(kvGet, kvSet, surfaceId) {
+  const sid = String(surfaceId ?? "interactive").slice(0, 200);
+  const live = await readBrowserCommandLease(kvGet);
+  if (live && !live.expired) {
+    if (live.surfaceId === sid) return { ok: true, lease: live };
+    return {
+      ok: false,
+      error: "another surface is driving the browser — wait for it to finish",
+      holder: { surfaceId: live.surfaceId, runId: live.runId ?? null },
+    };
+  }
+  // Nobody is driving → this surface becomes the driver (lazy acquire).
+  const acq = await acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: sid, runId: sid });
+  if (!acq.ok) return acq;
+  return { ok: true, lease: acq.lease };
+}
+
+/** Release the lease a surface currently holds (used by runTask's finally to
+ * free the slot this run lazily acquired). Idempotent; never throws. */
+export async function releaseBrowserCommandLeaseForSurface(kvGet, kvSet, surfaceId) {
+  const sid = String(surfaceId ?? "").slice(0, 200);
+  if (!sid) return { ok: true, released: false };
+  const live = await readBrowserCommandLease(kvGet);
+  if (live && !live.expired && live.surfaceId === sid) {
+    return releaseBrowserCommandLease(kvGet, kvSet, live.id);
+  }
+  return { ok: true, released: false };
+}

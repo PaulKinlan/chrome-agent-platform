@@ -18,6 +18,8 @@
 import { capLog } from "../../lib/cap-log.js";
 import {
   acquireBrowserCommandLease,
+  enterBrowserCommandContext,
+  exitBrowserCommandContext,
   readBrowserCommandLease,
   releaseBrowserCommandLease,
 } from "../../lib/browser-command-lease.js";
@@ -271,17 +273,24 @@ export function createAgentWorkerRoutes({
         return { ok: false, error: "tool execution not wired in this context" };
       }
       // P4 single-driver: destructive browser commands need a held lease.
+      let leaseSurface = null;
       if (requiresBrowserCommandLease(toolName)) {
         const leaseId = m?.leaseId ? String(m.leaseId).slice(0, 200) : "";
         const live = await readBrowserCommandLease(kvGet);
         if (!live || live.expired || live.id !== leaseId) {
           return { ok: false, error: "browser command lease required — another surface may be driving the browser" };
         }
+        leaseSurface = live.surfaceId;
       }
+      // Enter the run context so the destructive tool's OWN grant-lock lease
+      // gate (browser-tools.js withGrantLock) sees THIS run as the holder.
+      enterBrowserCommandContext(leaseSurface);
       try {
         return await executeTool(toolName, m?.args ?? {}, context);
       } catch (e) {
         return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
+      } finally {
+        exitBrowserCommandContext();
       }
     },
 

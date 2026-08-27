@@ -104,3 +104,61 @@ Deno.test("agent-worker.lease: principal gate is first", async () => {
   assertEquals(r.ok, false, "non-extension principal refused");
   assertEquals(r.error, "unauthorized_principal");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// B1 fix: the INTERACTIVE path hits the SAME lease as the worker RPC path.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("interactive path: a destructive tool lazily acquires the lease; a competing surface is refused", async () => {
+  const { kvGet, kvSet } = makeKv();
+  const { ensureBrowserCommandLease } = await import("../extension/lib/browser-command-lease.js");
+
+  // Surface A drives: lazily acquires (nobody holds it yet).
+  const a = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
+  assertEquals(a.ok, true, "first surface becomes the driver");
+
+  // Surface B (a DIFFERENT context) tries to drive while A holds the lease.
+  const b = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-2");
+  assertEquals(b.ok, false, "competing surface refused");
+  assert(/another surface/.test(b.error), "honest reason");
+
+  // Surface A (the holder, same context) can keep driving.
+  const a2 = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
+  assertEquals(a2.ok, true, "holder continues driving");
+});
+
+Deno.test("interactive path: lease release frees the slot for another surface", async () => {
+  const { kvGet, kvSet } = makeKv();
+  const { ensureBrowserCommandLease, releaseBrowserCommandLease } = await import("../extension/lib/browser-command-lease.js");
+
+  const a = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
+  assertEquals(a.ok, true);
+  const rel = await releaseBrowserCommandLease(kvGet, kvSet, a.lease.id);
+  assertEquals(rel.released, true);
+
+  const b = await ensureBrowserCommandLease(kvGet, kvSet, "ntp-2");
+  assertEquals(b.ok, true, "after release, another surface can drive");
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// B1 acceptance: a WORKER holding the lease refuses an INTERACTIVE destructive
+// command; releasing the worker's lease frees the interactive path.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("worker holds the lease → interactive destructive command refused; release frees it", async () => {
+  const { kvGet, kvSet } = makeKv();
+  const mod = await import("../extension/lib/browser-command-lease.js");
+
+  // A background worker (sorting hat) acquires the lease via its dispatch path.
+  const worker = await mod.acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "worker:sorting-hat", runId: "r1" });
+  assertEquals(worker.ok, true, "worker acquires the lease");
+
+  // An interactive surface (ntp-1) issues a destructive command → refused.
+  const interactive = await mod.ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
+  assertEquals(interactive.ok, false, "interactive destructive command refused while worker drives");
+  assert(/another surface/.test(interactive.error), "honest reason");
+
+  // The worker's run ends → release → the interactive surface can now drive.
+  const rel = await mod.releaseBrowserCommandLease(kvGet, kvSet, worker.lease.id);
+  assertEquals(rel.released, true);
+  const interactive2 = await mod.ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
+  assertEquals(interactive2.ok, true, "interactive destructive command works after worker release");
+});
