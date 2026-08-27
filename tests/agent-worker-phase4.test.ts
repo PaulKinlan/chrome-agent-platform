@@ -162,3 +162,50 @@ Deno.test("worker holds the lease → interactive destructive command refused; r
   const interactive2 = await mod.ensureBrowserCommandLease(kvGet, kvSet, "ntp-1");
   assertEquals(interactive2.ok, true, "interactive destructive command works after worker release");
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// B2: the lease gate is DESTRUCTIVE-ONLY — capture_screenshot (a read) is NOT
+// refused while another surface drives; close_tab (a mutation) IS.
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("B2: competing lease → close_tab refused (mutation), capture_screenshot not lease-refused (read)", async () => {
+  // Minimal chrome shim so browser-tools.js + kv.js can run.
+  const store = new Map();
+  globalThis.chrome = {
+    storage: { local: {
+      get: async (key) => { const keys = Array.isArray(key) ? key : [key]; const out = {}; for (const k of keys) if (store.has(k)) out[k] = store.get(k); return out; },
+      set: async (o) => { for (const [k, v] of Object.entries(o)) store.set(k, v); },
+      remove: async (keys) => { for (const k of (Array.isArray(keys) ? keys : [keys])) store.delete(k); },
+    } },
+    permissions: { contains: async () => true, request: async () => true, getAll: async () => ({ permissions: [], origins: [] }) },
+    tabs: {
+      get: async (id) => ({ id, url: "https://a.example/1", active: true }),
+      query: async () => [{ id: 1, url: "https://a.example/1", active: true, windowId: 1 }],
+      remove: async () => {},
+      captureVisibleTab: async () => "data:image/png;base64,AA==",
+    },
+    runtime: { getURL: (p) => "chrome-extension://x/" + p, lastError: null },
+  };
+
+  const leaseMod = await import("../extension/lib/browser-command-lease.js");
+  const { kvGet, kvSet } = await import("../extension/lib/kv.js");
+  const { browserToolset } = await import("../extension/lib/browser-tools.js");
+
+  // A background worker holds the lease.
+  const worker = await leaseMod.acquireBrowserCommandLease(kvGet, kvSet, { surfaceId: "worker:sorting-hat", runId: "r1" });
+  assertEquals(worker.ok, true);
+
+  const tools = browserToolset(false);
+
+  // MUTATION: close_tab is destructive → refused by the lease.
+  const close = await tools.close_tab.execute({ tabId: 1 });
+  assert(close?.error && /another surface/.test(close.error), `close_tab must be lease-refused, got: ${JSON.stringify(close)}`);
+
+  // READ: capture_screenshot is NON-destructive → the lease check is skipped;
+  // it proceeds to its grant validation (which returns a grant error, NOT a
+  // lease error) — proving the read was not blocked by the lease.
+  const shot = await tools.capture_screenshot.execute({});
+  assert(!(shot?.error && /another surface/.test(shot.error)),
+    `capture_screenshot must NOT be lease-refused, got: ${JSON.stringify(shot)}`);
+
+  delete globalThis.chrome;
+});
