@@ -1,0 +1,18 @@
+# xan (patched fork) — licence notices — lock-faithful
+
+Aggregate (BUILT wasm32-wasip1 tree): MIT AND Apache-2.0 AND BSD-3-Clause AND
+BSD-2-Clause AND Unicode-3.0 AND ISC AND Zlib AND CC0-1.0 AND MPL-2.0 AND
+Unlicense AND BSL-1.0 AND 0BSD AND (Apache-2.0 WITH LLVM-exception).
+
+No GPL/AGPL/LGPL in the BUILT tree. GPL-family crates present in Cargo.lock but
+EXCLUDED from the wasip1 build (target-gated, verified absent from
+`cargo tree --locked -e normal,build --target wasm32-wasip1`):
+- namedlock@0.7.0 — GPL-2.0+ (lock-only; non-wasip1 target)
+- priority-queue@1.4.0 — LGPL-3.0 OR MPL-2.0 (lock-only; MPL arm admissible, absent from build)
+- r-efi@5.3.0 / r-efi@6.0.0 — MIT OR Apache-2.0 OR LGPL-2.1-or-later (target-specific wasm32-unknown-unknown; absent from wasip1 build)
+
+MPL-2.0 (file-level weak copyleft, admissible + FLAGGED): 5 crates in the resolve.
+Full per-crate licence texts vendored at the retained-build admission step.
+Methodology: cargo metadata --locked (full resolve) + cargo tree --locked
+-e normal,build --target wasm32-wasip1 (the actually-compiled set). NOT
+cargo metadata alone (352 ≠ built count).
