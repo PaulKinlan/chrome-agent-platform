@@ -49,34 +49,73 @@ Deno.test("pyodide: a failed load degrades to unavailable and the platform still
   assertEquals(run.error, "python_unavailable");
 });
 
-Deno.test("pyodide: runPython enforces the stdin/stdout/timeout bounds and is fresh per run", async () => {
+Deno.test("pyodide: runPython enforces the stdin/stdout/timeout bounds + the non-eval entrypoint, fresh per run", async () => {
+  // A mock with the NON-EVAL interpreter shape (runPythonAsync + setStdout/setStdin).
+  const mockRuntime = (behavior) => ({
+    runPythonAsync: behavior,
+    setStdout: () => {},
+    setStdin: () => {},
+  });
   // stdin over budget.
-  const over = await runPython({ runPython: () => "1" }, { code: "x", stdin: "y".repeat(PYTHON_EXEC_BOUNDS.maxStdinBytes + 1) });
+  const over = await runPython(mockRuntime(async () => {}), { code: "x", stdin: "y".repeat(PYTHON_EXEC_BOUNDS.maxStdinBytes + 1) });
   assertEquals(over.ok, false);
   assertEquals(over.error, "python_stdin_over_budget");
   // empty code.
-  const empty = await runPython({ runPython: () => "1" }, { code: "" });
+  const empty = await runPython(mockRuntime(async () => {}), { code: "" });
   assertEquals(empty.error, "python_empty_code");
-  // stdout over budget.
-  const big = await runPython({ runPython: () => "z".repeat(PYTHON_EXEC_BOUNDS.maxStdoutBytes + 1) }, { code: "print()" });
+  // stdout over budget — the interpreter emits via setStdout.batched.
+  const big = await runPython({ runPythonAsync: async () => {}, setStdout: ({ batched }) => batched("z".repeat(PYTHON_EXEC_BOUNDS.maxStdoutBytes + 1)), setStdin: () => {} }, { code: "print()" });
   assertEquals(big.ok, false);
   assertEquals(big.error, "python_stdout_over_budget");
   // the timeout fence.
-  const slow = await runPython({ runPython: () => new Promise(() => {}) }, { code: "sleep", timeoutMs: 5 });
+  const slow = await runPython({ runPythonAsync: () => new Promise(() => {}), setStdout: () => {}, setStdin: () => {} }, { code: "sleep", timeoutMs: 5 });
   assertEquals(slow.ok, false);
   assertEquals(slow.error, "python_run_timeout");
-  // the happy path: the code + the stdin are the only inputs; fresh per run.
+  // the happy path: code is the interpreter's input, stdout is captured via setStdout.
   const seen = [];
+  let emit = null;
   const ok = await runPython({
-    runPython: (code, stdin) => { seen.push([code, stdin]); return `${code}:${stdin}`; },
+    runPythonAsync: (code) => { seen.push(code); emit("hello"); },
+    setStdout: ({ batched }) => { emit = batched; },
+    setStdin: ({ stdin }) => seen.push(`stdin:${stdin()}`),
   }, { code: "print(2)", stdin: "data" });
   assertEquals(ok.ok, true);
-  assertEquals(ok.stdout, "print(2):data");
-  assertEquals(seen.length, 1, "one call — no cross-run state");
+  assertEquals(ok.stdout, "hello");
+  assertEquals(seen[0], "stdin:data", "stdin flows through setStdin's provider");
+  assertEquals(seen[1], "print(2)", "the code reaches only runPythonAsync (never a JS eval path)");
+});
+
+Deno.test("pyodide: a JS-eval-shaped runtime (no runPythonAsync) is refused fail-closed", async () => {
+  // A runtime that ONLY offers a JS-eval-shaped surface (eval/new Function) and
+  // no interpreter entrypoint must be refused — the adapter never calls eval.
+  const evil = { eval: (code) => code, runPython: () => "x" };
+  const r = await runPython(evil, { code: "print(1)" });
+  assertEquals(r.ok, false);
+  assertEquals(r.error, "python_unavailable");
 });
 
 Deno.test("pyodide: the pinned CDN version is stable and the pins are non-empty-shaped", () => {
   assertEquals(PYTHON_RUNTIME_PIN.version, "0.26.4");
   assert(PYTHON_RUNTIME_PIN.jsUrl.startsWith("https://"), "the CDN pin is https");
   assert(PYTHON_RUNTIME_PIN.wasmUrl.includes("pyodide.asm.wasm"), "the core wasm is pinned");
+});
+
+Deno.test("pyodide: the python tool fails closed when the runtime is not admitted, and runs when injected", async () => {
+  const { pythonTool, setPythonRuntimeProvider } = await import("../extension/lib/python-tool.js");
+  // Default provider = null → honest unavailable, no fabricated result.
+  const unavailable = await pythonTool.execute({ code: "print(1)" });
+  assertEquals(unavailable.ok, undefined);
+  assert(String(unavailable.error).includes("python unavailable"), "honest unavailable when the runtime is not admitted");
+  // Inject a non-eval runtime; the tool now runs bounded code.
+  setPythonRuntimeProvider(async () => ({
+    runPythonAsync: async () => {},
+    setStdout: ({ batched }) => batched("42\n"),
+    setStdin: () => {},
+  }));
+  const ok = await pythonTool.execute({ code: "print(6*7)" });
+  assertEquals(ok.ok, true);
+  assertEquals(ok.stdout, "42\n");
+  // Over-budget code is refused by the schema/exec bounds, not fabricated.
+  const over = await pythonTool.execute({ code: "x".repeat(PYTHON_EXEC_BOUNDS.maxStdinBytes + 1) });
+  assert(over.error, "over-budget code refused");
 });
