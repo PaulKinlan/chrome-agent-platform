@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.315] — 2026-08-27
+- jq is IN — a real, single-threaded WASI jq (tiny 490KB, 19 pure-WASI imports, runs filters and object transforms). The patched-fork route works: xan now builds too (needs the rayon serial-fallback next), qsv has a precise patch plan
+
 ## [0.2.314] — 2026-08-27
 - Opening a task is now fast: the thread view reads only the most-recent runs and log entries instead of replaying the whole history (which is what made it take 10-15 seconds on well-used tasks). Plus sub-stage timing so any future slow part shows exactly where. And sed is in — a real, reproducible WASI sed
 
