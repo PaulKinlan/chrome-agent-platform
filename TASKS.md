@@ -349,7 +349,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
     lane proof), numbat DONE (runnable WASI calc), bttf DONE (direct CLI),
     tokei BLOCKED (native-only deps: memmap via grep-searcher, home via dirs,
     rayon runtime-panic — none of v12.1.2/v13/v14 build for wasip1; licence-clean;
-    deferred pending dep patching or upstream change). xan + qsv continue serially.
+    deferred pending dep patching or upstream change). xan BLOCKED (pager→errno@0.2.8 nightly-only thread_local on wasi; 0.59.0+0.60.0 verified; licence-clean; deferred). qsv continues.
   - 2026-08-26 23:22 UTC — OWNER DECISION (option a): APPROVED the permissive
     routes — toybox 0BSD for the awk/sed/date trio, onetrueawk, NetBSD-style
     sed, and the fend pre-1.4.0 MIT pin. T3 unblocks on those routes. PANDOC
