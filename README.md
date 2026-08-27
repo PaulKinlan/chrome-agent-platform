@@ -36,73 +36,39 @@ isolated OPFS memory, run history, skills, and avatar.
   (on a schedule/hook) in a sandboxed worker, without re-invoking the model.
 - **System hooks** — the full `chrome.*` `on*` event surface as candidate hooks, with
   an owner-only authoritative deny-list.
-- **Live bounded lazy tool provider** — every provider run receives exactly two fixed
-  definitions, `search_tools` and `execute_tool`, regardless of catalog size. Search
-  derives bounded metadata from the live built-in, browser, management, and WebMCP
-  sources and returns expiring, single-use, run/task/agent/origin/document/generation-
-  bound references; it never grants, approves, installs, or executes. Execute accepts
-  only a returned reference and revalidates live catalog/source/closure/package,
-  capability, permission, grant, enrollment, document, run, expiry, and replay fences
-  before validation, before dispatch, and after dispatch. Bundled Wasm rows remain
-  disabled catalog-only metadata with no provider reference or dispatch closure. The
-  retained Settings shadow capture remains a non-executing diagnostic view.
-- **Per-job OPFS workspace authority (source candidate)** — a service-worker-owned
-  wrapper projects hash-verified read-only inputs into strict job roots, journals bounded
-  scratch/output quotas, recovers interrupted writes, garbage-collects only validated
-  terminal jobs, and promotes output only through content-digest-bound keyed artifact
-  WAL creates. No message, provider, package, or execution route reaches the wrapper;
-  loaded-MV3 use remains blocked on a separately reviewed route/Worker successor.
-- **Owner-only tree Settings preview (0.2.181 source candidate)** — the exact retained
-  39,108-byte tree CAS runs only after an explicit Settings click over a deeply frozen
-  in-memory `/job/inputs` seed containing `f.bin` and `sub/g.txt`. Its exact `[0]`
-  accepted-exit policy, default operand, package/capability identity, and nested seed
-  are immutable spec authority rather than request fields. It adds no provider/page,
-  permission, route, OPFS, persistence, mutation, runtime-import, or package-install
-  authority; the Settings posture is exactly 22 enabled and 4 disabled.
-- **Lossless Worker result-envelope foundation (0.2.182 source candidate)** — every
-  immutable Settings preview spec now supplies required `stdoutEncoding`; the Worker
-  returns an exact UTF-8/base64 tagged union bounded to 64 KiB raw / 87,384 canonical
-  base64 characters, while failures and timeouts discard partial output and counters.
-  All current 22 tools remain byte-identical UTF-8 previews in that foundation release.
-- **Owner-only gzip Settings preview (0.2.183 source candidate)** — appends the retained
-  bounded zlib/minigzip-derived gzip wrapper as exact tool 23, with only `Compress text`
-  and `Decompress base64` modes. The immutable spec limits text to 2,048 UTF-8 bytes,
-  canonical-base64 input to 2,048 characters / 1,536 decoded bytes, and binary output
-  to 65,536 bytes. Both directions render only canonical base64 through inert
-  `textContent`; gzip keeps `canonicalNameClaim:false`. The exact posture is 23 enabled /
-  3 disabled, with unchanged CAS/SBOM/licence/capabilities/memory and no provider, page,
-  filesystem, OPFS, network, permission, persistence, export, clipboard or route expansion.
-- **Bundled Wasm package authority (source candidate)** — strict canonical manifests,
-  immutable release-inventory/CAS verification, bounded raw import/memory/framing audit,
-  and an exact-token package registry WAL record bundled metadata only. Import module
-  names have a separate 64-byte ASCII bound from the eight-module count; the bundled
-  first slice allows only exact `wasi_snapshot_preview1`, while deny declarations may
-  use `*` or bounded module names. Arbitrary `env`, typos and wildcards in `allowed`
-  fail before admission. This release contains zero Wasm binaries and no install,
-  owner, provider, Worker, network, permission, OPFS, or execution route; signer
-  metadata is recorded but not verified.
-- **Pure WASI Preview 1 host contract (source candidate)** — two unreachable modules
-  define frozen errno/rights/job/context/quota/FD types and a synchronous host-call
-  table over injected bounded memory and workspace adapters. The table implements the
-  initial 37-rebuild import union plus bounded args, empty environment, stdio, fd
-  read/write/seek/tell/close/stat, fd3 `.` preopen plus the same-workspace fd4 `/job` guest alias, normalized workspace path open/stat,
-  64 KiB random, monotonic clock, explicit realtime `ENOTSUP`, quotas, cancellation and
-  typed `proc_exit`. It constructs no OPFS handle and contains no Worker, offscreen,
-  route, provider, network, package-byte load, Wasm instantiation or execution path.
-- **Retained code-diff artifacts (source candidate)** — strict Unicode owner paths and
-  add/update/delete/rename/binary documents bind producer, run, inputs, base and result
-  digests. Bounded base/result bytes are preflighted, retained through digest-keyed
-  artifact WAL creates, re-read and hash-verified; unified and side-by-side text views
-  are non-authoritative and bounded. Apply/reject/undo synchronously refuse because no
-  owner-approved workspace mutation route exists in this slice.
-- **Retained tabular-diff artifacts (source candidate)** — a separate strict
-  `cap-tabular-diff-v1` authority validates complete canonical descriptive JSON, binds
-  bundled producer/call/two-source identities, and plans fixed 180 KiB byte chunks up
-  to one MiB. The unreachable adapter uses only keyed artifact create/read, verifies
-  every chunk, writes a read-only manifest last, and exposes bounded inert data views.
-  Capacity errors disclose the lack of group reservation/orphan GC; nothing truncates,
-  evicts, applies, rejects, undoes, exports a patched CSV, or mutates a workspace.
-  See [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md).
+- **Agent workers** — each agent runs in its **own shared worker** hosted by the
+  offscreen document and bootstrapped through the service worker. One crashed or leaky
+  agent no longer takes the router and every other agent down with it. The UI holds a
+  live `MessagePort` with redacted progress; background agents run with zero visible
+  pages; a service-worker-owned single-driver lease means only one surface drives
+  *destructive* browser commands at a time (reads like screenshots stay ungated).
+- **126 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
+  schemas — tabs and tab groups, windows, downloads, history, cookies, bookmarks,
+  reading list, content settings, MHTML capture, network rules, extension management,
+  privacy/proxy/font/power settings, TTS, and user scripts. All grant-gated; the
+  extension can never act on itself.
+- **Live bounded lazy tool provider** — every run receives exactly two definitions,
+  `search_tools` and `execute_tool`, regardless of how large the catalog is, so provider
+  context stays constant. Search derives bounded metadata from the live built-in,
+  browser, management and WebMCP sources and returns expiring single-use references
+  bound to run/task/agent/origin/document/generation; it never grants, approves,
+  installs or executes. Execute accepts only a returned reference and revalidates
+  catalog, source, capability, permission, grant, enrollment, document, run, expiry and
+  replay fences before validation, before dispatch, and after dispatch.
+- **26 bundled Wasm tools** — base64, csvtool, cut, diff, du, grep, gzip, head, markdown,
+  md5sum, patch, sha256sum, sha512sum, sort, sqlite3 (bounded query), stat, tail,
+  toml2json, touch, tr, tree, truncate, uniq, uuid, wc, xxd. Each ships with an exact
+  manifest, CAS digest, SBOM and licence record, verified at build time by a bounded raw
+  import/memory scan. A Rust→`wasm32-wasip1` lane (htmlq, numbat, bttf, sed, jq, xan,
+  tokei) builds and runs with reproducible builds and lock-faithful licence censuses —
+  those seven are **proven, not yet admitted** to the shipped set.
+- **Usage + cost accounting** — per-call token/cost records against the bundled
+  llm-prices table, aggregated per run and per agent. Providers that don't report usage
+  are recorded as unknown, never faked.
+- **Observability** — `npm run build` produces a debug build with source maps and a
+  namespaced, levelled, timed logger plus performance marks across grants, every tool
+  call, model round-trips and task loading. Redacted: no prompt or page content ever
+  appears. Security assertions are identical in both builds.
 - **Transparency** — an error console (full error detail + copy) and a security shield
   (CSP/permission state) in the hub.
 
@@ -110,7 +76,13 @@ isolated OPFS memory, run history, skills, and avatar.
 
 - **All permissions are optional** (the manifest `permissions` is empty). Each feature
   requests its permission on a user gesture, at the moment of need — never silently.
-- **No `debugger`**, no broad `<all_urls>`; screenshots via `captureVisibleTab`/`activeTab`.
+- No broad `<all_urls>` in `permissions`; screenshots via `captureVisibleTab`/`activeTab`.
+- **No `debugger`.** It was re-declared as an optional permission at `0.2.286` for the
+  CDP power tools and **removed again on 2026-08-27** (owner decision): it carries
+  Chrome's all-sites permission warning and a persistent "started debugging this
+  browser" bar. The four CDP tools went with it; the browser-tool count is 126.
+  `tests/chrome-tools-t12.test.ts` guards the removal, so bringing it back has to be a
+  deliberate act rather than a side effect of the next tool tranche.
 - **Origin-keyed OPFS** — one agent/origin can never read another's memory.
 - **The standing security suite** (`npm run test:security`) acquires the canonical
   Chrome lock, supervises one fresh exact profile under a hard timeout, and proves
@@ -215,11 +187,19 @@ table (cost tracking + spending limits work out of the box).
 
 ## The plan, the history, and the remaining work
 
-This README is the overview. **The current independent architectural review — the verified
-baseline, the delivery diagnosis, and the ordered work queue — is
-[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md).** **The plan — the landed state, the in-flight work, the
-open questions, and the proactive backlog — lives in [PLAN.md](PLAN.md)** (the single
-source of truth for what's done vs what's next). Historical detail and the open review
-findings live in root **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** +
-**[docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md)**. The design
-is **docs/DESIGN.md**; the constraints are **docs/CONSTITUTION.md**.
+This README is the overview. The document map, in precedence order:
+
+| Document | What it is authoritative for |
+|---|---|
+| **[TASKS.md](TASKS.md)** | **Task state.** The stable `CAP-FB-*` ID, its status, owner, evidence and history. The entry always wins over any summary of it. |
+| **[PLAN.md](PLAN.md)** | The roadmap view — what has landed, what is next, and the current gate results. |
+| **[CHANGELOG.md](CHANGELOG.md)** | What shipped, in plain English, one line per release. |
+| **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** | Open review/system findings. |
+| **[docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md)** | UI-detail asks and their fix state. |
+| **[docs/CONSTITUTION.md](docs/CONSTITUTION.md)** | The non-negotiable security/a11y/design/perf constraints. |
+| **[docs/DESIGN.md](docs/DESIGN.md)** + **[PRODUCT.md](PRODUCT.md)** | The visual system and the product's voice. |
+| **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | The 2026-08-21 independent architectural review. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
+
+**Current gate status (2026-08-27, `0.2.319`):** build clean · unit **1779/0** ·
+Chrome journeys **127/127** · security suite **PASS**. The journey suite had been red at
+26/127 since `0.2.313`; the three causes are described at the top of [PLAN.md](PLAN.md).

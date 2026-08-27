@@ -1,6 +1,6 @@
 # Agent Execution Architecture — Feasibility Deep-Dive
 
-**Status:** DECIDED + Phase 1 foundation implemented (2026-08-26). Owner chose **per-agent SHARED WORKERS** (MessagePorts passed to clients, SW-hop bootstrap). Phase 1 (the "keep building on it" foundation) is live; Phases 2–4 are next.
+**Status:** DECIDED + **Phases 1–4 all implemented and shipped** (`0.2.308`–`0.2.310`, 2026-08-27). Owner chose **per-agent SHARED WORKERS** (MessagePorts passed to clients, SW-hop bootstrap). Phase 1 = the offscreen host + per-agent worker shell + SW alive-set; Phase 2 = the agent-do loop moved into the worker with authority staying in the SW; Phase 3 = durable progress/result/journal routes; Phase 4 = the UI port client with live redacted progress + the SW-owned single-driver browser-command lease (destructive commands gated, reads such as `capture_screenshot` ungated).
 
 **Verdict (TL;DR):** Feasible and worthwhile — the owner chose **per-agent SHARED WORKERS** hosted by the single offscreen document, with the service worker as the durable coordinator/launcher. Shared workers give the UI a live raw MessagePort to its agent (NTP + sidepanel each hold a port to the SAME live instance) while the SW stays the routing/auth authority. The real win is **fault + memory isolation** (one crashed/leaky agent no longer kills the router + every other agent), plus low-latency client streams.
 

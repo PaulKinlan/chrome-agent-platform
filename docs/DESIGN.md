@@ -96,13 +96,17 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   key ceiling uses the failed indicator, concise “Storage full — retry or cancel”
   text, and a labelled keyboard-focusable Retry action beside Delete. Retry
   rearms the same logical schedule; Delete remains the authoritative cancel.
-- Settings → Approvals is the sole owner decision surface for destructive agent
-  operations. Rows disclose only the normalized action and a 128-bit private
-  install-scoped reference—never target, origin, id, payload, digest, execution
-  id, or credentials. Approve-once and Deny are ordinary labelled buttons with
-  immediate disabled/pending state and a polite live result. Approval ids stay
-  in event-handler closures and never become DOM attributes. Opening the section
-  refreshes FIFO pending rows because background-page timers may be throttled.
+- **Approval happens in context, not in Settings** (changed at `0.2.303`/`0.2.313`;
+  the Settings → Approvals section is deleted). When a tool needs a permission or a
+  destructive operation needs consent, the request renders as an approval card in the
+  conversation that raised it — "This agent wants to group tabs — Allow?" — and one
+  click grants exactly that scope and retries the run. Deny is sticky. Revoking a
+  permission confirms in place through a native dialog on the same owner-approved
+  mutation path. Cards disclose only the normalized action and a private
+  install-scoped reference — never target, origin, id, payload, digest, execution id,
+  or credentials. Approval ids stay in event-handler closures and never become DOM
+  attributes. Approve and Deny are ordinary labelled buttons with immediate
+  disabled/pending state and a polite live result.
 
 ## Generated artifact boundary
 Interactive HTML previews use three distinct layers: the privileged extension

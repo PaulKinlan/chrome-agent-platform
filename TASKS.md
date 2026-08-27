@@ -182,7 +182,7 @@ On resume after a coordinator or worker loss:
 
 ## Open work queue
 
-Every task in this file that is not in a terminal state, most urgent first. **32 open**. The entry itself is always the authority; where it disagrees with this table, the entry wins.
+Every task in this file that is not in a terminal state, most urgent first. **39 open** (regenerated 2026-08-27). The entry itself is always the authority; where it disagrees with this table, the entry wins.
 
 Regenerate after any status change (this exact command reproduces the table below):
 
@@ -192,20 +192,16 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 
 | Priority | Status | Task | What it is |
 |---|---|---|---|
-| P0 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
-| P0 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
-| P0 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
-| P0 | OPEN | [`CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`](#cap-fb-20260820-semantic-tool-search-01-local-semantic-search-over-the-complete-tool-catalog) | Local semantic search over the complete tool catalog |
 | P0 | IN_REVIEW | [`CAP-FB-20260821-WORKTREE-HYGIENE-01`](#cap-fb-20260821-worktree-hygiene-01-durable-worktrees-and-evidence-off-the-ram-backed-temp-filesystem) | Durable worktrees and evidence off the RAM-backed temp filesystem |
-| P0 | OPEN | [`CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`](#cap-fb-20260822-builtin-wasm-tools-01-provenance-clean-bundled-wasm-tool-tranche) | Provenance-clean bundled Wasm tool tranche |
-| P0 | OPEN | [`CAP-FB-20260822-SPREADSHEET-TOOLKIT-01`](#cap-fb-20260822-spreadsheet-toolkit-01-bounded-spreadsheet-and-table-workflow-toolkit) | Bounded spreadsheet and table workflow toolkit |
-| P0 | OPEN | [`CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01`](#cap-fb-20260822-tabular-diff-artifacts-01-read-only-tabular-diff-artifact-custody) | Read-only tabular-diff artifact custody |
-| P0 | OPEN | [`CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01`](#cap-fb-20260822-tool-platform-abuse-gates-01-tool-platform-abuse-quota-and-lifecycle-gates) | Tool platform abuse, quota and lifecycle gates |
-| P0 | IN_REVIEW | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
-| P0 | OPEN | [`CAP-FB-20260822-WASM-TOOL-PLATFORM-01`](#cap-fb-20260822-wasm-tool-platform-01-co-do-style-browser-native-tool-operating-platform) | Co-do-style browser-native tool operating platform |
+| P0 | IN_REVIEW | [`CAP-FB-20260827-MAIN-GATES-RED-02`](#cap-fb-20260827-main-gates-red-02-main-is-red-again-the-journey-suite-drives-a-deleted-settings-section) | Main is red again: the journey suite drives a deleted Settings section |
+| P0 | OPEN | [`CAP-FB-20260827-HUB-FIRST-RUN-01`](#cap-fb-20260827-hub-first-run-01-the-first-screen-is-an-onboarding-wall-not-a-command-center) | The first screen is an onboarding wall, not a command center |
+| P0 | OPEN | [`CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01`](#cap-fb-20260827-thread-open-sequential-reads-01-thread-open-serializes-25-opfs-reads-before-first-paint) | Thread open serializes 25 OPFS reads before first paint |
+| P0 | OPEN | [`CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01`](#cap-fb-20260827-tool-call-legibility-01-tool-call-cards-show-shape-not-answers) | Tool-call cards show shape, not answers |
 | P1 | **BLOCKED** | [`CAP-FB-20260819-PROACTIVE-TAB-DISCOVERY-01`](#cap-fb-20260819-proactive-tab-discovery-01-proactive-per-tab-site-agent-discovery-before-run) | Proactive per-tab Site Agent discovery before Run |
 | P1 | OPEN | [`CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01`](#cap-fb-20260819-directory-tool-explorer-01-agent-directory-tool-explorer-and-enrollment-policy) | Agent Directory tool explorer and enrollment policy |
+| P1 | OPEN | [`CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`](#cap-fb-20260819-permission-remediation-ux-01-user-facing-permission-management-and-run-remediation) | User-facing permission management and run remediation |
 | P1 | OPEN | [`CAP-FB-20260819-UI-FLASH-RELAYOUT-01`](#cap-fb-20260819-ui-flash-relayout-01-intermittent-extension-wide-ui-flash-and-relayout-investigation) | Intermittent extension-wide UI flash and relayout investigation |
+| P1 | OPEN | [`CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`](#cap-fb-20260820-semantic-tool-search-01-local-semantic-search-over-the-complete-tool-catalog) | Local semantic search over the complete tool catalog |
 | P1 | OPEN | [`CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01`](#cap-fb-20260823-comprehensive-chrome-tools-01-comprehensive-chrome-extension-api-tool-coverage) | Comprehensive Chrome extension API tool coverage |
 | P1 | OPEN | [`CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01`](#cap-fb-20260823-dialog-confirm-modernization-01-replace-all-windowconfirm-with-native-dialog-modals) | Replace all window.confirm with native dialog modals |
 | P1 | OPEN | [`CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`](#cap-fb-20260823-extended-tool-families-01-extended-unixsystem-tool-family-admissions) | Extended Unix/system tool family admissions |
@@ -216,14 +212,35 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 | P1 | OPEN | [`CAP-FB-20260825-SITE-AGENT-SHOWCASE-01`](#cap-fb-20260825-site-agent-showcase-01-make-sites-as-sub-agents-demonstrable-in-under-a-minute) | Make sites-as-sub-agents demonstrable in under a minute |
 | P1 | OPEN | [`CAP-FB-20260825-UI-INTEGRATION-RED-01`](#cap-fb-20260825-ui-integration-red-01-scriptsui-integrationts-is-red-and-never-finishes) | scripts/ui-integration.ts is red and never finishes |
 | P1 | OPEN | [`CAP-FB-20260825-WEBSTORE-RELEASE-01`](#cap-fb-20260825-webstore-release-01-the-path-to-a-published-extension) | The path to a published extension |
+| P1 | OPEN | [`CAP-FB-20260827-DIALOG-CONSOLIDATION-01`](#cap-fb-20260827-dialog-consolidation-01-five-dialog-implementations-three-hand-rolled) | Five dialog implementations, three hand-rolled |
+| P1 | OPEN | [`CAP-FB-20260827-SETTINGS-MONOLITH-01`](#cap-fb-20260827-settings-monolith-01-settings-is-one-88-screen-scroll-with-a-nav-that-only-scrolls) | Settings is one 8.8-screen scroll with a nav that only scrolls |
+| P2 | **BLOCKED** | [`CAP-FB-20260822-MV3-WASM-RUNTIME-PROBE-01`](#cap-fb-20260822-mv3-wasm-runtime-probe-01-loaded-mv3-wasm-runtime-and-termination-probe) | Loaded-MV3 Wasm runtime and termination probe |
+| P2 | **BLOCKED** | [`CAP-FB-20260822-OWNER-WASM-INSTALL-01`](#cap-fb-20260822-owner-wasm-install-01-owner-selected-wasm-package-lifecycle) | Owner-selected Wasm package lifecycle |
+| P2 | IN_REVIEW | [`CAP-FB-20260822-WASM-EXECUTION-HOST-02`](#cap-fb-20260822-wasm-execution-host-02-gate-2-source-only-fresh-worker-host-recomposed) | Gate 2 source-only fresh-Worker host (recomposed) |
 | P2 | IN_REVIEW | [`CAP-FB-20260823-AGENT-ICON-ON-CREATE-01`](#cap-fb-20260823-agent-icon-on-create-01-generate-the-agent-icon-at-creation-not-on-click) | Generate the agent icon at creation, not on click |
 | P2 | IN_REVIEW | [`CAP-FB-20260825-AGENT-ROLE-PREVIEW-01`](#cap-fb-20260825-agent-role-preview-01-the-hub-agent-list-prints-the-whole-role) | The hub agent list prints the whole role |
+| P2 | OPEN | [`CAP-FB-20260822-BUILTIN-WASM-TOOLS-01`](#cap-fb-20260822-builtin-wasm-tools-01-provenance-clean-bundled-wasm-tool-tranche) | Provenance-clean bundled Wasm tool tranche |
+| P2 | OPEN | [`CAP-FB-20260822-SPREADSHEET-TOOLKIT-01`](#cap-fb-20260822-spreadsheet-toolkit-01-bounded-spreadsheet-and-table-workflow-toolkit) | Bounded spreadsheet and table workflow toolkit |
+| P2 | OPEN | [`CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01`](#cap-fb-20260822-tabular-diff-artifacts-01-read-only-tabular-diff-artifact-custody) | Read-only tabular-diff artifact custody |
+| P2 | OPEN | [`CAP-FB-20260822-TOOL-PLATFORM-ABUSE-GATES-01`](#cap-fb-20260822-tool-platform-abuse-gates-01-tool-platform-abuse-quota-and-lifecycle-gates) | Tool platform abuse, quota and lifecycle gates |
+| P2 | OPEN | [`CAP-FB-20260822-WASM-TOOL-PLATFORM-01`](#cap-fb-20260822-wasm-tool-platform-01-co-do-style-browser-native-tool-operating-platform) | Co-do-style browser-native tool operating platform |
 | P2 | OPEN | [`CAP-FB-20260825-CONCURRENCY-RESIDUALS-01`](#cap-fb-20260825-concurrency-residuals-01-close-the-four-open-concurrency-verifications) | Close the four open concurrency verifications |
 | P2 | OPEN | [`CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01`](#cap-fb-20260825-delegate-attachments-progress-01-site-agent-delegation-is-text-only) | Site-agent delegation is text-only |
 | P2 | OPEN | [`CAP-FB-20260825-I18N-FOUNDATION-01`](#cap-fb-20260825-i18n-foundation-01-no-internationalisation-foundation) | No internationalisation foundation |
 | P3 | **BLOCKED** | [`CAP-FB-20260818-WIDER-REVIEW-01`](#cap-fb-20260818-wider-review-01-wider-goal-review-remediation-umbrella) | Wider-goal review remediation umbrella |
 | P3 | OPEN | [`CAP-FB-20260821-RECIPES-SKILLS-RENAME-01`](#cap-fb-20260821-recipes-skills-rename-01-finish-the-recipes-to-skills-rename) | Finish the recipes to skills rename |
 | P3 | OPEN | [`CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01`](#cap-fb-20260825-agent-picker-hub-rows-01-hub-agent-summary-rows-predate-the-shared-picker) | Hub agent summary rows predate the shared picker |
+| P3 | OPEN | [`CAP-FB-20260827-DEAD-COMPONENTS-01`](#cap-fb-20260827-dead-components-01-components-ship-to-users-but-are-only-used-by-the-gallery) | Components ship to users but are only used by the gallery |
+
+**The demo path is the only P0 lane (owner decision, 2026-08-27).** There were thirteen
+P0s, seven of them the bundled-Wasm tool platform — a lane that is invisible in a demo and
+largely blocked on owner licence/Store-policy decisions. The owner re-prioritised: the three
+things an exec actually experiences are P0, the Wasm lane drops to **P2** until after the
+demo, and permission-remediation and semantic tool search drop to **P1**. No scope,
+acceptance or evidence changed on any of them — only ordering. The five remaining P0s are
+`HUB-FIRST-RUN-01`, `TOOL-CALL-LEGIBILITY-01`, `THREAD-OPEN-SEQUENTIAL-READS-01`, the
+in-review gate repair `MAIN-GATES-RED-02`, and `WORKTREE-HYGIENE-01` (which protects the
+evidence every other task depends on).
 
 **Held by a product decision, not by engineering:** `CAP-FB-20260822-OWNER-WASM-INSTALL-01` and `CAP-FB-20260822-BUILTIN-WASM-TOOLS-01` wait on open questions Q13 and Q14, and `CAP-FB-20260825-WEBSTORE-RELEASE-01` on Q11. All three are collected in `CAP-FB-20260825-OWNER-DECISION-QUEUE-01` — clearing that entry unblocks the most work for the least effort.
 
@@ -507,6 +524,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   extension pages and side panel
 - Recover: `git grep -n "window.confirm\|window.prompt\|window.alert" -- extension`
 - History:
+  - 2026-08-27 23:35 UTC — **audited: the window.confirm half of this task is DONE.** `window.confirm` / `window.alert` / `window.prompt` no longer appear anywhere in `extension/` — the only match is the explanatory comment above `confirmActionDialog`. What remains is not modernization but CONSOLIDATION: three hand-rolled `document.createElement("dialog")` sites still live outside the component system (`extension/artifacts/index.js:83`, `extension/options/options.js:1236`, `extension/options/options.js:1555`), each owning its own focus/dismiss/overflow behaviour. That remainder is tracked as `CAP-FB-20260827-DIALOG-CONSOLIDATION-01`; this entry covers the native-dialog replacement itself and should close once that one is scoped.
   - 2026-08-23 20:08 UTC — captured from direct product-owner feedback with
     the explicit instruction to follow modern web guidance.
 
@@ -605,7 +623,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 07:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P1
 - Owner: unassigned
 - Workspace: none
 - Branch: `docs/permission-remediation-design`
@@ -619,6 +637,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: design the owner-only inbox + paused-run resume state machine from `docs/permission-remediation-design.md` under the settled policy — grants remembered at the narrowest practical scope, no per-invocation prompts, explicit broad host grant allowed and revocable; recoverable permission problems pause visibly and resume after resolution
 - Recover: `git show bbeff7b:TASKS.md && git grep -n "permissions.request\|optional_permissions\|all_urls" bbeff7b -- extension`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - Git reconcile at 2026-08-22 07:50 UTC: the agent/task permission policy layer is settled per the recorded project history — see the durable interruption/permissions policy (auto-resume on restart, visible pause + resume for recoverable permission problems, terminal explicit cancellation, narrowest-scope remembered grants, no per-invocation prompts, explicit broad host grant allowed and revocable).
   - Git reconcile at 2026-08-22 07:30 UTC: legacy state `OPEN` mapped to `OPEN` (unchanged semantics).
   - 2026-08-19 19:40 UTC — fourth docs-review correction applied: the source-map intro is now the bounded "known user-visible sources observed during this review; not formal/exhaustive" wording, and the duplicate row-15 numbering is fixed.
@@ -637,7 +656,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 09:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P2
 - Owner: tool-platform program coordinator
 - Workspace: none
 - Branch: none
@@ -669,6 +688,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git grep -n "CAP-FB-20260822-.*TOOL\|CAP-FB-20260822-.*WASM\|CAP-FB-20260822-.*OPFS\|CAP-FB-20260822-.*SPREADSHEET" -- TASKS.md docs/tool-platform-architecture.md`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 09:30 UTC — opened the P0 master program from source research
     pinned to [PaulKinlan/Co-do](https://github.com/PaulKinlan/Co-do) commit
     `d3ebdbd5066f16a2bb8a2b8cb8af4b57c8ae324a`: exactly 39 factual built-ins
@@ -684,7 +704,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 10:16 UTC
 - Status: BLOCKED
 - Resume: IN_REVIEW
-- Priority: P0
+- Priority: P2
 - Owner: unassigned
 - Workspace: active (local path private)
 - Branch: `feat/mv3-wasm-runtime-probe-30afd5a`
@@ -722,6 +742,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git grep -n "MV3-WASM-RUNTIME-PROBE\|wasm-unsafe-eval\|OFFSCREEN_DOCUMENT\|Worker" -- TASKS.md docs extension tests scripts`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 09:30 UTC — opened as the second owner-decision-free technical
     proof; Co-do's Worker/main-thread behavior is precedent only and cannot
     substitute for loaded-MV3 evidence.
@@ -739,7 +760,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 09:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P2
 - Owner: unassigned
 - Workspace: none
 - Branch: none
@@ -765,6 +786,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git grep -n "BUILTIN-WASM-TOOLS\|gzip\|SBOM\|Tranche A" -- TASKS.md docs extension tests`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-23 23:15 UTC — durable evidence migration LANDED (0.2.198, tip
     4bd429b): in-repo evidence tree is the sole generator root — full verify
     works on any fresh checkout with zero /tmp dependency; total scrub of
@@ -802,7 +824,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 18:48 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P2
 - Owner: retained tabular-diff source owner
 - Workspace: active (local path private)
 - Branch: `feat/tabular-diff-artifacts-462d21d`
@@ -839,6 +861,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git show feat/tabular-diff-artifacts-462d21d -- extension/lib/tabular-diff-artifacts-core.js extension/lib/tabular-diff-artifacts.js tests/tabular-diff-artifacts.test.ts docs/tool-platform-architecture.md TASKS.md`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 18:48 UTC — implemented only the PASSed source design on exact
     public `462d21d`; no route, Chrome run, execution, UI or mutation was added.
 
@@ -850,7 +873,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 20:12 UTC
 - Status: BLOCKED
 - Resume: OPEN
-- Priority: P0
+- Priority: P2
 - Owner: distribution-policy owner
 - Workspace: active (local path private)
 - Branch: `feat/store-boundary-recompose-093757f`
@@ -880,6 +903,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git grep -n "OWNER-WASM-INSTALL\|owner-selected\|remotely hosted code\|Store lane" -- TASKS.md docs extension tests`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 09:30 UTC — intentionally BLOCKED at the distribution boundary;
     digests, signatures and an owner click are not treated as automatic
     Store-policy clearance.
@@ -895,7 +919,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 09:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P2
 - Owner: unassigned
 - Workspace: none
 - Branch: none
@@ -920,6 +944,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git grep -n "SPREADSHEET-TOOLKIT\|pivot\|formula\|CSV" -- TASKS.md docs extension tests`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 09:30 UTC — opened as a later functional tranche; this catalog
     slice contains no spreadsheet runtime or UI.
 
@@ -930,7 +955,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 09:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P2
 - Owner: security review coordinator
 - Workspace: none
 - Branch: none
@@ -957,6 +982,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git grep -n "TOOL-PLATFORM-ABUSE-GATES\|hostile\|selection-source-stale\|RHC" -- TASKS.md docs extension tests`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 09:30 UTC — opened with the catalog slice's hostile metadata,
     Unicode, collision, bound, source-revocation, expiry and
     provider-nondisclosure tests as its first tranche.
@@ -969,7 +995,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 09:30 UTC
 - Status: OPEN
 - Resume: —
-- Priority: P0
+- Priority: P1
 - Owner: tool-platform research owner
 - Workspace: none
 - Branch: none
@@ -1021,6 +1047,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Recover:
   `git show ecf657f:TASKS.md && git grep -n "toolSetForOrigin\|MANAGEMENT_TOOL\|browserTools\|webmcpExpose\|document.modelContext" ecf657f -- extension`
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-22 09:30 UTC — Paul elevated the Co-do-style tool operating platform
     and this existing semantic-retrieval task to P0. The ID remains
     authoritative and unique; the new catalog slice implements only the required
@@ -1351,7 +1378,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Updated: 2026-08-22 20:30 UTC
 - Status: IN_REVIEW
 - Resume: —
-- Priority: P0
+- Priority: P2
 - Owner: recomposed source candidate on this branch
 - Workspace: active (local path private)
 - Branch: `recompose/gate2-6662dfa`
@@ -1370,6 +1397,7 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   1056/1056, build rc 0); recomposed gates re-run on this commit
 
 - History:
+  - 2026-08-27 23:55 UTC — priority changed by owner decision: the demo path is the only P0 lane until the exec demo. This entry is not on the path an exec walks and is not blocked by anything on it; it resumes at its recorded priority afterwards. No scope, acceptance or evidence changed.
   - 2026-08-25 12:30 UTC — recovered by `CAP-FB-20260825-TRACKER-INTEGRITY-01`. This field set had been concatenated under the `CAP-FB-20260822-WASI-FDSTAT-FLAGS-01` heading, which carried three complete field sets while this entry's own heading carried none. Restored verbatim; no field value was altered by the move.
   - 2026-08-22 20:40 UTC — Store package scan after the recomposed push passed
     ABSOLUTE source paths to the scanner; the canonical exemptions compared only
@@ -1528,21 +1556,165 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
   landed_version: 0.2.287
   summary: "Owner (2026-08-26): the extension has NO observability. Significant logging was requested before but isn't there. Clicking a task takes ~10s with zero trace of what's happening. One error seen: 'VM5974:2 Uncaught TypeError: Cannot read properties of undefined (reading startTime)' in et.reportAllChanges — that script is MINIFIED and is NOT our shipped code (our SW + options bundles are already unminified; grep confirms reportAllChanges absent), so it's a page the agent visited — we need logging to separate ours from theirs. REQUIREMENTS: (1) debug build with unminified code + source maps in npm run build; npm run build:production / --target=store stays the minified Store bundle; (2) a real logging layer — structured console logs with namespaces + levels + timing (grep-able like [cap:sw:grant]), console.groupCollapsed for runs; (3) performance.mark/measure around every slow path (task load, navigation, tool dispatch, model round-trips) + summary timing logs so a 10s task load becomes a readable breakdown; (4) use Chrome's native logging/performance features throughout (SW, NTP, side panel, content scripts); (5) a way to dump/ship the trace. Goal: use observability to improve the product. CRITICAL: debug mode must NOT weaken the production security assertions (seam scan, no-new-Function, oracle scan, bundled-tool verify) — logging verbosity is the only thing debug relaxes."
 
+## [CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01] Tool-call cards show shape, not answers
+- Feedback: 2026-08-27 — product owner: "the tools calling bubbles don't help as much, I'd expect some better info, then formatted and ability to see JSON input and response better"
+- Updated: 2026-08-27 23:30 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `139b6f92`
+- Candidate: —
+- Shipping: —
+- Acceptance: (1) the COLLAPSED head answers "what happened" without a click — tool label, the existing one-line result summary, duration, and for a failure the actual error text, not just a red "error" chip; (2) an ERROR card is expanded and styled as an error by default, and where the error is a permission/grant denial it renders the in-context approval card rather than prose; (3) the expanded view offers BOTH a structured view and a raw JSON view of inputs and result, with copy-to-clipboard on each, and remembers which the owner last chose; (4) the tree shows CONTENT not shape — an array of objects previews each row's identifying field inline instead of `0 object · 10`; (5) the synthetic `{keys}` root node is gone; (6) an `ok:true` envelope is not rendered as a data row when the status chip already carries it; (7) one expanded typical tool call fits in under ~40% of a 900px viewport; (8) no result summary is rendered twice
+- Review: independent review by a different model/session; visual verification in a real loaded extension with before/after screenshots at 1440px and at a narrow width
+- Gates: full unit suite; Chrome journeys green; a11y pass (the card is a `<details>`, the status chip is the live region — that must survive); the impeccable design pass
+- Blockers: —
+- Next: fix the collapsed head first — it is the highest value per line changed and needs no redesign of the tree
+- Recover: `git grep -n "buildToolCardDom" -- extension/shared/components.js`
+- History:
+  - 2026-08-27 23:30 UTC — captured with measured evidence from a real loaded extension (headless Chrome, 1440x1600, realistic payloads). **Measured:** one expanded `list_tabs` card is **462px** tall, `search_tools` **436px**; collapsed they are 33px each. Four tool calls expanded fill 1,316px — more than a 900px viewport, on the surface that is supposed to be the conversation. **The collapsed head shows only name + status + duration.** The `tool-result` summary ("8 tabs", "5 matches") is already computed and passed to the card, and is not shown in the head — so a collapsed row communicates almost nothing, while an expanded one floods. **An error card collapsed shows no error text at all:** a `group_tabs` failure renders as `group_tabs · error · 9ms`, and the actual message ("Tab grouping write operations are pending owner tab-management permission enrollment in Settings") is hidden behind a click — backwards for the one state the owner most needs to read. **The tree shows shape, not content:** an 8-tab result renders as eight `0 object · 10` rows, hiding every tab title behind eight more clicks. Every block carries a synthetic `{keys} object · N` root node that is pure noise and costs a level of indentation, and the `ok true` envelope field is rendered as a data row even though the green "done" chip already says it. The summary is duplicated — an "8 tabs" row, then the same thing structurally in the result tree. **There is no raw JSON view and no copy button** on the normal tool path at all; only the generate_ui branch has a "Raw payload" `<pre>`. That is the owner's exact ask and it is simply absent. Tool names render as raw snake_case (`memory_grep`) with no human label.
+  - 2026-08-27 23:30 UTC — note for the implementer: `<tool-chips>` already exists in `extension/shared/components.js` as a compact chip-row primitive and is currently used ONLY by the gallery, never by the product. It may be the right collapsed representation for a run of successful calls, with full cards reserved for failures and for the call the owner opens. Reuse it rather than adding a sixth representation.
+
+## [CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01] Thread open serializes 25 OPFS reads before first paint
+- Feedback: 2026-08-27 — product owner: "Loading tasks is quite slow"
+- Updated: 2026-08-27 23:30 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `139b6f92`
+- Candidate: —
+- Shipping: —
+- Acceptance: opening a thread with a full 25-execution history paints its first screen in well under a second on a cold service worker, measured in a real loaded extension with a seeded profile — and the measurement harness is committed so the number cannot silently regress. The per-execution log reads run concurrently rather than one after another; `thread.get` does not have to assemble every execution before the surface can render anything; and the honest truncation markers (`truncatedExecutions`, `truncatedLogs`, `logFailed`) are all preserved
+- Review: independent review by a different model/session; before/after timings from a real loaded extension, not a unit benchmark
+- Gates: full unit suite; Chrome journeys green; `tests/thread-run-view.test.ts` still green including the reconciliation and degraded-read paths
+- Blockers: —
+- Next: make the log reads concurrent (bounded) — that alone removes up to 24 serialized round-trips and needs no protocol change
+- Recover: `git grep -n "for (const e of viewedExecutions)" -- extension/lib/thread-run-view.js`
+- History:
+  - 2026-08-27 23:30 UTC — captured from source inspection of the load path. `0.2.314` and `0.2.317` bounded the replay (25 executions × 250 log rows) and added per-run cursor pagination, which fixed the 10–15 s case. What remains is structural: `buildThreadRunView` reads those executions in a **sequential `for` loop with an `await` inside** (`extension/lib/thread-run-view.js`), so a full-history thread performs **25 serialized OPFS round-trips through the service worker — up to 6,250 log rows — before `thread.get` returns anything at all**. The reads are independent of each other; nothing requires them to be serial. `thread.get` is also all-or-nothing: the entire view is assembled before the surface receives a single message, so the "renders instantly" property from `0.2.317` applies within a run, not to opening the thread. Two further costs worth measuring at the same time: there is no cache, so re-opening the same thread pays the full price again, and the reconciliation pass can issue additional `commitTerminal` writes on the read path.
+
+## [CAP-FB-20260827-HUB-FIRST-RUN-01] The first screen is an onboarding wall, not a command center
+- Feedback: 2026-08-27 — raised during the pre-exec-demo UX audit; the hub is the first thing anyone opening a new tab sees
+- Updated: 2026-08-27 23:30 UTC
+- Status: OPEN
+- Priority: P0
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `139b6f92`
+- Candidate: —
+- Shipping: —
+- Acceptance: on a fresh profile the composer is the visually primary element of the hub; the first-run card offers ONE next action rather than six competing ones; a fresh profile does not stack seven separate empty states; the zero state and the filtered-empty state use different copy; and the word "Agents" does not label three nested levels of the same view. Verified with before/after screenshots on a genuinely fresh profile
+- Review: independent review by a different model/session; the impeccable design skill is mandatory here (PRODUCT.md principle 1 — one primary action per view — is what this breaks)
+- Gates: Chrome journeys green (the first-run card is on the journey path); a11y pass; the impeccable design pass
+- Blockers: —
+- Next: decide what the single first action is — almost certainly "connect a provider", since nothing else works without one — and demote everything else
+- Recover: `git grep -n "first-run-guide" -- extension/shared/components.js extension/ntp/ntp.js`
+- History:
+  - 2026-08-27 23:30 UTC — captured with a screenshot of a genuinely fresh profile in a real loaded extension. The first-run card is roughly 590px tall and contains **six competing actions**: "Allow browser control", "Continue without browser control", "Open provider settings", "Use starter task", "Create the Weekly browsing review agent", and a dismiss X — against PRODUCT.md's first principle, "one primary action per view". The composer, which is the actual point of the product, sits below it and is visually weaker. Below that a fresh profile stacks **seven empty states**: "No tasks yet", "No agents yet" (sidebar), "No named agents yet", "No Site Agents yet", "Discovery has not run yet", "No artifacts yet", "No activity matches". The last of those is the **filtered-empty** copy showing in a never-had-any-data state, which tells a new owner a filter is hiding something. "Agents" labels the sidebar section, the card, and a row inside the card — three nestings of one word. The cold empty hub is genuinely fast (DCL 117 ms, 153 nodes) — this is a composition problem, not a performance one.
+
+## [CAP-FB-20260827-DIALOG-CONSOLIDATION-01] Five dialog implementations, three hand-rolled
+- Feedback: 2026-08-27 — product owner: "There's lots of issues with dialogs"
+- Updated: 2026-08-27 23:30 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `139b6f92`
+- Candidate: —
+- Shipping: —
+- Acceptance: every modal in the extension is raised through the shared component vocabulary — `<agent-dialog>` for a content dialog, `confirmActionDialog` for a decision — with no hand-rolled `document.createElement("dialog")` left outside `extension/shared/components.js`. Focus trap, Escape, backdrop light-dismiss, focus return, the destructive default-focus rule, scrollable overflow and theme/RTL/narrow behaviour are then identical everywhere by construction. Each converted site keeps its exact current semantics — in particular the provider-approval dialog must still be able only to DENY on dismissal, never approve
+- Review: independent review by a different model/session; a11y pass on each converted dialog (focus trap, focus return, Escape, announced label)
+- Gates: full unit suite; Chrome journeys green; gallery drift check green; the impeccable design pass
+- Blockers: —
+- Next: convert `extension/artifacts/index.js` first — it is the simplest and is a plain destructive confirm that `confirmActionDialog` already models exactly
+- Recover: `git grep -n 'createElement("dialog")' -- extension/`
+- History:
+  - 2026-08-27 23:30 UTC — captured by source audit. **Five dialog implementations ship.** Two are the intended shared ones in `extension/shared/components.js`: `<agent-dialog>` (the content-dialog shell) and `confirmActionDialog` (the promise-based confirm). Three are hand-rolled duplicates outside the component system: `extension/artifacts/index.js:83` (artifact delete), `extension/options/options.js:1236` (`confirmAgentProviderMutation`), and `extension/options/options.js:1555` (`editRecipePrompt`). This is precisely the failure mode the owner already named as a project rule — "never hand-roll a one-off version of an existing component (the blank-toggle + menu bugs came from hand-rolled duplicates)" — and it is the most likely explanation for dialogs behaving inconsistently: each of the five owns its own focus, dismiss, overflow and sizing behaviour, so a fix to one does not reach the others.
+  - 2026-08-27 23:30 UTC — **good news worth recording:** `window.confirm` / `window.alert` / `window.prompt` are already fully eliminated from the extension; the only remaining occurrence is the explanatory comment above `confirmActionDialog`. `CAP-FB-20260823-DIALOG-CONFIRM-MODERNIZATION-01` is therefore substantially further along than its OPEN status suggests — what is left of that task is this consolidation.
+
+## [CAP-FB-20260827-SETTINGS-MONOLITH-01] Settings is one 8.8-screen scroll with a nav that only scrolls
+- Feedback: 2026-08-27 — raised during the pre-exec-demo UX audit
+- Updated: 2026-08-27 23:30 UTC
+- Status: OPEN
+- Priority: P1
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `139b6f92`
+- Candidate: —
+- Shipping: —
+- Acceptance: opening Settings renders the requested section, not all twelve; the sidebar nav switches sections rather than scrolling to anchors; each section remains individually addressable by URL (the deep-link requirement the owner already set for the back-stack work); and the DOM node count on open drops substantially from the current 2,255. The single-history-entry back behaviour from `0.2.296` must be preserved
+- Review: independent review by a different model/session; before/after node counts and section heights from a real loaded extension
+- Gates: Chrome journeys green (several journeys drive Settings sections by `.nav-item[data-section=...]`); a11y pass on the section switch (focus and heading order); the impeccable design pass
+- Blockers: —
+- Next: measure which sections are cheap to defer — `hooks` (2,818px) and `permissions` (2,182px) alone are 39% of the page
+- Recover: `git grep -n 'section.panel' -- extension/options/options.html`
+- History:
+  - 2026-08-27 23:30 UTC — measured in a real loaded extension: the Settings document is **12,837px tall — 8.8 viewport-heights — with 2,255 DOM nodes, and all twelve `section.panel` elements rendered and visible simultaneously** (`display:none` count: zero). The thirteen `.nav-item` controls scroll to anchors rather than switching views, so the information architecture the nav implies does not exist. Section heights: hooks 2,818 · permissions 2,182 · providers 1,762 · about 1,376 · tool-library 1,172 · prompts 1,016 · agents 729 · data 418 · local-folders 300 · background 269 · browser 211 · usage 202. Everything is built on every open regardless of what the owner came for.
+
+## [CAP-FB-20260827-DEAD-COMPONENTS-01] Components ship to users but are only used by the gallery
+- Feedback: 2026-08-27 — found during the pre-exec-demo UX audit
+- Updated: 2026-08-27 23:30 UTC
+- Status: OPEN
+- Priority: P3
+- Owner: unassigned
+- Workspace: none
+- Branch: none
+- Base: `139b6f92`
+- Candidate: —
+- Shipping: —
+- Acceptance: `theme-picker` is deleted (its feature was removed at `0.2.301`); each of `run-task-button`, `tool-chips`, `prompt-bar` and `agent-nav` is either adopted by the product or removed with a one-line reason; the gallery and the drift check stay green either way
+- Review: independent review by a different model/session
+- Gates: unit suite; `npm run check:gallery`; Chrome journeys green
+- Blockers: `tool-chips` should NOT be deleted before `CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01` decides whether it becomes the collapsed tool representation
+- Next: delete `theme-picker` — it is unambiguous dead code for a removed feature
+- Recover: `git grep -n "customElements.define" -- extension/shared/components.js`
+- History:
+  - 2026-08-27 23:30 UTC — five custom elements are defined and shipped in `extension/shared/components.js` but referenced only by `docs/components.html`, never by any extension page: `theme-picker`, `run-task-button`, `tool-chips`, `prompt-bar`, `agent-nav`. `theme-picker` is straightforward dead code — theme switching was removed at `0.2.301` and the component was left behind, which is a miss against the owner's own cross-subsystem-consistency rule. The others are unbuilt primitives; `tool-chips` in particular may be exactly what the tool-card redesign needs, so it is called out as a blocker rather than deleted.
+
+## [CAP-FB-20260827-MAIN-GATES-RED-02] Main is red again: the journey suite drives a deleted Settings section
+- Feedback: 2026-08-27 — found by running the gates during a documentation reconciliation, not by reading trackers. `npm run test:chrome` reports **26/127** on clean `origin/main@139b6f92` (`0.2.319`) with no local changes
+- Updated: 2026-08-27 22:40 UTC
+- Status: IN_REVIEW
+- Priority: P0
+- Owner: claude-opus-5 implementer session
+- Workspace: active (local path private)
+- Branch: working tree on `origin/main`
+- Base: `139b6f92`
+- Candidate: uncommitted working tree — all three failures fixed, full suite green
+- Shipping: —
+- Acceptance: `npm run test:chrome` reaches 127/127 (or an honestly re-baselined count) on a clean profile. Each of the three failures is resolved at the layer that actually broke — the deleted-section drive is repointed at the in-context approval path so the deny/restart coverage it carried is **preserved, not deleted**; the capability-count assertion is derived from `CAPABILITIES` rather than hard-coded; and the `debugger` assertion is left failing until Q17 is decided, then made to match the decision. No assertion is weakened to make the suite pass
+- Review: **independent review still required** by a different model/session. This is the specific risk the different-model rule exists for: three of these changes touch assertions, and an author reviewing their own assertion edits cannot see where they weakened one
+- Gates: Chrome journeys **127/127** · unit **1779/0** · security suite **PASS** · build clean · changelog in sync · gallery drift clean · tasks schema clean
+- Blockers: —
+- Next: independent review of the assertion changes specifically — confirm each repointed check still fails against the unfixed product, not merely that it passes now
+- Recover: `npm run test:chrome 2>&1 | grep -E "^FAIL|journey failure" | head`
+- History:
+  - 2026-08-27 21:15 UTC — opened with reproduction on clean main. **(1) The abort, and the reason the number is 26.** `scripts/chrome-journeys.ts:749` `resolveNextApproval` clicks `.nav-item[data-section="approvals"]` and throws `pending owner approval did not render in exact Settings`. `0.2.313` (`5f8931f3`) deliberately deleted that Settings section — approvals moved in-context, which was the right product change — but the journey was never repointed, so the throw takes the remaining 100 checks with it. The suite is reporting far worse than the product is, and that gap is itself the danger: a red number nobody trusts is a gate nobody reads. **(2) `manifest: debugger absent everywhere` fails honestly.** `0.2.286` (`38641974`) re-declared `"debugger"` in `optional_permissions` for the allowlisted CDP tools, reversing its deliberate removal at `c5ccb2d0`. The assertion is correct and the posture changed under it; this is an owner decision (Q17), not a test defect. **(3) `permissions: all seven capabilities start ungranted` fails.** `extension/lib/capabilities.js` now defines **18** capabilities, up from 7 across the `0.2.278`–`0.2.290` tool waves; the assertion hard-codes `length === 7`.
+  - 2026-08-27 22:40 UTC — **all three fixed; the full suite is green (127/127, 1779/0, security PASS).** Deliberately NOT by relaxing assertions: **(1)** the approvals drive was repointed onto the product's real contract. `management.resolve-approval` is still gated on `context.principal === "owner-options"`, so resolving still demands the Settings surface; the Settings control now completes in ONE click through its native `confirmActionDialog`, driven with a genuine CDP click, matching what `runOwnerApprovedMutation` actually does. The two DOM-scraping approval assertions moved onto the **payload**, which is strictly stronger than scraping one rendering of it — the row must be singular, expose exactly `action,approvalId,at,targetRef`, carry a 32-char opaque `targetRef`, and leak no asset id, digest or raw target. The embedded-iframe deny check now evaluates inside the Settings frame's OWN execution context, because calling another frame's `chrome.runtime` from the parent realm does not adopt that frame's principal — so it now genuinely proves the embedded Settings surface is an owner principal, which the old version did not. **(2)** `debugger` removed per the owner decision (Q17): the optional permission, the four CDP tools, the capability row, the Settings label. Browser tools 130 → 126, capability table 159 → 155; the user-scripts half of T12 is untouched. A removal guard was ADDED (`tests/chrome-tools-t12.test.ts`) asserting absence from the manifest, the toolset, the scoped toolset, `BROWSER_TOOL_NAMES`, the capability table and the Settings capability list — deleting 10 tests without leaving a guard would have been the quiet way to lose this. **(3)** the capability count now reads `CAPABILITIES.length` from the product's own table instead of the literal `7`, so the next tool tranche cannot rot it.
+  - 2026-08-27 21:15 UTC — **process finding, recorded because the defect is the symptom.** This is the second instance of the identical class: `CAP-FB-20260825-MAIN-GATES-RED-01` was opened on 08-25 for a journey suite left behind by a shipped change, fixed, and the same thing happened again within two days. The full-suite-green rule in `AGENTS.md` is not being applied at the moment work lands. Consequence: **no task merged since 2026-08-25 can legitimately be `DONE`**, since `DONE` requires the journey suite green at that tip — several entries claim it against a gate that was not actually green.
+
 ## [CAP-FB-20260826-OWNER-BATCH-01] Owner bug/feature batch (2026-08-26, Telegram)
 
 Owner-described batch of bugs + UX issues. Each entry: analysis + acceptance. Prioritize + delegate.
 
 - Feedback: 2026-08-26 — product owner (Telegram): a batch of bugs and UX issues. Each child entry below carries its own analysis + acceptance.
-- Updated: 2026-08-26 23:30 UTC
-- Status: OPEN
+- Updated: 2026-08-27 21:20 UTC
+- Status: MERGED
 - Resume: —
 - Priority: P0
-- Owner: unassigned
+- Owner: coordinator
 - Workspace: none
 - Branch: none
 - Base: `c224d28b`
 - Candidate: —
-- Shipping: —
+- Shipping: `origin/main@139b6f92` (all 15 children landed across `0.2.290`–`0.2.313`)
 - Acceptance: every child is prioritized and delegated with its analysis + acceptance; each child's own acceptance criteria are recorded per child below
 - Review: per-child — each child that becomes a candidate gets an independent review by a different model/session (standing rule); children carry their own review state
 - Gates: per-child gates — each child lands behind its own acceptance and the full-suite-green gate
@@ -1552,66 +1724,67 @@ Owner-described batch of bugs + UX issues. Each entry: analysis + acceptance. Pr
 - History:
   - 2026-08-26 20:26 UTC — batch captured from product-owner Telegram (ea800309, 12 items)
   - 2026-08-26 20:58 UTC — permission-system simplification recorded as P0 (c8f06bbe)
+  - 2026-08-27 21:20 UTC — **reconciled: all 15 children are MERGED; the batch is complete.** Every child still read `status: open` while the work had shipped across `0.2.290`–`0.2.313` — the tracker had drifted from the code by roughly two weeks of releases, which is exactly what the update-after-every-completion rule exists to prevent. Each child now carries its landing version and commit. Highlights: the owner's top-priority usage/token bug was a single missing `stream_options.include_usage` (`0.2.297`); the permission mess became in-context approval cards (`0.2.303`) plus deletion of the orphaned Settings section (`0.2.313`); the agent-worker architecture landed all four phases (`0.2.308`–`0.2.310`). **Held at MERGED, not DONE, deliberately** — `DONE` requires the Chrome journey suite green at the tip and it is currently red (`CAP-FB-20260827-MAIN-GATES-RED-02`), which the `0.2.313` child is itself a cause of.
   - 2026-08-26 23:30 UTC — agent-worker shared-worker architecture decision recorded as P0, phased (680c8904)
 
 - id: CAP-FB-20260826-BACK-STACK-01
   severity: P1
-  status: open
-  summary: "Back-button stack management broken. Settings → Back goes to a BLANK screen; must press Back twice. Happens for multiple surfaces (click assets, click back twice). ALSO: inside Settings there's no easy way to get Home without clicking Back for every settings sub-page. Owner's steer: once inside the settings page, use history.replaceState (don't push every settings sub-view onto history) — but still allow linking to individual parts of the settings page. ANALYSIS: the route/view state machine pushes sub-views onto history (or fails to restore the prior view), producing a blank intermediate state. FIX: settings sub-navigation uses replaceState (one history entry for the whole settings surface) + back from settings returns to the prior home view in one step; deep-linkable settings sections still get their own addressable state. ACCEPTANCE: Settings→(any sub-page)→Back returns to Home in ONE press, no blank screen; assets→Back works in one press; each settings section is still linkable."
+  status: merged
+  summary: "Back-button stack management broken. Settings → Back goes to a BLANK screen; must press Back twice. Happens for multiple surfaces (click assets, click back twice). ALSO: inside Settings there's no easy way to get Home without clicking Back for every settings sub-page. Owner's steer: once inside the settings page, use history.replaceState (don't push every settings sub-view onto history) — but still allow linking to individual parts of the settings page. ANALYSIS: the route/view state machine pushes sub-views onto history (or fails to restore the prior view), producing a blank intermediate state. FIX: settings sub-navigation uses replaceState (one history entry for the whole settings surface) + back from settings returns to the prior home view in one step; deep-linkable settings sections still get their own addressable state. ACCEPTANCE: Settings→(any sub-page)→Back returns to Home in ONE press, no blank screen; assets→Back works in one press; each settings section is still linkable. LANDED 0.2.296 (c8730513) + 0.2.304 (2fea7454) — fixed at the TOP frame: hideViewInner no longer navigates the view iframe to about:blank, openView uses location.replace so the pushState is a single history entry, and Settings sub-navigation uses replaceState. Settings/Assets/Directory/Skills return to the hub in ONE press, no blank screen. Harness: scripts/kat-back-stack.ts."
 - id: CAP-FB-20260826-NTP-ADD-AGENT-01
   severity: P2
-  status: open
-  summary: "NTP agents folder '+' button (on the settings panel, not side panel) to add an agent should be scoped to YOUR named agent. Owner likes the empty-state affordance: 'No named agents yet — create one in Tasks / Create an agent / or /agent create / or click button'. ACCEPTANCE: the agents-folder '+' creates a named agent; the empty state shows that affordance text + the create paths."
+  status: merged
+  summary: "NTP agents folder '+' button (on the settings panel, not side panel) to add an agent should be scoped to YOUR named agent. Owner likes the empty-state affordance: 'No named agents yet — create one in Tasks / Create an agent / or /agent create / or click button'. ACCEPTANCE: the agents-folder '+' creates a named agent; the empty state shows that affordance text + the create paths. LANDED 0.2.312 (d7ed500e) — the add-agent empty state shows the requested affordance text and the + creates a named agent."
 - id: CAP-FB-20260826-DISCOVERED-SITE-SPACING-01
   severity: P2
-  status: open
-  summary: "'Discovered open pages — click to add site' grey dialog box butts straight against the edge of the main agents container (no padding/margin) — looks terrible. FIX: add proper padding/margin around the discovered-sites box inside the agents container."
+  status: merged
+  summary: "'Discovered open pages — click to add site' grey dialog box butts straight against the edge of the main agents container (no padding/margin) — looks terrible. FIX: add proper padding/margin around the discovered-sites box inside the agents container. LANDED 0.2.312 (d7ed500e) — the discovered-sites box has proper spacing inside the agents container."
 - id: CAP-FB-20260826-RECENT-ACTIVITY-FILTER-01
   severity: P1
-  status: open
-  summary: "Recent activity: the search text box + the 'all agents' button + the filter don't work. ACCEPTANCE: typing in search filters the recent-activity list; 'all agents' + the per-agent filter actually filter."
+  status: merged
+  summary: "Recent activity: the search text box + the 'all agents' button + the filter don't work. ACCEPTANCE: typing in search filters the recent-activity list; 'all agents' + the per-agent filter actually filter. LANDED 0.2.298 (3c40f71b) — root cause was not the controls: with many background agents the activity feed hung forever, so search and the agent filter appeared dead. Now loads with per-store fault isolation and an honest timeout + Retry."
 - id: CAP-FB-20260826-USAGE-TOKENS-01
   severity: P0
-  status: open
+  status: merged
   assign: best-agent
-  summary: "Usage calls + token numbers STILL aren't working (owner: works on his other projects incl. the chaos extension). The usage/token attribution isn't surfacing real numbers. This is the owner's explicit top-priority in the batch — assign to the strongest agent. ANALYSIS: the onUsage hook → usage-store path exists (usage.js); the tokens/calls either aren't being recorded from agent-do or aren't being read back into the UI. Compare against the chaos extension's working usage accounting. ACCEPTANCE: per-run + per-agent token/call counts are real, match the provider's actual usage, and render in the UI (and survive reload)."
+  summary: "Usage calls + token numbers STILL aren't working (owner: works on his other projects incl. the chaos extension). The usage/token attribution isn't surfacing real numbers. This is the owner's explicit top-priority in the batch — assign to the strongest agent. ANALYSIS: the onUsage hook → usage-store path exists (usage.js); the tokens/calls either aren't being recorded from agent-do or aren't being read back into the UI. Compare against the chaos extension's working usage accounting. ACCEPTANCE: per-run + per-agent token/call counts are real, match the provider's actual usage, and render in the UI (and survive reload). LANDED 0.2.297 (a18de46e) — ROOT CAUSE: without stream_options.include_usage the provider omits usage from the stream, so agent-do onStepEnd saw step.usage undefined, recorded 0, and recordUsage dropped it. Every real provider routes through this adapter. Unreported usage is now recorded as unknown, never faked."
 - id: CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01
   severity: P2
-  status: open
-  summary: "Background agents are separate from the agents box — owner wants them UNIFIED: background agents appear IN the agents list (with a 'runs in background' indicator), always accessible from there, and mentionable in the chat text box (@-mention) if not already. ACCEPTANCE: the agents list (side panel + NTP) includes background agents with a background indicator; they can be opened/messaged/@-mentioned like named agents."
+  status: merged
+  summary: "Background agents are separate from the agents box — owner wants them UNIFIED: background agents appear IN the agents list (with a 'runs in background' indicator), always accessible from there, and mentionable in the chat text box (@-mention) if not already. ACCEPTANCE: the agents list (side panel + NTP) includes background agents with a background indicator; they can be opened/messaged/@-mentioned like named agents. LANDED 0.2.306 (b779a88a) — background agents appear in the agents list (NTP + side panel) with a runs-in-the-background marker, schedule and toggle."
 - id: CAP-FB-20260826-DELETE-AGENT-FOLDER-01
   severity: P2
-  status: open
-  summary: "After deleting all of an agent's data (memory + OPFS), the owner can't delete the named agent's folder/record itself (had 'sorting hat', deleted all data, wants the agent folder gone too). Add the ability to fully delete a named agent (its folder + record), not just its data. ACCEPTANCE: from the agent, the owner can delete the named agent entirely (folder + registry record + memory + OPFS), with confirmation."
+  status: merged
+  summary: "After deleting all of an agent's data (memory + OPFS), the owner can't delete the named agent's folder/record itself (had 'sorting hat', deleted all data, wants the agent folder gone too). Add the ability to fully delete a named agent (its folder + record), not just its data. ACCEPTANCE: from the agent, the owner can delete the named agent entirely (folder + registry record + memory + OPFS), with confirmation. LANDED 0.2.306 (b779a88a) — full named-agent delete removes folder, registry record, memory and OPFS store; verified by KAT. Instant delete/disable landed at 0.2.305 (bdc90bd2)."
 - id: CAP-FB-20260826-TOOL-LIBRARY-COUNT-01
   severity: P2
-  status: open
-  summary: "Tool library says 'browser tools: 130' but the list clearly doesn't show 130. The bundled-packages count should be double-checked too. ANALYSIS: the count comes from the registry bounds (130) but the rendered list is filtered/truncated or groups differently, so the visible rows << 130. ACCEPTANCE: the tool library shows all 130 browser tools (or honestly labels the grouping), and the bundled-package count is verified against the actual shipped packages."
+  status: merged
+  summary: "Tool library says 'browser tools: 130' but the list clearly doesn't show 130. The bundled-packages count should be double-checked too. ANALYSIS: the count comes from the registry bounds (130) but the rendered list is filtered/truncated or groups differently, so the visible rows << 130. ACCEPTANCE: the tool library shows all 130 browser tools (or honestly labels the grouping), and the bundled-package count is verified against the actual shipped packages. LANDED 0.2.312 (d7ed500e) — the tool library lists all 130 browser tools; the count and the rows agree."
 - id: CAP-FB-20260826-LOCAL-MODELS-HIDE-01
   severity: P2
-  status: open
-  summary: "Hide the local-models feature — the download never works (Chrome built-in AI ~10GB storage cap: 'insufficient storage available, 10GB below required payload 10.53GB' even though it claims a 5.72GB install payload). Owner's steer: remove/simplify the local-model download code now; LATER, load models (gguf) from the user's local drive via OPFS using the directory handle + file handle. ACCEPTANCE: the local-models UI is hidden/removed and the dead download code simplified; a follow-up note records the OPFS-file-handle model-loading idea."
+  status: merged
+  summary: "Hide the local-models feature — the download never works (Chrome built-in AI ~10GB storage cap: 'insufficient storage available, 10GB below required payload 10.53GB' even though it claims a 5.72GB install payload). Owner's steer: remove/simplify the local-model download code now; LATER, load models (gguf) from the user's local drive via OPFS using the directory handle + file handle. ACCEPTANCE: the local-models UI is hidden/removed and the dead download code simplified; a follow-up note records the OPFS-file-handle model-loading idea. LANDED 0.2.307 (49fd4ef5) — removed outright rather than hidden: the UI and the dead download machinery are gone. The architecture and the future load-gguf-from-your-own-drive direction are logged in docs/LOCAL-MODELS-ARCHITECTURE.md. Ollama still works as a local OpenAI-compatible provider."
 - id: CAP-FB-20260826-APPROVALS-REMOVE-01
   severity: P2
-  status: open
-  summary: "The 'approval session' section inside the settings panel — is it still used? Owner thinks the whole interface doesn't work: if the agent requests access, going to a weird settings page to approve doesn't work. Approvals should be IN the context of the agent or the task being done, not a settings page. ACCEPTANCE: the orphaned approvals settings section is removed; approval prompts surface in-context (in the agent/task that needs them)."
+  status: merged
+  summary: "The 'approval session' section inside the settings panel — is it still used? Owner thinks the whole interface doesn't work: if the agent requests access, going to a weird settings page to approve doesn't work. Approvals should be IN the context of the agent or the task being done, not a settings page. ACCEPTANCE: the orphaned approvals settings section is removed; approval prompts surface in-context (in the agent/task that needs them). LANDED 0.2.313 (5f8931f3) — the orphaned Settings Approvals section, nav and wiring are removed; revoking a permission confirms in-context via runOwnerApprovedMutation. NOTE: this is the change that left scripts/chrome-journeys.ts driving a deleted section — see CAP-FB-20260827-MAIN-GATES-RED-02."
 - id: CAP-FB-20260826-SYSTEM-PROMPT-01
   severity: P2
-  status: open
-  summary: "Update the built-in default system prompt to be more accurate to the types of tasks it can do (now that the toolset grew to 130 tools). Also: the agent should ALWAYS search for the tool first — we have a search/list-tools (query_tools) capability; give more examples of search-then-execute, WITHOUT bloating the system prompt context. ACCEPTANCE: the default system prompt reflects the real toolset, instructs search-then-execute with query_tools examples, and stays context-bounded."
+  status: merged
+  summary: "Update the built-in default system prompt to be more accurate to the types of tasks it can do (now that the toolset grew to 130 tools). Also: the agent should ALWAYS search for the tool first — we have a search/list-tools (query_tools) capability; give more examples of search-then-execute, WITHOUT bloating the system prompt context. ACCEPTANCE: the default system prompt reflects the real toolset, instructs search-then-execute with query_tools examples, and stays context-bounded. LANDED 0.2.312 (d7ed500e) — the default system prompt instructs search-then-execute and carries accurate tool signatures."
 - id: CAP-FB-20260826-HEADER-HOME-01
   severity: P3
-  status: open
-  summary: "In the settings panel, clicking the 'Chrome agent platform' header should take you back to the homepage. Small UX affordance; pairs with BACK-STACK-01."
+  status: merged
+  summary: "In the settings panel, clicking the 'Chrome agent platform' header should take you back to the homepage. Small UX affordance; pairs with BACK-STACK-01. LANDED 0.2.296 (c8730513) — the Settings brand click goes Home."
 - id: CAP-FB-20260826-PERMISSIONS-SIMPLIFY-01
   severity: P0
-  status: open
-  summary: "Owner (frustrated, P0): the permission system is a MESS. (1) The sorting-hat demo failed with 'Tab grouping write operations are pending owner tab-management permission enrollment in Settings' EVEN THOUGH all permissions are enabled — there are TWO confusing layers (the chrome API permission AND the separate expiring browser-control GRANT) and the owner can't tell which one to grant. (2) 'It should be asking me in context' — when a tool needs a permission/grant, the approval must surface IN the agent/task context, not send the owner to a Settings page. (3) Settings UI can't REMOVE a permission; the 'needs permission' security label never surfaces where to manage it. GOAL (owner's words): 'make it super simple and easy to use and understand.' REDESIGN: (a) ONE coherent mental model — when a tool needs something, an approval surfaces in-context ('This agent wants to group tabs — Allow?') and one click grants what's needed; (b) diagnose why the demo said 'pending enrollment' despite enabled permissions (which layer failed — is the grant expiring/not-set, is tabGroups separate from tabs and un-granted, or a real detection bug?); (c) Settings becomes a clear inventory — every permission with a plain-English label + what it enables + a working add/remove toggle, and 'needs permission' labels link to the exact control; (d) the in-context approval is the primary path, Settings is the management/inventory path. ACCEPTANCE: the sorting-hat demo works after a single in-context approval; every permission is add/removable in Settings with a plain-English label; no 'pending enrollment' dead-ends."
+  status: merged
+  summary: "Owner (frustrated, P0): the permission system is a MESS. (1) The sorting-hat demo failed with 'Tab grouping write operations are pending owner tab-management permission enrollment in Settings' EVEN THOUGH all permissions are enabled — there are TWO confusing layers (the chrome API permission AND the separate expiring browser-control GRANT) and the owner can't tell which one to grant. (2) 'It should be asking me in context' — when a tool needs a permission/grant, the approval must surface IN the agent/task context, not send the owner to a Settings page. (3) Settings UI can't REMOVE a permission; the 'needs permission' security label never surfaces where to manage it. GOAL (owner's words): 'make it super simple and easy to use and understand.' REDESIGN: (a) ONE coherent mental model — when a tool needs something, an approval surfaces in-context ('This agent wants to group tabs — Allow?') and one click grants what's needed; (b) diagnose why the demo said 'pending enrollment' despite enabled permissions (which layer failed — is the grant expiring/not-set, is tabGroups separate from tabs and un-granted, or a real detection bug?); (c) Settings becomes a clear inventory — every permission with a plain-English label + what it enables + a working add/remove toggle, and 'needs permission' labels link to the exact control; (d) the in-context approval is the primary path, Settings is the management/inventory path. ACCEPTANCE: the sorting-hat demo works after a single in-context approval; every permission is add/removable in Settings with a plain-English label; no 'pending enrollment' dead-ends. LANDED 0.2.303 (0856225f) + 0.2.313 (5f8931f3) — in-context approval cards for tool permission/grant denials; one click grants exactly the needed scope and retries; deny is sticky; the Settings dead-end is gone. The tabGroups half of the sorting-hat failure was a genuinely undeclared permission, fixed at 0.2.290."
 - id: CAP-FB-20260826-BROWSER-SINGLE-DRIVER-01
   severity: P1
-  status: open
-  summary: "Owner requirement (2026-08-26): with many NTPs/surfaces open, ONLY ONE may issue browser commands at a time. Today the grantMutex serializes the grant-check+mutation per-tool in the SW realm, but nothing arbitrates WHICH surface drives — multiple NTPs can interleave destructive commands from different agents. DESIGN: a SW-owned, durable, expiring BROWSER-CONTROL SESSION LEASE — a single holder keyed by surface/run; a surface must hold the lease to issue destructive browser commands; a competing surface gets an honest 'another surface is driving the browser' result (or a bounded queue); released on task end / surface close / expiry. In the worker architecture the lease authority stays in the SW and each agent worker requests the lease before driving the browser (recorded in docs/AGENT-EXECUTION-ARCHITECTURE.md). ACCEPTANCE: two NTPs drive concurrently → exactly one succeeds, the other is honestly told why; the lease survives the issuing surface closing (expiry-based release); no deadlock on lease release."
+  status: merged
+  summary: "Owner requirement (2026-08-26): with many NTPs/surfaces open, ONLY ONE may issue browser commands at a time. Today the grantMutex serializes the grant-check+mutation per-tool in the SW realm, but nothing arbitrates WHICH surface drives — multiple NTPs can interleave destructive commands from different agents. DESIGN: a SW-owned, durable, expiring BROWSER-CONTROL SESSION LEASE — a single holder keyed by surface/run; a surface must hold the lease to issue destructive browser commands; a competing surface gets an honest 'another surface is driving the browser' result (or a bounded queue); released on task end / surface close / expiry. In the worker architecture the lease authority stays in the SW and each agent worker requests the lease before driving the browser (recorded in docs/AGENT-EXECUTION-ARCHITECTURE.md). ACCEPTANCE: two NTPs drive concurrently → exactly one succeeds, the other is honestly told why; the lease survives the issuing surface closing (expiry-based release); no deadlock on lease release. LANDED 0.2.310 (a7612031, b8896f0d, 95521139) — a SW-owned, durable, expiring single-driver lease. Both the worker and the interactive paths go through withGrantLock; the check is DESTRUCTIVE-only so capture_screenshot stays an ungated read."
 - id: CAP-FB-20260826-AGENT-WORKERS-01
   severity: P0
-  status: in-progress
-  summary: "Owner DECISION (2026-08-26): adopt the per-agent SHARED WORKER execution architecture (docs/AGENT-EXECUTION-ARCHITECTURE.md). Each agent (background/named/site) = its own shared worker ({name: agentId}), hosted by the single offscreen document (reason WORKERS — the SW cannot create workers directly), bootstrapped through the SW (alarms wake SW → SW ensures offscreen host + worker alive → dispatch). MessagePorts passed to CLIENTS (NTP/sidepanel) via a SW-validated handshake so the UI holds a live port and keeps the worker alive 'as much as possible'. BroadcastChannel (cap:agent:<id>) for state. SW stays the authority for routing/auth/grant-lock/redaction/storage. PHASES: P1 foundation (offscreen host bootstrap + agent-worker shared-worker shell + SW connect/port handshake + alive-set reconciliation + documented pattern) → P2 migrate the agent-do run loop into the worker (tool exec, provider calls, durable-run interaction from the worker context) → P3 durability mapping (run progress/logs survive worker death via durable-runs/OPFS) → P4 UI ports everywhere + background agents fully on workers. Acceptance per phase; P1 KATs: bootstrap, port handshake, keep-alive across host/client death, reconcile-on-wake."
+  status: merged
+  summary: "Owner DECISION (2026-08-26): adopt the per-agent SHARED WORKER execution architecture (docs/AGENT-EXECUTION-ARCHITECTURE.md). Each agent (background/named/site) = its own shared worker ({name: agentId}), hosted by the single offscreen document (reason WORKERS — the SW cannot create workers directly), bootstrapped through the SW (alarms wake SW → SW ensures offscreen host + worker alive → dispatch). MessagePorts passed to CLIENTS (NTP/sidepanel) via a SW-validated handshake so the UI holds a live port and keeps the worker alive 'as much as possible'. BroadcastChannel (cap:agent:<id>) for state. SW stays the authority for routing/auth/grant-lock/redaction/storage. PHASES: P1 foundation (offscreen host bootstrap + agent-worker shared-worker shell + SW connect/port handshake + alive-set reconciliation + documented pattern) → P2 migrate the agent-do run loop into the worker (tool exec, provider calls, durable-run interaction from the worker context) → P3 durability mapping (run progress/logs survive worker death via durable-runs/OPFS) → P4 UI ports everywhere + background agents fully on workers. Acceptance per phase; P1 KATs: bootstrap, port handshake, keep-alive across host/client death, reconcile-on-wake. LANDED — all four phases: P1 0.2.308 (d0060d28), P2 0.2.309 (e7bf6b81, 90d32754), P3 (1e0588c4), P4 0.2.310 (a7612031). Each agent runs in its own shared worker with authority staying in the SW."

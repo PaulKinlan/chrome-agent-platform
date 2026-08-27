@@ -2,7 +2,40 @@
 
 Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in the real extension → checked off. Nothing dropped. Stale/duplicate entries are a defect.
 
-**Reconciled 2026-08-17 against the current code (HEAD 431bf59).** Items below are grouped; each is verified against the committed code, not the worker's claim.
+**Reconciled 2026-08-27 against the current code (`0.2.319` / `origin/main@139b6f92`).**
+Items below are grouped; each is verified against the committed code, not the worker's claim.
+
+## Fixed since the 2026-08-21 revision
+
+The 2026-08-26 owner batch (Telegram, 12 items) and its follow-ons all landed. Full
+per-item evidence is under `CAP-FB-20260826-OWNER-BATCH-01` in [TASKS.md](../TASKS.md);
+one line each here:
+
+- **Back button → blank screen** — fixed at the top frame (`0.2.296`, `0.2.304`).
+  Settings/Assets/Directory/Skills return to the hub in ONE press. Settings
+  sub-navigation uses `replaceState`, and the Settings brand click goes Home.
+- **Permission dead-ends** — approval now surfaces **in the conversation** that needs it
+  (`0.2.303`); the orphaned Settings → Approvals section is deleted and revoke confirms
+  in-context (`0.2.313`).
+- **Usage/token counts always zero** — `0.2.297`. Root cause was a missing
+  `stream_options.include_usage`, not the UI.
+- **Recent activity search + filters dead** — `0.2.298`. The feed was hanging on profiles
+  with many background agents; the controls only looked broken.
+- **Run-status cards pushing the page off screen** — `0.2.300`: one subtle line per run,
+  plain-English status, capped at the 3 most recent with a quiet "+N earlier runs".
+- **Agent list printing the whole role** — `0.2.277`: a two-line preview, full text on hover.
+- **Dialog body clipping with many tabs/tools** — `0.2.299`: dialog bodies scroll.
+- **Discovered-sites box butting against the container edge** — `0.2.312`.
+- **Add-agent empty state / agents-folder "+"** — `0.2.312`.
+- **Tool library count disagreeing with the rows** — `0.2.312`: all 130 listed.
+- **Background agents separated from the agents list** — `0.2.306`: unified, with a
+  runs-in-the-background marker, schedule and toggle; full named-agent delete added.
+- **Data & memory Clear looking like it did nothing** — `0.2.265`, `0.2.266`: the clear
+  worked, the UI never refreshed; tree expansion is now preserved across the refresh.
+- **Surfaces dead-rendering on a suspended worker** — `0.2.302`: honest error + Retry.
+- **Artifact viewer as a tiny unclickable box** — `0.2.318`: fills the window, opens in a
+  full tab.
+- **Theme switcher** — removed (`0.2.301`); it only ever worked on Settings.
 
 ## Open
 

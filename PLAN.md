@@ -2,13 +2,50 @@
 
 The working plan for the fleet. Every agent/session reads this to see what's happening + where things are.
 
+**Reconciled 2026-08-27 against the actual tree at `0.2.319` / `origin/main@139b6f92`,
+by building and running the gates — not by reading trackers.**
+
+| Gate | Result |
+|---|---|
+| `npm run build` | **clean** — 80 generated files byte-identical, 26 packages, 65 shipped files, no `eval`/`new Function` across 151 shipped JS files |
+| `npm test` | **1779 pass / 0 fail** |
+| `npm run test:chrome` | **127/127** |
+| `npm run test:security` | **PASS** (production scenario, no survivor/residue/poison) |
+
+**The suite was red at 26/127 and is now green.** Three drifts, all from shipped
+changes that never updated the gate, all fixed 2026-08-27 under
+`CAP-FB-20260827-MAIN-GATES-RED-02`:
+
+1. **The abort that cost 100 checks.** `scripts/chrome-journeys.ts` still clicked
+   `.nav-item[data-section="approvals"]` — a Settings section deliberately deleted at
+   `0.2.313` when approvals moved in-context — and threw when no row appeared.
+   Repointed to the product's real contract rather than deleted: resolving still
+   requires the `owner-options` principal, the Settings control now completes in ONE
+   click through its native confirm dialog (driven with a genuine CDP click), and the
+   two DOM-scraping approval assertions were moved onto the **payload**, which is
+   strictly stronger — whatever surface renders an approval can only show what the
+   service worker hands it.
+2. **`debugger` removed** (owner decision, Q17 resolved). `0.2.286` had re-declared it
+   in `optional_permissions` for the CDP power tools, reversing its deliberate removal
+   at `c5ccb2d0`. The permission, the four CDP tools, the capability row and the
+   Settings label are gone; the browser-tool count is **126** (was 130) and the
+   capability table **155** (was 159). `tests/chrome-tools-t12.test.ts` carries a
+   removal guard so it cannot come back by accident — re-adding it must be a
+   deliberate act. The user-scripts half of T12 is untouched.
+3. **The capability count is now derived**, not hard-coded. The assertion read
+   `length === 7` while the product had grown to 17 capabilities. It now reads
+   `CAPABILITIES.length` from the product's own table, so the next tranche cannot
+   rot it.
+
+Task state lives in [TASKS.md](TASKS.md) (the authority); this file is the roadmap view.
+
 ## The project
 Chrome as the agent platform: a new-tab agent hub that orchestrates the web with
 persistent named agents (each with its own OPFS sandbox), per-site sub-agents (WebMCP
 tool discovery), the generative-UI artifacts surface, a skills system, agent-generated
 repeatable scripts, and a system-hooks layer — all under an all-optional-permissions
-security model. The README is the overview; THIS file is the single source of truth for
-what's landed vs what's next.
+security model. The README is the overview; TASKS.md is the task authority; THIS file is
+the roadmap: what's landed vs what's next.
 
 ## Principles (from the 2026-08-15 thread — NON-NEGOTIABLE)
 - **Never accept "it serves" as "it works."** Every feature/fix is verified by driving the real behavior in a browser (CDP) with screenshots as evidence. A route returning 200 or a build passing is zero evidence.
@@ -20,92 +57,173 @@ what's landed vs what's next.
 - **Modern web guidance** throughout.
 - **No external-project references** — usage-logging is an in-repo pattern, not a reference to another project.
 
-## Independent architectural review (2026-08-21)
+## Independent architectural review (2026-08-21) — delivery diagnosis, now largely answered
 
 [`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) verified the baseline by building and driving
-exact `origin/main@300bea1`: build clean, 632 unit tests pass, **126/126 Chrome journeys**,
-hub render 62 ms, fresh-profile boot clean. Code quality is not the constraint — delivery is.
-Landed commits per day fell 83 → 65 → 20 → 3 → 0 between 17 and 21 August, with 0 of 31 tasks
-reaching a terminal state and 46 branches of reviewed work unmerged. The review's §6 work
-queue supersedes the ordering of the backlog below until its P0 items are cleared.
+exact `origin/main@300bea1`: build clean, 632 unit tests pass, 126/126 Chrome journeys,
+hub render 62 ms. Its finding was that code quality was not the constraint — **delivery**
+was: landed commits per day had fallen 83 → 65 → 20 → 3 → 0 between 17 and 21 August, with
+0 of 31 tasks terminal and 46 branches of reviewed work unmerged.
 
-**Lifecycle change (Paul, 2026-08-21):** the nine-state delivery lifecycle is replaced by
-`OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps, and `DONE` no
-longer requires a per-task owner interaction. Independent review by a different
-model/session and real-browser verification are retained unchanged; the gate-evidence and
-attestation machinery is removed. See `AGENTS.md` for the normative rules.
+**That diagnosis has been acted on.** Between 22 and 27 August the project shipped
+`0.2.105 → 0.2.319` — 214 releases, each with a user-facing changelog line. The delivery
+stall is resolved; the ordering discipline it introduced (CAP-FB IDs in commit subjects,
+no `-vN+1` without a commit in `-vN`, durable worktrees) stands.
 
-## P0 tool operating platform (Paul, 2026-08-22)
+**Lifecycle:** `OPEN → IN_REVIEW → MERGED → DONE` with `BLOCKED`/`ABANDONED` off-ramps.
+`DONE` = merged **and** the journey suite green at that tip; it does not require a
+per-task owner interaction. Independent review by a different model/session and
+real-browser verification are retained unchanged. See `AGENTS.md` for the normative rules.
 
-Paul elevated the Co-do-style browser-native Wasm/tool operating layer to P0. The public architecture is [docs/tool-platform-architecture.md](docs/tool-platform-architecture.md), based on source inspection of [PaulKinlan/Co-do](https://github.com/PaulKinlan/Co-do) at exact `d3ebdbd5066f16a2bb8a2b8cb8af4b57c8ae324a` (39 factual built-ins across nine functional categories; no code or binaries copied).
+## Where the product actually is (2026-08-27, `0.2.319`)
 
-The first owner-decision-free slice, `CAP-FB-20260822-TOOL-CATALOG-CONTRACT-01`, merged on public `a8985af`: bounded canonical descriptors, stable source/package/tool/version/digest/capability/scope/generation identity, real adapters for current built-in/browser/management/declared+inferred WebMCP sources, an in-memory deterministic exact/alias/lexical index, and expiring non-authorizing selection references. Public `0.2.180` / `CAP-FB-20260823-LAZY-PROVIDER-CUTOVER-01` replaces eager provider binding with exactly two fixed definitions (`search_tools`/`execute_tool`) while preserving the Settings-only shadow diagnostic route and every existing source dispatcher/permission/grant authority.
+### Landed and shipping — the foundation
+- [x] MV3 extension: NTP hub, side panel, chat, directory, memory explorer, options.
+- [x] Real `agent-do` bundled (esbuild) + process/global shims.
+- [x] Provider layer (`lib/provider.js`) — OpenAI / Anthropic / Gemini / DeepSeek /
+      Ollama / OpenAI-compatible, per-provider model dropdowns, **Test connection**,
+      per-agent provider override, bundled llm-prices cost table.
+- [x] The named-agent layer — every agent (named/site/background) gets its own OPFS
+      sandbox: memory + run history + skills + `memory_grep`.
+- [x] Sites-as-sub-agents (WebMCP discovery + per-tool first-run approval) with
+      Settings → Site agents → Diagnostics.
+- [x] Tasks-as-threads, skills (`/skill:<id>`), generative-UI artifacts, agent-generated
+      scripts, the system-hooks layer, the omnibox keyword.
+- [x] All-optional permissions (`manifest.permissions: []`), origin-keyed OPFS,
+      no `debugger` declared, the standing security suite (`npm run test:security`).
+- [x] The component design system — 20+ Web Components in the single-source
+      `extension/shared/components.js`, mirrored in the gallery with a build-time drift guard.
+- [x] The layered, versioned system-prompt architecture (`lib/system-prompts.js` +
+      `lib/runtime-policy.js`, Settings → Advanced) — docs/SYSTEM-PROMPTS.md.
+- [x] Unified agent access — the one shared `<agent-picker>` for the + menu, `/agent`,
+      and the side-panel Agents view.
+- [x] Durable run authority — service-worker/OPFS run registry, outbox projection,
+      bounded recovery, reload persistence. docs/DURABLE-RUN-ARCHITECTURE.md.
 
-The live cutover keeps provider context constant at 20/100/1000 catalog rows, gives only ready in-scope results single-use run-bound references, and re-resolves immutable source/closure/package/capability plus live permission/grant/run/document authority before validation, before dispatch, and after dispatch. Protected guidance applies after owner customization for hub, named/direct, background/durable, scheduled, hook, and site-worker runs. Source-only OPFS, retained code-diff and retained tabular-diff authorities remain unchanged. Bundled-package rows remain non-executable catalog metadata and never receive a provider reference or dispatch closure. The `0.2.181` tree admission changes only the separate explicit-owner-click Settings preview posture from 21 enabled / 5 disabled to exactly 22 / 4, using the unchanged retained tree CAS and existing WASI runtime over an immutable nested job seed. The `0.2.182` FND-1 candidate adds only a required spec-derived UTF-8/base64 result-envelope discriminator and a strict bounded tagged union; all 22 previews remain UTF-8 in that foundation. The speculative `0.2.183` serial successor admits gzip alone as tool 23 over the generic envelope: exact text-compress/canonical-base64-decompress modes, a 1,536-byte decoded-input cap, a complete 65,536-byte binary-output cap, no partial output, and a native one-button Settings UI that renders only inert canonical base64. touch, truncate and SQLite remain disabled; gzip CAS/SBOM/licence/capabilities/memory and `canonicalNameClaim:false` remain unchanged. The existing semantic-search task remains the sole semantic authority and is P0; embeddings/SQLite are not selected by this lexical cutover. Independent source/package review is required; loaded-MV3/browser and security gates remain residual because this source lane intentionally stops before Chrome.
+### Landed 2026-08-24 → 08-27 — the recent wave
+- [x] **Agent workers (Phases 1–4 complete, `0.2.308`–`0.2.310`)** — each agent runs in
+      its own shared worker hosted by the offscreen document, bootstrapped through the
+      service worker. Fault + memory isolation: one crashed or leaky agent no longer
+      takes the router and every other agent with it. The UI holds a live MessagePort
+      with redacted progress; background agents run with zero visible pages; a
+      SW-owned single-driver lease means only one surface drives *destructive* browser
+      commands at a time (reads like screenshots stay ungated).
+      docs/AGENT-EXECUTION-ARCHITECTURE.md + AGENT-WORKER-DURABILITY.md + AGENT-WORKER-PHASE4.md.
+- [x] **Usage/token accounting actually works (`0.2.297`)** — the OpenAI-compatible
+      adapter now sends `stream_options.include_usage`, which was the root cause of
+      silently-zero token counts. Providers that don't report usage are recorded as
+      unknown, never faked.
+- [x] **Permissions simplified (`0.2.303`, `0.2.313`)** — when a tool needs a permission
+      the request appears **in the conversation** ("This agent wants to group tabs —
+      Allow?"); one click grants exactly that and retries. Deny is sticky. The orphaned
+      Settings → Approvals page is gone; revoke confirms in-context.
+- [x] **130 Chrome tools audited against the Chromium schemas (`0.2.295`)** — tab groups,
+      MHTML save, keep-awake release and per-site content settings were all calling
+      APIs that don't exist or that escaped their grant scope. Test doubles now mirror
+      the real shapes and reject wrong ones.
+- [x] **Observability (`0.2.287`, `0.2.294`)** — `npm run build` produces a debug build
+      with source maps and a namespaced, levelled, timed logger + performance marks
+      across grants, tool calls, model round-trips and task loading. Redacted: no prompt
+      or page content. Security assertions identical in both modes.
+- [x] **Thread-open performance (`0.2.314`, `0.2.317`)** — task open was 10–15 s on
+      well-used threads because it replayed the whole history. Now a per-execution
+      ordered log index with cursor pagination reads only the requested page (O(page),
+      never O(total)); the first screen renders instantly and the full history pages back.
+- [x] **Back-stack fixed at the top frame (`0.2.296`, `0.2.304`)** — Settings / Assets /
+      Directory / Skills return to the hub in ONE press with no blank screen.
+- [x] **Background agents unified into the agents list (`0.2.306`)** with a "runs in the
+      background" marker, schedule and toggle; full named-agent delete (folder, record,
+      memory, OPFS) and instant delete/disable (`0.2.305`).
+- [x] **Every data-loading surface is bounded (`0.2.302`)** — providers, usage, agents,
+      activity and the tool library time out with an honest error + Retry instead of
+      dead-rendering when the worker is suspended.
+- [x] **Artifacts (`0.2.318`)** — the viewer fills the window and opens in a full tab via
+      minimal web-accessible resources. docs/ARTIFACT-NEW-TAB.md.
+- [x] **Simplification** — the theme switcher is removed (`0.2.301`, it only ever worked
+      on Settings); built-in local models are removed (`0.2.307`, the ~10 GB Chrome
+      built-in-AI download never succeeded) with the architecture logged in
+      docs/LOCAL-MODELS-ARCHITECTURE.md for a future OPFS-file-handle rebuild.
+      Ollama/LM Studio remain as local OpenAI-compatible endpoints.
 
-Store and owner-package lanes remain separate. The credential-free Store packaging successor adds explicit `--target=store` validation without changing archive bytes or runtime/package SHA authority: a canonical v2 commit/source/output/target marker rejects honest cross-target mismatches, while an independent scanner classifies the actual tracked/generated package bytes for exact MV3 CSP, unmanifested Wasm, empty Worker allowlist, remote code-loading sinks, and exact sandbox-evaluator scope before and after atomic packaging. Marker target is not independent content proof, and static PASS is not Store approval. Store builds execute bundled reviewed Wasm only until written Chrome Web Store remotely hosted code guidance says otherwise. Unpacked/enterprise/developer owner-selected packages remain a separate lane. The bundled authority declares only exact `wasi_snapshot_preview1` in `imports.allowed`; module names have a 64-byte ASCII bound independent of the eight-module count, and arbitrary `env` or wildcard allow declarations fail closed. This corrects the prior eight-character grammar that made truthful WASI manifests impossible, but admits no binary. Co-do's Apache-2.0 root versus MIT package/manifest metadata remains an unresolved blocker for every reconstructed tool, not permission to copy or admit binaries.
+### The Wasm tool platform — what actually ships vs what is proven
+- [x] **26 bundled Wasm packages ship** and are verified at build time (exact manifest,
+      CAS digests, bounded raw import/memory scan, SBOM + licence records):
+      base64, csvtool, cut, diff, du, grep, gzip, head, markdown, md5sum, patch,
+      sha256sum, sha512sum, sort, sqlite3-query-bounded, stat, tail, toml2json, touch,
+      tr, tree, truncate, uniq, uuid, wc, xxd.
+- [x] **Live bounded lazy tool provider** — every run gets exactly two fixed definitions,
+      `search_tools` and `execute_tool`, regardless of catalog size. Search authorizes
+      nothing; execute accepts only a single-use run-bound reference and revalidates
+      identity, permission, grant, document and run authority before and after dispatch.
+- [x] **The Rust→`wasm32-wasip1` lane is standing up** with reproducible builds and
+      lock-faithful licence censuses: **htmlq, numbat, bttf, sed, jq, xan, tokei** all
+      build and run. The `rayon-wasi` serial shim (a `[patch.crates-io]` replacement, no
+      tool-source change) is the single unblock for the rayon-dependent tools.
+- [ ] **Those seven are proven, not admitted** — they are build/census proofs under
+      `docs/plans/rust-lane/` and `docs/admissions/`, not entries in the shipped 26.
+      Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
+- [ ] **Python via Pyodide (`0.2.319`)** — the bounded non-eval tool is built and tested
+      (`runPythonAsync` + `setStdout`/`setStdin`, 2 KiB in / 64 KiB out, fail-closed) and
+      the wiring is ready. The remaining step is the Pyodide runtime **binary**, a
+      blocked Emscripten build. docs/PYODIDE-BOUNDED-BUILD.md.
+- [ ] **qsv is a documented STOP** — reqwest→tokio/socket2, memmap2/blake3-mmap and a
+      dual-GPL `self_cell` sit in core files. The exact patch recipe is recorded; no
+      fabricated binary.
 
-`CAP-FB-20260822-SECURITY-SUITE-SERIALIZATION-01` is public at exact `0e47a63` / `0.2.148`. `npm run test:security` acquires the canonical lock before side effects, requires the wrapper's exact profile and inherited lock capability, keeps the production runner and 120-second timeout immutable, and owns PID=PGID=SID supervision, bounded TERM→KILL, durable evidence, exact guarded cleanup and residue poison. Executable no-Chrome custody tests and the coordinator-authorized real Chromium run passed; the seven standing assertions were 7/7 with no survivor, residue, profile or poison.
+## In flight / next (the ordered queue)
 
-`CAP-FB-20260822-PACKAGE-ARCHIVE-FRESHNESS-01` is public at exact `093757f` with the deterministic build marker. Production ZIPs are assembled from Git's tracked extension inventory plus the current generated dist and byte-identical generated changelog—never a wholesale local-tree copy. A fresh same-directory temp ZIP is exact-inventory/hash verified before atomic replacement, so ignored artifacts and removed files cannot survive from local state or an older final archive. Canonical marker bytes bind the exact Git commit, indexed source digest, and generated bundle hashes; the Store successor evolves the schema to v2 and adds target intent plus legacy/cross-target refusal without weakening same-source byte identity or atomic custody.
+The authority is the **Open work queue** table in [TASKS.md](TASKS.md) (39 open).
+**The demo path is the only P0 lane** (owner decision, 2026-08-27) — the Wasm platform
+dropped to P2 until after the exec demo, because it is invisible in one and largely blocked
+on owner licence/Store decisions.
 
-## Status (2026-08-17)
-- [x] MV3 extension skeleton + NTP hub + side panel + chat + directory + memory explorer
-- [x] Real agent-do bundled (esbuild) + process/global shims (SW registers, no errors)
-- [x] Provider options — a DEDICATED settings pane (options page): Gemini/OpenAI/Anthropic/DeepSeek/Ollama/Prompt-API/demo, multi-agent (1-vs-N) hub, theme picker (4 themes), scoped browser-control grant, usage log, per-origin memory (Paul 2026-08-15: the inline dropdown was not a config pane)
-- [x] Usage logging (per-call token/cost records, 7-day rolling window, aggregation) — current-main reconciliation for `CAP-FB-20260818-USAGE-RECORDING-01` preserves accepted attempt-bound identity across synchronous/async failure, plain stream-object returns, AI SDK retries, and aborts; loaded-MV3 usage proof remains pending
-- [x] Browser control + event listening (tabs, alarms, capture)
-- [x] Recipes (4 pre-baked utility agents) + management tools (create/delete/list agents)
-- [x] Glow effect (reduced-motion-aware) + theme picker (midnight/sunlit/neon/terminal, default sunlit) + mood board
-- [x] Composer: "+" attach menu (file/audio/video/other), mic with Web Speech Recognition (in-button equalizer, dedup'd), Record audio + Capture camera
-- [x] Omnibox integration (keyword → start a task)
-- [x] SVG icons (no emoji)
-- [x] Side-panel mechanism — the agent opens a real page in chrome.sidePanel + drives it via WebMCP (open_side_panel tool + sidepanel.getTarget/getTools routes) — landed 72e781a
-- [x] Activity-log explorer — a browsable/searchable timeline of every agent run (per-agent + master, tool calls/results/errors) — landed ba83236
-- [x] End-to-end task completion verification — a task runs a real model + produces a result + usage recorded (the e2e-task test + the real-browser OPFS verification) — landed 690188c + scripts/opfs-real-browser.ts
-- [x] Per-agent provider config — an agent can have its own model/provider override — landed 690188c
-- [x] The named-agent layer — every agent (named/site/background) its own OPFS sandbox (memory + history + skills + memory_grep); the master manages them — landed f8909c6/e28e600
-- [x] The skills system — recipes → skills; a skill is INCLUDED in a task (/skill:<id>), attached to an agent, scheduled, or imported (the chaos skill-loader pattern) — landed f7a49fc
-- [x] The co-do generative-UI (generate_ui + sandboxed double-iframe + the artifact system) — landed 7323a4c
-- [x] The hooks system (the full chrome.* on* event catalog + the owner-only authoritative deny-list) — landed
-- [x] The standing security suite (network exfil / sandbox escapes / prompt-injection blocked) — landed 9da411c
-- [x] The component design system (20+ Web Components, the gallery) + the impeccable design (paper/teal, PRODUCT.md + DESIGN.md) — landed
-- [x] Chaos-style semver (a post-commit hook auto-bumps the patch version after each commit) — landed
-- [x] The BeautifulUI AI-native primitives (loading-state, thinking-trace, tool-chips, task-row, streaming-text, approval-card, prompt-bar) — landed 6adcfe6
-- [x] The layered, versioned system-prompt architecture (lib/system-prompts.js — the single composition authority for every run type; lib/runtime-policy.js — the single authoritative protected-constraints source, enforced LAST after full referenced-skill bodies even for foreign caller prompts; Settings → Advanced with the built-in viewer, per-scope append/prepend/replace customization, the built-in-updated keep/reset/diff flow, mandatory mutation CAS + strict store quarantine + coordinated named-agent lifecycle, the context-aware preview, exact generate/stream provider-boundary capture, and unique-execution keyed attestations with versioned rotation/ephemeral labelling) — docs/SYSTEM-PROMPTS.md
-- [x] Unified agent access (CAP-FB-20260818-AGENT-ACCESS-01) — canonical named:/background:/site: refs; redacted, revisioned `agent.registry` + lifecycle broadcasts; the ONE shared `<agent-picker>` for the + menu and strict-position `/agent`; stale/request/history race fencing; side-panel browse/history/task list with no iframe/stub; sender-authenticated, owner-gesture-gated real-tab navigation — integrated 2026-08-18 (`scripts/agent-access-journeys.ts`: 88 fixed real-CDP checks + external commit-bound manifest/screenshots)
-- [x] Current-main hub sidebar parity — Tasks and Agents share fixed headers, intrinsic scrolling lists, stable expanded gutters, row tokens, and aligned + actions; the collapsed rail removes scrollbar width from content and centers task dots/agent avatars/actions; task X hover/focus/delete geometry and Site discovery copy are corrected (`scripts/sidebar-parity.ts`).
+**P0 — the demo path.** Ordered by how early an exec hits them, and each is independently
+shippable:
+1. `CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01` — put the summary, and on failure the error
+   text, in the COLLAPSED tool card; then rebuild the expanded view around content
+   (structured/raw JSON toggle with copy, array rows previewed by their identifying field,
+   no synthetic `{keys}` node). Measured: one expanded `list_tabs` is 462 px; a collapsed
+   failure shows zero characters of its error; there is no raw JSON view at all.
+2. `CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01` — the view builder awaits inside a
+   `for` loop, so a full-history thread makes 25 serialized OPFS round-trips (up to 6,250
+   rows) before `thread.get` returns anything. The reads are independent.
+3. `CAP-FB-20260827-HUB-FIRST-RUN-01` — the first-run card offers six competing actions
+   above the composer and a fresh profile stacks seven empty states, one of which shows
+   filtered-empty copy to someone who has never had data.
 
-- [ ] **WebMCP discovery observability (Paul 2026-08-18) — OPEN (round-30 correction awaiting evidence/re-review).** Earlier rounds fixed startup sync, explicit tab picking, positive-opt-in `window.webmcpExpose`, source-threaded dispatch, strict schemas, singleton teardown, replacement snapshots, injection readiness, and attested-vs-page-reported status separation. Round 30 still BLOCKED completion: acceptance bypassed `invokeSiteTool`; invocation lost the approved tab; snapshots were not ordered by real document identity; cancellation fencing expired; the bridge nonce crossed an observable channel; diagnostics logged raw page errors; and retained evidence did not identify the tested bytes. The current source addresses those blockers with production `tools.invoke` → `invokeSiteTool`, exact approved tab + active `documentId`, SW-issued navigation epochs, immutable cancellation epochs, MAC/replay-fenced cross-world transport with the key delivered out-of-band, and diagnostics redaction. MAIN remains explicitly untrusted: page-owned tools/results are never described as attested. **No completion claim is made here:** exact-clean-commit browser evidence must be generated externally (`WEBMCP_ARTIFACT_DIR=… deno run -A scripts/webmcp-acceptance.ts`) and independently reviewed. The OS permission prompts additionally remain a headed manual gate (`--headed`; docs/WEBMCP-ACCEPTANCE.md).
+Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed, awaiting independent review) and
+`CAP-FB-20260821-WORKTREE-HYGIENE-01` (it protects the evidence everything else cites).
 
-## In flight (2026-08-19)
-- **Scheduled-memory quota-flood correction (`CAP-FB-20260821-SCHEDULED-MEMORY-QUOTA-01`)** — urgent current-main successor removes the arbitrary per-store key-count ceiling while retaining the 8 MiB/store, 64 MiB global, and 256 KiB/value byte ceilings. It also isolates the retained Durable registry and each execution's record/log/outbox/resume/payload authority from owner/model master memory. Boot performs idempotent copy-verify-version-delete migration of legacy authority only. Genuine storage-quota failures disarm once and remain visible with Retry/Cancel instead of logging on every tick.
-- **Task-view transition ghost correction (provisional current-main 0.2.118 reconciliation, `CAP-FB-20260821-TASK-VIEW-TRANSITION-GHOST-01`)** — exact `8b5a6287` hid old `root` and fixed clean-archive changelog shipping, but immutable v2 browser evidence proved shared `::view-transition-old(overlay-view)` still faded task controls over Settings at 125 ms. Reviewed successor `0d3199a` is reconciled by content onto Directory main `eed40358`: source/target direction policy hides old root plus only the old named overlay on every task enter/exit (Hub, Settings, Directory, Skills, Artifacts), leaves new `overlay-view` named/active, preserves unrelated named cross-fades plus cleanup/focus/race/reduced-motion behavior, routes focus synchronously to the composer only for explicit already-open surface switches, leaves no-argument follow-up and same-thread routes focus-neutral, and keeps Directory's covered sidebar/edge inertness plus initiating-trigger focus restoration. Independent current-main review and corrected loaded-MV3 launch/Settings/restore/error/focus/genuine-pointer proof remain pending; the focused successor must also prove follow-up focus retention and normal `durable-run-registry` Shadow DOM retargeting. Reconcile this provisional release number during serialized integration.
-- **Generalized covered-nub policy + narrow Settings reflow (provisional 0.2.119 composite, `CAP-FB-20260819-COVERED-NUB-VISIBILITY-01`)** — independently reviewed nub/responsive content from `35f3246f` is recomposed onto exact accepted-for-browser transition-focus tip `46a3e6df`: the sidebar retains covered inert/AX authority, one pure policy solely owns toggle hidden/inert/disabled/AX state without touching collapse state, and Settings reflows every section/control through shrink-safe 500px/360px layouts. The composite preserves explicit-only same-surface focus ownership, no-argument follow-up/same-thread focus neutrality, route-aware snapshots, Directory trigger restoration, and canonical changelog shipping. Exact composite review plus the complete 48-cell and rapid-sequence loaded-MV3 matrix remain pending; no browser or shipping claim is made.
-- **Conversation run-status + no-tools projection correction (`CAP-FB-20260819-CONVERSATION-RUN-STATUS-01`)** — the independently reviewed run-status/projection successor is reconciled onto public `598fb12`, retaining current task-scoped run controls and streamed tool-call finish normalization. A terminal `thread.get` projection that wins before the live response records exact thread/execution/owner/generation authority and suppresses only a byte-identical same-attempt append; genuine revisions, new attempts, stale-owner fencing and hard reload remain covered without polling. Independent current-main conflict review and fresh loaded-MV3 cancellation/fencing/status plus per-journey transcript-singularity evidence remain required; the exact-`43e395d` headed package is superseded.
-- **Durable run authority and owner surfaces (0.2.113 integration candidate)** — exact source `dd41258f7401dda8ccf8b561b955b5f4b919baa0` / tree `80ca97f0c55cbd0e8a2c306b82764f3a4aa1a860` passed independent source review and the exact 7/7 loaded-MV3 journey. Service-worker/OPFS authority, outbox projection, bounded recovery, exact native-quota compensation, owner controls, live Tasks-sidebar rows, terminal owner-thread replacement, and reload recovery are accepted for integration. [The architecture reference](docs/DURABLE-RUN-ARCHITECTURE.md) binds the exact evidence and retains the v1-v39 limits. This is Durable-lane acceptance only, not whole-product acceptance; the clean current-main integration commit still requires independent integration review, and the residual no-Chrome browser-security suite remains to be run after that review.
-- **Owner-bound destructive-operation approvals (0.2.98 local, no push)** — current-main correction has branded bounded canonical payloads, normalized targets, exact Settings-only resolution, single-use run/document-bound grants, install-scoped opaque references, one-lock named/hook replacement gates, trap-free diagnostic redaction, focused concurrency/security tests, and a 126/126 loaded-MV3 journey with genuine top-level + primary embedded-Settings approval/deny clicks. The prior 125-check evidence was invalidated and will be replaced with exact corrected-source evidence before re-review. Awaiting independent re-review; real fixture-model same-execution retry remains an honest acceptance gap. Artifact-store transactions are a separate lane and remain open.
-- **Permission orchestration (recovery PARTIAL, 2026-08-19)** — least-privilege declaration validation, exact-host background screenshot gating, redacted provider preflight, and removal of model-visible grant/revoke tools are implemented. The required genuine owner preflight button, task/execution authorization, one-shot JIT continuation, denial/concurrency/restart handling, and headed Chrome acceptance remain OPEN; no complete orchestration claim is made.
-- **WebMCP discovery correction + attestation** — implementation is awaiting exact-clean-commit automated evidence, independent re-review, and the headed permission-prompt gesture (see the OPEN item above + docs/WEBMCP-ACCEPTANCE.md).
-- (otherwise none actively blocked — see the known-issues + the UI-fixes tracker for the polish backlog)
+**P1.** Dialog consolidation (five implementations, three hand-rolled outside the component
+system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
+permission-remediation UX; semantic tool search; Store release path; owner export/import;
+the headed acceptance lane; `scripts/ui-integration.ts` red; the UI flash/relayout.
 
-## Remaining work (the proactive backlog)
-- Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only) — see the task backlog.
-- The screenshot / media-capture permission flows (ask-on-need, not fail).
-- The UI polish + the review backlog (see [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) + root [KNOWN-ISSUES.md](KNOWN-ISSUES.md)).
-- The extension rename/distribution decision (still "Chrome Agent Platform"; archive freshness is implemented separately).
+**P2.** The whole Wasm tool platform lane — runtime probe, owner install, bundled tranche,
+spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the
+demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
+
+### Known open defect classes
+- **WebMCP discovery attestation** — the implementation is corrected (production
+  `tools.invoke` → `invokeSiteTool`, approved tab + active `documentId`, SW-issued
+  navigation epochs, MAC/replay-fenced transport, redacted diagnostics), but completion
+  needs exact-clean-commit evidence plus the **headed** run for the two OS permission
+  prompts that cannot be automated: `deno run -A scripts/webmcp-acceptance.ts --headed`
+  (docs/WEBMCP-ACCEPTANCE.md).
+- **Worktree hygiene** — 71 registered worktrees, and `/tmp` is RAM-backed at 92% inode
+  use. Run `node scripts/worktree-audit.mjs` before any cleanup decision; nothing is
+  removed until its HEAD is reachable from `origin/main` or a `rescue/*` tag.
 
 ## Open questions for Paul
-- The extension rename/distribution decision (still "Chrome Agent Platform"; archive freshness is implemented separately).
+The full list with resolved answers is [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
+Genuinely open: **Q11** extension name/distribution channel · **Q12** the recommended
+default provider/model for the best out-of-box experience · **Q13** owner-selected Wasm
+under Store policy · **Q14** Co-do licence/provenance reconciliation · **Q15** the
+semantic index engine · **Q16** grouped tabular artifact promotion.
 
-## Feature: Artifacts (Paul 2026-08-16)
-Agents create things for the user in the context of a task (generated pages, files, UI, data). We need:
-1. **Per-task artifact view** — see the artifacts a task produced, in the conversation.
-2. **Master artifacts view in the hub** — all artifacts across tasks/agents.
-3. **Use artifacts** — open/preview/use them.
-4. **Attach to a new task** — the + button should offer existing artifacts as attachments (so a task can build on a prior artifact).
-Artifacts are origin-keyed (per-agent) with a master index. Types: generated page (HTML), file, data, screenshot, UI fragment. This connects to the co-do double-iframe generative-UI work (a generated UI IS an artifact).
-
-## Task backlog (Paul 2026-08-17)
-- Remove the Chrome Prompt API + Demo local from the settings provider picker (internal/testing only).
-- (The UI-FIXES-TRACKER.md has the full UI batch.)
+## Feature: Artifacts (Paul 2026-08-16) — shipped
+Agents create things for the user in the context of a task (generated pages, files, UI,
+data). All four pieces are in: the per-task artifact view in the conversation, the master
+artifacts view in the hub, open/preview/use (now full-window and openable in a new tab,
+`0.2.318`), and attach-an-existing-artifact from the + menu. Artifacts are origin-keyed
+per agent with a master index; a generated UI IS an artifact.

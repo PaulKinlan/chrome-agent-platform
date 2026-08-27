@@ -4,6 +4,80 @@ This tracks the open findings from the ongoing independent review (sol). The rev
 
 **Status legend:** Open / In progress / Verified-fixed.
 
+## Current state (verified 2026-08-27, `0.2.319` / `origin/main@139b6f92`)
+
+Established by building and running the gates, not by reading trackers.
+
+| Gate | Result |
+|---|---|
+| `npm run build` | clean — 80 generated files byte-identical, 26 packages, 65 shipped files, no `eval`/`new Function` across 151 shipped JS files |
+| `npm test` | **1779 pass / 0 fail** |
+| `npm run test:chrome` | **127/127** (was 26/127 — see below) |
+| `npm run test:security` | **PASS** |
+
+### [FIXED 2026-08-27, pending independent review] The Chrome journey suite was red — `CAP-FB-20260827-MAIN-GATES-RED-02`
+
+Was **26/127**; now **127/127** with unit 1779/0 and the security suite PASS. Three
+drifts, every one a shipped change that did not update the gate — the second occurrence
+of this exact class in three days (`CAP-FB-20260825-MAIN-GATES-RED-01` was the first),
+which makes it a process finding as much as a defect.
+
+1. **The abort that cost 100 checks.** `scripts/chrome-journeys.ts` clicked
+   `.nav-item[data-section="approvals"]` and threw when no row appeared. `0.2.313`
+   (`5f8931f3`) deleted that Settings section on purpose. **Repointed, not deleted:**
+   resolving an approval still requires the `owner-options` principal; the Settings
+   control now completes in one click through its native confirm dialog, driven with a
+   genuine CDP click; and the two DOM-scraping assertions moved onto the payload, where
+   they are stronger — whatever surface renders an approval can only show what the
+   service worker hands it. The embedded-iframe deny check now evaluates inside the
+   Settings frame's own execution context, so it actually proves what it claims.
+2. **`debugger` removed** (owner decision, Q17). Re-declared at `0.2.286`, reversing the
+   deliberate removal at `c5ccb2d0`; gone again along with the four CDP tools, the
+   capability row and the Settings label. Browser tools 130 → 126, capability table
+   159 → 155. A removal guard in `tests/chrome-tools-t12.test.ts` makes any return
+   deliberate.
+3. **The capability count is derived**, not hard-coded — it read `length === 7` while the
+   product had 17 capabilities.
+
+**Still required:** independent review by a different model/session, focused on the
+assertion changes. Three of these edits touch assertions, and an author reviewing their
+own assertion edits cannot see where one was weakened.
+
+### [P1 — OPEN] Build-host temp filesystem — `CAP-FB-20260821-WORKTREE-HYGIENE-01`
+
+Still live, still RAM-backed. `/tmp` is a 46 GB tmpfs at **92% inode use** (955,417 of
+1,048,576) with **71 registered git worktrees**. A reboot destroys every worktree and
+every retained evidence bundle referenced by a `Gates:` field in `TASKS.md`. Run
+`node scripts/worktree-audit.mjs` before any cleanup; nothing is removed until its HEAD is
+reachable from `origin/main` or a `rescue/*` tag.
+
+### Resolved since the 2026-08-23 revision of this file
+
+Closed by shipped work; kept as one line each so the history stays readable.
+
+- **Usage/token counts always zero** → `0.2.297` (`a18de46e`): the OpenAI-compatible
+  adapter now sends `stream_options.include_usage`. Unreported usage is recorded as
+  unknown, never faked.
+- **Imagined Chrome API calls** → `0.2.293`/`0.2.295`: all 130 tools audited against the
+  Chromium schemas. `chrome.tabGroups.group/ungroup` (don't exist), `saveTabAsMHTML`
+  (wrong name, so page-save never worked), `power.release` (wrong name), and
+  `contentSettings` get/clear (a read that always threw and a clear that was
+  browser-wide — a grant-scope escape) are all fixed; the test doubles now reject wrong
+  shapes.
+- **Surfaces dead-rendering on a suspended worker** → `0.2.302`: every data-loading view
+  times out with an honest error + Retry.
+- **Task open taking 10–15 s** → `0.2.314`/`0.2.317`: per-execution ordered log index with
+  cursor pagination; O(page), not O(total).
+- **Back button landing on a blank screen** → `0.2.296`/`0.2.304`: fixed at the top frame.
+- **Two-layer permission confusion** → `0.2.303`/`0.2.313`: in-context approval cards;
+  the orphaned Settings → Approvals section deleted.
+- **Orphaned scheduled alarms** → `0.2.291`. **Run dispatches killed by the 12 s
+  dead-surface timeout** → `0.2.311`. **Artifact viewer as an unclickable tiny box** →
+  `0.2.318`. **URL-controlled id in the artifact error state** → `e5374506` (escaped via
+  `textContent`).
+- **Service-worker-wide agent fault blast radius** → `0.2.308`–`0.2.310`: per-agent shared
+  workers give fault + memory isolation.
+
 ## Review process
 - 30 rounds of independent security/correctness review across the integrated feature histories against the Constitution.
 - Last retained clean feature baselines include **119/119 general Chrome journeys** and separate external, commit-bound unified-agent-access evidence. Current integration results must be read from the exact-commit external evidence; historical totals are not presented as proof for new bytes. All permissions remain optional (`manifest.permissions = []`) and no debugger permission is declared.
