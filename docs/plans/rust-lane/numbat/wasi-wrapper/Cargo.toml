@@ -1,0 +1,15 @@
+[package]
+name = "numbat-wasi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Thin WASI entrypoint wrapper for the numbat core (bounded stdin → evaluate → bounded stdout)."
+
+[dependencies]
+numbat = { git = "https://github.com/sharkdp/numbat", rev = "79046422203060e296da41c8c762c506200d2c93", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1

@@ -12,3 +12,4 @@ node_modules
 extension/dist-versions/
 dist-archives/
 .cache/
+.build/
