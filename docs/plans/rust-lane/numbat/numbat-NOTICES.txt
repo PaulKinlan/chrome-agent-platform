@@ -1,12 +1,21 @@
 # numbat-wasi (numbat core v1.24.0 + thin wrapper) — dependency-tree licence census
 
-Generated from `cargo metadata --locked` against the COMMITTED Cargo.lock of the
-`numbat-wasi` wrapper crate (a git dependency on numbat at the pinned commit
-79046422203060e296da41c8c762c506200d2c93, tag v1.24.0, default-features off).
-This is the ACTUAL tree linked into the shipped `numbat-wasi.wasm` (the wrapper
-resolves numbat's transitive deps from its own lockfile — git deps ignore the
-upstream lock, so versions differ from numbat's workspace lock and are pinned
-HERE).
+METHOD (exact, reproducible): `cargo tree --locked -e normal,build --target
+wasm32-wasip1` on the `numbat-wasi` wrapper crate (a git dependency on numbat at
+pinned commit 79046422203060e296da41c8c762c506200d2c93, tag v1.24.0,
+default-features off) → 74 distinct name@version nodes, minus the 3 workspace
+members (numbat-wasi, numbat, numbat-exchange-rates) and the 4 proc-macro-only
+build-time crates (rust-embed-impl, rustversion, serde_derive, thiserror-impl) =
+**67 crates** in the census (the runtime code actually linked into
+`numbat-wasi.wasm`). NOTE: `cargo metadata --locked` is NOT the source — it
+returns 105 packages (the full resolve, including target-specific crates never
+built for wasip1); the census is the BUILT tree, not the lock.
+
+## Excluded from the built tree (present in the committed lock, NOT built)
+- r-efi@5.3.0 (MIT OR Apache-2.0 OR LGPL-2.1-or-later) — target-specific to
+  wasm32-unknown-unknown, confirmed ABSENT from the wasm32-wasip1 build via
+  `cargo tree --locked -e normal,build --target wasm32-wasip1`. The "no
+  GPL/AGPL/LGPL" statement below applies to the BUILT tree only.
 
 ## Aggregate licence expression
 MIT AND Apache-2.0 AND BSD-2-Clause AND Unlicense AND BSL-1.0 AND Unicode-3.0 AND MPL-2.0

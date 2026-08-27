@@ -28,9 +28,13 @@ COMMITTED (git deps ignore the upstream lock, so this pins the actual versions).
 - sha256: `805ce2d14f3b735e500b82b06fd719397413f1b2f5f29901d201768d6324ef67`
 
 ## CENSUS (licence) — numbat-NOTICES.txt (lock-faithful)
-67 crates in the wrapper's ACTUAL built tree. All permissive (MIT/Apache-2.0/
-BSD-2-Clause/Unlicense/BSL-1.0/Unicode-3.0) except ONE MPL-2.0
-(`option-ext@0.2.0`, file-level weak copyleft, FLAGGED). NO GPL/AGPL/LGPL.
+67 crates in the wrapper's ACTUAL built tree (method: `cargo tree --locked -e
+normal,build --target wasm32-wasip1` → 74 nodes − 3 workspace members − 4
+proc-macros; see the NOTICES header for the exact derivation). All permissive
+(MIT/Apache-2.0/BSD-2-Clause/Unlicense/BSL-1.0/Unicode-3.0) except
+(`option-ext@0.2.0`, file-level weak copyleft, FLAGGED). NO GPL/AGPL/LGPL **in the
+built tree**. (r-efi@5.3.0 is LGPL-2.1-or-later but target-specific to
+wasm32-unknown-unknown and NOT built — excluded, documented in the NOTICES.)
 Aggregate: MIT AND Apache-2.0 AND BSD-2-Clause AND Unlicense AND BSL-1.0 AND
 Unicode-3.0 AND MPL-2.0.
 
