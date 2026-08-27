@@ -29,5 +29,5 @@ Deno.test("tokei shim: the built wasm is pure-WASI + within default tier", () =>
   const sha = Deno.readTextFileSync("docs/plans/rust-lane/tokei/metadata/sha256.txt").trim();
   assert(/^[0-9a-f]{64}/.test(sha), "sha256 recorded");
   const prov = Deno.readTextFileSync("docs/plans/rust-lane/tokei/PROVENANCE.md");
-  assert(/2,246,692|\b\d{6,8}\b.*bytes|bytes/i.test(prov), "binary size recorded in provenance");
+  assert(/binary\.sha256/.test(prov), "binary sha256 recorded in provenance (reproducible)");
 });
