@@ -112,3 +112,44 @@ Deno.test("agent-worker-host: ensure/close/list contract (shimmed SharedWorker)"
   assertEquals(mod.liveAgentIds(), []);
   delete globalThis.SharedWorker;
 });
+
+Deno.test("P2 agent-worker.run + agent-worker.tool: validate principal + authority split", async () => {
+  reset();
+  let executed = [];
+  const routes = createAgentWorkerRoutes({
+    ensureOffscreen,
+    kvGet,
+    kvSet,
+    executeTool: async (name, args) => { executed.push({ name, args }); return { ok: true, result: `ran ${name}` }; },
+  });
+  const c = { principal: "extension" };
+
+  // run kick: posts a run descriptor through the host (stubbed sendMessage).
+  const run = await routes["agent-worker.run"]({ agentId: "bg:hat", runId: "r1", task: "@demo-tools" }, c);
+  assertEquals(run.ok, true);
+  assertEquals(run.runId, "r1");
+  assert(sent.some((m) => m.type === "agent-worker-host:post" && m.msg?.type === "agent-worker:run"), "run descriptor must be posted to the host");
+
+  // tool bridge: the SW executes through the injected executor (authority).
+  const tool = await routes["agent-worker.tool"]({ toolName: "memory_set", args: { k: "v" } }, c);
+  assertEquals(tool.ok, true);
+  assertEquals(executed[0]?.name, "memory_set");
+
+  // unauthorized principal: both routes refuse before any host/executor work.
+  executed = [];
+  for (const principal of ["model", "page", undefined]) {
+    const r1 = await routes["agent-worker.run"]({ agentId: "a", runId: "x" }, { principal });
+    assertEquals(r1.error, "unauthorized_principal");
+    const r2 = await routes["agent-worker.tool"]({ toolName: "memory_set" }, { principal });
+    assertEquals(r2.error, "unauthorized_principal");
+  }
+  assertEquals(executed.length, 0, "no tool may execute for an unauthorized caller");
+});
+
+Deno.test("P2 agent-worker.tool: honest error when the executor is not wired", async () => {
+  reset();
+  const routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet });
+  const r = await routes["agent-worker.tool"]({ toolName: "memory_set" }, { principal: "extension" });
+  assertEquals(r.ok, false);
+  assertEquals(r.error, "tool execution not wired in this context");
+});

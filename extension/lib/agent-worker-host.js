@@ -13,7 +13,7 @@
 //   - the host holds a port per live agent (keep-alive with zero visible pages);
 //   - the SW is the only caller (validated routes stay in the SW).
 
-const WORKER_URL = "workers/agent-worker.js";
+const WORKER_URL = "dist/workers/agent-worker.js";
 
 const agents = new Map(); // agentId -> { worker, port }
 
@@ -33,7 +33,7 @@ export function ensureAgentWorker(agentId) {
 
   let worker;
   try {
-    worker = new SharedWorker(workerUrl(), { name: id });
+    worker = new SharedWorker(workerUrl(), { type: "module", name: id });
   } catch (e) {
     return { ok: false, error: `SharedWorker construction failed: ${e?.message ?? e}` };
   }
@@ -60,6 +60,22 @@ export function liveAgentIds() {
   return [...agents.keys()];
 }
 
+/** Post a message to a worker's keep-alive port (the SW is the only caller —
+ * it cannot hold a port itself, so it routes the run kick through the host).
+ * Returns the worker's immediate ack if it replies synchronously, else an
+ * { posted: true } acknowledgement. */
+export function postAgentWorkerMessage(agentId, message) {
+  const id = String(agentId || "");
+  const entry = agents.get(id);
+  if (!entry) return { ok: false, error: "no such agent worker" };
+  try {
+    entry.port.postMessage(message ?? {});
+  } catch (e) {
+    return { ok: false, error: `post failed: ${e?.message ?? e}` };
+  }
+  return { ok: true, agentId: id, posted: true };
+}
+
 /**
  * Register the host's chrome.runtime.onMessage listener. Messages come from
  * the service worker (the validated authority). Returns an unregister fn.
@@ -77,6 +93,10 @@ export function registerAgentWorkerHost() {
     }
     if (message.type === "agent-worker-host:list") {
       sendResponse({ ok: true, agents: liveAgentIds() });
+      return false;
+    }
+    if (message.type === "agent-worker-host:post") {
+      sendResponse(postAgentWorkerMessage(message.agentId, message.msg));
       return false;
     }
     return false;

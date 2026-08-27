@@ -295,19 +295,47 @@ try {
       },
     });
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
+    // PHASE-2 agent worker bundle: the per-agent shared worker runs the
+    // agent-do loop (lib/agent-loop.js → agent-do + ai) — those live in
+    // node_modules, so the worker MUST be bundled (native ESM can't resolve
+    // node_modules in the browser). Same `shared` config, no node shims (the
+    // loop stack is browser-only: fetch/streams).
+    const WORKER = path.join(STAGE, "workers/agent-worker.js");
+    await mkdir(path.dirname(WORKER), { recursive: true });
+    await build({
+      ...shared,
+      entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
+      outfile: WORKER,
+      format: "esm",
+      // agent-do pulls @modelcontextprotocol/sdk (MCP) which imports node: builtins
+      // even on the browser path — same shims as the SW bundle.
+      inject: [path.join(ROOT, "browser-shim-process.js")],
+      alias: {
+        "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
+        "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
+        "node:stream": shimNode, "node:util": shimNode, "node:module": shimNode,
+        "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
+      },
+    });
 
-    // Scrub + seam-scan IN STAGING.
-    let bundle = await readFile(SW, "utf8");
-    if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
-      throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
+    // Scrub + seam-scan IN STAGING (both the SW AND the agent-worker bundle —
+    // agent-do/ai/mcp-sdk carry a `new Function`/`new F("")` evaluator that the
+    // store-target policy forbids as a dynamic source evaluator).
+    let occurrences = 0;
+    let zodProbes = 0;
+    for (const scrubPath of [SW, WORKER]) {
+      let bundle = await readFile(scrubPath, "utf8");
+      if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
+        throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
+      }
+      occurrences += (bundle.match(/new Function\s*\(/g) ?? []).length;
+      bundle = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
+      zodProbes += (bundle.match(/new F\(""\)/g) ?? []).length;
+      bundle = bundle.replace(/new F\(""\)/g, '(() => { throw new Error("eval disabled (MV3 CSP)"); })()');
+      await writeFile(scrubPath, bundle);
+      const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
+      if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
     }
-    const occurrences = (bundle.match(/new Function\s*\(/g) ?? []).length;
-    bundle = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
-    const zodProbes = (bundle.match(/new F\(""\)/g) ?? []).length;
-    bundle = bundle.replace(/new F\(""\)/g, '(() => { throw new Error("eval disabled (MV3 CSP)"); })()');
-    await writeFile(SW, bundle);
-    const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
-    if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
 
     // Per-FILE mode preservation from the previous tree (fall back to defaults
     // for new files).
