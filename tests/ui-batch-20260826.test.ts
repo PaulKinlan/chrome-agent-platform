@@ -37,16 +37,13 @@ Deno.test("Local models hidden: Settings no longer hosts the local-model catalog
   assertNotMatch(js, /renderLocalModels/, "dead renderLocalModels wiring removed");
 });
 
-Deno.test("Approvals: the settings section is retained as the guided-revoke vehicle (in-context approval is the primary path)", () => {
-  // NOTE: the section was scheduled for removal, but the permissions redesign
-  // (0.2.303) built the guided capability-Disable flow ON this list — removing
-  // it would break "revoke a permission". Kept until the in-context revoke
-  // synthesis lands (see CAP-FB-20260826-APPROVALS-REMOVE-01).
+Deno.test("Approvals: the orphaned settings section is gone; revoke confirmation is now in-context", () => {
   const html = read("../extension/options/options.html");
-  assertMatch(html, /id="approvals"/, "Approvals section retained for the guided revoke flow");
-  assertMatch(html, /data-section="approvals"/, "Approvals nav retained");
+  assertNotMatch(html, /id="approvals"/, "Approvals section removed");
+  assertNotMatch(html, /data-section="approvals"/, "Approvals nav removed");
   const js = read("../extension/options/options.js");
-  assertMatch(js, /renderApprovals/, "approvals settings-panel wiring retained (the revoke flow depends on it)");
+  assertNotMatch(js, /renderApprovals/, "approvals settings-panel wiring removed");
+  assertMatch(js, /runOwnerApprovedMutation/, "revoke confirmation routes through the in-context owner-approved mutation");
 });
 
 Deno.test("System prompt: search-then-execute guidance present and context-bounded", () => {
