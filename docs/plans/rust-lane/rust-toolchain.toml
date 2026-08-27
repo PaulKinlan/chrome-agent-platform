@@ -1,0 +1,7 @@
+[toolchain]
+# Pins the toolchain for this lane. "stable" resolves to the installed
+# 1.97.1 (stable-x86_64-unknown-linux-gnu). The AUTHORITATIVE build pin is the
+# build.sh env (`rustup which --toolchain stable-x86_64-unknown-linux-gnu rustc`)
+# because /usr/bin/rustc (system, empty wasip1 std) shadows rustup in PATH.
+channel = "stable"
+targets = ["wasm32-wasip1"]
