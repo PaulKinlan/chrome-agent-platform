@@ -2696,6 +2696,7 @@ async function renderApprovals() {
   }
 }
 
+
 // nav active state
 export function handleSettingsHashNavigation(hash, isTraverse = false) {
   const sectionId = normalizeSettingsSectionId(hash);
@@ -2716,7 +2717,6 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   });
 
   if (sectionId === "local-folders") renderLocalFolders();
-  if (sectionId === "approvals") renderApprovals();
   if (sectionId === "usage") renderUsage();
 
   section.scrollIntoView({
@@ -2859,8 +2859,6 @@ await renderBackgroundAgents();
 await renderEnroll();
 await renderBrowser();
 await renderPermissions();
-await renderApprovals();
-setInterval(() => { if (document.visibilityState === "visible") renderApprovals(); }, 1500);
 await renderHooks();
 await renderPrompts();
 await renderUsage();

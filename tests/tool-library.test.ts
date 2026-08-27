@@ -138,6 +138,8 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
   const nav = html.indexOf('data-section="tool-library"');
   const localFolders = html.indexOf('data-section="local-folders"');
   assert(localFolders > 0 && nav > localFolders && nav < html.indexOf('data-section="agents"'), "nav item sits between Local folders and Agents");
+  const agents = html.indexOf('data-section="agents"');
+  assert(localFolders > 0 && nav > localFolders && nav < agents, "nav item sits between Local folders and Agents (Local models was removed)");
   const section = html.slice(html.indexOf('id="tool-library"'), html.indexOf('id="tool-library"') + 700);
   assertNotMatch(section, /<button/, "the section markup contains no buttons");
   assertMatch(section, /Read-only diagnostics/, "the section carries the truthful intro");
