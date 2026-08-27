@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.314] — 2026-08-27
+- Opening a task is now fast: the thread view reads only the most-recent runs and log entries instead of replaying the whole history (which is what made it take 10-15 seconds on well-used tasks). Plus sub-stage timing so any future slow part shows exactly where. And sed is in — a real, reproducible WASI sed
+
 ## [0.2.313] — 2026-08-27
 - The approvals settings page is gone — revoking a permission now confirms right there with a simple dialog (a real click, then it completes), using the same in-context approval path the rest of the app uses. No more hunting through a settings list
 
