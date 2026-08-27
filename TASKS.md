@@ -345,6 +345,11 @@ awk '/^## \[CAP-FB/{h=$0; sub(/^## \[/,"",h); id=h; sub(/\].*/,"",id); t=h; sub(
 - Next: run the licence/feasibility triage across all eighteen candidates
 - Recover: `git grep -n "EXTENDED-TOOL-FAMILIES" -- TASKS.md`
 - History:
+  - 2026-08-27 01:11 UTC — RUST LANE STATUS: htmlq DONE (0.2.309-era, first
+    lane proof), numbat DONE (runnable WASI calc), bttf DONE (direct CLI),
+    tokei BLOCKED (native-only deps: memmap via grep-searcher, home via dirs,
+    rayon runtime-panic — none of v12.1.2/v13/v14 build for wasip1; licence-clean;
+    deferred pending dep patching or upstream change). xan + qsv continue serially.
   - 2026-08-26 23:22 UTC — OWNER DECISION (option a): APPROVED the permissive
     routes — toybox 0BSD for the awk/sed/date trio, onetrueawk, NetBSD-style
     sed, and the fend pre-1.4.0 MIT pin. T3 unblocks on those routes. PANDOC
