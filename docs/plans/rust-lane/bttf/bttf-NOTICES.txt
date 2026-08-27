@@ -1,0 +1,74 @@
+bttf — build/census proof NOTICES
+=================================
+
+Crate: bttf v0.1.4 (MIT OR Apache-2.0)
+Upstream: https://github.com/BurntSushi/bttf
+Pinned commit: b839c69d12a93cff278cc38e47838ac9246d6105 (tag 0.1.4 ^{commit};
+  annotated tag object 286b1ed7c832534c3f26697f00d08da349508b34)
+
+CENSUS METHODOLOGY (exact — do not rely on `cargo metadata`):
+  `cargo tree --locked -e normal,build --target wasm32-wasip1` resolves
+  24 unique non-workspace crates (bttf is the sole workspace member; the graph
+  for this target carries ZERO proc-macro crates). `cargo metadata --locked`
+  returns the FULL 73-package resolve and is NOT the built-tree census — the
+  built set is derived from `cargo tree`, not `cargo metadata`.
+
+BUILT TREE — licence distribution (24 crates, all permissive):
+  14  MIT OR Apache-2.0
+   5  Unlicense OR MIT
+   4  MIT
+   1  Apache-2.0/MIT
+  No GPL / AGPL / LGPL / MPL in the built tree.
+
+  Full list (name version: licence):
+    aho-corasick 1.1.4: Unlicense OR MIT
+    anstyle 1.0.14: MIT OR Apache-2.0
+    anyhow 1.0.102: MIT OR Apache-2.0
+    bstr 1.12.1: MIT OR Apache-2.0
+    flume 0.12.0: Apache-2.0/MIT
+    itoa 1.0.18: MIT OR Apache-2.0
+    jiff 0.2.27: Unlicense OR MIT
+    jiff-tzdb 0.1.6: Unlicense OR MIT
+    jiff-tzdb-platform 0.1.3: Unlicense OR MIT
+    lexopt 0.3.2: MIT
+    lock_api 0.4.14: MIT OR Apache-2.0
+    log 0.4.30: MIT OR Apache-2.0
+    memchr 2.8.1: Unlicense OR MIT
+    memmap2 0.9.10: MIT OR Apache-2.0
+    regex 1.12.3: MIT OR Apache-2.0
+    regex-automata 0.4.14: MIT OR Apache-2.0
+    regex-syntax 0.8.10: MIT OR Apache-2.0
+    scopeguard 1.2.0: MIT OR Apache-2.0
+    serde 1.0.228: MIT OR Apache-2.0
+    serde_core 1.0.228: MIT OR Apache-2.0
+    serde_json 1.0.150: MIT OR Apache-2.0
+    spin 0.9.8: MIT
+    textwrap 0.16.2: MIT
+    zmij 1.0.21: MIT
+
+AGGREGATE LICENCE EXPRESSION (built tree):
+  MIT AND Apache-2.0 AND Unlicense
+
+TARGET-SPECIFIC LOCK EXCLUSION (the r-efi lesson — lock-only, NOT built):
+  r-efi 6.0.0 (MIT OR Apache-2.0 OR LGPL-2.1-or-later) is present in the
+  committed Cargo.lock but is NOT in the wasm32-wasip1 built tree (it is a
+  wasm32-unknown-unknown UEFI-target crate). The built tree carries no
+  LGPL-family code. serde_derive 1.0.228 (MIT OR Apache-2.0, permissive) is
+  likewise lock-only (0 proc-macro crates in the wasip1 graph).
+
+Vendored texts: MIT.txt and Apache-2.0.txt alongside. The Unlicense texts for
+jiff/jiff-tzdb/jiff-tzdb-platform/memchr/aho-corasick will be vendored verbatim
+from the pinned upstreams at the retained-build (admission) step.
+
+BUILD ARTIFACT (this pass):
+  bttf.wasm sha256 928dee85962393546f2e3a361585289300d65e5bfafbc615b4b05f414b53e7a9
+  size 2,447,964 bytes (~2.33 MiB) → default tier (≤16 MiB)
+  19 imports, ALL wasi_snapshot_preview1 (random_get, args_sizes_get, args_get,
+  environ_get, environ_sizes_get, clock_time_get, fd_close, fd_fdstat_get,
+  fd_fdstat_set_flags, fd_filestat_get, fd_prestat_get, fd_prestat_dir_name,
+  fd_read, fd_readdir, fd_seek, fd_write, path_filestat_get, path_open, proc_exit);
+  1 linear memory; no JS/bindgen imports.
+
+REPRODUCIBILITY (honest caveat): config-level, not byte-level — rustc embeds
+build paths, so the sha256 differs across build directories. Byte-identical
+retained build needs a path-stable root + remap/strip flags (the admission step).
