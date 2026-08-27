@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.313] — 2026-08-27
+- The approvals settings page is gone — revoking a permission now confirms right there with a simple dialog (a real click, then it completes), using the same in-context approval path the rest of the app uses. No more hunting through a settings list
+
 ## [0.2.312] — 2026-08-27
 - Your UI batch is in: the add-agent empty state shows your requested text, the discovered-sites box has proper spacing, the tool library actually lists all 130 tools (the count and the rows finally agree), local models are hidden, and the system prompt now tells agents to search for tools first. The approvals section is kept for now — it's what the 'disable a permission' flow rides on — and I'll move that confirmation into the conversation itself next
 
