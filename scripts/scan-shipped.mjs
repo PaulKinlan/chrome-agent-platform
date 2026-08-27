@@ -237,6 +237,13 @@ const AGENT_WORKER_HOST_CANONICAL_PATH = "extension/lib/agent-worker-host.js";
 const AGENT_WORKER_HOST_CANONICAL_LOCATION = { line: 36, column: 13 };
 const AGENT_WORKER_HOST_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 
+// The UI-side port client (Phase 4) constructs the SAME per-agent shared
+// worker the client is connecting to — a runtime-resolved absolute URL from
+// the SW's validated ensure response. Same canonical pattern as the host.
+const AGENT_WORKER_CLIENT_CANONICAL_PATH = "extension/lib/agent-worker-client.js";
+const AGENT_WORKER_CLIENT_CANONICAL_LOCATION = { line: 53, column: 15 };
+const AGENT_WORKER_CLIENT_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
+
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
 // source paths (`path.join(root, entry.name)`), so a bare relative equality
@@ -452,6 +459,13 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === AGENT_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(AGENT_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, AGENT_WORKER_CLIENT_CANONICAL_PATH) &&
+            workerSink === "SharedWorker" &&
+            node.loc?.start?.line === AGENT_WORKER_CLIENT_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === AGENT_WORKER_CLIENT_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(AGENT_WORKER_CLIENT_ALLOWED_RE) ?? []).length === 1
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);

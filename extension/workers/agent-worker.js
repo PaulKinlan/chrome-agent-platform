@@ -67,7 +67,7 @@ function resolveModel(modelKind) {
 /** Build the RPC-proxy tools from the SW-provided spec (names + descriptions
  * only — the worker holds no tool implementation). `execute` posts to the SW
  * and resolves the SW's structured result. */
-function buildProxyTools(toolSpecs, runId) {
+function buildProxyTools(toolSpecs, runId, leaseId) {
   const tools = {};
   for (const spec of toolSpecs ?? []) {
     const name = String(spec?.name ?? "");
@@ -85,6 +85,9 @@ function buildProxyTools(toolSpecs, runId) {
           agentId: AGENT_ID,
           toolName,
           args: args ?? {},
+          // The single-driver lease (if this run holds one) — presented so the
+          // SW authorizes destructive browser commands against the live holder.
+          leaseId: leaseId ?? undefined,
         });
         if (reply && typeof reply === "object" && reply.error !== undefined && reply.ok === false) {
           return { error: reply.error };
@@ -102,6 +105,7 @@ async function handleRun(port, msg) {
   const system = String(msg?.system ?? "");
   const modelKind = String(msg?.modelKind ?? "demo");
   const maxIterations = Number(msg?.maxIterations ?? 12) || 12;
+  const leaseId = msg?.leaseId ? String(msg.leaseId) : null;
   const controller = new AbortController();
   activeRun = { runId, controller };
 
@@ -111,7 +115,7 @@ async function handleRun(port, msg) {
   };
 
   try {
-    const tools = buildProxyTools(msg?.toolSpecs, runId);
+    const tools = buildProxyTools(msg?.toolSpecs, runId, leaseId);
     const result = await runAgentLoop({
       model: resolveModel(modelKind),
       system,
