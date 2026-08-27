@@ -6,7 +6,15 @@
 // dead-renders every surface that awaits it (the real-profile "everything is
 // broken" class). The bounded timeout settles with an honest {ok:false, error}
 // so callers show an error + Retry instead of a blank/loading-forever surface.
+// Run dispatches are TERMINAL HANDSHAKES: the route responds only when the
+// run completes (minutes for a real task) — the 12s dead-surface bound must
+// never apply to them (it produced "the agent worker didn't answer" on any
+// run over 12s while the run actually finished — owner P0 2026-08-27).
+const LONG_RUN_ROUTES = new Set(["agent.run", "named-agent.run", "background-agent.run", "agent.delegate"]);
+const LONG_RUN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes — a real task's ceiling
+
 export function send(type, payload = {}, timeoutMs = 12000) {
+  const effectiveTimeout = LONG_RUN_ROUTES.has(type) ? LONG_RUN_TIMEOUT_MS : timeoutMs;
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value) => {
@@ -16,7 +24,7 @@ export function send(type, payload = {}, timeoutMs = 12000) {
     };
     const timer = setTimeout(() => {
       finish({ ok: false, error: "the agent worker didn't answer — it may be busy (retry)" });
-    }, timeoutMs);
+    }, effectiveTimeout);
     try {
       chrome.runtime.sendMessage({ type, ...payload }, (res) => {
         clearTimeout(timer);

@@ -71,3 +71,21 @@ Deno.test("messages.send: a throwing sendMessage settles as ok:false (never reje
     restore();
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Run dispatches are terminal handshakes — the 12s dead-surface bound must
+// NOT apply (a real task takes minutes; the owner hit "the agent worker
+// didn't answer" on a 13s run that actually finished).
+// ──────────────────────────────────────────────────────────────────────────
+Deno.test("long-run dispatch routes are exempt from the 12s bound (30m ceiling)", () => {
+  const LONG_RUN = ["agent.run", "named-agent.run", "background-agent.run", "agent.delegate"];
+  const quick = ["thread.list", "provider.get", "activity.list"];
+  // The classification lives inside messages.js's send(); assert via the
+  // source contract so a regression (a run route added to the quick set, or
+  // a long route dropped) is pinned.
+  const src = Deno.readTextFileSync("extension/lib/messages.js");
+  for (const r of LONG_RUN) {
+    assert(src.includes(`"${r}"`), `${r} must stay in the LONG_RUN_ROUTES set`);
+  }
+  assert(src.includes("30 * 60 * 1000"), "the 30-minute ceiling must stay");
+});
