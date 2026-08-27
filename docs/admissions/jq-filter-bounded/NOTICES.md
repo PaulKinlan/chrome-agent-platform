@@ -1,3 +1,12 @@
+## jq core — MIT (verbatim text vendored)
+
+The complete verbatim `COPYING` from the PINNED commit
+`34f7186b86743a083a589741b6cea95293524108` (tag jq-1.8.2) is vendored at
+`COPYING-jq.txt` (sha256 `ad2b4a266b226893…`, fetched raw from
+`https://raw.githubusercontent.com/jqlang/jq/<commit>/COPYING`). It is MIT
+("jq is copyright (C) 2012 Stephen Dolan") plus the CC-BY-3.0 note for the
+docs/ subtree and third-party attribution paragraphs.
+
 # jq_filter_bounded — licence NOTICES
 
 This package bundles the following third-party components. Each notice must ship

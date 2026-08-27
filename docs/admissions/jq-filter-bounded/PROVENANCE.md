@@ -10,9 +10,11 @@ environment (see BLOCKERS below and the build.sh).
 ## re-verifiable, and hash-pinned before the package is admitted)
 
 1. **source.repo** — upstream: `https://github.com/jqlang/jq` (public).
-2. **source.commit** — PINNED revision (to be fixed at build time; the triage did
-   NOT pin a commit — see blocker B2). The system `jq --version` is 1.8.2, but the
-   house rule requires an exact immutable git SHA, not a distro version.
+2. **source.commit** — PINNED: `34f7186b86743a083a589741b6cea95293524108`
+   (tag `jq-1.8.2`, the latest stable release; resolved via `git ls-remote
+   https://github.com/jqlang/jq.git` — REAL, hash-pinned, independently
+   re-verifiable). Blocker B2 (unpinned) is RESOLVED; the source is still not
+   VENDORED in-tree (see B2 below).
 3. **binary.sha256** — the content-addressed `extension/wasm/cas/<sha256>.wasm`
    identity (does NOT exist yet — no build has run).
 4. **build.log + toolchain** — the deterministic retained-build log proving the
@@ -31,11 +33,12 @@ UNSET, which is the honest pre-admission state.
   Every existing lane's build.sh hard-requires `WASI_SDK` (host path scrubbed on
   repo migration). The deterministic retained build is therefore IMPOSSIBLE here
   and must run in the pinned build environment.
-- **B2 — jq source is not pinned/vendored.** The repo has no `packages/bundled/jq/source`
-  and no pinned upstream commit. jq is a large C program (core + oniguruma regex
+- **B2 — jq source is pinned but NOT vendored in-tree.** The commit is now pinned
+  (see source.commit above); the source tree is still not vendored under
+  `packages/bundled/jq/source`. jq is a large C program (core + oniguruma regex
   engine + decNumber bignum + dtoa + a main() loop), NOT a single-file CAP-authored
-  tool like the a2/b2 lanes — a clean-room/wasi port is a multi-hour native-build
-  effort, not a "mirror a2/b2" task.
+  tool like the a2/b2 lanes — the wasi port is a multi-hour native-build effort
+  that must run in the pinned build environment alongside B1's toolchain.
 - **B3 — scripts/safe-build-env.sh does not exist in this repo** (referenced by the
   brief; the safe build environment lives elsewhere). The retained-build preflight
   cannot be reproduced from this checkout.
